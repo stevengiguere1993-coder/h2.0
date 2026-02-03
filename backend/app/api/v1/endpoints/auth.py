@@ -4,7 +4,9 @@ Authentication endpoints.
 Handles user login, registration, and profile retrieval.
 """
 
-from fastapi import APIRouter, HTTPException, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 
 from app.api.deps import CurrentAdmin, CurrentUser, DBSession
@@ -24,7 +26,7 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 )
 async def login(
     db: DBSession,
-    form_data: OAuth2PasswordRequestForm = ...,
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
 ) -> Token:
     """
     Authenticate user and return access token.
