@@ -2,10 +2,15 @@
 Pydantic schemas for Client operations.
 """
 
+from __future__ import annotations
+
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from app.schemas.project import ProjectRead
 
 
 class ClientBase(BaseModel):
@@ -48,6 +53,4 @@ class ClientRead(ClientBase):
 class ClientReadWithProjects(ClientRead):
     """Schema for reading client with projects."""
 
-    from app.schemas.project import ProjectRead
-
-    projects: list["ProjectRead"] = []
+    projects: List[ProjectRead] = []
