@@ -10,6 +10,8 @@ Pattern: Repository Pattern
 - Enables testing with mocks
 """
 
+from app.repositories.client import ClientRepository
+from app.repositories.project import ProjectRepository
 from app.repositories.user import UserRepository
 
-__all__ = ["UserRepository"]
+__all__ = ["ClientRepository", "ProjectRepository", "UserRepository"]
