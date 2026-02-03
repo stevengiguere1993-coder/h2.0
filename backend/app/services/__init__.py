@@ -1,7 +1,7 @@
 """
 Services module - Business logic layer
 
-This module will contain service classes that implement
+This module contains service classes that implement
 business logic for the application.
 
 Pattern: Service Layer
@@ -10,4 +10,6 @@ Pattern: Service Layer
 - Handles complex operations
 """
 
-__all__ = []
+from app.services.auth import AuthService
+
+__all__ = ["AuthService"]
