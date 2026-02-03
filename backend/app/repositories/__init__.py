@@ -1,7 +1,7 @@
 """
 Repositories module - Data access layer
 
-This module will contain repository classes that handle
+This module contains repository classes that handle
 database operations for each model.
 
 Pattern: Repository Pattern
@@ -10,4 +10,6 @@ Pattern: Repository Pattern
 - Enables testing with mocks
 """
 
-__all__ = []
+from app.repositories.user import UserRepository
+
+__all__ = ["UserRepository"]
