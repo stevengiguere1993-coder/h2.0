@@ -66,7 +66,19 @@ GRANT ALL PRIVILEGES ON DATABASE construction_db TO construction_user;
 alembic upgrade head
 ```
 
-### 7. Lancer le serveur
+### 7. Créer le premier admin
+
+```bash
+# Mode interactif (développement)
+python -m scripts.create_admin
+
+# Mode automatique (via variables d'environnement)
+export ADMIN_EMAIL="admin@example.com"
+export ADMIN_PASSWORD="securepassword123"
+python -m scripts.init_admin
+```
+
+### 8. Lancer le serveur
 
 ```bash
 # Développement
@@ -137,11 +149,37 @@ Une fois le serveur lancé, la documentation est disponible :
 
 ## Endpoints Disponibles
 
+### Root
 | Méthode | Endpoint | Description |
 |---------|----------|-------------|
 | GET | `/` | Message de bienvenue |
 | GET | `/health` | Health check |
 | GET | `/docs` | Documentation Swagger |
+
+### Authentification
+| Méthode | Endpoint | Description | Accès |
+|---------|----------|-------------|-------|
+| POST | `/api/v1/auth/login` | Connexion | Public |
+| POST | `/api/v1/auth/register` | Créer un utilisateur | Admin |
+| GET | `/api/v1/auth/me` | Profil utilisateur | Authentifié |
+
+### Clients
+| Méthode | Endpoint | Description | Accès |
+|---------|----------|-------------|-------|
+| POST | `/api/v1/clients` | Créer un client | Admin |
+| GET | `/api/v1/clients` | Liste des clients | Authentifié |
+| GET | `/api/v1/clients/{id}` | Détail d'un client | Authentifié |
+| PUT | `/api/v1/clients/{id}` | Modifier un client | Admin |
+| DELETE | `/api/v1/clients/{id}` | Supprimer un client | Admin |
+
+### Projets
+| Méthode | Endpoint | Description | Accès |
+|---------|----------|-------------|-------|
+| POST | `/api/v1/projects` | Créer un projet | Admin |
+| GET | `/api/v1/projects` | Liste des projets | Authentifié |
+| GET | `/api/v1/projects/{id}` | Détail d'un projet | Authentifié |
+| PUT | `/api/v1/projects/{id}` | Modifier un projet | Admin |
+| DELETE | `/api/v1/projects/{id}` | Supprimer un projet | Admin |
 
 ## Variables d'Environnement
 
@@ -153,6 +191,8 @@ Une fois le serveur lancé, la documentation est disponible :
 | `JWT_SECRET` | Clé secrète pour JWT | Oui |
 | `JWT_ALGORITHM` | Algorithme JWT (HS256) | Non |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Durée de validité token | Non |
+| `ADMIN_EMAIL` | Email du premier admin (init) | Non |
+| `ADMIN_PASSWORD` | Mot de passe du premier admin (init) | Non |
 
 ## Licence
 
