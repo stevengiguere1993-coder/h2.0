@@ -11,5 +11,7 @@ Pattern: Service Layer
 """
 
 from app.services.auth import AuthService
+from app.services.client import ClientService
+from app.services.project import ProjectService
 
-__all__ = ["AuthService"]
+__all__ = ["AuthService", "ClientService", "ProjectService"]
