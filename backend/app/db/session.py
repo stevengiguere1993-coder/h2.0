@@ -19,8 +19,9 @@ from app.core.config import settings
 
 
 # Create async engine
+# Use async_database_url to ensure postgresql+asyncpg:// format
 engine = create_async_engine(
-    settings.database_url,
+    settings.async_database_url,
     echo=settings.is_development,  # Log SQL in development
     pool_pre_ping=True,  # Verify connections before use
     pool_size=5,

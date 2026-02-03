@@ -33,6 +33,21 @@ class Settings(BaseSettings):
     # Database
     database_url: str
 
+    @property
+    def async_database_url(self) -> str:
+        """
+        Get database URL for async SQLAlchemy.
+
+        Converts standard postgresql:// to postgresql+asyncpg://
+        which is required for async operations.
+        """
+        url = self.database_url
+        if url.startswith("postgresql://"):
+            return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        if url.startswith("postgres://"):
+            return url.replace("postgres://", "postgresql+asyncpg://", 1)
+        return url
+
     # Security
     jwt_secret: str
     jwt_algorithm: str = "HS256"

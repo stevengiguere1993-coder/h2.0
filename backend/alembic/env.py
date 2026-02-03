@@ -26,9 +26,12 @@ from app.models import *  # noqa: F401, F403
 config = context.config
 
 # Override sqlalchemy.url with the value from settings
-config.set_main_option("sqlalchemy.url", settings.database_url.replace(
-    "postgresql+asyncpg://", "postgresql://"
-))
+# Use database_url directly (not async) for Alembic offline mode
+# Handle both postgres:// and postgresql:// formats from Render
+db_url = settings.database_url
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+config.set_main_option("sqlalchemy.url", db_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
@@ -83,7 +86,7 @@ async def run_async_migrations() -> None:
     """
     # Create async engine configuration
     configuration = config.get_section(config.config_ini_section)
-    configuration["sqlalchemy.url"] = settings.database_url
+    configuration["sqlalchemy.url"] = settings.async_database_url
 
     connectable = async_engine_from_config(
         configuration,
