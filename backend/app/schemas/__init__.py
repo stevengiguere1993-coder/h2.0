@@ -22,6 +22,10 @@ from app.schemas.project import (
 from app.schemas.token import Token, TokenPayload
 from app.schemas.user import UserCreate, UserLogin, UserRead, UserUpdate
 
+# Rebuild models to resolve forward references
+ClientReadWithProjects.model_rebuild()
+ProjectReadWithClient.model_rebuild()
+
 __all__ = [
     # Client
     "ClientCreate",

@@ -2,10 +2,15 @@
 Pydantic schemas for Project operations.
 """
 
+from __future__ import annotations
+
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from app.schemas.client import ClientRead
 
 
 class ProjectBase(BaseModel):
@@ -58,6 +63,4 @@ class ProjectRead(ProjectBase):
 class ProjectReadWithClient(ProjectRead):
     """Schema for reading project with client details."""
 
-    from app.schemas.client import ClientRead
-
-    client: Optional["ClientRead"] = None
+    client: Optional[ClientRead] = None
