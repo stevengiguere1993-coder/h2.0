@@ -1,9 +1,10 @@
 """
 Construction Management API - Main Application Entry Point
 
-FastAPI application for construction company management.
+FastAPI application for Horizon Services Immobiliers.
 """
 
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -12,7 +13,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import api_router
 from app.core.config import settings
-from app.db.session import close_db
+from app.db.session import close_db, init_db
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -20,60 +23,71 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     Application lifespan handler.
 
-    Handles startup and shutdown events.
+    On startup, run a best-effort idempotent table creation
+    (create_all only creates tables that don't exist — never drops
+    or alters existing ones). Real schema changes will be shipped
+    via Alembic once we introduce a baseline migration.
     """
-    # Startup
+    try:
+        # Ensure models are imported so they register with metadata
+        import app.models  # noqa: F401
+
+        await init_db()
+    except Exception as exc:
+        logger.warning("init_db failed during startup: %s", exc)
+
     yield
-    # Shutdown
     await close_db()
 
 
 def create_application() -> FastAPI:
-    """
-    Create and configure the FastAPI application.
-
-    Returns:
-        Configured FastAPI application instance
-    """
+    """Create and configure the FastAPI application."""
     app = FastAPI(
-        title="Construction Management API",
-        description="API pour la gestion d'entreprise de construction",
-        version="0.1.0",
+        title="Horizon Services Immobiliers API",
+        description="API publique et interne pour Horizon Services Immobiliers.",
+        version="0.2.0",
         docs_url="/docs",
         redoc_url="/redoc",
         openapi_url="/openapi.json",
         lifespan=lifespan,
     )
 
-    # CORS middleware configuration
+    # CORS — production will be restricted to the Next.js frontend origin
+    # via the FRONTEND_ORIGINS env var (comma-separated).
+    allowed_origins: list[str] = []
+    if settings.is_development:
+        allowed_origins = ["*"]
+    else:
+        raw = getattr(settings, "frontend_origins", "") or ""
+        allowed_origins = [o.strip() for o in raw.split(",") if o.strip()]
+        if not allowed_origins:
+            allowed_origins = [
+                "https://immohorizon.com",
+                "https://www.immohorizon.com",
+                "https://immohorizon.ca",
+                "https://www.immohorizon.ca",
+            ]
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"] if settings.is_development else [],
+        allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    # Include API routers
     app.include_router(api_router, prefix="/api/v1")
-
     return app
 
 
-# Create application instance
 app = create_application()
 
 
 @app.get("/", tags=["root"])
 async def root() -> dict:
-    """
-    Root endpoint - Welcome message.
-
-    Returns basic API information.
-    """
     return {
-        "message": "Construction Management API",
-        "version": "0.1.0",
+        "message": "Horizon Services Immobiliers API",
+        "version": "0.2.0",
         "docs": "/docs",
         "health": "/health",
     }
@@ -81,12 +95,4 @@ async def root() -> dict:
 
 @app.get("/health", tags=["health"])
 async def health_check() -> dict:
-    """
-    Health check endpoint.
-
-    Used by Render and other services to verify the API is running.
-    """
-    return {
-        "status": "healthy",
-        "environment": settings.env,
-    }
+    return {"status": "healthy", "environment": settings.env}
