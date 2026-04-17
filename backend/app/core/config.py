@@ -14,8 +14,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """
     Application settings loaded from environment variables.
-
-    All values must be provided via environment variables or .env file.
     """
 
     model_config = SettingsConfigDict(
@@ -35,12 +33,6 @@ class Settings(BaseSettings):
 
     @property
     def async_database_url(self) -> str:
-        """
-        Get database URL for async SQLAlchemy.
-
-        Converts standard postgresql:// to postgresql+asyncpg://
-        which is required for async operations.
-        """
         url = self.database_url
         if url.startswith("postgresql://"):
             return url.replace("postgresql://", "postgresql+asyncpg://", 1)
@@ -53,37 +45,49 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
 
-    # S3 Storage (optional, for future use)
+    # Frontend origins (comma-separated) for CORS in production
+    frontend_origins: Optional[str] = None
+
+    # S3 Storage (optional)
     s3_endpoint: Optional[str] = None
     s3_bucket: Optional[str] = None
     s3_access_key: Optional[str] = None
     s3_secret_key: Optional[str] = None
 
-    # QuickBooks Integration (optional, for future use)
+    # QuickBooks Integration (optional)
     quickbooks_client_id: Optional[str] = None
     quickbooks_client_secret: Optional[str] = None
     quickbooks_env: str = "sandbox"
+    qbo_refresh_token: Optional[str] = None
+    qbo_realm_id: Optional[str] = None
+
+    # Microsoft Graph (email)
+    azure_tenant_id: Optional[str] = None
+    azure_client_id: Optional[str] = None
+    azure_client_secret: Optional[str] = None
+    mail_from_email: str = "info@immohorizon.com"
+    mail_from_name: str = "Horizon Services Immobiliers"
+
+    # Anthropic (SEO content + validation)
+    anthropic_api_key: Optional[str] = None
+    claude_model: str = "claude-sonnet-4-5"
+
+    # Monday migration (one-shot import from old Monday account)
+    monday_api_token: Optional[str] = None
 
     @property
     def is_production(self) -> bool:
-        """Check if running in production environment."""
         return self.env.lower() == "production"
 
     @property
     def is_development(self) -> bool:
-        """Check if running in development environment."""
         return self.env.lower() == "development"
 
 
 @lru_cache
 def get_settings() -> Settings:
-    """
-    Get cached settings instance.
-
-    Uses lru_cache to ensure settings are only loaded once.
-    """
+    """Get cached settings instance."""
     return Settings()
 
 
-# Global settings instance
 settings = get_settings()
