@@ -6,7 +6,7 @@ Main router that aggregates all API v1 endpoints.
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, blog, clients, contact, projects
+from app.api.v1.endpoints import auth, blog, clients, contact, projects, webhooks
 from app.api.v1.endpoints.business import (
     achats_router,
     agenda_router,
@@ -26,6 +26,7 @@ api_router.include_router(clients.router)
 api_router.include_router(projects.router)
 api_router.include_router(contact.router)
 api_router.include_router(blog.router)
+api_router.include_router(webhooks.router)
 
 # Business
 api_router.include_router(employes_router)
