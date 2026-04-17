@@ -50,8 +50,8 @@ export function SiteFooter() {
         <div className="container flex flex-col items-center justify-between gap-2 py-5 text-xs text-brand-300 md:flex-row">
           <p>© {year} Horizon Services Immobiliers. {tFooter("rights")}</p>
           <div className="flex gap-4">
-            <Link href="/contact" className="hover:text-white">{tFooter("legal")}</Link>
-            <Link href="/contact" className="hover:text-white">{tFooter("privacy")}</Link>
+            <Link href={"/mentions-legales" as "/mentions-legales"} className="hover:text-white">{tFooter("legal")}</Link>
+            <Link href={"/confidentialite" as "/confidentialite"} className="hover:text-white">{tFooter("privacy")}</Link>
           </div>
         </div>
       </div>
