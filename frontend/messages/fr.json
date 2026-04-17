@@ -1,0 +1,106 @@
+{
+  "metadata": {
+    "siteName": "Horizon Services Immobiliers",
+    "tagline": "Rénovation résidentielle et multilogements — Grand Montréal",
+    "defaultDescription": "Rénovation de salles de bain, cuisines et immeubles multilogements dans le Grand Montréal. Qualité, rigueur, budget maîtrisé."
+  },
+  "nav": {
+    "home": "Accueil",
+    "services": "Services",
+    "about": "À propos",
+    "contact": "Contact",
+    "login": "Connexion",
+    "getQuote": "Demander une soumission"
+  },
+  "hero": {
+    "eyebrow": "Horizon Services Immobiliers",
+    "title": "Des rénovations rigoureuses, au prix juste.",
+    "subtitle": "Salles de bain, cuisines et appartements complets dans le Grand Montréal. Nous sommes aussi propriétaires d'immeubles multilogements — nous optimisons vos coûts comme les nôtres.",
+    "ctaPrimary": "Obtenir une soumission gratuite",
+    "ctaSecondary": "Découvrir nos services",
+    "highlights": [
+      "Plus de 15 ans d'expérience terrain",
+      "Équipe intégrée, aucun intermédiaire",
+      "Devis détaillé sous 48h"
+    ]
+  },
+  "services": {
+    "title": "Nos services de rénovation",
+    "subtitle": "Une expertise concentrée, un résultat exécuté selon les règles de l'art.",
+    "items": {
+      "bathroom": {
+        "title": "Salle de bain",
+        "description": "Conception, plomberie, céramique, mobilier sur mesure. On s'occupe de tout."
+      },
+      "kitchen": {
+        "title": "Cuisine",
+        "description": "Rénovation complète : armoires, comptoirs, électricité, ventilation."
+      },
+      "multi": {
+        "title": "Multilogement",
+        "description": "Rénovation d'appartements complets pour propriétaires d'immeubles. Recette prouvée, coût optimisé."
+      },
+      "complete": {
+        "title": "Rénovation complète",
+        "description": "Mise à niveau intégrale d'un logement ou d'un immeuble. Un seul interlocuteur."
+      }
+    },
+    "learnMore": "En savoir plus"
+  },
+  "why": {
+    "title": "Pourquoi nous choisir",
+    "items": [
+      { "title": "Propriétaires nous-mêmes", "desc": "Nous détenons des immeubles multilogements. Votre budget est traité comme le nôtre." },
+      { "title": "Équipe intégrée", "desc": "Pas de sous-traitance sauvage. Nos corps de métier, notre contrôle qualité." },
+      { "title": "Transparence totale", "desc": "Prix détaillés, échéancier clair, suivi numérique du chantier." },
+      { "title": "Finition exemplaire", "desc": "Notre marque de commerce. Vérifiez nos projets livrés avant de vous engager." }
+    ]
+  },
+  "cta": {
+    "title": "Prêt à démarrer votre projet?",
+    "subtitle": "Décrivez-nous votre projet. Réponse sous 24 heures ouvrables.",
+    "button": "Demander une soumission"
+  },
+  "contact": {
+    "title": "Parlons de votre projet",
+    "subtitle": "Remplissez ce formulaire. Un membre de notre équipe vous contacte sous 24 h ouvrables.",
+    "fields": {
+      "name": "Nom complet",
+      "email": "Courriel",
+      "phone": "Téléphone (optionnel)",
+      "address": "Adresse du projet (optionnel)",
+      "projectType": "Type de projet",
+      "budget": "Budget approximatif",
+      "message": "Décrivez votre projet",
+      "consent": "J'accepte d'être contacté par Horizon Services Immobiliers au sujet de ma demande.",
+      "marketing": "Je souhaite recevoir occasionnellement des conseils et offres."
+    },
+    "projectTypes": {
+      "salle_bain": "Salle de bain",
+      "cuisine": "Cuisine",
+      "multilogement": "Multilogement",
+      "renovation_complete": "Rénovation complète",
+      "autre": "Autre"
+    },
+    "budgets": {
+      "under_10k": "Moins de 10 000 $",
+      "10_25": "10 000 $ – 25 000 $",
+      "25_50": "25 000 $ – 50 000 $",
+      "50_100": "50 000 $ – 100 000 $",
+      "over_100": "Plus de 100 000 $",
+      "unsure": "Je ne sais pas encore"
+    },
+    "submit": "Envoyer ma demande",
+    "submitting": "Envoi en cours…",
+    "success": "Merci! Votre demande a bien été reçue. Référence : {reference}. Nous vous contactons sous 24 h ouvrables.",
+    "errorGeneric": "Désolé, une erreur est survenue. Veuillez réessayer ou nous appeler directement.",
+    "errorRateLimit": "Trop de demandes en peu de temps. Veuillez réessayer dans quelques minutes."
+  },
+  "footer": {
+    "rights": "Tous droits réservés.",
+    "legal": "Mentions légales",
+    "privacy": "Politique de confidentialité",
+    "rbq": "Licence RBQ : à ajouter",
+    "service_zone": "Grand Montréal — Laval, Rive-Sud, Rive-Nord"
+  }
+}
