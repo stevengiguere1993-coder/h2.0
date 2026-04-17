@@ -1,8 +1,16 @@
-# Horizon Services Immobiliers — Frontend
+# Immo Horizon — frontend (Next.js 15)
 
-Next.js 15 (App Router) frontend for `immohorizon.com`.
+Site public bilingue (FR / EN) et portail interne pour Horizon Services Immobiliers.
 
-## Dev
+## Stack
+
+- Next.js 15 App Router + React 19
+- TypeScript strict
+- Tailwind CSS + tokens brand Horizon
+- `next-intl` pour la i18n FR/EN
+- Consomme l'API FastAPI déployée sur Render (`NEXT_PUBLIC_API_BASE_URL`)
+
+## Développement
 
 ```bash
 cd frontend
@@ -11,18 +19,12 @@ npm install
 npm run dev
 ```
 
-The app talks to the FastAPI backend defined by `NEXT_PUBLIC_API_BASE_URL`
-(defaults to the deployed `https://h2-0.onrender.com`).
-
-## Locales
-
-- `/` → French (default)
-- `/en` → English
-
-Messages live in `messages/{locale}.json`.
-
-## Build
+## Build / start (Render)
 
 ```bash
-npm run build && npm run start
+npm install
+npm run build
+npm run start
 ```
+
+Le `start` écoute sur `$PORT` (injecté par Render).

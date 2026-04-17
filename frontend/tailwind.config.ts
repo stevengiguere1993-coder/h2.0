@@ -1,57 +1,52 @@
-import type { Config } from 'tailwindcss';
+import type { Config } from "tailwindcss";
 
 const config: Config = {
   content: [
-    './app/**/*.{ts,tsx}',
-    './components/**/*.{ts,tsx}',
+    "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
+    "./src/components/**/*.{js,ts,jsx,tsx,mdx}"
   ],
   theme: {
+    container: {
+      center: true,
+      padding: {
+        DEFAULT: "1rem",
+        sm: "1.5rem",
+        lg: "2rem"
+      },
+      screens: {
+        "2xl": "1280px"
+      }
+    },
     extend: {
       colors: {
         brand: {
-          50: '#f0f7ff',
-          100: '#dcedff',
-          200: '#bfdcff',
-          300: '#92c3ff',
-          400: '#5fa1fb',
-          500: '#3a80f5',
-          600: '#2463e8',
-          700: '#1c4dd4',
-          800: '#1d40ac',
-          900: '#1d3a87',
-          950: '#162451',
+          50: "#f2f7fb",
+          100: "#e2ecf5",
+          200: "#bfd5e9",
+          300: "#8fb4d6",
+          400: "#5a8ebe",
+          500: "#3a6fa3",
+          600: "#2d588a",
+          700: "#254772",
+          800: "#1f3a5e",
+          900: "#15283f",
+          950: "#0b1726"
         },
-        ink: {
-          50: '#f6f7f9',
-          100: '#ebedf2',
-          200: '#d3d8e0',
-          300: '#abb3c0',
-          400: '#7d8798',
-          500: '#5d6879',
-          600: '#495164',
-          700: '#3c4251',
-          800: '#333846',
-          900: '#13151b',
-        },
+        accent: {
+          500: "#d89b3c",
+          600: "#b97e24"
+        }
       },
       fontFamily: {
-        sans: ['var(--font-inter)', 'system-ui', 'sans-serif'],
-        display: ['var(--font-inter)', 'system-ui', 'sans-serif'],
+        sans: ["'Inter'", "ui-sans-serif", "system-ui", "sans-serif"],
+        display: ["'Plus Jakarta Sans'", "'Inter'", "sans-serif"]
       },
-      container: {
-        center: true,
-        padding: {
-          DEFAULT: '1rem',
-          sm: '1.5rem',
-          lg: '2rem',
-        },
-        screens: {
-          '2xl': '1280px',
-        },
-      },
-    },
+      boxShadow: {
+        card: "0 1px 2px rgba(15,23,42,0.05), 0 8px 24px -12px rgba(15,23,42,0.15)"
+      }
+    }
   },
-  plugins: [],
+  plugins: []
 };
 
 export default config;
