@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Image from "next/image";
 import { Menu, X } from "lucide-react";
 import { useTranslations } from "next-intl";
 
@@ -20,11 +19,14 @@ export function SiteHeader() {
   ];
 
   return (
-    <header className="sticky top-0 z-40 border-b border-brand-800 bg-brand-950/90 backdrop-blur">
+    <header className="sticky top-0 z-40 border-b border-brand-800 bg-brand-950/95 backdrop-blur">
       <div className="container flex h-16 items-center justify-between">
-        <Link href="/" className="flex items-center gap-2 font-display text-lg font-bold tracking-tight text-white">
-          <Image src="/logo.png" alt="Horizon" width="32" height="32" className="h-8 w-8 object-contain" />
-          <span>Horizon</span>
+        <Link href="/" className="flex items-center gap-3">
+          <span className="logo-badge" aria-hidden="true">H</span>
+          <span className="hidden font-display text-sm font-bold uppercase tracking-[0.2em] text-white sm:inline">
+            Horizon <span className="text-brand-300">Services Immobiliers</span>
+          </span>
+          <span className="font-display text-base font-bold text-white sm:hidden">Horizon</span>
         </Link>
 
         <nav className="hidden items-center gap-8 md:flex">
@@ -32,16 +34,16 @@ export function SiteHeader() {
             <Link
               key={l.href}
               href={l.href}
-              className="text-sm font-medium text-brand-200 transition hover:text-white"
+              className="text-sm font-semibold text-white/80 transition hover:text-white"
             >
               {l.label}
             </Link>
           ))}
         </nav>
 
-        <div className="hidden items-center gap-3 md:flex">
+        <div className="hidden items-center gap-4 md:flex">
           <LanguageSwitcher />
-          <Link href="/connexion" className="text-sm font-medium text-brand-200 hover:text-white">
+          <Link href="/connexion" className="text-sm font-semibold text-white/80 hover:text-white">
             {t("login")}
           </Link>
           <Link href="/contact" className="btn-accent text-sm">
@@ -67,14 +69,14 @@ export function SiteHeader() {
                 key={l.href}
                 href={l.href}
                 onClick={() => setOpen(false)}
-                className="text-base font-medium text-brand-100"
+                className="text-base font-medium text-white"
               >
                 {l.label}
               </Link>
             ))}
             <div className="flex items-center gap-3 pt-2">
               <LanguageSwitcher />
-              <Link href="/connexion" onClick={() => setOpen(false)} className="text-sm font-medium text-brand-100">
+              <Link href="/connexion" onClick={() => setOpen(false)} className="text-sm font-medium text-white">
                 {t("login")}
               </Link>
               <Link href="/contact" onClick={() => setOpen(false)} className="btn-accent text-sm">
