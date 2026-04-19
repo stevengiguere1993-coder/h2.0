@@ -20,13 +20,13 @@ export function SiteHeader() {
 
   return (
     <header className="sticky top-0 z-40 border-b border-brand-800 bg-brand-950/95 backdrop-blur">
-      <div className="container flex h-16 items-center justify-between">
+      <div className="container flex items-center justify-between py-3">
         <Link href="/" className="flex items-center" aria-label="Horizon Services Immobiliers — accueil">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/logo.png"
             alt="Horizon Services Immobiliers"
-            className="h-10 w-auto object-contain sm:h-12"
+            className="h-24 w-auto object-contain sm:h-32"
           />
         </Link>
 

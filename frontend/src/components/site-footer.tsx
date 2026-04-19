@@ -16,7 +16,7 @@ export function SiteFooter() {
           <img
             src="/logo.png"
             alt="Horizon Services Immobiliers"
-            className="h-16 w-auto object-contain"
+            className="h-40 w-auto object-contain"
           />
           <p className="mt-4 text-sm text-white/80">{tFooter("service_zone")}</p>
           <p className="mt-1 text-xs text-white/60">{tFooter("rbq")}</p>
