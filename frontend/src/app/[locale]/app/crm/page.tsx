@@ -24,10 +24,10 @@ type ContactRequest = {
 
 const STATUS_LABELS: Record<string, string> = {
   new: "Nouveau",
-  contacted: "Contacté",
-  qualified: "Qualifié",
-  quoted: "Devis envoyé",
-  won: "Gagné",
+  contacted: "Contacte",
+  qualified: "Qualifie",
+  quoted: "Devis envoye",
+  won: "Gagne",
   lost: "Perdu",
   spam: "Spam"
 };
@@ -55,7 +55,9 @@ export default function CrmPage() {
       setLoading(true);
       setError(null);
       try {
-        const qs = statusFilter ? `?status=${encodeURIComponent(statusFilter)}&limit=100` : "?limit=100";
+        const qs = statusFilter
+          ? `?status=${encodeURIComponent(statusFilter)}&limit=100`
+          : "?limit=100";
         const res = await authedFetch(`/api/v1/contact${qs}`);
         if (!res.ok) throw new Error(`http_${res.status}`);
         const data = (await res.json()) as ContactRequest[];
@@ -71,7 +73,9 @@ export default function CrmPage() {
 
   async function updateStatus(id: number, newStatus: string) {
     const prev = items;
-    setItems((xs) => xs.map((x) => (x.id === id ? { ...x, status: newStatus } : x)));
+    setItems((xs) =>
+      xs.map((x) => (x.id === id ? { ...x, status: newStatus } : x))
+    );
     try {
       const res = await authedFetch(`/api/v1/contact/${id}`, {
         method: "PATCH",
@@ -80,7 +84,7 @@ export default function CrmPage() {
       if (!res.ok) throw new Error(`http_${res.status}`);
     } catch {
       setItems(prev);
-      setError("Mise à jour échouée.");
+      setError("Mise a jour echouee.");
     }
   }
 
@@ -92,14 +96,22 @@ export default function CrmPage() {
       <div className="container">
         <header className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
           <div>
-            <p className="text-sm text-brand-600"><Link href={"/app" as "/app"} className="hover:text-brand-900">&larr; Portail</Link></p>
-            <h1 className="text-3xl font-bold text-brand-950">CRM — Demandes de contact</h1>
+            <p className="text-sm text-brand-600">
+              <Link href={"/app"} className="hover:text-brand-900">
+                &larr; Portail
+              </Link>
+            </p>
+            <h1 className="text-3xl font-bold text-brand-950">
+              CRM &mdash; Demandes de contact
+            </h1>
             <p className="mt-1 text-sm text-brand-700">
               Pipeline des prospects issus du site public.
             </p>
           </div>
           <div>
-            <label className="sr-only" htmlFor="status-filter">Filtrer</label>
+            <label className="sr-only" htmlFor="status-filter">
+              Filtrer
+            </label>
             <select
               id="status-filter"
               value={statusFilter}
@@ -108,7 +120,9 @@ export default function CrmPage() {
             >
               <option value="">Tous les statuts</option>
               {Object.entries(STATUS_LABELS).map(([k, v]) => (
-                <option key={k} value={k}>{v}</option>
+                <option key={k} value={k}>
+                  {v}
+                </option>
               ))}
             </select>
           </div>
@@ -118,7 +132,9 @@ export default function CrmPage() {
 
         <div className="mt-8 overflow-hidden rounded-2xl border border-brand-100 bg-white shadow-card">
           {loading ? (
-            <div className="py-16"><CenterSpinner /></div>
+            <div className="py-16">
+              <CenterSpinner />
+            </div>
           ) : items.length === 0 ? (
             <p className="px-6 py-12 text-center text-sm text-brand-600">
               Aucune demande pour ce filtre.
@@ -138,27 +154,42 @@ export default function CrmPage() {
                 {items.map((r) => (
                   <tr key={r.id} className="hover:bg-brand-50/50">
                     <td className="px-4 py-3 text-brand-700">
-                      {new Date(r.created_at).toLocaleDateString("fr-CA", { month: "short", day: "2-digit" })}
+                      {new Date(r.created_at).toLocaleDateString("fr-CA", {
+                        month: "short",
+                        day: "2-digit"
+                      })}
                     </td>
                     <td className="px-4 py-3">
                       <div className="font-semibold text-brand-950">{r.name}</div>
                       <div className="text-xs text-brand-600">{r.email}</div>
-                      {r.phone ? <div className="text-xs text-brand-600">{r.phone}</div> : null}
+                      {r.phone ? (
+                        <div className="text-xs text-brand-600">{r.phone}</div>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3">
                       <div className="text-brand-900">{r.project_type}</div>
-                      {r.budget_range ? <div className="text-xs text-brand-600">{r.budget_range}</div> : null}
-                      <div className="text-xs text-brand-700 line-clamp-2 max-w-xs">{r.message}</div>
+                      {r.budget_range ? (
+                        <div className="text-xs text-brand-600">{r.budget_range}</div>
+                      ) : null}
+                      <div className="text-xs text-brand-700 line-clamp-2 max-w-xs">
+                        {r.message}
+                      </div>
                     </td>
-                    <td className="px-4 py-3 text-xs text-brand-600">{r.source || “–”}</td>
+                    <td className="px-4 py-3 text-xs text-brand-600">
+                      {r.source || "-"}
+                    </td>
                     <td className="px-4 py-3">
                       <select
                         value={r.status}
                         onChange={(e) => updateStatus(r.id, e.target.value)}
-                        className={`rounded-md px-2 py-1 text-xs font-semibold ${STATUS_CLASS[r.status] || "bg-gray-100"}`}
+                        className={`rounded-md px-2 py-1 text-xs font-semibold ${
+                          STATUS_CLASS[r.status] || "bg-gray-100"
+                        }`}
                       >
                         {Object.entries(STATUS_LABELS).map(([k, v]) => (
-                          <option key={k} value={k}>{v}</option>
+                          <option key={k} value={k}>
+                            {v}
+                          </option>
                         ))}
                       </select>
                     </td>

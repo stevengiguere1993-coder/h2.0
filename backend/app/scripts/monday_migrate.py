@@ -1,5 +1,5 @@
 """
-One-shot Monday.com → Postgres migration.
+One-shot Monday.com -> Postgres migration.
 
 Reads the priority boards from both Horizon workspaces and upserts rows
 into our own tables. Safe to re-run: every target has a stable
@@ -39,7 +39,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("monday_migrate")
 
 
-# Board mapping — discovered during exploration
+# Board mapping - discovered during exploration
 BOARDS = {
     # Horizon Construction
     "clients": 18398667742,
@@ -62,10 +62,17 @@ BOARDS = {
 }
 
 
+# Characters stripped from numeric-looking Monday values.
+_NUMERIC_STRIP = (",", "$", " ", "\u00a0", "\u202f")
+
+
 def parse_numeric(val: Optional[str]) -> Optional[float]:
     if not val:
         return None
-    cleaned = val.replace(",", ".").replace("$", "").replace(“ ”, "").strip()
+    cleaned = val
+    for ch in _NUMERIC_STRIP:
+        cleaned = cleaned.replace(ch, "")
+    cleaned = cleaned.replace(",", ".").strip()
     try:
         return float(cleaned)
     except (TypeError, ValueError):
