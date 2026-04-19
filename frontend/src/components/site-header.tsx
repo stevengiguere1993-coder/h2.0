@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import { Menu, X } from "lucide-react";
 import { useTranslations } from "next-intl";
 
@@ -19,11 +20,11 @@ export function SiteHeader() {
   ];
 
   return (
-    <header className="sticky top-0 z-40 border-b border-brand-100 bg-white/90 backdrop-blur">
+    <header className="sticky top-0 z-40 border-b border-brand-800 bg-brand-950/90 backdrop-blur">
       <div className="container flex h-16 items-center justify-between">
-        <Link href="/" className="flex items-center gap-2 font-display text-lg font-bold tracking-tight text-brand-900">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-700 text-white">H</span>
-          Horizon
+        <Link href="/" className="flex items-center gap-2 font-display text-lg font-bold tracking-tight text-white">
+          <Image src="/logo.png" alt="Horizon" width="32" height="32" className="h-8 w-8 object-contain" />
+          <span>Horizon</span>
         </Link>
 
         <nav className="hidden items-center gap-8 md:flex">
@@ -31,7 +32,7 @@ export function SiteHeader() {
             <Link
               key={l.href}
               href={l.href}
-              className="text-sm font-medium text-brand-800 transition hover:text-brand-950"
+              className="text-sm font-medium text-brand-200 transition hover:text-white"
             >
               {l.label}
             </Link>
@@ -40,17 +41,17 @@ export function SiteHeader() {
 
         <div className="hidden items-center gap-3 md:flex">
           <LanguageSwitcher />
-          <Link href="/connexion" className="text-sm font-medium text-brand-800 hover:text-brand-950">
+          <Link href="/connexion" className="text-sm font-medium text-brand-200 hover:text-white">
             {t("login")}
           </Link>
-          <Link href="/contact" className="btn-primary text-sm">
+          <Link href="/contact" className="btn-accent text-sm">
             {t("getQuote")}
           </Link>
         </div>
 
         <button
           type="button"
-          className="rounded-md p-2 text-brand-800 md:hidden"
+          className="rounded-md p-2 text-white md:hidden"
           onClick={() => setOpen((v) => !v)}
           aria-label={open ? "Close menu" : "Open menu"}
         >
@@ -59,24 +60,24 @@ export function SiteHeader() {
       </div>
 
       {open ? (
-        <div className="border-t border-brand-100 bg-white md:hidden">
+        <div className="border-t border-brand-800 bg-brand-950 md:hidden">
           <div className="container flex flex-col gap-3 py-4">
             {links.map((l) => (
               <Link
                 key={l.href}
                 href={l.href}
                 onClick={() => setOpen(false)}
-                className="text-base font-medium text-brand-800"
+                className="text-base font-medium text-brand-100"
               >
                 {l.label}
               </Link>
             ))}
             <div className="flex items-center gap-3 pt-2">
               <LanguageSwitcher />
-              <Link href="/connexion" onClick={() => setOpen(false)} className="text-sm font-medium text-brand-800">
+              <Link href="/connexion" onClick={() => setOpen(false)} className="text-sm font-medium text-brand-100">
                 {t("login")}
               </Link>
-              <Link href="/contact" onClick={() => setOpen(false)} className="btn-primary text-sm">
+              <Link href="/contact" onClick={() => setOpen(false)} className="btn-accent text-sm">
                 {t("getQuote")}
               </Link>
             </div>

@@ -29,9 +29,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     via Alembic once we introduce a baseline migration.
     """
     try:
-        # Ensure models are imported so they register with metadata
         import app.models  # noqa: F401
-
         await init_db()
     except Exception as exc:
         logger.warning("init_db failed during startup: %s", exc)
@@ -45,15 +43,16 @@ def create_application() -> FastAPI:
     app = FastAPI(
         title="Horizon Services Immobiliers API",
         description="API publique et interne pour Horizon Services Immobiliers.",
-        version="0.2.0",
+        version="0.2.1",
         docs_url="/docs",
         redoc_url="/redoc",
         openapi_url="/openapi.json",
         lifespan=lifespan,
     )
 
-    # CORS — production will be restricted to the Next.js frontend origin
-    # via the FRONTEND_ORIGINS env var (comma-separated).
+    # CORS — allow the production domains, plus localhost for dev,
+    # plus any *.onrender.com preview URL so the Render-assigned
+    # temporary domain for h2-0-web can reach the API during setup.
     allowed_origins: list[str] = []
     if settings.is_development:
         allowed_origins = ["*"]
@@ -71,6 +70,7 @@ def create_application() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
+        allow_origin_regex=r"^https://[a-z0-9-]+\.onrender\.com$|^http://localhost(:\d+)?$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -87,7 +87,7 @@ app = create_application()
 async def root() -> dict:
     return {
         "message": "Horizon Services Immobiliers API",
-        "version": "0.2.0",
+        "version": "0.2.1",
         "docs": "/docs",
         "health": "/health",
     }

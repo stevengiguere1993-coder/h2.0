@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { NextIntlClientProvider } from "next-intl";
-import { getTranslations, setRequestLocale } from "next-intl/server";
+import { getMessages, getTranslations, setRequestLocale } from "next-intl/server";
 
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
@@ -70,9 +70,13 @@ export default async function LocaleLayout({ children, params }: Props) {
 
   setRequestLocale(locale);
 
+  // Load the full messages bundle server-side and hand it to the
+  // client provider so every useTranslations() call resolves.
+  const messages = await getMessages();
+
   return (
-    <NextIntlClientProvider>
-      <div className="flex min-h-screen flex-col">
+    <NextIntlClientProvider locale={locale} messages={messages}>
+      <div className="flex min-h-screen flex-col bg-brand-950 text-brand-100">
         <SiteHeader />
         <main className="flex-1">{children}</main>
         <SiteFooter />
