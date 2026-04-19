@@ -19,18 +19,22 @@ const config: Config = {
     },
     extend: {
       colors: {
+        // Monochrome palette aligned with the Horizon logo (pure black bg).
+        // brand-950 is pure black so the site background matches the logo
+        // exactly. The rest of the scale stays dark but slightly lifted
+        // so cards and borders remain readable against pure black.
         brand: {
-          50: "#f2f7fb",
-          100: "#e2ecf5",
-          200: "#bfd5e9",
-          300: "#8fb4d6",
-          400: "#5a8ebe",
-          500: "#3a6fa3",
-          600: "#2d588a",
-          700: "#254772",
-          800: "#1f3a5e",
-          900: "#15283f",
-          950: "#0b1726"
+          50: "#f5f5f5",
+          100: "#e5e5e5",
+          200: "#cfcfcf",
+          300: "#a3a3a3",
+          400: "#737373",
+          500: "#525252",
+          600: "#3d3d3d",
+          700: "#2b2b2b",
+          800: "#1a1a1a",
+          900: "#0f0f0f",
+          950: "#000000"
         },
         accent: {
           500: "#d89b3c",
@@ -42,7 +46,7 @@ const config: Config = {
         display: ["'Plus Jakarta Sans'", "'Inter'", "sans-serif"]
       },
       boxShadow: {
-        card: "0 1px 2px rgba(15,23,42,0.05), 0 8px 24px -12px rgba(15,23,42,0.15)"
+        card: "0 1px 2px rgba(0,0,0,0.5), 0 8px 24px -12px rgba(0,0,0,0.7)"
       }
     }
   },
