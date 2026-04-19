@@ -9,7 +9,9 @@ export default getRequestConfig(async ({ requestLocale }) => {
   }
 
   try {
-    const messages = (await import(`../messages/${locale}.json`)).default;
+    // messages live at frontend/messages/*.json (project root), so from
+    // frontend/src/i18n/ we climb two levels.
+    const messages = (await import(`../../messages/${locale}.json`)).default;
     return { locale, messages };
   } catch {
     notFound();
