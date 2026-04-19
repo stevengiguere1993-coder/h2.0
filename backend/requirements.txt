@@ -10,7 +10,10 @@ alembic>=1.13.1,<2.0.0
 
 # Security
 python-jose[cryptography]>=3.3.0,<4.0.0
-passlib[bcrypt]>=1.7.4,<2.0.0
+passlib>=1.7.4,<2.0.0
+# Pin bcrypt < 4.0 because passlib 1.7.4's internal self-test
+# uses a >72-byte password that bcrypt 4.x rejects, breaking startup.
+bcrypt>=3.2.0,<4.0.0
 
 # Configuration
 pydantic>=2.5.0,<3.0.0
