@@ -91,8 +91,8 @@ function HomeContent() {
               <div className="flex items-center gap-3">
                 <Hammer className="h-6 w-6 text-accent-500" />
                 <div>
-                  <p className="text-2xl font-bold text-white">150+</p>
-                  <p className="text-xs text-white/70">Chantiers livres</p>
+                  <p className="text-2xl font-bold text-white">100+</p>
+                  <p className="text-xs text-white/70">Chantiers livres par notre equipe</p>
                 </div>
               </div>
             </div>
@@ -100,8 +100,8 @@ function HomeContent() {
               <div className="flex items-center gap-3">
                 <ShieldCheck className="h-6 w-6 text-accent-500" />
                 <div>
-                  <p className="text-2xl font-bold text-white">5 ans</p>
-                  <p className="text-xs text-white/70">Garantie</p>
+                  <p className="text-2xl font-bold text-white">1 an+</p>
+                  <p className="text-xs text-white/70">Plusieurs garanties applicables</p>
                 </div>
               </div>
             </div>
@@ -164,7 +164,7 @@ function HomeContent() {
         <div className="container">
           <div className="mx-auto max-w-2xl text-center">
             <span className="eyebrow">
-              <Sparkles className="h-3 w-3" /> Notre différence
+              <Sparkles className="h-3 w-3" /> Notre difference
             </span>
             <h2 className="mt-4 text-3xl font-bold text-white sm:text-4xl">{tWhy("title")}</h2>
           </div>
