@@ -21,12 +21,13 @@ export function SiteHeader() {
   return (
     <header className="sticky top-0 z-40 border-b border-brand-800 bg-brand-950/95 backdrop-blur">
       <div className="container flex h-16 items-center justify-between">
-        <Link href="/" className="flex items-center gap-3">
-          <span className="logo-badge" aria-hidden="true">H</span>
-          <span className="hidden font-display text-sm font-bold uppercase tracking-[0.2em] text-white sm:inline">
-            Horizon <span className="text-brand-300">Services Immobiliers</span>
-          </span>
-          <span className="font-display text-base font-bold text-white sm:hidden">Horizon</span>
+        <Link href="/" className="flex items-center" aria-label="Horizon Services Immobiliers — accueil">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/logo.png"
+            alt="Horizon Services Immobiliers"
+            className="h-10 w-auto object-contain sm:h-12"
+          />
         </Link>
 
         <nav className="hidden items-center gap-8 md:flex">

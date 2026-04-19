@@ -12,10 +12,12 @@ export function SiteFooter() {
     <footer className="border-t border-brand-800 bg-brand-950 text-white">
       <div className="container grid gap-10 py-12 md:grid-cols-4">
         <div>
-          <div className="flex items-center gap-3">
-            <span className="logo-badge" aria-hidden="true">H</span>
-            <span className="font-display text-sm font-bold uppercase tracking-[0.2em] text-white">Horizon</span>
-          </div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/logo.png"
+            alt="Horizon Services Immobiliers"
+            className="h-16 w-auto object-contain"
+          />
           <p className="mt-4 text-sm text-white/80">{tFooter("service_zone")}</p>
           <p className="mt-1 text-xs text-white/60">{tFooter("rbq")}</p>
         </div>
