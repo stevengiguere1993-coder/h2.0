@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { NextIntlClientProvider, hasLocale } from "next-intl";
+import { NextIntlClientProvider } from "next-intl";
 import { getTranslations, setRequestLocale } from "next-intl/server";
 
 import { SiteHeader } from "@/components/site-header";
@@ -60,9 +60,13 @@ export async function generateMetadata({
   };
 }
 
+function isSupportedLocale(value: string): value is (typeof routing.locales)[number] {
+  return (routing.locales as readonly string[]).includes(value);
+}
+
 export default async function LocaleLayout({ children, params }: Props) {
   const { locale } = await params;
-  if (!hasLocale(routing.locales, locale)) notFound();
+  if (!isSupportedLocale(locale)) notFound();
 
   setRequestLocale(locale);
 
