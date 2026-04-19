@@ -72,8 +72,11 @@ class Settings(BaseSettings):
     anthropic_api_key: Optional[str] = None
     claude_model: str = "claude-sonnet-4-5"
 
-    # Monday migration (one-shot import from old Monday account)
+    # Monday integration (migration + live bridge while the portal is built)
     monday_api_token: Optional[str] = None
+    # Default board for incoming contact submissions.
+    # 18400565505 = CRM Soumissions (Horizon Construction workspace).
+    monday_crm_board_id: Optional[int] = 18400565505
 
     @property
     def is_production(self) -> bool:

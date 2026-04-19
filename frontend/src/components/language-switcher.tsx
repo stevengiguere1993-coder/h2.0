@@ -21,7 +21,7 @@ export function LanguageSwitcher() {
         )
       }
       disabled={isPending}
-      className="rounded-md px-2 py-1 text-sm font-semibold uppercase text-brand-700 hover:text-brand-900 disabled:opacity-50"
+      className="rounded-md border border-white/30 px-2.5 py-1 text-sm font-semibold uppercase text-white transition hover:bg-white/10 disabled:opacity-50"
       aria-label={`Switch language to ${next.toUpperCase()}`}
     >
       {next.toUpperCase()}

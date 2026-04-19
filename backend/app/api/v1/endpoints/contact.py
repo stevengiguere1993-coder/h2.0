@@ -7,9 +7,10 @@ Authenticated GET/PATCH for internal CRM triage.
 
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
 
 from app.api.deps import CurrentUser, DBSession
+from app.integrations.monday_bridge import push_contact_to_monday
 from app.models.contact_request import ContactRequestStatus
 from app.schemas.contact_request import (
     ContactRequestCreate,
@@ -33,11 +34,15 @@ async def submit_contact(
     data: ContactRequestCreate,
     request: Request,
     db: DBSession,
+    background_tasks: BackgroundTasks,
 ) -> ContactRequestPublicAck:
     """Public endpoint used by the landing page form.
 
-    Enforces explicit consent, basic per-IP rate-limit, and stores the
-    request in the internal CRM. The response is intentionally minimal.
+    Saves the request to Postgres (source of truth) and, in the
+    background, also creates an item in the Monday CRM Soumissions
+    board so the team can keep working from Monday during the
+    transition to the full internal portal. A Monday failure never
+    blocks or fails the public response.
     """
     if not data.gdpr_consent:
         raise HTTPException(
@@ -61,7 +66,12 @@ async def submit_contact(
             )
         raise
 
-    return ContactRequestPublicAck(reference=ContactRequestService.build_reference(record))
+    reference = ContactRequestService.build_reference(record)
+
+    # Transitional: also push to Monday so the team can keep working there.
+    background_tasks.add_task(push_contact_to_monday, record, reference)
+
+    return ContactRequestPublicAck(reference=reference)
 
 
 @router.get(
