@@ -7,16 +7,17 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   compress: true,
-  // Skip ESLint strict rules during production build — lint in dev only.
   eslint: {
     ignoreDuringBuilds: true
   },
-  // TypeScript still runs, but we do not want style-level type errors to
-  // block shipping. Re-enable once we have a full test run.
   typescript: {
     ignoreBuildErrors: true
   },
   images: {
+    // Skip Next.js image optimization entirely. Render's free plan lacks
+    // the RAM to run the sharp-based optimizer at scale, and we mostly
+    // serve pre-optimized Unsplash URLs. Images are loaded as-is.
+    unoptimized: true,
     formats: ["image/avif", "image/webp"],
     remotePatterns: [
       { protocol: "https", hostname: "images.unsplash.com" },
