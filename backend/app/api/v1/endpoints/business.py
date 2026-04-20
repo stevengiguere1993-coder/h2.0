@@ -18,6 +18,7 @@ from app.models.facture import Facture
 from app.models.fournisseur import Fournisseur
 from app.models.punch import Punch
 from app.models.soumission import Soumission
+from app.models.sous_traitant import SousTraitant
 from app.repositories.generic import GenericCrud
 from app.schemas.business import (
     AchatCreate,
@@ -44,6 +45,11 @@ from app.schemas.business import (
     SoumissionCreate,
     SoumissionRead,
     SoumissionUpdate,
+)
+from app.schemas.sous_traitant import (
+    SousTraitantCreate,
+    SousTraitantRead,
+    SousTraitantUpdate,
 )
 
 
@@ -110,6 +116,10 @@ employes_router = make_crud_router(
 fournisseurs_router = make_crud_router(
     prefix="/fournisseurs", tag="fournisseurs",
     model=Fournisseur, create_schema=FournisseurCreate, update_schema=FournisseurUpdate, read_schema=FournisseurRead,
+)
+sous_traitants_router = make_crud_router(
+    prefix="/sous-traitants", tag="sous-traitants",
+    model=SousTraitant, create_schema=SousTraitantCreate, update_schema=SousTraitantUpdate, read_schema=SousTraitantRead,
 )
 soumissions_router = make_crud_router(
     prefix="/soumissions", tag="soumissions",

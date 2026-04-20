@@ -18,6 +18,7 @@ from app.models.punch import Punch
 from app.models.seo_article import SeoArticle
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
+from app.models.sous_traitant import SousTraitant
 from app.models.user import User
 
 __all__ = [
@@ -34,5 +35,6 @@ __all__ = [
     "SeoArticle",
     "Soumission",
     "SoumissionItem",
+    "SousTraitant",
     "User",
 ]

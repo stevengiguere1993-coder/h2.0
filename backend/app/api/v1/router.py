@@ -25,6 +25,7 @@ from app.api.v1.endpoints.business import (
     fournisseurs_router,
     punch_router,
     soumissions_router,
+    sous_traitants_router,
 )
 
 api_router = APIRouter()
@@ -40,6 +41,7 @@ api_router.include_router(webhooks.router)
 # Business
 api_router.include_router(employes_router)
 api_router.include_router(fournisseurs_router)
+api_router.include_router(sous_traitants_router)
 api_router.include_router(soumissions_router)
 api_router.include_router(soumission_items.router)
 api_router.include_router(soumission_qbo.router)
