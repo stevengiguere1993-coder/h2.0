@@ -18,12 +18,31 @@ export type ContactPayload = {
 export type ContactAck = { ok: boolean; reference: string };
 
 export async function submitContactRequest(
-  payload: ContactPayload
+  payload: ContactPayload,
+  photos?: File[]
 ): Promise<ContactAck> {
+  // Backend expects multipart/form-data (Form + File fields).
+  const fd = new FormData();
+  fd.append("name", payload.name);
+  fd.append("email", payload.email);
+  fd.append("message", payload.message);
+  fd.append("gdpr_consent", payload.gdpr_consent ? "true" : "false");
+  fd.append("marketing_consent", payload.marketing_consent ? "true" : "false");
+  fd.append("project_type", payload.project_type || "autre");
+  fd.append("locale", payload.locale || "fr");
+  if (payload.phone) fd.append("phone", payload.phone);
+  if (payload.address) fd.append("address", payload.address);
+  if (payload.budget_range) fd.append("budget_range", payload.budget_range);
+  if (payload.source) fd.append("source", payload.source);
+  if (photos && photos.length > 0) {
+    for (const file of photos) fd.append("photos", file, file.name);
+  }
+
   const res = await fetch(`${DEFAULT_BASE}/api/v1/contact`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
+    // Do NOT set Content-Type manually — the browser adds the correct
+    // multipart boundary automatically when body is a FormData.
+    body: fd,
     cache: "no-store"
   });
 

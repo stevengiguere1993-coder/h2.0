@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { Loader2, MapPin } from "lucide-react";
+import { ImagePlus, Loader2, MapPin, X } from "lucide-react";
 import { z } from "zod";
 
 import { submitContactRequest } from "@/lib/api";
@@ -23,6 +23,9 @@ const projectKeys = [
   "renovation_complete",
   "autre"
 ] as const;
+
+const MAX_PHOTOS = 5;
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024; // 10 MB
 
 const schema = z.object({
   name: z.string().min(2).max(255),
@@ -64,20 +67,29 @@ function formatPhotonAddress(p: PhotonProps): string {
   return parts.join(", ");
 }
 
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} o`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} Ko`;
+  return `${(n / 1024 / 1024).toFixed(1)} Mo`;
+}
+
 export function ContactForm({ source }: { source?: string }) {
   const t = useTranslations("contact");
   const locale = useLocale();
   const [state, setState] = useState<FormState>({ status: "idle" });
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Address autocomplete via Photon (OpenStreetMap). No API key, no
-  // billing, no quota to worry about.
+  // Address autocomplete (Photon / OpenStreetMap, no API key).
   const [address, setAddress] = useState("");
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [loadingAddr, setLoadingAddr] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Photo attachments.
+  const [photos, setPhotos] = useState<File[]>([]);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   function onAddressChange(e: React.ChangeEvent<HTMLInputElement>) {
     const v = e.target.value;
@@ -121,6 +133,32 @@ export function ContactForm({ source }: { source?: string }) {
     setShowSuggestions(false);
   }
 
+  function onPhotosChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files || []);
+    const accepted: File[] = [];
+    const errors: string[] = [];
+    for (const f of files) {
+      if (!f.type.startsWith("image/")) {
+        errors.push(`${f.name} — pas une image`);
+        continue;
+      }
+      if (f.size > MAX_PHOTO_BYTES) {
+        errors.push(`${f.name} — > 10 Mo`);
+        continue;
+      }
+      accepted.push(f);
+    }
+    const combined = [...photos, ...accepted].slice(0, MAX_PHOTOS);
+    setPhotos(combined);
+    if (errors.length) setFormError(errors.join(" · "));
+    // Reset the input so the same file can be re-picked after removal.
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  function removePhoto(index: number) {
+    setPhotos(photos.filter((_, i) => i !== index));
+  }
+
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setFormError(null);
@@ -145,20 +183,24 @@ export function ContactForm({ source }: { source?: string }) {
 
     setState({ status: "submitting" });
     try {
-      const ack = await submitContactRequest({
-        name: parsed.data.name,
-        email: parsed.data.email,
-        phone: parsed.data.phone || undefined,
-        address: parsed.data.address || undefined,
-        project_type: parsed.data.project_type,
-        budget_range: parsed.data.budget_range || undefined,
-        message: parsed.data.message,
-        locale,
-        source,
-        gdpr_consent: parsed.data.gdpr_consent,
-        marketing_consent: parsed.data.marketing_consent
-      });
+      const ack = await submitContactRequest(
+        {
+          name: parsed.data.name,
+          email: parsed.data.email,
+          phone: parsed.data.phone || undefined,
+          address: parsed.data.address || undefined,
+          project_type: parsed.data.project_type,
+          budget_range: parsed.data.budget_range || undefined,
+          message: parsed.data.message,
+          locale,
+          source,
+          gdpr_consent: parsed.data.gdpr_consent,
+          marketing_consent: parsed.data.marketing_consent
+        },
+        photos
+      );
       setState({ status: "success", reference: ack.reference });
+      setPhotos([]);
     } catch (err) {
       const code = (err as Error & { code?: string }).code || "unknown";
       setState({ status: "error", code });
@@ -181,6 +223,13 @@ export function ContactForm({ source }: { source?: string }) {
       </div>
     );
   }
+
+  const photosLabel =
+    locale === "en"
+      ? "Photos (optional, up to 5 - 10 MB each)"
+      : "Photos (optionnel, jusqu'a 5 - 10 Mo chacune)";
+  const photosHint =
+    locale === "en" ? "Add photos" : "Ajouter des photos";
 
   return (
     <form onSubmit={onSubmit} className="space-y-5" noValidate>
@@ -253,6 +302,53 @@ export function ContactForm({ source }: { source?: string }) {
       <div>
         <label htmlFor="message" className="label">{t("fields.message")}</label>
         <textarea id="message" name="message" required rows={5} className="input" />
+      </div>
+
+      {/* Photo upload */}
+      <div>
+        <label className="label">{photosLabel}</label>
+        <input
+          ref={fileRef}
+          id="photos"
+          name="photos"
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={onPhotosChange}
+          className="hidden"
+        />
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          disabled={photos.length >= MAX_PHOTOS}
+          className="inline-flex items-center gap-2 rounded-lg border border-dashed border-brand-700 bg-brand-900 px-4 py-2 text-sm font-medium text-white transition hover:border-accent-500 disabled:opacity-50"
+        >
+          <ImagePlus className="h-4 w-4 text-accent-500" />
+          {photosHint} ({photos.length}/{MAX_PHOTOS})
+        </button>
+        {photos.length > 0 ? (
+          <ul className="mt-3 space-y-2">
+            {photos.map((f, i) => (
+              <li
+                key={`${f.name}-${i}`}
+                className="flex items-center justify-between rounded-md border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white"
+              >
+                <span className="truncate">
+                  {f.name}{" "}
+                  <span className="text-white/50">({formatBytes(f.size)})</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removePhoto(i)}
+                  className="ml-3 text-white/60 hover:text-red-400"
+                  aria-label="Remove"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
 
       <div className="space-y-2">
