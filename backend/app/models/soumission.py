@@ -50,3 +50,8 @@ class Soumission(Base, TimestampUpdateMixin):
 
     pdf_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # QuickBooks Online linkage (populated by sync service)
+    qbo_estimate_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    qbo_doc_number: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    qbo_sync_token: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)

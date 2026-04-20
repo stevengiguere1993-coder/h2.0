@@ -13,6 +13,7 @@ from app.api.v1.endpoints import (
     contact,
     projects,
     soumission_items,
+    soumission_qbo,
     webhooks,
 )
 from app.api.v1.endpoints.business import (
@@ -41,6 +42,7 @@ api_router.include_router(employes_router)
 api_router.include_router(fournisseurs_router)
 api_router.include_router(soumissions_router)
 api_router.include_router(soumission_items.router)
+api_router.include_router(soumission_qbo.router)
 api_router.include_router(agenda_router)
 api_router.include_router(bons_router)
 api_router.include_router(punch_router)
