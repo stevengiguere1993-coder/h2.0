@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter as useNextRouter } from "next/navigation";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -10,6 +10,7 @@ import {
   Mail,
   MapPin,
   Phone,
+  Trash2,
   User,
   Users
 } from "lucide-react";
@@ -79,6 +80,7 @@ export default function ProspectDetailPage() {
   const { onOpenSidebar } = useAppLayout();
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
+  const router = useNextRouter();
 
   const [p, setP] = useState<Prospect | null>(null);
   const [loading, setLoading] = useState(true);
@@ -86,6 +88,7 @@ export default function ProspectDetailPage() {
   const [tab, setTab] = useState<TabId>("apercu");
   const [notes, setNotes] = useState("");
   const [savingNotes, setSavingNotes] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -146,6 +149,20 @@ export default function ProspectDetailPage() {
     }
   }
 
+  async function deleteProspect() {
+    if (!p) return;
+    if (!confirm(`Supprimer définitivement le prospect « ${p.name} » ?`)) return;
+    setDeleting(true);
+    try {
+      const res = await authedFetch(`/api/v1/contact/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      router.back();
+    } catch {
+      setDeleting(false);
+      setError("Suppression échouée.");
+    }
+  }
+
   return (
     <>
       <AppTopbar
@@ -177,7 +194,7 @@ export default function ProspectDetailPage() {
         ) : p ? (
           <>
             {/* Header */}
-            <header className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <header className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h1 className="text-2xl font-bold text-white">{p.name}</h1>
                 <p className="mt-1 text-sm text-accent-500">
@@ -194,19 +211,34 @@ export default function ProspectDetailPage() {
                   })}
                 </p>
               </div>
-              <div>
-                <label className="label">Statut</label>
-                <select
-                  value={p.status}
-                  onChange={(e) => updateStatus(e.target.value)}
-                  className="input w-56"
+              <div className="flex items-end gap-3">
+                <div>
+                  <label className="label">Statut</label>
+                  <select
+                    value={p.status}
+                    onChange={(e) => updateStatus(e.target.value)}
+                    className="input w-56"
+                  >
+                    {Object.entries(STATUS_LABELS).map(([k, v]) => (
+                      <option key={k} value={k}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  onClick={deleteProspect}
+                  disabled={deleting}
+                  className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 transition hover:bg-rose-500/20 hover:text-rose-200 disabled:opacity-50"
                 >
-                  {Object.entries(STATUS_LABELS).map(([k, v]) => (
-                    <option key={k} value={k}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
+                  {deleting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                  Supprimer
+                </button>
               </div>
             </header>
 
