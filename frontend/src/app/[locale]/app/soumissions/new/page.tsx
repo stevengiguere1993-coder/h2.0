@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter as useNextRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Info, Loader2 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
@@ -17,9 +17,6 @@ type Prospect = {
   project_type: string;
 };
 
-const TPS_RATE = 0.05;
-const TVQ_RATE = 0.09975;
-
 function yyyyMmDd(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -28,7 +25,6 @@ function yyyyMmDd(date: Date): string {
 }
 
 function buildReference(): string {
-  // "SUM-YYYYMMDD-HHMMSS" format, stable per click
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   return (
@@ -50,8 +46,6 @@ export default function NewSoumissionPage() {
     prefilledContactId || ""
   );
   const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [subtotal, setSubtotal] = useState<string>("");
   const [validUntil, setValidUntil] = useState<string>(() => {
     const d = new Date();
     d.setDate(d.getDate() + 30);
@@ -81,11 +75,6 @@ export default function NewSoumissionPage() {
     };
   }, []);
 
-  const subtotalNum = Number(subtotal) || 0;
-  const tps = +(subtotalNum * TPS_RATE).toFixed(2);
-  const tvq = +(subtotalNum * TVQ_RATE).toFixed(2);
-  const total = +(subtotalNum + tps + tvq).toFixed(2);
-
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
@@ -94,21 +83,16 @@ export default function NewSoumissionPage() {
       setError("Le titre est requis.");
       return;
     }
-    if (!subtotal || subtotalNum <= 0) {
-      setError("Le sous-total doit être supérieur à 0.");
-      return;
-    }
 
     setSubmitting(true);
     try {
       const payload = {
         reference,
         title: title.trim(),
-        description: description.trim() || undefined,
-        subtotal: subtotalNum,
-        tps,
-        tvq,
-        total,
+        subtotal: 0,
+        tps: 0,
+        tvq: 0,
+        total: 0,
         valid_until: validUntil ? new Date(validUntil).toISOString() : undefined,
         contact_request_id: contactRequestId ? Number(contactRequestId) : undefined
       };
@@ -152,14 +136,22 @@ export default function NewSoumissionPage() {
           <ArrowLeft className="mr-1 h-4 w-4" /> Retour aux soumissions
         </Link>
 
-        <h1 className="mt-6 text-2xl font-bold text-white">
-          Nouvelle soumission
-        </h1>
+        <h1 className="mt-6 text-2xl font-bold text-white">Nouvelle soumission</h1>
         <p className="mt-1 text-sm text-white/60">
           Référence générée : <span className="text-accent-500">{reference}</span>
         </p>
 
-        <form onSubmit={onSubmit} className="mt-8 max-w-3xl space-y-5">
+        <div className="mt-6 flex max-w-3xl items-start gap-3 rounded-lg border border-accent-500/30 bg-accent-500/5 p-4 text-sm text-brand-100">
+          <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-accent-500" />
+          <p>
+            Remplissez seulement le <strong className="text-white">titre</strong> ici.
+            Les <strong className="text-white">items détaillés, prix et description complète</strong>{" "}
+            seront ajoutés sur la page suivante (après « Créer »), avec calcul
+            automatique du sous-total et des taxes.
+          </p>
+        </div>
+
+        <form onSubmit={onSubmit} className="mt-6 max-w-3xl space-y-5">
           <div>
             <label htmlFor="prospect" className="label">
               Prospect (optionnel)
@@ -190,7 +182,7 @@ export default function NewSoumissionPage() {
 
           <div>
             <label htmlFor="title" className="label">
-              Titre / Description courte
+              Titre / Description courte <span className="text-rose-400">*</span>
             </label>
             <input
               id="title"
@@ -204,75 +196,19 @@ export default function NewSoumissionPage() {
           </div>
 
           <div>
-            <label htmlFor="description" className="label">
-              Description détaillée (optionnel)
+            <label htmlFor="valid_until" className="label">
+              Valide jusqu&apos;au
             </label>
-            <textarea
-              id="description"
-              rows={6}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Détails des travaux, matériaux, étapes…"
-              className="input"
+            <input
+              id="valid_until"
+              type="date"
+              value={validUntil}
+              onChange={(e) => setValidUntil(e.target.value)}
+              className="input sm:w-60"
             />
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label htmlFor="subtotal" className="label">
-                Sous-total (avant taxes, CAD)
-              </label>
-              <input
-                id="subtotal"
-                type="number"
-                step="0.01"
-                min="0"
-                required
-                value={subtotal}
-                onChange={(e) => setSubtotal(e.target.value)}
-                placeholder="0.00"
-                className="input"
-              />
-            </div>
-            <div>
-              <label htmlFor="valid_until" className="label">
-                Valide jusqu&apos;au
-              </label>
-              <input
-                id="valid_until"
-                type="date"
-                value={validUntil}
-                onChange={(e) => setValidUntil(e.target.value)}
-                className="input"
-              />
-            </div>
-          </div>
-
-          {/* Tax recap */}
-          <div className="rounded-xl border border-brand-800 bg-brand-900 p-5 text-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-white/60">Sous-total</span>
-              <span className="text-white">{subtotalNum.toFixed(2)} $</span>
-            </div>
-            <div className="mt-2 flex items-center justify-between">
-              <span className="text-white/60">TPS (5 %)</span>
-              <span className="text-white">{tps.toFixed(2)} $</span>
-            </div>
-            <div className="mt-2 flex items-center justify-between">
-              <span className="text-white/60">TVQ (9,975 %)</span>
-              <span className="text-white">{tvq.toFixed(2)} $</span>
-            </div>
-            <div className="mt-3 flex items-center justify-between border-t border-brand-800 pt-3">
-              <span className="font-semibold text-white">Total</span>
-              <span className="text-lg font-bold text-accent-500">
-                {total.toFixed(2)} $
-              </span>
-            </div>
-          </div>
-
-          {error ? (
-            <p className="text-sm text-rose-400">{error}</p>
-          ) : null}
+          {error ? <p className="text-sm text-rose-400">{error}</p> : null}
 
           <div className="flex items-center gap-3">
             <button
@@ -286,7 +222,7 @@ export default function NewSoumissionPage() {
                   Création…
                 </>
               ) : (
-                "Créer la soumission"
+                "Créer → ajouter les items"
               )}
             </button>
             <Link
