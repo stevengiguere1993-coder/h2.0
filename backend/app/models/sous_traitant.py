@@ -39,7 +39,14 @@ class SousTraitant(Base, TimestampUpdateMixin):
     # Comma-separated list of specialties: "plomberie, electricite, ceramique"
     trades: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     hourly_rate: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
-    rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1..5
+    rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1..5 (note générale, legacy)
+
+    # Qualifications 1..5 on four axes — the overall score shown in the UI
+    # is the mean of the axes that are filled in.
+    competence_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    availability_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    punctuality_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    quality_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Lifecycle
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)

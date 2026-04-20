@@ -22,6 +22,10 @@ class SousTraitantCreate(BaseModel):
     trades: Optional[str] = Field(default=None, max_length=500)
     hourly_rate: Optional[float] = Field(default=None, ge=0)
     rating: Optional[int] = Field(default=None, ge=1, le=5)
+    competence_rating: Optional[int] = Field(default=None, ge=1, le=5)
+    availability_rating: Optional[int] = Field(default=None, ge=1, le=5)
+    punctuality_rating: Optional[int] = Field(default=None, ge=1, le=5)
+    quality_rating: Optional[int] = Field(default=None, ge=1, le=5)
     notes: Optional[str] = None
 
 
@@ -39,6 +43,10 @@ class SousTraitantUpdate(BaseModel):
     trades: Optional[str] = None
     hourly_rate: Optional[float] = None
     rating: Optional[int] = Field(default=None, ge=1, le=5)
+    competence_rating: Optional[int] = Field(default=None, ge=1, le=5)
+    availability_rating: Optional[int] = Field(default=None, ge=1, le=5)
+    punctuality_rating: Optional[int] = Field(default=None, ge=1, le=5)
+    quality_rating: Optional[int] = Field(default=None, ge=1, le=5)
     active: Optional[bool] = None
     notes: Optional[str] = None
 
@@ -60,6 +68,10 @@ class SousTraitantRead(BaseModel):
     trades: Optional[str]
     hourly_rate: Optional[float]
     rating: Optional[int]
+    competence_rating: Optional[int]
+    availability_rating: Optional[int]
+    punctuality_rating: Optional[int]
+    quality_rating: Optional[int]
     active: bool
     notes: Optional[str]
     created_at: datetime

@@ -30,10 +30,27 @@ type SousTraitant = {
   trades: string | null;
   hourly_rate: number | null;
   rating: number | null;
+  competence_rating: number | null;
+  availability_rating: number | null;
+  punctuality_rating: number | null;
+  quality_rating: number | null;
   active: boolean;
   notes: string | null;
   created_at: string;
 };
+
+function overallScore(st: SousTraitant): number | null {
+  const axes = [
+    st.competence_rating,
+    st.availability_rating,
+    st.punctuality_rating,
+    st.quality_rating
+  ].filter((v): v is number => typeof v === "number" && v > 0);
+  if (axes.length > 0) {
+    return axes.reduce((a, b) => a + b, 0) / axes.length;
+  }
+  return st.rating && st.rating > 0 ? st.rating : null;
+}
 
 function fmtRate(n: number | null): string {
   if (n == null) return "—";
@@ -169,16 +186,7 @@ function Card({ st }: { st: SousTraitant }) {
             <p className="truncate text-xs text-white/60">{st.contact_name}</p>
           ) : null}
         </div>
-        <div className="flex items-center gap-1">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <Star
-              key={i}
-              className={`h-3 w-3 ${
-                (st.rating || 0) > i ? "fill-accent-500 text-accent-500" : "text-white/20"
-              }`}
-            />
-          ))}
-        </div>
+        <OverallBadge score={overallScore(st)} />
       </div>
 
       {/* Trades */}
@@ -267,6 +275,32 @@ function Card({ st }: { st: SousTraitant }) {
         <span className="font-semibold text-white">{fmtRate(st.hourly_rate)}</span>
       </div>
     </Link>
+  );
+}
+
+function OverallBadge({ score }: { score: number | null }) {
+  if (score == null) {
+    return <span className="text-[10px] text-white/30">Non évalué</span>;
+  }
+  const rounded = Math.round(score);
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-0.5">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Star
+            key={i}
+            className={`h-3 w-3 ${
+              i < rounded
+                ? "fill-accent-500 text-accent-500"
+                : "text-white/20"
+            }`}
+          />
+        ))}
+      </div>
+      <span className="text-[10px] font-semibold text-white/70">
+        {score.toFixed(1)}
+      </span>
+    </div>
   );
 }
 
