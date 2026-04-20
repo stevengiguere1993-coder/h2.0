@@ -23,13 +23,13 @@ function BathroomContent() {
   const tCta = useTranslations("cta");
   return (
     <>
-      <section className="bg-brand-50">
+      <section className="bg-brand-900">
         <div className="container py-16">
           <span className="eyebrow">Service</span>
-          <h1 className="mt-4 text-4xl font-bold text-brand-950 sm:text-5xl">
+          <h1 className="mt-4 text-4xl font-bold text-white sm:text-5xl">
             Rénovation de salle de bain dans le Grand Montréal
           </h1>
-          <p className="mt-4 max-w-2xl text-brand-700">
+          <p className="mt-4 max-w-2xl text-brand-200">
             Conception, plomberie, céramique, vanités sur mesure, éclairage :
             notre équipe intégrée s'occupe de chaque étape. Résultat hygiénique,
             durable, fini au millésime.
@@ -44,8 +44,8 @@ function BathroomContent() {
       <section className="section">
         <div className="container grid gap-10 md:grid-cols-2">
           <div className="card">
-            <h2 className="text-xl font-semibold text-brand-950">Inclus d'office</h2>
-            <ul className="mt-3 space-y-2 text-sm text-brand-700">
+            <h2 className="text-xl font-semibold text-white">Inclus d'office</h2>
+            <ul className="mt-3 space-y-2 text-sm text-brand-200">
               <li>Démolition et élimination des débris</li>
               <li>Plomberie (certifiée)</li>
               <li>Céramique, plinthes, joints</li>
@@ -55,22 +55,22 @@ function BathroomContent() {
             </ul>
           </div>
           <div className="card">
-            <h2 className="text-xl font-semibold text-brand-950">Fourchettes 2026</h2>
-            <ul className="mt-3 space-y-2 text-sm text-brand-700">
+            <h2 className="text-xl font-semibold text-white">Fourchettes 2026</h2>
+            <ul className="mt-3 space-y-2 text-sm text-brand-200">
               <li>Salle d'eau : 12 000 $ – 18 000 $</li>
               <li>Salle de bain complète : 18 000 $ – 32 000 $</li>
               <li>Suite parentale : 32 000 $ – 55 000 $</li>
             </ul>
-            <p className="mt-4 text-xs text-brand-500">
+            <p className="mt-4 text-xs text-brand-400">
               Fourchettes indicatives. Soumission détaillée après visite.
             </p>
           </div>
         </div>
       </section>
 
-      <section className="section bg-brand-50">
+      <section className="section bg-brand-900">
         <div className="container max-w-2xl">
-          <h2 className="text-2xl font-bold text-brand-950">Obtenir une soumission</h2>
+          <h2 className="text-2xl font-bold text-white">Obtenir une soumission</h2>
           <div className="mt-6 card">
             <ContactForm source="service-salle-de-bain" />
           </div>

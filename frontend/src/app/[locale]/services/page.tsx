@@ -20,13 +20,13 @@ function ServicesContent() {
   return (
     <section className="section">
       <div className="container">
-        <h1 className="text-3xl font-bold text-brand-950 sm:text-4xl">{t("title")}</h1>
-        <p className="mt-3 max-w-2xl text-brand-700">{t("subtitle")}</p>
+        <h1 className="text-3xl font-bold text-white sm:text-4xl">{t("title")}</h1>
+        <p className="mt-3 max-w-2xl text-brand-300">{t("subtitle")}</p>
         <div className="mt-10 grid gap-6 sm:grid-cols-2">
           {keys.map((k) => (
             <article key={k} className="card">
-              <h2 className="text-xl font-semibold text-brand-950">{t(`items.${k}.title`)}</h2>
-              <p className="mt-2 text-brand-700">{t(`items.${k}.description`)}</p>
+              <h2 className="text-xl font-semibold text-white">{t(`items.${k}.title`)}</h2>
+              <p className="mt-2 text-brand-200">{t(`items.${k}.description`)}</p>
             </article>
           ))}
         </div>

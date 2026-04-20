@@ -23,13 +23,13 @@ function MultiContent() {
   const tCta = useTranslations("cta");
   return (
     <>
-      <section className="bg-brand-50">
+      <section className="bg-brand-900">
         <div className="container py-16">
           <span className="eyebrow">Investisseurs</span>
-          <h1 className="mt-4 text-4xl font-bold text-brand-950 sm:text-5xl">
+          <h1 className="mt-4 text-4xl font-bold text-white sm:text-5xl">
             Rénovation d'appartements multilogements
           </h1>
-          <p className="mt-4 max-w-2xl text-brand-700">
+          <p className="mt-4 max-w-2xl text-brand-200">
             Nous détenons nous-mêmes des immeubles multilogements. Nous avons
             la recette pour remettre à neuf un appartement sans exploser le
             budget, tout en augmentant la valeur locative.
@@ -57,16 +57,16 @@ function MultiContent() {
             }
           ].map((b) => (
             <div key={b.t} className="card">
-              <h3 className="text-base font-semibold text-brand-950">{b.t}</h3>
-              <p className="mt-2 text-sm text-brand-700">{b.d}</p>
+              <h3 className="text-base font-semibold text-white">{b.t}</h3>
+              <p className="mt-2 text-sm text-brand-200">{b.d}</p>
             </div>
           ))}
         </div>
       </section>
 
-      <section className="section bg-brand-50">
+      <section className="section bg-brand-900">
         <div className="container max-w-2xl">
-          <h2 className="text-2xl font-bold text-brand-950">Discutons de votre parc</h2>
+          <h2 className="text-2xl font-bold text-white">Discutons de votre parc</h2>
           <div className="mt-6 card">
             <ContactForm source="service-multilogement" />
           </div>
