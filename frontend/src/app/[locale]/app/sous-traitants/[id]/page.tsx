@@ -31,6 +31,10 @@ type SousTraitant = {
   trades: string | null;
   hourly_rate: number | null;
   rating: number | null;
+  competence_rating: number | null;
+  availability_rating: number | null;
+  punctuality_rating: number | null;
+  quality_rating: number | null;
   active: boolean;
   notes: string | null;
   created_at: string;
@@ -82,6 +86,10 @@ export default function SousTraitantDetailPage() {
   const [trades, setTrades] = useState("");
   const [hourlyRate, setHourlyRate] = useState("");
   const [rating, setRating] = useState<number>(0);
+  const [competence, setCompetence] = useState<number>(0);
+  const [availability, setAvailability] = useState<number>(0);
+  const [punctuality, setPunctuality] = useState<number>(0);
+  const [quality, setQuality] = useState<number>(0);
   const [active, setActive] = useState(true);
   const [notes, setNotes] = useState("");
 
@@ -111,6 +119,10 @@ export default function SousTraitantDetailPage() {
           data.hourly_rate != null ? String(data.hourly_rate) : ""
         );
         setRating(data.rating || 0);
+        setCompetence(data.competence_rating || 0);
+        setAvailability(data.availability_rating || 0);
+        setPunctuality(data.punctuality_rating || 0);
+        setQuality(data.quality_rating || 0);
         setActive(data.active);
         setNotes(data.notes || "");
       } catch {
@@ -141,13 +153,17 @@ export default function SousTraitantDetailPage() {
       trades !== (st.trades || "") ||
       hourlyRate !== (st.hourly_rate != null ? String(st.hourly_rate) : "") ||
       rating !== (st.rating || 0) ||
+      competence !== (st.competence_rating || 0) ||
+      availability !== (st.availability_rating || 0) ||
+      punctuality !== (st.punctuality_rating || 0) ||
+      quality !== (st.quality_rating || 0) ||
       active !== st.active ||
       notes !== (st.notes || "")
     );
   }, [
     st, fullName, contactName, email, phone, address, rbqLicense,
     rbqExpiresAt, insProvider, insPolicy, insExpiresAt, trades, hourlyRate,
-    rating, active, notes
+    rating, competence, availability, punctuality, quality, active, notes
   ]);
 
   async function saveAll() {
@@ -169,6 +185,10 @@ export default function SousTraitantDetailPage() {
         trades: trades.trim() || null,
         hourly_rate: hourlyRate ? Number(hourlyRate) : null,
         rating: rating || null,
+        competence_rating: competence || null,
+        availability_rating: availability || null,
+        punctuality_rating: punctuality || null,
+        quality_rating: quality || null,
         active,
         notes: notes.trim() || null
       };
@@ -248,26 +268,13 @@ export default function SousTraitantDetailPage() {
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-3">
-                {/* Star rating edit */}
-                <div className="flex items-center gap-1">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => setRating(rating === i + 1 ? 0 : i + 1)}
-                      aria-label={`Note ${i + 1}`}
-                      className="p-0.5"
-                    >
-                      <Star
-                        className={`h-4 w-4 transition ${
-                          rating > i
-                            ? "fill-accent-500 text-accent-500"
-                            : "text-white/30 hover:text-white/60"
-                        }`}
-                      />
-                    </button>
-                  ))}
-                </div>
+                {/* Overall average — read-only, computed from the 4 qualification axes */}
+                <OverallStars
+                  competence={competence}
+                  availability={availability}
+                  punctuality={punctuality}
+                  quality={quality}
+                />
                 <label className="inline-flex items-center gap-2 text-sm text-white/70">
                   <input
                     type="checkbox"
@@ -400,6 +407,39 @@ export default function SousTraitantDetailPage() {
                         className="input sm:w-48"
                       />
                     </div>
+                  </div>
+                </section>
+
+                {/* Qualifications */}
+                <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Qualifications
+                  </h2>
+                  <p className="mt-1 text-xs text-white/50">
+                    Notation 1 à 5 sur chaque axe. La moyenne est affichée en
+                    haut de la fiche.
+                  </p>
+                  <div className="mt-4 space-y-2">
+                    <RatingRow
+                      label="Compétence"
+                      value={competence}
+                      onChange={setCompetence}
+                    />
+                    <RatingRow
+                      label="Disponibilité"
+                      value={availability}
+                      onChange={setAvailability}
+                    />
+                    <RatingRow
+                      label="Ponctualité"
+                      value={punctuality}
+                      onChange={setPunctuality}
+                    />
+                    <RatingRow
+                      label="Qualité du travail"
+                      value={quality}
+                      onChange={setQuality}
+                    />
                   </div>
                 </section>
 
@@ -564,6 +604,82 @@ function StatusRow({
       <dd>
         <ExpiryChip status={status} />
       </dd>
+    </div>
+  );
+}
+
+function RatingRow({
+  label,
+  value,
+  onChange
+}: {
+  label: string;
+  value: number;
+  onChange: (n: number) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-1.5">
+      <span className="text-sm text-white/80">{label}</span>
+      <div className="flex items-center gap-1">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <button
+            key={i}
+            type="button"
+            onClick={() => onChange(value === i + 1 ? 0 : i + 1)}
+            aria-label={`${label} ${i + 1}`}
+            className="p-0.5"
+          >
+            <Star
+              className={`h-4 w-4 transition ${
+                value > i
+                  ? "fill-accent-500 text-accent-500"
+                  : "text-white/30 hover:text-white/60"
+              }`}
+            />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OverallStars({
+  competence,
+  availability,
+  punctuality,
+  quality
+}: {
+  competence: number;
+  availability: number;
+  punctuality: number;
+  quality: number;
+}) {
+  const vals = [competence, availability, punctuality, quality].filter(
+    (v) => v > 0
+  );
+  if (vals.length === 0) {
+    return (
+      <span className="text-xs text-white/40">Non évalué</span>
+    );
+  }
+  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex items-center gap-0.5">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Star
+            key={i}
+            className={`h-4 w-4 ${
+              i < Math.round(avg)
+                ? "fill-accent-500 text-accent-500"
+                : "text-white/20"
+            }`}
+          />
+        ))}
+      </div>
+      <span className="text-xs font-semibold text-white/70">
+        {avg.toFixed(1)}/5
+      </span>
     </div>
   );
 }
