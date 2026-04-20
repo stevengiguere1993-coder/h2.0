@@ -1,0 +1,569 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { useParams, useRouter as useNextRouter } from "next/navigation";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Loader2,
+  Save,
+  Star,
+  Trash2
+} from "lucide-react";
+
+import { AppTopbar } from "@/components/app-topbar";
+import { Link } from "@/i18n/navigation";
+import { useAppLayout } from "../../layout";
+import { authedFetch } from "@/lib/auth";
+
+type SousTraitant = {
+  id: number;
+  full_name: string;
+  contact_name: string | null;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  rbq_license: string | null;
+  rbq_expires_at: string | null;
+  insurance_provider: string | null;
+  insurance_policy_number: string | null;
+  insurance_expires_at: string | null;
+  trades: string | null;
+  hourly_rate: number | null;
+  rating: number | null;
+  active: boolean;
+  notes: string | null;
+  created_at: string;
+};
+
+function daysUntil(iso: string | null): number | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.round((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+function expiryBadge(iso: string | null): {
+  label: string;
+  tone: "ok" | "warn" | "danger" | "none";
+} {
+  const days = daysUntil(iso);
+  if (days == null) return { label: "Non renseigné", tone: "none" };
+  if (days < 0) return { label: `Expirée il y a ${-days} j`, tone: "danger" };
+  if (days <= 30) return { label: `Expire dans ${days} j`, tone: "warn" };
+  return { label: `Valide (${days} j)`, tone: "ok" };
+}
+
+export default function SousTraitantDetailPage() {
+  const { onOpenSidebar } = useAppLayout();
+  const params = useParams<{ id: string }>();
+  const id = Number(params.id);
+  const router = useNextRouter();
+
+  const [st, setSt] = useState<SousTraitant | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  // form state (editable)
+  const [fullName, setFullName] = useState("");
+  const [contactName, setContactName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [address, setAddress] = useState("");
+  const [rbqLicense, setRbqLicense] = useState("");
+  const [rbqExpiresAt, setRbqExpiresAt] = useState("");
+  const [insProvider, setInsProvider] = useState("");
+  const [insPolicy, setInsPolicy] = useState("");
+  const [insExpiresAt, setInsExpiresAt] = useState("");
+  const [trades, setTrades] = useState("");
+  const [hourlyRate, setHourlyRate] = useState("");
+  const [rating, setRating] = useState<number>(0);
+  const [active, setActive] = useState(true);
+  const [notes, setNotes] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await authedFetch(`/api/v1/sous-traitants/${id}`);
+        if (!res.ok) throw new Error(`http_${res.status}`);
+        const data = (await res.json()) as SousTraitant;
+        if (cancelled) return;
+        setSt(data);
+        setFullName(data.full_name);
+        setContactName(data.contact_name || "");
+        setEmail(data.email || "");
+        setPhone(data.phone || "");
+        setAddress(data.address || "");
+        setRbqLicense(data.rbq_license || "");
+        setRbqExpiresAt(data.rbq_expires_at || "");
+        setInsProvider(data.insurance_provider || "");
+        setInsPolicy(data.insurance_policy_number || "");
+        setInsExpiresAt(data.insurance_expires_at || "");
+        setTrades(data.trades || "");
+        setHourlyRate(
+          data.hourly_rate != null ? String(data.hourly_rate) : ""
+        );
+        setRating(data.rating || 0);
+        setActive(data.active);
+        setNotes(data.notes || "");
+      } catch {
+        if (!cancelled) setError("Sous-traitant introuvable.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    if (id) load();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  const dirty = useMemo(() => {
+    if (!st) return false;
+    return (
+      fullName !== st.full_name ||
+      contactName !== (st.contact_name || "") ||
+      email !== (st.email || "") ||
+      phone !== (st.phone || "") ||
+      address !== (st.address || "") ||
+      rbqLicense !== (st.rbq_license || "") ||
+      rbqExpiresAt !== (st.rbq_expires_at || "") ||
+      insProvider !== (st.insurance_provider || "") ||
+      insPolicy !== (st.insurance_policy_number || "") ||
+      insExpiresAt !== (st.insurance_expires_at || "") ||
+      trades !== (st.trades || "") ||
+      hourlyRate !== (st.hourly_rate != null ? String(st.hourly_rate) : "") ||
+      rating !== (st.rating || 0) ||
+      active !== st.active ||
+      notes !== (st.notes || "")
+    );
+  }, [
+    st, fullName, contactName, email, phone, address, rbqLicense,
+    rbqExpiresAt, insProvider, insPolicy, insExpiresAt, trades, hourlyRate,
+    rating, active, notes
+  ]);
+
+  async function saveAll() {
+    if (!st) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const payload = {
+        full_name: fullName.trim(),
+        contact_name: contactName.trim() || null,
+        email: email.trim() || null,
+        phone: phone.trim() || null,
+        address: address.trim() || null,
+        rbq_license: rbqLicense.trim() || null,
+        rbq_expires_at: rbqExpiresAt || null,
+        insurance_provider: insProvider.trim() || null,
+        insurance_policy_number: insPolicy.trim() || null,
+        insurance_expires_at: insExpiresAt || null,
+        trades: trades.trim() || null,
+        hourly_rate: hourlyRate ? Number(hourlyRate) : null,
+        rating: rating || null,
+        active,
+        notes: notes.trim() || null
+      };
+      const res = await authedFetch(`/api/v1/sous-traitants/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error();
+      const updated = (await res.json()) as SousTraitant;
+      setSt(updated);
+    } catch {
+      setError("Sauvegarde échouée.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onDelete() {
+    if (!st) return;
+    if (!confirm(`Supprimer définitivement « ${st.full_name} » ?`)) return;
+    setDeleting(true);
+    try {
+      const res = await authedFetch(`/api/v1/sous-traitants/${id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok) throw new Error();
+      router.replace("/app/sous-traitants");
+    } catch {
+      setDeleting(false);
+      setError("Suppression échouée.");
+    }
+  }
+
+  const rbqStatus = expiryBadge(rbqExpiresAt || null);
+  const insStatus = expiryBadge(insExpiresAt || null);
+
+  return (
+    <>
+      <AppTopbar
+        breadcrumbs={[
+          { label: "Ressources" },
+          { label: "Sous-traitants" },
+          { label: st?.full_name || "…" }
+        ]}
+        onOpenSidebar={onOpenSidebar}
+      />
+
+      <div className="p-4 lg:p-6">
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={"/app/sous-traitants" as any}
+          className="inline-flex items-center text-sm text-white/70 hover:text-accent-500"
+        >
+          <ArrowLeft className="mr-1 h-4 w-4" /> Retour aux sous-traitants
+        </Link>
+
+        {loading ? (
+          <div className="flex min-h-[40vh] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
+          </div>
+        ) : error && !st ? (
+          <p className="mt-6 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
+            {error}
+          </p>
+        ) : st ? (
+          <>
+            <header className="mt-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <h1 className="text-2xl font-bold text-white">{st.full_name}</h1>
+                <p className="mt-1 text-xs text-white/50">
+                  Créé le{" "}
+                  {new Date(st.created_at).toLocaleDateString("fr-CA", {
+                    day: "numeric",
+                    month: "long",
+                    year: "numeric"
+                  })}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                {/* Star rating edit */}
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setRating(rating === i + 1 ? 0 : i + 1)}
+                      aria-label={`Note ${i + 1}`}
+                      className="p-0.5"
+                    >
+                      <Star
+                        className={`h-4 w-4 transition ${
+                          rating > i
+                            ? "fill-accent-500 text-accent-500"
+                            : "text-white/30 hover:text-white/60"
+                        }`}
+                      />
+                    </button>
+                  ))}
+                </div>
+                <label className="inline-flex items-center gap-2 text-sm text-white/70">
+                  <input
+                    type="checkbox"
+                    checked={active}
+                    onChange={(e) => setActive(e.target.checked)}
+                  />
+                  <span>Actif</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={onDelete}
+                  disabled={deleting}
+                  className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
+                >
+                  {deleting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                  Supprimer
+                </button>
+              </div>
+            </header>
+
+            {error ? (
+              <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
+                {error}
+              </p>
+            ) : null}
+
+            <div className="mt-8 grid gap-6 lg:grid-cols-3">
+              <div className="lg:col-span-2 space-y-6">
+                {/* Identité */}
+                <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Identité
+                  </h2>
+                  <div className="mt-4 space-y-4">
+                    <div>
+                      <label htmlFor="full_name" className="label">
+                        Nom de l&apos;entreprise
+                      </label>
+                      <input
+                        id="full_name"
+                        type="text"
+                        value={fullName}
+                        onChange={(e) => setFullName(e.target.value)}
+                        className="input"
+                      />
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label htmlFor="contact_name" className="label">
+                          Personne-contact
+                        </label>
+                        <input
+                          id="contact_name"
+                          type="text"
+                          value={contactName}
+                          onChange={(e) => setContactName(e.target.value)}
+                          className="input"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="phone" className="label">
+                          Téléphone
+                        </label>
+                        <input
+                          id="phone"
+                          type="tel"
+                          value={phone}
+                          onChange={(e) => setPhone(e.target.value)}
+                          className="input"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label htmlFor="email" className="label">Courriel</label>
+                      <input
+                        id="email"
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="input"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="address" className="label">Adresse</label>
+                      <input
+                        id="address"
+                        type="text"
+                        value={address}
+                        onChange={(e) => setAddress(e.target.value)}
+                        className="input"
+                      />
+                    </div>
+                  </div>
+                </section>
+
+                {/* Métiers & taux */}
+                <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Métiers & tarification
+                  </h2>
+                  <div className="mt-4 space-y-4">
+                    <div>
+                      <label htmlFor="trades" className="label">
+                        Métiers (séparés par virgule)
+                      </label>
+                      <input
+                        id="trades"
+                        type="text"
+                        value={trades}
+                        onChange={(e) => setTrades(e.target.value)}
+                        placeholder="plomberie, chauffage, gaz"
+                        className="input"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="hourly_rate" className="label">
+                        Taux horaire (CAD)
+                      </label>
+                      <input
+                        id="hourly_rate"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={hourlyRate}
+                        onChange={(e) => setHourlyRate(e.target.value)}
+                        className="input sm:w-48"
+                      />
+                    </div>
+                  </div>
+                </section>
+
+                {/* Conformité */}
+                <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Conformité
+                  </h2>
+                  <div className="mt-4 space-y-5">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <label className="label mb-0">Licence RBQ</label>
+                        <ExpiryChip status={rbqStatus} />
+                      </div>
+                      <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                        <input
+                          type="text"
+                          value={rbqLicense}
+                          onChange={(e) => setRbqLicense(e.target.value)}
+                          placeholder="0000-0000-00"
+                          className="input"
+                        />
+                        <input
+                          type="date"
+                          value={rbqExpiresAt}
+                          onChange={(e) => setRbqExpiresAt(e.target.value)}
+                          className="input"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <label className="label mb-0">Assurance responsabilité</label>
+                        <ExpiryChip status={insStatus} />
+                      </div>
+                      <div className="mt-2 grid gap-3 sm:grid-cols-3">
+                        <input
+                          type="text"
+                          value={insProvider}
+                          onChange={(e) => setInsProvider(e.target.value)}
+                          placeholder="Fournisseur"
+                          className="input"
+                        />
+                        <input
+                          type="text"
+                          value={insPolicy}
+                          onChange={(e) => setInsPolicy(e.target.value)}
+                          placeholder="N° de police"
+                          className="input"
+                        />
+                        <input
+                          type="date"
+                          value={insExpiresAt}
+                          onChange={(e) => setInsExpiresAt(e.target.value)}
+                          className="input"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                {/* Notes */}
+                <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Notes internes
+                  </h2>
+                  <textarea
+                    rows={5}
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    placeholder="Impressions, fiabilité, chantiers communs…"
+                    className="input mt-3"
+                  />
+                </section>
+
+                <button
+                  type="button"
+                  onClick={saveAll}
+                  disabled={saving || !dirty}
+                  className="btn-accent text-sm"
+                >
+                  {saving ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Sauvegarde…
+                    </>
+                  ) : (
+                    <>
+                      <Save className="mr-2 h-4 w-4" />
+                      {dirty ? "Sauvegarder" : "Aucun changement"}
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Sidebar status summary */}
+              <aside className="space-y-5">
+                <div className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Statut conformité
+                  </h2>
+                  <dl className="mt-4 space-y-3 text-sm">
+                    <StatusRow label="Licence RBQ" status={rbqStatus} />
+                    <StatusRow label="Assurance" status={insStatus} />
+                    <div className="flex items-center justify-between">
+                      <dt className="text-white/60">Compte</dt>
+                      <dd
+                        className={`text-xs font-semibold ${
+                          active ? "text-emerald-300" : "text-white/50"
+                        }`}
+                      >
+                        {active ? "Actif" : "Inactif"}
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+              </aside>
+            </div>
+          </>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+function ExpiryChip({
+  status
+}: {
+  status: { label: string; tone: "ok" | "warn" | "danger" | "none" };
+}) {
+  const cls =
+    status.tone === "ok"
+      ? "bg-emerald-500/10 text-emerald-300"
+      : status.tone === "warn"
+      ? "bg-amber-500/15 text-amber-300"
+      : status.tone === "danger"
+      ? "bg-rose-500/15 text-rose-300"
+      : "bg-white/5 text-white/50";
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${cls}`}
+    >
+      {status.tone === "warn" || status.tone === "danger" ? (
+        <AlertTriangle className="h-3 w-3" />
+      ) : null}
+      {status.label}
+    </span>
+  );
+}
+
+function StatusRow({
+  label,
+  status
+}: {
+  label: string;
+  status: { label: string; tone: "ok" | "warn" | "danger" | "none" };
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <dt className="text-white/60">{label}</dt>
+      <dd>
+        <ExpiryChip status={status} />
+      </dd>
+    </div>
+  );
+}
