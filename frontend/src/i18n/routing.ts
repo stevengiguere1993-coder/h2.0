@@ -35,6 +35,34 @@ export const routing = defineRouting({
     "/connexion": {
       fr: "/connexion",
       en: "/login"
+    },
+    "/blog": {
+      fr: "/blog",
+      en: "/blog"
+    },
+    "/blog/[slug]": {
+      fr: "/blog/[slug]",
+      en: "/blog/[slug]"
+    },
+    "/renovation/[service]/[city]": {
+      fr: "/renovation/[service]/[city]",
+      en: "/renovation/[service]/[city]"
+    },
+    "/mentions-legales": {
+      fr: "/mentions-legales",
+      en: "/mentions-legales"
+    },
+    "/confidentialite": {
+      fr: "/confidentialite",
+      en: "/confidentialite"
+    },
+    "/app": {
+      fr: "/app",
+      en: "/app"
+    },
+    "/app/crm": {
+      fr: "/app/crm",
+      en: "/app/crm"
     }
   }
 });
