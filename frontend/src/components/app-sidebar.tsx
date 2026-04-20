@@ -8,6 +8,7 @@ import {
   Clock,
   DollarSign,
   FileText,
+  HardHat,
   Home,
   LogOut,
   ShoppingCart,
@@ -39,6 +40,7 @@ const CONSTRUCTION_NAV: NavItem[] = [
 
 const RESOURCES_NAV: NavItem[] = [
   { href: "/app/employes", label: "Employés", icon: UserCircle },
+  { href: "/app/sous-traitants", label: "Sous-traitants", icon: HardHat },
   { href: "/app/fournisseurs", label: "Fournisseurs", icon: Truck }
 ];
 
@@ -56,13 +58,13 @@ export function AppSidebar({
   const pathname = usePathname();
 
   function isActive(href: string) {
-    if (href === "/app") return pathname === "/app" || pathname === "/fr/app" || pathname === "/en/app";
+    if (href === "/app")
+      return pathname === "/app" || pathname === "/fr/app" || pathname === "/en/app";
     return pathname.includes(href);
   }
 
   return (
     <>
-      {/* Mobile backdrop */}
       {open ? (
         <button
           type="button"
@@ -77,7 +79,6 @@ export function AppSidebar({
           open ? "flex translate-x-0" : "hidden -translate-x-full"
         }`}
       >
-        {/* Header with logo + close (mobile) */}
         <div className="flex items-center justify-between border-b border-brand-800 px-4 py-4">
           <Link href="/app" className="flex items-center gap-2">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -97,7 +98,6 @@ export function AppSidebar({
           </button>
         </div>
 
-        {/* Navigation */}
         <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
           <div>
             <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-accent-500">
@@ -164,7 +164,6 @@ export function AppSidebar({
           </div>
         </nav>
 
-        {/* Footer: user info + signout */}
         <div className="border-t border-brand-800 px-3 py-4">
           {userEmail ? (
             <p
