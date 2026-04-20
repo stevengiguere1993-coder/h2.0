@@ -1,17 +1,29 @@
 """
 Contact request endpoints.
 
-Public POST (no auth) for the landing-form submission.
-Authenticated GET/PATCH for internal CRM triage.
+Public POST (multipart, no auth) for the landing-form submission,
+including optional photo attachments. Authenticated GET/PATCH for
+internal CRM triage.
 """
 
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
+from pydantic import ValidationError
 
 from app.api.deps import CurrentUser, DBSession
 from app.integrations.monday_bridge import push_contact_to_monday
-from app.models.contact_request import ContactRequestStatus
+from app.models.contact_request import ContactRequestStatus, ProjectType
 from app.schemas.contact_request import (
     ContactRequestCreate,
     ContactRequestPublicAck,
@@ -23,32 +35,65 @@ from app.services.contact_request import ContactRequestService
 
 router = APIRouter(prefix="/contact", tags=["contact"])
 
+MAX_PHOTOS = 5
+MAX_PHOTO_BYTES = 10 * 1024 * 1024  # 10 MB each
+ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
+
 
 @router.post(
     "",
     response_model=ContactRequestPublicAck,
     status_code=status.HTTP_201_CREATED,
-    summary="Submit a contact request (public)",
+    summary="Submit a contact request (public, multipart/form-data)",
 )
 async def submit_contact(
-    data: ContactRequestCreate,
     request: Request,
     db: DBSession,
     background_tasks: BackgroundTasks,
+    name: str = Form(...),
+    email: str = Form(...),
+    message: str = Form(...),
+    gdpr_consent: bool = Form(...),
+    phone: Optional[str] = Form(None),
+    address: Optional[str] = Form(None),
+    project_type: str = Form("autre"),
+    budget_range: Optional[str] = Form(None),
+    locale: str = Form("fr"),
+    source: Optional[str] = Form(None),
+    marketing_consent: bool = Form(False),
+    photos: List[UploadFile] = File(default=[]),
 ) -> ContactRequestPublicAck:
-    """Public endpoint used by the landing page form.
+    """Public endpoint for the landing-page form.
 
-    Saves the request to Postgres (source of truth) and, in the
-    background, also creates an item in the Monday CRM Soumissions
-    board so the team can keep working from Monday during the
-    transition to the full internal portal. A Monday failure never
-    blocks or fails the public response.
+    Saves the textual data to Postgres (source of truth) and, in a
+    background task, forwards the item + attached photos to the Monday
+    CRM Soumissions board so the team can keep working from Monday
+    during the transition to the internal portal.
     """
-    if not data.gdpr_consent:
+    if not gdpr_consent:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Consent is required to submit a contact request.",
         )
+
+    # Validate payload through the existing pydantic schema so we keep
+    # the same normalization rules as the old JSON endpoint.
+    try:
+        data = ContactRequestCreate(
+            name=name,
+            email=email,
+            phone=phone or None,
+            address=address or None,
+            project_type=ProjectType(project_type) if project_type else ProjectType.AUTRE,
+            budget_range=budget_range or None,
+            message=message,
+            locale=locale if locale in ("fr", "en") else "fr",
+            source=source or None,
+            gdpr_consent=gdpr_consent,
+            marketing_consent=marketing_consent,
+        )
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
     ip_address = _client_ip(request)
     user_agent = request.headers.get("user-agent")
@@ -68,8 +113,22 @@ async def submit_contact(
 
     reference = ContactRequestService.build_reference(record)
 
-    # Transitional: also push to Monday so the team can keep working there.
-    background_tasks.add_task(push_contact_to_monday, record, reference)
+    # Read photo bytes now (before the request closes) so the background
+    # task can forward them to Monday without holding the response open.
+    photo_payloads: list[tuple[str, bytes, str]] = []
+    if photos:
+        for up in photos[:MAX_PHOTOS]:
+            ct = (up.content_type or "").lower()
+            if ct not in ALLOWED_CONTENT_TYPES:
+                continue
+            content = await up.read(MAX_PHOTO_BYTES + 1)
+            if not content or len(content) > MAX_PHOTO_BYTES:
+                continue
+            photo_payloads.append((up.filename or "photo.jpg", content, ct))
+
+    background_tasks.add_task(
+        push_contact_to_monday, record, reference, None, photo_payloads or None
+    )
 
     return ContactRequestPublicAck(reference=reference)
 
