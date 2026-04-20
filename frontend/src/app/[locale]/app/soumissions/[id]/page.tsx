@@ -4,11 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter as useNextRouter } from "next/navigation";
 import {
   ArrowLeft,
+  Check,
   FileText,
   Loader2,
   Mail,
   PenTool,
   Plus,
+  RefreshCw,
   Save,
   Send,
   Trash2
@@ -37,6 +39,9 @@ type Soumission = {
   pdf_url: string | null;
   notes: string | null;
   created_at: string;
+  qbo_estimate_id?: string | null;
+  qbo_doc_number?: string | null;
+  qbo_sync_token?: string | null;
 };
 
 type Item = {
@@ -95,6 +100,8 @@ export default function SoumissionDetailPage() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [itemBusy, setItemBusy] = useState<number | "new" | null>(null);
+  const [qboBusy, setQboBusy] = useState(false);
+  const [qboNotice, setQboNotice] = useState<string | null>(null);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -148,6 +155,41 @@ export default function SoumissionDetailPage() {
       isoToDateInput(s.valid_until) !== validUntil ||
       (s.notes || "") !== notes);
 
+  async function syncToQbo(options?: { silent?: boolean }) {
+    setQboBusy(true);
+    if (!options?.silent) setQboNotice(null);
+    try {
+      const res = await authedFetch(`/api/v1/soumissions/${id}/qbo/sync`, {
+        method: "POST"
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(err || `http_${res.status}`);
+      }
+      const r = (await res.json()) as {
+        qbo_estimate_id: string;
+        qbo_doc_number: string;
+      };
+      setS((cur) =>
+        cur
+          ? {
+              ...cur,
+              qbo_estimate_id: r.qbo_estimate_id || null,
+              qbo_doc_number: r.qbo_doc_number || null
+            }
+          : cur
+      );
+      if (!options?.silent)
+        setQboNotice(`Synchronisé avec QuickBooks (Estimate ${r.qbo_estimate_id}).`);
+    } catch (err) {
+      setQboNotice(
+        `Erreur de synchronisation QuickBooks : ${(err as Error).message.slice(0, 240)}`
+      );
+    } finally {
+      setQboBusy(false);
+    }
+  }
+
   async function saveMeta() {
     if (!s) return;
     setSaving(true);
@@ -197,6 +239,11 @@ export default function SoumissionDetailPage() {
       if (!res.ok) throw new Error();
       const updated = (await res.json()) as Soumission;
       setS(updated);
+
+      // Auto-sync to QBO when transitioning to "sent"
+      if (newStatus === "sent" && prev.status !== "sent") {
+        void syncToQbo({ silent: true });
+      }
     } catch {
       setS(prev);
       setError("Changement de statut échoué.");
@@ -277,6 +324,8 @@ export default function SoumissionDetailPage() {
     }
   }
 
+  const isQboSynced = Boolean(s?.qbo_estimate_id);
+
   return (
     <>
       <AppTopbar
@@ -327,6 +376,12 @@ export default function SoumissionDetailPage() {
                     ? ` · Acceptée le ${new Date(s.accepted_at).toLocaleDateString("fr-CA")}`
                     : ""}
                 </p>
+                {isQboSynced ? (
+                  <p className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+                    <Check className="h-3 w-3" /> QuickBooks Estimate #
+                    {s.qbo_doc_number || s.qbo_estimate_id}
+                  </p>
+                ) : null}
               </div>
               <div className="flex flex-wrap items-end gap-3">
                 <span
@@ -362,11 +417,51 @@ export default function SoumissionDetailPage() {
                 {error}
               </p>
             ) : null}
+            {qboNotice ? (
+              <p
+                className={`mt-4 rounded-lg border px-4 py-2 text-sm ${
+                  qboNotice.startsWith("Synchronisé")
+                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                    : "border-amber-500/40 bg-amber-500/10 text-amber-200"
+                }`}
+              >
+                {qboNotice}
+              </p>
+            ) : null}
 
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
               <ActionCard icon={FileText} label="Générer PDF" hint="Version imprimable." />
               <ActionCard icon={Mail} label="Envoyer au client" hint="Via Microsoft Graph." />
-              <ActionCard icon={PenTool} label="Signature électronique" hint="Lien unique client." />
+              <button
+                type="button"
+                onClick={() => syncToQbo()}
+                disabled={qboBusy}
+                className={`flex items-start gap-3 rounded-xl border p-4 text-left transition ${
+                  isQboSynced
+                    ? "border-emerald-500/40 bg-emerald-500/5 hover:bg-emerald-500/10"
+                    : "border-brand-800 bg-brand-900 hover:border-accent-500"
+                } disabled:opacity-60`}
+              >
+                {qboBusy ? (
+                  <Loader2 className="mt-0.5 h-5 w-5 flex-shrink-0 animate-spin text-accent-500" />
+                ) : (
+                  <RefreshCw
+                    className={`mt-0.5 h-5 w-5 flex-shrink-0 ${
+                      isQboSynced ? "text-emerald-400" : "text-accent-500"
+                    }`}
+                  />
+                )}
+                <div>
+                  <p className="text-sm font-semibold text-white">
+                    {isQboSynced ? "Resynchroniser QuickBooks" : "Envoyer vers QuickBooks"}
+                  </p>
+                  <p className="mt-0.5 text-xs text-white/60">
+                    {isQboSynced
+                      ? `Estimate #${s.qbo_doc_number || s.qbo_estimate_id} — mise à jour`
+                      : "Créer l'Estimate dans QBO"}
+                  </p>
+                </div>
+              </button>
             </div>
 
             <section className="mt-8 rounded-xl border border-brand-800 bg-brand-900">
@@ -555,18 +650,29 @@ export default function SoumissionDetailPage() {
                         {s.client_id ? `Client #${s.client_id}` : "—"}
                       </dd>
                     </div>
+                    <div>
+                      <dt className="text-white/50">QuickBooks</dt>
+                      <dd className="mt-0.5 text-white">
+                        {isQboSynced ? (
+                          <span className="text-emerald-300">
+                            Estimate #{s.qbo_doc_number || s.qbo_estimate_id}
+                          </span>
+                        ) : (
+                          <span className="text-white/50">Non synchronisé</span>
+                        )}
+                      </dd>
+                    </div>
                   </dl>
                 </div>
 
                 <div className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 p-5 text-xs text-white/50">
                   <p className="flex items-center gap-2 text-white/70">
                     <Send className="h-4 w-4 text-accent-500" />
-                    <span className="font-semibold">Actions à venir</span>
+                    <span className="font-semibold">À venir</span>
                   </p>
                   <ul className="mt-2 list-disc pl-5">
                     <li>Génération PDF + envoi courriel</li>
-                    <li>Signature électronique</li>
-                    <li>Synchronisation QuickBooks</li>
+                    <li>Signature électronique (lien client)</li>
                   </ul>
                 </div>
               </aside>
