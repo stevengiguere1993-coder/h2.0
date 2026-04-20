@@ -60,7 +60,7 @@ export default function CrmKanbanPage() {
       setLoading(true);
       setError(null);
       try {
-        const res = await authedFetch("/api/v1/contact?limit=500");
+        const res = await authedFetch("/api/v1/contact?limit=200");
         if (!res.ok) throw new Error(`http_${res.status}`);
         const data = (await res.json()) as Prospect[];
         if (!cancelled) setItems(data);
