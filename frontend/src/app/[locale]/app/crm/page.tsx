@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Mail, Phone, Plus } from "lucide-react";
+import { Loader2, Mail, Phone, Plus, Trash2 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
@@ -23,11 +23,7 @@ type Prospect = {
   created_at: string;
 };
 
-type Column = {
-  id: string;
-  label: string;
-  dot: string;
-};
+type Column = { id: string; label: string; dot: string };
 
 const COLUMNS: Column[] = [
   { id: "new", label: "Nouveaux", dot: "bg-emerald-400" },
@@ -115,13 +111,23 @@ export default function CrmKanbanPage() {
     }
   }
 
-  function onDragStart(id: number) {
-    setDragging(id);
+  async function deleteProspect(id: number, name: string) {
+    if (!confirm(`Supprimer définitivement le prospect « ${name} » ?`)) return;
+    const prev = items;
+    setItems((xs) => xs.filter((x) => x.id !== id));
+    try {
+      const res = await authedFetch(`/api/v1/contact/${id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      setItems(prev);
+      setError("Suppression échouée.");
+    }
   }
-  function onDragEnd() {
-    setDragging(null);
-    setHoverCol(null);
-  }
+
+  function onDragStart(id: number) { setDragging(id); }
+  function onDragEnd() { setDragging(null); setHoverCol(null); }
   function onDropToColumn(colId: string) {
     if (dragging == null) return;
     const item = items.find((p) => p.id === dragging);
@@ -205,6 +211,7 @@ export default function CrmKanbanPage() {
                           dragging={dragging === p.id}
                           onDragStart={() => onDragStart(p.id)}
                           onDragEnd={onDragEnd}
+                          onDelete={() => deleteProspect(p.id, p.name)}
                         />
                       ))
                     )}
@@ -223,46 +230,66 @@ function ProspectCard({
   prospect: p,
   dragging,
   onDragStart,
-  onDragEnd
+  onDragEnd,
+  onDelete
 }: {
   prospect: Prospect;
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
+  onDelete: () => void;
 }) {
   return (
-    <Link
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      href={`/app/crm/${p.id}` as any}
+    <div
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className={`block cursor-grab rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-accent-500 active:cursor-grabbing ${
+      className={`group relative cursor-grab rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-accent-500 active:cursor-grabbing ${
         dragging ? "opacity-40" : ""
       }`}
     >
-      <p className="truncate text-sm font-semibold text-white">{p.name}</p>
-      {p.phone ? (
+      {/* Delete button — top right, appears on hover */}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onDelete();
+        }}
+        aria-label="Supprimer le prospect"
+        className="absolute right-2 top-2 rounded-md p-1 text-white/40 opacity-0 transition hover:bg-rose-500/15 hover:text-rose-400 group-hover:opacity-100"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+
+      <Link
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        href={`/app/crm/${p.id}` as any}
+        className="block pr-6"
+      >
+        <p className="truncate text-sm font-semibold text-white">{p.name}</p>
+        {p.phone ? (
+          <p className="mt-1 flex items-center gap-1.5 text-xs text-white/60">
+            <Phone className="h-3 w-3" />
+            <span className="truncate">{p.phone}</span>
+          </p>
+        ) : null}
         <p className="mt-1 flex items-center gap-1.5 text-xs text-white/60">
-          <Phone className="h-3 w-3" />
-          <span className="truncate">{p.phone}</span>
+          <Mail className="h-3 w-3" />
+          <span className="truncate">{p.email}</span>
         </p>
-      ) : null}
-      <p className="mt-1 flex items-center gap-1.5 text-xs text-white/60">
-        <Mail className="h-3 w-3" />
-        <span className="truncate">{p.email}</span>
-      </p>
-      <div className="mt-2 flex items-center justify-between">
-        <span className="inline-flex rounded-md bg-accent-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-          {PROJECT_LABEL[p.project_type] || p.project_type}
-        </span>
-        <span className="text-[10px] text-white/40">
-          {new Date(p.created_at).toLocaleDateString("fr-CA", {
-            month: "short",
-            day: "2-digit"
-          })}
-        </span>
-      </div>
-    </Link>
+        <div className="mt-2 flex items-center justify-between">
+          <span className="inline-flex rounded-md bg-accent-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+            {PROJECT_LABEL[p.project_type] || p.project_type}
+          </span>
+          <span className="text-[10px] text-white/40">
+            {new Date(p.created_at).toLocaleDateString("fr-CA", {
+              month: "short",
+              day: "2-digit"
+            })}
+          </span>
+        </div>
+      </Link>
+    </div>
   );
 }

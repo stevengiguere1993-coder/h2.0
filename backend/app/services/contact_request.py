@@ -27,10 +27,6 @@ class ContactRequestService:
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
     ) -> ContactRequest:
-        """Create a contact request from the public form.
-
-        Raises ValueError on rate-limit breach so the endpoint can return 429.
-        """
         if ip_address:
             recent = await self.repo.count_recent_from_ip(ip_address, minutes=10)
             if recent >= self.RATE_LIMIT_PER_IP_PER_10_MIN:
@@ -56,7 +52,13 @@ class ContactRequestService:
             return None
         return await self.repo.update(record, data)
 
+    async def delete(self, request_id: int) -> bool:
+        record = await self.repo.get_by_id(request_id)
+        if record is None:
+            return False
+        await self.repo.delete(record)
+        return True
+
     @staticmethod
     def build_reference(record: ContactRequest) -> str:
-        """Return a short human-readable reference string, e.g. 'HSI-2026-000123'."""
         return f"HSI-{record.created_at.year}-{record.id:06d}"

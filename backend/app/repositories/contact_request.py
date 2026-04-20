@@ -73,6 +73,10 @@ class ContactRequestRepository:
         await self.db.refresh(record)
         return record
 
+    async def delete(self, record: ContactRequest) -> None:
+        await self.db.delete(record)
+        await self.db.flush()
+
     async def count_recent_from_ip(self, ip_address: str, minutes: int = 10) -> int:
         """Used for basic abuse rate-limiting."""
         from datetime import datetime, timedelta, timezone

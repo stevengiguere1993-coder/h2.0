@@ -1,9 +1,5 @@
 """
 Contact request endpoints.
-
-Public POST (multipart, no auth) for the landing-form submission,
-including optional photo attachments. Authenticated GET/PATCH for
-internal CRM triage.
 """
 
 from typing import List, Optional
@@ -36,8 +32,14 @@ from app.services.contact_request import ContactRequestService
 router = APIRouter(prefix="/contact", tags=["contact"])
 
 MAX_PHOTOS = 5
-MAX_PHOTO_BYTES = 10 * 1024 * 1024  # 10 MB each
-ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
+MAX_PHOTO_BYTES = 10 * 1024 * 1024
+ALLOWED_CONTENT_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+}
 
 
 @router.post(
@@ -63,21 +65,12 @@ async def submit_contact(
     marketing_consent: bool = Form(False),
     photos: List[UploadFile] = File(default=[]),
 ) -> ContactRequestPublicAck:
-    """Public endpoint for the landing-page form.
-
-    Saves the textual data to Postgres (source of truth) and, in a
-    background task, forwards the item + attached photos to the Monday
-    CRM Soumissions board so the team can keep working from Monday
-    during the transition to the internal portal.
-    """
     if not gdpr_consent:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Consent is required to submit a contact request.",
         )
 
-    # Validate payload through the existing pydantic schema so we keep
-    # the same normalization rules as the old JSON endpoint.
     try:
         data = ContactRequestCreate(
             name=name,
@@ -93,7 +86,9 @@ async def submit_contact(
             marketing_consent=marketing_consent,
         )
     except (ValidationError, ValueError) as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        )
 
     ip_address = _client_ip(request)
     user_agent = request.headers.get("user-agent")
@@ -113,8 +108,6 @@ async def submit_contact(
 
     reference = ContactRequestService.build_reference(record)
 
-    # Read photo bytes now (before the request closes) so the background
-    # task can forward them to Monday without holding the response open.
     photo_payloads: list[tuple[str, bytes, str]] = []
     if photos:
         for up in photos[:MAX_PHOTOS]:
@@ -189,8 +182,23 @@ async def update_contact_request(
     return ContactRequestRead.model_validate(record)
 
 
+@router.delete(
+    "/{request_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a contact request (staff)",
+)
+async def delete_contact_request(
+    request_id: int,
+    db: DBSession,
+    current_user: CurrentUser,
+) -> None:
+    service = ContactRequestService(db)
+    deleted = await service.delete(request_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+
 def _client_ip(request: Request) -> Optional[str]:
-    """Extract the best-effort client IP, respecting a single proxy hop."""
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip() or None
