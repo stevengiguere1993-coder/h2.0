@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Loader2, Mail, Phone, Plus } from "lucide-react";
 
-import { Link } from "@/i18n/navigation";
-import { useCurrentUser } from "@/hooks/use-current-user";
+import { AppTopbar } from "@/components/app-topbar";
+import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
+import { Link } from "@/i18n/navigation";
 
-type ContactRequest = {
+type Prospect = {
   id: number;
   name: string;
   email: string;
@@ -22,56 +23,82 @@ type ContactRequest = {
   created_at: string;
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  new: "Nouveau",
-  contacted: "Contacte",
-  qualified: "Qualifie",
-  quoted: "Devis envoye",
-  won: "Gagne",
-  lost: "Perdu",
-  spam: "Spam"
+type Column = {
+  id: string;
+  label: string;
+  dot: string;
 };
 
-const STATUS_CLASS: Record<string, string> = {
-  new: "bg-blue-100 text-blue-800",
-  contacted: "bg-amber-100 text-amber-800",
-  qualified: "bg-violet-100 text-violet-800",
-  quoted: "bg-indigo-100 text-indigo-800",
-  won: "bg-green-100 text-green-800",
-  lost: "bg-gray-100 text-gray-600",
-  spam: "bg-red-100 text-red-700"
+const COLUMNS: Column[] = [
+  { id: "new", label: "Nouveaux", dot: "bg-emerald-400" },
+  { id: "contacted", label: "À rappeler", dot: "bg-amber-400" },
+  { id: "quoted", label: "Soumission envoyée", dot: "bg-blue-400" },
+  { id: "won", label: "Soumission acceptée", dot: "bg-green-500" },
+  { id: "lost", label: "Soumission refusée", dot: "bg-rose-500" }
+];
+
+const PROJECT_LABEL: Record<string, string> = {
+  salle_bain: "Salle de bain",
+  cuisine: "Cuisine",
+  multilogement: "Multilogement",
+  renovation_complete: "Rénovation complète",
+  autre: "Autre"
 };
 
-export default function CrmPage() {
-  const { user, loading: authLoading } = useCurrentUser();
-  const [items, setItems] = useState<ContactRequest[]>([]);
+export default function CrmKanbanPage() {
+  const { onOpenSidebar } = useAppLayout();
+  const [items, setItems] = useState<Prospect[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [search, setSearch] = useState("");
+  const [dragging, setDragging] = useState<number | null>(null);
+  const [hoverCol, setHoverCol] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!user) return;
-    const load = async () => {
+    let cancelled = false;
+    async function load() {
       setLoading(true);
       setError(null);
       try {
-        const qs = statusFilter
-          ? `?status=${encodeURIComponent(statusFilter)}&limit=100`
-          : "?limit=100";
-        const res = await authedFetch(`/api/v1/contact${qs}`);
+        const res = await authedFetch("/api/v1/contact?limit=500");
         if (!res.ok) throw new Error(`http_${res.status}`);
-        const data = (await res.json()) as ContactRequest[];
-        setItems(data);
-      } catch (err) {
-        setError("Impossible de charger les demandes.");
+        const data = (await res.json()) as Prospect[];
+        if (!cancelled) setItems(data);
+      } catch {
+        if (!cancelled) setError("Impossible de charger les prospects.");
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
-    };
+    }
     load();
-  }, [user, statusFilter]);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  async function updateStatus(id: number, newStatus: string) {
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.email.toLowerCase().includes(q) ||
+        (p.phone || "").includes(q)
+    );
+  }, [items, search]);
+
+  const byColumn = useMemo(() => {
+    const map: Record<string, Prospect[]> = Object.fromEntries(
+      COLUMNS.map((c) => [c.id, [] as Prospect[]])
+    );
+    for (const p of filtered) {
+      const target = COLUMNS.find((c) => c.id === p.status) ? p.status : "new";
+      map[target].push(p);
+    }
+    return map;
+  }, [filtered]);
+
+  async function moveProspect(id: number, newStatus: string) {
     const prev = items;
     setItems((xs) =>
       xs.map((x) => (x.id === id ? { ...x, status: newStatus } : x))
@@ -81,133 +108,161 @@ export default function CrmPage() {
         method: "PATCH",
         body: JSON.stringify({ status: newStatus })
       });
-      if (!res.ok) throw new Error(`http_${res.status}`);
+      if (!res.ok) throw new Error();
     } catch {
       setItems(prev);
-      setError("Mise a jour echouee.");
+      setError("Mise à jour échouée.");
     }
   }
 
-  if (authLoading) return <CenterSpinner />;
-  if (!user) return null;
+  function onDragStart(id: number) {
+    setDragging(id);
+  }
+  function onDragEnd() {
+    setDragging(null);
+    setHoverCol(null);
+  }
+  function onDropToColumn(colId: string) {
+    if (dragging == null) return;
+    const item = items.find((p) => p.id === dragging);
+    if (item && item.status !== colId) moveProspect(dragging, colId);
+    setDragging(null);
+    setHoverCol(null);
+  }
 
   return (
-    <section className="section">
-      <div className="container">
-        <header className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
-          <div>
-            <p className="text-sm text-brand-600">
-              <Link href={"/app"} className="hover:text-brand-900">
-                &larr; Portail
-              </Link>
-            </p>
-            <h1 className="text-3xl font-bold text-brand-950">
-              CRM &mdash; Demandes de contact
-            </h1>
-            <p className="mt-1 text-sm text-brand-700">
-              Pipeline des prospects issus du site public.
-            </p>
-          </div>
-          <div>
-            <label className="sr-only" htmlFor="status-filter">
-              Filtrer
-            </label>
-            <select
-              id="status-filter"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="input w-56"
-            >
-              <option value="">Tous les statuts</option>
-              {Object.entries(STATUS_LABELS).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
-              ))}
-            </select>
-          </div>
-        </header>
+    <>
+      <AppTopbar
+        breadcrumbs={[{ label: "Construction" }, { label: "CRM / Prospects" }]}
+        onOpenSidebar={onOpenSidebar}
+        onSearch={setSearch}
+        searchPlaceholder="Rechercher un prospect…"
+        rightSlot={
+          <button
+            type="button"
+            className="btn-accent text-sm"
+            disabled
+            title="À venir — création manuelle"
+          >
+            <Plus className="mr-1.5 h-4 w-4" /> Créer un prospect
+          </button>
+        }
+      />
 
-        {error ? <p className="mt-6 text-sm text-red-600">{error}</p> : null}
+      <div className="p-4 lg:p-6">
+        {error ? (
+          <p className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
+            {error}
+          </p>
+        ) : null}
 
-        <div className="mt-8 overflow-hidden rounded-2xl border border-brand-100 bg-white shadow-card">
-          {loading ? (
-            <div className="py-16">
-              <CenterSpinner />
-            </div>
-          ) : items.length === 0 ? (
-            <p className="px-6 py-12 text-center text-sm text-brand-600">
-              Aucune demande pour ce filtre.
-            </p>
-          ) : (
-            <table className="w-full divide-y divide-brand-100 text-sm">
-              <thead className="bg-brand-50 text-left text-xs uppercase tracking-wider text-brand-700">
-                <tr>
-                  <th className="px-4 py-3">Date</th>
-                  <th className="px-4 py-3">Contact</th>
-                  <th className="px-4 py-3">Projet</th>
-                  <th className="px-4 py-3">Source</th>
-                  <th className="px-4 py-3">Statut</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-brand-100">
-                {items.map((r) => (
-                  <tr key={r.id} className="hover:bg-brand-50/50">
-                    <td className="px-4 py-3 text-brand-700">
-                      {new Date(r.created_at).toLocaleDateString("fr-CA", {
-                        month: "short",
-                        day: "2-digit"
-                      })}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="font-semibold text-brand-950">{r.name}</div>
-                      <div className="text-xs text-brand-600">{r.email}</div>
-                      {r.phone ? (
-                        <div className="text-xs text-brand-600">{r.phone}</div>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="text-brand-900">{r.project_type}</div>
-                      {r.budget_range ? (
-                        <div className="text-xs text-brand-600">{r.budget_range}</div>
-                      ) : null}
-                      <div className="text-xs text-brand-700 line-clamp-2 max-w-xs">
-                        {r.message}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-xs text-brand-600">
-                      {r.source || "-"}
-                    </td>
-                    <td className="px-4 py-3">
-                      <select
-                        value={r.status}
-                        onChange={(e) => updateStatus(r.id, e.target.value)}
-                        className={`rounded-md px-2 py-1 text-xs font-semibold ${
-                          STATUS_CLASS[r.status] || "bg-gray-100"
-                        }`}
-                      >
-                        {Object.entries(STATUS_LABELS).map(([k, v]) => (
-                          <option key={k} value={k}>
-                            {v}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+        {loading ? (
+          <div className="flex min-h-[50vh] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
+          </div>
+        ) : (
+          <div className="flex gap-4 overflow-x-auto pb-4">
+            {COLUMNS.map((col) => {
+              const cards = byColumn[col.id] || [];
+              const isHover = hoverCol === col.id;
+              return (
+                <div
+                  key={col.id}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setHoverCol(col.id);
+                  }}
+                  onDragLeave={() =>
+                    setHoverCol((h) => (h === col.id ? null : h))
+                  }
+                  onDrop={() => onDropToColumn(col.id)}
+                  className={`flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
+                    isHover ? "border-accent-500 bg-brand-900" : "border-brand-800"
+                  }`}
+                >
+                  <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <span className={`h-2 w-2 rounded-full ${col.dot}`} />
+                      <h2 className="text-sm font-semibold text-white">
+                        {col.label}
+                      </h2>
+                    </div>
+                    <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
+                      {cards.length}
+                    </span>
+                  </div>
+
+                  <div className="flex-1 space-y-3 p-3">
+                    {cards.length === 0 ? (
+                      <p className="py-8 text-center text-xs text-white/40">
+                        Aucun prospect
+                      </p>
+                    ) : (
+                      cards.map((p) => (
+                        <ProspectCard
+                          key={p.id}
+                          prospect={p}
+                          dragging={dragging === p.id}
+                          onDragStart={() => onDragStart(p.id)}
+                          onDragEnd={onDragEnd}
+                        />
+                      ))
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
-    </section>
+    </>
   );
 }
 
-function CenterSpinner() {
+function ProspectCard({
+  prospect: p,
+  dragging,
+  onDragStart,
+  onDragEnd
+}: {
+  prospect: Prospect;
+  dragging: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+}) {
   return (
-    <div className="flex min-h-[40vh] items-center justify-center">
-      <Loader2 className="h-6 w-6 animate-spin text-brand-700" />
-    </div>
+    <Link
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      href={`/app/crm/${p.id}` as any}
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      className={`block cursor-grab rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-accent-500 active:cursor-grabbing ${
+        dragging ? "opacity-40" : ""
+      }`}
+    >
+      <p className="truncate text-sm font-semibold text-white">{p.name}</p>
+      {p.phone ? (
+        <p className="mt-1 flex items-center gap-1.5 text-xs text-white/60">
+          <Phone className="h-3 w-3" />
+          <span className="truncate">{p.phone}</span>
+        </p>
+      ) : null}
+      <p className="mt-1 flex items-center gap-1.5 text-xs text-white/60">
+        <Mail className="h-3 w-3" />
+        <span className="truncate">{p.email}</span>
+      </p>
+      <div className="mt-2 flex items-center justify-between">
+        <span className="inline-flex rounded-md bg-accent-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+          {PROJECT_LABEL[p.project_type] || p.project_type}
+        </span>
+        <span className="text-[10px] text-white/40">
+          {new Date(p.created_at).toLocaleDateString("fr-CA", {
+            month: "short",
+            day: "2-digit"
+          })}
+        </span>
+      </div>
+    </Link>
   );
 }
