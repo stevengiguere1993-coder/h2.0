@@ -276,11 +276,7 @@ export default function ProjectDetailPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Construction" },
-          { label: "Projets" },
-          { label: p?.name || "…" }
-        ]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Projets" }]}
         onOpenSidebar={onOpenSidebar}
       />
 

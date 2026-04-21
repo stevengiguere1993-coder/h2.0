@@ -260,7 +260,7 @@ export default function PunchPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[{ label: "Construction" }, { label: "Punch / Temps" }]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Punch / Temps" }]}
         onOpenSidebar={onOpenSidebar}
         rightSlot={
           <Link

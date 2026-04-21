@@ -159,11 +159,7 @@ export default function EmployeDetailPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Ressources" },
-          { label: "Employés" },
-          { label: emp?.full_name || "…" }
-        ]}
+        breadcrumbs={[{ label: "Ressources", href: "/app" }, { label: "Employés" }]}
         onOpenSidebar={onOpenSidebar}
       />
 

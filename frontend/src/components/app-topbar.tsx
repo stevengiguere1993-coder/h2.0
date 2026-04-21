@@ -2,6 +2,8 @@
 
 import { Menu, Search } from "lucide-react";
 
+import { Link } from "@/i18n/navigation";
+
 type Crumb = { label: string; href?: string };
 
 export function AppTopbar({
@@ -29,20 +31,32 @@ export function AppTopbar({
       </button>
 
       <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-2">
-        {breadcrumbs.map((c, i) => (
-          <span key={i} className="flex items-center gap-2">
-            {i > 0 ? <span className="text-white/30">/</span> : null}
-            <span
-              className={`truncate text-sm font-medium ${
-                i === breadcrumbs.length - 1
-                  ? "text-white"
-                  : "text-white/50"
-              }`}
-            >
-              {c.label}
+        {breadcrumbs.map((c, i) => {
+          const isLast = i === breadcrumbs.length - 1;
+          const labelClass = `truncate text-sm font-medium ${
+            isLast
+              ? "text-white"
+              : c.href
+              ? "text-white/60 hover:text-accent-500"
+              : "text-white/50"
+          }`;
+          return (
+            <span key={i} className="flex items-center gap-2">
+              {i > 0 ? <span className="text-white/30">/</span> : null}
+              {!isLast && c.href ? (
+                <Link
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  href={c.href as any}
+                  className={labelClass}
+                >
+                  {c.label}
+                </Link>
+              ) : (
+                <span className={labelClass}>{c.label}</span>
+              )}
             </span>
-          </span>
-        ))}
+          );
+        })}
       </nav>
 
       {onSearch ? (

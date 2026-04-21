@@ -135,11 +135,7 @@ export default function FournisseurDetailPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Ressources" },
-          { label: "Fournisseurs" },
-          { label: f?.name || "…" }
-        ]}
+        breadcrumbs={[{ label: "Ressources", href: "/app" }, { label: "Fournisseurs" }]}
         onOpenSidebar={onOpenSidebar}
       />
 

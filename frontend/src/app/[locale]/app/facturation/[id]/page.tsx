@@ -439,11 +439,7 @@ export default function FactureDetailPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Construction" },
-          { label: "Facturation" },
-          { label: f?.reference || "…" }
-        ]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Facturation" }]}
         onOpenSidebar={onOpenSidebar}
       />
 

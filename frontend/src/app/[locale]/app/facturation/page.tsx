@@ -125,7 +125,7 @@ export default function FacturationPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[{ label: "Construction" }, { label: "Facturation" }]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Facturation" }]}
         onOpenSidebar={onOpenSidebar}
         onSearch={setSearch}
         searchPlaceholder="Référence, montant…"

@@ -77,7 +77,7 @@ export default function EmployesPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[{ label: "Ressources" }, { label: "Employés" }]}
+        breadcrumbs={[{ label: "Ressources", href: "/app" }, { label: "Employés" }]}
         onOpenSidebar={onOpenSidebar}
         onSearch={setSearch}
         searchPlaceholder="Nom, courriel, rôle, téléphone…"

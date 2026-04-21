@@ -125,11 +125,7 @@ export default function ClientDetailPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Construction" },
-          { label: "Clients" },
-          { label: c?.name || "…" }
-        ]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Clients" }]}
         onOpenSidebar={onOpenSidebar}
       />
 

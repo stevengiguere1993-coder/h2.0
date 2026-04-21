@@ -66,7 +66,7 @@ export default function FournisseursPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[{ label: "Ressources" }, { label: "Fournisseurs" }]}
+        breadcrumbs={[{ label: "Ressources", href: "/app" }, { label: "Fournisseurs" }]}
         onOpenSidebar={onOpenSidebar}
         onSearch={setSearch}
         searchPlaceholder="Nom, catégorie, contact…"

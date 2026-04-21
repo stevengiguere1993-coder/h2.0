@@ -139,7 +139,7 @@ export default function CrmKanbanPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[{ label: "Construction" }, { label: "CRM / Prospects" }]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "CRM / Prospects" }]}
         onOpenSidebar={onOpenSidebar}
         onSearch={setSearch}
         searchPlaceholder="Rechercher un prospect…"

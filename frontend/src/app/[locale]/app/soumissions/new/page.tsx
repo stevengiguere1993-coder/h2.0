@@ -129,11 +129,7 @@ export default function NewSoumissionPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Construction" },
-          { label: "Soumissions" },
-          { label: "Nouvelle" }
-        ]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Soumissions", href: "/app/soumissions" }, { label: "Nouvelle" }]}
         onOpenSidebar={onOpenSidebar}
       />
 

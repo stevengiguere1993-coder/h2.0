@@ -56,11 +56,7 @@ export default function NewClientPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Construction" },
-          { label: "Clients" },
-          { label: "Nouveau" }
-        ]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Clients", href: "/app/clients" }, { label: "Nouveau" }]}
         onOpenSidebar={onOpenSidebar}
       />
 

@@ -141,7 +141,7 @@ export default function AchatsPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[{ label: "Construction" }, { label: "Achats / PO" }]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Achats / PO" }]}
         onOpenSidebar={onOpenSidebar}
         onSearch={setSearch}
         searchPlaceholder="Référence, description…"

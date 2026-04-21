@@ -118,7 +118,7 @@ export default function SousTraitantsPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[{ label: "Ressources" }, { label: "Sous-traitants" }]}
+        breadcrumbs={[{ label: "Ressources", href: "/app" }, { label: "Sous-traitants" }]}
         onOpenSidebar={onOpenSidebar}
         onSearch={setSearch}
         searchPlaceholder="Nom, RBQ, métier, courriel…"

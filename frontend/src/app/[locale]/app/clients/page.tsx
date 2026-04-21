@@ -63,7 +63,7 @@ export default function ClientsPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[{ label: "Construction" }, { label: "Clients" }]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Clients" }]}
         onOpenSidebar={onOpenSidebar}
         onSearch={setSearch}
         searchPlaceholder="Nom, courriel, téléphone, adresse…"

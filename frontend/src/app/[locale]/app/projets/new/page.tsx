@@ -95,11 +95,7 @@ export default function NewProjectPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Construction" },
-          { label: "Projets" },
-          { label: "Nouveau" }
-        ]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Projets", href: "/app/projets" }, { label: "Nouveau" }]}
         onOpenSidebar={onOpenSidebar}
       />
 

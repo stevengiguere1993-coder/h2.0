@@ -228,11 +228,7 @@ export default function SousTraitantDetailPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Ressources" },
-          { label: "Sous-traitants" },
-          { label: st?.full_name || "…" }
-        ]}
+        breadcrumbs={[{ label: "Ressources", href: "/app" }, { label: "Sous-traitants" }]}
         onOpenSidebar={onOpenSidebar}
       />
 

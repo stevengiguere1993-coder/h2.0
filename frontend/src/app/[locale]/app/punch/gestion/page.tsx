@@ -201,11 +201,7 @@ export default function PunchGestionPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Construction" },
-          { label: "Punch / Temps" },
-          { label: "Gestion" }
-        ]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Punch / Temps", href: "/app/punch" }, { label: "Gestion" }]}
         onOpenSidebar={onOpenSidebar}
         rightSlot={
           <button

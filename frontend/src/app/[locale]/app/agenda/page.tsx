@@ -202,7 +202,7 @@ export default function AgendaPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[{ label: "Construction" }, { label: "Agenda" }]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Agenda" }]}
         onOpenSidebar={onOpenSidebar}
         rightSlot={
           <button

@@ -59,11 +59,7 @@ export default function NewEmployePage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Ressources" },
-          { label: "Employés" },
-          { label: "Nouveau" }
-        ]}
+        breadcrumbs={[{ label: "Ressources", href: "/app" }, { label: "Employés", href: "/app/employes" }, { label: "Nouveau" }]}
         onOpenSidebar={onOpenSidebar}
       />
 

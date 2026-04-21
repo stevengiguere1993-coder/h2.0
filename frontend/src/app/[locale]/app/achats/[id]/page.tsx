@@ -226,11 +226,7 @@ export default function AchatDetailPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Construction" },
-          { label: "Achats / PO" },
-          { label: a?.reference || "…" }
-        ]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Achats / PO" }]}
         onOpenSidebar={onOpenSidebar}
       />
 

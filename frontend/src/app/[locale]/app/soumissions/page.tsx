@@ -139,7 +139,7 @@ export default function SoumissionsPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[{ label: "Construction" }, { label: "Soumissions" }]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Soumissions" }]}
         onOpenSidebar={onOpenSidebar}
         onSearch={setSearch}
         searchPlaceholder="Rechercher une soumission…"

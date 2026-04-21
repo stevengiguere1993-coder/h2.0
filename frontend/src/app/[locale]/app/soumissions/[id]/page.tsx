@@ -457,11 +457,7 @@ export default function SoumissionDetailPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Construction" },
-          { label: "Soumissions" },
-          { label: s?.reference || "…" }
-        ]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Soumissions" }]}
         onOpenSidebar={onOpenSidebar}
       />
 

@@ -97,11 +97,7 @@ export default function NewFacturePage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Construction" },
-          { label: "Facturation" },
-          { label: "Nouvelle" }
-        ]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Facturation", href: "/app/facturation" }, { label: "Nouvelle" }]}
         onOpenSidebar={onOpenSidebar}
       />
 

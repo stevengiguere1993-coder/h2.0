@@ -123,7 +123,7 @@ export default function ProjectsPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[{ label: "Construction" }, { label: "Projets" }]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Projets" }]}
         onOpenSidebar={onOpenSidebar}
         onSearch={setSearch}
         searchPlaceholder="Rechercher un projet…"

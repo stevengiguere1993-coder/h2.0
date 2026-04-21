@@ -166,11 +166,7 @@ export default function ProspectDetailPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Construction" },
-          { label: "CRM / Prospects" },
-          { label: p?.name || "…" }
-        ]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "CRM / Prospects" }]}
         onOpenSidebar={onOpenSidebar}
       />
 

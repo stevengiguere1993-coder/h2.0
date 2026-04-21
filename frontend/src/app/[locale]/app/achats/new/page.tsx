@@ -109,11 +109,7 @@ export default function NewAchatPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Construction" },
-          { label: "Achats / PO" },
-          { label: "Nouveau" }
-        ]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Achats / PO", href: "/app/achats" }, { label: "Nouveau" }]}
         onOpenSidebar={onOpenSidebar}
       />
 
