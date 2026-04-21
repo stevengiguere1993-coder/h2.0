@@ -128,6 +128,35 @@ async def punch_me(db: DBSession, user: CurrentUser) -> PunchMe:
     )
 
 
+@router.get(
+    "/debug",
+    summary="Diagnose why /me can't find the employe fiche (admin only)",
+)
+async def punch_debug(db: DBSession, user: CurrentUser):
+    """Returns the exact values the backend compares so staff can spot
+    the mismatch (e.g. invisible characters, wrong casing, inactive)."""
+    candidates = (
+        await db.execute(select(Employe).limit(50))
+    ).scalars().all()
+    rows = [
+        {
+            "id": e.id,
+            "full_name": e.full_name,
+            "email_raw": e.email,
+            "email_len": len(e.email) if e.email else 0,
+            "email_repr": repr(e.email),
+            "active": e.active,
+        }
+        for e in candidates
+    ]
+    return {
+        "login_email_raw": user.email,
+        "login_email_repr": repr(user.email),
+        "login_email_normalized": (user.email or "").strip().lower(),
+        "employes": rows,
+    }
+
+
 @router.post(
     "/clock-in",
     response_model=PunchRead,
