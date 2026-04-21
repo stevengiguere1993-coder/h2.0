@@ -68,7 +68,15 @@ async def change_soumission_status(
     if data.status == SoumissionStatus.ACCEPTED.value and sm.accepted_at is None:
         sm.accepted_at = now
 
+    # Propagate the soumission status onto the linked prospect every
+    # time — including corrections (e.g. the user clicked "accepted"
+    # by mistake and reverts to "sent"). We deliberately don't make
+    # won/lost sticky because a mis-click should be reversible from
+    # the soumission side.
     target = _SOUMISSION_TO_CRM.get(data.status)
+    # "draft" is intentionally absent from the map: putting a
+    # soumission back to draft leaves the prospect untouched (the
+    # staff can decide separately where the prospect sits).
     if target and sm.contact_request_id:
         cr = (
             await db.execute(
@@ -78,21 +86,7 @@ async def change_soumission_status(
             )
         ).scalar_one_or_none()
         if cr is not None:
-            # Terminal states are sticky: don't bump "won" back to
-            # "quoted" just because we re-send later.
-            if target == ContactRequestStatus.LOST.value and cr.status == ContactRequestStatus.WON.value:
-                pass
-            elif (
-                target == ContactRequestStatus.QUOTED.value
-                and cr.status
-                in (
-                    ContactRequestStatus.WON.value,
-                    ContactRequestStatus.LOST.value,
-                )
-            ):
-                pass
-            else:
-                cr.status = target
+            cr.status = target
 
     await db.flush()
     await db.refresh(sm)

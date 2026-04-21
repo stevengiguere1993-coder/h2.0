@@ -118,9 +118,10 @@ async def send_soumission(
     sm.status = SoumissionStatus.SENT.value
     sm.sent_at = datetime.now(timezone.utc)
 
-    # Propagate to the linked prospect in the CRM: once the soumission
-    # leaves our side, the prospect is at "quoted" stage unless it was
-    # already won/lost.
+    # Propagate to the linked prospect in the CRM: the soumission has
+    # been delivered so the prospect is at "quoted" stage. If the
+    # prospect was in a later stage by mistake, this brings it back
+    # in line with the soumission workflow.
     if sm.contact_request_id:
         cr = (
             await db.execute(
@@ -129,10 +130,7 @@ async def send_soumission(
                 )
             )
         ).scalar_one_or_none()
-        if cr is not None and cr.status not in (
-            ContactRequestStatus.WON.value,
-            ContactRequestStatus.LOST.value,
-        ):
+        if cr is not None:
             cr.status = ContactRequestStatus.QUOTED.value
 
     await db.flush()

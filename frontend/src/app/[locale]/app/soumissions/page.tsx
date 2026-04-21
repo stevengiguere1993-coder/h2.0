@@ -104,10 +104,16 @@ export default function SoumissionsPage() {
     const prev = items;
     setItems((xs) => xs.map((x) => (x.id === id ? { ...x, status: newStatus } : x)));
     try {
-      const res = await authedFetch(`/api/v1/soumissions/${id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ status: newStatus })
-      });
+      // Use the dedicated status endpoint so the CRM prospect card
+      // moves in sync (quoted / won / lost) — even on reversals or
+      // mistakes.
+      const res = await authedFetch(
+        `/api/v1/soumissions/${id}/status`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ status: newStatus })
+        }
+      );
       if (!res.ok) throw new Error();
     } catch {
       setItems(prev);
