@@ -7,6 +7,7 @@ import {
   Briefcase,
   Check,
   FileText,
+  Users,
   Loader2,
   Mail,
   PenTool,
@@ -232,6 +233,26 @@ export default function SoumissionDetailPage() {
     } catch (err) {
       setSendNotice(
         `Prévisualisation PDF échouée : ${(err as Error).message.slice(0, 240)}`
+      );
+    }
+  }
+
+  async function convertToClient() {
+    if (!s) return;
+    try {
+      const res = await authedFetch(
+        `/api/v1/soumissions/${id}/convert-to-client`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text.slice(0, 240) || `http_${res.status}`);
+      }
+      const client = (await res.json()) as { id: number };
+      router.push(`/app/clients/${client.id}`);
+    } catch (err) {
+      setSendNotice(
+        `Conversion en client échouée : ${(err as Error).message}`
       );
     }
   }
@@ -614,7 +635,15 @@ export default function SoumissionDetailPage() {
             </div>
 
             {s.status === "accepted" ? (
-              <div className="mt-3">
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={convertToClient}
+                  className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2.5 text-sm font-medium text-accent-200 hover:bg-accent-500/20"
+                >
+                  <Users className="h-4 w-4" />
+                  Convertir en client
+                </button>
                 <button
                   type="button"
                   onClick={convertToProject}
@@ -623,9 +652,10 @@ export default function SoumissionDetailPage() {
                   <Briefcase className="h-4 w-4" />
                   Convertir en projet
                 </button>
-                <p className="mt-1 text-xs text-white/50">
-                  Crée une fiche projet pré-remplie avec l&apos;adresse,
-                  le budget et la description de cette soumission.
+                <p className="w-full text-xs text-white/50">
+                  La conversion en client est normalement automatique quand tu
+                  acceptes la soumission; utilise ce bouton si elle n&apos;a pas
+                  été faite (soumission déjà acceptée avant la MAJ).
                 </p>
               </div>
             ) : null}

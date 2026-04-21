@@ -22,6 +22,7 @@ from app.api.v1.endpoints import (
     soumission_qbo,
     soumission_send,
     soumission_status,
+    soumission_to_client,
     soumission_to_project,
     webhooks,
 )
@@ -57,6 +58,7 @@ api_router.include_router(soumission_items.router)
 api_router.include_router(soumission_qbo.router)
 api_router.include_router(soumission_send.router)
 api_router.include_router(soumission_status.router)
+api_router.include_router(soumission_to_client.router)
 api_router.include_router(soumission_to_project.router)
 api_router.include_router(agenda_router)
 api_router.include_router(bons_router)

@@ -262,6 +262,15 @@ export default function PunchPage() {
       <AppTopbar
         breadcrumbs={[{ label: "Construction" }, { label: "Punch / Temps" }]}
         onOpenSidebar={onOpenSidebar}
+        rightSlot={
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/app/punch/gestion" as any}
+            className="btn-secondary text-xs"
+          >
+            Gestion admin
+          </Link>
+        }
       />
 
       <div className="p-4 lg:p-6">
