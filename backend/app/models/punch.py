@@ -20,6 +20,13 @@ class Punch(Base, TimestampUpdateMixin):
     project_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Lets employees clock hours against a prospect before a project
+    # exists — typically visits, quoting and soumission preparation.
+    contact_request_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("contact_requests.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

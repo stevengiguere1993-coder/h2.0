@@ -19,8 +19,9 @@ class ClientRepository:
         self.db = db
 
     async def create(self, data: ClientCreate) -> Client:
-        """Create a new client."""
-        client = Client(name=data.name)
+        """Create a new client with all optional fields."""
+        payload = data.model_dump(exclude_unset=True)
+        client = Client(**payload)
         self.db.add(client)
         await self.db.flush()
         await self.db.refresh(client)

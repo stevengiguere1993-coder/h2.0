@@ -37,6 +37,7 @@ class PunchRead(BaseModel):
     id: int
     employe_id: int
     project_id: Optional[int]
+    contact_request_id: Optional[int]
     started_at: datetime
     ended_at: Optional[datetime]
     hours: Optional[float]
@@ -53,6 +54,7 @@ class PunchMe(BaseModel):
 
 class ClockInRequest(BaseModel):
     project_id: Optional[int] = None
+    contact_request_id: Optional[int] = None
     task: Optional[str] = Field(default=None, max_length=255)
     latitude: Optional[float] = None
     longitude: Optional[float] = None
@@ -185,6 +187,7 @@ async def clock_in(
     p = Punch(
         employe_id=emp.id,
         project_id=data.project_id,
+        contact_request_id=data.contact_request_id,
         started_at=datetime.now(timezone.utc),
         task=(data.task.strip() if data.task else None),
         geolocation=_geo_str(data.latitude, data.longitude),

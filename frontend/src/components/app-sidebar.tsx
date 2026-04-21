@@ -10,6 +10,7 @@ import {
   FileText,
   HardHat,
   Home,
+  Contact,
   LogOut,
   ShoppingCart,
   Truck,
@@ -29,6 +30,7 @@ type NavItem = {
 const CONSTRUCTION_NAV: NavItem[] = [
   { href: "/app", label: "Accueil", icon: Home },
   { href: "/app/crm", label: "CRM / Prospects", icon: Users },
+  { href: "/app/clients", label: "Clients", icon: Contact },
   { href: "/app/soumissions", label: "Soumissions", icon: FileText },
   { href: "/app/projets", label: "Projets", icon: Briefcase },
   { href: "/app/agenda", label: "Agenda", icon: Calendar },

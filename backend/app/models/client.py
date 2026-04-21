@@ -1,10 +1,9 @@
-"""
-Client model for managing construction clients.
-"""
+"""Client model — a prospect that accepted a soumission or was
+created manually by staff."""
 
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import String
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
@@ -14,22 +13,24 @@ if TYPE_CHECKING:
 
 
 class Client(Base, TimestampMixin):
-    """
-    Client model representing construction clients.
-
-    Attributes:
-        id: Primary key
-        name: Client name
-        created_at: Timestamp when client was created
-        projects: List of projects associated with this client
-    """
+    """Active client (post-conversion from prospect)."""
 
     __tablename__ = "clients"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(
-        String(255),
-        nullable=False,
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+
+    email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True, index=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Link back to the original prospect (when the client was
+    # converted from an accepted soumission). NULL when staff created
+    # the client directly.
+    contact_request_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("contact_requests.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
 

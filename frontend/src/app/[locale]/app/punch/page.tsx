@@ -18,11 +18,19 @@ import { authedFetch } from "@/lib/auth";
 
 type Employe = { id: number; full_name: string; email: string | null };
 type Project = { id: number; name: string; status: string };
+type Prospect = {
+  id: number;
+  name: string;
+  email: string;
+  status: string;
+  project_type: string;
+};
 
 type PunchRead = {
   id: number;
   employe_id: number;
   project_id: number | null;
+  contact_request_id: number | null;
   started_at: string;
   ended_at: string | null;
   hours: number | null;
@@ -95,13 +103,16 @@ export default function PunchPage() {
   const { user } = useCurrentUser();
   const [me, setMe] = useState<Me | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [prospects, setProspects] = useState<Prospect[]>([]);
   const [weekly, setWeekly] = useState<Weekly | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
 
-  const [projectId, setProjectId] = useState("");
+  // Target value format: "p-123" for project, "c-45" for contact
+  // request, or "" for none.
+  const [target, setTarget] = useState("");
   const [task, setTask] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -118,18 +129,29 @@ export default function PunchPage() {
       setLoading(true);
       setError(null);
       try {
-        const [meRes, prRes] = await Promise.all([
+        const [meRes, prRes, csRes] = await Promise.all([
           authedFetch("/api/v1/punch/me"),
-          authedFetch("/api/v1/projects?limit=200")
+          authedFetch("/api/v1/projects?limit=200"),
+          // Open prospects — anything not yet won/lost/spam, sorted
+          // newest-first by the contact endpoint default.
+          authedFetch("/api/v1/contact?limit=200")
         ]);
         if (!meRes.ok) throw new Error(`http_${meRes.status}`);
         const meData = (await meRes.json()) as Me;
         const prData = prRes.ok ? ((await prRes.json()) as Project[]) : [];
+        const csData = csRes.ok ? ((await csRes.json()) as Prospect[]) : [];
+        const openProspects = csData.filter(
+          (c) => !["won", "lost", "spam"].includes(c.status)
+        );
         if (cancelled) return;
         setMe(meData);
         setProjects(prData);
-        if (meData.active?.project_id)
-          setProjectId(String(meData.active.project_id));
+        setProspects(openProspects);
+        if (meData.active?.project_id) {
+          setTarget(`p-${meData.active.project_id}`);
+        } else if (meData.active?.contact_request_id) {
+          setTarget(`c-${meData.active.contact_request_id}`);
+        }
         if (meData.active?.task) setTask(meData.active.task);
         if (meData.employe) await refreshWeekly();
       } catch {
@@ -165,7 +187,11 @@ export default function PunchPage() {
     try {
       const pos = await getPosition();
       const payload: Record<string, unknown> = {};
-      if (projectId) payload.project_id = Number(projectId);
+      if (target.startsWith("p-")) {
+        payload.project_id = Number(target.slice(2));
+      } else if (target.startsWith("c-")) {
+        payload.contact_request_id = Number(target.slice(2));
+      }
       if (task.trim()) payload.task = task.trim();
       if (pos) {
         payload.latitude = pos.coords.latitude;
@@ -220,6 +246,16 @@ export default function PunchPage() {
   const activeProject = projects.find(
     (p) => me?.active?.project_id && p.id === me.active.project_id
   );
+  const activeProspect = prospects.find(
+    (c) =>
+      me?.active?.contact_request_id &&
+      c.id === me.active.contact_request_id
+  );
+  const activeTargetLabel = activeProject
+    ? `Projet — ${activeProject.name}`
+    : activeProspect
+    ? `Prospect — ${activeProspect.name}`
+    : "Aucun";
 
   return (
     <>
@@ -258,7 +294,7 @@ export default function PunchPage() {
                 startedAt={me.active.started_at}
                 task={me.active.task}
                 geolocation={me.active.geolocation}
-                projectName={activeProject?.name || null}
+                targetLabel={activeTargetLabel}
                 notes={notes}
                 onNotes={setNotes}
                 onStop={stopPunch}
@@ -267,8 +303,9 @@ export default function PunchPage() {
             ) : (
               <IdleCard
                 projects={projects}
-                projectId={projectId}
-                onProjectId={setProjectId}
+                prospects={prospects}
+                target={target}
+                onTarget={setTarget}
                 task={task}
                 onTask={setTask}
                 onStart={startPunch}
@@ -429,7 +466,7 @@ function ActivePunchCard({
   startedAt,
   task,
   geolocation,
-  projectName,
+  targetLabel,
   notes,
   onNotes,
   onStop,
@@ -439,7 +476,7 @@ function ActivePunchCard({
   startedAt: string;
   task: string | null;
   geolocation: string | null;
-  projectName: string | null;
+  targetLabel: string;
   notes: string;
   onNotes: (v: string) => void;
   onStop: () => void;
@@ -461,11 +498,7 @@ function ActivePunchCard({
       </p>
 
       <dl className="mt-5 space-y-2 text-sm text-white/80">
-        {projectName ? (
-          <Row label="Projet" value={projectName} />
-        ) : (
-          <Row label="Projet" value="Aucun" />
-        )}
+        <Row label="Affecté à" value={targetLabel} />
         {task ? <Row label="Tâche" value={task} /> : null}
         {lat && lng ? (
           <Row
@@ -512,16 +545,18 @@ function ActivePunchCard({
 
 function IdleCard({
   projects,
-  projectId,
-  onProjectId,
+  prospects,
+  target,
+  onTarget,
   task,
   onTask,
   onStart,
   busy
 }: {
   projects: Project[];
-  projectId: string;
-  onProjectId: (v: string) => void;
+  prospects: Prospect[];
+  target: string;
+  onTarget: (v: string) => void;
   task: string;
   onTask: (v: string) => void;
   onStart: () => void;
@@ -530,26 +565,40 @@ function IdleCard({
   return (
     <section className="rounded-2xl border border-brand-800 bg-brand-900 p-6">
       <p className="text-sm text-white/60">
-        Sélectionne le projet (si pertinent) et appuie sur Démarrer. On
-        capture ta position GPS pour vérifier la présence au chantier.
+        Sélectionne un projet ou un prospect (visite, soumission),
+        puis appuie sur Démarrer. On capture ta position GPS pour
+        vérifier la présence sur le terrain.
       </p>
       <div className="mt-5 space-y-4">
         <div>
-          <label htmlFor="punch_project" className="label">
-            Projet
+          <label htmlFor="punch_target" className="label">
+            Projet ou prospect
           </label>
           <select
-            id="punch_project"
-            value={projectId}
-            onChange={(e) => onProjectId(e.target.value)}
+            id="punch_target"
+            value={target}
+            onChange={(e) => onTarget(e.target.value)}
             className="input"
           >
-            <option value="">— Aucun projet —</option>
-            {projects.map((p) => (
-              <option key={p.id} value={String(p.id)}>
-                {p.name}
-              </option>
-            ))}
+            <option value="">— Administration (aucun lien) —</option>
+            {projects.length > 0 ? (
+              <optgroup label="Projets">
+                {projects.map((p) => (
+                  <option key={`p-${p.id}`} value={`p-${p.id}`}>
+                    {p.name}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
+            {prospects.length > 0 ? (
+              <optgroup label="Prospects (visite / soumission)">
+                {prospects.map((c) => (
+                  <option key={`c-${c.id}`} value={`c-${c.id}`}>
+                    {c.name} — {c.project_type}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
           </select>
         </div>
         <div>

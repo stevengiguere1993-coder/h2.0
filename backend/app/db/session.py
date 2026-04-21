@@ -99,6 +99,12 @@ async def init_db() -> None:
             ("projects", "end_date", "DATE"),
             ("projects", "budget", "NUMERIC(12, 2)"),
             ("projects", "updated_at", "TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"),
+            ("punches", "contact_request_id", "INTEGER"),
+            ("clients", "email", "VARCHAR(320)"),
+            ("clients", "phone", "VARCHAR(50)"),
+            ("clients", "address", "VARCHAR(500)"),
+            ("clients", "notes", "TEXT"),
+            ("clients", "contact_request_id", "INTEGER"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

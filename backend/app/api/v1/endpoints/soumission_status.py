@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
+from app.models.client import Client
 from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.models.soumission import Soumission, SoumissionStatus
 from app.schemas.business import SoumissionRead
@@ -77,6 +78,7 @@ async def change_soumission_status(
     # "draft" is intentionally absent from the map: putting a
     # soumission back to draft leaves the prospect untouched (the
     # staff can decide separately where the prospect sits).
+    cr: ContactRequest | None = None
     if target and sm.contact_request_id:
         cr = (
             await db.execute(
@@ -87,6 +89,33 @@ async def change_soumission_status(
         ).scalar_one_or_none()
         if cr is not None:
             cr.status = target
+
+    # When the soumission becomes "accepted", promote the prospect
+    # into the Client roster (idempotent — we reuse any existing
+    # Client that already points at this contact_request).
+    if data.status == SoumissionStatus.ACCEPTED.value and cr is not None:
+        existing_client = (
+            await db.execute(
+                select(Client).where(Client.contact_request_id == cr.id)
+            )
+        ).scalar_one_or_none()
+        if existing_client is None:
+            client = Client(
+                name=cr.name,
+                email=cr.email,
+                phone=cr.phone,
+                address=cr.address,
+                contact_request_id=cr.id,
+            )
+            db.add(client)
+            await db.flush()
+            # Link the soumission to the freshly-created client so
+            # downstream factures / projets pick it up automatically.
+            if sm.client_id is None:
+                sm.client_id = client.id
+        else:
+            if sm.client_id is None:
+                sm.client_id = existing_client.id
 
     await db.flush()
     await db.refresh(sm)
