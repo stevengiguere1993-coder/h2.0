@@ -73,9 +73,19 @@ export async function authedFetch(
   if (token) headers.set("authorization", `Bearer ${token}`);
   if (init.body && !headers.has("content-type"))
     headers.set("content-type", "application/json");
-  return fetch(`${DEFAULT_BASE}${path}`, {
-    ...init,
-    headers,
-    cache: "no-store"
-  });
+
+  const url = `${DEFAULT_BASE}${path}`;
+  const doFetch = () =>
+    fetch(url, { ...init, headers, cache: "no-store" });
+
+  // Render Free cold starts + spotty mobile networks occasionally
+  // make the first attempt throw a bare network error ("Load failed"
+  // on Safari, "Failed to fetch" on Chrome). Retry once after a short
+  // pause before surfacing the error to the caller.
+  try {
+    return await doFetch();
+  } catch (err) {
+    await new Promise((r) => setTimeout(r, 1500));
+    return doFetch();
+  }
 }

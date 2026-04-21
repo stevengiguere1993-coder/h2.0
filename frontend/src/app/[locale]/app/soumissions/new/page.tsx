@@ -101,6 +101,7 @@ export default function NewSoumissionPage() {
         method: "POST",
         body: JSON.stringify(payload)
       });
+
       if (!res.ok) {
         let detail = "";
         try {
