@@ -216,10 +216,23 @@ export default function SoumissionDetailPage() {
     setSendOpen(true);
   }
 
-  function previewPdf() {
-    // Same-origin URL — the Next rewrite will proxy to the backend.
-    const href = `/api/v1/soumissions/${id}/pdf`;
-    window.open(href, "_blank", "noopener,noreferrer");
+  async function previewPdf() {
+    try {
+      // Fetch the PDF with the auth header then hand it off to the
+      // browser as a blob URL. window.open() alone can't attach the
+      // Bearer token, which is why a direct link returned 401.
+      const res = await authedFetch(`/api/v1/soumissions/${id}/pdf`);
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      // Revoke later so the new tab has time to load it.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      setSendNotice(
+        `Prévisualisation PDF échouée : ${(err as Error).message.slice(0, 240)}`
+      );
+    }
   }
 
   async function sendToClient() {
@@ -299,18 +312,16 @@ export default function SoumissionDetailPage() {
     const prev = s;
     setS({ ...s, status: newStatus });
     try {
-      const res = await authedFetch(`/api/v1/soumissions/${id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          status: newStatus,
-          sent_at:
-            newStatus === "sent" && !s.sent_at ? new Date().toISOString() : undefined,
-          accepted_at:
-            newStatus === "accepted" && !s.accepted_at
-              ? new Date().toISOString()
-              : undefined
-        })
-      });
+      // Hit the dedicated status endpoint so the backend also
+      // propagates the change to the linked prospect CRM card
+      // (draft -> sent -> prospect "quoted", accepted -> "won", etc.)
+      const res = await authedFetch(
+        `/api/v1/soumissions/${id}/status`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ status: newStatus })
+        }
+      );
       if (!res.ok) throw new Error();
       const updated = (await res.json()) as Soumission;
       setS(updated);

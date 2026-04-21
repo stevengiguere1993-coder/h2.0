@@ -15,6 +15,7 @@ from app.models.facture import Facture
 from app.models.fournisseur import Fournisseur
 from app.models.project import Project
 from app.models.punch import Punch
+from app.models.qbo_token import QboToken
 from app.models.seo_article import SeoArticle
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
@@ -32,6 +33,7 @@ __all__ = [
     "Fournisseur",
     "Project",
     "Punch",
+    "QboToken",
     "SeoArticle",
     "Soumission",
     "SoumissionItem",

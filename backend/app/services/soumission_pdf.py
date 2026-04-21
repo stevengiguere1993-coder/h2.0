@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 from datetime import date, datetime
 from typing import Any, Optional
 
@@ -33,6 +34,7 @@ def _lazy_reportlab() -> dict[str, Any]:
     )
     from reportlab.lib.units import mm  # type: ignore
     from reportlab.platypus import (  # type: ignore
+        Image,
         Paragraph,
         SimpleDocTemplate,
         Spacer,
@@ -46,12 +48,20 @@ def _lazy_reportlab() -> dict[str, Any]:
         "ParagraphStyle": ParagraphStyle,
         "getSampleStyleSheet": getSampleStyleSheet,
         "mm": mm,
+        "Image": Image,
         "Paragraph": Paragraph,
         "SimpleDocTemplate": SimpleDocTemplate,
         "Spacer": Spacer,
         "Table": Table,
         "TableStyle": TableStyle,
     }
+
+
+_LOGO_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "assets",
+    "logo.png",
+)
 
 COMPANY_NAME = "Horizon Services Immobiliers"
 COMPANY_RBQ = "RBQ 5868-5991-01"
@@ -162,8 +172,14 @@ def _styles(rl: dict[str, Any]):
     return styles
 
 
-def _render_bytes(sm: Soumission, items: list[SoumissionItem],
-                  contact: Optional[ContactRequest]) -> bytes:
+def _render_bytes(
+    sm: Soumission,
+    items: list[SoumissionItem],
+    contact: Optional[ContactRequest],
+    *,
+    tax_gst: Optional[str] = None,
+    tax_qst: Optional[str] = None,
+) -> bytes:
     rl = _lazy_reportlab()
     colors = rl["colors"]
     mm = rl["mm"]
@@ -190,29 +206,41 @@ def _render_bytes(sm: Soumission, items: list[SoumissionItem],
     s = _styles(rl)
     story: list = []
 
-    # Header: company on the left, "SOUMISSION" on the right.
+    # Header: logo + company on the left, "SOUMISSION" on the right.
+    Image = rl["Image"]
+    left_cell: list = []
+    if os.path.exists(_LOGO_PATH):
+        try:
+            logo = Image(_LOGO_PATH, width=28 * mm, height=28 * mm)
+            left_cell.append(logo)
+            left_cell.append(Spacer(1, 4))
+        except Exception as exc:
+            log.warning("Could not embed logo in PDF: %s", exc)
+    left_cell.extend([
+        Paragraph(f"<b>{COMPANY_NAME}</b>", s["h2"]),
+        Paragraph(COMPANY_RBQ, s["small"]),
+        Paragraph(
+            f"{COMPANY_SITE} &middot; {COMPANY_EMAIL}", s["small"]
+        ),
+    ])
+    # Tax numbers (pulled from QBO CompanyInfo when available).
+    if tax_gst:
+        left_cell.append(Paragraph(f"TPS : {tax_gst}", s["small"]))
+    if tax_qst:
+        left_cell.append(Paragraph(f"TVQ : {tax_qst}", s["small"]))
+
+    right_cell: list = [
+        Paragraph("SOUMISSION", s["h1"]),
+        Paragraph(f"N<sup>o</sup> {sm.reference}", s["accent"]),
+        Paragraph(f"Émise le {_date(sm.created_at)}", s["small"]),
+    ]
+    if sm.valid_until:
+        right_cell.append(
+            Paragraph(f"Valide jusqu'au {_date(sm.valid_until)}", s["small"])
+        )
+
     header_tbl = Table(
-        [
-            [
-                [
-                    Paragraph(f"<b>{COMPANY_NAME}</b>", s["h2"]),
-                    Paragraph(COMPANY_RBQ, s["small"]),
-                    Paragraph(
-                        f"{COMPANY_SITE} &middot; {COMPANY_EMAIL}", s["small"]
-                    ),
-                ],
-                [
-                    Paragraph("SOUMISSION", s["h1"]),
-                    Paragraph(f"N<sup>o</sup> {sm.reference}", s["accent"]),
-                    Paragraph(f"Émise le {_date(sm.created_at)}", s["small"]),
-                    Paragraph(
-                        f"Valide jusqu'au {_date(sm.valid_until)}", s["small"]
-                    )
-                    if sm.valid_until
-                    else Spacer(1, 0),
-                ],
-            ]
-        ],
+        [[left_cell, right_cell]],
         colWidths=[doc.width * 0.55, doc.width * 0.45],
     )
     header_tbl.setStyle(
@@ -377,11 +405,27 @@ def _render_bytes(sm: Soumission, items: list[SoumissionItem],
     return buf.getvalue()
 
 
+async def _fetch_tax_numbers() -> tuple[Optional[str], Optional[str]]:
+    """Pull TPS/TVQ registration numbers from QBO. Best-effort."""
+    try:
+        from app.integrations.quickbooks import get_qbo
+
+        qbo = get_qbo()
+        if not qbo.ready:
+            return None, None
+        nums = await qbo.tax_registration_numbers()
+        return nums.get("gst"), nums.get("qst")
+    except Exception as exc:
+        log.warning("Could not fetch QBO tax numbers: %s", exc)
+        return None, None
+
+
 async def render_soumission_pdf(
     db: AsyncSession, soumission_id: int
 ) -> Optional[tuple[Soumission, bytes]]:
     sm, items, contact = await _load(db, soumission_id)
     if sm is None:
         return None
-    pdf = _render_bytes(sm, items, contact)
+    gst, qst = await _fetch_tax_numbers()
+    pdf = _render_bytes(sm, items, contact, tax_gst=gst, tax_qst=qst)
     return sm, pdf

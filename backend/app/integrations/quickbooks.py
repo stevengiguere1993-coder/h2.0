@@ -23,8 +23,11 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import httpx
+from sqlalchemy import select
 
 from app.core.config import settings
+from app.db.session import AsyncSessionLocal
+from app.models.qbo_token import QboToken
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +55,24 @@ class QuickBooksClient:
         self.env = (settings.quickbooks_env or "sandbox").lower()
         self.tokens = QBOTokens(refresh_token=settings.qbo_refresh_token)
         self.base_url = _PROD_API if self.env == "production" else _SANDBOX_API
+        # Guard so we only read the DB-persisted refresh token once per
+        # process lifetime. If DB has a newer token than the env, use it.
+        self._db_loaded = False
+
+    async def _load_refresh_from_db(self) -> None:
+        if self._db_loaded:
+            return
+        try:
+            async with AsyncSessionLocal() as db:
+                row = (
+                    await db.execute(select(QboToken).where(QboToken.id == 1))
+                ).scalar_one_or_none()
+                if row and row.refresh_token:
+                    self.tokens.refresh_token = row.refresh_token
+        except Exception as exc:
+            log.warning("Could not load QBO refresh token from DB: %s", exc)
+        finally:
+            self._db_loaded = True
 
     @property
     def ready(self) -> bool:
@@ -89,22 +110,42 @@ class QuickBooksClient:
         self.tokens.access_expires_at = time.time() + int(data.get("expires_in", 3600))
 
         new_refresh = data.get("refresh_token")
-        render_api_key = os.getenv("RENDER_API_KEY")
-        web_service_id = os.getenv("RENDER_WEB_SERVICE_ID")
-        if new_refresh and render_api_key and web_service_id:
+        if new_refresh:
+            # Primary: persist to DB so the rotated refresh token
+            # survives backend restarts without any external service.
             try:
-                async with httpx.AsyncClient(timeout=15.0) as http:
-                    await http.put(
-                        f"https://api.render.com/v1/services/{web_service_id}/env-vars/QBO_REFRESH_TOKEN",
-                        headers={"Authorization": f"Bearer {render_api_key}"},
-                        json={"value": new_refresh},
-                    )
+                async with AsyncSessionLocal() as db:
+                    row = (
+                        await db.execute(select(QboToken).where(QboToken.id == 1))
+                    ).scalar_one_or_none()
+                    if row is None:
+                        db.add(QboToken(id=1, refresh_token=new_refresh))
+                    else:
+                        row.refresh_token = new_refresh
+                    await db.commit()
             except Exception as exc:
-                log.warning("Could not persist rotated QBO refresh token: %s", exc)
+                log.warning("Could not save rotated QBO refresh token to DB: %s", exc)
+
+            # Secondary (optional): mirror it into the Render env var
+            # so a fresh boot still has a valid value before the DB
+            # read is wired in (e.g. during local dev).
+            render_api_key = os.getenv("RENDER_API_KEY")
+            web_service_id = os.getenv("RENDER_WEB_SERVICE_ID")
+            if render_api_key and web_service_id:
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as http:
+                        await http.put(
+                            f"https://api.render.com/v1/services/{web_service_id}/env-vars/QBO_REFRESH_TOKEN",
+                            headers={"Authorization": f"Bearer {render_api_key}"},
+                            json={"value": new_refresh},
+                        )
+                except Exception as exc:
+                    log.warning("Could not persist rotated QBO refresh token to Render: %s", exc)
 
     async def _access(self) -> str:
         if self.tokens.access_token and time.time() < self.tokens.access_expires_at - 60:
             return self.tokens.access_token
+        await self._load_refresh_from_db()
         await self._refresh()
         assert self.tokens.access_token is not None
         return self.tokens.access_token
@@ -146,7 +187,36 @@ class QuickBooksClient:
     # Company
     # ------------------------------------------------------------------
     async def company_info(self) -> Dict[str, Any]:
-        return await self._request("GET", f"/companyinfo/{self.realm_id}")
+        data = await self._request("GET", f"/companyinfo/{self.realm_id}")
+        return data.get("CompanyInfo") or data
+
+    async def tax_registration_numbers(self) -> Dict[str, Optional[str]]:
+        """Return GST (TPS) and QST (TVQ) registration numbers.
+
+        QBO stores these under CompanyInfo.NameValue custom fields. The
+        keys vary per locale; we look at a few common ones (TaxIdNumber,
+        GSTRegistrationNumber, QSTRegistrationNumber, TaxID, etc.).
+        """
+        try:
+            ci = await self.company_info()
+        except Exception as exc:
+            log.warning("Could not fetch QBO CompanyInfo: %s", exc)
+            return {"gst": None, "qst": None}
+
+        gst: Optional[str] = None
+        qst: Optional[str] = None
+        for entry in ci.get("NameValue", []) or []:
+            name = (entry.get("Name") or "").lower()
+            value = entry.get("Value")
+            if not value:
+                continue
+            if gst is None and any(
+                k in name for k in ("gst", "tps", "taxid", "tax_id")
+            ):
+                gst = str(value)
+            if qst is None and any(k in name for k in ("qst", "tvq", "pst")):
+                qst = str(value)
+        return {"gst": gst, "qst": qst}
 
     # ------------------------------------------------------------------
     # Customers

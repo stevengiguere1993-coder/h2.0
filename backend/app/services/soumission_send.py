@@ -8,7 +8,10 @@ from typing import Iterable, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import select
+
 from app.integrations.email_graph import EmailAttachment, get_mailer
+from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.models.soumission import Soumission, SoumissionStatus
 from app.services.soumission_pdf import render_soumission_pdf
 
@@ -114,6 +117,24 @@ async def send_soumission(
 
     sm.status = SoumissionStatus.SENT.value
     sm.sent_at = datetime.now(timezone.utc)
+
+    # Propagate to the linked prospect in the CRM: once the soumission
+    # leaves our side, the prospect is at "quoted" stage unless it was
+    # already won/lost.
+    if sm.contact_request_id:
+        cr = (
+            await db.execute(
+                select(ContactRequest).where(
+                    ContactRequest.id == sm.contact_request_id
+                )
+            )
+        ).scalar_one_or_none()
+        if cr is not None and cr.status not in (
+            ContactRequestStatus.WON.value,
+            ContactRequestStatus.LOST.value,
+        ):
+            cr.status = ContactRequestStatus.QUOTED.value
+
     await db.flush()
     await db.refresh(sm)
     return sm

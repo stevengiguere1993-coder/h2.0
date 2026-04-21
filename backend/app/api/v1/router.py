@@ -15,6 +15,7 @@ from app.api.v1.endpoints import (
     soumission_items,
     soumission_qbo,
     soumission_send,
+    soumission_status,
     webhooks,
 )
 from app.api.v1.endpoints.business import (
@@ -47,6 +48,7 @@ api_router.include_router(soumissions_router)
 api_router.include_router(soumission_items.router)
 api_router.include_router(soumission_qbo.router)
 api_router.include_router(soumission_send.router)
+api_router.include_router(soumission_status.router)
 api_router.include_router(agenda_router)
 api_router.include_router(bons_router)
 api_router.include_router(punch_router)
