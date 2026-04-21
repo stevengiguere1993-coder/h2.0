@@ -9,6 +9,7 @@ import {
   FileText,
   Loader2,
   MapPin,
+  Plus,
   Save,
   Trash2
 } from "lucide-react";
@@ -50,13 +51,12 @@ const STATUS_CLASS: Record<string, string> = {
   delivered: "bg-emerald-500/20 text-emerald-300"
 };
 
-type TabId = "summary" | "agenda" | "bons" | "factures";
+type TabId = "summary" | "photos" | "tasks";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "summary", label: "Résumé" },
-  { id: "agenda", label: "Agenda" },
-  { id: "bons", label: "Bons de travail" },
-  { id: "factures", label: "Facturation" }
+  { id: "photos", label: "Photos" },
+  { id: "tasks", label: "Tâches" }
 ];
 
 function fmtMoney(n: number | string | null): string {
@@ -433,10 +433,10 @@ export default function ProjectDetailPage() {
                   saving={saving}
                   onSave={saveAll}
                 />
+              ) : tab === "photos" ? (
+                <PhotosTab projectId={id} />
               ) : (
-                <PlaceholderTab
-                  label={TABS.find((t) => t.id === tab)?.label || ""}
-                />
+                <TasksTab projectId={id} />
               )}
             </div>
           </>
@@ -804,15 +804,408 @@ function SummaryTab(props: {
   );
 }
 
-function PlaceholderTab({ label }: { label: string }) {
+type Photo = {
+  id: number;
+  project_id: number;
+  content_type: string;
+  caption: string | null;
+  uploaded_by_email: string | null;
+  created_at: string;
+};
+
+function PhotosTab({ projectId }: { projectId: number }) {
+  const [photos, setPhotos] = useState<Photo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [caption, setCaption] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const res = await authedFetch(
+          `/api/v1/projects/${projectId}/photos`
+        );
+        if (!res.ok) throw new Error();
+        if (!cancelled) setPhotos((await res.json()) as Photo[]);
+      } catch {
+        if (!cancelled) setErr("Chargement échoué.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  async function upload(file: File) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      if (caption.trim()) fd.append("caption", caption.trim());
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/photos`,
+        { method: "POST", body: fd }
+      );
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt.slice(0, 240) || `http_${res.status}`);
+      }
+      const created = (await res.json()) as Photo;
+      setPhotos((xs) => [created, ...xs]);
+      setCaption("");
+    } catch (e) {
+      setErr(`Upload échoué : ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: number) {
+    if (!confirm("Supprimer cette photo ?")) return;
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/photos/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) throw new Error();
+      setPhotos((xs) => xs.filter((p) => p.id !== id));
+    } catch {
+      setErr("Suppression échouée.");
+    }
+  }
+
+  async function openImage(p: Photo) {
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/photos/${p.id}/image`
+      );
+      if (!res.ok) throw new Error();
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      setErr("Ouverture échouée.");
+    }
+  }
+
   return (
-    <div className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 p-10 text-center">
-      <FileText className="mx-auto h-10 w-10 text-accent-500" />
-      <h3 className="mt-4 text-base font-semibold text-white">{label}</h3>
-      <p className="mt-2 text-sm text-white/60">
-        Ce module sera branché dans la prochaine phase (agenda, bons de
-        travail, factures liées au projet).
-      </p>
+    <div className="space-y-5">
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          Ajouter une photo
+        </h2>
+        <p className="mt-1 text-xs text-white/60">
+          Scan avec la caméra (mobile) ou import de fichier. JPG / PNG /
+          WEBP / HEIC / PDF, 15 Mo max.
+        </p>
+        <div className="mt-4 space-y-3">
+          <input
+            type="text"
+            value={caption}
+            onChange={(e) => setCaption(e.target.value)}
+            placeholder="Légende (ex. Avant démolition cuisine)"
+            className="input"
+          />
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
+            capture="environment"
+            disabled={busy}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) upload(f);
+              e.target.value = "";
+            }}
+            className="block w-full text-sm text-white/70 file:mr-3 file:rounded-md file:border-0 file:bg-accent-500 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-brand-950 hover:file:bg-accent-400"
+          />
+        </div>
+        {err ? (
+          <p className="mt-3 text-sm text-rose-300">{err}</p>
+        ) : null}
+      </section>
+
+      <section>
+        {loading ? (
+          <div className="flex min-h-[30vh] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
+          </div>
+        ) : photos.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
+            Aucune photo pour ce projet.
+          </p>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {photos.map((p) => (
+              <div
+                key={p.id}
+                className="rounded-xl border border-brand-800 bg-brand-900 p-3"
+              >
+                <button
+                  type="button"
+                  onClick={() => openImage(p)}
+                  className="block aspect-video w-full overflow-hidden rounded-lg bg-brand-950"
+                >
+                  {p.content_type === "application/pdf" ? (
+                    <div className="flex h-full items-center justify-center text-sm text-white/60">
+                      📄 PDF
+                    </div>
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={`${process.env.NEXT_PUBLIC_API_BASE_URL || ""}/api/v1/projects/${projectId}/photos/${p.id}/image`}
+                      alt={p.caption || ""}
+                      className="h-full w-full object-cover"
+                      loading="lazy"
+                    />
+                  )}
+                </button>
+                <p className="mt-2 line-clamp-2 text-xs text-white/80">
+                  {p.caption || <span className="text-white/40">Sans légende</span>}
+                </p>
+                <div className="mt-1 flex items-center justify-between text-[10px] text-white/40">
+                  <span>
+                    {new Date(p.created_at).toLocaleDateString("fr-CA")}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => remove(p.id)}
+                    className="text-rose-400 hover:text-rose-300"
+                    aria-label="Supprimer"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+type Task = {
+  id: number;
+  project_id: number;
+  title: string;
+  description: string | null;
+  assignee_id: number | null;
+  due_date: string | null;
+  done: boolean;
+  done_at: string | null;
+  position: number;
+  created_at: string;
+};
+
+function TasksTab({ projectId }: { projectId: number }) {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [employes, setEmployes] = useState<Array<{ id: number; full_name: string }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const [newTitle, setNewTitle] = useState("");
+  const [newAssignee, setNewAssignee] = useState("");
+  const [newDue, setNewDue] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const [tRes, eRes] = await Promise.all([
+          authedFetch(`/api/v1/projects/${projectId}/tasks`),
+          authedFetch("/api/v1/employes?limit=500")
+        ]);
+        if (!tRes.ok) throw new Error();
+        const ts = (await tRes.json()) as Task[];
+        const es = eRes.ok
+          ? ((await eRes.json()) as Array<{ id: number; full_name: string }>)
+          : [];
+        if (cancelled) return;
+        setTasks(ts);
+        setEmployes(es);
+      } catch {
+        if (!cancelled) setErr("Chargement échoué.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  async function addTask() {
+    if (!newTitle.trim()) return;
+    setCreating(true);
+    try {
+      const payload: Record<string, unknown> = {
+        title: newTitle.trim(),
+        position: tasks.length
+      };
+      if (newAssignee) payload.assignee_id = Number(newAssignee);
+      if (newDue) payload.due_date = newDue;
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/tasks`,
+        { method: "POST", body: JSON.stringify(payload) }
+      );
+      if (!res.ok) throw new Error();
+      setTasks((xs) => [...xs, (await res.json()) as Task]);
+      setNewTitle("");
+      setNewAssignee("");
+      setNewDue("");
+    } catch {
+      setErr("Ajout échoué.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function toggleDone(t: Task) {
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/tasks/${t.id}`,
+        { method: "PATCH", body: JSON.stringify({ done: !t.done }) }
+      );
+      if (!res.ok) throw new Error();
+      const updated = (await res.json()) as Task;
+      setTasks((xs) => xs.map((x) => (x.id === t.id ? updated : x)));
+    } catch {
+      setErr("Mise à jour échouée.");
+    }
+  }
+
+  async function remove(id: number) {
+    if (!confirm("Supprimer cette tâche ?")) return;
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/tasks/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) throw new Error();
+      setTasks((xs) => xs.filter((x) => x.id !== id));
+    } catch {
+      setErr("Suppression échouée.");
+    }
+  }
+
+  const empName = (id: number | null) =>
+    id ? employes.find((e) => e.id === id)?.full_name || `#${id}` : "—";
+
+  return (
+    <div className="space-y-5">
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          Nouvelle tâche
+        </h2>
+        <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_220px_180px_auto]">
+          <input
+            type="text"
+            value={newTitle}
+            onChange={(e) => setNewTitle(e.target.value)}
+            placeholder="Ex. Plomberie brute 2e étage"
+            className="input"
+          />
+          <select
+            value={newAssignee}
+            onChange={(e) => setNewAssignee(e.target.value)}
+            className="input"
+          >
+            <option value="">— Assigner à —</option>
+            {employes.map((e) => (
+              <option key={e.id} value={String(e.id)}>
+                {e.full_name}
+              </option>
+            ))}
+          </select>
+          <input
+            type="date"
+            value={newDue}
+            onChange={(e) => setNewDue(e.target.value)}
+            className="input"
+          />
+          <button
+            type="button"
+            onClick={addTask}
+            disabled={creating || !newTitle.trim()}
+            className="btn-accent text-sm"
+          >
+            {creating ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Plus className="mr-2 h-4 w-4" />
+            )}
+            Ajouter
+          </button>
+        </div>
+        {err ? <p className="mt-3 text-sm text-rose-300">{err}</p> : null}
+      </section>
+
+      <section className="rounded-xl border border-brand-800 bg-brand-900">
+        {loading ? (
+          <div className="flex min-h-[30vh] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
+          </div>
+        ) : tasks.length === 0 ? (
+          <p className="px-5 py-8 text-center text-sm text-white/60">
+            Aucune tâche pour ce projet.
+          </p>
+        ) : (
+          <ul className="divide-y divide-brand-800">
+            {tasks.map((t) => (
+              <li
+                key={t.id}
+                className="flex items-start gap-3 px-4 py-3 text-sm"
+              >
+                <input
+                  type="checkbox"
+                  checked={t.done}
+                  onChange={() => toggleDone(t)}
+                  className="mt-1 h-4 w-4"
+                />
+                <div className="min-w-0 flex-1">
+                  <p
+                    className={`truncate font-medium ${
+                      t.done ? "text-white/40 line-through" : "text-white"
+                    }`}
+                  >
+                    {t.title}
+                  </p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-white/50">
+                    <span>Assigné : {empName(t.assignee_id)}</span>
+                    {t.due_date ? (
+                      <span>Échéance : {t.due_date}</span>
+                    ) : null}
+                    {t.done && t.done_at ? (
+                      <span className="text-emerald-300">
+                        Fait {new Date(t.done_at).toLocaleDateString("fr-CA")}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => remove(t.id)}
+                  className="text-rose-400 hover:text-rose-300"
+                  aria-label="Supprimer"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }

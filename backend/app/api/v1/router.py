@@ -19,6 +19,8 @@ from app.api.v1.endpoints import (
     facture_items,
     facture_qbo,
     facture_send,
+    project_photos,
+    project_tasks,
     project_to_facture,
     projects,
     public_bon,
@@ -50,6 +52,10 @@ api_router = APIRouter()
 # Core
 api_router.include_router(auth.router)
 api_router.include_router(clients.router)
+# Nested project routes MUST be registered before projects.router so
+# /projects/{id}/photos etc. are matched before /projects/{item_id}.
+api_router.include_router(project_photos.router)
+api_router.include_router(project_tasks.router)
 api_router.include_router(projects.router)
 api_router.include_router(contact.router)
 api_router.include_router(blog.router)

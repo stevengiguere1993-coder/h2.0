@@ -16,6 +16,8 @@ from app.models.facture import Facture
 from app.models.facture_item import FactureItem
 from app.models.fournisseur import Fournisseur
 from app.models.project import Project
+from app.models.project_photo import ProjectPhoto
+from app.models.project_task import ProjectTask
 from app.models.punch import Punch
 from app.models.qbo_token import QboToken
 from app.models.seo_article import SeoArticle
@@ -36,6 +38,8 @@ __all__ = [
     "FactureItem",
     "Fournisseur",
     "Project",
+    "ProjectPhoto",
+    "ProjectTask",
     "Punch",
     "QboToken",
     "SeoArticle",
