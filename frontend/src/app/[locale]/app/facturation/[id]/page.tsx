@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { PaymentsPanel } from "@/components/payments-panel";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -693,6 +694,21 @@ export default function FactureDetailPage() {
                 </div>
               </div>
             </section>
+
+            <div className="mt-6">
+              <PaymentsPanel
+                factureId={Number(f.id)}
+                factureTotal={total}
+                onStatusMayHaveChanged={async () => {
+                  try {
+                    const res = await authedFetch(`/api/v1/factures/${f.id}`);
+                    if (res.ok) setF((await res.json()) as typeof f);
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+              />
+            </div>
           </>
         ) : null}
       </div>

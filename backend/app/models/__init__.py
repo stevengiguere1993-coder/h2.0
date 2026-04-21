@@ -15,6 +15,7 @@ from app.models.employe import Employe
 from app.models.facture import Facture
 from app.models.facture_item import FactureItem
 from app.models.fournisseur import Fournisseur
+from app.models.payment import Payment
 from app.models.project import Project
 from app.models.project_photo import ProjectPhoto
 from app.models.project_task import ProjectTask
@@ -37,6 +38,7 @@ __all__ = [
     "Facture",
     "FactureItem",
     "Fournisseur",
+    "Payment",
     "Project",
     "ProjectPhoto",
     "ProjectTask",

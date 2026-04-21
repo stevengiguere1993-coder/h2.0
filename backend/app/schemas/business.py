@@ -95,6 +95,7 @@ class SoumissionCreate(BaseModel):
     total: Optional[float] = None
     valid_until: Optional[datetime] = None
     notes: Optional[str] = None
+    property_address: Optional[str] = None
 
 
 class SoumissionUpdate(BaseModel):
@@ -110,6 +111,7 @@ class SoumissionUpdate(BaseModel):
     valid_until: Optional[datetime] = None
     pdf_url: Optional[str] = None
     notes: Optional[str] = None
+    property_address: Optional[str] = None
 
 
 class SoumissionRead(_Base):
@@ -129,6 +131,7 @@ class SoumissionRead(_Base):
     valid_until: Optional[datetime]
     pdf_url: Optional[str]
     notes: Optional[str]
+    property_address: Optional[str]
     created_at: datetime
 
 

@@ -19,6 +19,7 @@ from app.api.v1.endpoints import (
     facture_items,
     facture_qbo,
     facture_send,
+    payments,
     project_photos,
     project_tasks,
     project_to_facture,
@@ -87,6 +88,9 @@ api_router.include_router(bons_router)
 api_router.include_router(punch_ops.router)
 api_router.include_router(punch_router)
 api_router.include_router(factures_router)
+# Payments sub-routes must come BEFORE facture_items so /factures/{id}/payments
+# is matched before /factures/{id}/items (same prefix, different path).
+api_router.include_router(payments.router)
 api_router.include_router(facture_items.router)
 api_router.include_router(facture_import.router)
 api_router.include_router(facture_send.router)

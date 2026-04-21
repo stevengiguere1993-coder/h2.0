@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from sqlalchemy import ForeignKey, Integer, Numeric, String
+from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -26,3 +26,16 @@ class SoumissionItem(Base, TimestampUpdateMixin):
     quantity: Mapped[float] = mapped_column(Numeric(12, 3), nullable=False, default=1)
     unit_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     total: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+
+    # Per-item tax toggles so the quote can mix taxable services
+    # (e.g. main-d'œuvre) with non-taxable line items (e.g. rabais).
+    tps_applicable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    tvq_applicable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    # "service" (default), "frais" (no-tax fee), "rabais" (negative discount).
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="service", server_default="service"
+    )

@@ -203,9 +203,17 @@ export default function SoumissionsPage() {
                       <h2 className="text-sm font-semibold text-white">
                         {col.label}
                       </h2>
+                      <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
+                        {cards.length}
+                      </span>
                     </div>
-                    <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
-                      {cards.length}
+                    <span className="text-xs font-semibold text-emerald-300">
+                      {fmtMoney(
+                        cards.reduce(
+                          (sum, s) => sum + Number(s.total || 0),
+                          0
+                        )
+                      )}
                     </span>
                   </div>
 
