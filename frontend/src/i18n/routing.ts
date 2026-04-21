@@ -119,6 +119,18 @@ export const routing = defineRouting({
     "/bon/[token]": {
       fr: "/bon/[token]",
       en: "/bon/[token]"
+    },
+    "/m": { fr: "/m", en: "/m" },
+    "/m/agenda": { fr: "/m/agenda", en: "/m/agenda" },
+    "/m/punch": { fr: "/m/punch", en: "/m/punch" },
+    "/m/ops": { fr: "/m/ops", en: "/m/ops" },
+    "/m/clients": { fr: "/m/clients", en: "/m/clients" },
+    "/m/profil": { fr: "/m/profil", en: "/m/profil" },
+    "/m/plus": { fr: "/m/plus", en: "/m/plus" },
+    "/m/conge": { fr: "/m/conge", en: "/m/conge" },
+    "/m/intervention/[id]": {
+      fr: "/m/intervention/[id]",
+      en: "/m/intervention/[id]"
     }
   }
 });
