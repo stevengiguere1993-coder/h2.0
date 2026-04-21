@@ -63,6 +63,62 @@ export const routing = defineRouting({
     "/app/crm": {
       fr: "/app/crm",
       en: "/app/crm"
+    },
+    "/app/clients": {
+      fr: "/app/clients",
+      en: "/app/clients"
+    },
+    "/app/soumissions": {
+      fr: "/app/soumissions",
+      en: "/app/soumissions"
+    },
+    "/app/projets": {
+      fr: "/app/projets",
+      en: "/app/projets"
+    },
+    "/app/agenda": {
+      fr: "/app/agenda",
+      en: "/app/agenda"
+    },
+    "/app/punch": {
+      fr: "/app/punch",
+      en: "/app/punch"
+    },
+    "/app/punch/gestion": {
+      fr: "/app/punch/gestion",
+      en: "/app/punch/gestion"
+    },
+    "/app/facturation": {
+      fr: "/app/facturation",
+      en: "/app/facturation"
+    },
+    "/app/achats": {
+      fr: "/app/achats",
+      en: "/app/achats"
+    },
+    "/app/bons": {
+      fr: "/app/bons",
+      en: "/app/bons"
+    },
+    "/app/employes": {
+      fr: "/app/employes",
+      en: "/app/employes"
+    },
+    "/app/sous-traitants": {
+      fr: "/app/sous-traitants",
+      en: "/app/sous-traitants"
+    },
+    "/app/fournisseurs": {
+      fr: "/app/fournisseurs",
+      en: "/app/fournisseurs"
+    },
+    "/soumission/[token]": {
+      fr: "/soumission/[token]",
+      en: "/soumission/[token]"
+    },
+    "/bon/[token]": {
+      fr: "/bon/[token]",
+      en: "/bon/[token]"
     }
   }
 });
