@@ -102,7 +102,21 @@ class QuickBooksClient:
                     "refresh_token": self.tokens.refresh_token,
                 },
             )
-            r.raise_for_status()
+            if r.status_code >= 400:
+                try:
+                    body = r.json()
+                except Exception:
+                    body = {"error": r.text}
+                log.error(
+                    "QBO token refresh failed: %s %s", r.status_code, body
+                )
+                err = str(body.get("error") or r.text)
+                raise QuickBooksError(
+                    "QBO refresh token invalide ou expiré. "
+                    "Refais l'autorisation dans QuickBooks et utilise "
+                    "POST /api/v1/qbo/refresh-token pour enregistrer "
+                    f"le nouveau token. (détail: {err})"
+                )
             data = r.json()
 
         self.tokens.access_token = data["access_token"]

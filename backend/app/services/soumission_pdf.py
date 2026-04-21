@@ -343,11 +343,26 @@ def _render_bytes(
     story.append(Spacer(1, 10))
 
     # Totals (right-aligned)
+    # Compute totals from the line items at render time. The Soumission
+    # row rarely has subtotal/tps/tvq saved because the UI keeps those
+    # values live from the items table; using the items here guarantees
+    # the PDF is always consistent with what the user is editing.
+    computed_subtotal = 0.0
+    for it in items:
+        if it.total is not None:
+            computed_subtotal += float(it.total)
+        else:
+            computed_subtotal += float(it.quantity) * float(it.unit_price)
+    computed_subtotal = round(computed_subtotal, 2)
+    computed_tps = round(computed_subtotal * 0.05, 2)
+    computed_tvq = round(computed_subtotal * 0.09975, 2)
+    computed_total = round(computed_subtotal + computed_tps + computed_tvq, 2)
+
     totals_rows = [
-        ["Sous-total", _money(sm.subtotal)],
-        ["TPS (5 %)", _money(sm.tps)],
-        ["TVQ (9,975 %)", _money(sm.tvq)],
-        ["TOTAL CAD", _money(sm.total)],
+        ["Sous-total", _money(computed_subtotal)],
+        ["TPS (5 %)", _money(computed_tps)],
+        ["TVQ (9,975 %)", _money(computed_tvq)],
+        ["TOTAL CAD", _money(computed_total)],
     ]
     totals_tbl = Table(totals_rows, colWidths=[doc.width * 0.30, doc.width * 0.20])
     totals_tbl.setStyle(
