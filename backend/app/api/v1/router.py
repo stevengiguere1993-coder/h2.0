@@ -56,7 +56,11 @@ api_router.include_router(soumission_status.router)
 api_router.include_router(soumission_to_project.router)
 api_router.include_router(agenda_router)
 api_router.include_router(bons_router)
-api_router.include_router(punch_router)
+# punch_ops FIRST so its literal paths (/me, /debug, /weekly, ...)
+# are matched before the generic /{item_id} from punch_router, which
+# would otherwise try to coerce "me"/"debug"/"weekly" to an int and
+# return 422.
 api_router.include_router(punch_ops.router)
+api_router.include_router(punch_router)
 api_router.include_router(factures_router)
 api_router.include_router(achats_router)
