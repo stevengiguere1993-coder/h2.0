@@ -83,6 +83,12 @@ async def init_db() -> None:
             ("sous_traitants", "availability_rating", "INTEGER"),
             ("sous_traitants", "punctuality_rating", "INTEGER"),
             ("sous_traitants", "quality_rating", "INTEGER"),
+            ("soumissions", "qbo_estimate_id", "VARCHAR(64)"),
+            ("soumissions", "qbo_doc_number", "VARCHAR(64)"),
+            ("soumissions", "qbo_sync_token", "VARCHAR(32)"),
+            ("factures", "qbo_invoice_id", "VARCHAR(64)"),
+            ("factures", "qbo_doc_number", "VARCHAR(64)"),
+            ("factures", "qbo_sync_token", "VARCHAR(32)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
