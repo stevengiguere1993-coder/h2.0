@@ -60,6 +60,25 @@ function dayLabel(iso: string): string {
   });
 }
 
+async function explainError(res: Response): Promise<string> {
+  try {
+    const data = await res.json();
+    if (Array.isArray(data?.detail)) {
+      return data.detail
+        .map(
+          (d: { loc?: (string | number)[]; msg?: string }) =>
+            `${(d.loc || []).slice(1).join(".")} — ${d.msg}`
+        )
+        .join(" · ")
+        .slice(0, 400);
+    }
+    if (typeof data?.detail === "string") return data.detail.slice(0, 400);
+    return `http_${res.status}`;
+  } catch {
+    return `http_${res.status}`;
+  }
+}
+
 async function getPosition(): Promise<GeolocationPosition | null> {
   if (!("geolocation" in navigator)) return null;
   return new Promise((resolve) => {
@@ -157,8 +176,7 @@ export default function PunchPage() {
         body: JSON.stringify(payload)
       });
       if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt.slice(0, 240) || `http_${res.status}`);
+        throw new Error(await explainError(res));
       }
       const created = (await res.json()) as PunchRead;
       setMe({ ...(me as Me), active: created });
@@ -187,8 +205,7 @@ export default function PunchPage() {
         body: JSON.stringify(payload)
       });
       if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt.slice(0, 240) || `http_${res.status}`);
+        throw new Error(await explainError(res));
       }
       setMe({ ...(me as Me), active: null });
       setNotes("");

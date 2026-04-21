@@ -107,13 +107,36 @@ export default function EmployeDetailPage() {
         method: "PATCH",
         body: JSON.stringify(payload)
       });
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        const detail = await explainError(res);
+        throw new Error(detail);
+      }
       const updated = (await res.json()) as Employe;
       setEmp(updated);
-    } catch {
-      setError("Sauvegarde échouée.");
+    } catch (err) {
+      setError(`Sauvegarde échouée : ${(err as Error).message}`);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function explainError(res: Response): Promise<string> {
+    try {
+      const data = await res.json();
+      if (Array.isArray(data?.detail)) {
+        // Pydantic 422 -> list of { loc, msg, type }
+        return data.detail
+          .map(
+            (d: { loc?: (string | number)[]; msg?: string }) =>
+              `${(d.loc || []).slice(1).join(".")} — ${d.msg}`
+          )
+          .join(" · ")
+          .slice(0, 400);
+      }
+      if (typeof data?.detail === "string") return data.detail.slice(0, 400);
+      return `http_${res.status}`;
+    } catch {
+      return `http_${res.status}`;
     }
   }
 
