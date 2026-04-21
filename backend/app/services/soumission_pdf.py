@@ -1,0 +1,347 @@
+"""Generate a PDF for a Soumission using ReportLab.
+
+Pure Python, no system dependencies — safe on Render Free.
+"""
+
+from __future__ import annotations
+
+import io
+import logging
+from datetime import date, datetime
+from typing import Optional
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.platypus import (
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.contact_request import ContactRequest
+from app.models.soumission import Soumission
+from app.models.soumission_item import SoumissionItem
+
+log = logging.getLogger(__name__)
+
+COMPANY_NAME = "Horizon Services Immobiliers"
+COMPANY_RBQ = "RBQ 5868-5991-01"
+COMPANY_SITE = "immohorizon.com"
+COMPANY_EMAIL = "info@immohorizon.com"
+
+ACCENT = colors.HexColor("#d89b3c")
+DARK = colors.HexColor("#111111")
+MUTED = colors.HexColor("#6b6b6b")
+LINE = colors.HexColor("#e2e2e2")
+
+
+def _money(n: Optional[float | int]) -> str:
+    if n is None:
+        return "—"
+    return f"{float(n):,.2f} $".replace(",", " ")
+
+
+def _date(d: Optional[datetime | date]) -> str:
+    if d is None:
+        return "—"
+    if isinstance(d, datetime):
+        d = d.date()
+    return d.strftime("%Y-%m-%d")
+
+
+async def _load(db: AsyncSession, soumission_id: int):
+    sm = (
+        await db.execute(
+            select(Soumission).where(Soumission.id == soumission_id)
+        )
+    ).scalar_one_or_none()
+    if sm is None:
+        return None, [], None
+    items = list(
+        (
+            await db.execute(
+                select(SoumissionItem)
+                .where(SoumissionItem.soumission_id == soumission_id)
+                .order_by(SoumissionItem.position.asc(), SoumissionItem.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    contact: Optional[ContactRequest] = None
+    if sm.contact_request_id:
+        contact = (
+            await db.execute(
+                select(ContactRequest).where(
+                    ContactRequest.id == sm.contact_request_id
+                )
+            )
+        ).scalar_one_or_none()
+    return sm, items, contact
+
+
+def _styles():
+    base = getSampleStyleSheet()
+    styles = {
+        "h1": ParagraphStyle(
+            "h1",
+            parent=base["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=22,
+            leading=26,
+            textColor=DARK,
+        ),
+        "h2": ParagraphStyle(
+            "h2",
+            parent=base["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=11,
+            leading=14,
+            textColor=DARK,
+            spaceBefore=6,
+        ),
+        "body": ParagraphStyle(
+            "body",
+            parent=base["Normal"],
+            fontName="Helvetica",
+            fontSize=10,
+            leading=13,
+            textColor=DARK,
+        ),
+        "small": ParagraphStyle(
+            "small",
+            parent=base["Normal"],
+            fontName="Helvetica",
+            fontSize=8.5,
+            leading=11,
+            textColor=MUTED,
+        ),
+        "accent": ParagraphStyle(
+            "accent",
+            parent=base["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=9,
+            leading=12,
+            textColor=ACCENT,
+        ),
+    }
+    return styles
+
+
+def _render_bytes(sm: Soumission, items: list[SoumissionItem],
+                  contact: Optional[ContactRequest]) -> bytes:
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=letter,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=18 * mm,
+        bottomMargin=18 * mm,
+        title=f"Soumission {sm.reference}",
+        author=COMPANY_NAME,
+    )
+    s = _styles()
+    story: list = []
+
+    # Header: company on the left, "SOUMISSION" on the right.
+    header_tbl = Table(
+        [
+            [
+                [
+                    Paragraph(f"<b>{COMPANY_NAME}</b>", s["h2"]),
+                    Paragraph(COMPANY_RBQ, s["small"]),
+                    Paragraph(
+                        f"{COMPANY_SITE} &middot; {COMPANY_EMAIL}", s["small"]
+                    ),
+                ],
+                [
+                    Paragraph("SOUMISSION", s["h1"]),
+                    Paragraph(f"N<sup>o</sup> {sm.reference}", s["accent"]),
+                    Paragraph(f"Émise le {_date(sm.created_at)}", s["small"]),
+                    Paragraph(
+                        f"Valide jusqu'au {_date(sm.valid_until)}", s["small"]
+                    )
+                    if sm.valid_until
+                    else Spacer(1, 0),
+                ],
+            ]
+        ],
+        colWidths=[doc.width * 0.55, doc.width * 0.45],
+    )
+    header_tbl.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+            ]
+        )
+    )
+    story.append(header_tbl)
+    story.append(Spacer(1, 14))
+
+    # Client block
+    if contact is not None:
+        client_lines = [f"<b>{contact.name}</b>"]
+        if contact.email:
+            client_lines.append(contact.email)
+        if contact.phone:
+            client_lines.append(contact.phone)
+        if contact.address:
+            client_lines.append(contact.address)
+    else:
+        client_lines = ["<b>Client à confirmer</b>"]
+    story.append(Paragraph("ADRESSÉE À", s["accent"]))
+    for line in client_lines:
+        story.append(Paragraph(line, s["body"]))
+    story.append(Spacer(1, 10))
+
+    # Title + description
+    story.append(Paragraph(sm.title, s["h2"]))
+    if sm.description:
+        story.append(Paragraph(sm.description.replace("\n", "<br/>"), s["body"]))
+    story.append(Spacer(1, 10))
+
+    # Line items
+    data = [["Description", "Qté", "Unité", "Prix unit.", "Total"]]
+    for it in items:
+        q = float(it.quantity)
+        up = float(it.unit_price)
+        line_total = (
+            float(it.total) if it.total is not None else round(q * up, 2)
+        )
+        data.append(
+            [
+                Paragraph(it.description, s["body"]),
+                f"{q:g}",
+                it.unit or "",
+                _money(up),
+                _money(line_total),
+            ]
+        )
+    if len(data) == 1:
+        data.append(
+            [
+                Paragraph(
+                    "<i>Aucun item — la soumission sera détaillée sur le chantier.</i>",
+                    s["small"],
+                ),
+                "",
+                "",
+                "",
+                "",
+            ]
+        )
+
+    tbl = Table(
+        data,
+        colWidths=[
+            doc.width * 0.50,
+            doc.width * 0.08,
+            doc.width * 0.10,
+            doc.width * 0.15,
+            doc.width * 0.17,
+        ],
+        repeatRows=1,
+    )
+    tbl.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), DARK),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, 0), 9),
+                ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+                ("ALIGN", (0, 0), (0, -1), "LEFT"),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fafafa")]),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.5, ACCENT),
+                ("LINEABOVE", (0, -1), (-1, -1), 0.25, LINE),
+                ("FONTSIZE", (0, 1), (-1, -1), 9.5),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]
+        )
+    )
+    story.append(tbl)
+    story.append(Spacer(1, 10))
+
+    # Totals (right-aligned)
+    totals_rows = [
+        ["Sous-total", _money(sm.subtotal)],
+        ["TPS (5 %)", _money(sm.tps)],
+        ["TVQ (9,975 %)", _money(sm.tvq)],
+        ["TOTAL CAD", _money(sm.total)],
+    ]
+    totals_tbl = Table(totals_rows, colWidths=[doc.width * 0.30, doc.width * 0.20])
+    totals_tbl.setStyle(
+        TableStyle(
+            [
+                ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9.5),
+                ("TEXTCOLOR", (0, 0), (-1, -2), MUTED),
+                ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+                ("FONTSIZE", (0, -1), (-1, -1), 11),
+                ("TEXTCOLOR", (0, -1), (-1, -1), DARK),
+                ("LINEABOVE", (0, -1), (-1, -1), 0.75, DARK),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+        )
+    )
+    totals_wrap = Table(
+        [["", totals_tbl]],
+        colWidths=[doc.width * 0.50, doc.width * 0.50],
+    )
+    totals_wrap.setStyle(
+        TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")])
+    )
+    story.append(totals_wrap)
+    story.append(Spacer(1, 18))
+
+    # Notes
+    if sm.notes:
+        story.append(Paragraph("NOTES", s["accent"]))
+        story.append(Paragraph(sm.notes.replace("\n", "<br/>"), s["body"]))
+        story.append(Spacer(1, 12))
+
+    # Conditions
+    story.append(Paragraph("CONDITIONS", s["accent"]))
+    story.append(
+        Paragraph(
+            "Prix valides jusqu'à la date indiquée ci-dessus. "
+            "Les taxes TPS (5 %) et TVQ (9,975 %) sont applicables. "
+            "L'acceptation de cette soumission constitue le bon de commande. "
+            "Le paiement est dû selon les termes convenus à la signature.",
+            s["small"],
+        )
+    )
+
+    story.append(Spacer(1, 16))
+    story.append(
+        Paragraph(
+            f"{COMPANY_NAME} &middot; {COMPANY_RBQ} &middot; {COMPANY_EMAIL}",
+            s["small"],
+        )
+    )
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+async def render_soumission_pdf(
+    db: AsyncSession, soumission_id: int
+) -> Optional[tuple[Soumission, bytes]]:
+    sm, items, contact = await _load(db, soumission_id)
+    if sm is None:
+        return None
+    pdf = _render_bytes(sm, items, contact)
+    return sm, pdf

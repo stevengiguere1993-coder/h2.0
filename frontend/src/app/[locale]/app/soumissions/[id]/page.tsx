@@ -103,6 +103,14 @@ export default function SoumissionDetailPage() {
   const [qboBusy, setQboBusy] = useState(false);
   const [qboNotice, setQboNotice] = useState<string | null>(null);
 
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sendBusy, setSendBusy] = useState(false);
+  const [sendNotice, setSendNotice] = useState<string | null>(null);
+  const [sendTo, setSendTo] = useState("");
+  const [sendCc, setSendCc] = useState("");
+  const [sendSubject, setSendSubject] = useState("");
+  const [sendMessage, setSendMessage] = useState("");
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [validUntil, setValidUntil] = useState<string>("");
@@ -128,6 +136,16 @@ export default function SoumissionDetailPage() {
         setDescription(sData.description || "");
         setValidUntil(isoToDateInput(sData.valid_until));
         setNotes(sData.notes || "");
+        setSendSubject(`Soumission ${sData.reference} — ${sData.title}`);
+        if (sData.contact_request_id) {
+          const cr = await authedFetch(
+            `/api/v1/contact/${sData.contact_request_id}`
+          );
+          if (cr.ok && !cancelled) {
+            const crData = (await cr.json()) as { email?: string };
+            if (crData.email) setSendTo(crData.email);
+          }
+        }
       } catch {
         if (!cancelled) setError("Soumission introuvable.");
       } finally {
@@ -187,6 +205,62 @@ export default function SoumissionDetailPage() {
       );
     } finally {
       setQboBusy(false);
+    }
+  }
+
+  function openSendModal() {
+    if (!s) return;
+    if (!sendSubject)
+      setSendSubject(`Soumission ${s.reference} — ${s.title}`);
+    setSendNotice(null);
+    setSendOpen(true);
+  }
+
+  function previewPdf() {
+    const href = `${process.env.NEXT_PUBLIC_API_BASE_URL || ""}/api/v1/soumissions/${id}/pdf`;
+    window.open(href, "_blank", "noopener,noreferrer");
+  }
+
+  async function sendToClient() {
+    if (!s) return;
+    const to = sendTo
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    if (to.length === 0) {
+      setSendNotice("Adresse courriel du destinataire requise.");
+      return;
+    }
+    const cc = sendCc
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    setSendBusy(true);
+    setSendNotice(null);
+    try {
+      const res = await authedFetch(`/api/v1/soumissions/${id}/send`, {
+        method: "POST",
+        body: JSON.stringify({
+          to,
+          cc: cc.length > 0 ? cc : null,
+          subject: sendSubject || null,
+          message: sendMessage || null
+        })
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(err || `http_${res.status}`);
+      }
+      const updated = (await res.json()) as Soumission;
+      setS(updated);
+      setSendOpen(false);
+      setSendNotice(`Soumission envoyée à ${to.join(", ")}.`);
+    } catch (err) {
+      setSendNotice(
+        `Erreur d'envoi : ${(err as Error).message.slice(0, 240)}`
+      );
+    } finally {
+      setSendBusy(false);
     }
   }
 
@@ -429,9 +503,51 @@ export default function SoumissionDetailPage() {
               </p>
             ) : null}
 
+            {sendNotice ? (
+              <p
+                className={`mt-4 rounded-lg border px-4 py-2 text-sm ${
+                  sendNotice.startsWith("Soumission envoyée")
+                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                    : "border-amber-500/40 bg-amber-500/10 text-amber-200"
+                }`}
+              >
+                {sendNotice}
+              </p>
+            ) : null}
+
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
-              <ActionCard icon={FileText} label="Générer PDF" hint="Version imprimable." />
-              <ActionCard icon={Mail} label="Envoyer au client" hint="Via Microsoft Graph." />
+              <button
+                type="button"
+                onClick={previewPdf}
+                className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500"
+              >
+                <FileText className="mt-0.5 h-5 w-5 flex-shrink-0 text-accent-500" />
+                <div>
+                  <p className="text-sm font-semibold text-white">
+                    Prévisualiser le PDF
+                  </p>
+                  <p className="mt-0.5 text-xs text-white/60">
+                    Ouvre dans un nouvel onglet.
+                  </p>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={openSendModal}
+                className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500"
+              >
+                <Mail className="mt-0.5 h-5 w-5 flex-shrink-0 text-accent-500" />
+                <div>
+                  <p className="text-sm font-semibold text-white">
+                    {s.sent_at ? "Renvoyer au client" : "Envoyer au client"}
+                  </p>
+                  <p className="mt-0.5 text-xs text-white/60">
+                    {s.sent_at
+                      ? `Envoyée le ${new Date(s.sent_at).toLocaleDateString("fr-CA")}`
+                      : "PDF + courriel via Microsoft Graph."}
+                  </p>
+                </div>
+              </button>
               <button
                 type="button"
                 onClick={() => syncToQbo()}
@@ -680,6 +796,112 @@ export default function SoumissionDetailPage() {
           </>
         ) : null}
       </div>
+
+      {sendOpen && s ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => (!sendBusy ? setSendOpen(false) : null)}
+        >
+          <div
+            className="w-full max-w-xl rounded-2xl border border-brand-800 bg-brand-950 p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-bold text-white">
+              Envoyer la soumission
+            </h3>
+            <p className="mt-1 text-xs text-white/60">
+              Référence {s.reference}. Un PDF sera attaché automatiquement et la
+              soumission passera en statut « Envoyée ».
+            </p>
+
+            <div className="mt-5 space-y-4">
+              <div>
+                <label htmlFor="send_to" className="label">
+                  Destinataire(s) <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  id="send_to"
+                  type="text"
+                  value={sendTo}
+                  onChange={(e) => setSendTo(e.target.value)}
+                  placeholder="client@exemple.com"
+                  className="input"
+                />
+                <p className="mt-1 text-xs text-white/50">
+                  Séparés par des virgules pour plusieurs adresses.
+                </p>
+              </div>
+              <div>
+                <label htmlFor="send_cc" className="label">CC (optionnel)</label>
+                <input
+                  id="send_cc"
+                  type="text"
+                  value={sendCc}
+                  onChange={(e) => setSendCc(e.target.value)}
+                  placeholder="info@immohorizon.com"
+                  className="input"
+                />
+              </div>
+              <div>
+                <label htmlFor="send_subject" className="label">Objet</label>
+                <input
+                  id="send_subject"
+                  type="text"
+                  value={sendSubject}
+                  onChange={(e) => setSendSubject(e.target.value)}
+                  className="input"
+                />
+              </div>
+              <div>
+                <label htmlFor="send_message" className="label">
+                  Message (optionnel)
+                </label>
+                <textarea
+                  id="send_message"
+                  rows={4}
+                  value={sendMessage}
+                  onChange={(e) => setSendMessage(e.target.value)}
+                  placeholder="Bonjour, veuillez trouver ci-joint la soumission demandée…"
+                  className="input"
+                />
+              </div>
+            </div>
+
+            {sendNotice ? (
+              <p className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                {sendNotice}
+              </p>
+            ) : null}
+
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setSendOpen(false)}
+                disabled={sendBusy}
+                className="btn-secondary text-sm"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={sendToClient}
+                disabled={sendBusy || !sendTo.trim()}
+                className="btn-accent text-sm disabled:opacity-60"
+              >
+                {sendBusy ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Envoi…
+                  </>
+                ) : (
+                  <>
+                    <Send className="mr-2 h-4 w-4" /> Envoyer
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
