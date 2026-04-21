@@ -36,6 +36,22 @@ const nextConfig: NextConfig = {
         ]
       }
     ];
+  },
+  // Proxy all API calls through the same origin (immohorizon.com) so
+  // the browser never needs to make a cross-origin request to the
+  // Render backend. This eliminates CORS, ITP and onrender.com
+  // network-level blocks that some ISPs / iOS builds apply.
+  async rewrites() {
+    const backend =
+      process.env.BACKEND_URL ||
+      process.env.NEXT_PUBLIC_API_BASE_URL ||
+      "https://h2-0.onrender.com";
+    return [
+      {
+        source: "/api/:path*",
+        destination: `${backend}/api/:path*`
+      }
+    ];
   }
 };
 

@@ -217,7 +217,8 @@ export default function SoumissionDetailPage() {
   }
 
   function previewPdf() {
-    const href = `${process.env.NEXT_PUBLIC_API_BASE_URL || ""}/api/v1/soumissions/${id}/pdf`;
+    // Same-origin URL — the Next rewrite will proxy to the backend.
+    const href = `/api/v1/soumissions/${id}/pdf`;
     window.open(href, "_blank", "noopener,noreferrer");
   }
 

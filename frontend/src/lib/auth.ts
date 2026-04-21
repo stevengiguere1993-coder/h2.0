@@ -1,5 +1,12 @@
+// In the browser we always hit the same origin so the Next.js rewrite
+// can proxy the request to the Render backend. This eliminates CORS
+// and any ISP/iOS block targeting onrender.com. On the server (SSR,
+// Node runtime) we still need an absolute URL, so we fall back to the
+// public base URL.
 const DEFAULT_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "https://h2-0.onrender.com";
+  typeof window !== "undefined"
+    ? ""
+    : process.env.NEXT_PUBLIC_API_BASE_URL || "https://h2-0.onrender.com";
 
 const TOKEN_KEY = "hsi_access_token";
 

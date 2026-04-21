@@ -1,5 +1,9 @@
+// Browser calls go through the Next.js rewrite on the same origin; on
+// the server we need an absolute URL.
 const DEFAULT_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "https://h2-0.onrender.com";
+  typeof window !== "undefined"
+    ? ""
+    : process.env.NEXT_PUBLIC_API_BASE_URL || "https://h2-0.onrender.com";
 
 export type ContactPayload = {
   name: string;
