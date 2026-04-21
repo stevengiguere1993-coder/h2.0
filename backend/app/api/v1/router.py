@@ -13,12 +13,15 @@ from app.api.v1.endpoints import (
     contact,
     dashboard,
     achat_receipt,
+    bon_items,
+    bon_send,
     facture_import,
     facture_items,
     facture_qbo,
     facture_send,
     project_to_facture,
     projects,
+    public_bon,
     public_soumission,
     punch_ops,
     qbo_token,
@@ -52,6 +55,7 @@ api_router.include_router(contact.router)
 api_router.include_router(blog.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(public_soumission.router)
+api_router.include_router(public_bon.router)
 api_router.include_router(qbo_token.router)
 api_router.include_router(dashboard.router)
 
@@ -67,6 +71,8 @@ api_router.include_router(soumission_status.router)
 api_router.include_router(soumission_to_client.router)
 api_router.include_router(soumission_to_project.router)
 api_router.include_router(agenda_router)
+api_router.include_router(bon_items.router)
+api_router.include_router(bon_send.router)
 api_router.include_router(bons_router)
 # punch_ops FIRST so its literal paths (/me, /debug, /weekly, ...)
 # are matched before the generic /{item_id} from punch_router, which

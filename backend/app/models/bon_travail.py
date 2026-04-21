@@ -44,3 +44,8 @@ class BonTravail(Base, TimestampUpdateMixin):
     signed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     signed_by_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     signature_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # Public e-signature token for the client-facing link.
+    signature_token: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )

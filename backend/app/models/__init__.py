@@ -7,6 +7,7 @@ with the shared metadata for Alembic autogenerate and create_all.
 
 from app.models.achat import Achat
 from app.models.agenda_event import AgendaEvent
+from app.models.bon_item import BonItem
 from app.models.bon_travail import BonTravail
 from app.models.client import Client
 from app.models.contact_request import ContactRequest
@@ -26,6 +27,7 @@ from app.models.user import User
 __all__ = [
     "Achat",
     "AgendaEvent",
+    "BonItem",
     "BonTravail",
     "Client",
     "ContactRequest",
