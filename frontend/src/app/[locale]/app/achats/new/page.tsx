@@ -5,6 +5,7 @@ import { useRouter as useNextRouter } from "next/navigation";
 import { ArrowLeft, Loader2 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { ReceiptScanner } from "@/components/receipt-scanner";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -190,27 +191,8 @@ export default function NewAchatPage() {
           </div>
 
           <div>
-            <label htmlFor="receipt" className="label">
-              Facture / reçu
-            </label>
-            <input
-              id="receipt"
-              type="file"
-              accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
-              capture="environment"
-              onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
-              className="block w-full text-sm text-white/70 file:mr-3 file:rounded-md file:border-0 file:bg-accent-500 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-brand-950 hover:file:bg-accent-400"
-            />
-            <p className="mt-1 text-xs text-white/50">
-              Sur mobile: ouvre directement la caméra arrière. JPG, PNG,
-              WEBP, HEIC ou PDF, 15 Mo max.
-            </p>
-            {receiptFile ? (
-              <p className="mt-2 text-xs text-accent-300">
-                {receiptFile.name} ·{" "}
-                {(receiptFile.size / 1024).toFixed(0)} Ko
-              </p>
-            ) : null}
+            <label className="label">Facture / reçu</label>
+            <ReceiptScanner value={receiptFile} onChange={setReceiptFile} />
           </div>
 
           {error ? <p className="text-sm text-rose-400">{error}</p> : null}

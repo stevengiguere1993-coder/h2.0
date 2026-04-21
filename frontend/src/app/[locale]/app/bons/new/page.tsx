@@ -131,35 +131,37 @@ export default function NewBonPage() {
               placeholder="Ex. Extras — ajout d'une fenêtre cuisine"
               className="input"
             />
+            <p className="mt-1 text-xs text-white/50">
+              Un bon de travail documente un travail additionnel (extras,
+              modifications hors soumission initiale, appels de service…)
+              et peut être signé par le client. Le montant indiqué est ce
+              que vous <span className="font-semibold">chargez au client</span>{" "}
+              pour ces extras.
+            </p>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label htmlFor="project" className="label">Projet</label>
-              <select
-                id="project"
-                value={projectId}
-                onChange={(e) => {
-                  setProjectId(e.target.value);
-                  const p = projects.find((x) => String(x.id) === e.target.value);
-                  if (p?.client_id) setClientId(String(p.client_id));
-                }}
-                className="input"
-              >
-                <option value="">— Aucun —</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={String(p.id)}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </div>
             <div>
               <label htmlFor="client" className="label">Client</label>
               <select
                 id="client"
                 value={clientId}
-                onChange={(e) => setClientId(e.target.value)}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setClientId(next);
+                  if (next && projectId) {
+                    const p = projects.find(
+                      (x) => String(x.id) === projectId
+                    );
+                    if (
+                      p &&
+                      p.client_id !== null &&
+                      String(p.client_id) !== next
+                    ) {
+                      setProjectId("");
+                    }
+                  }
+                }}
                 className="input"
               >
                 <option value="">— Aucun —</option>
@@ -169,6 +171,37 @@ export default function NewBonPage() {
                   </option>
                 ))}
               </select>
+            </div>
+            <div>
+              <label htmlFor="project" className="label">Projet</label>
+              <select
+                id="project"
+                value={projectId}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setProjectId(next);
+                  const p = projects.find((x) => String(x.id) === next);
+                  if (p?.client_id) setClientId(String(p.client_id));
+                }}
+                className="input"
+              >
+                <option value="">— Aucun —</option>
+                {(clientId
+                  ? projects.filter(
+                      (p) => String(p.client_id) === clientId
+                    )
+                  : projects
+                ).map((p) => (
+                  <option key={p.id} value={String(p.id)}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              {clientId ? (
+                <p className="mt-1 text-xs text-white/50">
+                  Filtré sur le client sélectionné.
+                </p>
+              ) : null}
             </div>
           </div>
 
@@ -185,7 +218,9 @@ export default function NewBonPage() {
           </div>
 
           <div>
-            <label htmlFor="amount" className="label">Montant (CAD)</label>
+            <label htmlFor="amount" className="label">
+              Montant à charger au client (CAD, avant taxes)
+            </label>
             <input
               id="amount"
               type="number"
@@ -196,6 +231,10 @@ export default function NewBonPage() {
               placeholder="0.00 (ou laisse vide et ajoute des items ensuite)"
               className="input sm:w-64"
             />
+            <p className="mt-1 text-xs text-white/50">
+              C&apos;est ce que le client paiera pour ces travaux
+              supplémentaires — pas ton coût de revient.
+            </p>
           </div>
 
           {error ? <p className="text-sm text-rose-400">{error}</p> : null}

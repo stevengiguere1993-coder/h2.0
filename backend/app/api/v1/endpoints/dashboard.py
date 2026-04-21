@@ -28,7 +28,10 @@ class KpiResponse(BaseModel):
     unpaid_count: int
     overdue_total: float
     overdue_count: int
+    draft_total: float
+    draft_count: int
     revenue_this_month: float
+    revenue_this_month_mode: str  # "paid" | "issued"
 
     # Ops
     active_projects: int
@@ -85,13 +88,40 @@ async def get_kpis(db: DBSession, _: CurrentUser) -> KpiResponse:
         await db.execute(overdue_sum_stmt)
     ).one()
 
+    # Drafts — not yet sent, but surfaced so the user sees test/pending
+    # factures on the dashboard rather than them disappearing.
+    draft_sum_stmt = select(
+        func.coalesce(func.sum(Facture.total), 0),
+        func.count(Facture.id),
+    ).where(Facture.status == FactureStatus.DRAFT.value)
+    draft_total, draft_count = (await db.execute(draft_sum_stmt)).one()
+
     # Revenue this month: paid factures with paid_at >= start of month.
+    # If nothing's been marked paid yet (common in dev/test), fall back
+    # to "issued this month" so the tile isn't stuck at $0.
     revenue_stmt = select(func.coalesce(func.sum(Facture.total), 0)).where(
         Facture.status == FactureStatus.PAID.value,
         Facture.paid_at.is_not(None),
         Facture.paid_at >= month_start,
     )
     revenue = (await db.execute(revenue_stmt)).scalar_one()
+    revenue_mode = "paid"
+    if float(revenue or 0) == 0:
+        issued_stmt = select(func.coalesce(func.sum(Facture.total), 0)).where(
+            Facture.status.in_(
+                [
+                    FactureStatus.SENT.value,
+                    FactureStatus.PAID.value,
+                    FactureStatus.OVERDUE.value,
+                ]
+            ),
+            Facture.issued_at.is_not(None),
+            Facture.issued_at >= month_start,
+        )
+        issued_sum = (await db.execute(issued_stmt)).scalar_one()
+        if float(issued_sum or 0) > 0:
+            revenue = issued_sum
+            revenue_mode = "issued"
 
     # Active projects (in_progress)
     active_projects = (
@@ -130,7 +160,10 @@ async def get_kpis(db: DBSession, _: CurrentUser) -> KpiResponse:
         unpaid_count=int(unpaid_count or 0),
         overdue_total=float(overdue_total or 0),
         overdue_count=int(overdue_count or 0),
+        draft_total=float(draft_total or 0),
+        draft_count=int(draft_count or 0),
         revenue_this_month=float(revenue or 0),
+        revenue_this_month_mode=revenue_mode,
         active_projects=int(active_projects or 0),
         hours_this_week=float(hours_week or 0),
         new_prospects_7d=int(new_prospects or 0),

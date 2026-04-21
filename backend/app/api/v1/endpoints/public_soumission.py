@@ -170,12 +170,18 @@ async def public_accept(
     sm.status = SoumissionStatus.ACCEPTED.value
     if sm.accepted_at is None:
         sm.accepted_at = now
-    sm.signed_name = data.name.strip()
-    sm.signed_ip = (
+    sm.signed_name = data.name.strip()[:255]
+    raw_ip = (
         request.headers.get("x-forwarded-for") or (
             request.client.host if request.client else None
         )
     )
+    # x-forwarded-for can chain multiple hops (CF + Render + client),
+    # easily exceeding the VARCHAR(64) column. Keep only the first
+    # (original client) IP and cap the length defensively.
+    if raw_ip:
+        raw_ip = raw_ip.split(",")[0].strip()[:64]
+    sm.signed_ip = raw_ip
 
     # Propagate to prospect + auto-create client (same logic as the
     # internal /status endpoint).

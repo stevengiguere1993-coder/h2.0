@@ -138,12 +138,15 @@ async def public_accept(
     now = datetime.now(timezone.utc)
     bon.status = BonTravailStatus.SIGNED.value
     bon.signed_at = now
-    bon.signed_by_name = data.name.strip()
-    bon.signature_ip = (
+    bon.signed_by_name = data.name.strip()[:255]
+    raw_ip = (
         request.headers.get("x-forwarded-for") or (
             request.client.host if request.client else None
         )
     )
+    if raw_ip:
+        raw_ip = raw_ip.split(",")[0].strip()[:64]
+    bon.signature_ip = raw_ip
     await db.flush()
     await db.refresh(bon)
     return await public_read(token, db)

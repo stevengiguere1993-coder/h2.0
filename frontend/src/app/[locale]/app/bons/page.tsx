@@ -114,6 +114,15 @@ export default function BonsPage() {
       />
 
       <div className="p-4 lg:p-6">
+        <p className="mb-4 rounded-lg border border-brand-800 bg-brand-900/60 px-4 py-3 text-xs text-white/60">
+          <strong className="text-white/80">À quoi ça sert ?</strong>{" "}
+          Un bon de travail documente un travail additionnel sur un
+          projet (extras, modifications hors soumission, appel de service)
+          et peut être signé électroniquement par le client. Le montant
+          est ce que tu <strong className="text-white/80">charges au client</strong>{" "}
+          pour ces extras (avant taxes).
+        </p>
+
         {error ? (
           <p className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
             {error}

@@ -5,6 +5,7 @@ import { useParams, useRouter as useNextRouter } from "next/navigation";
 import { ArrowLeft, Loader2, Save, Trash2 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { ReceiptScanner } from "@/components/receipt-scanner";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -65,6 +66,7 @@ export default function AchatDetailPage() {
   const [receiptUrl, setReceiptUrl] = useState("");
   const [notes, setNotes] = useState("");
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [pendingReceipt, setPendingReceipt] = useState<File | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -405,26 +407,6 @@ export default function AchatDetailPage() {
                     >
                       Ouvrir
                     </button>
-                    <label
-                      htmlFor="receipt_replace"
-                      className={`btn-secondary cursor-pointer text-xs ${
-                        uploadBusy ? "opacity-60" : ""
-                      }`}
-                    >
-                      Remplacer
-                    </label>
-                    <input
-                      id="receipt_replace"
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
-                      capture="environment"
-                      className="hidden"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) uploadReceipt(f);
-                        e.target.value = "";
-                      }}
-                    />
                     <button
                       type="button"
                       onClick={deleteReceipt}
@@ -434,37 +416,40 @@ export default function AchatDetailPage() {
                       Supprimer
                     </button>
                   </div>
-                ) : (
-                  <div className="mt-4">
-                    <label
-                      htmlFor="receipt_upload"
-                      className={`btn-accent inline-flex cursor-pointer items-center text-sm ${
-                        uploadBusy ? "opacity-60" : ""
-                      }`}
+                ) : null}
+                <div className="mt-4">
+                  <p className="text-xs text-white/50">
+                    {a.has_receipt_image
+                      ? "Remplacer la pièce jointe :"
+                      : "Ajoute une pièce jointe :"}
+                  </p>
+                  <div className="mt-2">
+                    <ReceiptScanner
+                      value={pendingReceipt}
+                      onChange={setPendingReceipt}
+                    />
+                  </div>
+                  {pendingReceipt ? (
+                    <button
+                      type="button"
+                      disabled={uploadBusy}
+                      onClick={async () => {
+                        await uploadReceipt(pendingReceipt);
+                        setPendingReceipt(null);
+                      }}
+                      className="btn-accent mt-3 text-sm"
                     >
                       {uploadBusy ? (
                         <>
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Upload…
+                          Envoi…
                         </>
                       ) : (
-                        "Scanner / Importer"
+                        "Envoyer au dossier"
                       )}
-                    </label>
-                    <input
-                      id="receipt_upload"
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
-                      capture="environment"
-                      className="hidden"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) uploadReceipt(f);
-                        e.target.value = "";
-                      }}
-                    />
-                  </div>
-                )}
+                    </button>
+                  ) : null}
+                </div>
 
                 <div className="mt-4 border-t border-brand-800 pt-4">
                   <label htmlFor="aurl" className="label">

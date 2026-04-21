@@ -398,7 +398,7 @@ export default function BonDetailPage() {
             <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
               <div className="flex items-center justify-between border-b border-brand-800 px-5 py-4">
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-                  Items (facultatif)
+                  Items — montant chargé au client
                 </h2>
                 <button
                   type="button"
@@ -416,7 +416,8 @@ export default function BonDetailPage() {
               </div>
               {items.length === 0 ? (
                 <p className="px-5 py-8 text-center text-sm text-white/50">
-                  Aucun item — ou utilise le montant global dans « Montant » ci-bas.
+                  Aucun item — sinon laisse simplement le montant global sur
+                  la fiche (c&apos;est ce que le client paiera).
                 </p>
               ) : (
                 <div className="divide-y divide-brand-800">
