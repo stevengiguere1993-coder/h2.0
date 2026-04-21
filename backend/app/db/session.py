@@ -105,6 +105,8 @@ async def init_db() -> None:
             ("clients", "address", "VARCHAR(500)"),
             ("clients", "notes", "TEXT"),
             ("clients", "contact_request_id", "INTEGER"),
+            ("achats", "receipt_image", "BYTEA"),
+            ("achats", "receipt_image_content_type", "VARCHAR(100)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

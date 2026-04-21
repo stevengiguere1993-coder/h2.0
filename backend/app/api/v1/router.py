@@ -11,6 +11,7 @@ from app.api.v1.endpoints import (
     blog,
     clients,
     contact,
+    achat_receipt,
     facture_import,
     facture_items,
     facture_qbo,
@@ -75,4 +76,8 @@ api_router.include_router(facture_import.router)
 api_router.include_router(facture_send.router)
 api_router.include_router(facture_qbo.router)
 api_router.include_router(project_to_facture.router)
+# achat_receipt must come BEFORE achats_router so /achats/{id}/receipt
+# is matched before the generic /achats/{item_id} tries to parse
+# "receipt" as an integer.
+api_router.include_router(achat_receipt.router)
 api_router.include_router(achats_router)

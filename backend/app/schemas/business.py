@@ -324,5 +324,9 @@ class AchatRead(_Base):
     ordered_at: Optional[datetime]
     received_at: Optional[datetime]
     receipt_url: Optional[str]
+    # True when a scanned receipt image is attached (served via
+    # GET /api/v1/achats/{id}/receipt).
+    has_receipt_image: bool = False
+    receipt_image_content_type: Optional[str] = None
     notes: Optional[str]
     created_at: datetime

@@ -4,8 +4,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import DateTime, ForeignKey, LargeBinary, Numeric, String, Text
+from sqlalchemy.orm import Mapped, deferred, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
 
@@ -40,4 +40,19 @@ class Achat(Base, TimestampUpdateMixin):
     received_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     receipt_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Scanned / uploaded receipt image stored in-DB. Blobs stay small
+    # (receipts typically < 2 MB) so this is fine for our volume; if
+    # we ever outgrow it we can swap in a cloud object store.
+    receipt_image: Mapped[Optional[bytes]] = deferred(
+        mapped_column(LargeBinary, nullable=True)
+    )
+    receipt_image_content_type: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True
+    )
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    @property
+    def has_receipt_image(self) -> bool:
+        # Cheap check: the blob itself is deferred from list queries;
+        # content_type is set iff an image is attached.
+        return self.receipt_image_content_type is not None

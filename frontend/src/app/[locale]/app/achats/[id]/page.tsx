@@ -20,6 +20,8 @@ type Achat = {
   ordered_at: string | null;
   received_at: string | null;
   receipt_url: string | null;
+  has_receipt_image: boolean;
+  receipt_image_content_type: string | null;
   notes: string | null;
   created_at: string;
 };
@@ -62,6 +64,7 @@ export default function AchatDetailPage() {
   const [receivedAt, setReceivedAt] = useState("");
   const [receiptUrl, setReceiptUrl] = useState("");
   const [notes, setNotes] = useState("");
+  const [uploadBusy, setUploadBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -145,6 +148,62 @@ export default function AchatDetailPage() {
       setError("Sauvegarde échouée.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function uploadReceipt(file: File) {
+    if (!a) return;
+    setUploadBusy(true);
+    setError(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      const res = await authedFetch(`/api/v1/achats/${id}/receipt`, {
+        method: "POST",
+        body: fd
+      });
+      if (!res.ok && res.status !== 204) {
+        const txt = await res.text();
+        throw new Error(txt.slice(0, 240) || `http_${res.status}`);
+      }
+      // Reload the achat row to refresh has_receipt_image + content_type.
+      const re = await authedFetch(`/api/v1/achats/${id}`);
+      if (re.ok) setA((await re.json()) as Achat);
+    } catch (err) {
+      setError(`Upload reçu échoué : ${(err as Error).message}`);
+    } finally {
+      setUploadBusy(false);
+    }
+  }
+
+  async function deleteReceipt() {
+    if (!a) return;
+    if (!confirm("Supprimer la photo / le PDF du reçu ?")) return;
+    setUploadBusy(true);
+    try {
+      const res = await authedFetch(`/api/v1/achats/${id}/receipt`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) throw new Error();
+      const re = await authedFetch(`/api/v1/achats/${id}`);
+      if (re.ok) setA((await re.json()) as Achat);
+    } catch {
+      setError("Suppression du reçu échouée.");
+    } finally {
+      setUploadBusy(false);
+    }
+  }
+
+  async function openReceipt() {
+    try {
+      const res = await authedFetch(`/api/v1/achats/${id}/receipt`);
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      setError(`Ouverture reçu échouée : ${(err as Error).message}`);
     }
   }
 
@@ -324,19 +383,105 @@ export default function AchatDetailPage() {
                       />
                     </div>
                   </div>
-                  <div>
-                    <label htmlFor="aurl" className="label">
-                      URL du reçu (optionnel)
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                  Facture / reçu
+                </h2>
+                <p className="mt-1 text-xs text-white/50">
+                  Scan avec la caméra de ton cell, ou importe un fichier
+                  (JPG, PNG, WEBP, HEIC ou PDF, 15 Mo max).
+                </p>
+
+                {a.has_receipt_image ? (
+                  <div className="mt-4 flex flex-wrap items-center gap-3">
+                    <span className="rounded-md bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-300">
+                      {a.receipt_image_content_type === "application/pdf"
+                        ? "PDF attaché"
+                        : "Photo attachée"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={openReceipt}
+                      className="btn-secondary text-xs"
+                    >
+                      Ouvrir
+                    </button>
+                    <label
+                      htmlFor="receipt_replace"
+                      className={`btn-secondary cursor-pointer text-xs ${
+                        uploadBusy ? "opacity-60" : ""
+                      }`}
+                    >
+                      Remplacer
                     </label>
                     <input
-                      id="aurl"
-                      type="url"
-                      value={receiptUrl}
-                      onChange={(e) => setReceiptUrl(e.target.value)}
-                      placeholder="https://…"
-                      className="input"
+                      id="receipt_replace"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
+                      capture="environment"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) uploadReceipt(f);
+                        e.target.value = "";
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={deleteReceipt}
+                      disabled={uploadBusy}
+                      className="inline-flex items-center gap-1 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/20 disabled:opacity-60"
+                    >
+                      Supprimer
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-4">
+                    <label
+                      htmlFor="receipt_upload"
+                      className={`btn-accent inline-flex cursor-pointer items-center text-sm ${
+                        uploadBusy ? "opacity-60" : ""
+                      }`}
+                    >
+                      {uploadBusy ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Upload…
+                        </>
+                      ) : (
+                        "Scanner / Importer"
+                      )}
+                    </label>
+                    <input
+                      id="receipt_upload"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
+                      capture="environment"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) uploadReceipt(f);
+                        e.target.value = "";
+                      }}
                     />
                   </div>
+                )}
+
+                <div className="mt-4 border-t border-brand-800 pt-4">
+                  <label htmlFor="aurl" className="label">
+                    Ou URL externe vers le reçu
+                  </label>
+                  <input
+                    id="aurl"
+                    type="url"
+                    value={receiptUrl}
+                    onChange={(e) => setReceiptUrl(e.target.value)}
+                    placeholder="https://…"
+                    className="input"
+                  />
                 </div>
               </section>
 

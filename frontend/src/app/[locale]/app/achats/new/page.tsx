@@ -33,6 +33,7 @@ export default function NewAchatPage() {
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -78,6 +79,26 @@ export default function NewAchatPage() {
         throw new Error(txt.slice(0, 240) || `http_${res.status}`);
       }
       const created = (await res.json()) as { id: number };
+
+      // If a receipt photo/PDF was picked, upload it right after the
+      // create so the achat is complete before we land on the detail.
+      if (receiptFile) {
+        const fd = new FormData();
+        fd.append("file", receiptFile, receiptFile.name);
+        const up = await authedFetch(
+          `/api/v1/achats/${created.id}/receipt`,
+          { method: "POST", body: fd }
+        );
+        if (!up.ok && up.status !== 204) {
+          const txt = await up.text();
+          // Don't block navigation — the achat itself was created.
+          setError(
+            "Achat créé, mais l'upload du reçu a échoué : " +
+              (txt.slice(0, 200) || `http_${up.status}`)
+          );
+        }
+      }
+
       router.replace(`/app/achats/${created.id}`);
     } catch (err) {
       setError((err as Error).message);
@@ -170,6 +191,30 @@ export default function NewAchatPage() {
               placeholder="0.00"
               className="input sm:w-48"
             />
+          </div>
+
+          <div>
+            <label htmlFor="receipt" className="label">
+              Facture / reçu
+            </label>
+            <input
+              id="receipt"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
+              capture="environment"
+              onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
+              className="block w-full text-sm text-white/70 file:mr-3 file:rounded-md file:border-0 file:bg-accent-500 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-brand-950 hover:file:bg-accent-400"
+            />
+            <p className="mt-1 text-xs text-white/50">
+              Sur mobile: ouvre directement la caméra arrière. JPG, PNG,
+              WEBP, HEIC ou PDF, 15 Mo max.
+            </p>
+            {receiptFile ? (
+              <p className="mt-2 text-xs text-accent-300">
+                {receiptFile.name} ·{" "}
+                {(receiptFile.size / 1024).toFixed(0)} Ko
+              </p>
+            ) : null}
           </div>
 
           {error ? <p className="text-sm text-rose-400">{error}</p> : null}
