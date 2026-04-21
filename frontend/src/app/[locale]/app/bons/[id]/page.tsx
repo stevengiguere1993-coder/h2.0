@@ -165,7 +165,8 @@ export default function BonDetailPage() {
         })
       });
       if (!res.ok) throw new Error();
-      setItems((xs) => [...xs, (await res.json()) as Item]);
+      const created = (await res.json()) as Item;
+      setItems((xs) => [...xs, created]);
     } catch {
       setError("Ajout d'item échoué.");
     } finally {

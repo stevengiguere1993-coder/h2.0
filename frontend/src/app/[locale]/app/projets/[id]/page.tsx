@@ -1060,7 +1060,8 @@ function TasksTab({ projectId }: { projectId: number }) {
         { method: "POST", body: JSON.stringify(payload) }
       );
       if (!res.ok) throw new Error();
-      setTasks((xs) => [...xs, (await res.json()) as Task]);
+      const created = (await res.json()) as Task;
+      setTasks((xs) => [...xs, created]);
       setNewTitle("");
       setNewAssignee("");
       setNewDue("");
