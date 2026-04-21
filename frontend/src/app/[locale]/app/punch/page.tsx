@@ -1,0 +1,488 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  Clock,
+  Loader2,
+  MapPin,
+  Play,
+  Square
+} from "lucide-react";
+
+import { AppTopbar } from "@/components/app-topbar";
+import { useAppLayout } from "../layout";
+import { authedFetch } from "@/lib/auth";
+
+type Employe = { id: number; full_name: string; email: string | null };
+type Project = { id: number; name: string; status: string };
+
+type PunchRead = {
+  id: number;
+  employe_id: number;
+  project_id: number | null;
+  started_at: string;
+  ended_at: string | null;
+  hours: number | null;
+  task: string | null;
+  geolocation: string | null;
+  approved: boolean;
+  notes: string | null;
+};
+
+type Me = { employe: Employe | null; active: PunchRead | null };
+
+type WeeklyDay = { day: string; hours: number };
+type Weekly = {
+  employe_id: number;
+  week_start: string;
+  week_end: string;
+  total_hours: number;
+  days: WeeklyDay[];
+};
+
+function fmtElapsed(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(
+    s
+  ).padStart(2, "0")}`;
+}
+
+function dayLabel(iso: string): string {
+  return new Date(iso + "T00:00:00").toLocaleDateString("fr-CA", {
+    weekday: "short",
+    day: "2-digit"
+  });
+}
+
+async function getPosition(): Promise<GeolocationPosition | null> {
+  if (!("geolocation" in navigator)) return null;
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve(pos),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 30_000 }
+    );
+  });
+}
+
+export default function PunchPage() {
+  const { onOpenSidebar } = useAppLayout();
+  const [me, setMe] = useState<Me | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [weekly, setWeekly] = useState<Weekly | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+
+  const [projectId, setProjectId] = useState("");
+  const [task, setTask] = useState("");
+  const [notes, setNotes] = useState("");
+
+  async function refreshWeekly(): Promise<void> {
+    const r = await authedFetch("/api/v1/punch/weekly");
+    if (r.ok) {
+      setWeekly((await r.json()) as Weekly);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const [meRes, prRes] = await Promise.all([
+          authedFetch("/api/v1/punch/me"),
+          authedFetch("/api/v1/projects?limit=200")
+        ]);
+        if (!meRes.ok) throw new Error(`http_${meRes.status}`);
+        const meData = (await meRes.json()) as Me;
+        const prData = prRes.ok ? ((await prRes.json()) as Project[]) : [];
+        if (cancelled) return;
+        setMe(meData);
+        setProjects(prData);
+        if (meData.active?.project_id)
+          setProjectId(String(meData.active.project_id));
+        if (meData.active?.task) setTask(meData.active.task);
+        if (meData.employe) await refreshWeekly();
+      } catch {
+        if (!cancelled) setError("Impossible de charger le punch.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Tick the in-memory timer when a punch is active.
+  useEffect(() => {
+    if (!me?.active) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [me?.active]);
+
+  const activeElapsed = useMemo(() => {
+    if (!me?.active) return 0;
+    return Date.now() - new Date(me.active.started_at).getTime();
+    // tick keeps this fresh
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?.active, tick]);
+
+  async function startPunch() {
+    if (!me?.employe) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const pos = await getPosition();
+      const payload: Record<string, unknown> = {};
+      if (projectId) payload.project_id = Number(projectId);
+      if (task.trim()) payload.task = task.trim();
+      if (pos) {
+        payload.latitude = pos.coords.latitude;
+        payload.longitude = pos.coords.longitude;
+      }
+      const res = await authedFetch("/api/v1/punch/clock-in", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt.slice(0, 240) || `http_${res.status}`);
+      }
+      const created = (await res.json()) as PunchRead;
+      setMe({ ...(me as Me), active: created });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function stopPunch() {
+    if (!me?.active) return;
+    if (!confirm("Terminer le punch maintenant ?")) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const pos = await getPosition();
+      const payload: Record<string, unknown> = {};
+      if (pos) {
+        payload.latitude = pos.coords.latitude;
+        payload.longitude = pos.coords.longitude;
+      }
+      if (notes.trim()) payload.notes = notes.trim();
+      const res = await authedFetch("/api/v1/punch/clock-out", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt.slice(0, 240) || `http_${res.status}`);
+      }
+      setMe({ ...(me as Me), active: null });
+      setNotes("");
+      await refreshWeekly();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const activeProject = projects.find(
+    (p) => me?.active?.project_id && p.id === me.active.project_id
+  );
+
+  return (
+    <>
+      <AppTopbar
+        breadcrumbs={[{ label: "Construction" }, { label: "Punch / Temps" }]}
+        onOpenSidebar={onOpenSidebar}
+      />
+
+      <div className="p-4 lg:p-6">
+        {loading ? (
+          <div className="flex min-h-[40vh] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
+          </div>
+        ) : !me?.employe ? (
+          <NoEmployeCard email={error} />
+        ) : (
+          <div className="mx-auto max-w-xl space-y-6">
+            <header>
+              <p className="text-xs uppercase tracking-wider text-white/50">
+                {me.employe.full_name}
+              </p>
+              <h1 className="mt-1 text-2xl font-bold text-white">
+                {me.active ? "Punch en cours" : "Prêt à pointer"}
+              </h1>
+            </header>
+
+            {error ? (
+              <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+                {error}
+              </p>
+            ) : null}
+
+            {me.active ? (
+              <ActivePunchCard
+                elapsed={activeElapsed}
+                startedAt={me.active.started_at}
+                task={me.active.task}
+                geolocation={me.active.geolocation}
+                projectName={activeProject?.name || null}
+                notes={notes}
+                onNotes={setNotes}
+                onStop={stopPunch}
+                busy={busy}
+              />
+            ) : (
+              <IdleCard
+                projects={projects}
+                projectId={projectId}
+                onProjectId={setProjectId}
+                task={task}
+                onTask={setTask}
+                onStart={startPunch}
+                busy={busy}
+              />
+            )}
+
+            {weekly ? <WeeklyCard weekly={weekly} /> : null}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function NoEmployeCard({ email }: { email: string | null }) {
+  return (
+    <div className="mx-auto mt-10 max-w-md rounded-2xl border border-amber-500/40 bg-amber-500/10 p-6 text-amber-100">
+      <AlertTriangle className="h-6 w-6" />
+      <h2 className="mt-3 text-base font-semibold text-white">
+        Aucune fiche employé
+      </h2>
+      <p className="mt-2 text-sm text-amber-100/80">
+        Ton compte n&apos;est pas rattaché à une fiche employé. Ajoute une
+        fiche dans « Ressources → Employés » avec le même courriel que
+        ton compte de connexion pour activer le punch.
+      </p>
+      {email ? <p className="mt-2 text-xs text-amber-200/70">{email}</p> : null}
+    </div>
+  );
+}
+
+function ActivePunchCard({
+  elapsed,
+  startedAt,
+  task,
+  geolocation,
+  projectName,
+  notes,
+  onNotes,
+  onStop,
+  busy
+}: {
+  elapsed: number;
+  startedAt: string;
+  task: string | null;
+  geolocation: string | null;
+  projectName: string | null;
+  notes: string;
+  onNotes: (v: string) => void;
+  onStop: () => void;
+  busy: boolean;
+}) {
+  const lat = geolocation?.split("|")[0]?.split(",")[0];
+  const lng = geolocation?.split("|")[0]?.split(",")[1];
+  return (
+    <section className="rounded-2xl border border-accent-500/40 bg-accent-500/5 p-6">
+      <div className="flex items-center gap-2 text-sm text-accent-300">
+        <Clock className="h-4 w-4" /> En cours depuis{" "}
+        {new Date(startedAt).toLocaleTimeString("fr-CA", {
+          hour: "2-digit",
+          minute: "2-digit"
+        })}
+      </div>
+      <p className="mt-4 font-mono text-5xl font-bold tracking-tight text-white">
+        {fmtElapsed(elapsed)}
+      </p>
+
+      <dl className="mt-5 space-y-2 text-sm text-white/80">
+        {projectName ? (
+          <Row label="Projet" value={projectName} />
+        ) : (
+          <Row label="Projet" value="Aucun" />
+        )}
+        {task ? <Row label="Tâche" value={task} /> : null}
+        {lat && lng ? (
+          <Row
+            label="Position"
+            value={
+              <span className="inline-flex items-center gap-1 text-xs text-white/70">
+                <MapPin className="h-3 w-3" /> {lat}, {lng}
+              </span>
+            }
+          />
+        ) : null}
+      </dl>
+
+      <div className="mt-5">
+        <label htmlFor="punch_notes" className="label">
+          Notes (optionnel)
+        </label>
+        <textarea
+          id="punch_notes"
+          rows={2}
+          value={notes}
+          onChange={(e) => onNotes(e.target.value)}
+          placeholder="Anomalies, consignes, etc."
+          className="input"
+        />
+      </div>
+
+      <button
+        type="button"
+        onClick={onStop}
+        disabled={busy}
+        className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-rose-500 px-4 py-4 text-base font-bold text-white shadow-lg hover:bg-rose-600 disabled:opacity-60"
+      >
+        {busy ? (
+          <Loader2 className="h-5 w-5 animate-spin" />
+        ) : (
+          <Square className="h-5 w-5" />
+        )}
+        Terminer le punch
+      </button>
+    </section>
+  );
+}
+
+function IdleCard({
+  projects,
+  projectId,
+  onProjectId,
+  task,
+  onTask,
+  onStart,
+  busy
+}: {
+  projects: Project[];
+  projectId: string;
+  onProjectId: (v: string) => void;
+  task: string;
+  onTask: (v: string) => void;
+  onStart: () => void;
+  busy: boolean;
+}) {
+  return (
+    <section className="rounded-2xl border border-brand-800 bg-brand-900 p-6">
+      <p className="text-sm text-white/60">
+        Sélectionne le projet (si pertinent) et appuie sur Démarrer. On
+        capture ta position GPS pour vérifier la présence au chantier.
+      </p>
+      <div className="mt-5 space-y-4">
+        <div>
+          <label htmlFor="punch_project" className="label">
+            Projet
+          </label>
+          <select
+            id="punch_project"
+            value={projectId}
+            onChange={(e) => onProjectId(e.target.value)}
+            className="input"
+          >
+            <option value="">— Aucun projet —</option>
+            {projects.map((p) => (
+              <option key={p.id} value={String(p.id)}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="punch_task" className="label">
+            Tâche (optionnel)
+          </label>
+          <input
+            id="punch_task"
+            type="text"
+            value={task}
+            onChange={(e) => onTask(e.target.value)}
+            className="input"
+            placeholder="Ex. Plomberie salle de bain"
+          />
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={onStart}
+        disabled={busy}
+        className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-accent-500 px-4 py-4 text-base font-bold text-brand-950 shadow-lg hover:bg-accent-400 disabled:opacity-60"
+      >
+        {busy ? (
+          <Loader2 className="h-5 w-5 animate-spin" />
+        ) : (
+          <Play className="h-5 w-5" />
+        )}
+        Démarrer le punch
+      </button>
+    </section>
+  );
+}
+
+function WeeklyCard({ weekly }: { weekly: Weekly }) {
+  return (
+    <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          Mes heures — semaine courante
+        </h2>
+        <span className="text-base font-bold text-white">
+          {weekly.total_hours.toFixed(2)} h
+        </span>
+      </div>
+      <p className="mt-1 text-xs text-white/50">
+        Du {weekly.week_start} au {weekly.week_end}
+      </p>
+      <ul className="mt-4 divide-y divide-brand-800 text-sm">
+        {weekly.days.map((d) => (
+          <li
+            key={d.day}
+            className="flex items-center justify-between py-2 text-white/80"
+          >
+            <span>{dayLabel(d.day)}</span>
+            <span className="font-semibold text-white">
+              {d.hours > 0 ? `${d.hours.toFixed(2)} h` : "—"}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function Row({
+  label,
+  value
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <dt className="text-white/50">{label}</dt>
+      <dd className="max-w-[60%] truncate text-right">{value}</dd>
+    </div>
+  );
+}
