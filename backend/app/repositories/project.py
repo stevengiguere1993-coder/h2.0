@@ -19,11 +19,11 @@ class ProjectRepository:
         self.db = db
 
     async def create(self, data: ProjectCreate) -> Project:
-        """Create a new project."""
-        project = Project(
-            name=data.name,
-            client_id=data.client_id,
-        )
+        """Create a new project with every optional field accepted."""
+        payload = data.model_dump(exclude_unset=True)
+        if not payload.get("status"):
+            payload["status"] = "planned"
+        project = Project(**payload)
         self.db.add(project)
         await self.db.flush()
         await self.db.refresh(project)
@@ -44,11 +44,14 @@ class ProjectRepository:
         skip: int = 0,
         limit: int = 100,
         client_id: Optional[int] = None,
+        status_filter: Optional[str] = None,
     ) -> Sequence[Project]:
-        """List projects with optional filtering by client."""
-        query = select(Project).order_by(Project.name)
+        """List projects with optional client / status filters."""
+        query = select(Project).order_by(Project.created_at.desc())
         if client_id is not None:
             query = query.where(Project.client_id == client_id)
+        if status_filter is not None:
+            query = query.where(Project.status == status_filter)
         query = query.offset(skip).limit(limit)
         result = await self.db.execute(query)
         return result.scalars().all()

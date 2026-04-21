@@ -1,11 +1,10 @@
-"""
-Pydantic schemas for Project operations.
-"""
+"""Pydantic schemas for Project operations."""
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from datetime import date, datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,54 +12,66 @@ if TYPE_CHECKING:
     from app.schemas.client import ClientRead
 
 
-class ProjectBase(BaseModel):
-    """Base project schema with common fields."""
-
-    name: str = Field(
-        ...,
-        min_length=1,
-        max_length=255,
-        description="Project name",
-    )
-    client_id: int = Field(
-        ...,
-        gt=0,
-        description="ID of the associated client",
-    )
-
-
-class ProjectCreate(ProjectBase):
-    """Schema for creating a new project."""
-
-    pass
+class ProjectCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    client_id: Optional[int] = Field(default=None, gt=0)
+    contact_request_id: Optional[int] = Field(default=None, gt=0)
+    soumission_id: Optional[int] = Field(default=None, gt=0)
+    status: Optional[str] = Field(default=None, max_length=32)
+    address: Optional[str] = Field(default=None, max_length=500)
+    description: Optional[str] = None
+    notes: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    budget: Optional[Decimal] = Field(default=None, ge=0)
 
 
 class ProjectUpdate(BaseModel):
-    """Schema for updating a project. All fields optional."""
-
-    name: Optional[str] = Field(
-        default=None,
-        min_length=1,
-        max_length=255,
-        description="Project name",
-    )
-    client_id: Optional[int] = Field(
-        default=None,
-        gt=0,
-        description="ID of the associated client",
-    )
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    client_id: Optional[int] = Field(default=None, gt=0)
+    contact_request_id: Optional[int] = Field(default=None, gt=0)
+    soumission_id: Optional[int] = Field(default=None, gt=0)
+    status: Optional[str] = Field(default=None, max_length=32)
+    address: Optional[str] = None
+    description: Optional[str] = None
+    notes: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    budget: Optional[Decimal] = Field(default=None, ge=0)
 
 
-class ProjectRead(ProjectBase):
-    """Schema for reading project data."""
-
+class ProjectRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    name: str
+    client_id: Optional[int]
+    contact_request_id: Optional[int]
+    soumission_id: Optional[int]
+    status: str
+    address: Optional[str]
+    description: Optional[str]
+    notes: Optional[str]
+    start_date: Optional[date]
+    end_date: Optional[date]
+    budget: Optional[Decimal]
     created_at: datetime
+    updated_at: datetime
 
 
 class ProjectReadWithClient(ProjectRead):
-    """Schema for reading project with client details."""
+    client: Optional["ClientRead"] = None
 
-    client: Optional[ClientRead] = None
+
+# Convenience schema for listing (lightweight).
+class ProjectSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    status: str
+    address: Optional[str]
+    start_date: Optional[date]
+    end_date: Optional[date]
+    budget: Optional[Decimal]
+    client_id: Optional[int]

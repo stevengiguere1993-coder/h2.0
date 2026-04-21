@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter as useNextRouter } from "next/navigation";
 import {
   ArrowLeft,
+  Briefcase,
   Check,
   FileText,
   Loader2,
@@ -231,6 +232,26 @@ export default function SoumissionDetailPage() {
     } catch (err) {
       setSendNotice(
         `Prévisualisation PDF échouée : ${(err as Error).message.slice(0, 240)}`
+      );
+    }
+  }
+
+  async function convertToProject() {
+    if (!s) return;
+    try {
+      const res = await authedFetch(
+        `/api/v1/soumissions/${id}/convert-to-project`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text.slice(0, 240) || `http_${res.status}`);
+      }
+      const project = (await res.json()) as { id: number };
+      router.replace(`/app/projets/${project.id}`);
+    } catch (err) {
+      setSendNotice(
+        `Conversion en projet échouée : ${(err as Error).message}`
       );
     }
   }
@@ -591,6 +612,23 @@ export default function SoumissionDetailPage() {
                 </div>
               </button>
             </div>
+
+            {s.status === "accepted" ? (
+              <div className="mt-3">
+                <button
+                  type="button"
+                  onClick={convertToProject}
+                  className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2.5 text-sm font-medium text-accent-200 hover:bg-accent-500/20"
+                >
+                  <Briefcase className="h-4 w-4" />
+                  Convertir en projet
+                </button>
+                <p className="mt-1 text-xs text-white/50">
+                  Crée une fiche projet pré-remplie avec l&apos;adresse,
+                  le budget et la description de cette soumission.
+                </p>
+              </div>
+            ) : null}
 
             <section className="mt-8 rounded-xl border border-brand-800 bg-brand-900">
               <div className="flex items-center justify-between border-b border-brand-800 px-5 py-4">

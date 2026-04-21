@@ -21,15 +21,15 @@ class ProjectService:
         self.client_repo = ClientRepository(db)
 
     async def create(self, data: ProjectCreate) -> Optional[Project]:
-        """
-        Create a new project.
+        """Create a new project.
 
-        Returns None if client_id doesn't exist.
+        client_id is optional now; if provided, we verify it exists.
+        Returns None only when client_id is given but doesn't match.
         """
-        # Validate client exists
-        client = await self.client_repo.get_by_id(data.client_id)
-        if client is None:
-            return None
+        if data.client_id is not None:
+            client = await self.client_repo.get_by_id(data.client_id)
+            if client is None:
+                return None
         return await self.repo.create(data)
 
     async def get_by_id(
@@ -43,9 +43,12 @@ class ProjectService:
         skip: int = 0,
         limit: int = 100,
         client_id: Optional[int] = None,
+        status_filter: Optional[str] = None,
     ) -> Sequence[Project]:
         """List projects with optional filtering."""
-        return await self.repo.list(skip, limit, client_id)
+        return await self.repo.list(
+            skip, limit, client_id, status_filter=status_filter
+        )
 
     async def update(
         self, project_id: int, data: ProjectUpdate

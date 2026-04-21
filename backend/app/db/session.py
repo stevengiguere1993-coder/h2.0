@@ -89,6 +89,16 @@ async def init_db() -> None:
             ("factures", "qbo_invoice_id", "VARCHAR(64)"),
             ("factures", "qbo_doc_number", "VARCHAR(64)"),
             ("factures", "qbo_sync_token", "VARCHAR(32)"),
+            ("projects", "contact_request_id", "INTEGER"),
+            ("projects", "soumission_id", "INTEGER"),
+            ("projects", "status", "VARCHAR(32) NOT NULL DEFAULT 'planned'"),
+            ("projects", "address", "VARCHAR(500)"),
+            ("projects", "description", "TEXT"),
+            ("projects", "notes", "TEXT"),
+            ("projects", "start_date", "DATE"),
+            ("projects", "end_date", "DATE"),
+            ("projects", "budget", "NUMERIC(12, 2)"),
+            ("projects", "updated_at", "TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
@@ -97,6 +107,19 @@ async def init_db() -> None:
                     f'ADD COLUMN IF NOT EXISTS {column} {col_type}'
                 )
             )
+
+        # Relaxations — columns whose nullability changed.
+        # ALTER ... DROP NOT NULL is idempotent on PostgreSQL.
+        for table, column in (
+            ("projects", "client_id"),
+        ):
+            try:
+                await conn.execute(
+                    text(f'ALTER TABLE {table} ALTER COLUMN {column} DROP NOT NULL')
+                )
+            except Exception:
+                # Column may not exist yet on a brand-new DB — harmless.
+                pass
 
 
 async def close_db() -> None:

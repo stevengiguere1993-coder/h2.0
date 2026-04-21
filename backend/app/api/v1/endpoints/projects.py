@@ -8,7 +8,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from app.api.deps import CurrentAdmin, CurrentUser, DBSession
+from app.api.deps import CurrentUser, DBSession
 from app.schemas.project import (
     ProjectCreate,
     ProjectRead,
@@ -30,7 +30,7 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 async def create_project(
     data: ProjectCreate,
     db: DBSession,
-    current_admin: CurrentAdmin,
+    current_user: CurrentUser,
 ) -> ProjectRead:
     """Create a new project. Requires admin privileges."""
     service = ProjectService(db)
@@ -52,12 +52,18 @@ async def list_projects(
     db: DBSession,
     current_user: CurrentUser,
     skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=100, ge=1, le=100),
+    limit: int = Query(default=200, ge=1, le=500),
     client_id: Optional[int] = Query(default=None, gt=0),
+    status_filter: Optional[str] = Query(default=None, alias="status"),
 ) -> List[ProjectRead]:
-    """List projects with optional client filter. Requires authentication."""
+    """List projects with optional client / status filter."""
     service = ProjectService(db)
-    projects = await service.list(skip=skip, limit=limit, client_id=client_id)
+    projects = await service.list(
+        skip=skip,
+        limit=limit,
+        client_id=client_id,
+        status_filter=status_filter,
+    )
     return [ProjectRead.model_validate(p) for p in projects]
 
 
@@ -91,7 +97,7 @@ async def update_project(
     project_id: int,
     data: ProjectUpdate,
     db: DBSession,
-    current_admin: CurrentAdmin,
+    current_user: CurrentUser,
 ) -> ProjectRead:
     """Update a project. Requires admin privileges."""
     service = ProjectService(db)
@@ -112,7 +118,7 @@ async def update_project(
 async def delete_project(
     project_id: int,
     db: DBSession,
-    current_admin: CurrentAdmin,
+    current_user: CurrentUser,
 ) -> None:
     """Delete a project. Requires admin privileges."""
     service = ProjectService(db)

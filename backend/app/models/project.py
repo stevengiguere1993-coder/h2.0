@@ -1,49 +1,90 @@
-"""
-Project model for managing construction projects.
+"""Project model for managing construction projects.
+
+A Project represents an actual chantier / contract once a soumission
+is accepted (or when we set one up manually). Everything else —
+agenda events, bons de travail, punches, factures — hangs off it.
 """
 
+from datetime import date, datetime
+from decimal import Decimal
+from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, TimestampMixin
+from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.models.client import Client
 
 
-class Project(Base, TimestampMixin):
-    """
-    Project model representing construction projects.
+class ProjectStatus(str, Enum):
+    PLANNED = "planned"
+    IN_PROGRESS = "in_progress"
+    SUSPENDED = "suspended"
+    DELIVERED = "delivered"
 
-    Attributes:
-        id: Primary key
-        name: Project name
-        client_id: Foreign key to the associated client
-        created_at: Timestamp when project was created
-        client: Reference to the associated client
-    """
+
+class Project(Base):
+    """Construction project / chantier."""
 
     __tablename__ = "projects"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(
-        String(255),
-        nullable=False,
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+
+    # Links (all optional — a project can start from a Client, a
+    # prospect contact_request, or directly from an accepted soumission).
+    client_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("clients.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
-    client_id: Mapped[int] = mapped_column(
-        ForeignKey("clients.id", ondelete="CASCADE"),
-        nullable=False,
+    contact_request_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("contact_requests.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    soumission_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("soumissions.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
 
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=ProjectStatus.PLANNED.value,
+        index=True,
+    )
+
+    address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+    budget: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
     # Relationships
-    client: Mapped["Client"] = relationship(
+    client: Mapped[Optional["Client"]] = relationship(
         "Client",
         back_populates="projects",
     )
 
     def __repr__(self) -> str:
-        return f"<Project(id={self.id}, name='{self.name}', client_id={self.client_id})>"
+        return f"<Project(id={self.id}, name='{self.name}', status='{self.status}')>"
