@@ -78,7 +78,12 @@ export async function authedFetch(
   const token = getToken();
   const headers = new Headers(init.headers);
   if (token) headers.set("authorization", `Bearer ${token}`);
-  if (init.body && !headers.has("content-type"))
+  // Do NOT force a content-type when the body is FormData — the browser must
+  // set multipart/form-data with its own boundary, and a JSON override breaks
+  // file uploads (backend sees `body.file` as missing).
+  const isFormData =
+    typeof FormData !== "undefined" && init.body instanceof FormData;
+  if (init.body && !isFormData && !headers.has("content-type"))
     headers.set("content-type", "application/json");
 
   const url = `${DEFAULT_BASE}${path}`;

@@ -18,7 +18,8 @@
     "tailwind-merge": "2.6.0",
     "lucide-react": "0.469.0",
     "zod": "3.24.1",
-    "marked": "15.0.7"
+    "marked": "15.0.7",
+    "jspdf": "2.5.2"
   },
   "devDependencies": {
     "@types/node": "22.10.5",

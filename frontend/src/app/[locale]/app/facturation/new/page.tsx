@@ -121,7 +121,20 @@ export default function NewFacturePage() {
             <select
               id="client"
               value={clientId}
-              onChange={(e) => setClientId(e.target.value)}
+              onChange={(e) => {
+                const next = e.target.value;
+                setClientId(next);
+                // If the currently selected project doesn't belong to the
+                // new client, clear it so the dropdown stays consistent.
+                if (next && projectId) {
+                  const p = projects.find(
+                    (x) => String(x.id) === projectId
+                  );
+                  if (p && p.client_id !== null && String(p.client_id) !== next) {
+                    setProjectId("");
+                  }
+                }
+              }}
               className="input"
             >
               <option value="">— Aucun —</option>
@@ -138,16 +151,33 @@ export default function NewFacturePage() {
             <select
               id="project"
               value={projectId}
-              onChange={(e) => setProjectId(e.target.value)}
+              onChange={(e) => {
+                const next = e.target.value;
+                setProjectId(next);
+                // Selecting a project auto-fills its client so the two
+                // stay in sync everywhere in the portal.
+                const p = projects.find((x) => String(x.id) === next);
+                if (p?.client_id) setClientId(String(p.client_id));
+              }}
               className="input"
             >
               <option value="">— Aucun —</option>
-              {projects.map((p) => (
+              {(clientId
+                ? projects.filter(
+                    (p) => String(p.client_id) === clientId
+                  )
+                : projects
+              ).map((p) => (
                 <option key={p.id} value={String(p.id)}>
                   {p.name}
                 </option>
               ))}
             </select>
+            {clientId ? (
+              <p className="mt-1 text-xs text-white/50">
+                Seuls les projets du client sélectionné sont affichés.
+              </p>
+            ) : null}
           </div>
 
           <div>

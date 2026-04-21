@@ -23,7 +23,10 @@ type Kpis = {
   unpaid_count: number;
   overdue_total: number;
   overdue_count: number;
+  draft_total: number;
+  draft_count: number;
   revenue_this_month: number;
+  revenue_this_month_mode: "paid" | "issued";
   active_projects: number;
   hours_this_week: number;
   new_prospects_7d: number;
@@ -104,10 +107,24 @@ export default function AppHome() {
             hint={
               loading
                 ? " "
-                : kpis && kpis.unpaid_count > 0
-                ? `${kpis.unpaid_count} factures — dont ${money(
-                    kpis.overdue_total
-                  )} en retard`
+                : kpis && (kpis.unpaid_count > 0 || kpis.draft_count > 0)
+                ? [
+                    kpis.unpaid_count > 0
+                      ? `${kpis.unpaid_count} envoyée${
+                          kpis.unpaid_count > 1 ? "s" : ""
+                        }`
+                      : null,
+                    kpis.overdue_count > 0
+                      ? `${money(kpis.overdue_total)} en retard`
+                      : null,
+                    kpis.draft_count > 0
+                      ? `${kpis.draft_count} brouillon${
+                          kpis.draft_count > 1 ? "s" : ""
+                        } (${money(kpis.draft_total)})`
+                      : null
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
                 : "Aucune impayée"
             }
             alert={
@@ -122,7 +139,11 @@ export default function AppHome() {
             iconClass="text-emerald-400"
             label="Revenu ce mois"
             value={loading ? "…" : money(kpis?.revenue_this_month || 0)}
-            hint="Factures payées (mois courant)"
+            hint={
+              kpis?.revenue_this_month_mode === "issued"
+                ? "Facturé ce mois (aucune réglée — passe en « payée » pour le chiffre encaissé)"
+                : "Factures payées (mois courant)"
+            }
           />
           <KpiCard
             href="/app/projets"

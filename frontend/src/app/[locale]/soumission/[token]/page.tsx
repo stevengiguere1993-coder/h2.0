@@ -81,6 +81,22 @@ export default function PublicSoumissionPage() {
     [token]
   );
 
+  async function extractError(res: Response): Promise<string> {
+    try {
+      const body = (await res.json()) as {
+        detail?: string | { msg?: string }[] | { msg?: string };
+      };
+      if (typeof body.detail === "string") return body.detail;
+      if (Array.isArray(body.detail))
+        return body.detail.map((d) => d.msg || "").filter(Boolean).join(", ");
+      if (body.detail && typeof body.detail === "object" && body.detail.msg)
+        return body.detail.msg;
+    } catch {
+      /* not JSON */
+    }
+    return `Erreur serveur (HTTP ${res.status}).`;
+  }
+
   async function accept() {
     if (!signName.trim()) {
       setError("Ton nom complet est requis pour signer.");
@@ -94,10 +110,14 @@ export default function PublicSoumissionPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ name: signName.trim() })
       });
-      if (!res.ok) throw new Error(`http_${res.status}`);
+      if (!res.ok) {
+        const detail = await extractError(res);
+        throw new Error(detail);
+      }
       setData((await res.json()) as PublicSoumission);
-    } catch {
-      setError("Acceptation échouée — réessaie dans un instant.");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      setError(msg || "Acceptation échouée — réessaie dans un instant.");
     } finally {
       setSubmitting(null);
     }
@@ -112,11 +132,15 @@ export default function PublicSoumissionPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ reason: rejectReason.trim() || null })
       });
-      if (!res.ok) throw new Error(`http_${res.status}`);
+      if (!res.ok) {
+        const detail = await extractError(res);
+        throw new Error(detail);
+      }
       setData((await res.json()) as PublicSoumission);
       setRejectOpen(false);
-    } catch {
-      setError("Refus échoué — réessaie dans un instant.");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      setError(msg || "Refus échoué — réessaie dans un instant.");
     } finally {
       setSubmitting(null);
     }
