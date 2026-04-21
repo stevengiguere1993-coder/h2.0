@@ -8,19 +8,8 @@ from __future__ import annotations
 import io
 import logging
 from datetime import date, datetime
-from typing import Optional
+from typing import Any, Optional
 
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib.units import mm
-from reportlab.platypus import (
-    Paragraph,
-    SimpleDocTemplate,
-    Spacer,
-    Table,
-    TableStyle,
-)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,15 +19,49 @@ from app.models.soumission_item import SoumissionItem
 
 log = logging.getLogger(__name__)
 
+
+# ReportLab is imported lazily inside `_render_bytes` so that the backend
+# can start even when the wheel is not yet installed — the PDF endpoints
+# simply return an HTTP 500 with a clear error until the deployment
+# picks up the new dependency.
+def _lazy_reportlab() -> dict[str, Any]:
+    from reportlab.lib import colors  # type: ignore
+    from reportlab.lib.pagesizes import letter  # type: ignore
+    from reportlab.lib.styles import (  # type: ignore
+        ParagraphStyle,
+        getSampleStyleSheet,
+    )
+    from reportlab.lib.units import mm  # type: ignore
+    from reportlab.platypus import (  # type: ignore
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
+
+    return {
+        "colors": colors,
+        "letter": letter,
+        "ParagraphStyle": ParagraphStyle,
+        "getSampleStyleSheet": getSampleStyleSheet,
+        "mm": mm,
+        "Paragraph": Paragraph,
+        "SimpleDocTemplate": SimpleDocTemplate,
+        "Spacer": Spacer,
+        "Table": Table,
+        "TableStyle": TableStyle,
+    }
+
 COMPANY_NAME = "Horizon Services Immobiliers"
 COMPANY_RBQ = "RBQ 5868-5991-01"
 COMPANY_SITE = "immohorizon.com"
 COMPANY_EMAIL = "info@immohorizon.com"
 
-ACCENT = colors.HexColor("#d89b3c")
-DARK = colors.HexColor("#111111")
-MUTED = colors.HexColor("#6b6b6b")
-LINE = colors.HexColor("#e2e2e2")
+ACCENT_HEX = "#d89b3c"
+DARK_HEX = "#111111"
+MUTED_HEX = "#6b6b6b"
+LINE_HEX = "#e2e2e2"
 
 
 def _money(n: Optional[float | int]) -> str:
@@ -86,8 +109,13 @@ async def _load(db: AsyncSession, soumission_id: int):
     return sm, items, contact
 
 
-def _styles():
-    base = getSampleStyleSheet()
+def _styles(rl: dict[str, Any]):
+    ParagraphStyle = rl["ParagraphStyle"]
+    colors = rl["colors"]
+    DARK = colors.HexColor(DARK_HEX)
+    MUTED = colors.HexColor(MUTED_HEX)
+    ACCENT = colors.HexColor(ACCENT_HEX)
+    base = rl["getSampleStyleSheet"]()
     styles = {
         "h1": ParagraphStyle(
             "h1",
@@ -136,10 +164,22 @@ def _styles():
 
 def _render_bytes(sm: Soumission, items: list[SoumissionItem],
                   contact: Optional[ContactRequest]) -> bytes:
+    rl = _lazy_reportlab()
+    colors = rl["colors"]
+    mm = rl["mm"]
+    Paragraph = rl["Paragraph"]
+    Spacer = rl["Spacer"]
+    Table = rl["Table"]
+    TableStyle = rl["TableStyle"]
+    DARK = colors.HexColor(DARK_HEX)
+    MUTED = colors.HexColor(MUTED_HEX)
+    ACCENT = colors.HexColor(ACCENT_HEX)
+    LINE = colors.HexColor(LINE_HEX)
+
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(
+    doc = rl["SimpleDocTemplate"](
         buf,
-        pagesize=letter,
+        pagesize=rl["letter"],
         leftMargin=18 * mm,
         rightMargin=18 * mm,
         topMargin=18 * mm,
@@ -147,7 +187,7 @@ def _render_bytes(sm: Soumission, items: list[SoumissionItem],
         title=f"Soumission {sm.reference}",
         author=COMPANY_NAME,
     )
-    s = _styles()
+    s = _styles(rl)
     story: list = []
 
     # Header: company on the left, "SOUMISSION" on the right.

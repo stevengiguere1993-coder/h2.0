@@ -228,6 +228,51 @@ class QuickBooksClient:
         )
 
     # ------------------------------------------------------------------
+    # Items (Service catalog)
+    # ------------------------------------------------------------------
+    async def first_income_account(self) -> Optional[Dict[str, Any]]:
+        rows = await self.query(
+            "SELECT * FROM Account WHERE AccountType = 'Income' MAXRESULTS 1"
+        )
+        return rows[0] if rows else None
+
+    async def find_item_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        safe = name.replace("'", "\\'")
+        rows = await self.query(
+            f"SELECT * FROM Item WHERE Name = '{safe}' MAXRESULTS 1"
+        )
+        return rows[0] if rows else None
+
+    async def create_item(
+        self, name: str, description: Optional[str] = None
+    ) -> Dict[str, Any]:
+        income = await self.first_income_account()
+        if not income:
+            raise QuickBooksError(
+                "No QBO Income account available to link the new Item."
+            )
+        payload: Dict[str, Any] = {
+            "Name": name[:100],
+            "Type": "Service",
+            "IncomeAccountRef": {"value": str(income["Id"])},
+        }
+        if description:
+            payload["Description"] = description[:4000]
+        data = await self._request(
+            "POST", "/item", json_body=payload, params={"minorversion": "70"}
+        )
+        return data.get("Item", data)
+
+    async def ensure_item(
+        self, name: str, description: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Find an Item by name, otherwise create a Service Item."""
+        existing = await self.find_item_by_name(name)
+        if existing:
+            return existing
+        return await self.create_item(name, description=description)
+
+    # ------------------------------------------------------------------
     # Estimates
     # ------------------------------------------------------------------
     async def get_estimate(self, estimate_id: str) -> Dict[str, Any]:

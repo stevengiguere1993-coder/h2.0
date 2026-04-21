@@ -68,31 +68,47 @@ async def _load_contact(
     ).scalar_one_or_none()
 
 
-def _build_estimate_payload(
-    *,
-    soumission: Soumission,
-    customer_id: str,
-    items: list[SoumissionItem],
-    existing_sync_token: Optional[str] = None,
-    existing_estimate_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    lines = []
+async def _build_lines(qbo, items: list[SoumissionItem], fallback_name: str) -> list[Dict[str, Any]]:
+    """Build QBO Estimate lines, ensuring each one references a real QBO Item.
+
+    Each Soumission line item description is used as the QBO Item name
+    (find-or-create, Service type). This way every line in the Estimate
+    is tied to a proper entry in the Products & Services catalog.
+    """
+    lines: list[Dict[str, Any]] = []
     for it in items:
         amount = round(float(it.quantity) * float(it.unit_price), 2)
         qty = float(it.quantity)
         unit_price = float(it.unit_price)
+        # QBO Item.Name is limited to 100 chars and must be unique per realm.
+        name = (it.description or "").strip()[:100] or fallback_name
+        qbo_item = await qbo.ensure_item(name, description=it.description)
+        item_id = str(qbo_item.get("Id") or "")
+        sales_detail: Dict[str, Any] = {
+            "Qty": qty,
+            "UnitPrice": unit_price,
+        }
+        if item_id:
+            sales_detail["ItemRef"] = {"value": item_id}
         lines.append(
             {
                 "DetailType": "SalesItemLineDetail",
                 "Amount": amount,
                 "Description": it.description,
-                "SalesItemLineDetail": {
-                    "Qty": qty,
-                    "UnitPrice": unit_price,
-                },
+                "SalesItemLineDetail": sales_detail,
             }
         )
+    return lines
 
+
+def _build_estimate_payload(
+    *,
+    soumission: Soumission,
+    customer_id: str,
+    lines: list[Dict[str, Any]],
+    existing_sync_token: Optional[str] = None,
+    existing_estimate_id: Optional[str] = None,
+) -> Dict[str, Any]:
     # If we have no items, QBO requires at least one line -- send a
     # placeholder so the estimate can still be created as a draft.
     if not lines:
@@ -160,10 +176,13 @@ async def sync_soumission_to_qbo(
         if not customer_id:
             raise SoumissionSyncError("QBO customer creation did not return an Id.")
 
+        lines = await _build_lines(
+            qbo, items, fallback_name=(s.title or s.reference)
+        )
         payload = _build_estimate_payload(
             soumission=s,
             customer_id=customer_id,
-            items=items,
+            lines=lines,
             existing_estimate_id=s.qbo_estimate_id if hasattr(s, "qbo_estimate_id") else None,
             existing_sync_token=s.qbo_sync_token if hasattr(s, "qbo_sync_token") else None,
         )
