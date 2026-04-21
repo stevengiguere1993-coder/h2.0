@@ -119,13 +119,19 @@ export function AddressInput({
         className={className}
       />
       {open && suggestions.length > 0 ? (
-        <ul className="absolute left-0 right-0 top-full z-20 mt-1 max-h-72 overflow-auto rounded-lg border border-brand-800 bg-brand-950 shadow-2xl">
+        <ul className="absolute left-0 right-0 top-full z-[70] mt-1 max-h-72 overflow-auto rounded-lg border border-brand-800 bg-brand-950 shadow-2xl">
           {suggestions.map((s) => (
             <li key={s}>
               <button
                 type="button"
-                onClick={() => pick(s)}
-                className="block w-full truncate px-3 py-2 text-left text-sm text-white/90 hover:bg-brand-800"
+                onMouseDown={(e) => {
+                  // Prevent the input blur from closing the menu before
+                  // the click registers — otherwise Safari loses the
+                  // selection on touch.
+                  e.preventDefault();
+                  pick(s);
+                }}
+                className="block w-full truncate px-3 py-2 text-left text-sm text-white/90 hover:bg-brand-800 active:bg-accent-500/20"
               >
                 {s}
               </button>
