@@ -61,6 +61,37 @@ class PublicSoumission(BaseModel):
 
 class AcceptRequest(BaseModel):
     name: str = Field(..., min_length=2, max_length=255)
+    # Drawn signature, sent as a data URL ("data:image/png;base64,…").
+    # Optional for backward compat (a typed name still works).
+    signature_image_data_url: Optional[str] = Field(
+        default=None, max_length=2_000_000
+    )
+
+
+def _decode_data_url(data_url: Optional[str]) -> tuple[Optional[bytes], Optional[str]]:
+    """Parse a 'data:...;base64,...' URL and return (bytes, content_type).
+    Returns (None, None) if the input is None or malformed."""
+    import base64
+    if not data_url:
+        return None, None
+    if not data_url.startswith("data:"):
+        return None, None
+    try:
+        header, b64 = data_url.split(",", 1)
+        # header looks like "data:image/png;base64"
+        content_type = "image/png"
+        if ":" in header:
+            after_colon = header.split(":", 1)[1]
+            if ";" in after_colon:
+                content_type = after_colon.split(";", 1)[0]
+            else:
+                content_type = after_colon or content_type
+        raw = base64.b64decode(b64, validate=False)
+        if len(raw) > 1_500_000:  # ~1.5 MB cap
+            return None, None
+        return raw, content_type
+    except Exception:
+        return None, None
 
 
 class RejectRequest(BaseModel):
@@ -182,6 +213,12 @@ async def public_accept(
     if raw_ip:
         raw_ip = raw_ip.split(",")[0].strip()[:64]
     sm.signed_ip = raw_ip
+
+    # Persist the drawn signature when provided.
+    sig_bytes, sig_ct = _decode_data_url(data.signature_image_data_url)
+    if sig_bytes:
+        sm.signature_image = sig_bytes
+        sm.signature_image_content_type = sig_ct
 
     # Propagate to prospect + auto-create client (same logic as the
     # internal /status endpoint).

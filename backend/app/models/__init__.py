@@ -23,6 +23,7 @@ from app.models.punch import Punch
 from app.models.qbo_token import QboToken
 from app.models.sales_task import SalesTask, sales_task_assignees  # noqa: F401
 from app.models.seo_article import SeoArticle
+from app.models.service_template import ServiceTemplate, ServiceTemplateItem
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
 from app.models.sous_traitant import SousTraitant
@@ -47,6 +48,8 @@ __all__ = [
     "QboToken",
     "SalesTask",
     "SeoArticle",
+    "ServiceTemplate",
+    "ServiceTemplateItem",
     "Soumission",
     "SoumissionItem",
     "SousTraitant",

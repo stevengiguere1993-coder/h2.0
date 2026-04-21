@@ -49,6 +49,27 @@ class PublicBon(BaseModel):
 
 class AcceptRequest(BaseModel):
     name: str = Field(..., min_length=2, max_length=255)
+    signature_image_data_url: Optional[str] = Field(
+        default=None, max_length=2_000_000
+    )
+
+
+def _decode_data_url(data_url: Optional[str]) -> tuple[Optional[bytes], Optional[str]]:
+    import base64
+    if not data_url or not data_url.startswith("data:"):
+        return None, None
+    try:
+        header, b64 = data_url.split(",", 1)
+        content_type = "image/png"
+        if ":" in header:
+            after = header.split(":", 1)[1]
+            content_type = after.split(";", 1)[0] if ";" in after else after
+        raw = base64.b64decode(b64, validate=False)
+        if len(raw) > 1_500_000:
+            return None, None
+        return raw, content_type
+    except Exception:
+        return None, None
 
 
 async def _load_by_token(db: AsyncSession, token: str) -> BonTravail:
@@ -147,6 +168,11 @@ async def public_accept(
     if raw_ip:
         raw_ip = raw_ip.split(",")[0].strip()[:64]
     bon.signature_ip = raw_ip
+
+    sig_bytes, sig_ct = _decode_data_url(data.signature_image_data_url)
+    if sig_bytes:
+        bon.signature_image = sig_bytes
+        bon.signature_image_content_type = sig_ct
     await db.flush()
     await db.refresh(bon)
     return await public_read(token, db)

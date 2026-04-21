@@ -4,8 +4,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import DateTime, ForeignKey, LargeBinary, Numeric, String, Text
+from sqlalchemy.orm import Mapped, deferred, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
 
@@ -64,6 +64,15 @@ class Soumission(Base, TimestampUpdateMixin):
     )
     signed_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     signed_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # Drawn signature captured from the public acceptance page. Stored
+    # as raw PNG bytes; deferred so lists don't pay the cost.
+    signature_image: Mapped[Optional[bytes]] = deferred(
+        mapped_column(LargeBinary, nullable=True)
+    )
+    signature_image_content_type: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True
+    )
 
     # Property address captured at soumission time so the PDF + public
     # view always show the job location (may differ from the client's

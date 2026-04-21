@@ -22,6 +22,7 @@ from app.api.v1.endpoints import (
     mobile,
     payments,
     sales_tasks,
+    service_templates,
     project_finances,
     project_photos,
     project_tasks,
@@ -71,6 +72,7 @@ api_router.include_router(qbo_token.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(sales_tasks.router)
 api_router.include_router(mobile.router)
+api_router.include_router(service_templates.router)
 
 # Business
 api_router.include_router(employes_router)
