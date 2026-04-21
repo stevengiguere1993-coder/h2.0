@@ -132,6 +132,14 @@ export default function FactureDetailPage() {
 
   const [dueAt, setDueAt] = useState("");
 
+  const [importOpen, setImportOpen] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importIncludeSoumission, setImportIncludeSoumission] = useState(true);
+  const [importSoumissionPct, setImportSoumissionPct] = useState("100");
+  const [importIncludeHours, setImportIncludeHours] = useState(false);
+  const [importOnlyApproved, setImportOnlyApproved] = useState(true);
+  const [importIncludeAchats, setImportIncludeAchats] = useState(false);
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -217,6 +225,50 @@ export default function FactureDetailPage() {
       setError("Sauvegarde échéance échouée.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function runImport() {
+    if (
+      !importIncludeSoumission &&
+      !importIncludeHours &&
+      !importIncludeAchats
+    ) {
+      setError("Choisis au moins une source à importer.");
+      return;
+    }
+    setImportBusy(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/factures/${id}/import-sources`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            include_soumission: importIncludeSoumission,
+            soumission_percentage: Math.max(
+              1,
+              Math.min(100, Number(importSoumissionPct) || 100)
+            ),
+            include_hours: importIncludeHours,
+            only_approved: importOnlyApproved,
+            include_achats: importIncludeAchats
+          })
+        }
+      );
+      if (!res.ok) {
+        throw new Error(await explainError(res));
+      }
+      // Reload items from backend
+      const iRes = await authedFetch(`/api/v1/factures/${id}/items`);
+      if (iRes.ok) {
+        setItems((await iRes.json()) as Item[]);
+      }
+      setImportOpen(false);
+    } catch (err) {
+      setError(`Import échoué : ${(err as Error).message}`);
+    } finally {
+      setImportBusy(false);
     }
   }
 
@@ -576,23 +628,34 @@ export default function FactureDetailPage() {
             </section>
 
             <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
-              <div className="flex items-center justify-between border-b border-brand-800 px-5 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brand-800 px-5 py-4">
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                   Items de la facture
                 </h2>
-                <button
-                  type="button"
-                  onClick={addItem}
-                  disabled={itemBusy === "new"}
-                  className="btn-accent text-xs"
-                >
-                  {itemBusy === "new" ? (
-                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Plus className="mr-1.5 h-3.5 w-3.5" />
-                  )}
-                  Ajouter un item
-                </button>
+                <div className="flex gap-2">
+                  {f.project_id ? (
+                    <button
+                      type="button"
+                      onClick={() => setImportOpen(true)}
+                      className="btn-secondary text-xs"
+                    >
+                      Importer du projet
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={addItem}
+                    disabled={itemBusy === "new"}
+                    className="btn-accent text-xs"
+                  >
+                    {itemBusy === "new" ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Plus className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Ajouter un item
+                  </button>
+                </div>
               </div>
 
               {items.length === 0 ? (
@@ -637,6 +700,162 @@ export default function FactureDetailPage() {
           </>
         ) : null}
       </div>
+
+      {importOpen && f ? (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4"
+          onClick={() => (!importBusy ? setImportOpen(false) : null)}
+        >
+          <div
+            className="mt-10 w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-bold text-white">
+              Importer des items
+            </h3>
+            <p className="mt-1 text-xs text-white/60">
+              Les lignes sélectionnées sont ajoutées à la facture
+              existante sans remplacer ce qui s&apos;y trouve déjà. Tu
+              peux ensuite modifier ou supprimer chaque ligne à la main.
+            </p>
+
+            <div className="mt-5 space-y-3">
+              <label className="flex items-start gap-3 rounded-lg border border-brand-800 bg-brand-900 p-3 text-sm text-white/80">
+                <input
+                  type="checkbox"
+                  checked={importIncludeSoumission}
+                  onChange={(e) =>
+                    setImportIncludeSoumission(e.target.checked)
+                  }
+                  className="mt-0.5"
+                />
+                <div className="flex-1">
+                  <div className="font-semibold text-white">
+                    Items du devis{" "}
+                    <span className="text-xs font-normal text-white/50">
+                      (soumission du projet)
+                    </span>
+                  </div>
+                  {importIncludeSoumission ? (
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <label className="text-xs text-white/70">
+                        % à facturer
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="100"
+                        value={importSoumissionPct}
+                        onChange={(e) =>
+                          setImportSoumissionPct(e.target.value)
+                        }
+                        className="input w-20 text-sm"
+                      />
+                      <div className="flex gap-1">
+                        {[25, 30, 50, 75, 100].map((v) => (
+                          <button
+                            key={v}
+                            type="button"
+                            onClick={() =>
+                              setImportSoumissionPct(String(v))
+                            }
+                            className={`rounded-md px-2 py-0.5 text-[10px] font-semibold ${
+                              String(v) === importSoumissionPct
+                                ? "bg-accent-500 text-brand-950"
+                                : "bg-white/5 text-white/70 hover:bg-white/10"
+                            }`}
+                          >
+                            {v}%
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </label>
+
+              <label className="flex items-start gap-3 rounded-lg border border-brand-800 bg-brand-900 p-3 text-sm text-white/80">
+                <input
+                  type="checkbox"
+                  checked={importIncludeHours}
+                  onChange={(e) => setImportIncludeHours(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <div className="flex-1">
+                  <div className="font-semibold text-white">
+                    Heures punchées{" "}
+                    <span className="text-xs font-normal text-white/50">
+                      (T&amp;M)
+                    </span>
+                  </div>
+                  {importIncludeHours ? (
+                    <label className="mt-2 flex items-center gap-2 text-xs text-white/70">
+                      <input
+                        type="checkbox"
+                        checked={importOnlyApproved}
+                        onChange={(e) =>
+                          setImportOnlyApproved(e.target.checked)
+                        }
+                      />
+                      Seulement les punches approuvés
+                    </label>
+                  ) : null}
+                </div>
+              </label>
+
+              <label className="flex items-start gap-3 rounded-lg border border-brand-800 bg-brand-900 p-3 text-sm text-white/80">
+                <input
+                  type="checkbox"
+                  checked={importIncludeAchats}
+                  onChange={(e) =>
+                    setImportIncludeAchats(e.target.checked)
+                  }
+                  className="mt-0.5"
+                />
+                <div>
+                  <div className="font-semibold text-white">
+                    Achats du projet{" "}
+                    <span className="text-xs font-normal text-white/50">
+                      (matériel)
+                    </span>
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setImportOpen(false)}
+                disabled={importBusy}
+                className="btn-secondary text-sm"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={runImport}
+                disabled={
+                  importBusy ||
+                  (!importIncludeSoumission &&
+                    !importIncludeHours &&
+                    !importIncludeAchats)
+                }
+                className="btn-accent text-sm disabled:opacity-60"
+              >
+                {importBusy ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Import…
+                  </>
+                ) : (
+                  "Importer"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {sendOpen && f ? (
         <div

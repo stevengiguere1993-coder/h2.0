@@ -11,6 +11,7 @@ from app.api.v1.endpoints import (
     blog,
     clients,
     contact,
+    facture_import,
     facture_items,
     facture_qbo,
     facture_send,
@@ -70,6 +71,7 @@ api_router.include_router(punch_ops.router)
 api_router.include_router(punch_router)
 api_router.include_router(factures_router)
 api_router.include_router(facture_items.router)
+api_router.include_router(facture_import.router)
 api_router.include_router(facture_send.router)
 api_router.include_router(facture_qbo.router)
 api_router.include_router(project_to_facture.router)
