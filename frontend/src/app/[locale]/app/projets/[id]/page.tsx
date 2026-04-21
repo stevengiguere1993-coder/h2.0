@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { AddressInput } from "@/components/address-input";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -418,12 +419,10 @@ function SummaryTab(props: {
           </div>
           <div>
             <label className="label" htmlFor="p_address">Adresse du chantier</label>
-            <input
+            <AddressInput
               id="p_address"
-              type="text"
               value={props.address}
-              onChange={(e) => props.onAddress(e.target.value)}
-              className="input"
+              onChange={props.onAddress}
             />
           </div>
         </div>

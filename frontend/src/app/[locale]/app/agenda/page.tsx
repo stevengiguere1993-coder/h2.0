@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { AddressInput } from "@/components/address-input";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 
@@ -738,12 +739,10 @@ function EventModal({
             <label className="label" htmlFor="ev_location">
               Lieu
             </label>
-            <input
+            <AddressInput
               id="ev_location"
-              type="text"
               value={location}
-              onChange={(e) => setLocation(e.target.value)}
-              className="input"
+              onChange={setLocation}
               placeholder="Adresse du chantier, bureau…"
             />
           </div>

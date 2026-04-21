@@ -5,6 +5,7 @@ import { useRouter as useNextRouter } from "next/navigation";
 import { ArrowLeft, Loader2 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { AddressInput } from "@/components/address-input";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -112,13 +113,11 @@ export default function NewProjectPage() {
 
           <div>
             <label htmlFor="address" className="label">Adresse du chantier</label>
-            <input
+            <AddressInput
               id="address"
-              type="text"
               value={address}
-              onChange={(e) => setAddress(e.target.value)}
+              onChange={setAddress}
               placeholder="Ex. 1234 rue des Chantiers, Montréal"
-              className="input"
             />
           </div>
 
