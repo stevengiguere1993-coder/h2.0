@@ -73,6 +73,12 @@ class ContactRequest(Base, TimestampUpdateMixin):
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=ContactRequestStatus.NEW.value, index=True
     )
+    # Free-form kanban column label so the staff can define their own
+    # CRM columns (e.g. "En attente de pièce", "Rappel à faire", "À
+    # visiter"). When null we bucket by `status` instead.
+    kanban_column: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     internal_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     def __repr__(self) -> str:

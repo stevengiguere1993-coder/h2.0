@@ -40,6 +40,7 @@ type Soumission = {
   valid_until: string | null;
   pdf_url: string | null;
   notes: string | null;
+  property_address: string | null;
   created_at: string;
   qbo_estimate_id?: string | null;
   qbo_doc_number?: string | null;
@@ -55,6 +56,9 @@ type Item = {
   quantity: number;
   unit_price: number;
   total: number;
+  tps_applicable: boolean;
+  tvq_applicable: boolean;
+  kind: "service" | "frais" | "rabais";
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -117,6 +121,7 @@ export default function SoumissionDetailPage() {
   const [description, setDescription] = useState("");
   const [validUntil, setValidUntil] = useState<string>("");
   const [notes, setNotes] = useState("");
+  const [propertyAddress, setPropertyAddress] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -138,6 +143,7 @@ export default function SoumissionDetailPage() {
         setDescription(sData.description || "");
         setValidUntil(isoToDateInput(sData.valid_until));
         setNotes(sData.notes || "");
+        setPropertyAddress(sData.property_address || "");
         setSendSubject(`Soumission ${sData.reference} — ${sData.title}`);
         if (sData.contact_request_id) {
           const cr = await authedFetch(
@@ -164,8 +170,25 @@ export default function SoumissionDetailPage() {
     () => +items.reduce((sum, it) => sum + Number(it.total || 0), 0).toFixed(2),
     [items]
   );
-  const tps = +(subtotal * TPS_RATE).toFixed(2);
-  const tvq = +(subtotal * TVQ_RATE).toFixed(2);
+  // Per-item tax calculation: sum TPS only on items whose tps_applicable
+  // is true, same for TVQ. Lets us mix taxable services with non-taxable
+  // frais or rabais line items.
+  const tps = useMemo(
+    () =>
+      +items
+        .filter((it) => it.tps_applicable)
+        .reduce((sum, it) => sum + Number(it.total || 0) * TPS_RATE, 0)
+        .toFixed(2),
+    [items]
+  );
+  const tvq = useMemo(
+    () =>
+      +items
+        .filter((it) => it.tvq_applicable)
+        .reduce((sum, it) => sum + Number(it.total || 0) * TVQ_RATE, 0)
+        .toFixed(2),
+    [items]
+  );
   const total = +(subtotal + tps + tvq).toFixed(2);
 
   const metaDirty =
@@ -333,7 +356,8 @@ export default function SoumissionDetailPage() {
         tvq,
         total,
         valid_until: validUntil ? new Date(validUntil).toISOString() : null,
-        notes: notes.trim() || null
+        notes: notes.trim() || null,
+        property_address: propertyAddress.trim() || null
       };
       const res = await authedFetch(`/api/v1/soumissions/${id}`, {
         method: "PATCH",
@@ -394,17 +418,43 @@ export default function SoumissionDetailPage() {
     }
   }
 
-  async function addItem() {
+  async function addItem(kind: "service" | "frais" | "rabais" = "service") {
     setItemBusy("new");
     try {
+      const defaults: Record<string, Record<string, unknown>> = {
+        service: {
+          description: "Nouveau service",
+          unit: "unité",
+          quantity: 1,
+          unit_price: 0,
+          tps_applicable: true,
+          tvq_applicable: true,
+          kind: "service"
+        },
+        frais: {
+          description: "Frais",
+          unit: null,
+          quantity: 1,
+          unit_price: 0,
+          tps_applicable: false,
+          tvq_applicable: false,
+          kind: "frais"
+        },
+        rabais: {
+          description: "Rabais",
+          unit: null,
+          quantity: 1,
+          unit_price: -0,
+          tps_applicable: true,
+          tvq_applicable: true,
+          kind: "rabais"
+        }
+      };
       const res = await authedFetch(`/api/v1/soumissions/${id}/items`, {
         method: "POST",
         body: JSON.stringify({
           position: items.length,
-          description: "Nouvel item",
-          unit: "unité",
-          quantity: 1,
-          unit_price: 0
+          ...defaults[kind]
         })
       });
       if (!res.ok) throw new Error();
@@ -657,23 +707,41 @@ export default function SoumissionDetailPage() {
             ) : null}
 
             <section className="mt-8 rounded-xl border border-brand-800 bg-brand-900">
-              <div className="flex items-center justify-between border-b border-brand-800 px-5 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brand-800 px-5 py-4">
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                   Items de la soumission
                 </h2>
-                <button
-                  type="button"
-                  onClick={addItem}
-                  disabled={itemBusy === "new"}
-                  className="btn-accent text-xs"
-                >
-                  {itemBusy === "new" ? (
-                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Plus className="mr-1.5 h-3.5 w-3.5" />
-                  )}
-                  Ajouter un item
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => addItem("service")}
+                    disabled={itemBusy === "new"}
+                    className="btn-accent text-xs"
+                  >
+                    {itemBusy === "new" ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Plus className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Service
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addItem("frais")}
+                    disabled={itemBusy === "new"}
+                    className="btn-secondary text-xs"
+                  >
+                    <Plus className="mr-1.5 h-3.5 w-3.5" /> Frais
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addItem("rabais")}
+                    disabled={itemBusy === "new"}
+                    className="inline-flex items-center rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/20 disabled:opacity-60"
+                  >
+                    <Plus className="mr-1.5 h-3.5 w-3.5" /> Rabais
+                  </button>
+                </div>
               </div>
 
               {items.length === 0 ? (
@@ -689,6 +757,8 @@ export default function SoumissionDetailPage() {
                         <th className="px-3 py-3 text-right font-semibold">Qté</th>
                         <th className="px-3 py-3 text-left font-semibold">Unité</th>
                         <th className="px-3 py-3 text-right font-semibold">Prix unit.</th>
+                        <th className="px-3 py-3 text-center font-semibold" title="TPS applicable">TPS</th>
+                        <th className="px-3 py-3 text-center font-semibold" title="TVQ applicable">TVQ</th>
                         <th className="px-3 py-3 text-right font-semibold">Total</th>
                         <th className="px-3 py-3"></th>
                       </tr>
@@ -735,6 +805,27 @@ export default function SoumissionDetailPage() {
                     onChange={(e) => setDescription(e.target.value)}
                     className="input"
                   />
+                </div>
+
+                <div>
+                  <label htmlFor="property_address" className="label">
+                    Adresse du chantier
+                  </label>
+                  <input
+                    id="property_address"
+                    type="text"
+                    value={propertyAddress}
+                    onChange={(e) => setPropertyAddress(e.target.value)}
+                    placeholder="Ex. 32 Croissant d'Avaugour, Laval, QC"
+                    className="input"
+                  />
+                  <p className="mt-1 text-xs text-white/50">
+                    Affichée sur le PDF et la page publique. Utilisée pour le
+                    Street View ci-dessous.
+                  </p>
+                  {propertyAddress.trim() ? (
+                    <StreetViewEmbed address={propertyAddress.trim()} />
+                  ) : null}
                 </div>
 
                 <div>
@@ -1058,15 +1149,45 @@ function ItemRow({
         <input
           type="number"
           step="0.01"
-          min="0"
           value={unitPrice}
           onChange={(e) => setUnitPrice(e.target.value)}
           onBlur={() => commit("unit_price")}
           className="w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-right text-sm text-white focus:border-brand-700 focus:outline-none"
         />
       </td>
+      <td className="px-3 py-3 w-12 text-center">
+        <input
+          type="checkbox"
+          checked={item.tps_applicable}
+          onChange={(e) => onPatch({ tps_applicable: e.target.checked })}
+          className="h-4 w-4 accent-accent-500"
+          aria-label="TPS applicable"
+        />
+      </td>
+      <td className="px-3 py-3 w-12 text-center">
+        <input
+          type="checkbox"
+          checked={item.tvq_applicable}
+          onChange={(e) => onPatch({ tvq_applicable: e.target.checked })}
+          className="h-4 w-4 accent-accent-500"
+          aria-label="TVQ applicable"
+        />
+      </td>
       <td className="px-3 py-3 w-32 whitespace-nowrap text-right text-sm font-semibold text-white">
-        {fmtMoney(computedTotal)}
+        <span
+          className={
+            item.kind === "rabais" || computedTotal < 0
+              ? "text-rose-300"
+              : undefined
+          }
+        >
+          {fmtMoney(computedTotal)}
+        </span>
+        {item.kind !== "service" ? (
+          <span className="ml-1 rounded bg-white/10 px-1 py-0.5 text-[9px] uppercase text-white/60">
+            {item.kind}
+          </span>
+        ) : null}
       </td>
       <td className="px-3 py-3 w-10 text-right">
         {busy ? (
@@ -1108,5 +1229,44 @@ function ActionCard({
         <p className="mt-0.5 text-xs text-white/50">{hint}</p>
       </div>
     </button>
+  );
+}
+
+// Google Street View + mini map. We use the public Embed API endpoints
+// which don't require a signed URL for the free "location=address" form,
+// but they do require the site to load over HTTPS. On mobile Safari the
+// iframe falls back to a static "Pas d'imagerie" screen if no pano is
+// available, which is the intended UX.
+function StreetViewEmbed({ address }: { address: string }) {
+  const encoded = encodeURIComponent(address);
+  // Prefer the user-provided key when available; otherwise fall back to
+  // the keyless Maps "view" URL (works for most addresses but with a
+  // "For development purposes only" watermark).
+  const key = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || "";
+  const panoSrc = key
+    ? `https://www.google.com/maps/embed/v1/streetview?key=${key}&location=${encoded}&heading=210&pitch=10&fov=90`
+    : `https://maps.google.com/maps?q=&layer=c&cbll=${encoded}&cbp=11,0,0,0,0&output=svembed`;
+  const mapSrc = key
+    ? `https://www.google.com/maps/embed/v1/place?key=${key}&q=${encoded}&zoom=18`
+    : `https://maps.google.com/maps?q=${encoded}&z=18&output=embed`;
+  return (
+    <div className="mt-3 grid gap-3 sm:grid-cols-3">
+      <iframe
+        title="Street View"
+        src={panoSrc}
+        loading="lazy"
+        className="sm:col-span-2 h-64 w-full rounded-lg border border-brand-800 bg-brand-950"
+        referrerPolicy="no-referrer-when-downgrade"
+        allowFullScreen
+      />
+      <iframe
+        title="Carte"
+        src={mapSrc}
+        loading="lazy"
+        className="h-64 w-full rounded-lg border border-brand-800 bg-brand-950"
+        referrerPolicy="no-referrer-when-downgrade"
+        allowFullScreen
+      />
+    </div>
   );
 }

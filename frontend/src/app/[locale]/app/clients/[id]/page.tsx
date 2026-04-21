@@ -6,6 +6,7 @@ import { ArrowLeft, Loader2, Save, Trash2 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
+import { SalesTasksPanel } from "@/components/sales-tasks-panel";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -283,6 +284,8 @@ export default function ClientDetailPage() {
                   </>
                 )}
               </button>
+
+              <SalesTasksPanel clientId={c.id} />
             </div>
           </>
         ) : null}

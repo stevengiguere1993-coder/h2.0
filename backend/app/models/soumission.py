@@ -64,3 +64,10 @@ class Soumission(Base, TimestampUpdateMixin):
     )
     signed_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     signed_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # Property address captured at soumission time so the PDF + public
+    # view always show the job location (may differ from the client's
+    # billing address).
+    property_address: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True
+    )

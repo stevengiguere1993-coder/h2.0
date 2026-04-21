@@ -15,11 +15,13 @@ from app.models.employe import Employe
 from app.models.facture import Facture
 from app.models.facture_item import FactureItem
 from app.models.fournisseur import Fournisseur
+from app.models.payment import Payment
 from app.models.project import Project
 from app.models.project_photo import ProjectPhoto
 from app.models.project_task import ProjectTask
 from app.models.punch import Punch
 from app.models.qbo_token import QboToken
+from app.models.sales_task import SalesTask, sales_task_assignees  # noqa: F401
 from app.models.seo_article import SeoArticle
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
@@ -37,11 +39,13 @@ __all__ = [
     "Facture",
     "FactureItem",
     "Fournisseur",
+    "Payment",
     "Project",
     "ProjectPhoto",
     "ProjectTask",
     "Punch",
     "QboToken",
+    "SalesTask",
     "SeoArticle",
     "Soumission",
     "SoumissionItem",

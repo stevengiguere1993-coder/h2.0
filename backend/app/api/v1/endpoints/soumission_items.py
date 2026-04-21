@@ -28,16 +28,22 @@ class SoumissionItemCreate(BaseModel):
     position: int = Field(default=0, ge=0)
     description: str = Field(..., min_length=1, max_length=500)
     unit: Optional[str] = Field(default=None, max_length=32)
-    quantity: float = Field(default=1, ge=0)
-    unit_price: float = Field(default=0, ge=0)
+    quantity: float = Field(default=1)
+    unit_price: float = Field(default=0)
+    tps_applicable: bool = Field(default=True)
+    tvq_applicable: bool = Field(default=True)
+    kind: str = Field(default="service", pattern="^(service|frais|rabais)$")
 
 
 class SoumissionItemUpdate(BaseModel):
     position: Optional[int] = Field(default=None, ge=0)
     description: Optional[str] = Field(default=None, min_length=1, max_length=500)
     unit: Optional[str] = Field(default=None, max_length=32)
-    quantity: Optional[float] = Field(default=None, ge=0)
-    unit_price: Optional[float] = Field(default=None, ge=0)
+    quantity: Optional[float] = Field(default=None)
+    unit_price: Optional[float] = Field(default=None)
+    tps_applicable: Optional[bool] = Field(default=None)
+    tvq_applicable: Optional[bool] = Field(default=None)
+    kind: Optional[str] = Field(default=None, pattern="^(service|frais|rabais)$")
 
 
 class SoumissionItemRead(BaseModel):
@@ -51,6 +57,9 @@ class SoumissionItemRead(BaseModel):
     quantity: float
     unit_price: float
     total: float
+    tps_applicable: bool
+    tvq_applicable: bool
+    kind: str
 
 
 async def _ensure_soumission(db, soumission_id: int) -> Soumission:
@@ -94,15 +103,23 @@ async def create_item(
     _: CurrentUser,
 ) -> SoumissionItemRead:
     await _ensure_soumission(db, soumission_id)
-    total = round(data.quantity * data.unit_price, 2)
+    # Rabais = negative line, frais = positive no-tax line.
+    qty = data.quantity
+    unit_price = data.unit_price
+    if data.kind == "rabais" and unit_price > 0:
+        unit_price = -abs(unit_price)
+    total = round(qty * unit_price, 2)
     item = SoumissionItem(
         soumission_id=soumission_id,
         position=data.position,
         description=data.description.strip(),
         unit=(data.unit or None),
-        quantity=data.quantity,
-        unit_price=data.unit_price,
+        quantity=qty,
+        unit_price=unit_price,
         total=total,
+        tps_applicable=(False if data.kind == "frais" else data.tps_applicable),
+        tvq_applicable=(False if data.kind == "frais" else data.tvq_applicable),
+        kind=data.kind,
     )
     db.add(item)
     await db.flush()
