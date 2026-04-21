@@ -19,6 +19,7 @@ from app.api.v1.endpoints import (
     facture_send,
     project_to_facture,
     projects,
+    public_soumission,
     punch_ops,
     qbo_token,
     soumission_items,
@@ -50,6 +51,7 @@ api_router.include_router(projects.router)
 api_router.include_router(contact.router)
 api_router.include_router(blog.router)
 api_router.include_router(webhooks.router)
+api_router.include_router(public_soumission.router)
 api_router.include_router(qbo_token.router)
 api_router.include_router(dashboard.router)
 

@@ -109,6 +109,9 @@ async def init_db() -> None:
             ("achats", "receipt_image_content_type", "VARCHAR(100)"),
             ("factures", "last_reminder_at", "TIMESTAMP WITH TIME ZONE"),
             ("factures", "reminder_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("soumissions", "signature_token", "VARCHAR(64)"),
+            ("soumissions", "signed_name", "VARCHAR(255)"),
+            ("soumissions", "signed_ip", "VARCHAR(64)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

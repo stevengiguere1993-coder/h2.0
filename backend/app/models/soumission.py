@@ -55,3 +55,12 @@ class Soumission(Base, TimestampUpdateMixin):
     qbo_estimate_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     qbo_doc_number: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     qbo_sync_token: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+
+    # Public e-signature flow — the token is embedded in the email
+    # link sent to the client; visiting the URL allows them to see
+    # the PDF and accept without a portal account.
+    signature_token: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    signed_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    signed_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)

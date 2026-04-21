@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import secrets
 from datetime import datetime, timezone
 from typing import Iterable, Optional
 
@@ -14,6 +16,10 @@ from app.integrations.email_graph import EmailAttachment, get_mailer
 from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.models.soumission import Soumission, SoumissionStatus
 from app.services.soumission_pdf import render_soumission_pdf
+
+
+def _public_base() -> str:
+    return (os.getenv("PUBLIC_SITE_URL") or "https://immohorizon.com").rstrip("/")
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +51,19 @@ def _default_body_html(sm: Soumission, intro: Optional[str]) -> str:
             f"<p style=\"margin:0 0 8px 0\"><strong>Valide jusqu'au :</strong> "
             f"{sm.valid_until.date().isoformat()}</p>"
         )
+    sign_block = ""
+    if sm.signature_token:
+        sign_url = f"{_public_base()}/soumission/{sm.signature_token}"
+        sign_block = f"""\
+  <p style="margin:20px 0 6px 0">
+    <a href="{sign_url}"
+       style="display:inline-block;background:#d89b3c;color:#111;
+              padding:12px 20px;border-radius:8px;font-weight:bold;
+              text-decoration:none">Voir et signer en ligne</a>
+  </p>
+  <p style="margin:0 0 16px 0;font-size:12px;color:#555">
+    Ou copiez ce lien : {sign_url}
+  </p>"""
     return f"""\
 <div style="font-family:Helvetica,Arial,sans-serif;color:#111;line-height:1.5;max-width:640px">
   <p style="margin:0 0 16px 0">Bonjour,</p>
@@ -56,9 +75,9 @@ def _default_body_html(sm: Soumission, intro: Optional[str]) -> str:
   </p>
   {total_line}
   {valid_line}
+  {sign_block}
   <p style="margin:16px 0 0 0">
-    N'hésitez pas à me contacter pour toute question ou pour confirmer votre
-    accord.
+    N'hésitez pas à me contacter pour toute question.
   </p>
   <p style="margin:24px 0 0 0;color:#555;font-size:12px">
     Horizon Services Immobiliers<br>
@@ -83,6 +102,19 @@ async def send_soumission(
         raise SoumissionSendError(
             "Microsoft Graph mailer is not configured (AZURE_* / MAIL_FROM_EMAIL)."
         )
+
+    # Ensure the soumission has a signature token BEFORE rendering
+    # the email body / PDF so the public link works once delivered.
+    sm_pre = (
+        await db.execute(
+            select(Soumission).where(Soumission.id == soumission_id)
+        )
+    ).scalar_one_or_none()
+    if sm_pre is None:
+        raise SoumissionSendError(f"Soumission {soumission_id} introuvable.")
+    if not sm_pre.signature_token:
+        sm_pre.signature_token = secrets.token_urlsafe(32)
+        await db.flush()
 
     rendered = await render_soumission_pdf(db, soumission_id)
     if rendered is None:
