@@ -51,10 +51,11 @@ const STATUS_CLASS: Record<string, string> = {
   delivered: "bg-emerald-500/20 text-emerald-300"
 };
 
-type TabId = "summary" | "photos" | "tasks";
+type TabId = "summary" | "photos" | "tasks" | "finances";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "summary", label: "Résumé" },
+  { id: "finances", label: "Finances" },
   { id: "photos", label: "Photos" },
   { id: "tasks", label: "Tâches" }
 ];
@@ -433,6 +434,8 @@ export default function ProjectDetailPage() {
                   saving={saving}
                   onSave={saveAll}
                 />
+              ) : tab === "finances" ? (
+                <FinancesTab projectId={id} />
               ) : tab === "photos" ? (
                 <PhotosTab projectId={id} />
               ) : (
@@ -1210,3 +1213,300 @@ function TasksTab({ projectId }: { projectId: number }) {
     </div>
   );
 }
+
+type Finances = {
+  projected_revenue: number;
+  projected_service_cost: number;
+  projected_labour_cost: number;
+  projected_labour_hours: number;
+  projected_total_cost: number;
+  projected_profit: number;
+  projected_margin_pct: number;
+  actual_material_cost: number;
+  actual_labour_cost: number;
+  actual_labour_hours: number;
+  actual_total_cost: number;
+  actual_profit: number | null;
+  actual_margin_pct: number | null;
+  service_lines: { label: string; quantity: number; unit_cost: number; total: number }[];
+  material_lines: { label: string; quantity: number; unit_cost: number; total: number }[];
+  invoiced_amount: number;
+  paid_amount: number;
+  balance_due: number;
+};
+
+function FinancesTab({ projectId }: { projectId: number }) {
+  const [data, setData] = useState<Finances | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const res = await authedFetch(
+          `/api/v1/projects/${projectId}/finances`
+        );
+        if (!res.ok) throw new Error();
+        if (!cancelled) setData((await res.json()) as Finances);
+      } catch {
+        if (!cancelled) setErr("Chargement des finances échoué.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    if (projectId) load();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[30vh] items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
+      </div>
+    );
+  }
+  if (err || !data) {
+    return (
+      <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
+        {err || "Données indisponibles."}
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* KPIs */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <FinanceKpi
+          label="Revenu des services"
+          value={fmtMoney(data.projected_revenue)}
+          sub="Soumission client"
+          tone="accent"
+        />
+        <FinanceKpi
+          label="Coût total"
+          value={fmtMoney(data.projected_total_cost)}
+          sub={`Services ${fmtMoney(
+            data.projected_service_cost
+          )} · Main-d'œuvre ${fmtMoney(data.projected_labour_cost)}`}
+          tone="white"
+        />
+        <FinanceKpi
+          label="Profit projeté"
+          value={fmtMoney(data.projected_profit)}
+          sub={`${data.projected_margin_pct.toFixed(1)} % marge`}
+          tone={data.projected_profit >= 0 ? "emerald" : "rose"}
+        />
+        <FinanceKpi
+          label="Profit réel"
+          value={
+            data.actual_profit == null
+              ? "—"
+              : fmtMoney(data.actual_profit)
+          }
+          sub={
+            data.actual_margin_pct == null
+              ? "Aucun paiement encaissé"
+              : `${data.actual_margin_pct.toFixed(1)} % marge`
+          }
+          tone={
+            data.actual_profit == null
+              ? "white"
+              : data.actual_profit >= 0
+              ? "emerald"
+              : "rose"
+          }
+        />
+      </div>
+
+      {/* Labour budget vs actual */}
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          Main-d&apos;œuvre
+        </h3>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div>
+            <p className="text-xs text-white/50">Prévue</p>
+            <p className="mt-1 text-lg font-bold text-white">
+              {data.projected_labour_hours.toFixed(0)} h
+            </p>
+            <p className="text-xs text-white/60">
+              {fmtMoney(data.projected_labour_cost)}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-white/50">Réelle (punches)</p>
+            <p className="mt-1 text-lg font-bold text-white">
+              {data.actual_labour_hours.toFixed(1)} h
+            </p>
+            <p className="text-xs text-white/60">
+              {fmtMoney(data.actual_labour_cost)}
+            </p>
+          </div>
+        </div>
+        {data.projected_labour_hours > 0 ? (
+          <div className="mt-4 h-2 overflow-hidden rounded-full bg-brand-950">
+            <div
+              className={`h-full ${
+                data.actual_labour_hours > data.projected_labour_hours
+                  ? "bg-rose-500"
+                  : "bg-emerald-500"
+              }`}
+              style={{
+                width: `${Math.min(
+                  100,
+                  (data.actual_labour_hours / data.projected_labour_hours) *
+                    100
+                )}%`
+              }}
+            />
+          </div>
+        ) : null}
+      </section>
+
+      {/* Service lines */}
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          Coût des services (soumission)
+        </h3>
+        {data.service_lines.length === 0 ? (
+          <p className="mt-3 text-xs text-white/50">
+            Aucun service lié à ce projet.
+          </p>
+        ) : (
+          <table className="mt-3 w-full text-sm">
+            <thead className="border-b border-brand-800 text-xs uppercase tracking-wider text-white/50">
+              <tr>
+                <th className="py-2 text-left">Nom</th>
+                <th className="py-2 text-right">Qté</th>
+                <th className="py-2 text-right">Coût/unité</th>
+                <th className="py-2 text-right">Total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-brand-800">
+              {data.service_lines.map((l, i) => (
+                <tr key={i}>
+                  <td className="py-2 text-white">{l.label}</td>
+                  <td className="py-2 text-right text-white/70">
+                    {l.quantity}
+                  </td>
+                  <td className="py-2 text-right text-white/70">
+                    {fmtMoney(l.unit_cost)}
+                  </td>
+                  <td className="py-2 text-right font-semibold text-white">
+                    {fmtMoney(l.total)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      {/* Material (achats) */}
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          Coûts supplémentaires (achats)
+        </h3>
+        {data.material_lines.length === 0 ? (
+          <p className="mt-3 text-xs text-white/50">
+            Aucun achat enregistré sur ce projet.
+          </p>
+        ) : (
+          <table className="mt-3 w-full text-sm">
+            <thead className="border-b border-brand-800 text-xs uppercase tracking-wider text-white/50">
+              <tr>
+                <th className="py-2 text-left">Description</th>
+                <th className="py-2 text-right">Total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-brand-800">
+              {data.material_lines.map((l, i) => (
+                <tr key={i}>
+                  <td className="py-2 text-white">{l.label}</td>
+                  <td className="py-2 text-right font-semibold text-white">
+                    {fmtMoney(l.total)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-brand-800">
+                <td className="py-2 text-right text-xs text-white/60">
+                  Total achats
+                </td>
+                <td className="py-2 text-right text-sm font-bold text-white">
+                  {fmtMoney(data.actual_material_cost)}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        )}
+      </section>
+
+      {/* Invoicing */}
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          Facturation
+        </h3>
+        <dl className="mt-3 space-y-1 text-sm">
+          <div className="flex justify-between">
+            <dt className="text-white/60">Facturé</dt>
+            <dd className="font-semibold text-white">
+              {fmtMoney(data.invoiced_amount)}
+            </dd>
+          </div>
+          <div className="flex justify-between">
+            <dt className="text-white/60">Reçu</dt>
+            <dd className="font-semibold text-emerald-300">
+              {fmtMoney(data.paid_amount)}
+            </dd>
+          </div>
+          <div className="flex justify-between border-t border-brand-800 pt-1">
+            <dt className="text-white/60">Solde dû</dt>
+            <dd
+              className={`font-bold ${
+                data.balance_due > 0 ? "text-rose-300" : "text-emerald-300"
+              }`}
+            >
+              {fmtMoney(data.balance_due)}
+            </dd>
+          </div>
+        </dl>
+      </section>
+    </div>
+  );
+}
+
+function FinanceKpi({
+  label,
+  value,
+  sub,
+  tone
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  tone: "accent" | "emerald" | "rose" | "white";
+}) {
+  const toneMap: Record<string, string> = {
+    accent: "text-accent-500",
+    emerald: "text-emerald-400",
+    rose: "text-rose-400",
+    white: "text-white"
+  };
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+      <p className="text-xs font-medium uppercase tracking-wider text-white/50">
+        {label}
+      </p>
+      <p className={`mt-2 text-2xl font-bold ${toneMap[tone]}`}>{value}</p>
+      <p className="mt-1 text-xs text-white/50">{sub}</p>
+    </div>
+  );
+}
+

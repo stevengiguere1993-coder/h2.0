@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { SalesTasksPanel } from "@/components/sales-tasks-panel";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -338,7 +339,7 @@ export default function ProspectDetailPage() {
                 <Placeholder label="Employés assignés — module à venir avec la phase Projets/Agenda." />
               ) : null}
               {tab === "taches" ? (
-                <Placeholder label="Tâches de vente — module à venir prochainement." />
+                <SalesTasksPanel contactRequestId={p.id} />
               ) : null}
             </div>
           </>

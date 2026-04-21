@@ -35,6 +35,11 @@ class ContactRequestUpdate(BaseModel):
 
     status: Optional[ContactRequestStatus] = None
     internal_notes: Optional[str] = Field(default=None, max_length=10_000)
+    kanban_column: Optional[str] = Field(default=None, max_length=64)
+    name: Optional[str] = Field(default=None, max_length=255)
+    email: Optional[str] = Field(default=None, max_length=320)
+    phone: Optional[str] = Field(default=None, max_length=50)
+    address: Optional[str] = Field(default=None, max_length=500)
 
 
 class ContactRequestRead(BaseModel):
@@ -53,6 +58,7 @@ class ContactRequestRead(BaseModel):
     locale: str
     source: Optional[str]
     status: str
+    kanban_column: Optional[str] = None
     internal_notes: Optional[str]
     gdpr_consent: bool
     marketing_consent: bool
