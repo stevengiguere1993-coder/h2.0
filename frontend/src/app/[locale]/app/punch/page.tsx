@@ -11,7 +11,9 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
+import { useCurrentUser } from "@/hooks/use-current-user";
 import { authedFetch } from "@/lib/auth";
 
 type Employe = { id: number; full_name: string; email: string | null };
@@ -71,6 +73,7 @@ async function getPosition(): Promise<GeolocationPosition | null> {
 
 export default function PunchPage() {
   const { onOpenSidebar } = useAppLayout();
+  const { user } = useCurrentUser();
   const [me, setMe] = useState<Me | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [weekly, setWeekly] = useState<Weekly | null>(null);
@@ -214,7 +217,7 @@ export default function PunchPage() {
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : !me?.employe ? (
-          <NoEmployeCard email={error} />
+          <NoEmployeCard userEmail={user?.email || null} />
         ) : (
           <div className="mx-auto max-w-xl space-y-6">
             <header>
@@ -264,19 +267,30 @@ export default function PunchPage() {
   );
 }
 
-function NoEmployeCard({ email }: { email: string | null }) {
+function NoEmployeCard({ userEmail }: { userEmail: string | null }) {
   return (
     <div className="mx-auto mt-10 max-w-md rounded-2xl border border-amber-500/40 bg-amber-500/10 p-6 text-amber-100">
       <AlertTriangle className="h-6 w-6" />
       <h2 className="mt-3 text-base font-semibold text-white">
-        Aucune fiche employé
+        Fiche employé introuvable
       </h2>
       <p className="mt-2 text-sm text-amber-100/80">
-        Ton compte n&apos;est pas rattaché à une fiche employé. Ajoute une
-        fiche dans « Ressources → Employés » avec le même courriel que
-        ton compte de connexion pour activer le punch.
+        Aucune fiche active ne correspond à ton courriel de connexion.
+        Vérifie que la fiche existe, est <strong>active</strong> et que
+        son courriel est <em>exactement</em> :
       </p>
-      {email ? <p className="mt-2 text-xs text-amber-200/70">{email}</p> : null}
+      {userEmail ? (
+        <p className="mt-2 rounded-md bg-black/30 px-3 py-2 font-mono text-xs text-white">
+          {userEmail}
+        </p>
+      ) : null}
+      <Link
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        href={"/app/employes" as any}
+        className="btn-accent mt-4 inline-flex text-xs"
+      >
+        Ouvrir la liste des employés
+      </Link>
     </div>
   );
 }

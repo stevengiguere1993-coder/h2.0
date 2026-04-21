@@ -80,12 +80,20 @@ class WeeklyReport(BaseModel):
 
 # ---------- Helpers ----------
 async def _find_employe_for_user(db, email: str) -> Optional[Employe]:
+    """Find the Employe row matching the user's login email.
+
+    Match is tolerant to case and stray whitespace on either side of
+    the stored email. Only active fiches are eligible.
+    """
     if not email:
+        return None
+    target = email.strip().lower()
+    if not target:
         return None
     row = (
         await db.execute(
             select(Employe).where(
-                func.lower(Employe.email) == email.lower(),
+                func.lower(func.trim(Employe.email)) == target,
                 Employe.active.is_(True),
             )
         )
