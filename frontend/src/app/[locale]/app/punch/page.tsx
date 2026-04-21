@@ -268,8 +268,38 @@ export default function PunchPage() {
 }
 
 function NoEmployeCard({ userEmail }: { userEmail: string | null }) {
+  const [diag, setDiag] = useState<null | {
+    login_email_raw: string | null;
+    login_email_repr: string;
+    login_email_normalized: string;
+    employes: Array<{
+      id: number;
+      full_name: string;
+      email_raw: string | null;
+      email_len: number;
+      email_repr: string;
+      active: boolean;
+    }>;
+  }>(null);
+  const [diagBusy, setDiagBusy] = useState(false);
+  const [diagErr, setDiagErr] = useState<string | null>(null);
+
+  async function runDiagnostic() {
+    setDiagBusy(true);
+    setDiagErr(null);
+    try {
+      const res = await authedFetch("/api/v1/punch/debug");
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      setDiag(await res.json());
+    } catch (err) {
+      setDiagErr((err as Error).message || "Erreur");
+    } finally {
+      setDiagBusy(false);
+    }
+  }
+
   return (
-    <div className="mx-auto mt-10 max-w-md rounded-2xl border border-amber-500/40 bg-amber-500/10 p-6 text-amber-100">
+    <div className="mx-auto mt-10 max-w-xl rounded-2xl border border-amber-500/40 bg-amber-500/10 p-6 text-amber-100">
       <AlertTriangle className="h-6 w-6" />
       <h2 className="mt-3 text-base font-semibold text-white">
         Fiche employé introuvable
@@ -284,13 +314,95 @@ function NoEmployeCard({ userEmail }: { userEmail: string | null }) {
           {userEmail}
         </p>
       ) : null}
-      <Link
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        href={"/app/employes" as any}
-        className="btn-accent mt-4 inline-flex text-xs"
-      >
-        Ouvrir la liste des employés
-      </Link>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={"/app/employes" as any}
+          className="btn-accent text-xs"
+        >
+          Ouvrir la liste des employés
+        </Link>
+        <button
+          type="button"
+          onClick={runDiagnostic}
+          disabled={diagBusy}
+          className="btn-secondary text-xs"
+        >
+          {diagBusy ? (
+            <>
+              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+              Diagnostic…
+            </>
+          ) : (
+            "Lancer le diagnostic"
+          )}
+        </button>
+      </div>
+
+      {diagErr ? (
+        <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          Diagnostic échoué : {diagErr}
+        </p>
+      ) : null}
+
+      {diag ? (
+        <div className="mt-4 space-y-3 text-xs">
+          <div className="rounded-lg bg-black/30 p-3">
+            <p className="text-white/50">Login</p>
+            <p className="mt-1 font-mono text-white">
+              {diag.login_email_repr}{" "}
+              <span className="text-white/40">
+                (len {(diag.login_email_raw || "").length})
+              </span>
+            </p>
+          </div>
+          <div className="rounded-lg bg-black/30 p-3">
+            <p className="mb-2 text-white/50">
+              Fiches ({diag.employes.length})
+            </p>
+            {diag.employes.length === 0 ? (
+              <p className="text-white/60">
+                Aucune fiche employé dans la base. Crée-en une d&apos;abord.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {diag.employes.map((e) => {
+                  const matches =
+                    diag.login_email_normalized &&
+                    (e.email_raw || "").trim().toLowerCase() ===
+                      diag.login_email_normalized;
+                  return (
+                    <li
+                      key={e.id}
+                      className={`rounded border px-2 py-1.5 font-mono ${
+                        matches && e.active
+                          ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                          : "border-white/10 text-white/80"
+                      }`}
+                    >
+                      <div>{e.full_name}</div>
+                      <div>
+                        {e.email_repr}{" "}
+                        <span className="text-white/40">(len {e.email_len})</span>
+                      </div>
+                      <div className="text-white/50">
+                        {e.active ? "actif" : "INACTIF"}
+                        {matches ? " · ✓ correspond" : " · ≠"}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+          <p className="text-white/50">
+            Le diagnostic attendu : un bloc vert « ✓ correspond · actif ».
+            Sinon, regarde les différences dans les guillemets (espaces,
+            caractères invisibles, `l` vs `i`).
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }
