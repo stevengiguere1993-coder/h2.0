@@ -88,6 +88,7 @@ export default function ProjectDetailPage() {
   const [convertingToFacture, setConvertingToFacture] = useState(false);
   const [factureModalOpen, setFactureModalOpen] = useState(false);
   const [includeSoumission, setIncludeSoumission] = useState(true);
+  const [soumissionPct, setSoumissionPct] = useState("100");
   const [includeHours, setIncludeHours] = useState(false);
   const [includeAchats, setIncludeAchats] = useState(false);
   const [onlyApproved, setOnlyApproved] = useState(true);
@@ -96,6 +97,8 @@ export default function ProjectDetailPage() {
 
   // form state
   const [name, setName] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clients, setClients] = useState<Array<{ id: number; name: string }>>([]);
   const [address, setAddress] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -115,12 +118,18 @@ export default function ProjectDetailPage() {
         if (cancelled) return;
         setP(data);
         setName(data.name);
+        setClientId(data.client_id ? String(data.client_id) : "");
         setAddress(data.address || "");
         setStartDate(isoToDateInput(data.start_date));
         setEndDate(isoToDateInput(data.end_date));
         setBudget(data.budget != null ? String(data.budget) : "");
         setDescription(data.description || "");
         setNotes(data.notes || "");
+        // Load the client list in parallel so the selector has options.
+        const cs = await authedFetch("/api/v1/clients?limit=500");
+        if (cs.ok && !cancelled) {
+          setClients((await cs.json()) as Array<{ id: number; name: string }>);
+        }
       } catch {
         if (!cancelled) setError("Projet introuvable.");
       } finally {
@@ -137,6 +146,7 @@ export default function ProjectDetailPage() {
     if (!p) return false;
     return (
       name !== p.name ||
+      clientId !== (p.client_id ? String(p.client_id) : "") ||
       address !== (p.address || "") ||
       startDate !== isoToDateInput(p.start_date) ||
       endDate !== isoToDateInput(p.end_date) ||
@@ -144,7 +154,9 @@ export default function ProjectDetailPage() {
       description !== (p.description || "") ||
       notes !== (p.notes || "")
     );
-  }, [p, name, address, startDate, endDate, budget, description, notes]);
+  }, [
+    p, name, clientId, address, startDate, endDate, budget, description, notes,
+  ]);
 
   async function updateStatus(newStatus: string) {
     if (!p) return;
@@ -169,8 +181,9 @@ export default function ProjectDetailPage() {
     setSaving(true);
     setError(null);
     try {
-      const payload = {
+      const payload: Record<string, unknown> = {
         name: name.trim(),
+        client_id: clientId ? Number(clientId) : null,
         address: address.trim() || null,
         start_date: startDate || null,
         end_date: endDate || null,
@@ -196,6 +209,7 @@ export default function ProjectDetailPage() {
     if (!p) return;
     // Default: if the project came from a soumission, prefer prix fixe.
     setIncludeSoumission(!!p.soumission_id);
+    setSoumissionPct("100");
     setIncludeHours(!p.soumission_id);
     setIncludeAchats(false);
     setOnlyApproved(true);
@@ -218,6 +232,10 @@ export default function ProjectDetailPage() {
           method: "POST",
           body: JSON.stringify({
             include_soumission: includeSoumission,
+            soumission_percentage: Math.max(
+              1,
+              Math.min(100, Number(soumissionPct) || 100)
+            ),
             include_hours: includeHours,
             only_approved: onlyApproved,
             include_achats: includeAchats,
@@ -400,6 +418,9 @@ export default function ProjectDetailPage() {
                 <SummaryTab
                   name={name}
                   onName={setName}
+                  clientId={clientId}
+                  onClientId={setClientId}
+                  clients={clients}
                   address={address}
                   onAddress={setAddress}
                   startDate={startDate}
@@ -450,7 +471,7 @@ export default function ProjectDetailPage() {
                   onChange={(e) => setIncludeSoumission(e.target.checked)}
                   className="mt-0.5"
                 />
-                <div>
+                <div className="flex-1">
                   <div className="font-semibold text-white">
                     Items de la soumission acceptée{" "}
                     <span className="text-xs font-normal text-white/50">
@@ -459,9 +480,44 @@ export default function ProjectDetailPage() {
                   </div>
                   <p className="mt-1 text-xs text-white/60">
                     {p.soumission_id
-                      ? "Reprend exactement les items du devis du client."
+                      ? "Reprend les items du devis, avec un ratio pour facturation par étapes."
                       : "Aucune soumission liée à ce projet."}
                   </p>
+                  {includeSoumission && p.soumission_id ? (
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <label
+                        htmlFor="s_pct"
+                        className="text-xs text-white/70"
+                      >
+                        % à facturer
+                      </label>
+                      <input
+                        id="s_pct"
+                        type="number"
+                        min="1"
+                        max="100"
+                        value={soumissionPct}
+                        onChange={(e) => setSoumissionPct(e.target.value)}
+                        className="input w-20 text-sm"
+                      />
+                      <div className="flex gap-1">
+                        {[25, 30, 50, 75, 100].map((v) => (
+                          <button
+                            key={v}
+                            type="button"
+                            onClick={() => setSoumissionPct(String(v))}
+                            className={`rounded-md px-2 py-0.5 text-[10px] font-semibold ${
+                              String(v) === soumissionPct
+                                ? "bg-accent-500 text-brand-950"
+                                : "bg-white/5 text-white/70 hover:bg-white/10"
+                            }`}
+                          >
+                            {v}%
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </label>
 
@@ -597,6 +653,9 @@ function Kpi({
 function SummaryTab(props: {
   name: string;
   onName: (v: string) => void;
+  clientId: string;
+  onClientId: (v: string) => void;
+  clients: Array<{ id: number; name: string }>;
   address: string;
   onAddress: (v: string) => void;
   startDate: string;
@@ -629,6 +688,26 @@ function SummaryTab(props: {
               onChange={(e) => props.onName(e.target.value)}
               className="input"
             />
+          </div>
+          <div>
+            <label className="label" htmlFor="p_client">Client</label>
+            <select
+              id="p_client"
+              value={props.clientId}
+              onChange={(e) => props.onClientId(e.target.value)}
+              className="input"
+            >
+              <option value="">— Aucun client —</option>
+              {props.clients.map((c) => (
+                <option key={c.id} value={String(c.id)}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-white/50">
+              Nécessaire pour facturer (le client reçoit la facture par
+              courriel).
+            </p>
           </div>
           <div>
             <label className="label" htmlFor="p_address">Adresse du chantier</label>

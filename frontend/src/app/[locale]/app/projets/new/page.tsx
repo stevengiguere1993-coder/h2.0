@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter as useNextRouter } from "next/navigation";
 import { ArrowLeft, Loader2 } from "lucide-react";
 
@@ -10,11 +10,15 @@ import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 
+type Client = { id: number; name: string };
+
 export default function NewProjectPage() {
   const { onOpenSidebar } = useAppLayout();
   const router = useNextRouter();
 
   const [name, setName] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clients, setClients] = useState<Client[]>([]);
   const [address, setAddress] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -22,6 +26,24 @@ export default function NewProjectPage() {
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadClients() {
+      try {
+        const res = await authedFetch("/api/v1/clients?limit=500");
+        if (res.ok && !cancelled) {
+          setClients((await res.json()) as Client[]);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    loadClients();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -36,6 +58,7 @@ export default function NewProjectPage() {
         name: name.trim(),
         status: "planned"
       };
+      if (clientId) payload.client_id = Number(clientId);
       if (address.trim()) payload.address = address.trim();
       if (startDate) payload.start_date = startDate;
       if (endDate) payload.end_date = endDate;
@@ -109,6 +132,27 @@ export default function NewProjectPage() {
               placeholder="Ex. Rénovation Salle de bain Tremblay"
               className="input"
             />
+          </div>
+
+          <div>
+            <label htmlFor="client" className="label">Client</label>
+            <select
+              id="client"
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              className="input"
+            >
+              <option value="">— Aucun client —</option>
+              {clients.map((c) => (
+                <option key={c.id} value={String(c.id)}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-white/50">
+              Nécessaire pour facturer. Un client est créé automatiquement
+              quand une soumission est acceptée.
+            </p>
           </div>
 
           <div>

@@ -35,6 +35,13 @@ class ConvertToFactureRequest(BaseModel):
             "this project (prix fixe)."
         ),
     )
+    soumission_percentage: int = Field(
+        default=100, ge=1, le=100,
+        description=(
+            "Percentage of the soumission to invoice — supports progress "
+            "billing (ex. 30% acompte, 50% mi-projet, 20% livraison)."
+        ),
+    )
     include_hours: bool = Field(
         default=True,
         description="Seed line items from the punched hours (T&M).",
@@ -113,16 +120,22 @@ async def convert_project_to_facture(
                     .order_by(SoumissionItem.position.asc(), SoumissionItem.id.asc())
                 )
             ).scalars().all()
+            pct = max(1, min(100, int(data.soumission_percentage)))
+            ratio = pct / 100.0
+            prefix = f"{pct}% — " if pct != 100 else ""
             for it in sm_items:
+                qty = float(it.quantity)
+                unit_price = round(float(it.unit_price) * ratio, 2)
+                line_total = round(qty * unit_price, 2)
                 db.add(
                     FactureItem(
                         facture_id=facture.id,
                         position=pos,
-                        description=it.description,
+                        description=f"{prefix}{it.description}",
                         unit=it.unit,
-                        quantity=float(it.quantity),
-                        unit_price=float(it.unit_price),
-                        total=float(it.total or 0),
+                        quantity=qty,
+                        unit_price=unit_price,
+                        total=line_total,
                     )
                 )
                 pos += 1
