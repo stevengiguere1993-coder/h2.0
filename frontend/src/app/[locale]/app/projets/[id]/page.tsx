@@ -85,6 +85,7 @@ export default function ProjectDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [convertingToFacture, setConvertingToFacture] = useState(false);
   const [tab, setTab] = useState<TabId>("summary");
 
   // form state
@@ -182,6 +183,35 @@ export default function ProjectDetailPage() {
       setError("Sauvegarde échouée.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function createFacture() {
+    if (!p) return;
+    setConvertingToFacture(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${id}/convert-to-facture`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            include_hours: true,
+            only_approved: true,
+            due_in_days: 30
+          })
+        }
+      );
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt.slice(0, 240) || `http_${res.status}`);
+      }
+      const created = (await res.json()) as { id: number };
+      router.push(`/app/facturation/${created.id}`);
+    } catch (err) {
+      setError(`Création facture échouée : ${(err as Error).message}`);
+    } finally {
+      setConvertingToFacture(false);
     }
   }
 
@@ -283,6 +313,27 @@ export default function ProjectDetailPage() {
                 {error}
               </p>
             ) : null}
+
+            <div className="mt-4">
+              <button
+                type="button"
+                onClick={createFacture}
+                disabled={convertingToFacture}
+                className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2.5 text-sm font-medium text-accent-200 hover:bg-accent-500/20 disabled:opacity-60"
+              >
+                {convertingToFacture ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <DollarSign className="h-4 w-4" />
+                )}
+                Créer une facture
+              </button>
+              <p className="mt-1 text-xs text-white/50">
+                Génère une facture brouillon liée au client. Les heures
+                punchées approuvées × taux horaire sont ajoutées comme
+                items automatiquement.
+              </p>
+            </div>
 
             {/* Header KPIs */}
             <section className="mt-6 grid gap-3 sm:grid-cols-3">

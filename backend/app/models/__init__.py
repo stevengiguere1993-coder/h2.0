@@ -12,6 +12,7 @@ from app.models.client import Client
 from app.models.contact_request import ContactRequest
 from app.models.employe import Employe
 from app.models.facture import Facture
+from app.models.facture_item import FactureItem
 from app.models.fournisseur import Fournisseur
 from app.models.project import Project
 from app.models.punch import Punch
@@ -30,6 +31,7 @@ __all__ = [
     "ContactRequest",
     "Employe",
     "Facture",
+    "FactureItem",
     "Fournisseur",
     "Project",
     "Punch",
