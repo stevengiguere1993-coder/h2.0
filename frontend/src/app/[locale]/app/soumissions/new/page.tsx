@@ -86,32 +86,41 @@ export default function NewSoumissionPage() {
 
     setSubmitting(true);
     try {
-      const payload = {
+      const payload: Record<string, unknown> = {
         reference,
-        title: title.trim(),
-        subtotal: 0,
-        tps: 0,
-        tvq: 0,
-        total: 0,
-        valid_until: validUntil ? new Date(validUntil).toISOString() : undefined,
-        contact_request_id: contactRequestId ? Number(contactRequestId) : undefined
+        title: title.trim()
       };
+      if (validUntil) {
+        payload.valid_until = new Date(validUntil).toISOString();
+      }
+      if (contactRequestId) {
+        payload.contact_request_id = Number(contactRequestId);
+      }
+
       const res = await authedFetch("/api/v1/soumissions", {
         method: "POST",
         body: JSON.stringify(payload)
       });
       if (!res.ok) {
-        const err = await res.text();
-        throw new Error(err || `http_${res.status}`);
+        let detail = "";
+        try {
+          const text = await res.text();
+          try {
+            const j = JSON.parse(text);
+            detail = typeof j.detail === "string" ? j.detail : text.slice(0, 240);
+          } catch {
+            detail = text.slice(0, 240);
+          }
+        } catch {
+          detail = `http_${res.status}`;
+        }
+        throw new Error(detail || `http_${res.status}`);
       }
       const created = (await res.json()) as { id: number };
       router.replace(`/app/soumissions/${created.id}`);
     } catch (err) {
-      setError(
-        (err as Error).message.includes("http_")
-          ? "Création échouée côté serveur."
-          : "Création échouée."
-      );
+      const msg = (err as Error).message || "erreur inconnue";
+      setError(`Création échouée : ${msg}`);
       setSubmitting(false);
     }
   }
