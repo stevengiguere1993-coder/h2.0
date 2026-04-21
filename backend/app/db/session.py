@@ -118,6 +118,10 @@ async def init_db() -> None:
             ("soumission_items", "tvq_applicable", "BOOLEAN NOT NULL DEFAULT TRUE"),
             ("soumission_items", "kind", "VARCHAR(16) NOT NULL DEFAULT 'service'"),
             ("contact_requests", "kanban_column", "VARCHAR(64)"),
+            ("soumissions", "signature_image", "BYTEA"),
+            ("soumissions", "signature_image_content_type", "VARCHAR(100)"),
+            ("bons_travail", "signature_image", "BYTEA"),
+            ("bons_travail", "signature_image_content_type", "VARCHAR(100)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

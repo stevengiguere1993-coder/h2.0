@@ -13,12 +13,14 @@ import {
   PenTool,
   Plus,
   RefreshCw,
+  Ruler,
   Save,
   Send,
   Trash2
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { MapMeasureModal, type MeasureResult } from "@/components/map-measure";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -106,6 +108,8 @@ export default function SoumissionDetailPage() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [itemBusy, setItemBusy] = useState<number | "new" | null>(null);
+  const [measureFor, setMeasureFor] = useState<number | null>(null);
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [qboBusy, setQboBusy] = useState(false);
   const [qboNotice, setQboNotice] = useState<string | null>(null);
 
@@ -714,6 +718,14 @@ export default function SoumissionDetailPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
+                    onClick={() => setTemplatePickerOpen(true)}
+                    className="inline-flex items-center rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-1.5 text-xs font-semibold text-blue-200 hover:bg-blue-500/20"
+                  >
+                    <Briefcase className="mr-1.5 h-3.5 w-3.5" />
+                    Insérer un service du catalogue
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => addItem("service")}
                     disabled={itemBusy === "new"}
                     className="btn-accent text-xs"
@@ -771,6 +783,7 @@ export default function SoumissionDetailPage() {
                           busy={itemBusy === it.id}
                           onPatch={(patch) => patchItem(it.id, patch)}
                           onDelete={() => deleteItem(it.id)}
+                          onMeasure={() => setMeasureFor(it.id)}
                         />
                       ))}
                     </tbody>
@@ -964,6 +977,41 @@ export default function SoumissionDetailPage() {
         ) : null}
       </div>
 
+      {measureFor !== null ? (
+        <MapMeasureModal
+          address={propertyAddress || s?.property_address || null}
+          onClose={() => setMeasureFor(null)}
+          onDone={(r: MeasureResult) => {
+            if (measureFor != null) {
+              patchItem(measureFor, {
+                quantity: r.area_ft2,
+                unit: "ft²"
+              });
+            }
+            setMeasureFor(null);
+          }}
+        />
+      ) : null}
+
+      {templatePickerOpen ? (
+        <ServiceTemplatePicker
+          soumissionId={id}
+          onClose={() => setTemplatePickerOpen(false)}
+          onInserted={async () => {
+            setTemplatePickerOpen(false);
+            // Refresh the items list so the new lines show up.
+            try {
+              const res = await authedFetch(
+                `/api/v1/soumissions/${id}/items`
+              );
+              if (res.ok) setItems((await res.json()) as Item[]);
+            } catch {
+              /* ignore */
+            }
+          }}
+        />
+      ) : null}
+
       {sendOpen && s ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
@@ -1077,12 +1125,14 @@ function ItemRow({
   item,
   busy,
   onPatch,
-  onDelete
+  onDelete,
+  onMeasure
 }: {
   item: Item;
   busy: boolean;
   onPatch: (patch: Partial<Item>) => void;
   onDelete: () => void;
+  onMeasure?: () => void;
 }) {
   const [description, setDescription] = useState(item.description);
   const [unit, setUnit] = useState(item.unit || "");
@@ -1124,16 +1174,28 @@ function ItemRow({
           className="w-full resize-none rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm text-white focus:border-brand-700 focus:outline-none"
         />
       </td>
-      <td className="px-3 py-3 w-24">
-        <input
-          type="number"
-          step="0.001"
-          min="0"
-          value={quantity}
-          onChange={(e) => setQuantity(e.target.value)}
-          onBlur={() => commit("quantity")}
-          className="w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-right text-sm text-white focus:border-brand-700 focus:outline-none"
-        />
+      <td className="px-3 py-3 w-28">
+        <div className="flex items-center gap-1">
+          <input
+            type="number"
+            step="0.001"
+            min="0"
+            value={quantity}
+            onChange={(e) => setQuantity(e.target.value)}
+            onBlur={() => commit("quantity")}
+            className="w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-right text-sm text-white focus:border-brand-700 focus:outline-none"
+          />
+          {onMeasure ? (
+            <button
+              type="button"
+              onClick={onMeasure}
+              title="Mesurer sur la carte"
+              className="rounded-md bg-blue-500/15 p-1 text-blue-300 hover:bg-blue-500/25"
+            >
+              <Ruler className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+        </div>
       </td>
       <td className="px-3 py-3 w-24">
         <input
@@ -1267,6 +1329,170 @@ function StreetViewEmbed({ address }: { address: string }) {
         referrerPolicy="no-referrer-when-downgrade"
         allowFullScreen
       />
+    </div>
+  );
+}
+
+type ServiceTemplate = {
+  id: number;
+  name: string;
+  description: string | null;
+  default_unit: string | null;
+  default_unit_price: number | null;
+  is_active: boolean;
+};
+
+function ServiceTemplatePicker({
+  soumissionId,
+  onClose,
+  onInserted
+}: {
+  soumissionId: number;
+  onClose: () => void;
+  onInserted: () => void;
+}) {
+  const [templates, setTemplates] = useState<ServiceTemplate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [q, setQ] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authedFetch("/api/v1/service-templates");
+        if (!res.ok) throw new Error();
+        if (!cancelled)
+          setTemplates((await res.json()) as ServiceTemplate[]);
+      } catch {
+        if (!cancelled) setError("Chargement échoué.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const filtered = q.trim()
+    ? templates.filter((t) =>
+        t.name.toLowerCase().includes(q.trim().toLowerCase())
+      )
+    : templates;
+
+  async function apply(t: ServiceTemplate) {
+    setBusy(t.id);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/service-templates/${t.id}/apply`,
+        {
+          method: "POST",
+          body: JSON.stringify({ soumission_id: soumissionId })
+        }
+      );
+      if (!res.ok) throw new Error();
+      onInserted();
+    } catch {
+      setError("Insertion échouée.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-xl overflow-hidden rounded-2xl border border-brand-800 bg-brand-950"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
+          <h3 className="text-sm font-bold text-white">
+            Insérer un service du catalogue
+          </h3>
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/app/services-catalogue" as any}
+            className="text-xs text-accent-500 hover:underline"
+          >
+            Gérer le catalogue →
+          </Link>
+        </header>
+
+        <div className="border-b border-brand-800 p-4">
+          <input
+            type="search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Rechercher un service…"
+            className="input"
+            autoFocus
+          />
+        </div>
+
+        <div className="max-h-96 overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center justify-center py-6">
+              <Loader2 className="h-5 w-5 animate-spin text-white/40" />
+            </div>
+          ) : filtered.length === 0 ? (
+            <p className="px-4 py-10 text-center text-sm text-white/50">
+              {templates.length === 0
+                ? "Catalogue vide. Crée ton premier service dans « Gérer le catalogue »."
+                : "Aucun service ne correspond à la recherche."}
+            </p>
+          ) : (
+            <ul className="divide-y divide-brand-800">
+              {filtered.map((t) => (
+                <li
+                  key={t.id}
+                  className="flex items-center justify-between gap-3 px-4 py-3"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-white">
+                      {t.name}
+                    </p>
+                    {t.description ? (
+                      <p className="mt-0.5 truncate text-xs text-white/50">
+                        {t.description}
+                      </p>
+                    ) : null}
+                    {t.default_unit_price != null ? (
+                      <p className="mt-1 text-xs text-accent-400">
+                        {t.default_unit_price} $
+                        {t.default_unit ? ` / ${t.default_unit}` : ""}
+                      </p>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => apply(t)}
+                    disabled={busy === t.id}
+                    className="rounded-lg bg-accent-500 px-3 py-2 text-xs font-bold text-brand-950 disabled:opacity-60"
+                  >
+                    {busy === t.id ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      "Insérer"
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {error ? (
+          <p className="border-t border-brand-800 px-4 py-3 text-xs text-rose-300">
+            {error}
+          </p>
+        ) : null}
+      </div>
     </div>
   );
 }

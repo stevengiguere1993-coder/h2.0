@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter as useNextRouter } from "next/navigation";
 import {
   Calendar,
-  ChevronRight,
   ClipboardList,
   Home,
   Menu,
@@ -103,37 +102,5 @@ export default function MobileLayout({
       {/* Expose current user email in a global for deep pages if needed */}
       <span id="hsi-me" data-email={me?.email || ""} className="hidden" />
     </main>
-  );
-}
-
-export function MobileTopbar({
-  title,
-  back,
-  right
-}: {
-  title: string;
-  back?: string | null;
-  right?: React.ReactNode;
-}) {
-  return (
-    <header
-      className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-brand-800 bg-brand-950/95 px-4 py-3 backdrop-blur"
-      style={{ paddingTop: "max(env(safe-area-inset-top), 0.75rem)" }}
-    >
-      <div className="flex items-center gap-2">
-        {back ? (
-          <Link
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={back as any}
-            className="-ml-1 rounded-md p-1.5 text-white/60 hover:bg-white/5 hover:text-white"
-            aria-label="Retour"
-          >
-            <ChevronRight className="h-4 w-4 rotate-180" />
-          </Link>
-        ) : null}
-        <h1 className="text-base font-bold text-white">{title}</h1>
-      </div>
-      {right}
-    </header>
   );
 }

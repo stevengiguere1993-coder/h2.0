@@ -135,7 +135,7 @@ async def list_contact_requests(
     db: DBSession,
     current_user: CurrentUser,
     skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50, ge=1, le=1000),
     status_filter: Optional[ContactRequestStatus] = Query(default=None, alias="status"),
 ) -> List[ContactRequestRead]:
     service = ContactRequestService(db)

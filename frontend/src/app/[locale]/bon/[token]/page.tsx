@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { CheckCircle2, FileText, Loader2, XCircle } from "lucide-react";
 
+import { SignaturePad } from "@/components/signature-pad";
+
 type Item = {
   position: number;
   description: string;
@@ -45,6 +47,7 @@ export default function PublicBonPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [signName, setSignName] = useState("");
+  const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -86,7 +89,10 @@ export default function PublicBonPage() {
       const res = await fetch(`/api/v1/public/bons/${token}/accept`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: signName.trim() })
+        body: JSON.stringify({
+          name: signName.trim(),
+          signature_image_data_url: signatureDataUrl
+        })
       });
       if (!res.ok) throw new Error(`http_${res.status}`);
       setData((await res.json()) as PublicBon);
@@ -236,6 +242,14 @@ export default function PublicBonPage() {
                 placeholder="Ex. Jean Tremblay"
                 className="mt-1 w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white placeholder:text-white/40 focus:border-accent-500 focus:outline-none"
               />
+            </div>
+            <div className="mt-4">
+              <label className="text-xs text-white/70">
+                Signature tracée (optionnel)
+              </label>
+              <div className="mt-1">
+                <SignaturePad onChange={setSignatureDataUrl} />
+              </div>
             </div>
             {error ? (
               <p className="mt-3 text-sm text-rose-300">{error}</p>
