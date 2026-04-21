@@ -69,9 +69,28 @@ async def init_db() -> None:
     This is primarily for development/testing.
     """
     from app.db.base import Base
+    from sqlalchemy import text
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        # Idempotent column additions for schema evolutions where a new
+        # column is added to an already-existing table. `create_all` only
+        # creates missing tables, never alters existing ones, so we patch
+        # those gaps here until we introduce Alembic migrations.
+        additive_columns = (
+            ("sous_traitants", "competence_rating", "INTEGER"),
+            ("sous_traitants", "availability_rating", "INTEGER"),
+            ("sous_traitants", "punctuality_rating", "INTEGER"),
+            ("sous_traitants", "quality_rating", "INTEGER"),
+        )
+        for table, column, col_type in additive_columns:
+            await conn.execute(
+                text(
+                    f'ALTER TABLE {table} '
+                    f'ADD COLUMN IF NOT EXISTS {column} {col_type}'
+                )
+            )
 
 
 async def close_db() -> None:
