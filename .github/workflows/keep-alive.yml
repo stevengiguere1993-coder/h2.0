@@ -1,0 +1,41 @@
+# Keep-alive — prevents Render Free services from cold-starting.
+#
+# Free-tier Render services go to sleep after 15 minutes of inactivity,
+# which greets the next visitor with a ~30-60 s "service waking up"
+# page. This workflow pings the public URLs every 10 minutes so the
+# containers never fall asleep.
+#
+# - Runs on GitHub-hosted runners (no external service account).
+# - ~5 s per run x 144/day x 30 days ≈ 360 min/month, well under the
+#   2000 min/month free quota for private repos.
+# - Does NOT fail the workflow if a ping is slow/temporarily down;
+#   we just log the status and move on.
+
+name: keep-alive
+
+on:
+  schedule:
+    # Every 10 minutes. Note: GitHub cron scheduling can drift by a
+    # few minutes on busy infra; that's fine, Render's sleep threshold
+    # is 15 min.
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping backend /health
+        run: |
+          echo "--- backend ---"
+          curl -sS -o /dev/null -w "backend  http=%{http_code}  time=%{time_total}s\n" \
+               --max-time 60 \
+               https://h2-0.onrender.com/health || true
+
+      - name: Ping frontend root
+        run: |
+          echo "--- frontend ---"
+          curl -sS -o /dev/null -w "frontend http=%{http_code}  time=%{time_total}s\n" \
+               --max-time 60 \
+               https://immohorizon.com/ || true
