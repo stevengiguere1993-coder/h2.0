@@ -48,3 +48,13 @@ class Facture(Base, TimestampUpdateMixin):
     qbo_invoice_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     qbo_doc_number: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     qbo_sync_token: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+
+    # Automatic reminders (cron). last_reminder_at is null until a
+    # first reminder fires; reminder_count lets us escalate the tone
+    # at each step (polite / firm / final).
+    last_reminder_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reminder_count: Mapped[int] = mapped_column(
+        nullable=False, default=0, server_default="0"
+    )

@@ -11,6 +11,7 @@ from app.api.v1.endpoints import (
     blog,
     clients,
     contact,
+    dashboard,
     achat_receipt,
     facture_import,
     facture_items,
@@ -50,6 +51,7 @@ api_router.include_router(contact.router)
 api_router.include_router(blog.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(qbo_token.router)
+api_router.include_router(dashboard.router)
 
 # Business
 api_router.include_router(employes_router)

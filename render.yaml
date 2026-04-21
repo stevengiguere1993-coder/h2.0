@@ -110,3 +110,32 @@ services:
         value: "claude-sonnet-4-5"
       - key: SITE_URL
         value: "https://immohorizon.com"
+
+  # --------------------------------------------------------------
+  # Cron — daily unpaid-invoice reminders via Microsoft Graph
+  # --------------------------------------------------------------
+  - type: cron
+    name: h2-0-facture-reminders
+    runtime: python
+    region: oregon
+    plan: free
+    rootDir: backend
+    branch: main
+    schedule: "30 12 * * *"   # 08:30 America/Montreal (12:30 UTC)
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.jobs.facture_reminders
+    envVars:
+      - key: ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: AZURE_TENANT_ID
+        sync: false
+      - key: AZURE_CLIENT_ID
+        sync: false
+      - key: AZURE_CLIENT_SECRET
+        sync: false
+      - key: MAIL_FROM_EMAIL
+        value: "info@immohorizon.com"
+      - key: MAIL_FROM_NAME
+        value: "Horizon Services Immobiliers"
