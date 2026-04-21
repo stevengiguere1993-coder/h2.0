@@ -47,7 +47,7 @@ async def list_clients(
     db: DBSession,
     current_user: CurrentUser,
     skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=100, ge=1, le=100),
+    limit: int = Query(default=200, ge=1, le=500),
 ) -> List[ClientRead]:
     """List all clients. Requires authentication."""
     service = ClientService(db)

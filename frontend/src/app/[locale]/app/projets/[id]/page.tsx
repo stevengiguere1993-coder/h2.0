@@ -86,6 +86,12 @@ export default function ProjectDetailPage() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [convertingToFacture, setConvertingToFacture] = useState(false);
+  const [factureModalOpen, setFactureModalOpen] = useState(false);
+  const [includeSoumission, setIncludeSoumission] = useState(true);
+  const [includeHours, setIncludeHours] = useState(false);
+  const [includeAchats, setIncludeAchats] = useState(false);
+  const [onlyApproved, setOnlyApproved] = useState(true);
+  const [dueInDays, setDueInDays] = useState("30");
   const [tab, setTab] = useState<TabId>("summary");
 
   // form state
@@ -186,8 +192,23 @@ export default function ProjectDetailPage() {
     }
   }
 
+  function openFactureModal() {
+    if (!p) return;
+    // Default: if the project came from a soumission, prefer prix fixe.
+    setIncludeSoumission(!!p.soumission_id);
+    setIncludeHours(!p.soumission_id);
+    setIncludeAchats(false);
+    setOnlyApproved(true);
+    setDueInDays("30");
+    setFactureModalOpen(true);
+  }
+
   async function createFacture() {
     if (!p) return;
+    if (!includeSoumission && !includeHours && !includeAchats) {
+      setError("Choisis au moins une source d'items.");
+      return;
+    }
     setConvertingToFacture(true);
     setError(null);
     try {
@@ -196,9 +217,11 @@ export default function ProjectDetailPage() {
         {
           method: "POST",
           body: JSON.stringify({
-            include_hours: true,
-            only_approved: true,
-            due_in_days: 30
+            include_soumission: includeSoumission,
+            include_hours: includeHours,
+            only_approved: onlyApproved,
+            include_achats: includeAchats,
+            due_in_days: Number(dueInDays) || 30
           })
         }
       );
@@ -207,6 +230,7 @@ export default function ProjectDetailPage() {
         throw new Error(txt.slice(0, 240) || `http_${res.status}`);
       }
       const created = (await res.json()) as { id: number };
+      setFactureModalOpen(false);
       router.push(`/app/facturation/${created.id}`);
     } catch (err) {
       setError(`Création facture échouée : ${(err as Error).message}`);
@@ -317,21 +341,16 @@ export default function ProjectDetailPage() {
             <div className="mt-4">
               <button
                 type="button"
-                onClick={createFacture}
-                disabled={convertingToFacture}
-                className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2.5 text-sm font-medium text-accent-200 hover:bg-accent-500/20 disabled:opacity-60"
+                onClick={openFactureModal}
+                className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2.5 text-sm font-medium text-accent-200 hover:bg-accent-500/20"
               >
-                {convertingToFacture ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <DollarSign className="h-4 w-4" />
-                )}
+                <DollarSign className="h-4 w-4" />
                 Créer une facture
               </button>
               <p className="mt-1 text-xs text-white/50">
-                Génère une facture brouillon liée au client. Les heures
-                punchées approuvées × taux horaire sont ajoutées comme
-                items automatiquement.
+                Choix des sources d&apos;items au prochain écran: soumission
+                acceptée (prix fixe), heures punchées (T&amp;M), achats du
+                projet.
               </p>
             </div>
 
@@ -406,6 +425,149 @@ export default function ProjectDetailPage() {
           </>
         ) : null}
       </div>
+
+      {factureModalOpen && p ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => (!convertingToFacture ? setFactureModalOpen(false) : null)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-bold text-white">Créer une facture</h3>
+            <p className="mt-1 text-xs text-white/60">
+              Sélectionne les sources d&apos;items à inclure. Tu pourras
+              ensuite ajuster manuellement sur la fiche facture.
+            </p>
+
+            <div className="mt-5 space-y-3">
+              <label className="flex items-start gap-3 rounded-lg border border-brand-800 bg-brand-900 p-3 text-sm text-white/80">
+                <input
+                  type="checkbox"
+                  checked={includeSoumission}
+                  disabled={!p.soumission_id}
+                  onChange={(e) => setIncludeSoumission(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <div>
+                  <div className="font-semibold text-white">
+                    Items de la soumission acceptée{" "}
+                    <span className="text-xs font-normal text-white/50">
+                      (prix fixe)
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-white/60">
+                    {p.soumission_id
+                      ? "Reprend exactement les items du devis du client."
+                      : "Aucune soumission liée à ce projet."}
+                  </p>
+                </div>
+              </label>
+
+              <label className="flex items-start gap-3 rounded-lg border border-brand-800 bg-brand-900 p-3 text-sm text-white/80">
+                <input
+                  type="checkbox"
+                  checked={includeHours}
+                  onChange={(e) => setIncludeHours(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <div className="flex-1">
+                  <div className="font-semibold text-white">
+                    Heures punchées{" "}
+                    <span className="text-xs font-normal text-white/50">
+                      (T&amp;M)
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-white/60">
+                    Regroupées par employé × taux horaire.
+                  </p>
+                  {includeHours ? (
+                    <label className="mt-2 flex items-center gap-2 text-xs text-white/70">
+                      <input
+                        type="checkbox"
+                        checked={onlyApproved}
+                        onChange={(e) => setOnlyApproved(e.target.checked)}
+                      />
+                      Seulement les punches approuvés
+                    </label>
+                  ) : null}
+                </div>
+              </label>
+
+              <label className="flex items-start gap-3 rounded-lg border border-brand-800 bg-brand-900 p-3 text-sm text-white/80">
+                <input
+                  type="checkbox"
+                  checked={includeAchats}
+                  onChange={(e) => setIncludeAchats(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <div>
+                  <div className="font-semibold text-white">
+                    Achats du projet{" "}
+                    <span className="text-xs font-normal text-white/50">
+                      (matériel)
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-white/60">
+                    Chaque bon d&apos;achat devient une ligne au montant
+                    payé.
+                  </p>
+                </div>
+              </label>
+
+              <div className="pt-2">
+                <label htmlFor="due_days" className="label">
+                  Échéance (jours à partir d&apos;aujourd&apos;hui)
+                </label>
+                <input
+                  id="due_days"
+                  type="number"
+                  min="0"
+                  max="365"
+                  value={dueInDays}
+                  onChange={(e) => setDueInDays(e.target.value)}
+                  className="input w-32"
+                />
+              </div>
+            </div>
+
+            {error ? (
+              <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                {error}
+              </p>
+            ) : null}
+
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setFactureModalOpen(false)}
+                disabled={convertingToFacture}
+                className="btn-secondary text-sm"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={createFacture}
+                disabled={
+                  convertingToFacture ||
+                  (!includeSoumission && !includeHours && !includeAchats)
+                }
+                className="btn-accent text-sm disabled:opacity-60"
+              >
+                {convertingToFacture ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Création…
+                  </>
+                ) : (
+                  "Créer la facture"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

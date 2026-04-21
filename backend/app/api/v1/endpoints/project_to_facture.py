@@ -13,11 +13,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
+from app.models.achat import Achat
 from app.models.employe import Employe
 from app.models.facture import Facture, FactureStatus
 from app.models.facture_item import FactureItem
 from app.models.project import Project
 from app.models.punch import Punch
+from app.models.soumission import Soumission, SoumissionStatus
+from app.models.soumission_item import SoumissionItem
 from app.schemas.business import FactureRead
 
 
@@ -25,13 +28,24 @@ router = APIRouter(prefix="/projects", tags=["project-to-facture"])
 
 
 class ConvertToFactureRequest(BaseModel):
+    include_soumission: bool = Field(
+        default=False,
+        description=(
+            "Seed line items from the accepted soumission linked to "
+            "this project (prix fixe)."
+        ),
+    )
     include_hours: bool = Field(
         default=True,
-        description="Seed line items from the punched hours of this project.",
+        description="Seed line items from the punched hours (T&M).",
     )
     only_approved: bool = Field(
         default=True,
         description="Only include approved punches.",
+    )
+    include_achats: bool = Field(
+        default=False,
+        description="Seed line items from the Achats linked to this project.",
     )
     due_in_days: Optional[int] = Field(
         default=30, ge=0, le=365,
@@ -79,8 +93,43 @@ async def convert_project_to_facture(
     db.add(facture)
     await db.flush()
 
+    pos = 0
+
+    # 1) Prix fixe — items de la soumission acceptée liée au projet.
+    if data.include_soumission and project.soumission_id:
+        sm = (
+            await db.execute(
+                select(Soumission).where(Soumission.id == project.soumission_id)
+            )
+        ).scalar_one_or_none()
+        if sm is not None and sm.status in (
+            SoumissionStatus.ACCEPTED.value,
+            SoumissionStatus.SENT.value,
+        ):
+            sm_items = (
+                await db.execute(
+                    select(SoumissionItem)
+                    .where(SoumissionItem.soumission_id == sm.id)
+                    .order_by(SoumissionItem.position.asc(), SoumissionItem.id.asc())
+                )
+            ).scalars().all()
+            for it in sm_items:
+                db.add(
+                    FactureItem(
+                        facture_id=facture.id,
+                        position=pos,
+                        description=it.description,
+                        unit=it.unit,
+                        quantity=float(it.quantity),
+                        unit_price=float(it.unit_price),
+                        total=float(it.total or 0),
+                    )
+                )
+                pos += 1
+
+    # 2) T&M — heures punchées approuvées x taux horaire, groupées par
+    #    (employé, taux).
     if data.include_hours:
-        # Pull punches for this project, optionally filtered to approved.
         stmt = select(Punch).where(Punch.project_id == project_id)
         if data.only_approved:
             stmt = stmt.where(Punch.approved.is_(True))
@@ -88,7 +137,6 @@ async def convert_project_to_facture(
         punches = (await db.execute(stmt)).scalars().all()
 
         if punches:
-            # Fetch employe hourly rates in bulk.
             emp_ids = {p.employe_id for p in punches}
             emps = {
                 e.id: e
@@ -99,7 +147,6 @@ async def convert_project_to_facture(
                 ).scalars().all()
             }
 
-            # Aggregate hours per (employe_id, hourly_rate).
             buckets: dict[tuple[int, float], float] = {}
             for p in punches:
                 emp = emps.get(p.employe_id)
@@ -107,7 +154,6 @@ async def convert_project_to_facture(
                 key = (p.employe_id, rate)
                 buckets[key] = buckets.get(key, 0.0) + float(p.hours or 0)
 
-            pos = 0
             for (emp_id, rate), hours in buckets.items():
                 emp = emps.get(emp_id)
                 label = emp.full_name if emp else f"Employé #{emp_id}"
@@ -124,6 +170,32 @@ async def convert_project_to_facture(
                     )
                 )
                 pos += 1
+
+    # 3) Matériel — Achats liés à ce projet (chaque achat devient une
+    #    ligne quantité 1 au montant de l'achat).
+    if data.include_achats:
+        achats = (
+            await db.execute(
+                select(Achat)
+                .where(Achat.project_id == project_id)
+                .order_by(Achat.id.asc())
+            )
+        ).scalars().all()
+        for ac in achats:
+            amount = float(ac.amount or 0)
+            desc = ac.description or f"Achat {ac.reference}"
+            db.add(
+                FactureItem(
+                    facture_id=facture.id,
+                    position=pos,
+                    description=f"Matériel — {desc}",
+                    unit="lot",
+                    quantity=1,
+                    unit_price=amount,
+                    total=amount,
+                )
+            )
+            pos += 1
 
     await db.flush()
     await db.refresh(facture)
