@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter as useNextRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -1294,41 +1294,101 @@ function ActionCard({
   );
 }
 
-// Google Street View + mini map. We use the public Embed API endpoints
-// which don't require a signed URL for the free "location=address" form,
-// but they do require the site to load over HTTPS. On mobile Safari the
-// iframe falls back to a static "Pas d'imagerie" screen if no pano is
-// available, which is the intended UX.
+/**
+ * Free satellite preview (Esri World Imagery tiles via Leaflet) + a
+ * "Ouvrir dans Google Maps" button for the staff to hop into Street
+ * View on demand (no API cost — it's just a link).
+ *
+ * Replaces the former Google StreetView iframe which required a paid
+ * API key to stay watermark-free.
+ */
 function StreetViewEmbed({ address }: { address: string }) {
-  const encoded = encodeURIComponent(address);
-  // Prefer the user-provided key when available; otherwise fall back to
-  // the keyless Maps "view" URL (works for most addresses but with a
-  // "For development purposes only" watermark).
-  const key = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || "";
-  const panoSrc = key
-    ? `https://www.google.com/maps/embed/v1/streetview?key=${key}&location=${encoded}&heading=210&pitch=10&fov=90`
-    : `https://maps.google.com/maps?q=&layer=c&cbll=${encoded}&cbp=11,0,0,0,0&output=svembed`;
-  const mapSrc = key
-    ? `https://www.google.com/maps/embed/v1/place?key=${key}&q=${encoded}&zoom=18`
-    : `https://maps.google.com/maps?q=${encoded}&z=18&output=embed`;
+  const mapRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let map: unknown = null; // eslint-disable-line @typescript-eslint/no-explicit-any
+    (async () => {
+      if (!mapRef.current) return;
+      const L = (await import("leaflet")).default;
+      if (!document.getElementById("leaflet-css")) {
+        const link = document.createElement("link");
+        link.id = "leaflet-css";
+        link.rel = "stylesheet";
+        link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+        document.head.appendChild(link);
+      }
+      // Geocode via Photon (free, OSM-backed, no key).
+      let center: [number, number] = [45.5017, -73.5673];
+      try {
+        const r = await fetch(
+          `https://photon.komoot.io/api/?q=${encodeURIComponent(
+            address
+          )}&limit=1`
+        );
+        if (r.ok) {
+          const data = await r.json();
+          const coord = data.features?.[0]?.geometry?.coordinates;
+          if (coord && coord.length === 2) center = [coord[1], coord[0]];
+        }
+      } catch {
+        /* ignore */
+      }
+      if (cancelled) return;
+      const m = L.map(mapRef.current, {
+        center,
+        zoom: 19,
+        zoomControl: true,
+        scrollWheelZoom: false
+      });
+      map = m;
+      L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        {
+          attribution: "Imagery © Esri",
+          maxZoom: 22,
+          maxNativeZoom: 19
+        }
+      ).addTo(m);
+      L.marker(center).addTo(m);
+    })();
+    return () => {
+      cancelled = true;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (map as any)?.remove?.();
+    };
+  }, [address]);
+
+  const gmapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+    address
+  )}`;
+  const gstreetUrl = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${encodeURIComponent(
+    address
+  )}`;
+
   return (
-    <div className="mt-3 grid gap-3 sm:grid-cols-3">
-      <iframe
-        title="Street View"
-        src={panoSrc}
-        loading="lazy"
-        className="sm:col-span-2 h-64 w-full rounded-lg border border-brand-800 bg-brand-950"
-        referrerPolicy="no-referrer-when-downgrade"
-        allowFullScreen
+    <div className="mt-3 space-y-2">
+      <div
+        ref={mapRef}
+        className="h-64 w-full overflow-hidden rounded-lg border border-brand-800 bg-brand-950"
       />
-      <iframe
-        title="Carte"
-        src={mapSrc}
-        loading="lazy"
-        className="h-64 w-full rounded-lg border border-brand-800 bg-brand-950"
-        referrerPolicy="no-referrer-when-downgrade"
-        allowFullScreen
-      />
+      <div className="flex flex-wrap gap-2 text-xs">
+        <a
+          href={gmapsUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-white/70 hover:border-accent-500 hover:text-white"
+        >
+          🗺️ Ouvrir dans Google Maps
+        </a>
+        <a
+          href={gstreetUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-white/70 hover:border-accent-500 hover:text-white"
+        >
+          👁️ Voir en Street View
+        </a>
+      </div>
     </div>
   );
 }
