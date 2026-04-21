@@ -5,59 +5,25 @@ import { Loader2, Ruler, Trash2, X } from "lucide-react";
 
 type Mode = "choose" | "horizontal" | "vertical";
 
-declare global {
-  interface Window {
-    google: any; // eslint-disable-line @typescript-eslint/no-explicit-any
-    __hsiMapsCbs?: Array<() => void>;
-    __hsiMapsLoading?: boolean;
-  }
-}
-
-/**
- * Loads the Google Maps JS API once, with the `drawing` and `geometry`
- * libraries. We reuse the same <script> across instances via a small
- * global promise cache.
- */
-function loadGoogleMaps(key: string | undefined): Promise<void> {
-  return new Promise((resolve) => {
-    if (typeof window === "undefined") return;
-    if (window.google?.maps?.drawing) {
-      resolve();
-      return;
-    }
-    window.__hsiMapsCbs = window.__hsiMapsCbs || [];
-    window.__hsiMapsCbs.push(resolve);
-    if (window.__hsiMapsLoading) return;
-    window.__hsiMapsLoading = true;
-    const s = document.createElement("script");
-    const k = key ? `&key=${encodeURIComponent(key)}` : "";
-    s.src = `https://maps.googleapis.com/maps/api/js?libraries=drawing,geometry${k}&v=weekly`;
-    s.async = true;
-    s.defer = true;
-    s.onload = () => {
-      (window.__hsiMapsCbs || []).forEach((cb) => cb());
-      window.__hsiMapsCbs = [];
-    };
-    document.head.appendChild(s);
-  });
-}
-
 export type MeasureResult = {
   kind: "horizontal" | "vertical";
   /** Area in square feet (ft²) */
   area_ft2: number;
-  /** Raw polygon coordinates for audit/reuse */
+  /** Polygon coordinates {lat, lng} for audit/reuse */
   coords: Array<{ lat: number; lng: number }>;
   /** Only meaningful for vertical walls */
   wall_height_ft?: number;
 };
 
 /**
- * A modal that lets the user draw a polygon on Google Maps to measure
- * a surface (horizontal = ground footprint in ft², vertical = wall
- * surface computed from wall length × entered height). The result is
- * returned via `onDone` to the parent so it can populate an item's
- * quantity field.
+ * 100% free-stack polygon measurement:
+ *  - Leaflet (MIT, no key)
+ *  - Esri World Imagery tiles (free, no key)
+ *  - Leaflet-Geoman free plugin for polygon drawing
+ *  - Turf.js for geodesic area/perimeter (same math as Google)
+ *  - Photon (OSM-based) for address → lat/lng geocoding
+ *
+ * No Google Cloud account required, no credit card, no quota.
  */
 export function MapMeasureModal({
   address,
@@ -70,152 +36,210 @@ export function MapMeasureModal({
 }) {
   const [mode, setMode] = useState<Mode>("choose");
   const [loading, setLoading] = useState(false);
-  const [area, setArea] = useState<number>(0);
-  const [perimeter, setPerimeter] = useState<number>(0);
-  const [polygonCoords, setPolygonCoords] = useState<
-    { lat: number; lng: number }[]
-  >([]);
+  const [areaM2, setAreaM2] = useState<number>(0);
+  const [perimM, setPerimM] = useState<number>(0);
+  const [coords, setCoords] = useState<{ lat: number; lng: number }[]>([]);
   const [wallHeightFt, setWallHeightFt] = useState<string>("8");
   const [error, setError] = useState<string | null>(null);
 
   const mapRef = useRef<HTMLDivElement | null>(null);
-  const mapInstance = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
-  const managerInstance = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
-  const drawnPolygon = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mapInstance = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const polyLayer = useRef<any>(null);
 
-  const mapsKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
+  const M2_TO_FT2 = 10.7639;
+  const M_TO_FT = 3.2808;
 
   const initMap = useCallback(async () => {
     if (!mapRef.current) return;
     setLoading(true);
     setError(null);
     try {
-      await loadGoogleMaps(mapsKey);
-      const g = window.google;
-
-      // Try to geocode the property address; fall back to downtown MTL
-      let center = { lat: 45.5017, lng: -73.5673 };
-      if (address) {
-        await new Promise<void>((resolve) => {
-          new g.maps.Geocoder().geocode(
-            { address },
-            (results: any, statusStr: string) => {
-              // eslint-disable-line @typescript-eslint/no-explicit-any
-              if (statusStr === "OK" && results?.[0]) {
-                const loc = results[0].geometry.location;
-                center = { lat: loc.lat(), lng: loc.lng() };
-              }
-              resolve();
-            }
-          );
-        });
+      const L = (await import("leaflet")).default;
+      // Geoman side-effects: attaches pm.* API to L.Map.
+      await import("@geoman-io/leaflet-geoman-free");
+      // Leaflet CSS
+      if (!document.getElementById("leaflet-css")) {
+        const link = document.createElement("link");
+        link.id = "leaflet-css";
+        link.rel = "stylesheet";
+        link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+        document.head.appendChild(link);
+      }
+      if (!document.getElementById("geoman-css")) {
+        const link = document.createElement("link");
+        link.id = "geoman-css";
+        link.rel = "stylesheet";
+        link.href =
+          "https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.css";
+        document.head.appendChild(link);
       }
 
-      mapInstance.current = new g.maps.Map(mapRef.current, {
+      // Geocode the address via Photon (free, OSM-backed). Fall back to
+      // downtown Montreal if unknown.
+      let center: [number, number] = [45.5017, -73.5673];
+      if (address) {
+        try {
+          const r = await fetch(
+            `https://photon.komoot.io/api/?q=${encodeURIComponent(
+              address
+            )}&limit=1`
+          );
+          if (r.ok) {
+            const data = await r.json();
+            const coord = data.features?.[0]?.geometry?.coordinates;
+            if (coord && coord.length === 2) {
+              // Photon returns [lng, lat]
+              center = [coord[1], coord[0]];
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
+      if (mapInstance.current) {
+        mapInstance.current.remove();
+        mapInstance.current = null;
+      }
+
+      const map = L.map(mapRef.current, {
         center,
         zoom: 20,
-        mapTypeId: "satellite",
-        tilt: 0,
-        streetViewControl: false,
-        mapTypeControl: true,
-        fullscreenControl: false
+        maxZoom: 22,
+        zoomControl: true
       });
+      mapInstance.current = map;
 
-      managerInstance.current = new g.maps.drawing.DrawingManager({
-        drawingMode: g.maps.drawing.OverlayType.POLYGON,
-        drawingControl: false,
-        polygonOptions: {
+      // Esri World Imagery — free, no key, unlimited.
+      L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        {
+          attribution:
+            "Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+          maxZoom: 22,
+          maxNativeZoom: 19 // Esri tiles cap here; Leaflet over-zooms fine
+        }
+      ).addTo(map);
+
+      // OSM street labels overlay, semi-transparent so the satellite
+      // stays visible.
+      L.tileLayer(
+        "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        {
+          attribution: "© OpenStreetMap contributors",
+          maxZoom: 19,
+          opacity: 0.25
+        }
+      ).addTo(map);
+
+      // Enable Geoman polygon drawing — no toolbar, we trigger it ourselves.
+      map.pm.setGlobalOptions({
+        snappable: true,
+        snapDistance: 15,
+        allowSelfIntersection: false
+      });
+      // Cast to any — Geoman's custom enableDraw options aren't in @types/leaflet.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (map.pm as any).enableDraw("Polygon", {
+        templineStyle: { color: "#3b82f6" },
+        hintlineStyle: { color: "#3b82f6", dashArray: [5, 5] },
+        pathOptions: {
+          color: "#3b82f6",
           fillColor: "#3b82f6",
           fillOpacity: 0.25,
-          strokeColor: "#3b82f6",
-          strokeWeight: 2,
-          editable: true,
-          draggable: false
+          weight: 2
         }
       });
-      managerInstance.current.setMap(mapInstance.current);
 
-      managerInstance.current.addListener(
-        "polygoncomplete",
-        (poly: any) => {
-          // eslint-disable-line @typescript-eslint/no-explicit-any
-          // Remove any previously drawn polygon so only one is active.
-          if (drawnPolygon.current) drawnPolygon.current.setMap(null);
-          drawnPolygon.current = poly;
-          managerInstance.current.setDrawingMode(null);
-          recomputeFromPolygon(poly);
-          const path = poly.getPath();
-          // Recompute on any edit (vertex dragged, inserted, deleted).
-          ["set_at", "insert_at", "remove_at"].forEach((evt) =>
-            g.maps.event.addListener(path, evt, () =>
-              recomputeFromPolygon(poly)
-            )
-          );
+      map.on("pm:create", async (e: { layer: any }) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (polyLayer.current) {
+          map.removeLayer(polyLayer.current);
         }
-      );
+        polyLayer.current = e.layer;
+        e.layer.pm.enable({ allowSelfIntersection: false });
+        await recompute();
+        e.layer.on("pm:edit pm:vertexadded pm:vertexremoved", recompute);
+      });
     } catch (e) {
-      setError("Impossible de charger Google Maps.");
+      console.error(e); // eslint-disable-line no-console
+      setError("Impossible de charger la carte.");
     } finally {
       setLoading(false);
     }
-  }, [address, mapsKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address]);
 
-  function recomputeFromPolygon(poly: any) {
-    // eslint-disable-line @typescript-eslint/no-explicit-any
-    const g = window.google;
-    if (!poly || !g) return;
-    const path = poly.getPath();
-    // computeArea → m²; computeLength → m.
-    const area_m2 = g.maps.geometry.spherical.computeArea(path);
-    const perim_m = g.maps.geometry.spherical.computeLength(path);
-    setArea(area_m2);
-    setPerimeter(perim_m);
-    const coords: { lat: number; lng: number }[] = [];
-    for (let i = 0; i < path.getLength(); i++) {
-      const p = path.getAt(i);
-      coords.push({ lat: p.lat(), lng: p.lng() });
+  async function recompute() {
+    if (!polyLayer.current) return;
+    const turfArea = (await import("@turf/area")).default;
+    const turfLength = (await import("@turf/length")).default;
+    const { polygon, lineString } = await import("@turf/helpers");
+
+    const latlngs: { lat: number; lng: number }[] =
+      polyLayer.current.getLatLngs()[0];
+    const ring = latlngs.map(
+      (p) => [p.lng, p.lat] as [number, number]
+    );
+    // Close the ring for turf.polygon
+    if (
+      ring.length > 2 &&
+      (ring[0][0] !== ring[ring.length - 1][0] ||
+        ring[0][1] !== ring[ring.length - 1][1])
+    ) {
+      ring.push(ring[0]);
     }
-    setPolygonCoords(coords);
+    if (ring.length < 4) {
+      setAreaM2(0);
+      setPerimM(0);
+      setCoords(latlngs.map((p) => ({ lat: p.lat, lng: p.lng })));
+      return;
+    }
+    const poly = polygon([ring]);
+    // Turf area returns m². Turf length in km → convert.
+    const area = turfArea(poly);
+    const perimKm = turfLength(lineString(ring));
+    setAreaM2(area);
+    setPerimM(perimKm * 1000);
+    setCoords(latlngs.map((p) => ({ lat: p.lat, lng: p.lng })));
   }
 
   useEffect(() => {
     if (mode === "horizontal" || mode === "vertical") {
       void initMap();
     }
-    // Cleanup on close
     return () => {
-      if (drawnPolygon.current) drawnPolygon.current.setMap(null);
-      drawnPolygon.current = null;
+      if (mapInstance.current) {
+        mapInstance.current.remove();
+        mapInstance.current = null;
+      }
+      polyLayer.current = null;
     };
   }, [mode, initMap]);
 
   function clearPolygon() {
-    if (drawnPolygon.current) {
-      drawnPolygon.current.setMap(null);
-      drawnPolygon.current = null;
+    if (polyLayer.current && mapInstance.current) {
+      mapInstance.current.removeLayer(polyLayer.current);
+      polyLayer.current = null;
     }
-    setArea(0);
-    setPerimeter(0);
-    setPolygonCoords([]);
-    managerInstance.current?.setDrawingMode(
-      window.google?.maps.drawing.OverlayType.POLYGON
-    );
+    setAreaM2(0);
+    setPerimM(0);
+    setCoords([]);
+    mapInstance.current?.pm.enableDraw("Polygon");
   }
 
-  // Conversions: 1 m² = 10.7639 ft², 1 m = 3.2808 ft
-  const M2_TO_FT2 = 10.7639;
-  const M_TO_FT = 3.2808;
-
   function confirm() {
-    if (area <= 0) {
+    if (areaM2 <= 0) {
       setError("Dessine un polygone avant de valider.");
       return;
     }
     if (mode === "horizontal") {
       onDone({
         kind: "horizontal",
-        area_ft2: Math.round(area * M2_TO_FT2 * 100) / 100,
-        coords: polygonCoords
+        area_ft2: Math.round(areaM2 * M2_TO_FT2 * 100) / 100,
+        coords
       });
     } else if (mode === "vertical") {
       const h = parseFloat(wallHeightFt || "0");
@@ -223,14 +247,11 @@ export function MapMeasureModal({
         setError("Hauteur de mur requise.");
         return;
       }
-      // Vertical surface = wall length × height; wall length = polygon
-      // perimeter for a single wall run, or the polygon perimeter for
-      // multi-wall selections.
-      const length_ft = perimeter * M_TO_FT;
+      const length_ft = perimM * M_TO_FT;
       onDone({
         kind: "vertical",
         area_ft2: Math.round(length_ft * h * 100) / 100,
-        coords: polygonCoords,
+        coords,
         wall_height_ft: h
       });
     }
@@ -304,7 +325,7 @@ export function MapMeasureModal({
               className="relative h-[55vh] flex-1 bg-brand-900 md:h-auto"
             >
               {loading ? (
-                <div className="absolute inset-0 flex items-center justify-center bg-brand-900/80">
+                <div className="absolute inset-0 z-[500] flex items-center justify-center bg-brand-900/80">
                   <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
                 </div>
               ) : null}
@@ -316,24 +337,24 @@ export function MapMeasureModal({
               </p>
               <p className="text-xs text-white/60">
                 Clique sur la carte pour placer les points du polygone.
-                Double-clique (ou clique sur le premier point) pour le
-                fermer. Les sommets sont modifiables après.
+                Clique sur le premier point pour le fermer. Les sommets
+                sont ensuite déplaçables.
               </p>
 
               <dl className="mt-2 space-y-1 rounded-lg border border-brand-800 bg-brand-900 p-3 text-sm">
                 <div className="flex justify-between">
                   <dt className="text-white/50">Aire</dt>
                   <dd className="font-semibold text-white">
-                    {area > 0
-                      ? `${(area * M2_TO_FT2).toFixed(1)} ft²`
+                    {areaM2 > 0
+                      ? `${(areaM2 * M2_TO_FT2).toFixed(1)} ft²`
                       : "—"}
                   </dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-white/50">Périmètre</dt>
                   <dd className="font-semibold text-white">
-                    {perimeter > 0
-                      ? `${(perimeter * M_TO_FT).toFixed(1)} ft`
+                    {perimM > 0
+                      ? `${(perimM * M_TO_FT).toFixed(1)} ft`
                       : "—"}
                   </dd>
                 </div>
@@ -352,11 +373,11 @@ export function MapMeasureModal({
                     onChange={(e) => setWallHeightFt(e.target.value)}
                     className="mt-1 w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white"
                   />
-                  {perimeter > 0 && wallHeightFt ? (
+                  {perimM > 0 && wallHeightFt ? (
                     <p className="mt-1 text-[10px] text-white/40">
-                      Surface = {(perimeter * M_TO_FT).toFixed(1)} ft ×{" "}
+                      Surface = {(perimM * M_TO_FT).toFixed(1)} ft ×{" "}
                       {wallHeightFt} ft ={" "}
-                      {(perimeter * M_TO_FT * parseFloat(wallHeightFt || "0")).toFixed(1)} ft²
+                      {(perimM * M_TO_FT * parseFloat(wallHeightFt || "0")).toFixed(1)} ft²
                     </p>
                   ) : null}
                 </div>
@@ -377,7 +398,7 @@ export function MapMeasureModal({
                 <button
                   type="button"
                   onClick={confirm}
-                  disabled={area <= 0}
+                  disabled={areaM2 <= 0}
                   className="flex-1 rounded-lg bg-accent-500 px-3 py-2 text-xs font-bold text-brand-950 disabled:opacity-60"
                 >
                   Utiliser cette mesure
