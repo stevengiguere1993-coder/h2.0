@@ -264,25 +264,10 @@ export default function SoumissionDetailPage() {
     }
   }
 
-  async function convertToClient() {
-    if (!s) return;
-    try {
-      const res = await authedFetch(
-        `/api/v1/soumissions/${id}/convert-to-client`,
-        { method: "POST" }
-      );
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text.slice(0, 240) || `http_${res.status}`);
-      }
-      const client = (await res.json()) as { id: number };
-      router.push(`/app/clients/${client.id}`);
-    } catch (err) {
-      setSendNotice(
-        `Conversion en client échouée : ${(err as Error).message}`
-      );
-    }
-  }
+  // convertToClient was removed — the conversion is now automatic
+  // when the soumission status flips to "accepted" (either via the
+  // staff /status endpoint or the public /accept endpoint). See
+  // backend/app/api/v1/endpoints/soumission_status.py.
 
   async function convertToProject() {
     if (!s) return;
@@ -686,14 +671,9 @@ export default function SoumissionDetailPage() {
 
             {s.status === "accepted" ? (
               <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={convertToClient}
-                  className="inline-flex items-center gap-2 rounded-lg border border-accent-500/40 bg-accent-500/10 px-4 py-2.5 text-sm font-medium text-accent-200 hover:bg-accent-500/20"
-                >
-                  <Users className="h-4 w-4" />
-                  Convertir en client
-                </button>
+                {/* Le client est créé automatiquement quand la
+                    soumission passe en "accepted" — pas besoin d'un
+                    bouton manuel. Voir backend/soumission_status.py. */}
                 <button
                   type="button"
                   onClick={convertToProject}
