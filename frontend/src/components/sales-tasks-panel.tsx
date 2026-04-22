@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type TaskKind = "suivi" | "commander_materiel" | "rappel_rdv" | "autre";
 type Recurrence = "none" | "daily" | "weekly" | "monthly";
@@ -78,6 +79,7 @@ export function SalesTasksPanel({
   clientId?: number | null;
   contactRequestId?: number | null;
 }) {
+  const confirm = useConfirm();
   const [tasks, setTasks] = useState<SalesTask[]>([]);
   const [employes, setEmployes] = useState<Employe[]>([]);
   const [loading, setLoading] = useState(true);
@@ -133,7 +135,7 @@ export function SalesTasksPanel({
   }
 
   async function remove(id: number) {
-    if (!confirm("Supprimer cette tâche ?")) return;
+    if (!(await confirm("Supprimer cette tâche ?"))) return;
     try {
       await authedFetch(`/api/v1/sales-tasks/${id}`, { method: "DELETE" });
       setTasks((xs) => xs.filter((x) => x.id !== id));

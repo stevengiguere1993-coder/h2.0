@@ -15,6 +15,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type SousTraitant = {
   id: number;
@@ -61,6 +62,7 @@ function expiryBadge(iso: string | null): {
 }
 
 export default function SousTraitantDetailPage() {
+  const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
@@ -208,7 +210,7 @@ export default function SousTraitantDetailPage() {
 
   async function onDelete() {
     if (!st) return;
-    if (!confirm(`Supprimer définitivement « ${st.full_name} » ?`)) return;
+    if (!(await confirm(`Supprimer définitivement « ${st.full_name} » ?`))) return;
     setDeleting(true);
     try {
       const res = await authedFetch(`/api/v1/sous-traitants/${id}`, {

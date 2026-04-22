@@ -5,6 +5,7 @@ import { Loader2, Palmtree, Plus } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type MyLeave = {
   id: number;
@@ -56,6 +57,7 @@ function fmtRange(s: string, e: string): string {
 }
 
 export default function MobileMesConges() {
+  const confirm = useConfirm();
   const [items, setItems] = useState<MyLeave[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -79,7 +81,7 @@ export default function MobileMesConges() {
   }, [load]);
 
   async function cancel(id: number) {
-    if (!confirm("Annuler cette demande ?")) return;
+    if (!(await confirm("Annuler cette demande ?"))) return;
     setBusy(id);
     try {
       const res = await authedFetch(`/api/v1/leaves/${id}/cancel`, {

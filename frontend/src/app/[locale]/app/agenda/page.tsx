@@ -15,6 +15,7 @@ import { AddressInput } from "@/components/address-input";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type AgendaEvent = {
   id: number;
@@ -694,7 +695,7 @@ function EventModal({
 
   async function remove() {
     if (!existing) return;
-    if (!confirm(`Supprimer l'événement « ${existing.title} » ?`)) return;
+    if (!(await confirm(`Supprimer l'événement « ${existing.title} » ?`))) return;
     setBusy(true);
     try {
       const res = await authedFetch(`/api/v1/agenda/${existing.id}`, {

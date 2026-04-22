@@ -24,6 +24,7 @@ import { SalesTasksPanel } from "@/components/sales-tasks-panel";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type Prospect = {
   id: number;
@@ -84,6 +85,7 @@ const TABS = [
 type TabId = (typeof TABS)[number]["id"];
 
 export default function ProspectDetailPage() {
+  const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
@@ -158,7 +160,7 @@ export default function ProspectDetailPage() {
 
   async function deleteProspect() {
     if (!p) return;
-    if (!confirm(`Supprimer définitivement le prospect « ${p.name} » ?`)) return;
+    if (!(await confirm(`Supprimer définitivement le prospect « ${p.name} » ?`))) return;
     setDeleting(true);
     try {
       const res = await authedFetch(`/api/v1/contact/${id}`, { method: "DELETE" });
@@ -494,7 +496,7 @@ function ProspectDocuments({
   }, []);
 
   async function remove(pid: number) {
-    if (!confirm("Supprimer cette photo ?")) return;
+    if (!(await confirm("Supprimer cette photo ?"))) return;
     const res = await authedFetch(
       `/api/v1/contact/${contactRequestId}/photos/${pid}`,
       { method: "DELETE" }

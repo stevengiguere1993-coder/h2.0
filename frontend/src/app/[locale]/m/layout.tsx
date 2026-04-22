@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
+import { ConfirmProvider } from "@/components/confirm-dialog";
 import { getToken, getMe, type CurrentUser } from "@/lib/auth";
 
 type Tab = {
@@ -65,6 +66,7 @@ export default function MobileLayout({
   }
 
   return (
+    <ConfirmProvider>
     <main className="flex min-h-screen flex-col bg-brand-950 text-white">
       <div className="flex-1 pb-20">{children}</div>
 
@@ -102,5 +104,6 @@ export default function MobileLayout({
       {/* Expose current user email in a global for deep pages if needed */}
       <span id="hsi-me" data-email={me?.email || ""} className="hidden" />
     </main>
+    </ConfirmProvider>
   );
 }

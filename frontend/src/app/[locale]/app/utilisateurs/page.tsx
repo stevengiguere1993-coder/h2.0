@@ -12,6 +12,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch, type UserRole } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
 type User = {
@@ -59,6 +60,7 @@ const ROLE_CLASS: Record<UserRole, string> = {
 };
 
 export default function UtilisateursPage() {
+  const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
   const { user: me } = useCurrentUser();
   const [users, setUsers] = useState<User[]>([]);
@@ -150,7 +152,7 @@ export default function UtilisateursPage() {
       return;
     }
     const action = u.is_active ? "deactivate" : "activate";
-    if (!confirm(`${u.is_active ? "Désactiver" : "Réactiver"} ${u.email} ?`))
+    if (!(await confirm(`${u.is_active ? "Désactiver" : "Réactiver"} ${u.email} ?`)))
       return;
     setBusyUser(u.id);
     try {

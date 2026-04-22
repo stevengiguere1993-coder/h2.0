@@ -8,6 +8,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type Fournisseur = {
   id: number;
@@ -23,6 +24,7 @@ type Fournisseur = {
 };
 
 export default function FournisseurDetailPage() {
+  const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
@@ -118,7 +120,7 @@ export default function FournisseurDetailPage() {
 
   async function onDelete() {
     if (!f) return;
-    if (!confirm(`Supprimer « ${f.name} » ?`)) return;
+    if (!(await confirm(`Supprimer « ${f.name} » ?`))) return;
     setDeleting(true);
     try {
       const res = await authedFetch(`/api/v1/fournisseurs/${id}`, {

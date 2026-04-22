@@ -15,6 +15,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type Employe = { id: number; full_name: string; email: string | null };
 type Project = { id: number; name: string };
@@ -69,6 +70,7 @@ function shortISO(d: Date): string {
 }
 
 export default function PunchGestionPage() {
+  const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
 
   const [weekStart, setWeekStart] = useState(() => weekStartOf(new Date()));
@@ -186,7 +188,7 @@ export default function PunchGestionPage() {
   }
 
   async function remove(p: Punch) {
-    if (!confirm(`Supprimer le punch du ${fmtDateTime(p.started_at)} ?`))
+    if (!(await confirm(`Supprimer le punch du ${fmtDateTime(p.started_at)} ?`)))
       return;
     try {
       const res = await authedFetch(`/api/v1/punch/${p.id}`, {

@@ -15,6 +15,7 @@ import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type Employe = { id: number; full_name: string; email: string | null };
 type Project = { id: number; name: string; status: string };
@@ -99,6 +100,7 @@ async function getPosition(): Promise<GeolocationPosition | null> {
 }
 
 export default function PunchPage() {
+  const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
   const { user } = useCurrentUser();
   const [me, setMe] = useState<Me | null>(null);
@@ -215,7 +217,7 @@ export default function PunchPage() {
 
   async function stopPunch() {
     if (!me?.active) return;
-    if (!confirm("Terminer le punch maintenant ?")) return;
+    if (!(await confirm("Terminer le punch maintenant ?"))) return;
     setBusy(true);
     setError(null);
     try {

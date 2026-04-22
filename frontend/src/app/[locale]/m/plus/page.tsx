@@ -13,10 +13,12 @@ import {
 
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch, setToken } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { InstallAppButton } from "@/components/install-app-button";
 
 export default function MobilePlus() {
+  const confirm = useConfirm();
   const router = useRouter();
   const { user } = useCurrentUser();
   const role = user?.role || "employee";
@@ -44,8 +46,8 @@ export default function MobilePlus() {
     };
   }, [isManagerPlus]);
 
-  function logout() {
-    if (!confirm("Déconnexion ?")) return;
+  async function logout() {
+    if (!(await confirm("Déconnexion ?"))) return;
     setToken(null);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     router.push("/connexion" as any);

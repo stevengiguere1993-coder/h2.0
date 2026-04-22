@@ -6,6 +6,7 @@ import { Loader2, Plus, Trash2 } from "lucide-react";
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type Template = {
   id: number;
@@ -29,6 +30,7 @@ type TemplateItem = {
 };
 
 export default function ServicesCataloguePage() {
+  const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
@@ -90,7 +92,7 @@ export default function ServicesCataloguePage() {
   }
 
   async function deleteTemplate(tid: number) {
-    if (!confirm("Supprimer ce service du catalogue ?")) return;
+    if (!(await confirm("Supprimer ce service du catalogue ?"))) return;
     try {
       const res = await authedFetch(`/api/v1/service-templates/${tid}`, {
         method: "DELETE"
@@ -158,7 +160,7 @@ export default function ServicesCataloguePage() {
 
   async function removeItem(iid: number) {
     if (selectedId == null) return;
-    if (!confirm("Retirer ce sous-item du service ?")) return;
+    if (!(await confirm("Retirer ce sous-item du service ?"))) return;
     try {
       const res = await authedFetch(
         `/api/v1/service-templates/${selectedId}/items/${iid}`,

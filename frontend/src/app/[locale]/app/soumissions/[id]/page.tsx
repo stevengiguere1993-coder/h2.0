@@ -24,6 +24,7 @@ import { MeasurementImportModal } from "@/components/measurement-import-modal";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type Soumission = {
   id: number;
@@ -97,6 +98,7 @@ function isoToDateInput(iso: string | null): string {
 }
 
 export default function SoumissionDetailPage() {
+  const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
@@ -412,7 +414,7 @@ export default function SoumissionDetailPage() {
 
   async function deleteSoumission() {
     if (!s) return;
-    if (!confirm(`Supprimer la soumission ${s.reference} ?`)) return;
+    if (!(await confirm(`Supprimer la soumission ${s.reference} ?`))) return;
     setDeleting(true);
     try {
       const res = await authedFetch(`/api/v1/soumissions/${id}`, {
