@@ -1531,6 +1531,8 @@ type Phase = {
   start_date: string | null;
   duration_days: number | null;
   notes: string | null;
+  assignee_employe_id: number | null;
+  assignee_sous_traitant_id: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -1559,6 +1561,12 @@ function PlanificationTab({ projectId }: { projectId: number }) {
   const confirm = useConfirm();
   const [phases, setPhases] = useState<Phase[]>([]);
   const [tasks, setTasks] = useState<PhaseTask[]>([]);
+  const [employes, setEmployes] = useState<
+    Array<{ id: number; full_name: string }>
+  >([]);
+  const [sousTraitants, setSousTraitants] = useState<
+    Array<{ id: number; full_name: string; trade?: string | null }>
+  >([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [busyPhase, setBusyPhase] = useState<number | "new" | null>(null);
@@ -1567,13 +1575,27 @@ function PlanificationTab({ projectId }: { projectId: number }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [phRes, tRes] = await Promise.all([
+      const [phRes, tRes, eRes, sRes] = await Promise.all([
         authedFetch(`/api/v1/projects/${projectId}/phases`),
-        authedFetch(`/api/v1/projects/${projectId}/tasks`)
+        authedFetch(`/api/v1/projects/${projectId}/tasks`),
+        authedFetch(`/api/v1/employes?limit=200`),
+        authedFetch(`/api/v1/sous-traitants?limit=200`)
       ]);
       if (!phRes.ok) throw new Error();
       setPhases((await phRes.json()) as Phase[]);
       if (tRes.ok) setTasks((await tRes.json()) as PhaseTask[]);
+      if (eRes.ok)
+        setEmployes(
+          (await eRes.json()) as Array<{ id: number; full_name: string }>
+        );
+      if (sRes.ok)
+        setSousTraitants(
+          (await sRes.json()) as Array<{
+            id: number;
+            full_name: string;
+            trade?: string | null;
+          }>
+        );
     } catch {
       setErr("Chargement échoué.");
     } finally {
@@ -1841,6 +1863,8 @@ function PlanificationTab({ projectId }: { projectId: number }) {
               index={idx}
               count={phases.length}
               tasks={tasks.filter((t) => t.phase_id === ph.id)}
+              employes={employes}
+              sousTraitants={sousTraitants}
               busyPhase={busyPhase === ph.id}
               busyTask={busyTask}
               onPatch={(patch) => patchPhase(ph.id, patch)}
@@ -1894,6 +1918,8 @@ function PhaseCard({
   index,
   count,
   tasks,
+  employes,
+  sousTraitants,
   busyPhase,
   busyTask,
   onPatch,
@@ -1906,6 +1932,8 @@ function PhaseCard({
 }: {
   phase: Phase;
   index: number;
+  employes: Array<{ id: number; full_name: string }>;
+  sousTraitants: Array<{ id: number; full_name: string; trade?: string | null }>;
   count: number;
   tasks: PhaseTask[];
   busyPhase: boolean;
@@ -1987,6 +2015,84 @@ function PhaseCard({
               <p className="mt-1 rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-sm font-semibold text-accent-500">
                 {endDate || "—"}
               </p>
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <p className="text-xs text-white/60">Assigné à</p>
+            <div className="mt-2 grid gap-2 sm:grid-cols-3">
+              <label className="flex cursor-pointer items-center gap-2 rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white/80">
+                <input
+                  type="radio"
+                  name={`assign-${phase.id}`}
+                  checked={
+                    !phase.assignee_employe_id &&
+                    !phase.assignee_sous_traitant_id
+                  }
+                  onChange={() =>
+                    onPatch({
+                      assignee_employe_id: null,
+                      assignee_sous_traitant_id: null
+                    })
+                  }
+                />
+                Personne assigné
+              </label>
+              <select
+                value={
+                  phase.assignee_employe_id
+                    ? `e:${phase.assignee_employe_id}`
+                    : ""
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (!v) {
+                    if (phase.assignee_employe_id)
+                      onPatch({ assignee_employe_id: null });
+                  } else {
+                    onPatch({
+                      assignee_employe_id: Number(v.slice(2)),
+                      assignee_sous_traitant_id: null
+                    });
+                  }
+                }}
+                className="rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white"
+              >
+                <option value="">— Employé interne —</option>
+                {employes.map((e) => (
+                  <option key={e.id} value={`e:${e.id}`}>
+                    {e.full_name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={
+                  phase.assignee_sous_traitant_id
+                    ? `s:${phase.assignee_sous_traitant_id}`
+                    : ""
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (!v) {
+                    if (phase.assignee_sous_traitant_id)
+                      onPatch({ assignee_sous_traitant_id: null });
+                  } else {
+                    onPatch({
+                      assignee_sous_traitant_id: Number(v.slice(2)),
+                      assignee_employe_id: null
+                    });
+                  }
+                }}
+                className="rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white"
+              >
+                <option value="">— Sous-traitant —</option>
+                {sousTraitants.map((s) => (
+                  <option key={s.id} value={`s:${s.id}`}>
+                    {s.full_name}
+                    {s.trade ? ` · ${s.trade}` : ""}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
         </div>

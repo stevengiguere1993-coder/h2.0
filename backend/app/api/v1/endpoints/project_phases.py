@@ -33,6 +33,8 @@ class PhaseCreate(BaseModel):
     start_date: Optional[date] = None
     duration_days: Optional[int] = Field(default=None, ge=0, le=3650)
     notes: Optional[str] = None
+    assignee_employe_id: Optional[int] = Field(default=None, gt=0)
+    assignee_sous_traitant_id: Optional[int] = Field(default=None, gt=0)
 
 
 class PhaseUpdate(BaseModel):
@@ -41,6 +43,8 @@ class PhaseUpdate(BaseModel):
     start_date: Optional[date] = None
     duration_days: Optional[int] = Field(default=None, ge=0, le=3650)
     notes: Optional[str] = None
+    assignee_employe_id: Optional[int] = None
+    assignee_sous_traitant_id: Optional[int] = None
 
 
 class PhaseRead(BaseModel):
@@ -52,6 +56,8 @@ class PhaseRead(BaseModel):
     start_date: Optional[date]
     duration_days: Optional[int]
     notes: Optional[str]
+    assignee_employe_id: Optional[int] = None
+    assignee_sous_traitant_id: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 
@@ -124,6 +130,8 @@ async def create_phase(
         start_date=data.start_date,
         duration_days=data.duration_days,
         notes=(data.notes.strip() if data.notes else None),
+        assignee_employe_id=data.assignee_employe_id,
+        assignee_sous_traitant_id=data.assignee_sous_traitant_id,
     )
     db.add(ph)
     await db.flush()

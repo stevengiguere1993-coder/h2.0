@@ -46,6 +46,23 @@ class ProjectPhase(Base):
     )
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Affectation par phase. Une phase peut être assignée :
+    #  - à un employé interne (assignee_employe_id), ou
+    #  - à un sous-traitant (assignee_sous_traitant_id), ou
+    #  - à personne (les 2 colonnes restent NULL).
+    # Mutuellement exclusives côté UI mais le modèle ne force pas la
+    # contrainte au cas où on ait besoin d'un cas hybride plus tard.
+    assignee_employe_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("employes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    assignee_sous_traitant_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("sous_traitants.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

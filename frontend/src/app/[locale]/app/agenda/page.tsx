@@ -46,11 +46,13 @@ const TYPE_LABELS: Record<string, string> = {
   visite: "Visite",
   reunion: "Réunion",
   livraison: "Livraison",
+  conge: "Congé / vacances",
   autre: "Autre"
 };
 
 const TYPE_CLASS: Record<string, string> = {
   chantier: "bg-accent-500/20 text-accent-300 border-accent-500/40",
+  conge: "bg-orange-500/20 text-orange-300 border-orange-500/40",
   visite: "bg-blue-500/20 text-blue-300 border-blue-500/40",
   reunion: "bg-violet-500/20 text-violet-300 border-violet-500/40",
   livraison: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",

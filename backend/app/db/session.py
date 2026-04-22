@@ -153,6 +153,8 @@ async def init_db() -> None:
             ("employes", "cnesst_rate", "NUMERIC(6, 4)"),
             ("employes", "ccq_rate", "NUMERIC(6, 4)"),
             ("employes", "employeur_d_url", "VARCHAR(500)"),
+            ("project_phases", "assignee_employe_id", "INTEGER"),
+            ("project_phases", "assignee_sous_traitant_id", "INTEGER"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

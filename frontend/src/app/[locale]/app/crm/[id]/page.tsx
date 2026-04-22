@@ -659,7 +659,7 @@ function ProspectDocuments({
             title="Photos"
             count={photos.length}
             icon={<ImageIcon className="h-3.5 w-3.5" />}
-            defaultOpen={photos.length > 0}
+            defaultOpen={false}
           >
             {photos.length === 0 ? (
               <p className="rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
@@ -720,7 +720,7 @@ function ProspectDocuments({
             title="Soumissions signées"
             count={signedSoumissions.length}
             icon={<FileText className="h-3.5 w-3.5" />}
-            defaultOpen={signedSoumissions.length > 0}
+            defaultOpen={false}
           >
             {signedSoumissions.length === 0 ? (
               <p className="rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
@@ -762,7 +762,7 @@ function ProspectDocuments({
             title="Autres documents"
             count={otherDocs.length}
             icon={<FileText className="h-3.5 w-3.5" />}
-            defaultOpen={otherDocs.length > 0}
+            defaultOpen={false}
           >
             {otherDocs.length === 0 ? (
               <p className="rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
