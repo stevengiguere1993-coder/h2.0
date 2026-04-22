@@ -15,7 +15,6 @@ import {
   LogOut,
   Palmtree,
   Settings,
-  ShieldCheck,
   ShoppingCart,
   Truck,
   UserCircle,
@@ -55,7 +54,6 @@ const RESOURCES_NAV: NavItem[] = [
   { href: "/app/fournisseurs", label: "Fournisseurs", icon: Truck, minRole: "admin" },
   { href: "/app/services-catalogue", label: "Catalogue services", icon: ClipboardCheck, minRole: "manager" },
   { href: "/app/conges", label: "Congés", icon: Palmtree, minRole: "manager" },
-  { href: "/app/utilisateurs", label: "Utilisateurs", icon: ShieldCheck, minRole: "owner" },
   { href: "/app/parametres", label: "Paramètres", icon: Settings, minRole: "employee" }
 ];
 

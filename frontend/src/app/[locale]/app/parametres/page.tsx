@@ -5,15 +5,19 @@ import {
   AlertCircle,
   Calendar,
   CheckCircle2,
+  ChevronRight,
   ExternalLink,
   Loader2,
   RefreshCw,
+  ShieldCheck,
   Trash2
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
-import { authedFetch } from "@/lib/auth";
+import { authedFetch, hasMinRole } from "@/lib/auth";
+import { useCurrentUser } from "@/hooks/use-current-user";
 
 type Feed = {
   id: number;
@@ -26,6 +30,8 @@ type Feed = {
 
 export default function ParametresPage() {
   const { onOpenSidebar } = useAppLayout();
+  const { user: me } = useCurrentUser();
+  const isOwner = hasMinRole(me, "owner");
   const [feed, setFeed] = useState<Feed | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -136,6 +142,28 @@ export default function ParametresPage() {
           <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {error}
           </p>
+        ) : null}
+
+        {isOwner ? (
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/app/utilisateurs" as any}
+            className="mt-6 flex items-center gap-3 rounded-2xl border border-brand-800 bg-brand-900 p-5 transition hover:border-accent-500"
+          >
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
+              <ShieldCheck className="h-5 w-5" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-base font-bold text-white">
+                Utilisateurs &amp; rôles
+              </h2>
+              <p className="mt-0.5 text-xs text-white/60">
+                Créer / désactiver / supprimer des comptes, changer
+                les rôles, réinitialiser un mot de passe.
+              </p>
+            </div>
+            <ChevronRight className="h-4 w-4 text-white/40" />
+          </Link>
         ) : null}
 
         <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
