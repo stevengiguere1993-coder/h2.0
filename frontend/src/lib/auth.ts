@@ -54,10 +54,15 @@ export function hasMinRole(user: CurrentUser | null, min: UserRole): boolean {
   return ROLE_RANK[user.role] >= ROLE_RANK[min];
 }
 
-export async function login(email: string, password: string): Promise<LoginResult> {
+export async function login(
+  email: string,
+  password: string,
+  rememberMe: boolean = false
+): Promise<LoginResult> {
   const body = new URLSearchParams();
   body.set("username", email);
   body.set("password", password);
+  if (rememberMe) body.set("remember_me", "true");
 
   const res = await fetch(`${DEFAULT_BASE}/api/v1/auth/login`, {
     method: "POST",
