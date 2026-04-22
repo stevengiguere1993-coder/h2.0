@@ -96,3 +96,12 @@ async def root() -> dict:
 @app.get("/health", tags=["health"])
 async def health_check() -> dict:
     return {"status": "healthy", "environment": settings.env}
+
+
+@app.get("/api/v1/ping", tags=["health"])
+async def api_ping() -> dict:
+    """Alias under /api/v1 so uptime monitors pinging a single URL
+    (e.g. immohorizon.com/api/v1/ping via the Next.js rewrite) wake up
+    both the frontend (which serves /api/*) and the backend (this
+    handler). Cheap: no DB, no I/O."""
+    return {"status": "ok"}
