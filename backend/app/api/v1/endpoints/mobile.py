@@ -22,7 +22,9 @@ from sqlalchemy import and_, func, or_, select
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.agenda_event import AgendaEvent
+from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.models.employe import Employe
+from app.models.project import Project, ProjectStatus
 from app.models.punch import Punch
 
 
@@ -43,7 +45,27 @@ class OpenPunch(BaseModel):
     id: int
     started_at: datetime
     project_id: Optional[int]
+    contact_request_id: Optional[int]
     task: Optional[str]
+
+
+class PunchContextProject(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    address: Optional[str]
+
+
+class PunchContextProspect(BaseModel):
+    id: int
+    name: str
+    address: Optional[str]
+    project_type: str
+
+
+class PunchContextsResponse(BaseModel):
+    projects: list[PunchContextProject]
+    prospects: list[PunchContextProspect]
 
 
 class AgendaEventMini(BaseModel):
@@ -78,7 +100,11 @@ class MobileMe(BaseModel):
 
 
 class PunchStartBody(BaseModel):
+    # One of the three contexts; at least one must be non-null for the
+    # punch to be useful downstream (finances, reporting).
     project_id: Optional[int] = None
+    contact_request_id: Optional[int] = None
+    # Free-form task label, e.g. "Admin", "Déplacement", "Formation".
     task: Optional[str] = Field(default=None, max_length=255)
     geolocation: Optional[str] = Field(default=None, max_length=128)
 
@@ -230,10 +256,17 @@ async def punch_start(
             status.HTTP_409_CONFLICT,
             "Un punch est déjà en cours.",
         )
+    # At least one context is required so reporting stays meaningful.
+    if not any([body.project_id, body.contact_request_id, body.task]):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Un contexte est requis (projet, prospect ou tâche admin).",
+        )
     now = datetime.now(timezone.utc)
     p = Punch(
         employe_id=emp.id,
         project_id=body.project_id,
+        contact_request_id=body.contact_request_id,
         started_at=now,
         task=body.task,
         geolocation=body.geolocation,
@@ -279,45 +312,48 @@ class LeaveResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     start_at: datetime
-    end_at: Optional[datetime]
-    title: str
-    event_type: str
+    end_at: datetime
+    status: str
+    reason: Optional[str]
 
 
 @router.post(
     "/leave",
     response_model=LeaveResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="Submit a leave request (pending approval by an admin)",
 )
 async def request_leave(
     body: LeaveRequestBody,
     db: DBSession,
     user: CurrentUser,
 ) -> LeaveResponse:
+    """Legacy endpoint kept for the PWA conge form; now submits a
+    LeaveRequest (pending) via the new workflow so admins can
+    approve/reject. Agenda block is created on approval, not here."""
+    from app.models.leave_request import LeaveRequest, LeaveStatus
+
     emp = await _resolve_employe(db, user.email)
     if emp is None:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "Aucun employé n'est lié à ce compte (email).",
         )
-    if body.end_at < body.start_at:
+    if body.end_at <= body.start_at:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "Plage horaire invalide."
         )
-    title = f"Congé — {emp.full_name}"
-    event = AgendaEvent(
-        title=title,
-        description=body.reason,
+    lr = LeaveRequest(
+        employe_id=emp.id,
         start_at=body.start_at,
         end_at=body.end_at,
-        all_day=False,
-        assignee_id=emp.id,
-        event_type="conge",
+        reason=(body.reason.strip() if body.reason else None),
+        status=LeaveStatus.PENDING.value,
     )
-    db.add(event)
+    db.add(lr)
     await db.flush()
-    await db.refresh(event)
-    return LeaveResponse.model_validate(event)
+    await db.refresh(lr)
+    return LeaveResponse.model_validate(lr)
 
 
 @router.get(
@@ -350,3 +386,63 @@ async def my_agenda(
         )
     rows = (await db.execute(stmt)).scalars().all()
     return [AgendaEventMini.model_validate(r) for r in rows]
+
+
+
+@router.get(
+    "/punch/contexts",
+    response_model=PunchContextsResponse,
+    summary="Active projects + open prospects for the punch picker",
+)
+async def punch_contexts(
+    db: DBSession,
+    _: CurrentUser,
+) -> PunchContextsResponse:
+    # Active projects — planned or in progress. Skip suspended/delivered.
+    proj_stmt = (
+        select(Project)
+        .where(
+            Project.status.in_(
+                [ProjectStatus.PLANNED.value, ProjectStatus.IN_PROGRESS.value]
+            )
+        )
+        .order_by(Project.name.asc())
+    )
+    projects = (await db.execute(proj_stmt)).scalars().all()
+
+    # Open prospects — anything not won/lost/spam so the employee can
+    # punch a visit or quote prep.
+    prospect_stmt = (
+        select(ContactRequest)
+        .where(
+            ContactRequest.status.in_(
+                [
+                    ContactRequestStatus.NEW.value,
+                    ContactRequestStatus.CONTACTED.value,
+                    ContactRequestStatus.QUALIFIED.value,
+                    ContactRequestStatus.QUOTED.value,
+                ]
+            )
+        )
+        .order_by(ContactRequest.created_at.desc())
+        .limit(50)
+    )
+    prospects = (await db.execute(prospect_stmt)).scalars().all()
+
+    return PunchContextsResponse(
+        projects=[
+            PunchContextProject(
+                id=p.id, name=p.name, address=p.address
+            )
+            for p in projects
+        ],
+        prospects=[
+            PunchContextProspect(
+                id=p.id,
+                name=p.name,
+                address=p.address,
+                project_type=p.project_type,
+            )
+            for p in prospects
+        ],
+    )

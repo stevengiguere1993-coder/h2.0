@@ -56,6 +56,10 @@ export const routing = defineRouting({
       fr: "/confidentialite",
       en: "/confidentialite"
     },
+    "/installer": {
+      fr: "/installer",
+      en: "/install"
+    },
     "/app": {
       fr: "/app",
       en: "/app"
@@ -116,6 +120,10 @@ export const routing = defineRouting({
       fr: "/app/services-catalogue",
       en: "/app/services-catalogue"
     },
+    "/app/conges": {
+      fr: "/app/conges",
+      en: "/app/conges"
+    },
     "/soumission/[token]": {
       fr: "/soumission/[token]",
       en: "/soumission/[token]"
@@ -132,6 +140,7 @@ export const routing = defineRouting({
     "/m/profil": { fr: "/m/profil", en: "/m/profil" },
     "/m/plus": { fr: "/m/plus", en: "/m/plus" },
     "/m/conge": { fr: "/m/conge", en: "/m/conge" },
+    "/m/conges": { fr: "/m/conges", en: "/m/conges" },
     "/m/intervention/[id]": {
       fr: "/m/intervention/[id]",
       en: "/m/intervention/[id]"

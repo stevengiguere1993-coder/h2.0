@@ -19,6 +19,7 @@ from app.api.v1.endpoints import (
     facture_items,
     facture_qbo,
     facture_send,
+    leave_requests,
     mobile,
     payments,
     sales_tasks,
@@ -72,6 +73,7 @@ api_router.include_router(qbo_token.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(sales_tasks.router)
 api_router.include_router(mobile.router)
+api_router.include_router(leave_requests.router)
 api_router.include_router(service_templates.router)
 
 # Business
