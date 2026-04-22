@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ChevronDown,
   ClipboardList,
+  FileDown,
+  Image as ImageIcon,
   Loader2,
   MapPin,
   Plus,
@@ -14,6 +16,10 @@ import {
 import { authedFetch } from "@/lib/auth";
 import { MapMeasureModal, type MeasureResult } from "@/components/map-measure";
 import { MeasurementChecklistModal } from "@/components/measurement-checklist-modal";
+import {
+  PhotoMeasureModal,
+  type PhotoMeasureResult
+} from "@/components/photo-measure-modal";
 import { getTemplate, readTemplateValues } from "@/lib/measurement-templates";
 
 export type Measurement = {
@@ -22,7 +28,7 @@ export type Measurement = {
   contact_request_id: number | null;
   label: string;
   notes: string | null;
-  kind: "horizontal" | "vertical" | "checklist";
+  kind: "horizontal" | "vertical" | "checklist" | "photo";
   area_ft2: number;
   perimeter_ft: number | null;
   wall_height_ft: number | null;
@@ -32,6 +38,16 @@ export type Measurement = {
   template_data_json: string | null;
   captured_by_user_id: number | null;
   captured_at: string;
+  created_at: string;
+};
+
+type MeasurementPhoto = {
+  id: number;
+  measurement_id: number;
+  content_type: string;
+  caption: string | null;
+  annotations_json: string | null;
+  uploaded_by_user_id: number | null;
   created_at: string;
 };
 
@@ -49,6 +65,7 @@ export function MeasurementsPanel({
   const [error, setError] = useState<string | null>(null);
   const [mapOpen, setMapOpen] = useState(false);
   const [checklistOpen, setChecklistOpen] = useState(false);
+  const [photoMeasureOpen, setPhotoMeasureOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const load = useCallback(async () => {
@@ -133,6 +150,43 @@ export function MeasurementsPanel({
     setChecklistOpen(false);
   }
 
+  async function persistPhotoMeasure(r: PhotoMeasureResult) {
+    const summary = r.annotations.lines
+      .map((l, i) => `#${i + 1}: ${l.len_ft.toFixed(2)} ft`)
+      .join(" · ");
+    const mres = await authedFetch("/api/v1/measurements", {
+      method: "POST",
+      body: JSON.stringify({
+        client_id: clientId || null,
+        contact_request_id: contactRequestId || null,
+        label: `Mesure sur photo — ${r.longest_ft.toFixed(2)} ft max`,
+        kind: "photo",
+        area_ft2: r.longest_ft,
+        notes: summary || null,
+        address: defaultAddress || null
+      })
+    });
+    if (!mres.ok) {
+      const txt = await mres.text();
+      throw new Error(txt.slice(0, 240));
+    }
+    const created = (await mres.json()) as Measurement;
+
+    const form = new FormData();
+    form.append("file", r.file);
+    form.append("annotations_json", JSON.stringify(r.annotations));
+    const up = await authedFetch(
+      `/api/v1/measurements/${created.id}/photos`,
+      { method: "POST", body: form }
+    );
+    if (!up.ok) {
+      const txt = await up.text();
+      throw new Error(`Photo: ${txt.slice(0, 240)}`);
+    }
+    setItems((xs) => [created, ...xs]);
+    setPhotoMeasureOpen(false);
+  }
+
   async function remove(id: number) {
     if (!confirm("Supprimer cette mesure ?")) return;
     try {
@@ -196,7 +250,7 @@ export function MeasurementsPanel({
                   setPickerOpen(false);
                   setChecklistOpen(true);
                 }}
-                className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-brand-900"
+                className="flex w-full items-start gap-3 border-b border-brand-800 px-4 py-3 text-left hover:bg-brand-900"
               >
                 <span className="text-lg">📋</span>
                 <div>
@@ -205,6 +259,24 @@ export function MeasurementsPanel({
                   </p>
                   <p className="mt-0.5 text-[11px] text-white/50">
                     Cuisine, salle de bain, sous-sol, multilogement…
+                  </p>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPickerOpen(false);
+                  setPhotoMeasureOpen(true);
+                }}
+                className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-brand-900"
+              >
+                <span className="text-lg">📸</span>
+                <div>
+                  <p className="text-sm font-semibold text-white">
+                    Mesure sur photo
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-white/50">
+                    Prendre une photo + calibrer avec une référence connue
                   </p>
                 </div>
               </button>
@@ -263,6 +335,13 @@ export function MeasurementsPanel({
           onSubmit={persistChecklist}
         />
       ) : null}
+
+      {photoMeasureOpen ? (
+        <PhotoMeasureModal
+          onClose={() => setPhotoMeasureOpen(false)}
+          onDone={persistPhotoMeasure}
+        />
+      ) : null}
     </section>
   );
 }
@@ -280,12 +359,112 @@ function MeasurementCard({
       ? readTemplateValues(tpl, m.template_data_json)
       : [];
   const isChecklist = m.kind === "checklist";
+  const isPhoto = m.kind === "photo";
+
+  const [photos, setPhotos] = useState<MeasurementPhoto[]>([]);
+  const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({});
+  const [uploading, setUploading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+
+  const loadPhotos = useCallback(async () => {
+    const res = await authedFetch(`/api/v1/measurements/${m.id}/photos`);
+    if (!res.ok) return;
+    setPhotos((await res.json()) as MeasurementPhoto[]);
+  }, [m.id]);
+
+  useEffect(() => {
+    void loadPhotos();
+  }, [loadPhotos]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const urls: string[] = [];
+    (async () => {
+      for (const p of photos) {
+        if (photoUrls[p.id]) continue;
+        const res = await authedFetch(
+          `/api/v1/measurements/${m.id}/photos/${p.id}/image`
+        );
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        urls.push(url);
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        setPhotoUrls((prev) => ({ ...prev, [p.id]: url }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [photos, m.id, photoUrls]);
+
+  useEffect(() => {
+    return () => {
+      for (const url of Object.values(photoUrls)) URL.revokeObjectURL(url);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function onPickPhoto(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", f);
+      const res = await authedFetch(
+        `/api/v1/measurements/${m.id}/photos`,
+        { method: "POST", body: form }
+      );
+      if (res.ok) {
+        const created = (await res.json()) as MeasurementPhoto;
+        setPhotos((xs) => [created, ...xs]);
+      }
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function removePhoto(pid: number) {
+    const res = await authedFetch(
+      `/api/v1/measurements/${m.id}/photos/${pid}`,
+      { method: "DELETE" }
+    );
+    if (res.ok || res.status === 204) {
+      setPhotos((xs) => xs.filter((p) => p.id !== pid));
+    }
+  }
+
+  async function downloadPdf() {
+    setDownloading(true);
+    try {
+      const res = await authedFetch(`/api/v1/measurements/${m.id}/pdf`);
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `releve-${m.id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   return (
     <li
       className={`rounded-xl border p-3 ${
         isChecklist
           ? "border-sky-500/30 bg-sky-500/5"
+          : isPhoto
+          ? "border-amber-500/30 bg-amber-500/5"
           : "border-brand-800 bg-brand-950"
       }`}
     >
@@ -297,6 +476,8 @@ function MeasurementCard({
           <p className="mt-0.5 text-[10px] uppercase tracking-wider text-accent-500">
             {isChecklist
               ? `${tpl?.icon || "📋"} ${tpl?.label || "Relevé"}`
+              : isPhoto
+              ? "📸 Sur photo"
               : m.kind === "vertical"
               ? "🧱 Verticale"
               : "🏠 Horizontale"}
@@ -365,6 +546,70 @@ function MeasurementCard({
           year: "numeric"
         })}
       </p>
+
+      {photos.length > 0 ? (
+        <div className="mt-2 flex gap-1.5 overflow-x-auto">
+          {photos.map((p) => (
+            <div
+              key={p.id}
+              className="group relative h-14 w-14 shrink-0 overflow-hidden rounded-md border border-brand-800 bg-black"
+            >
+              {photoUrls[p.id] ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  alt={p.caption || "Photo"}
+                  src={photoUrls[p.id]}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center">
+                  <Loader2 className="h-3 w-3 animate-spin text-white/40" />
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => removePhoto(p.id)}
+                className="absolute right-0.5 top-0.5 hidden rounded bg-black/70 p-0.5 text-rose-300 group-hover:block"
+                aria-label="Retirer la photo"
+              >
+                <Trash2 className="h-2.5 w-2.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-brand-800/60 pt-2">
+        <label className="flex cursor-pointer items-center gap-1 rounded border border-brand-800 bg-brand-900 px-2 py-1 text-[10px] text-white/70 hover:border-accent-500">
+          {uploading ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <ImageIcon className="h-3 w-3" />
+          )}
+          <span>Photo</span>
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            hidden
+            onChange={onPickPhoto}
+            disabled={uploading}
+          />
+        </label>
+        <button
+          type="button"
+          onClick={downloadPdf}
+          disabled={downloading}
+          className="flex items-center gap-1 rounded border border-brand-800 bg-brand-900 px-2 py-1 text-[10px] text-white/70 hover:border-accent-500 disabled:opacity-60"
+        >
+          {downloading ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <FileDown className="h-3 w-3" />
+          )}
+          PDF
+        </button>
+      </div>
     </li>
   );
 }

@@ -22,6 +22,7 @@ from app.models.facture_item import FactureItem
 from app.models.fournisseur import Fournisseur
 from app.models.leave_request import LeaveRequest, LeaveStatus  # noqa: F401
 from app.models.measurement import MeasurementSnapshot
+from app.models.measurement_photo import MeasurementPhoto
 from app.models.payment import Payment
 from app.models.project import Project
 from app.models.project_member import ProjectMember
@@ -54,6 +55,7 @@ __all__ = [
     "Fournisseur",
     "LeaveRequest",
     "MeasurementSnapshot",
+    "MeasurementPhoto",
     "Payment",
     "Project",
     "ProjectMember",
