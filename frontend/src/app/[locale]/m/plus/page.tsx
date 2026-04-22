@@ -14,6 +14,7 @@ import {
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch, setToken } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { InstallAppButton } from "@/components/install-app-button";
 
 export default function MobilePlus() {
   const router = useRouter();
@@ -142,6 +143,13 @@ export default function MobilePlus() {
             Mes congés (historique)
           </span>
         </Link>
+
+        <div className="pt-2">
+          <p className="text-xs uppercase tracking-wider text-white/50">
+            Application
+          </p>
+        </div>
+        <InstallAppButton variant="card" />
 
         <button
           type="button"

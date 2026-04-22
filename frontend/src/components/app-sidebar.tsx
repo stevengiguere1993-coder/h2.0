@@ -26,6 +26,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch, type UserRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { InstallAppButton } from "@/components/install-app-button";
 
 type NavItem = {
   href: string;
@@ -240,6 +241,7 @@ export function AppSidebar({
               {userEmail}
             </p>
           ) : null}
+          <InstallAppButton variant="sidebar" />
           <button
             type="button"
             onClick={onSignOut}
