@@ -128,6 +128,10 @@ export const routing = defineRouting({
       fr: "/app/utilisateurs",
       en: "/app/utilisateurs"
     },
+    "/app/parametres": {
+      fr: "/app/parametres",
+      en: "/app/parametres"
+    },
     "/soumission/[token]": {
       fr: "/soumission/[token]",
       en: "/soumission/[token]"

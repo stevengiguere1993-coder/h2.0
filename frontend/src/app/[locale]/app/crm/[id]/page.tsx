@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter as useNextRouter } from "next/navigation";
 import {
   ArrowLeft,
+  Calendar,
   CheckCircle2,
   FileText,
   Loader2,
@@ -70,6 +71,7 @@ const BUDGET_LABEL: Record<string, string> = {
 const TABS = [
   { id: "apercu", label: "Aperçu", icon: FileText },
   { id: "client", label: "Client", icon: User },
+  { id: "rendez-vous", label: "Rendez-vous", icon: Calendar },
   { id: "documents", label: "Documents", icon: FileText },
   { id: "employes", label: "Employés", icon: Users },
   { id: "taches", label: "Tâches", icon: CheckCircle2 }
@@ -332,6 +334,13 @@ export default function ProspectDetailPage() {
                 </div>
               ) : null}
 
+              {tab === "rendez-vous" ? (
+                <AppointmentScheduler
+                  contactRequestId={p.id}
+                  prospectName={p.name}
+                  prospectAddress={p.address || null}
+                />
+              ) : null}
               {tab === "documents" ? (
                 <Placeholder label="Documents (soumissions, bons de travail, photos) — module à venir avec la phase Soumissions." />
               ) : null}
@@ -383,6 +392,269 @@ function Placeholder({ label }: { label: string }) {
   return (
     <div className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 p-10 text-center">
       <p className="text-sm text-white/50">{label}</p>
+    </div>
+  );
+}
+
+// ---------- Appointment scheduler (Phase C) ----------
+
+type Appointment = {
+  id: number;
+  title: string;
+  start_at: string;
+  end_at: string | null;
+  contact_request_id: number | null;
+  assignee_id: number | null;
+  event_type: string;
+  confirmation_sent_at?: string | null;
+};
+
+function todayIso(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function AppointmentScheduler({
+  contactRequestId,
+  prospectName,
+  prospectAddress
+}: {
+  contactRequestId: number;
+  prospectName: string;
+  prospectAddress: string | null;
+}) {
+  const [past, setPast] = useState<Appointment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Form state
+  const [title, setTitle] = useState(`Visite — ${prospectName}`);
+  const [date, setDate] = useState(todayIso());
+  const [startHm, setStartHm] = useState("10:00");
+  const [endHm, setEndHm] = useState("11:00");
+  const [location, setLocation] = useState(prospectAddress || "");
+  const [eventType, setEventType] = useState("visite");
+  const [submitting, setSubmitting] = useState(false);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        // Reuse the agenda list and filter by contact_request_id.
+        const res = await authedFetch("/api/v1/agenda?limit=500");
+        if (!res.ok) throw new Error();
+        const all = (await res.json()) as Appointment[];
+        if (!cancelled)
+          setPast(
+            all
+              .filter((a) => a.contact_request_id === contactRequestId)
+              .sort(
+                (a, b) =>
+                  new Date(b.start_at).getTime() -
+                  new Date(a.start_at).getTime()
+              )
+          );
+      } catch {
+        if (!cancelled) setError("Chargement des RDV échoué.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [contactRequestId]);
+
+  async function submit() {
+    if (!title.trim() || !date || !startHm || !endHm) {
+      setError("Tous les champs sont requis.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const startIso = new Date(`${date}T${startHm}:00`).toISOString();
+      const endIso = new Date(`${date}T${endHm}:00`).toISOString();
+      const res = await authedFetch("/api/v1/appointments", {
+        method: "POST",
+        body: JSON.stringify({
+          contact_request_id: contactRequestId,
+          title: title.trim(),
+          start_at: startIso,
+          end_at: endIso,
+          location: location.trim() || null,
+          event_type: eventType
+        })
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt.slice(0, 240));
+      }
+      const created = (await res.json()) as Appointment;
+      setPast((xs) => [created, ...xs]);
+      setSuccess(
+        "RDV créé. Un courriel de confirmation a été envoyé au prospect."
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <section className="rounded-2xl border border-accent-500/30 bg-accent-500/5 p-5">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          Planifier un rendez-vous
+        </h3>
+        <p className="mt-1 text-xs text-white/60">
+          Le prospect reçoit un courriel de confirmation immédiat + un
+          rappel 24 h avant.
+        </p>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <label className="label">Titre</label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className="input"
+            />
+          </div>
+          <div>
+            <label className="label">Type</label>
+            <select
+              value={eventType}
+              onChange={(e) => setEventType(e.target.value)}
+              className="input"
+            >
+              <option value="visite">Visite / soumission</option>
+              <option value="reunion">Réunion</option>
+              <option value="livraison">Livraison</option>
+              <option value="chantier">Chantier</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">Date</label>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="input"
+            />
+          </div>
+          <div>
+            <label className="label">Début</label>
+            <input
+              type="time"
+              value={startHm}
+              onChange={(e) => setStartHm(e.target.value)}
+              className="input"
+            />
+          </div>
+          <div>
+            <label className="label">Fin</label>
+            <input
+              type="time"
+              value={endHm}
+              onChange={(e) => setEndHm(e.target.value)}
+              className="input"
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label">Adresse / lieu</label>
+            <input
+              type="text"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="Adresse de la visite"
+              className="input"
+            />
+          </div>
+        </div>
+
+        {error ? (
+          <p className="mt-3 text-sm text-rose-300">{error}</p>
+        ) : null}
+        {success ? (
+          <p className="mt-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+            {success}
+          </p>
+        ) : null}
+
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={submit}
+            disabled={submitting}
+            className="btn-accent text-sm disabled:opacity-60"
+          >
+            {submitting ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : null}
+            Planifier + envoyer la confirmation
+          </button>
+        </div>
+      </section>
+
+      <section>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-accent-500">
+          Historique
+        </h3>
+        {loading ? (
+          <div className="flex items-center justify-center py-6">
+            <Loader2 className="h-5 w-5 animate-spin text-white/40" />
+          </div>
+        ) : past.length === 0 ? (
+          <p className="mt-2 text-xs text-white/50">
+            Aucun rendez-vous planifié.
+          </p>
+        ) : (
+          <ul className="mt-3 space-y-2">
+            {past.map((a) => (
+              <li
+                key={a.id}
+                className="rounded-xl border border-brand-800 bg-brand-900 p-3"
+              >
+                <p className="text-sm font-semibold text-white">
+                  {a.title}
+                </p>
+                <p className="mt-0.5 text-xs text-white/60">
+                  {new Date(a.start_at).toLocaleString("fr-CA", {
+                    weekday: "short",
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit"
+                  })}
+                  {a.end_at
+                    ? ` → ${new Date(a.end_at).toLocaleTimeString(
+                        "fr-CA",
+                        { hour: "2-digit", minute: "2-digit" }
+                      )}`
+                    : ""}
+                </p>
+                <span className="mt-1 inline-flex rounded bg-white/5 px-1.5 py-0.5 text-[10px] uppercase text-white/50">
+                  {a.event_type}
+                </span>
+                {a.confirmation_sent_at ? (
+                  <span className="ml-1 inline-flex rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] uppercase text-emerald-300">
+                    courriel envoyé
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }

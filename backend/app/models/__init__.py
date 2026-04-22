@@ -9,6 +9,11 @@ from app.models.achat import Achat
 from app.models.agenda_event import AgendaEvent
 from app.models.bon_item import BonItem
 from app.models.bon_travail import BonTravail
+from app.models.calendar_sync import (
+    AvailabilitySlot,
+    ExternalBusyBlock,
+    UserCalendarFeed,
+)
 from app.models.client import Client
 from app.models.contact_request import ContactRequest
 from app.models.employe import Employe
@@ -37,6 +42,9 @@ __all__ = [
     "AgendaEvent",
     "BonItem",
     "BonTravail",
+    "AvailabilitySlot",
+    "ExternalBusyBlock",
+    "UserCalendarFeed",
     "Client",
     "ContactRequest",
     "Employe",

@@ -7,8 +7,10 @@ Main router that aggregates all API v1 endpoints.
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    appointments,
     auth,
     blog,
+    calendar,
     clients,
     contact,
     dashboard,
@@ -75,6 +77,8 @@ api_router.include_router(public_soumission.router)
 api_router.include_router(public_bon.router)
 api_router.include_router(qbo_token.router)
 api_router.include_router(dashboard.router)
+api_router.include_router(calendar.router)
+api_router.include_router(appointments.router)
 api_router.include_router(sales_tasks.router)
 api_router.include_router(mobile.router)
 api_router.include_router(leave_requests.router)

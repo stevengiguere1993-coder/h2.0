@@ -124,6 +124,9 @@ async def init_db() -> None:
             ("bons_travail", "signature_image_content_type", "VARCHAR(100)"),
             ("users", "role", "VARCHAR(16) NOT NULL DEFAULT 'employee'"),
             ("project_tasks", "phase_id", "INTEGER"),
+            ("agenda_events", "contact_request_id", "INTEGER"),
+            ("agenda_events", "reminder_sent_at", "TIMESTAMP WITH TIME ZONE"),
+            ("agenda_events", "confirmation_sent_at", "TIMESTAMP WITH TIME ZONE"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

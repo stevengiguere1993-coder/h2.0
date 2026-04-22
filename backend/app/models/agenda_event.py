@@ -28,6 +28,22 @@ class AgendaEvent(Base, TimestampUpdateMixin):
     assignee_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("employes.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Prospect tied to this event (e.g. scheduled visit to quote the
+    # work). When set, we auto-send a confirmation email on create and
+    # a 24h reminder via cron.
+    contact_request_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("contact_requests.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     event_type: Mapped[str] = mapped_column(String(32), nullable=False, default="chantier")
     # e.g. chantier, visite, reunion, livraison
+
+    # Marker for the 24h reminder cron so we don't send twice.
+    reminder_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    confirmation_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
