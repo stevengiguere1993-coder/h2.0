@@ -16,6 +16,7 @@ from app.models.calendar_sync import (
 )
 from app.models.client import Client
 from app.models.contact_request import ContactRequest
+from app.models.contact_request_photo import ContactRequestPhoto
 from app.models.employe import Employe
 from app.models.facture import Facture
 from app.models.facture_item import FactureItem
@@ -49,6 +50,7 @@ __all__ = [
     "UserCalendarFeed",
     "Client",
     "ContactRequest",
+    "ContactRequestPhoto",
     "Employe",
     "Facture",
     "FactureItem",

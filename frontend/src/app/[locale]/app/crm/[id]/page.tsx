@@ -7,6 +7,7 @@ import {
   Calendar,
   CheckCircle2,
   FileText,
+  Image as ImageIcon,
   Loader2,
   Mail,
   MapPin,
@@ -364,7 +365,7 @@ export default function ProspectDetailPage() {
                 />
               ) : null}
               {tab === "documents" ? (
-                <Placeholder label="Documents (soumissions, bons de travail, photos) — module à venir avec la phase Soumissions." />
+                <ProspectDocuments contactRequestId={p.id} />
               ) : null}
               {tab === "employes" ? (
                 <Placeholder label="Employés assignés — module à venir avec la phase Projets/Agenda." />
@@ -418,6 +419,163 @@ function Placeholder({ label }: { label: string }) {
   );
 }
 
+// ---------- Prospect documents (photos uploaded with the contact form) ----
+
+type ProspectPhoto = {
+  id: number;
+  content_type: string;
+  filename: string | null;
+  created_at: string;
+};
+
+function ProspectDocuments({
+  contactRequestId
+}: {
+  contactRequestId: number;
+}) {
+  const [photos, setPhotos] = useState<ProspectPhoto[]>([]);
+  const [urls, setUrls] = useState<Record<number, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const res = await authedFetch(
+          `/api/v1/contact/${contactRequestId}/photos`
+        );
+        if (!res.ok) throw new Error();
+        const data = (await res.json()) as ProspectPhoto[];
+        if (!cancelled) setPhotos(data);
+      } catch {
+        if (!cancelled) setError("Chargement des photos échoué.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [contactRequestId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const created: string[] = [];
+    (async () => {
+      for (const p of photos) {
+        if (urls[p.id]) continue;
+        const res = await authedFetch(
+          `/api/v1/contact/${contactRequestId}/photos/${p.id}/image`
+        );
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        created.push(url);
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        setUrls((prev) => ({ ...prev, [p.id]: url }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [photos, contactRequestId, urls]);
+
+  useEffect(() => {
+    return () => {
+      for (const url of Object.values(urls)) URL.revokeObjectURL(url);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function remove(pid: number) {
+    if (!confirm("Supprimer cette photo ?")) return;
+    const res = await authedFetch(
+      `/api/v1/contact/${contactRequestId}/photos/${pid}`,
+      { method: "DELETE" }
+    );
+    if (res.ok || res.status === 204) {
+      setPhotos((xs) => xs.filter((x) => x.id !== pid));
+    }
+  }
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-center gap-2">
+        <ImageIcon className="h-4 w-4 text-accent-500" />
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          Photos transmises par le prospect
+        </h3>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-5 w-5 animate-spin text-white/40" />
+        </div>
+      ) : error ? (
+        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {error}
+        </p>
+      ) : photos.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-10 text-center text-xs text-white/50">
+          Aucune photo n'a été jointe au formulaire.
+        </p>
+      ) : (
+        <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {photos.map((p) => (
+            <li
+              key={p.id}
+              className="group overflow-hidden rounded-xl border border-brand-800 bg-brand-900"
+            >
+              <a
+                href={urls[p.id] || "#"}
+                target="_blank"
+                rel="noreferrer"
+                className="block aspect-video w-full overflow-hidden bg-black"
+              >
+                {urls[p.id] ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    alt={p.filename || "Photo"}
+                    src={urls[p.id]}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center">
+                    <Loader2 className="h-4 w-4 animate-spin text-white/40" />
+                  </div>
+                )}
+              </a>
+              <div className="flex items-center justify-between gap-2 p-2">
+                <div className="min-w-0 text-xs">
+                  <p className="truncate text-white">
+                    {p.filename || `photo-${p.id}`}
+                  </p>
+                  <p className="text-white/40">
+                    {new Date(p.created_at).toLocaleDateString("fr-CA")}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => remove(p.id)}
+                  className="rounded p-1 text-white/40 hover:text-rose-300"
+                  aria-label="Supprimer"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 // ---------- Appointment scheduler (Phase C) ----------
 
 type Appointment = {
@@ -437,6 +595,8 @@ function todayIso(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+type Employe = { id: number; full_name: string };
+
 function AppointmentScheduler({
   contactRequestId,
   prospectName,
@@ -449,6 +609,7 @@ function AppointmentScheduler({
   const [past, setPast] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [employes, setEmployes] = useState<Employe[]>([]);
 
   // Form state
   const [title, setTitle] = useState(`Visite — ${prospectName}`);
@@ -457,6 +618,7 @@ function AppointmentScheduler({
   const [endHm, setEndHm] = useState("11:00");
   const [location, setLocation] = useState(prospectAddress || "");
   const [eventType, setEventType] = useState("visite");
+  const [assigneeId, setAssigneeId] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -465,11 +627,14 @@ function AppointmentScheduler({
     async function load() {
       setLoading(true);
       try {
-        // Reuse the agenda list and filter by contact_request_id.
-        const res = await authedFetch("/api/v1/agenda?limit=500");
-        if (!res.ok) throw new Error();
-        const all = (await res.json()) as Appointment[];
-        if (!cancelled)
+        const [agendaRes, empRes] = await Promise.all([
+          authedFetch("/api/v1/agenda?limit=500"),
+          authedFetch("/api/v1/employes?limit=200")
+        ]);
+        if (!agendaRes.ok) throw new Error();
+        const all = (await agendaRes.json()) as Appointment[];
+        const emps = empRes.ok ? ((await empRes.json()) as Employe[]) : [];
+        if (!cancelled) {
           setPast(
             all
               .filter((a) => a.contact_request_id === contactRequestId)
@@ -479,6 +644,8 @@ function AppointmentScheduler({
                   new Date(a.start_at).getTime()
               )
           );
+          setEmployes(emps);
+        }
       } catch {
         if (!cancelled) setError("Chargement des RDV échoué.");
       } finally {
@@ -510,7 +677,8 @@ function AppointmentScheduler({
           start_at: startIso,
           end_at: endIso,
           location: location.trim() || null,
-          event_type: eventType
+          event_type: eventType,
+          assignee_id: assigneeId ? Number(assigneeId) : null
         })
       });
       if (!res.ok) {
@@ -600,6 +768,25 @@ function AppointmentScheduler({
               className="input"
             />
           </div>
+          <div className="sm:col-span-2">
+            <label className="label">Assigné à</label>
+            <select
+              value={assigneeId}
+              onChange={(e) => setAssigneeId(e.target.value)}
+              className="input"
+            >
+              <option value="">— Personne assignée —</option>
+              {employes.map((e) => (
+                <option key={e.id} value={String(e.id)}>
+                  {e.full_name}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-[11px] text-white/40">
+              La personne assignée reçoit le RDV dans son calendrier
+              (lien .ics personnel dans son profil) + un courriel.
+            </p>
+          </div>
         </div>
 
         {error ? (
@@ -667,6 +854,13 @@ function AppointmentScheduler({
                 <span className="mt-1 inline-flex rounded bg-white/5 px-1.5 py-0.5 text-[10px] uppercase text-white/50">
                   {a.event_type}
                 </span>
+                {a.assignee_id ? (
+                  <span className="ml-1 inline-flex rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-200">
+                    👤{" "}
+                    {employes.find((e) => e.id === a.assignee_id)
+                      ?.full_name || `#${a.assignee_id}`}
+                  </span>
+                ) : null}
                 {a.confirmation_sent_at ? (
                   <span className="ml-1 inline-flex rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] uppercase text-emerald-300">
                     courriel envoyé

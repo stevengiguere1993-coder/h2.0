@@ -17,7 +17,11 @@ from sqlalchemy import select
 from app.api.deps import DBSession, RequireManager
 from app.models.agenda_event import AgendaEvent
 from app.models.contact_request import ContactRequest
-from app.services.appointment_mail import send_appointment_confirmation
+from app.models.employe import Employe
+from app.services.appointment_mail import (
+    send_appointment_assignee_invite,
+    send_appointment_confirmation,
+)
 
 
 router = APIRouter(prefix="/appointments", tags=["appointments"])
@@ -117,5 +121,35 @@ async def schedule_appointment(
                 await fresh_db.commit()
 
     bg.add_task(_send_and_mark, prospect.id, event.id)
+
+    # If an employee was assigned, send them an .ics calendar invite so
+    # the RDV lands in their personal calendar.
+    if data.assignee_id is not None:
+        async def _invite_assignee(assignee_id: int, event_id: int) -> None:
+            from app.db.session import AsyncSessionLocal
+
+            async with AsyncSessionLocal() as fresh_db:
+                emp = (
+                    await fresh_db.execute(
+                        select(Employe).where(Employe.id == assignee_id)
+                    )
+                ).scalar_one_or_none()
+                ev = (
+                    await fresh_db.execute(
+                        select(AgendaEvent).where(AgendaEvent.id == event_id)
+                    )
+                ).scalar_one_or_none()
+                pr = (
+                    await fresh_db.execute(
+                        select(ContactRequest).where(
+                            ContactRequest.id == ev.contact_request_id
+                        )
+                    )
+                ).scalar_one_or_none() if ev and ev.contact_request_id else None
+                if emp is None or ev is None:
+                    return
+                await send_appointment_assignee_invite(emp, ev, pr)
+
+        bg.add_task(_invite_assignee, data.assignee_id, event.id)
 
     return AppointmentRead.model_validate(event)
