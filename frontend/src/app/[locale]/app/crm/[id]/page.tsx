@@ -430,12 +430,25 @@ type ProspectPhoto = {
   created_at: string;
 };
 
+type ProspectSoumission = {
+  id: number;
+  reference: string;
+  title: string;
+  status: string;
+  total: number | string | null;
+  accepted_at: string | null;
+  signed_name: string | null;
+  contact_request_id: number | null;
+};
+
 function ProspectDocuments({
   contactRequestId
 }: {
   contactRequestId: number;
 }) {
-  const [photos, setPhotos] = useState<ProspectPhoto[]>([]);
+  const confirm = useConfirm();
+  const [files, setFiles] = useState<ProspectPhoto[]>([]);
+  const [soumissions, setSoumissions] = useState<ProspectSoumission[]>([]);
   const [urls, setUrls] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -446,14 +459,20 @@ function ProspectDocuments({
     (async () => {
       setLoading(true);
       try {
-        const res = await authedFetch(
-          `/api/v1/contact/${contactRequestId}/photos`
-        );
-        if (!res.ok) throw new Error();
-        const data = (await res.json()) as ProspectPhoto[];
-        if (!cancelled) setPhotos(data);
+        const [fRes, sRes] = await Promise.all([
+          authedFetch(`/api/v1/contact/${contactRequestId}/photos`),
+          authedFetch("/api/v1/soumissions?limit=500")
+        ]);
+        if (cancelled) return;
+        if (fRes.ok) setFiles((await fRes.json()) as ProspectPhoto[]);
+        if (sRes.ok) {
+          const all = (await sRes.json()) as ProspectSoumission[];
+          setSoumissions(
+            all.filter((s) => s.contact_request_id === contactRequestId)
+          );
+        }
       } catch {
-        if (!cancelled) setError("Chargement des photos échoué.");
+        if (!cancelled) setError("Chargement échoué.");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -463,30 +482,41 @@ function ProspectDocuments({
     };
   }, [contactRequestId]);
 
+  // Split images vs. other documents based on MIME type.
+  const photos = files.filter((f) => f.content_type.startsWith("image/"));
+  const otherDocs = files.filter(
+    (f) => !f.content_type.startsWith("image/")
+  );
+  const signedSoumissions = soumissions.filter(
+    (s) => s.status === "accepted" || s.accepted_at
+  );
+
+  // Lazy-load blob URLs for both photos (thumbnail preview) and
+  // other documents (PDF download link). The endpoint requires a
+  // Bearer token, so a plain <a href> would 401 — we fetch via
+  // authedFetch and create an object URL the browser can render.
   useEffect(() => {
     let cancelled = false;
-    const created: string[] = [];
     (async () => {
-      for (const p of photos) {
-        if (urls[p.id]) continue;
+      for (const f of files) {
+        if (urls[f.id]) continue;
         const res = await authedFetch(
-          `/api/v1/contact/${contactRequestId}/photos/${p.id}/image`
+          `/api/v1/contact/${contactRequestId}/photos/${f.id}/image`
         );
         if (!res.ok) continue;
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
-        created.push(url);
         if (cancelled) {
           URL.revokeObjectURL(url);
           return;
         }
-        setUrls((prev) => ({ ...prev, [p.id]: url }));
+        setUrls((prev) => ({ ...prev, [f.id]: url }));
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [photos, contactRequestId, urls]);
+  }, [files, contactRequestId, urls]);
 
   useEffect(() => {
     return () => {
@@ -496,24 +526,24 @@ function ProspectDocuments({
   }, []);
 
   async function remove(pid: number) {
-    if (!(await confirm("Supprimer cette photo ?"))) return;
+    if (!(await confirm("Supprimer ce document ?"))) return;
     const res = await authedFetch(
       `/api/v1/contact/${contactRequestId}/photos/${pid}`,
       { method: "DELETE" }
     );
     if (res.ok || res.status === 204) {
-      setPhotos((xs) => xs.filter((x) => x.id !== pid));
+      setFiles((xs) => xs.filter((x) => x.id !== pid));
     }
   }
 
   async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files || []);
+    const picked = Array.from(e.target.files || []);
     e.target.value = "";
-    if (files.length === 0) return;
+    if (picked.length === 0) return;
     setUploading(true);
     setError(null);
     try {
-      for (const f of files) {
+      for (const f of picked) {
         const form = new FormData();
         form.append("file", f);
         const res = await authedFetch(
@@ -525,7 +555,7 @@ function ProspectDocuments({
           throw new Error(txt.slice(0, 240) || `http_${res.status}`);
         }
         const created = (await res.json()) as ProspectPhoto;
-        setPhotos((xs) => [...xs, created]);
+        setFiles((xs) => [...xs, created]);
       }
     } catch (e) {
       setError(`Envoi échoué : ${(e as Error).message}`);
@@ -534,25 +564,36 @@ function ProspectDocuments({
     }
   }
 
+  function fmtMoney(n: number | string | null): string {
+    return new Intl.NumberFormat("fr-CA", {
+      style: "currency",
+      currency: "CAD",
+      maximumFractionDigits: 2
+    }).format(Number(n || 0));
+  }
+
   return (
-    <section className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2">
-          <ImageIcon className="h-4 w-4 text-accent-500" />
+    <section className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
           <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-            Photos transmises par le prospect
+            Documents du prospect
           </h3>
+          <p className="mt-1 text-xs text-white/60">
+            Tout ce qu&apos;on reçoit ou produit pour ce prospect, classé
+            par type.
+          </p>
         </div>
-        <label className="ml-auto inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-brand-800 bg-brand-900 px-3 py-1.5 text-xs text-white hover:border-accent-500">
+        <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-brand-800 bg-brand-900 px-3 py-1.5 text-xs text-white hover:border-accent-500">
           {uploading ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
             <ImageIcon className="h-3.5 w-3.5" />
           )}
-          Ajouter une photo
+          Ajouter un fichier
           <input
             type="file"
-            accept="image/*"
+            accept="image/*,application/pdf"
             multiple
             hidden
             onChange={onUpload}
@@ -561,65 +602,170 @@ function ProspectDocuments({
         </label>
       </div>
 
+      {error ? (
+        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {error}
+        </p>
+      ) : null}
+
       {loading ? (
         <div className="flex items-center justify-center py-8">
           <Loader2 className="h-5 w-5 animate-spin text-white/40" />
         </div>
-      ) : error ? (
-        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-          {error}
-        </p>
-      ) : photos.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-10 text-center text-xs text-white/50">
-          Aucune photo n'a été jointe au formulaire.
-        </p>
       ) : (
-        <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {photos.map((p) => (
-            <li
-              key={p.id}
-              className="group overflow-hidden rounded-xl border border-brand-800 bg-brand-900"
-            >
-              <a
-                href={urls[p.id] || "#"}
-                target="_blank"
-                rel="noreferrer"
-                className="block aspect-video w-full overflow-hidden bg-black"
-              >
-                {urls[p.id] ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    alt={p.filename || "Photo"}
-                    src={urls[p.id]}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="flex h-full items-center justify-center">
-                    <Loader2 className="h-4 w-4 animate-spin text-white/40" />
-                  </div>
-                )}
-              </a>
-              <div className="flex items-center justify-between gap-2 p-2">
-                <div className="min-w-0 text-xs">
-                  <p className="truncate text-white">
-                    {p.filename || `photo-${p.id}`}
-                  </p>
-                  <p className="text-white/40">
-                    {new Date(p.created_at).toLocaleDateString("fr-CA")}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => remove(p.id)}
-                  className="rounded p-1 text-white/40 hover:text-rose-300"
-                  aria-label="Supprimer"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
+        <>
+          {/* ---- Photos ---- */}
+          <div>
+            <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white/60">
+              <ImageIcon className="h-3.5 w-3.5" />
+              Photos ({photos.length})
+            </p>
+            {photos.length === 0 ? (
+              <p className="mt-2 rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
+                Aucune photo jointe.
+              </p>
+            ) : (
+              <ul className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {photos.map((p) => (
+                  <li
+                    key={p.id}
+                    className="group overflow-hidden rounded-xl border border-brand-800 bg-brand-900"
+                  >
+                    <a
+                      href={urls[p.id] || "#"}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block aspect-video w-full overflow-hidden bg-black"
+                    >
+                      {urls[p.id] ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          alt={p.filename || "Photo"}
+                          src={urls[p.id]}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-full items-center justify-center">
+                          <Loader2 className="h-4 w-4 animate-spin text-white/40" />
+                        </div>
+                      )}
+                    </a>
+                    <div className="flex items-center justify-between gap-2 p-2">
+                      <div className="min-w-0 text-xs">
+                        <p className="truncate text-white">
+                          {p.filename || `photo-${p.id}`}
+                        </p>
+                        <p className="text-white/40">
+                          {new Date(p.created_at).toLocaleDateString("fr-CA")}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => remove(p.id)}
+                        className="rounded p-1 text-white/40 hover:text-rose-300"
+                        aria-label="Supprimer"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* ---- Soumissions signées ---- */}
+          <div>
+            <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white/60">
+              <FileText className="h-3.5 w-3.5" />
+              Soumissions signées ({signedSoumissions.length})
+            </p>
+            {signedSoumissions.length === 0 ? (
+              <p className="mt-2 rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
+                Aucune soumission signée par ce prospect.
+              </p>
+            ) : (
+              <ul className="mt-3 space-y-2">
+                {signedSoumissions.map((s) => (
+                  <li key={s.id}>
+                    <Link
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      href={`/app/soumissions/${s.id}` as any}
+                      className="flex items-start justify-between gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-sm hover:border-emerald-500/50"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-white">
+                          {s.reference} — {s.title}
+                        </p>
+                        <p className="text-[11px] text-white/50">
+                          Signée
+                          {s.signed_name ? ` par ${s.signed_name}` : ""}
+                          {s.accepted_at
+                            ? ` le ${new Date(s.accepted_at).toLocaleDateString("fr-CA")}`
+                            : ""}
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-sm font-semibold text-emerald-300">
+                        {fmtMoney(s.total)}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* ---- Autres documents (PDF, plans, devis concurrents…) ---- */}
+          <div>
+            <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white/60">
+              <FileText className="h-3.5 w-3.5" />
+              Autres documents ({otherDocs.length})
+            </p>
+            {otherDocs.length === 0 ? (
+              <p className="mt-2 rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
+                Aucun PDF ou autre document. Utilise « Ajouter un
+                fichier » plus haut pour déposer un plan, un devis
+                concurrent, un rapport d&apos;inspection, etc.
+              </p>
+            ) : (
+              <ul className="mt-3 space-y-1.5">
+                {otherDocs.map((d) => (
+                  <li
+                    key={d.id}
+                    className="flex items-center justify-between gap-3 rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm"
+                  >
+                    <a
+                      href={urls[d.id] || "#"}
+                      target="_blank"
+                      rel="noreferrer"
+                      download={d.filename || `document-${d.id}`}
+                      className="flex min-w-0 items-center gap-2 text-white hover:text-accent-500"
+                    >
+                      <FileText className="h-4 w-4 shrink-0 text-accent-500" />
+                      <div className="min-w-0">
+                        <p className="truncate">
+                          {d.filename || `document-${d.id}`}
+                        </p>
+                        <p className="text-[10px] text-white/40">
+                          {d.content_type} ·{" "}
+                          {new Date(d.created_at).toLocaleDateString("fr-CA")}
+                        </p>
+                      </div>
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => remove(d.id)}
+                      className="rounded p-1 text-white/40 hover:text-rose-300"
+                      aria-label="Supprimer"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </>
       )}
     </section>
   );
