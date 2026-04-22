@@ -30,12 +30,28 @@ export function setToken(token: string | null) {
 }
 
 export type LoginResult = { access_token: string; token_type: string };
+export type UserRole = "owner" | "admin" | "manager" | "employee";
+
 export type CurrentUser = {
   id: number;
   email: string;
   is_active: boolean;
   is_admin: boolean;
+  role: UserRole;
 };
+
+const ROLE_RANK: Record<UserRole, number> = {
+  owner: 4,
+  admin: 3,
+  manager: 2,
+  employee: 1
+};
+
+/** True if `user` has at least `min` role privilege level. */
+export function hasMinRole(user: CurrentUser | null, min: UserRole): boolean {
+  if (!user) return false;
+  return ROLE_RANK[user.role] >= ROLE_RANK[min];
+}
 
 export async function login(email: string, password: string): Promise<LoginResult> {
   const body = new URLSearchParams();

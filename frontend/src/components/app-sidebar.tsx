@@ -14,6 +14,7 @@ import {
   Contact,
   LogOut,
   Palmtree,
+  ShieldCheck,
   ShoppingCart,
   Truck,
   UserCircle,
@@ -22,33 +23,50 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
-import { authedFetch } from "@/lib/auth";
+import { authedFetch, type UserRole } from "@/lib/auth";
+import { useCurrentUser } from "@/hooks/use-current-user";
 
 type NavItem = {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
+  /** Minimum role required to see this item. Default: manager. */
+  minRole?: UserRole;
 };
 
 const CONSTRUCTION_NAV: NavItem[] = [
-  { href: "/app", label: "Accueil", icon: Home },
-  { href: "/app/crm", label: "CRM / Prospects", icon: Users },
-  { href: "/app/clients", label: "Clients", icon: Contact },
-  { href: "/app/soumissions", label: "Soumissions", icon: FileText },
-  { href: "/app/projets", label: "Projets", icon: Briefcase },
-  { href: "/app/agenda", label: "Agenda", icon: Calendar },
-  { href: "/app/bons", label: "Bons de travail", icon: ClipboardCheck },
-  { href: "/app/punch", label: "Punch / Temps", icon: Clock },
-  { href: "/app/facturation", label: "Facturation", icon: DollarSign },
-  { href: "/app/achats", label: "Achats / PO", icon: ShoppingCart }
+  { href: "/app", label: "Accueil", icon: Home, minRole: "employee" },
+  { href: "/app/crm", label: "CRM / Prospects", icon: Users, minRole: "manager" },
+  { href: "/app/clients", label: "Clients", icon: Contact, minRole: "manager" },
+  { href: "/app/soumissions", label: "Soumissions", icon: FileText, minRole: "manager" },
+  { href: "/app/projets", label: "Projets", icon: Briefcase, minRole: "employee" },
+  { href: "/app/agenda", label: "Agenda", icon: Calendar, minRole: "employee" },
+  { href: "/app/bons", label: "Bons de travail", icon: ClipboardCheck, minRole: "manager" },
+  { href: "/app/punch", label: "Punch / Temps", icon: Clock, minRole: "manager" },
+  { href: "/app/facturation", label: "Facturation", icon: DollarSign, minRole: "manager" },
+  { href: "/app/achats", label: "Achats / PO", icon: ShoppingCart, minRole: "manager" }
 ];
 
 const RESOURCES_NAV: NavItem[] = [
-  { href: "/app/employes", label: "Employés", icon: UserCircle },
-  { href: "/app/sous-traitants", label: "Sous-traitants", icon: HardHat },
-  { href: "/app/fournisseurs", label: "Fournisseurs", icon: Truck },
-  { href: "/app/conges", label: "Congés", icon: Palmtree }
+  { href: "/app/employes", label: "Employés", icon: UserCircle, minRole: "admin" },
+  { href: "/app/sous-traitants", label: "Sous-traitants", icon: HardHat, minRole: "admin" },
+  { href: "/app/fournisseurs", label: "Fournisseurs", icon: Truck, minRole: "admin" },
+  { href: "/app/services-catalogue", label: "Catalogue services", icon: ClipboardCheck, minRole: "manager" },
+  { href: "/app/conges", label: "Congés", icon: Palmtree, minRole: "manager" },
+  { href: "/app/utilisateurs", label: "Utilisateurs", icon: ShieldCheck, minRole: "owner" }
 ];
+
+const ROLE_RANK: Record<UserRole, number> = {
+  owner: 4,
+  admin: 3,
+  manager: 2,
+  employee: 1
+};
+
+function canSee(role: UserRole | undefined, min: UserRole = "manager") {
+  if (!role) return false;
+  return ROLE_RANK[role] >= ROLE_RANK[min];
+}
 
 export function AppSidebar({
   open,
@@ -63,6 +81,16 @@ export function AppSidebar({
 }) {
   const pathname = usePathname();
   const [pendingLeaves, setPendingLeaves] = useState(0);
+  const { user } = useCurrentUser();
+  const role = (user?.role as UserRole | undefined) || "employee";
+
+  // Filter nav items based on the signed-in user's role.
+  const visibleConstruction = CONSTRUCTION_NAV.filter((i) =>
+    canSee(role, i.minRole)
+  );
+  const visibleResources = RESOURCES_NAV.filter((i) =>
+    canSee(role, i.minRole)
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -132,7 +160,7 @@ export function AppSidebar({
               Construction
             </p>
             <ul className="space-y-0.5">
-              {CONSTRUCTION_NAV.map((item) => {
+              {visibleConstruction.map((item) => {
                 const active = isActive(item.href);
                 return (
                   <li key={item.href}>
@@ -159,12 +187,12 @@ export function AppSidebar({
             </ul>
           </div>
 
-          <div>
+          <div className={visibleResources.length === 0 ? "hidden" : ""}>
             <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-accent-500">
               Ressources
             </p>
             <ul className="space-y-0.5">
-              {RESOURCES_NAV.map((item) => {
+              {visibleResources.map((item) => {
                 const active = isActive(item.href);
                 const badge =
                   item.href === "/app/conges" && pendingLeaves > 0

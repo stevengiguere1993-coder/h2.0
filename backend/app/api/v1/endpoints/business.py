@@ -8,7 +8,7 @@ from typing import List, Type
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 
-from app.api.deps import CurrentUser, DBSession
+from app.api.deps import CurrentUser, DBSession, RequireManager
 from app.db.base import Base
 from app.models.achat import Achat
 from app.models.agenda_event import AgendaEvent
@@ -61,11 +61,22 @@ def make_crud_router(
     create_schema: Type[BaseModel],
     update_schema: Type[BaseModel],
     read_schema: Type[BaseModel],
+    require_manager: bool = True,
 ) -> APIRouter:
+    """Generic CRUD endpoints. By default they require manager+ role so
+    that plain employees don't see (or modify) records they shouldn't.
+    Set ``require_manager=False`` to keep them open to any logged-in
+    user (e.g. agenda events which employees need to read)."""
     router = APIRouter(prefix=prefix, tags=[tag])
 
+    # One auth dep per-operation: manager+ for writes always, reads when
+    # require_manager=True. For open routers (agenda), reads are any user
+    # but writes still require manager+.
+    AuthRead = RequireManager if require_manager else CurrentUser
+    AuthWrite = RequireManager
+
     @router.post("", status_code=status.HTTP_201_CREATED)
-    async def create(data: create_schema, db: DBSession, _: CurrentUser):  # type: ignore[valid-type]
+    async def create(data: create_schema, db: DBSession, _: AuthWrite):  # type: ignore[valid-type]
         crud = GenericCrud(db, model)
         obj = await crud.create(data)
         return read_schema.model_validate(obj)
@@ -73,7 +84,7 @@ def make_crud_router(
     @router.get("", response_model=List[read_schema])  # type: ignore[valid-type]
     async def list_items(
         db: DBSession,
-        _: CurrentUser,
+        _: AuthRead,
         skip: int = Query(0, ge=0),
         limit: int = Query(100, ge=1, le=500),
     ):
@@ -82,7 +93,7 @@ def make_crud_router(
         return [read_schema.model_validate(i) for i in items]
 
     @router.get("/{item_id}")
-    async def get_item(item_id: int, db: DBSession, _: CurrentUser):
+    async def get_item(item_id: int, db: DBSession, _: AuthRead):
         crud = GenericCrud(db, model)
         obj = await crud.get(item_id)
         if obj is None:
@@ -90,7 +101,7 @@ def make_crud_router(
         return read_schema.model_validate(obj)
 
     @router.patch("/{item_id}")
-    async def update_item(item_id: int, data: update_schema, db: DBSession, _: CurrentUser):  # type: ignore[valid-type]
+    async def update_item(item_id: int, data: update_schema, db: DBSession, _: AuthWrite):  # type: ignore[valid-type]
         crud = GenericCrud(db, model)
         obj = await crud.get(item_id)
         if obj is None:
@@ -99,7 +110,7 @@ def make_crud_router(
         return read_schema.model_validate(obj)
 
     @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-    async def delete_item(item_id: int, db: DBSession, _: CurrentUser):
+    async def delete_item(item_id: int, db: DBSession, _: AuthWrite):
         crud = GenericCrud(db, model)
         obj = await crud.get(item_id)
         if obj is None:
@@ -126,16 +137,22 @@ soumissions_router = make_crud_router(
     model=Soumission, create_schema=SoumissionCreate, update_schema=SoumissionUpdate, read_schema=SoumissionRead,
 )
 agenda_router = make_crud_router(
+    # Agenda reads must stay open to employees (they need to consult
+    # their own schedule). Writes still require manager+.
     prefix="/agenda", tag="agenda",
     model=AgendaEvent, create_schema=AgendaEventCreate, update_schema=AgendaEventUpdate, read_schema=AgendaEventRead,
+    require_manager=False,
 )
 bons_router = make_crud_router(
     prefix="/bons-travail", tag="bons-travail",
     model=BonTravail, create_schema=BonTravailCreate, update_schema=BonTravailUpdate, read_schema=BonTravailRead,
 )
 punch_router = make_crud_router(
+    # Reads stay open: employees consult their own punches via
+    # /punch/me. Writes (admin edits) still require manager+.
     prefix="/punch", tag="punch",
     model=Punch, create_schema=PunchCreate, update_schema=PunchUpdate, read_schema=PunchRead,
+    require_manager=False,
 )
 factures_router = make_crud_router(
     prefix="/factures", tag="factures",

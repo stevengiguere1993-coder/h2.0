@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Loader2, Monitor, Smartphone } from "lucide-react";
 
 import { useRouter } from "@/i18n/navigation";
-import { login, setToken } from "@/lib/auth";
+import { getMe, login, setToken } from "@/lib/auth";
 
 /**
  * After a successful login, we show a small picker asking the user
@@ -38,13 +38,22 @@ export function LoginForm() {
       const result = await login(email, password);
       setToken(result.access_token);
       // If a ?next=... URL was provided (deep link), honor it directly.
-      // Otherwise show the Web / App picker below.
       if (nextUrl) {
-        // useRouter's push is typed on the i18n-routed paths; the raw
-        // redirect needs to bypass the type checker.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         router.replace(nextUrl as any);
         return;
+      }
+      // Employees default to the mobile app — they have no use for /app.
+      // Manager+ see the Web / App picker so they can pick.
+      try {
+        const me = await getMe(result.access_token);
+        if (me.role === "employee") {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          router.replace("/m" as any);
+          return;
+        }
+      } catch {
+        /* fall through to picker */
       }
       setAuthed(true);
     } catch (err) {

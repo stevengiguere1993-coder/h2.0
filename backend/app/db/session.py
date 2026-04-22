@@ -122,6 +122,7 @@ async def init_db() -> None:
             ("soumissions", "signature_image_content_type", "VARCHAR(100)"),
             ("bons_travail", "signature_image", "BYTEA"),
             ("bons_travail", "signature_image_content_type", "VARCHAR(100)"),
+            ("users", "role", "VARCHAR(16) NOT NULL DEFAULT 'employee'"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
@@ -130,6 +131,19 @@ async def init_db() -> None:
                     f'ADD COLUMN IF NOT EXISTS {column} {col_type}'
                 )
             )
+
+        # Backfill: any pre-existing user with is_admin=TRUE becomes
+        # an "owner" so current sign-ins keep full access. Only runs
+        # the first time; subsequent runs are harmless (no rows match).
+        try:
+            await conn.execute(
+                text(
+                    "UPDATE users SET role='owner' "
+                    "WHERE is_admin=TRUE AND role='employee'"
+                )
+            )
+        except Exception:
+            pass
 
         # Relaxations — columns whose nullability changed.
         # ALTER ... DROP NOT NULL is idempotent on PostgreSQL.

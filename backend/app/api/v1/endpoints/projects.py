@@ -9,6 +9,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import CurrentUser, DBSession
+from app.core.permissions import visible_project_ids
 from app.schemas.project import (
     ProjectCreate,
     ProjectRead,
@@ -56,14 +57,21 @@ async def list_projects(
     client_id: Optional[int] = Query(default=None, gt=0),
     status_filter: Optional[str] = Query(default=None, alias="status"),
 ) -> List[ProjectRead]:
-    """List projects with optional client / status filter."""
+    """List projects with optional client / status filter.
+
+    For employees (role=employee), only projects they've been assigned
+    to via project_members are returned. Manager+ roles see everything.
+    """
     service = ProjectService(db)
+    visible = await visible_project_ids(db, current_user)
     projects = await service.list(
         skip=skip,
         limit=limit,
         client_id=client_id,
         status_filter=status_filter,
     )
+    if visible is not None:
+        projects = [p for p in projects if p.id in visible]
     return [ProjectRead.model_validate(p) for p in projects]
 
 
@@ -77,7 +85,14 @@ async def get_project(
     db: DBSession,
     current_user: CurrentUser,
 ) -> ProjectReadWithClient:
-    """Get a project with its client. Requires authentication."""
+    """Get a project with its client. Employees must be members of
+    the project; manager+ can access any project."""
+    visible = await visible_project_ids(db, current_user)
+    if visible is not None and project_id not in visible:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found",
+        )
     service = ProjectService(db)
     project = await service.get_by_id(project_id, with_client=True)
     if project is None:
