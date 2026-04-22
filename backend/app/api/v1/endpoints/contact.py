@@ -239,6 +239,51 @@ class ContactPhotoRead(BaseModel):
     created_at: datetime
 
 
+@router.post(
+    "/{request_id}/photos",
+    response_model=ContactPhotoRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload a photo to a contact request (staff)",
+)
+async def upload_contact_photo(
+    request_id: int,
+    db: DBSession,
+    _: CurrentUser,
+    file: UploadFile = File(...),
+) -> ContactPhotoRead:
+    ct = (file.content_type or "").lower()
+    if ct not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Format image non supporté (JPG, PNG, WEBP, HEIC).",
+        )
+    blob = await file.read(MAX_PHOTO_BYTES + 1)
+    if not blob:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Fichier vide."
+        )
+    if len(blob) > MAX_PHOTO_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Fichier trop gros (>{MAX_PHOTO_BYTES // (1024 * 1024)} Mo).",
+        )
+    service = ContactRequestService(db)
+    if await service.get(request_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Prospect introuvable."
+        )
+    photo = ContactRequestPhoto(
+        contact_request_id=request_id,
+        image=blob,
+        content_type=ct,
+        filename=file.filename,
+    )
+    db.add(photo)
+    await db.flush()
+    await db.refresh(photo)
+    return ContactPhotoRead.model_validate(photo)
+
+
 @router.get(
     "/{request_id}/photos",
     response_model=List[ContactPhotoRead],
