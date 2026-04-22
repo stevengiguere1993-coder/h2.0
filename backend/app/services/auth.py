@@ -35,7 +35,7 @@ class AuthService:
         self.user_repo = UserRepository(db)
 
     async def login(
-        self, email: str, password: str
+        self, email: str, password: str, remember_me: bool = False
     ) -> Optional[Token]:
         """
         Authenticate user and generate access token.
@@ -54,8 +54,17 @@ class AuthService:
         if not user.is_active:
             return None
 
+        # Long session = 12 h. Default falls back to settings
+        # (access_token_expire_minutes, currently 30 min).
+        from datetime import timedelta
+
+        expires_delta = (
+            timedelta(hours=12) if remember_me else None
+        )
+
         access_token = create_access_token(
             subject=str(user.id),
+            expires_delta=expires_delta,
             additional_claims={
                 "email": user.email,
                 "is_admin": user.is_admin,

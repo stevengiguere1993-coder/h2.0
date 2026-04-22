@@ -6,7 +6,7 @@ Handles user login, registration, and profile retrieval.
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Form, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 
 from app.api.deps import CurrentAdmin, CurrentUser, DBSession
@@ -27,6 +27,7 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 async def login(
     db: DBSession,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+    remember_me: Annotated[bool, Form()] = False,
 ) -> Token:
     """
     Authenticate user and return access token.
@@ -35,11 +36,14 @@ async def login(
 
     - **username**: User's email address
     - **password**: User's password
+    - **remember_me**: when True, the access token is valid for 12 h
+      instead of the default short window (~30 min)
     """
     auth_service = AuthService(db)
     token = await auth_service.login(
         email=form_data.username,
         password=form_data.password,
+        remember_me=remember_me,
     )
 
     if token is None:

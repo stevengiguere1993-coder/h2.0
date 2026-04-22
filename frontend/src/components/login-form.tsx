@@ -34,8 +34,9 @@ export function LoginForm() {
     const fd = new FormData(e.currentTarget);
     const email = String(fd.get("email") || "");
     const password = String(fd.get("password") || "");
+    const rememberMe = fd.get("remember_me") === "on";
     try {
-      const result = await login(email, password);
+      const result = await login(email, password, rememberMe);
       setToken(result.access_token);
       // If a ?next=... URL was provided (deep link), honor it directly.
       if (nextUrl) {
@@ -149,6 +150,14 @@ export function LoginForm() {
         <label htmlFor="password" className="label">Mot de passe</label>
         <input id="password" name="password" type="password" required autoComplete="current-password" className="input" />
       </div>
+      <label className="flex cursor-pointer items-center gap-2 text-sm text-brand-700">
+        <input
+          type="checkbox"
+          name="remember_me"
+          className="h-4 w-4 accent-accent-500"
+        />
+        Rester connecté pendant 12 h
+      </label>
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
       <button type="submit" disabled={submitting} className="btn-primary w-full">
         {submitting ? (
