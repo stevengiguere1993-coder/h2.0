@@ -44,8 +44,17 @@ export function PwaRegister() {
     const dismissed = window.localStorage.getItem(DISMISS_KEY) === "1";
     if (dismissed) return;
 
-    const isMobileRoute = window.location.pathname.startsWith("/m");
-    if (!isMobileRoute) return;
+    // Show the prompt on internal app routes (mobile PWA + desktop admin
+    // zone) — not on the public marketing site.
+    const path = window.location.pathname;
+    const isInternalRoute =
+      path.startsWith("/m") ||
+      path.startsWith("/fr/m") ||
+      path.startsWith("/en/m") ||
+      path.startsWith("/app") ||
+      path.startsWith("/fr/app") ||
+      path.startsWith("/en/app");
+    if (!isInternalRoute) return;
 
     // Android / Chrome / Edge
     const onBip = (e: Event) => {
