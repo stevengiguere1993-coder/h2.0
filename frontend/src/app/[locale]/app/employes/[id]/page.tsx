@@ -555,6 +555,7 @@ export default function EmployeDetailPage() {
 type LeaveRow = {
   id: number;
   employe_id: number;
+  kind: "vacation" | "sick" | "personal";
   start_at: string;
   end_at: string;
   reason: string | null;
@@ -605,6 +606,30 @@ function EmployeLeaves({ employeId }: { employeId: number }) {
     );
   const pending = rows.filter((r) => r.status === "pending");
 
+  // Statistiques absences pour la fiche RH (12 derniers mois).
+  const oneYearAgo = Date.now() - 365 * 24 * 3600 * 1000;
+  const lastYear = rows.filter(
+    (r) => r.status === "approved" && new Date(r.start_at).getTime() >= oneYearAgo
+  );
+  const sickCount = lastYear.filter((r) => (r.kind || "vacation") === "sick").length;
+  const sickDays = lastYear
+    .filter((r) => (r.kind || "vacation") === "sick")
+    .reduce(
+      (acc, r) =>
+        acc +
+        Math.max(
+          1,
+          Math.round(
+            (new Date(r.end_at).getTime() - new Date(r.start_at).getTime()) /
+              (24 * 3600 * 1000)
+          )
+        ),
+      0
+    );
+  const vacationCount = lastYear.filter(
+    (r) => (r.kind || "vacation") === "vacation"
+  ).length;
+
   function fmtDate(iso: string): string {
     return new Date(iso).toLocaleDateString("fr-CA", {
       day: "numeric",
@@ -612,13 +637,40 @@ function EmployeLeaves({ employeId }: { employeId: number }) {
       year: "numeric"
     });
   }
+  function kindBadge(kind: string): string {
+    if (kind === "sick") return "🤒 Maladie";
+    if (kind === "personal") return "📋 Personnel";
+    return "🌴 Vacances";
+  }
 
   return (
     <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
       <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
         Vacances & congés
       </h2>
-      <p className="mt-1 text-xs text-white/60">
+      <div className="mt-2 grid grid-cols-3 gap-3">
+        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-center">
+          <p className="text-2xl font-bold text-emerald-300">
+            {vacationCount}
+          </p>
+          <p className="text-[10px] uppercase text-white/50">
+            Vacances · 12 mois
+          </p>
+        </div>
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 text-center">
+          <p className="text-2xl font-bold text-rose-300">{sickCount}</p>
+          <p className="text-[10px] uppercase text-white/50">
+            Maladie · 12 mois
+          </p>
+        </div>
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 text-center">
+          <p className="text-2xl font-bold text-rose-300">{sickDays}</p>
+          <p className="text-[10px] uppercase text-white/50">
+            Jours maladie cumulés
+          </p>
+        </div>
+      </div>
+      <p className="mt-3 text-xs text-white/60">
         Les vacances acceptées bloquent automatiquement l&apos;agenda
         de cet employé pendant la période (visible en orange dans
         l&apos;agenda équipe).
@@ -662,9 +714,14 @@ function EmployeLeaves({ employeId }: { employeId: number }) {
                 {upcoming.map((r) => (
                   <li
                     key={r.id}
-                    className="rounded border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-100"
+                    className={`rounded border px-3 py-2 text-xs ${
+                      (r.kind || "vacation") === "sick"
+                        ? "border-rose-500/30 bg-rose-500/5 text-rose-100"
+                        : "border-emerald-500/30 bg-emerald-500/5 text-emerald-100"
+                    }`}
                   >
-                    🌴 {fmtDate(r.start_at)} → {fmtDate(r.end_at)}
+                    {kindBadge(r.kind || "vacation")} ·{" "}
+                    {fmtDate(r.start_at)} → {fmtDate(r.end_at)}
                     {r.reason ? ` · ${r.reason}` : ""}
                   </li>
                 ))}
@@ -683,6 +740,7 @@ function EmployeLeaves({ employeId }: { employeId: number }) {
                     key={r.id}
                     className="rounded border border-brand-800 px-3 py-1.5 text-[11px] text-white/70"
                   >
+                    {kindBadge(r.kind || "vacation")} ·{" "}
                     {fmtDate(r.start_at)} → {fmtDate(r.end_at)}
                   </li>
                 ))}

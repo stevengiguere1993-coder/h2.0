@@ -48,12 +48,15 @@ const CONSTRUCTION_NAV: NavItem[] = [
   { href: "/app/achats", label: "Achats / PO", icon: ShoppingCart, minRole: "manager" }
 ];
 
+const ADMINISTRATION_NAV: NavItem[] = [
+  { href: "/app/conges", label: "Vacances & congés", icon: Palmtree, minRole: "manager" }
+];
+
 const RESOURCES_NAV: NavItem[] = [
   { href: "/app/employes", label: "Employés", icon: UserCircle, minRole: "admin" },
   { href: "/app/sous-traitants", label: "Sous-traitants", icon: HardHat, minRole: "admin" },
   { href: "/app/fournisseurs", label: "Fournisseurs", icon: Truck, minRole: "admin" },
   { href: "/app/services-catalogue", label: "Catalogue services", icon: ClipboardCheck, minRole: "manager" },
-  { href: "/app/conges", label: "Congés", icon: Palmtree, minRole: "manager" },
   { href: "/app/parametres", label: "Paramètres", icon: Settings, minRole: "employee" }
 ];
 
@@ -87,6 +90,9 @@ export function AppSidebar({
 
   // Filter nav items based on the signed-in user's role.
   const visibleConstruction = CONSTRUCTION_NAV.filter((i) =>
+    canSee(role, i.minRole)
+  );
+  const visibleAdministration = ADMINISTRATION_NAV.filter((i) =>
     canSee(role, i.minRole)
   );
   const visibleResources = RESOURCES_NAV.filter((i) =>
@@ -181,6 +187,47 @@ export function AppSidebar({
                         }`}
                       />
                       <span>{item.label}</span>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+
+          <div className={visibleAdministration.length === 0 ? "hidden" : ""}>
+            <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-accent-500">
+              Administration
+            </p>
+            <ul className="space-y-0.5">
+              {visibleAdministration.map((item) => {
+                const active = isActive(item.href);
+                const badge =
+                  item.href === "/app/conges" && pendingLeaves > 0
+                    ? pendingLeaves
+                    : null;
+                return (
+                  <li key={item.href}>
+                    {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                    <Link
+                      href={item.href as any}
+                      onClick={onClose}
+                      className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
+                        active
+                          ? "bg-brand-900 text-white"
+                          : "text-white/70 hover:bg-brand-900 hover:text-white"
+                      }`}
+                    >
+                      <item.icon
+                        className={`h-4 w-4 flex-shrink-0 ${
+                          active ? "text-accent-500" : ""
+                        }`}
+                      />
+                      <span className="flex-1">{item.label}</span>
+                      {badge ? (
+                        <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-bold text-white">
+                          {badge}
+                        </span>
+                      ) : null}
                     </Link>
                   </li>
                 );
