@@ -1585,25 +1585,69 @@ function PlanificationTab({ projectId }: { projectId: number }) {
     void load();
   }, [load]);
 
-  async function addPhase() {
+  async function addPhase(name?: string, durationDays = 5) {
     setBusyPhase("new");
+    setErr(null);
     try {
       const res = await authedFetch(
         `/api/v1/projects/${projectId}/phases`,
         {
           method: "POST",
           body: JSON.stringify({
-            name: "Nouvelle phase",
+            name: name || `Phase ${phases.length + 1}`,
             position: phases.length,
-            duration_days: 5
+            duration_days: durationDays
           })
         }
       );
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`${res.status} — ${txt.slice(0, 200)}`);
+      }
       const created = (await res.json()) as Phase;
       setPhases((xs) => [...xs, created]);
-    } catch {
-      setErr("Ajout phase échoué.");
+      return created;
+    } catch (e) {
+      setErr(`Ajout phase échoué : ${(e as Error).message}`);
+      return null;
+    } finally {
+      setBusyPhase(null);
+    }
+  }
+
+  async function seedDefaultPhases() {
+    // Insère les 3 phases standard d'un chantier construction/rénovation.
+    // On les crée séquentiellement pour garder l'ordre position=0,1,2
+    // stable côté backend (chaque POST calcule la position suivante).
+    const defaults = [
+      { name: "Démolition", days: 3 },
+      { name: "Électricité", days: 5 },
+      { name: "Plomberie", days: 5 }
+    ];
+    setBusyPhase("new");
+    setErr(null);
+    try {
+      for (const d of defaults) {
+        const res = await authedFetch(
+          `/api/v1/projects/${projectId}/phases`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              name: d.name,
+              position: 0, // let backend append
+              duration_days: d.days
+            })
+          }
+        );
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(`${res.status} — ${txt.slice(0, 200)}`);
+        }
+        const created = (await res.json()) as Phase;
+        setPhases((xs) => [...xs, created]);
+      }
+    } catch (e) {
+      setErr(`Insertion phases de base échouée : ${(e as Error).message}`);
     } finally {
       setBusyPhase(null);
     }
@@ -1668,6 +1712,7 @@ function PlanificationTab({ projectId }: { projectId: number }) {
 
   async function addTask(phaseId: number | null) {
     setBusyTask("new");
+    setErr(null);
     try {
       const res = await authedFetch(
         `/api/v1/projects/${projectId}/tasks`,
@@ -1680,11 +1725,14 @@ function PlanificationTab({ projectId }: { projectId: number }) {
           })
         }
       );
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`${res.status} — ${txt.slice(0, 200)}`);
+      }
       const created = (await res.json()) as PhaseTask;
       setTasks((xs) => [...xs, created]);
-    } catch {
-      setErr("Ajout tâche échoué.");
+    } catch (e) {
+      setErr(`Ajout tâche échoué : ${(e as Error).message}`);
     } finally {
       setBusyTask(null);
     }
@@ -1748,24 +1796,39 @@ function PlanificationTab({ projectId }: { projectId: number }) {
           Plomberie, Finition). Chaque phase a une date de début et une
           durée en jours — la fin est calculée automatiquement.
         </p>
-        <button
-          type="button"
-          onClick={addPhase}
-          disabled={busyPhase === "new"}
-          className="btn-accent text-xs disabled:opacity-60"
-        >
-          {busyPhase === "new" ? (
-            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Plus className="mr-1.5 h-3.5 w-3.5" />
-          )}
-          Nouvelle phase
-        </button>
+        <div className="flex items-center gap-2">
+          {phases.length === 0 ? (
+            <button
+              type="button"
+              onClick={() => seedDefaultPhases()}
+              disabled={busyPhase === "new"}
+              className="btn-secondary text-xs disabled:opacity-60"
+              title="Démolition · Électricité · Plomberie"
+            >
+              ⚡ Phases de base
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => addPhase()}
+            disabled={busyPhase === "new"}
+            className="btn-accent text-xs disabled:opacity-60"
+          >
+            {busyPhase === "new" ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            Nouvelle phase
+          </button>
+        </div>
       </div>
 
       {phases.length === 0 ? (
         <p className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
-          Aucune phase définie. Commence par en créer une.
+          Aucune phase définie. Clique « Phases de base » pour insérer
+          Démolition / Électricité / Plomberie d&apos;un coup, ou «
+          Nouvelle phase » pour en créer une vide.
         </p>
       ) : (
         <ol className="space-y-3">
@@ -1882,8 +1945,11 @@ function PhaseCard({
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            onBlur={() => name.trim() && name !== phase.name && onPatch({ name: name.trim() })}
-            className="w-full bg-transparent text-lg font-bold text-white focus:outline-none"
+            onBlur={() =>
+              name.trim() && name !== phase.name && onPatch({ name: name.trim() })
+            }
+            placeholder="Titre de la phase"
+            className="w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-lg font-bold text-white focus:border-accent-500 focus:outline-none"
           />
           <div className="mt-2 grid gap-3 sm:grid-cols-3">
             <label className="text-xs text-white/60">
