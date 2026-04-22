@@ -288,6 +288,8 @@ export default function ClientDetailPage() {
                 )}
               </button>
 
+              <ClientDocuments clientId={c.id} />
+
               <MeasurementsPanel
                 clientId={c.id}
                 defaultAddress={c.address}
@@ -298,5 +300,246 @@ export default function ClientDetailPage() {
         ) : null}
       </div>
     </>
+  );
+}
+
+// ---------- Documents tied to the client ----------
+
+type Soumission = {
+  id: number;
+  reference: string;
+  title: string;
+  status: string;
+  total: number | string | null;
+  accepted_at: string | null;
+  signed_name: string | null;
+  created_at: string;
+};
+
+type Facture = {
+  id: number;
+  reference: string;
+  status: string;
+  total: number | string | null;
+  balance: number | string | null;
+  issued_at: string | null;
+  paid_at: string | null;
+};
+
+type BonTravail = {
+  id: number;
+  reference: string;
+  title: string;
+  status: string;
+  client_id: number | null;
+  accepted_at: string | null;
+  signed_name: string | null;
+};
+
+function ClientDocuments({ clientId }: { clientId: number }) {
+  const [soumissions, setSoumissions] = useState<Soumission[]>([]);
+  const [factures, setFactures] = useState<Facture[]>([]);
+  const [bons, setBons] = useState<BonTravail[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const [sRes, fRes, bRes] = await Promise.all([
+          authedFetch("/api/v1/soumissions?limit=500"),
+          authedFetch("/api/v1/factures?limit=500"),
+          authedFetch("/api/v1/bons-travail?limit=500")
+        ]);
+        if (cancelled) return;
+        if (sRes.ok) {
+          const all = (await sRes.json()) as Array<
+            Soumission & { client_id: number | null }
+          >;
+          setSoumissions(all.filter((x) => x.client_id === clientId));
+        }
+        if (fRes.ok) {
+          const all = (await fRes.json()) as Array<
+            Facture & { client_id: number | null }
+          >;
+          setFactures(all.filter((x) => x.client_id === clientId));
+        }
+        if (bRes.ok) {
+          const all = (await bRes.json()) as BonTravail[];
+          setBons(all.filter((x) => x.client_id === clientId));
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId]);
+
+  const signedSoumissions = soumissions.filter(
+    (s) => s.status === "accepted" || s.accepted_at
+  );
+  const signedBons = bons.filter(
+    (b) => b.status === "signed" || b.accepted_at
+  );
+
+  function fmtMoney(n: number | string | null): string {
+    const v = Number(n || 0);
+    return new Intl.NumberFormat("fr-CA", {
+      style: "currency",
+      currency: "CAD",
+      maximumFractionDigits: 2
+    }).format(v);
+  }
+
+  return (
+    <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+      <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+        Documents du client
+      </h2>
+      <p className="mt-1 text-xs text-white/60">
+        Soumissions signées · contrats (bons de travail signés) · factures.
+      </p>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-6">
+          <Loader2 className="h-5 w-5 animate-spin text-white/40" />
+        </div>
+      ) : (
+        <div className="mt-4 space-y-5">
+          <DocGroup
+            title={`Soumissions signées (${signedSoumissions.length})`}
+            empty="Aucune soumission acceptée."
+          >
+            {signedSoumissions.map((s) => (
+              <Link
+                key={s.id}
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={`/app/soumissions/${s.id}` as any}
+                className="flex items-start justify-between gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-sm hover:border-emerald-500/50"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-semibold text-white">
+                    {s.reference} — {s.title}
+                  </p>
+                  <p className="text-[11px] text-white/50">
+                    Signée
+                    {s.signed_name ? ` par ${s.signed_name}` : ""}
+                    {s.accepted_at
+                      ? ` le ${new Date(s.accepted_at).toLocaleDateString("fr-CA")}`
+                      : ""}
+                  </p>
+                </div>
+                <span className="shrink-0 text-sm font-semibold text-emerald-300">
+                  {fmtMoney(s.total)}
+                </span>
+              </Link>
+            ))}
+          </DocGroup>
+
+          <DocGroup
+            title={`Contrats signés (${signedBons.length})`}
+            empty="Aucun bon de travail signé."
+          >
+            {signedBons.map((b) => (
+              <Link
+                key={b.id}
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={`/app/bons/${b.id}` as any}
+                className="flex items-start justify-between gap-3 rounded-lg border border-sky-500/20 bg-sky-500/5 px-3 py-2 text-sm hover:border-sky-500/50"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-semibold text-white">
+                    {b.reference} — {b.title}
+                  </p>
+                  <p className="text-[11px] text-white/50">
+                    Signé
+                    {b.signed_name ? ` par ${b.signed_name}` : ""}
+                    {b.accepted_at
+                      ? ` le ${new Date(b.accepted_at).toLocaleDateString("fr-CA")}`
+                      : ""}
+                  </p>
+                </div>
+                <span className="shrink-0 rounded bg-sky-500/15 px-2 py-0.5 text-[10px] uppercase text-sky-300">
+                  {b.status}
+                </span>
+              </Link>
+            ))}
+          </DocGroup>
+
+          <DocGroup
+            title={`Factures (${factures.length})`}
+            empty="Aucune facture."
+          >
+            {factures.map((f) => (
+              <Link
+                key={f.id}
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={`/app/facturation/${f.id}` as any}
+                className="flex items-start justify-between gap-3 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm hover:border-accent-500/50"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-semibold text-white">
+                    {f.reference}
+                  </p>
+                  <p className="text-[11px] text-white/50">
+                    {f.issued_at
+                      ? `Émise le ${new Date(f.issued_at).toLocaleDateString("fr-CA")}`
+                      : "Brouillon"}
+                    {f.paid_at
+                      ? ` · Payée le ${new Date(f.paid_at).toLocaleDateString("fr-CA")}`
+                      : ""}
+                  </p>
+                </div>
+                <div className="shrink-0 text-right">
+                  <p className="text-sm font-semibold text-white">
+                    {fmtMoney(f.total)}
+                  </p>
+                  <p
+                    className={`text-[10px] uppercase ${
+                      f.status === "paid"
+                        ? "text-emerald-300"
+                        : f.status === "overdue"
+                        ? "text-rose-300"
+                        : "text-white/50"
+                    }`}
+                  >
+                    {f.status}
+                  </p>
+                </div>
+              </Link>
+            ))}
+          </DocGroup>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DocGroup({
+  title,
+  empty,
+  children
+}: {
+  title: string;
+  empty: string;
+  children: React.ReactNode;
+}) {
+  const hasChildren = Array.isArray(children)
+    ? children.length > 0
+    : Boolean(children);
+  return (
+    <div>
+      <p className="text-xs font-semibold uppercase tracking-wider text-white/60">
+        {title}
+      </p>
+      {hasChildren ? (
+        <div className="mt-2 space-y-1.5">{children}</div>
+      ) : (
+        <p className="mt-2 text-xs text-white/40">{empty}</p>
+      )}
+    </div>
   );
 }
