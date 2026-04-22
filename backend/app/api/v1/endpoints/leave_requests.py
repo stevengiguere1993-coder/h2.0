@@ -257,6 +257,7 @@ async def list_leaves(
     status_filter: Optional[str] = Query(
         default=None, alias="status", pattern="^(pending|approved|rejected|cancelled)$"
     ),
+    employe_id: Optional[int] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> List[LeaveRead]:
     if not user.is_admin:
@@ -264,6 +265,8 @@ async def list_leaves(
     stmt = select(LeaveRequest)
     if status_filter:
         stmt = stmt.where(LeaveRequest.status == status_filter)
+    if employe_id is not None:
+        stmt = stmt.where(LeaveRequest.employe_id == employe_id)
     stmt = stmt.order_by(LeaveRequest.created_at.desc()).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
     out: List[LeaveRead] = []

@@ -98,3 +98,50 @@ async def get_me(current_user: CurrentUser) -> UserRead:
     Returns the user information associated with the provided access token.
     """
     return UserRead.model_validate(current_user)
+
+
+# ---------- Password change (self-service) ----------
+
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+
+from app.core.security import get_password_hash, verify_password
+from app.models.user import User
+
+
+class PasswordChange(BaseModel):
+    """Self-service password change. `current_password` is bypassable
+    only when the user is on a forced first-login change."""
+
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+@router.post(
+    "/change-password",
+    response_model=UserRead,
+    summary="Change my own password",
+)
+async def change_password(
+    body: PasswordChange,
+    db: DBSession,
+    current_user: CurrentUser,
+) -> UserRead:
+    u = (
+        await db.execute(select(User).where(User.id == current_user.id))
+    ).scalar_one()
+    if not verify_password(body.current_password, u.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Mot de passe actuel incorrect.",
+        )
+    if body.new_password == body.current_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Le nouveau mot de passe doit être différent.",
+        )
+    u.hashed_password = get_password_hash(body.new_password)
+    u.must_change_password = False
+    await db.flush()
+    await db.refresh(u)
+    return UserRead.model_validate(u)

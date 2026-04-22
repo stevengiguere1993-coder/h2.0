@@ -47,6 +47,13 @@ export function LoginForm() {
       // Manager+ see the Web / App picker so they can pick.
       try {
         const me = await getMe(result.access_token);
+        // First-login (or admin-triggered reset) — force the user
+        // through the change-password screen before going anywhere.
+        if (me.must_change_password) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          router.replace("/changer-mot-de-passe" as any);
+          return;
+        }
         if (me.role === "employee") {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           router.replace("/m" as any);

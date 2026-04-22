@@ -20,7 +20,8 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, insert, select
 
-from app.api.deps import DBSession, RequireOwner
+from app.api.deps import DBSession, RequireAdminRole, RequireOwner
+from app.core.security import get_password_hash
 from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.user import User, UserRole
@@ -122,6 +123,55 @@ async def activate(
     if u is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
     u.is_active = True
+    await db.flush()
+    await db.refresh(u)
+    return UserRead.model_validate(u)
+
+
+# ---------- Password management (admin / owner) ----------
+
+class SetPasswordBody(BaseModel):
+    """Admin sets a user's password directly. If `must_change` is True,
+    the user is forced to change it at next login."""
+
+    password: str = Field(..., min_length=8, max_length=128)
+    must_change: bool = Field(default=True)
+
+
+@router.post("/{user_id}/set-password", response_model=UserRead)
+async def set_password(
+    user_id: int,
+    body: SetPasswordBody,
+    db: DBSession,
+    _: RequireAdminRole,
+) -> UserRead:
+    u = (
+        await db.execute(select(User).where(User.id == user_id))
+    ).scalar_one_or_none()
+    if u is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    u.hashed_password = get_password_hash(body.password)
+    u.must_change_password = body.must_change
+    await db.flush()
+    await db.refresh(u)
+    return UserRead.model_validate(u)
+
+
+@router.post("/{user_id}/force-password-change", response_model=UserRead)
+async def force_password_change(
+    user_id: int,
+    db: DBSession,
+    _: RequireAdminRole,
+) -> UserRead:
+    """Just flips the must_change_password flag without rotating the
+    password. Used when an admin wants to invite a user to update an
+    expired password without choosing a new one for them."""
+    u = (
+        await db.execute(select(User).where(User.id == user_id))
+    ).scalar_one_or_none()
+    if u is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    u.must_change_password = True
     await db.flush()
     await db.refresh(u)
     return UserRead.model_validate(u)

@@ -83,6 +83,16 @@ class User(Base, TimestampMixin):
         nullable=True,
         index=True,
     )
+    # When True, the user is forced through the /app/change-password
+    # screen at next login before being allowed anywhere else. Used by
+    # the auto-created employee accounts (mot de passe temporaire
+    # « Horizon ») and by admin-triggered resets.
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
 
     def has_min_role(self, role: str) -> bool:
         return ROLE_RANK.get(self.role, 0) >= ROLE_RANK.get(role, 99)

@@ -13,6 +13,7 @@ from app.api.v1.endpoints import (
     blog,
     calendar,
     clients,
+    employes,
     contact,
     dashboard,
     achat_receipt,
@@ -54,7 +55,6 @@ from app.api.v1.endpoints.business import (
     achats_router,
     agenda_router,
     bons_router,
-    employes_router,
     factures_router,
     fournisseurs_router,
     punch_router,
@@ -95,7 +95,7 @@ api_router.include_router(notifications.router)
 api_router.include_router(audit.router)
 
 # Business
-api_router.include_router(employes_router)
+api_router.include_router(employes.router)
 api_router.include_router(fournisseurs_router)
 api_router.include_router(sous_traitants_router)
 api_router.include_router(soumissions_router)

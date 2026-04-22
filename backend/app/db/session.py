@@ -133,9 +133,28 @@ async def init_db() -> None:
             ("measurement_snapshots", "template_type", "VARCHAR(32)"),
             ("measurement_snapshots", "template_data_json", "TEXT"),
             ("users", "calendar_feed_token", "VARCHAR(64)"),
+            (
+                "users",
+                "must_change_password",
+                "BOOLEAN NOT NULL DEFAULT FALSE",
+            ),
             ("soumissions", "client_note", "TEXT"),
             ("factures", "internal_notes", "TEXT"),
             ("factures", "client_note", "TEXT"),
+            ("employes", "address", "VARCHAR(500)"),
+            ("employes", "license_number", "VARCHAR(64)"),
+            ("employes", "emergency_contact_name", "VARCHAR(255)"),
+            ("employes", "emergency_contact_phone", "VARCHAR(50)"),
+            (
+                "employes",
+                "is_ccq",
+                "BOOLEAN NOT NULL DEFAULT FALSE",
+            ),
+            ("employes", "cnesst_rate", "NUMERIC(6, 4)"),
+            ("employes", "ccq_rate", "NUMERIC(6, 4)"),
+            ("employes", "employeur_d_url", "VARCHAR(500)"),
+            ("project_phases", "assignee_employe_id", "INTEGER"),
+            ("project_phases", "assignee_sous_traitant_id", "INTEGER"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

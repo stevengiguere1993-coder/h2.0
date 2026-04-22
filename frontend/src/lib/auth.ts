@@ -38,6 +38,7 @@ export type CurrentUser = {
   is_active: boolean;
   is_admin: boolean;
   role: UserRole;
+  must_change_password?: boolean;
 };
 
 const ROLE_RANK: Record<UserRole, number> = {
