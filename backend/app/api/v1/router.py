@@ -31,6 +31,7 @@ from app.api.v1.endpoints import (
     service_templates,
     users,
     project_finances,
+    project_members,
     project_phases,
     project_photos,
     project_tasks,
@@ -72,6 +73,7 @@ api_router.include_router(clients.router)
 api_router.include_router(project_photos.router)
 api_router.include_router(project_tasks.router)
 api_router.include_router(project_phases.router)
+api_router.include_router(project_members.router)
 api_router.include_router(project_finances.router)
 api_router.include_router(projects.router)
 api_router.include_router(contact.router)
