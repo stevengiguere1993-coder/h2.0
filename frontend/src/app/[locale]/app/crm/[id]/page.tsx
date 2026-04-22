@@ -11,12 +11,14 @@ import {
   Mail,
   MapPin,
   Phone,
+  Ruler,
   Trash2,
   User,
   Users
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { MeasurementsPanel } from "@/components/measurements-panel";
 import { SalesTasksPanel } from "@/components/sales-tasks-panel";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
@@ -72,6 +74,7 @@ const TABS = [
   { id: "apercu", label: "Aperçu", icon: FileText },
   { id: "client", label: "Client", icon: User },
   { id: "rendez-vous", label: "Rendez-vous", icon: Calendar },
+  { id: "mesures", label: "Mesures", icon: Ruler },
   { id: "documents", label: "Documents", icon: FileText },
   { id: "employes", label: "Employés", icon: Users },
   { id: "taches", label: "Tâches", icon: CheckCircle2 }
@@ -210,7 +213,7 @@ export default function ProspectDetailPage() {
                   })}
                 </p>
               </div>
-              <div className="flex items-end gap-3">
+              <div className="flex flex-wrap items-end gap-3">
                 <div>
                   <label className="label">Statut</label>
                   <select
@@ -225,6 +228,19 @@ export default function ProspectDetailPage() {
                     ))}
                   </select>
                 </div>
+                <Link
+                  // Prefilled with the prospect ID so the form auto-
+                  // links the new soumission. eslint disable for the
+                  // i18n-typed Link.
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  href={
+                    `/app/soumissions/new?contact_request_id=${p.id}` as any
+                  }
+                  className="btn-accent text-sm"
+                >
+                  <FileText className="mr-1.5 h-4 w-4" />
+                  Créer soumission
+                </Link>
                 <button
                   type="button"
                   onClick={deleteProspect}
@@ -339,6 +355,12 @@ export default function ProspectDetailPage() {
                   contactRequestId={p.id}
                   prospectName={p.name}
                   prospectAddress={p.address || null}
+                />
+              ) : null}
+              {tab === "mesures" ? (
+                <MeasurementsPanel
+                  contactRequestId={p.id}
+                  defaultAddress={p.address || null}
                 />
               ) : null}
               {tab === "documents" ? (

@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
-import { MapMeasureModal, type MeasureResult } from "@/components/map-measure";
+import { MeasurementImportModal } from "@/components/measurement-import-modal";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -1028,14 +1028,17 @@ export default function SoumissionDetailPage() {
       </div>
 
       {measureFor !== null ? (
-        <MapMeasureModal
-          address={propertyAddress || s?.property_address || null}
+        <MeasurementImportModal
+          clientId={s?.client_id || null}
+          contactRequestId={s?.contact_request_id || null}
+          defaultAddress={propertyAddress || s?.property_address || null}
           onClose={() => setMeasureFor(null)}
-          onDone={(r: MeasureResult) => {
+          onPick={(areaFt2, label) => {
             if (measureFor != null) {
               patchItem(measureFor, {
-                quantity: r.area_ft2,
-                unit: "ft²"
+                quantity: areaFt2,
+                unit: "ft²",
+                description: label
               });
             }
             setMeasureFor(null);
@@ -1261,7 +1264,7 @@ function ItemRow({
             <button
               type="button"
               onClick={onMeasure}
-              title="Mesurer sur la carte"
+              title="Importer une mesure du client (ou en prendre une nouvelle)"
               className="rounded-md bg-blue-500/15 p-1 text-blue-300 hover:bg-blue-500/25"
             >
               <Ruler className="h-3.5 w-3.5" />
