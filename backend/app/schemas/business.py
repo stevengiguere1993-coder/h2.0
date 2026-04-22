@@ -95,6 +95,7 @@ class SoumissionCreate(BaseModel):
     total: Optional[float] = None
     valid_until: Optional[datetime] = None
     notes: Optional[str] = None
+    client_note: Optional[str] = None
     property_address: Optional[str] = None
 
 
@@ -111,6 +112,7 @@ class SoumissionUpdate(BaseModel):
     valid_until: Optional[datetime] = None
     pdf_url: Optional[str] = None
     notes: Optional[str] = None
+    client_note: Optional[str] = None
     property_address: Optional[str] = None
 
 
@@ -131,6 +133,7 @@ class SoumissionRead(_Base):
     valid_until: Optional[datetime]
     pdf_url: Optional[str]
     notes: Optional[str]
+    client_note: Optional[str] = None
     property_address: Optional[str]
     created_at: datetime
 
@@ -264,6 +267,8 @@ class FactureCreate(BaseModel):
     balance: Optional[float] = None
     issued_at: Optional[datetime] = None
     due_at: Optional[datetime] = None
+    internal_notes: Optional[str] = None
+    client_note: Optional[str] = None
 
 
 class FactureUpdate(BaseModel):
@@ -279,6 +284,8 @@ class FactureUpdate(BaseModel):
     qbo_invoice_id: Optional[str] = None
     qbo_doc_number: Optional[str] = None
     qbo_sync_token: Optional[str] = None
+    internal_notes: Optional[str] = None
+    client_note: Optional[str] = None
 
 
 class FactureRead(_Base):
@@ -297,6 +304,8 @@ class FactureRead(_Base):
     paid_at: Optional[datetime]
     qbo_invoice_id: Optional[str]
     qbo_doc_number: Optional[str]
+    internal_notes: Optional[str] = None
+    client_note: Optional[str] = None
     created_at: datetime
 
 

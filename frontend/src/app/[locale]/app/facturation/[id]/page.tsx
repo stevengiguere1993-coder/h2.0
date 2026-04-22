@@ -37,6 +37,8 @@ type Facture = {
   paid_at: string | null;
   qbo_invoice_id: string | null;
   qbo_doc_number: string | null;
+  internal_notes: string | null;
+  client_note: string | null;
   created_at: string;
 };
 
@@ -134,6 +136,9 @@ export default function FactureDetailPage() {
   const [sendMessage, setSendMessage] = useState("");
 
   const [dueAt, setDueAt] = useState("");
+  const [internalNotes, setInternalNotes] = useState("");
+  const [clientNote, setClientNote] = useState("");
+  const [notesSaving, setNotesSaving] = useState(false);
 
   const [importOpen, setImportOpen] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
@@ -160,6 +165,8 @@ export default function FactureDetailPage() {
         setF(fd);
         setItems(iData);
         setDueAt(isoToDateInput(fd.due_at));
+        setInternalNotes(fd.internal_notes || "");
+        setClientNote(fd.client_note || "");
         setSendSubject(`Facture ${fd.reference}`);
         if (fd.client_id) {
           const cr = await authedFetch(`/api/v1/clients/${fd.client_id}`);
@@ -228,6 +235,27 @@ export default function FactureDetailPage() {
       setError("Sauvegarde échéance échouée.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function saveNotes() {
+    if (!f) return;
+    setNotesSaving(true);
+    try {
+      const res = await authedFetch(`/api/v1/factures/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          internal_notes: internalNotes.trim() || null,
+          client_note: clientNote.trim() || null
+        })
+      });
+      if (!res.ok) throw new Error();
+      const u = (await res.json()) as Facture;
+      setF(u);
+    } catch {
+      setError("Sauvegarde des notes échouée.");
+    } finally {
+      setNotesSaving(false);
     }
   }
 
@@ -623,6 +651,68 @@ export default function FactureDetailPage() {
                     <Save className="h-3.5 w-3.5" />
                   )}
                 </button>
+              </div>
+            </section>
+
+            <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900 p-5">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                Notes
+              </h2>
+              <div className="mt-4 space-y-4">
+                <div>
+                  <label htmlFor="client_note" className="label">
+                    Note sur la facture{" "}
+                    <span className="text-[10px] font-normal text-accent-500">
+                      (visible par le client)
+                    </span>
+                  </label>
+                  <textarea
+                    id="client_note"
+                    rows={3}
+                    value={clientNote}
+                    onChange={(e) => setClientNote(e.target.value)}
+                    placeholder="Ex. Merci pour votre confiance. Paiement net 30j. Intérêts 2 % / mois après échéance."
+                    className="input"
+                  />
+                  <p className="mt-1 text-xs text-white/50">
+                    Apparaît sur le PDF envoyé au client.
+                  </p>
+                </div>
+                <div>
+                  <label htmlFor="internal_notes" className="label">
+                    Notes internes{" "}
+                    <span className="text-[10px] font-normal text-rose-300">
+                      (non visibles par le client)
+                    </span>
+                  </label>
+                  <textarea
+                    id="internal_notes"
+                    rows={3}
+                    value={internalNotes}
+                    onChange={(e) => setInternalNotes(e.target.value)}
+                    placeholder="Ex. Client a demandé reporter l'échéance. Paiement promis le 15 mai par Interac."
+                    className="input"
+                  />
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    onClick={saveNotes}
+                    disabled={
+                      notesSaving ||
+                      ((f.internal_notes || "") === internalNotes &&
+                        (f.client_note || "") === clientNote)
+                    }
+                    className="btn-accent text-sm disabled:opacity-50"
+                  >
+                    {notesSaving ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Save className="mr-2 h-4 w-4" />
+                    )}
+                    Sauvegarder les notes
+                  </button>
+                </div>
               </div>
             </section>
 

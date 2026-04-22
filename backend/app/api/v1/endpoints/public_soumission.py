@@ -46,6 +46,7 @@ class PublicSoumission(BaseModel):
     reference: str
     title: str
     description: Optional[str]
+    client_note: Optional[str] = None
     status: str
     valid_until: Optional[datetime]
     signed_name: Optional[str]
@@ -148,6 +149,7 @@ async def public_read(token: str, db: DBSession) -> PublicSoumission:
         reference=sm.reference,
         title=sm.title,
         description=sm.description,
+        client_note=sm.client_note,
         status=sm.status,
         valid_until=sm.valid_until,
         signed_name=sm.signed_name,

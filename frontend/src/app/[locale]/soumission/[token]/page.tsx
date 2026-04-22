@@ -19,6 +19,7 @@ type PublicSoumission = {
   reference: string;
   title: string;
   description: string | null;
+  client_note: string | null;
   status: string;
   valid_until: string | null;
   signed_name: string | null;
@@ -290,6 +291,12 @@ export default function PublicSoumissionPage() {
             </div>
           </div>
         </section>
+
+        {data.client_note ? (
+          <section className="mt-4 rounded-xl border border-accent-500/30 bg-accent-500/5 p-4 text-sm text-brand-100 whitespace-pre-line">
+            {data.client_note}
+          </section>
+        ) : null}
 
         {data.valid_until ? (
           <p className="mt-3 text-center text-xs text-white/50">
