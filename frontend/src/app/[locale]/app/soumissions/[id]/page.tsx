@@ -42,6 +42,7 @@ type Soumission = {
   valid_until: string | null;
   pdf_url: string | null;
   notes: string | null;
+  client_note: string | null;
   property_address: string | null;
   created_at: string;
   qbo_estimate_id?: string | null;
@@ -126,6 +127,7 @@ export default function SoumissionDetailPage() {
   const [description, setDescription] = useState("");
   const [validUntil, setValidUntil] = useState<string>("");
   const [notes, setNotes] = useState("");
+  const [clientNote, setClientNote] = useState("");
   const [propertyAddress, setPropertyAddress] = useState("");
 
   useEffect(() => {
@@ -148,6 +150,7 @@ export default function SoumissionDetailPage() {
         setDescription(sData.description || "");
         setValidUntil(isoToDateInput(sData.valid_until));
         setNotes(sData.notes || "");
+        setClientNote(sData.client_note || "");
         setPropertyAddress(sData.property_address || "");
         setSendSubject(`Soumission ${sData.reference} — ${sData.title}`);
         if (sData.contact_request_id) {
@@ -219,7 +222,8 @@ export default function SoumissionDetailPage() {
     (title !== s.title ||
       description !== (s.description || "") ||
       isoToDateInput(s.valid_until) !== validUntil ||
-      (s.notes || "") !== notes);
+      (s.notes || "") !== notes ||
+      (s.client_note || "") !== clientNote);
 
   async function syncToQbo(options?: { silent?: boolean }) {
     setQboBusy(true);
@@ -365,6 +369,7 @@ export default function SoumissionDetailPage() {
         total,
         valid_until: validUntil ? new Date(validUntil).toISOString() : null,
         notes: notes.trim() || null,
+        client_note: clientNote.trim() || null,
         property_address: propertyAddress.trim() || null
       };
       const res = await authedFetch(`/api/v1/soumissions/${id}`, {
@@ -878,13 +883,38 @@ export default function SoumissionDetailPage() {
                 </div>
 
                 <div>
-                  <label htmlFor="notes" className="label">Notes internes</label>
+                  <label htmlFor="client_note" className="label">
+                    Note sur la soumission{" "}
+                    <span className="text-[10px] font-normal text-accent-500">
+                      (visible par le client)
+                    </span>
+                  </label>
+                  <textarea
+                    id="client_note"
+                    rows={3}
+                    value={clientNote}
+                    onChange={(e) => setClientNote(e.target.value)}
+                    placeholder="Ex. Paiement 50 % à la signature, solde à la fin des travaux. Matériaux inclus."
+                    className="input"
+                  />
+                  <p className="mt-1 text-xs text-white/50">
+                    Apparaît sur le PDF + la page publique de signature.
+                  </p>
+                </div>
+
+                <div>
+                  <label htmlFor="notes" className="label">
+                    Notes internes{" "}
+                    <span className="text-[10px] font-normal text-rose-300">
+                      (non visibles par le client)
+                    </span>
+                  </label>
                   <textarea
                     id="notes"
                     rows={4}
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
-                    placeholder="Notes privées non visibles par le client."
+                    placeholder="Notes privées — motifs de refus, marge visée, particularités du chantier…"
                     className="input"
                   />
                 </div>

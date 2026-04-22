@@ -263,6 +263,18 @@ def _render_bytes(
     story.append(totals_wrap)
     story.append(Spacer(1, 18))
 
+    # Note client-facing (facultative) — mention libre à afficher sur
+    # la facture (ex. « Merci pour votre confiance », « Paiement net
+    # 15 jours », référence interne du client). Ne PAS confondre avec
+    # internal_notes qui restent côté admin.
+    client_note = getattr(fa, "client_note", None)
+    if client_note:
+        story.append(Paragraph("NOTE", s["accent"]))
+        story.append(
+            Paragraph(client_note.replace("\n", "<br/>"), s["body"])
+        )
+        story.append(Spacer(1, 12))
+
     story.append(Paragraph("MODALITÉS DE PAIEMENT", s["accent"]))
     story.append(Paragraph(
         "Les taxes TPS (5 %) et TVQ (9,975 %) sont applicables. "

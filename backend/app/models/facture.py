@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -58,3 +58,9 @@ class Facture(Base, TimestampUpdateMixin):
     reminder_count: Mapped[int] = mapped_column(
         nullable=False, default=0, server_default="0"
     )
+
+    # Internal-only staff notes (jamais rendues sur le PDF client).
+    internal_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Client-facing note rendered on the PDF (ex. « Paiement net 30j,
+    # intérêts de retard 2 %/mois », « Merci pour votre confiance »).
+    client_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

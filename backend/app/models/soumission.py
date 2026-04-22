@@ -49,7 +49,13 @@ class Soumission(Base, TimestampUpdateMixin):
     valid_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     pdf_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Internal-only notes (staff annotations, refusal reasons, margin
+    # hints). Never rendered on the client PDF or public page.
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Client-facing note rendered on the soumission PDF and the public
+    # signing page. Use this for "paiement 50 % à la signature, solde
+    # à la fin des travaux" type wording.
+    client_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # QuickBooks Online linkage (populated by sync service)
     qbo_estimate_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)

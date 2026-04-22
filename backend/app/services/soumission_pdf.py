@@ -396,6 +396,16 @@ def _render_bytes(
     # les particularités du chantier, etc. La description publique
     # côté client est `sm.description`, rendue plus haut.
 
+    # Note client-facing (client_note) — utilisé pour des mentions
+    # spécifiques à ce devis : modalités de paiement particulières,
+    # inclusions/exclusions, délais.
+    if getattr(sm, "client_note", None):
+        story.append(Paragraph("NOTE", s["accent"]))
+        story.append(
+            Paragraph(sm.client_note.replace("\n", "<br/>"), s["body"])
+        )
+        story.append(Spacer(1, 12))
+
     # Conditions
     story.append(Paragraph("CONDITIONS", s["accent"]))
     story.append(

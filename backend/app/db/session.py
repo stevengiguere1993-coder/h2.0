@@ -133,6 +133,9 @@ async def init_db() -> None:
             ("measurement_snapshots", "template_type", "VARCHAR(32)"),
             ("measurement_snapshots", "template_data_json", "TEXT"),
             ("users", "calendar_feed_token", "VARCHAR(64)"),
+            ("soumissions", "client_note", "TEXT"),
+            ("factures", "internal_notes", "TEXT"),
+            ("factures", "client_note", "TEXT"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
