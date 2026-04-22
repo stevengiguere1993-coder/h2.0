@@ -130,6 +130,8 @@ async def init_db() -> None:
             ("soumission_items", "cost_per_unit", "NUMERIC(12, 2) NOT NULL DEFAULT 0"),
             ("service_templates", "default_cost_per_unit", "NUMERIC(12, 2)"),
             ("service_template_items", "default_cost_per_unit", "NUMERIC(12, 2) NOT NULL DEFAULT 0"),
+            ("measurement_snapshots", "template_type", "VARCHAR(32)"),
+            ("measurement_snapshots", "template_data_json", "TEXT"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

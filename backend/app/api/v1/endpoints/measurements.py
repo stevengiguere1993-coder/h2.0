@@ -26,7 +26,9 @@ router = APIRouter(prefix="/measurements", tags=["measurements"])
 
 class MeasurementCreate(BaseModel):
     label: str = Field(..., min_length=1, max_length=255)
-    kind: str = Field(default="horizontal", pattern="^(horizontal|vertical)$")
+    kind: str = Field(
+        default="horizontal", pattern="^(horizontal|vertical|checklist)$"
+    )
     area_ft2: float = Field(..., ge=0)
     perimeter_ft: Optional[float] = Field(default=None, ge=0)
     wall_height_ft: Optional[float] = Field(default=None, ge=0)
@@ -35,6 +37,8 @@ class MeasurementCreate(BaseModel):
     notes: Optional[str] = None
     client_id: Optional[int] = None
     contact_request_id: Optional[int] = None
+    template_type: Optional[str] = Field(default=None, max_length=32)
+    template_data_json: Optional[str] = None
 
 
 class MeasurementUpdate(BaseModel):
@@ -42,6 +46,7 @@ class MeasurementUpdate(BaseModel):
     notes: Optional[str] = None
     wall_height_ft: Optional[float] = Field(default=None, ge=0)
     area_ft2: Optional[float] = Field(default=None, ge=0)
+    template_data_json: Optional[str] = None
 
 
 class MeasurementRead(BaseModel):
@@ -60,6 +65,8 @@ class MeasurementRead(BaseModel):
     captured_by_user_id: Optional[int]
     captured_at: datetime
     created_at: datetime
+    template_type: Optional[str] = None
+    template_data_json: Optional[str] = None
 
 
 @router.get("", response_model=List[MeasurementRead])
@@ -108,6 +115,8 @@ async def create_measurement(
         wall_height_ft=data.wall_height_ft,
         coords_json=data.coords_json,
         address=(data.address.strip() if data.address else None),
+        template_type=data.template_type,
+        template_data_json=data.template_data_json,
         captured_by_user_id=user.id,
     )
     db.add(m)
