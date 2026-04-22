@@ -4,10 +4,12 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   Camera,
+  CheckCircle2,
   ChevronLeft,
   ClipboardList,
   Loader2,
   MapPin,
+  Palmtree,
   StickyNote
 } from "lucide-react";
 
@@ -50,9 +52,6 @@ type ChecklistItem = {
   photoId?: number;
 };
 
-// Default checklist for any service call. A richer per-service-type
-// template will come later; for now every intervention gets Before +
-// After photos.
 const DEFAULT_ITEMS: Omit<ChecklistItem, "done">[] = [
   {
     key: "before",
@@ -67,6 +66,30 @@ const DEFAULT_ITEMS: Omit<ChecklistItem, "done">[] = [
     description: "Prendre une photo après travaux."
   }
 ];
+
+function fmtRange(s: string, e: string | null): string {
+  const a = new Date(s);
+  const b = e ? new Date(e) : null;
+  const dateFmt = a.toLocaleDateString("fr-CA", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  });
+  const sHm = a.toLocaleTimeString("fr-CA", {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+  if (!b) return `${dateFmt} · ${sHm}`;
+  const sameDay = a.toDateString() === b.toDateString();
+  const eHm = b.toLocaleTimeString("fr-CA", {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+  return sameDay
+    ? `${dateFmt} · ${sHm} → ${eHm}`
+    : `${dateFmt} · ${sHm} … ${b.toLocaleDateString("fr-CA")} ${eHm}`;
+}
 
 export default function MobileIntervention() {
   const params = useParams<{ id: string }>();
@@ -92,17 +115,22 @@ export default function MobileIntervention() {
         // project id), fall back to fetching the project directly.
         const eRes = await authedFetch(`/api/v1/agenda/${id}`);
         let projectId: number | null = null;
+        let ev: AgendaEvent | null = null;
         if (eRes.ok) {
-          const e = (await eRes.json()) as AgendaEvent;
-          if (!cancelled) setEvent(e);
-          projectId = e.project_id;
+          ev = (await eRes.json()) as AgendaEvent;
+          if (!cancelled) setEvent(ev);
+          projectId = ev.project_id;
         } else {
-          // Not an event id — maybe it's already a project id (Ops
-          // screen routes straight to /m/intervention/{project_id}).
           projectId = id;
         }
 
-        if (projectId) {
+        // For non-service events (congé, etc.), we don't load a project
+        // and we don't show the checklist. Guard the project fetch so
+        // we don't hit 404s on congés.
+        const isServiceEvent =
+          !ev || ev.event_type === "chantier" || ev.event_type === "service";
+
+        if (isServiceEvent && projectId) {
           const pRes = await authedFetch(`/api/v1/projects/${projectId}`);
           if (pRes.ok && !cancelled) {
             const p = (await pRes.json()) as Project;
@@ -128,7 +156,9 @@ export default function MobileIntervention() {
 
   async function takePhoto(itemKey: string, file: File) {
     if (!project) {
-      setError("Projet introuvable.");
+      setError(
+        "Cet événement n'a pas de projet lié — impossible de téléverser des photos."
+      );
       return;
     }
     setUploadingKey(itemKey);
@@ -164,6 +194,13 @@ export default function MobileIntervention() {
     }
   }
 
+  const eventType = event?.event_type || "chantier";
+  const isConge = eventType === "conge";
+  const isBlock =
+    eventType === "conge" ||
+    eventType === "ferie" ||
+    eventType === "indispo";
+
   return (
     <>
       <header
@@ -179,7 +216,7 @@ export default function MobileIntervention() {
           <ChevronLeft className="h-4 w-4" />
         </Link>
         <h1 className="flex-1 text-center text-base font-bold text-white">
-          Intervention
+          {isConge ? "Congé" : "Intervention"}
         </h1>
         <span className="w-6" />
       </header>
@@ -195,9 +232,12 @@ export default function MobileIntervention() {
           <div className="flex items-center justify-center py-10">
             <Loader2 className="h-5 w-5 animate-spin text-white/40" />
           </div>
+        ) : isBlock ? (
+          // Leave / unavailability: no checklist, just a summary card.
+          <LeaveSummaryCard event={event} />
         ) : (
+          // Default: service intervention with photos + notes.
           <div className="space-y-4">
-            {/* Service / project header */}
             <section className="rounded-2xl border border-accent-500/40 bg-accent-500/5 p-4">
               <p className="text-xs uppercase tracking-wider text-accent-500">
                 Service : {event?.title || project?.name || "—"}
@@ -208,77 +248,83 @@ export default function MobileIntervention() {
                   {project?.address || event?.location}
                 </p>
               ) : null}
+              {!project ? (
+                <p className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200">
+                  Aucun projet lié à cet événement. Les photos ne peuvent
+                  pas être téléversées ici.
+                </p>
+              ) : null}
             </section>
 
-            {/* Checklist */}
-            <ul className="space-y-3">
-              {items.map((it) => (
-                <li
-                  key={it.key}
-                  className="rounded-2xl border border-accent-500/30 bg-brand-900 p-4"
-                >
-                  <div className="flex items-start gap-2">
-                    <span className="rounded-md bg-white/5 px-2 py-0.5 text-[10px] font-bold text-white/60">
-                      #{it.num}
-                    </span>
-                    <p className="flex-1 text-sm font-semibold text-white">
-                      {it.title}
-                    </p>
-                    <span
-                      className={`h-5 w-5 rounded-full border-2 ${
-                        it.done
-                          ? "border-emerald-400 bg-emerald-400/30"
-                          : "border-accent-500/60"
-                      }`}
-                    />
-                  </div>
-                  <p className="mt-1 text-xs text-white/60">
-                    {it.description}
-                  </p>
-                  <div className="mt-3 flex gap-2">
-                    <label
-                      className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-xs font-semibold text-white ${
-                        uploadingKey === it.key ? "opacity-60" : ""
-                      }`}
-                    >
-                      {uploadingKey === it.key ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Camera className="h-4 w-4 text-accent-500" />
-                      )}
-                      Prendre photo
-                      <input
-                        type="file"
-                        accept="image/*"
-                        capture="environment"
-                        className="hidden"
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          if (f) void takePhoto(it.key, f);
-                          e.target.value = "";
-                        }}
+            {project ? (
+              <ul className="space-y-3">
+                {items.map((it) => (
+                  <li
+                    key={it.key}
+                    className="rounded-2xl border border-accent-500/30 bg-brand-900 p-4"
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className="rounded-md bg-white/5 px-2 py-0.5 text-[10px] font-bold text-white/60">
+                        #{it.num}
+                      </span>
+                      <p className="flex-1 text-sm font-semibold text-white">
+                        {it.title}
+                      </p>
+                      <span
+                        className={`h-5 w-5 rounded-full border-2 ${
+                          it.done
+                            ? "border-emerald-400 bg-emerald-400/30"
+                            : "border-accent-500/60"
+                        }`}
                       />
-                    </label>
-                    <button
-                      type="button"
-                      className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-xs font-semibold text-white"
-                      onClick={() =>
-                        setItems((xs) =>
-                          xs.map((x) =>
-                            x.key === it.key ? { ...x, done: !x.done } : x
+                    </div>
+                    <p className="mt-1 text-xs text-white/60">
+                      {it.description}
+                    </p>
+                    <div className="mt-3 flex gap-2">
+                      <label
+                        className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-xs font-semibold text-white ${
+                          uploadingKey === it.key ? "opacity-60" : ""
+                        }`}
+                      >
+                        {uploadingKey === it.key ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Camera className="h-4 w-4 text-accent-500" />
+                        )}
+                        Prendre photo
+                        <input
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) void takePhoto(it.key, f);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-xs font-semibold text-white"
+                        onClick={() =>
+                          setItems((xs) =>
+                            xs.map((x) =>
+                              x.key === it.key ? { ...x, done: !x.done } : x
+                            )
                           )
-                        )
-                      }
-                    >
-                      <StickyNote className="h-4 w-4 text-accent-500" />
-                      {it.done ? "Marquer à faire" : "Noter fait"}
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
+                        }
+                      >
+                        <StickyNote className="h-4 w-4 text-accent-500" />
+                        {it.done ? "Marquer à faire" : "Noter fait"}
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
 
-            {/* Notes sections */}
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
               <p className="flex items-center gap-2 text-xs uppercase tracking-wider text-accent-500">
                 <ClipboardList className="h-3.5 w-3.5" /> Notes
@@ -301,7 +347,6 @@ export default function MobileIntervention() {
               </div>
             </section>
 
-            {/* Recent photos gallery */}
             {photos.length > 0 ? (
               <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
                 <p className="text-xs uppercase tracking-wider text-white/50">
@@ -327,3 +372,70 @@ export default function MobileIntervention() {
     </>
   );
 }
+
+function LeaveSummaryCard({ event }: { event: AgendaEvent | null }) {
+  if (!event) {
+    return (
+      <p className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/50">
+        Événement introuvable.
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-4">
+      <section className="rounded-2xl border border-accent-500/40 bg-accent-500/10 p-5">
+        <div className="flex items-center gap-3">
+          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-500/20 text-accent-500">
+            <Palmtree className="h-5 w-5" />
+          </span>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs uppercase tracking-wider text-accent-500">
+              Congé — bloc agenda
+            </p>
+            <p className="mt-0.5 truncate text-sm font-semibold text-white">
+              {event.title}
+            </p>
+          </div>
+        </div>
+        <p className="mt-4 text-sm text-white/80">
+          {fmtRange(event.start_at, event.end_at)}
+        </p>
+        {event.description ? (
+          <p className="mt-3 rounded-lg border border-brand-800 bg-brand-950 p-3 text-xs text-white/60">
+            <span className="text-white/40">Raison : </span>
+            {event.description}
+          </p>
+        ) : null}
+      </section>
+
+      <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+        <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white/60">
+          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+          Pas d&apos;intervention requise
+        </p>
+        <p className="mt-2 text-xs text-white/60">
+          Cet événement est un congé — aucune photo, aucune tâche à
+          compléter. L&apos;équipe sait que tu es indisponible sur cette
+          plage horaire.
+        </p>
+        <div className="mt-4 grid gap-2">
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/m/conges" as any}
+            className="flex items-center justify-center gap-2 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-xs font-semibold text-white"
+          >
+            Voir mes congés
+          </Link>
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/m/agenda" as any}
+            className="flex items-center justify-center gap-2 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-xs font-semibold text-white/70"
+          >
+            Retour à l&apos;agenda
+          </Link>
+        </div>
+      </section>
+    </div>
+  );
+}
+
