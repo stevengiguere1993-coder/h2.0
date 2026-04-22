@@ -4,9 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Check,
   Loader2,
+  Plus,
   ShieldCheck,
+  UserPlus,
   UserX,
-  Users
+  Users,
+  X
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
@@ -72,6 +75,7 @@ export default function UtilisateursPage() {
   const [busyUser, setBusyUser] = useState<number | null>(null);
   const [savingProjects, setSavingProjects] = useState(false);
   const [dirtyIds, setDirtyIds] = useState<Set<number> | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -219,6 +223,16 @@ export default function UtilisateursPage() {
           { label: "Utilisateurs" }
         ]}
         onOpenSidebar={onOpenSidebar}
+        rightSlot={
+          <button
+            type="button"
+            onClick={() => setAddOpen(true)}
+            className="btn-accent text-sm"
+          >
+            <Plus className="mr-1.5 h-4 w-4" />
+            Ajouter un utilisateur
+          </button>
+        }
       />
 
       <div className="p-4 lg:p-6">
@@ -466,6 +480,187 @@ export default function UtilisateursPage() {
           </div>
         )}
       </div>
+
+      {addOpen ? (
+        <AddUserModal
+          onClose={() => setAddOpen(false)}
+          onCreated={(u) => {
+            setUsers((xs) => [...xs, u]);
+            setSelected(u.id);
+            setAddOpen(false);
+          }}
+        />
+      ) : null}
     </>
+  );
+}
+
+function AddUserModal({
+  onClose,
+  onCreated
+}: {
+  onClose: () => void;
+  onCreated: (u: User) => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState<UserRole>("employee");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function randomPassword() {
+    // 16-char mix suitable for a temp handoff. The user should change it
+    // at first login via their profile (or you re-roll later).
+    const alphabet =
+      "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!#$%&*";
+    let out = "";
+    for (let i = 0; i < 16; i++) {
+      out += alphabet[Math.floor(Math.random() * alphabet.length)];
+    }
+    setPassword(out);
+  }
+
+  async function submit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!email.trim() || !password.trim() || password.length < 8) {
+      setError("Courriel valide + mot de passe de 8+ caractères requis.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await authedFetch("/api/v1/auth/register", {
+        method: "POST",
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+          role,
+          is_admin: role === "owner" || role === "admin"
+        })
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt.slice(0, 240) || `http_${res.status}`);
+      }
+      const created = (await res.json()) as User;
+      onCreated(created);
+    } catch (e) {
+      setError(`Création échouée : ${(e as Error).message}`);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={() => (!submitting ? onClose() : null)}
+    >
+      <form
+        onSubmit={submit}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md space-y-4 rounded-2xl border border-brand-800 bg-brand-950 p-5 text-white"
+      >
+        <div className="flex items-center gap-2">
+          <UserPlus className="h-5 w-5 text-accent-500" />
+          <h3 className="text-base font-bold">Ajouter un utilisateur</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="ml-auto rounded-md p-1 text-white/60 hover:bg-white/5"
+            aria-label="Fermer"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div>
+          <label className="label">Courriel</label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="prenom.nom@immohorizon.com"
+            className="input"
+            autoFocus
+            required
+          />
+        </div>
+
+        <div>
+          <label className="label">Mot de passe (minimum 8 caractères)</label>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="input font-mono"
+              required
+              minLength={8}
+            />
+            <button
+              type="button"
+              onClick={randomPassword}
+              className="btn-secondary shrink-0 text-xs"
+              title="Générer un mot de passe aléatoire"
+            >
+              Auto
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-white/50">
+            Partage-le à la personne par un moyen sécuritaire — elle
+            pourra le changer dans son profil.
+          </p>
+        </div>
+
+        <div>
+          <label className="label">Rôle</label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {(["employee", "manager", "admin", "owner"] as UserRole[]).map(
+              (r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setRole(r)}
+                  className={`rounded-lg border px-3 py-2 text-left text-xs ${
+                    role === r
+                      ? "border-accent-500 bg-accent-500/10"
+                      : "border-brand-800 bg-brand-900 hover:border-accent-500/50"
+                  }`}
+                >
+                  <p className="font-semibold text-white">{ROLE_LABEL[r]}</p>
+                  <p className="mt-0.5 text-[10px] text-white/50">
+                    {ROLE_DESC[r]}
+                  </p>
+                </button>
+              )
+            )}
+          </div>
+        </div>
+
+        {error ? <p className="text-sm text-rose-300">{error}</p> : null}
+
+        <div className="flex items-center justify-end gap-2 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="btn-secondary text-sm"
+          >
+            Annuler
+          </button>
+          <button
+            type="submit"
+            disabled={submitting}
+            className="btn-accent text-sm disabled:opacity-60"
+          >
+            {submitting ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : null}
+            Créer le compte
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }

@@ -70,10 +70,20 @@ class UserRepository:
         Returns:
             The created User instance
         """
+        # Determine the final role. If caller passed `role` explicitly,
+        # that wins. Otherwise we fall back to: admin if is_admin,
+        # employee otherwise. Also keep the legacy is_admin flag in
+        # sync so any old code paths still work.
+        role = getattr(user_data, "role", None)
+        if not role:
+            role = "admin" if user_data.is_admin else "employee"
+        is_admin = user_data.is_admin or role in ("owner", "admin")
+
         user = User(
             email=user_data.email,
             hashed_password=get_password_hash(user_data.password),
-            is_admin=user_data.is_admin,
+            is_admin=is_admin,
+            role=role,
             is_active=True,
         )
         self.db.add(user)
