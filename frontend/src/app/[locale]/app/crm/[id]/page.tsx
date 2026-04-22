@@ -6,6 +6,8 @@ import {
   ArrowLeft,
   Calendar,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   FileText,
   Image as ImageIcon,
   Loader2,
@@ -25,6 +27,7 @@ import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
+import { formatPhone } from "@/lib/utils";
 
 type Prospect = {
   id: number;
@@ -334,7 +337,7 @@ export default function ProspectDetailPage() {
                 <div className="grid gap-4 sm:grid-cols-2">
                   <InfoRow icon={User} label="Nom complet" value={p.name} />
                   <InfoRow icon={Mail} label="Courriel" value={p.email} />
-                  <InfoRow icon={Phone} label="Téléphone" value={p.phone || "—"} />
+                  <InfoRow icon={Phone} label="Téléphone" value={p.phone ? formatPhone(p.phone) : "—"} />
                   <InfoRow
                     icon={MapPin}
                     label="Adresse du projet"
@@ -440,6 +443,43 @@ type ProspectSoumission = {
   signed_name: string | null;
   contact_request_id: number | null;
 };
+
+function DocSection({
+  title,
+  count,
+  icon,
+  defaultOpen = false,
+  children
+}: {
+  title: string;
+  count: number;
+  icon: React.ReactNode;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-white/70 transition hover:bg-brand-950/40"
+      >
+        {open ? (
+          <ChevronDown className="h-3.5 w-3.5 text-accent-500" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 text-white/40" />
+        )}
+        <span className="text-accent-500">{icon}</span>
+        <span className="text-white">{title}</span>
+        <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/70">
+          {count}
+        </span>
+      </button>
+      {open ? <div className="border-t border-brand-800 p-4">{children}</div> : null}
+    </div>
+  );
+}
 
 function ProspectDocuments({
   contactRequestId
@@ -613,19 +653,20 @@ function ProspectDocuments({
           <Loader2 className="h-5 w-5 animate-spin text-white/40" />
         </div>
       ) : (
-        <>
+        <div className="space-y-2">
           {/* ---- Photos ---- */}
-          <div>
-            <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white/60">
-              <ImageIcon className="h-3.5 w-3.5" />
-              Photos ({photos.length})
-            </p>
+          <DocSection
+            title="Photos"
+            count={photos.length}
+            icon={<ImageIcon className="h-3.5 w-3.5" />}
+            defaultOpen={photos.length > 0}
+          >
             {photos.length === 0 ? (
-              <p className="mt-2 rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
+              <p className="rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
                 Aucune photo jointe.
               </p>
             ) : (
-              <ul className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {photos.map((p) => (
                   <li
                     key={p.id}
@@ -672,20 +713,21 @@ function ProspectDocuments({
                 ))}
               </ul>
             )}
-          </div>
+          </DocSection>
 
           {/* ---- Soumissions signées ---- */}
-          <div>
-            <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white/60">
-              <FileText className="h-3.5 w-3.5" />
-              Soumissions signées ({signedSoumissions.length})
-            </p>
+          <DocSection
+            title="Soumissions signées"
+            count={signedSoumissions.length}
+            icon={<FileText className="h-3.5 w-3.5" />}
+            defaultOpen={signedSoumissions.length > 0}
+          >
             {signedSoumissions.length === 0 ? (
-              <p className="mt-2 rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
+              <p className="rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
                 Aucune soumission signée par ce prospect.
               </p>
             ) : (
-              <ul className="mt-3 space-y-2">
+              <ul className="space-y-2">
                 {signedSoumissions.map((s) => (
                   <li key={s.id}>
                     <Link
@@ -713,26 +755,27 @@ function ProspectDocuments({
                 ))}
               </ul>
             )}
-          </div>
+          </DocSection>
 
           {/* ---- Autres documents (PDF, plans, devis concurrents…) ---- */}
-          <div>
-            <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white/60">
-              <FileText className="h-3.5 w-3.5" />
-              Autres documents ({otherDocs.length})
-            </p>
+          <DocSection
+            title="Autres documents"
+            count={otherDocs.length}
+            icon={<FileText className="h-3.5 w-3.5" />}
+            defaultOpen={otherDocs.length > 0}
+          >
             {otherDocs.length === 0 ? (
-              <p className="mt-2 rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
+              <p className="rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
                 Aucun PDF ou autre document. Utilise « Ajouter un
                 fichier » plus haut pour déposer un plan, un devis
                 concurrent, un rapport d&apos;inspection, etc.
               </p>
             ) : (
-              <ul className="mt-3 space-y-1.5">
+              <ul className="space-y-1.5">
                 {otherDocs.map((d) => (
                   <li
                     key={d.id}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm"
+                    className="flex items-center justify-between gap-3 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm"
                   >
                     <a
                       href={urls[d.id] || "#"}
@@ -764,8 +807,8 @@ function ProspectDocuments({
                 ))}
               </ul>
             )}
-          </div>
-        </>
+          </DocSection>
+        </div>
       )}
     </section>
   );

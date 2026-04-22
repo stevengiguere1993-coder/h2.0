@@ -7,6 +7,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { Link } from "@/i18n/navigation";
+import { formatPhone } from "@/lib/utils";
 
 type Fournisseur = {
   id: number;
@@ -138,7 +139,7 @@ function Card({ f }: { f: Fournisseur }) {
       <div className="mt-1 space-y-1 text-xs text-white/70">
         {f.phone ? (
           <p className="flex items-center gap-1.5">
-            <Phone className="h-3 w-3" /> {f.phone}
+            <Phone className="h-3 w-3" /> {formatPhone(f.phone)}
           </p>
         ) : null}
         {f.email ? (

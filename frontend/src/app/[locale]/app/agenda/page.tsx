@@ -182,6 +182,11 @@ export default function AgendaPage() {
   // people".
   const projectsByDay = useMemo(() => {
     const map = new Map<string, Project[]>();
+    // Les bandes « projet » représentent une plage de chantier. On ne
+    // les affiche que quand le filtre type est vide (Tous les types) ou
+    // explicitement « chantier » — sinon ça pollue la vue quand on
+    // cherche juste ses visites ou ses réunions.
+    if (fType && fType !== "chantier") return map;
     const active = projects.filter(
       (p) =>
         p.start_date &&
@@ -205,7 +210,7 @@ export default function AgendaPage() {
       if (hits.length > 0) map.set(key, hits);
     }
     return map;
-  }, [grid, projects, fProject]);
+  }, [grid, projects, fProject, fType]);
 
   // Has the project any assigned employee?  A project band is shown in red
   // when there's still nobody assigned (signal to the user: "assigne une

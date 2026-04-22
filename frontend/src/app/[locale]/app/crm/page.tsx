@@ -17,6 +17,7 @@ import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { Link, useRouter } from "@/i18n/navigation";
+import { formatPhone } from "@/lib/utils";
 
 type Prospect = {
   id: number;
@@ -493,7 +494,7 @@ function ProspectCard({
         {p.phone ? (
           <p className="mt-1 flex items-center gap-1.5 text-xs text-white/60">
             <Phone className="h-3 w-3" />
-            <span className="truncate">{p.phone}</span>
+            <span className="truncate">{formatPhone(p.phone)}</span>
           </p>
         ) : null}
         <p className="mt-1 flex items-center gap-1.5 text-xs text-white/60">
