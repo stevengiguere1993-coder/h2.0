@@ -10,6 +10,12 @@
     POST   /api/v1/calendar/availability       — add a green zone
     DELETE /api/v1/calendar/availability/{id}  — remove a green zone
 
+    GET    /api/v1/calendar/my-agenda.ics?token=XXX   — public iCal feed
+                                                        for external calendar
+                                                        app subscriptions
+    POST   /api/v1/calendar/my-agenda-url      — (re)generate my feed token
+    GET    /api/v1/calendar/my-agenda-url      — fetch my current feed URL
+
 The busy endpoint returns blocks for a user if ?user_id=X is given
 (manager+ only), otherwise for the current user. Useful so managers
 can pick a slot that overlaps nobody's external calendar.
@@ -266,3 +272,139 @@ async def delete_availability(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Créneau introuvable.")
     await db.delete(s)
     await db.flush()
+
+
+# ---------- Outbound personal ICS feed (subscription URL) ----------
+
+import secrets
+
+from fastapi import Request
+from fastapi.responses import Response
+
+from app.models.agenda_event import AgendaEvent
+from app.models.employe import Employe
+from app.models.user import User
+from app.services.ics_event import _escape, _utc
+
+
+class FeedUrlRead(BaseModel):
+    url: str
+    token: str
+
+
+@router.get("/my-agenda-url", response_model=FeedUrlRead)
+async def get_my_agenda_url(
+    request: Request, db: DBSession, user: CurrentUser
+) -> FeedUrlRead:
+    """Return (or lazily generate) the user's personal ICS feed URL.
+
+    The URL embeds a long-lived secret token so external calendar apps
+    (Google, Apple, Outlook) can subscribe without an OAuth flow.
+    """
+    u = (
+        await db.execute(select(User).where(User.id == user.id))
+    ).scalar_one()
+    if not u.calendar_feed_token:
+        u.calendar_feed_token = secrets.token_urlsafe(32)
+        await db.flush()
+    base = str(request.base_url).rstrip("/")
+    return FeedUrlRead(
+        url=f"{base}/api/v1/calendar/my-agenda.ics?token={u.calendar_feed_token}",
+        token=u.calendar_feed_token,
+    )
+
+
+@router.post("/my-agenda-url", response_model=FeedUrlRead)
+async def rotate_my_agenda_url(
+    request: Request, db: DBSession, user: CurrentUser
+) -> FeedUrlRead:
+    """Rotate the user's feed token — invalidates every previous
+    subscription URL. Use when a device is lost or the URL leaked."""
+    u = (
+        await db.execute(select(User).where(User.id == user.id))
+    ).scalar_one()
+    u.calendar_feed_token = secrets.token_urlsafe(32)
+    await db.flush()
+    base = str(request.base_url).rstrip("/")
+    return FeedUrlRead(
+        url=f"{base}/api/v1/calendar/my-agenda.ics?token={u.calendar_feed_token}",
+        token=u.calendar_feed_token,
+    )
+
+
+@router.get("/my-agenda.ics")
+async def my_agenda_ics(
+    db: DBSession, token: str = Query(..., min_length=16)
+) -> Response:
+    """Public ICS feed. Returns all AgendaEvents assigned to the user
+    whose `calendar_feed_token` matches the query string.
+
+    We match the User → Employe via email (users.email == employes.email)
+    because AgendaEvent.assignee_id points at `employes`, not `users`.
+    This is how external calendar apps will continuously poll the user's
+    agenda without re-authenticating.
+    """
+    u = (
+        await db.execute(
+            select(User).where(User.calendar_feed_token == token)
+        )
+    ).scalar_one_or_none()
+    if u is None:
+        # 404 instead of 401 so scrapers don't learn anything
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Feed not found.")
+
+    emp = None
+    if u.email:
+        emp = (
+            await db.execute(select(Employe).where(Employe.email == u.email))
+        ).scalar_one_or_none()
+
+    events: list[AgendaEvent] = []
+    if emp is not None:
+        events = list(
+            (
+                await db.execute(
+                    select(AgendaEvent)
+                    .where(AgendaEvent.assignee_id == emp.id)
+                    .order_by(AgendaEvent.start_at.asc())
+                )
+            ).scalars().all()
+        )
+
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Horizon Services Immobiliers//Agenda Personnel//FR",
+        "METHOD:PUBLISH",
+        "X-WR-CALNAME:Horizon — Mon agenda",
+        "X-WR-TIMEZONE:America/Montreal",
+    ]
+    now = datetime.now(timezone.utc)
+    for ev in events:
+        end = ev.end_at or ev.start_at
+        lines.extend(
+            [
+                "BEGIN:VEVENT",
+                f"UID:agenda-{ev.id}@immohorizon.com",
+                f"DTSTAMP:{_utc(now)}",
+                f"DTSTART:{_utc(ev.start_at)}",
+                f"DTEND:{_utc(end)}",
+                f"SUMMARY:{_escape(ev.title)}",
+            ]
+        )
+        if ev.location:
+            lines.append(f"LOCATION:{_escape(ev.location)}")
+        if ev.description:
+            lines.append(f"DESCRIPTION:{_escape(ev.description)}")
+        lines.extend(["STATUS:CONFIRMED", "END:VEVENT"])
+    lines.append("END:VCALENDAR")
+
+    body = ("\r\n".join(lines) + "\r\n").encode("utf-8")
+    return Response(
+        content=body,
+        media_type="text/calendar; charset=utf-8",
+        headers={
+            # Short cache so subscribers re-pull within minutes
+            "Cache-Control": "public, max-age=300",
+        },
+    )

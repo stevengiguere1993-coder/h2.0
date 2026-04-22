@@ -7,6 +7,7 @@ with the shared metadata for Alembic autogenerate and create_all.
 
 from app.models.achat import Achat
 from app.models.agenda_event import AgendaEvent
+from app.models.audit_log import AuditLog
 from app.models.bon_item import BonItem
 from app.models.bon_travail import BonTravail
 from app.models.calendar_sync import (
@@ -24,6 +25,7 @@ from app.models.fournisseur import Fournisseur
 from app.models.leave_request import LeaveRequest, LeaveStatus  # noqa: F401
 from app.models.measurement import MeasurementSnapshot
 from app.models.measurement_photo import MeasurementPhoto
+from app.models.notification import Notification
 from app.models.payment import Payment
 from app.models.project import Project
 from app.models.project_member import ProjectMember
@@ -43,6 +45,7 @@ from app.models.user import User
 __all__ = [
     "Achat",
     "AgendaEvent",
+    "AuditLog",
     "BonItem",
     "BonTravail",
     "AvailabilitySlot",
@@ -58,6 +61,7 @@ __all__ = [
     "LeaveRequest",
     "MeasurementSnapshot",
     "MeasurementPhoto",
+    "Notification",
     "Payment",
     "Project",
     "ProjectMember",

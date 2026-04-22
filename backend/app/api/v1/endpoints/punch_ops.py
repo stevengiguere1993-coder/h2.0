@@ -594,3 +594,92 @@ async def payroll_csv(
             "Content-Disposition": f'attachment; filename="{filename}"'
         },
     )
+
+
+@router.get(
+    "/employe/{employe_id}/punches.csv",
+    summary="Per-employee monthly punch detail (manager+)",
+)
+async def employe_monthly_csv(
+    employe_id: int,
+    db: DBSession,
+    _: RequireManager,
+    month: Optional[str] = Query(
+        default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$"
+    ),
+):
+    """Export every individual punch (not aggregated) for one employee
+    over the given month — useful for a CNESST audit or a detailed
+    timesheet to hand to the employee."""
+    from fastapi.responses import Response
+
+    today = date.today()
+    if not month:
+        month = f"{today.year:04d}-{today.month:02d}"
+    start, end = _month_bounds(month)
+    start_dt = datetime(
+        start.year, start.month, start.day, tzinfo=timezone.utc
+    )
+    end_dt = datetime(
+        end.year, end.month, end.day, 23, 59, 59, tzinfo=timezone.utc
+    )
+
+    emp = (
+        await db.execute(select(Employe).where(Employe.id == employe_id))
+    ).scalar_one_or_none()
+    if emp is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Employé introuvable."
+        )
+
+    rows = (
+        await db.execute(
+            select(Punch)
+            .where(
+                Punch.employe_id == employe_id,
+                Punch.started_at >= start_dt,
+                Punch.started_at <= end_dt,
+                Punch.ended_at.is_not(None),
+            )
+            .order_by(Punch.started_at.asc())
+        )
+    ).scalars().all()
+
+    lines = [
+        "date,started_at,ended_at,hours,approved,project_id,location,notes"
+    ]
+    total = 0.0
+    approved_total = 0.0
+    for p in rows:
+        started = p.started_at.astimezone(timezone.utc)
+        ended = p.ended_at.astimezone(timezone.utc) if p.ended_at else None
+        h = float(p.hours or 0)
+        total += h
+        if p.approved:
+            approved_total += h
+        notes = (p.notes or "").replace('"', "'").replace("\n", " ")[:200]
+        loc = (p.location or "").replace('"', "'")
+        lines.append(
+            f'{started.date().isoformat()},'
+            f'{started.strftime("%Y-%m-%d %H:%M")},'
+            f'{ended.strftime("%Y-%m-%d %H:%M") if ended else ""},'
+            f'{h},{"oui" if p.approved else "non"},'
+            f'{p.project_id or ""},'
+            f'"{loc}","{notes}"'
+        )
+    lines.append("")
+    lines.append(f",,TOTAL,{round(total, 2)},,,,")
+    lines.append(f",,APPROUVÉES,{round(approved_total, 2)},,,,")
+
+    body = "\n".join(lines)
+    safe_name = (emp.full_name or f"employe-{emp.id}").replace(
+        " ", "-"
+    ).lower()
+    filename = f"punches-{safe_name}-{month}.csv"
+    return Response(
+        content=body,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )

@@ -754,6 +754,27 @@ function PayrollExportButton() {
     }
   }
 
+  async function downloadEmployeeCsv(employeId: number, employeName: string) {
+    try {
+      const res = await authedFetch(
+        `/api/v1/punch/employe/${employeId}/punches.csv?month=${month}`
+      );
+      if (!res.ok) throw new Error();
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const safe = employeName.replace(/\s+/g, "-").toLowerCase();
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `punches-${safe}-${month}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch {
+      setError(`Export ${employeName} échoué.`);
+    }
+  }
+
   function close() {
     setOpen(false);
     setReport(null);
@@ -852,6 +873,7 @@ function PayrollExportButton() {
                       <th className="px-3 py-2 text-right">En attente (h)</th>
                       <th className="px-3 py-2 text-right">Total (h)</th>
                       <th className="px-3 py-2 text-right">Paie approuvée</th>
+                      <th className="px-3 py-2"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-brand-800">
@@ -878,6 +900,18 @@ function PayrollExportButton() {
                             currency: "CAD",
                             maximumFractionDigits: 2
                           }).format(r.approved_revenue)}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              downloadEmployeeCsv(r.employe_id, r.employe_name)
+                            }
+                            className="text-[11px] text-accent-400 hover:text-accent-300"
+                            title="Détail des punches pour cet employé"
+                          >
+                            CSV détail
+                          </button>
                         </td>
                       </tr>
                     ))}

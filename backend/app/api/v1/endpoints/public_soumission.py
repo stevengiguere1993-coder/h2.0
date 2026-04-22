@@ -254,6 +254,22 @@ async def public_accept(
 
     await db.flush()
     await db.refresh(sm)
+
+    # Notify managers+ that the quote was signed online
+    try:
+        from app.services.notifications import notify_role
+
+        await notify_role(
+            db,
+            min_role="manager",
+            kind="soumission.accepted",
+            title=f"Soumission acceptée — {sm.reference}",
+            body=f"Signée par {sm.signed_name} en ligne.",
+            href=f"/app/soumissions/{sm.id}",
+        )
+    except Exception:
+        pass
+
     return await public_read(token, db)
 
 
