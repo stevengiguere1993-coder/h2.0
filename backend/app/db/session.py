@@ -127,6 +127,9 @@ async def init_db() -> None:
             ("agenda_events", "contact_request_id", "INTEGER"),
             ("agenda_events", "reminder_sent_at", "TIMESTAMP WITH TIME ZONE"),
             ("agenda_events", "confirmation_sent_at", "TIMESTAMP WITH TIME ZONE"),
+            ("soumission_items", "cost_per_unit", "NUMERIC(12, 2) NOT NULL DEFAULT 0"),
+            ("service_templates", "default_cost_per_unit", "NUMERIC(12, 2)"),
+            ("service_template_items", "default_cost_per_unit", "NUMERIC(12, 2) NOT NULL DEFAULT 0"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
