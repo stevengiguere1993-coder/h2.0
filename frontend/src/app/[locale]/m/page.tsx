@@ -12,7 +12,8 @@ import {
   MapPin,
   Palmtree,
   Play,
-  Square
+  Square,
+  XCircle
 } from "lucide-react";
 
 import { Link, useRouter } from "@/i18n/navigation";
@@ -109,14 +110,37 @@ export default function MobileHome() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [punchBusy, setPunchBusy] = useState(false);
+  // Most recent leave decision (pending/approved/rejected), shown as a
+  // banner on the home so employees see the outcome without having to
+  // dig through menus.
+  const [recentLeave, setRecentLeave] = useState<{
+    id: number;
+    status: "pending" | "approved" | "rejected" | "cancelled";
+    start_at: string;
+    end_at: string;
+    review_note: string | null;
+  } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await authedFetch("/api/v1/mobile/me");
-      if (!res.ok) throw new Error(`http_${res.status}`);
-      setData((await res.json()) as MobileMe);
+      const [meRes, leavesRes] = await Promise.all([
+        authedFetch("/api/v1/mobile/me"),
+        authedFetch("/api/v1/leaves/mine?limit=1")
+      ]);
+      if (!meRes.ok) throw new Error(`http_${meRes.status}`);
+      setData((await meRes.json()) as MobileMe);
+      if (leavesRes.ok) {
+        const rows = (await leavesRes.json()) as Array<{
+          id: number;
+          status: "pending" | "approved" | "rejected" | "cancelled";
+          start_at: string;
+          end_at: string;
+          review_note: string | null;
+        }>;
+        setRecentLeave(rows[0] || null);
+      }
     } catch {
       setError("Chargement échoué.");
     } finally {
@@ -128,24 +152,9 @@ export default function MobileHome() {
     void load();
   }, [load]);
 
-  async function punchStart() {
-    setPunchBusy(true);
-    try {
-      const res = await authedFetch("/api/v1/mobile/punch/start", {
-        method: "POST",
-        body: JSON.stringify({
-          project_id: data?.current_event?.project_id || null,
-          task: data?.current_event?.title || null
-        })
-      });
-      if (!res.ok) throw new Error();
-      await load();
-    } catch {
-      setError("Démarrage du punch échoué.");
-    } finally {
-      setPunchBusy(false);
-    }
-  }
+  // punchStart was removed from the home — users now go to /m/punch
+  // where they pick a context (project / prospect / admin) before
+  // starting. See the <Link /> on the "Poinçonner" button below.
 
   async function punchStop() {
     setPunchBusy(true);
@@ -188,6 +197,8 @@ export default function MobileHome() {
             {error}
           </p>
         ) : null}
+
+        {recentLeave ? <LeaveBanner leave={recentLeave} /> : null}
 
         {/* Profile card */}
         <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
@@ -304,19 +315,14 @@ export default function MobileHome() {
                   Arrêter le punch
                 </button>
               ) : (
-                <button
-                  type="button"
-                  onClick={punchStart}
-                  disabled={punchBusy}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-500 px-5 py-4 text-base font-bold text-white disabled:opacity-60"
+                <Link
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  href={"/m/punch" as any}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-500 px-5 py-4 text-base font-bold text-white"
                 >
-                  {punchBusy ? (
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                  ) : (
-                    <Play className="h-5 w-5" />
-                  )}
+                  <Play className="h-5 w-5" />
                   Poinçonner
-                </button>
+                </Link>
               )}
               <Link
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -468,6 +474,93 @@ function EventLine({ event: e }: { event: EventMini }) {
         ) : null}
       </div>
       <ChevronRight className="h-4 w-4 flex-shrink-0 text-white/30" />
+    </Link>
+  );
+}
+
+function LeaveBanner({
+  leave
+}: {
+  leave: {
+    id: number;
+    status: "pending" | "approved" | "rejected" | "cancelled";
+    start_at: string;
+    end_at: string;
+    review_note: string | null;
+  };
+}) {
+  if (leave.status === "cancelled") return null;
+  const when =
+    new Date(leave.start_at).toDateString() ===
+    new Date(leave.end_at).toDateString()
+      ? new Date(leave.start_at).toLocaleDateString("fr-CA", {
+          day: "numeric",
+          month: "long"
+        })
+      : `${new Date(leave.start_at).toLocaleDateString("fr-CA", {
+          day: "numeric",
+          month: "short"
+        })} → ${new Date(leave.end_at).toLocaleDateString("fr-CA", {
+          day: "numeric",
+          month: "short"
+        })}`;
+
+  if (leave.status === "pending") {
+    return (
+      <Link
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        href={"/m/conges" as any}
+        className="flex items-center gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-amber-200"
+      >
+        <Palmtree className="h-5 w-5 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold">
+            Demande de congé en attente
+          </p>
+          <p className="mt-0.5 text-xs opacity-80">
+            {when} · en attente d&apos;approbation
+          </p>
+        </div>
+        <ChevronRight className="h-4 w-4 flex-shrink-0 opacity-60" />
+      </Link>
+    );
+  }
+  if (leave.status === "approved") {
+    return (
+      <Link
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        href={"/m/conges" as any}
+        className="flex items-center gap-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3 text-emerald-200"
+      >
+        <CheckCircle2 className="h-5 w-5 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold">
+            Congé approuvé ✅
+          </p>
+          <p className="mt-0.5 text-xs opacity-80">
+            {when}{leave.review_note ? ` · ${leave.review_note}` : ""}
+          </p>
+        </div>
+        <ChevronRight className="h-4 w-4 flex-shrink-0 opacity-60" />
+      </Link>
+    );
+  }
+  // rejected
+  return (
+    <Link
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      href={"/m/conges" as any}
+      className="flex items-center gap-3 rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-rose-200"
+    >
+      <XCircle className="h-5 w-5 flex-shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold">Demande de congé refusée</p>
+        <p className="mt-0.5 text-xs opacity-80">
+          {when}
+          {leave.review_note ? ` · ${leave.review_note}` : ""}
+        </p>
+      </div>
+      <ChevronRight className="h-4 w-4 flex-shrink-0 opacity-60" />
     </Link>
   );
 }

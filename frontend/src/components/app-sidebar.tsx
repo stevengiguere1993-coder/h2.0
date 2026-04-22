@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import {
   Briefcase,
@@ -12,6 +13,7 @@ import {
   Home,
   Contact,
   LogOut,
+  Palmtree,
   ShoppingCart,
   Truck,
   UserCircle,
@@ -20,6 +22,7 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
+import { authedFetch } from "@/lib/auth";
 
 type NavItem = {
   href: string;
@@ -43,7 +46,8 @@ const CONSTRUCTION_NAV: NavItem[] = [
 const RESOURCES_NAV: NavItem[] = [
   { href: "/app/employes", label: "Employés", icon: UserCircle },
   { href: "/app/sous-traitants", label: "Sous-traitants", icon: HardHat },
-  { href: "/app/fournisseurs", label: "Fournisseurs", icon: Truck }
+  { href: "/app/fournisseurs", label: "Fournisseurs", icon: Truck },
+  { href: "/app/conges", label: "Congés", icon: Palmtree }
 ];
 
 export function AppSidebar({
@@ -58,6 +62,28 @@ export function AppSidebar({
   onSignOut: () => void;
 }) {
   const pathname = usePathname();
+  const [pendingLeaves, setPendingLeaves] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function poll() {
+      try {
+        const res = await authedFetch("/api/v1/leaves/pending-count");
+        if (!res.ok) return;
+        const n = (await res.json()) as number;
+        if (!cancelled) setPendingLeaves(Number(n) || 0);
+      } catch {
+        /* ignore */
+      }
+    }
+    void poll();
+    // Refresh every 2 minutes so admins see new requests without reload.
+    const t = setInterval(poll, 120_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
 
   function isActive(href: string) {
     if (href === "/app")
@@ -140,6 +166,10 @@ export function AppSidebar({
             <ul className="space-y-0.5">
               {RESOURCES_NAV.map((item) => {
                 const active = isActive(item.href);
+                const badge =
+                  item.href === "/app/conges" && pendingLeaves > 0
+                    ? pendingLeaves
+                    : null;
                 return (
                   <li key={item.href}>
                     {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
@@ -157,7 +187,12 @@ export function AppSidebar({
                           active ? "text-accent-500" : ""
                         }`}
                       />
-                      <span>{item.label}</span>
+                      <span className="flex-1">{item.label}</span>
+                      {badge ? (
+                        <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-bold text-white">
+                          {badge}
+                        </span>
+                      ) : null}
                     </Link>
                   </li>
                 );
