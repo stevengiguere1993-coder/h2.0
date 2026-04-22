@@ -13,14 +13,13 @@ import {
   PenTool,
   Plus,
   RefreshCw,
-  Ruler,
   Save,
   Send,
   Trash2
 } from "lucide-react";
 
+import { AddressInput } from "@/components/address-input";
 import { AppTopbar } from "@/components/app-topbar";
-import { MeasurementImportModal } from "@/components/measurement-import-modal";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -111,7 +110,6 @@ export default function SoumissionDetailPage() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [itemBusy, setItemBusy] = useState<number | "new" | null>(null);
-  const [measureFor, setMeasureFor] = useState<number | null>(null);
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [qboBusy, setQboBusy] = useState(false);
   const [qboNotice, setQboNotice] = useState<string | null>(null);
@@ -790,7 +788,6 @@ export default function SoumissionDetailPage() {
                           busy={itemBusy === it.id}
                           onPatch={(patch) => patchItem(it.id, patch)}
                           onDelete={() => deleteItem(it.id)}
-                          onMeasure={() => setMeasureFor(it.id)}
                         />
                       ))}
                     </tbody>
@@ -831,16 +828,14 @@ export default function SoumissionDetailPage() {
                   <label htmlFor="property_address" className="label">
                     Adresse du chantier
                   </label>
-                  <input
+                  <AddressInput
                     id="property_address"
-                    type="text"
                     value={propertyAddress}
-                    onChange={(e) => setPropertyAddress(e.target.value)}
-                    placeholder="Ex. 32 Croissant d'Avaugour, Laval, QC"
-                    className="input"
+                    onChange={setPropertyAddress}
+                    placeholder="Commence à taper — on propose les adresses canadiennes"
                   />
                   <p className="mt-1 text-xs text-white/50">
-                    Affichée sur le PDF et la page publique. Utilisée pour le
+                    Affichée sur le PDF et la page publique. Satellite +
                     Street View ci-dessous.
                   </p>
                   {propertyAddress.trim() ? (
@@ -1029,24 +1024,6 @@ export default function SoumissionDetailPage() {
         ) : null}
       </div>
 
-      {measureFor !== null ? (
-        <MeasurementImportModal
-          clientId={s?.client_id || null}
-          contactRequestId={s?.contact_request_id || null}
-          defaultAddress={propertyAddress || s?.property_address || null}
-          onClose={() => setMeasureFor(null)}
-          onPick={(areaFt2, label) => {
-            if (measureFor != null) {
-              patchItem(measureFor, {
-                quantity: areaFt2,
-                unit: "ft²",
-                description: label
-              });
-            }
-            setMeasureFor(null);
-          }}
-        />
-      ) : null}
 
       {templatePickerOpen ? (
         <ServiceTemplatePicker
@@ -1180,14 +1157,12 @@ function ItemRow({
   item,
   busy,
   onPatch,
-  onDelete,
-  onMeasure
+  onDelete
 }: {
   item: Item;
   busy: boolean;
   onPatch: (patch: Partial<Item>) => void;
   onDelete: () => void;
-  onMeasure?: () => void;
 }) {
   const [description, setDescription] = useState(item.description);
   const [unit, setUnit] = useState(item.unit || "");
@@ -1252,27 +1227,15 @@ function ItemRow({
         />
       </td>
       <td className="px-3 py-3 w-28">
-        <div className="flex items-center gap-1">
-          <input
-            type="number"
-            step="0.001"
-            min="0"
-            value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
-            onBlur={() => commit("quantity")}
-            className="w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-right text-sm text-white focus:border-brand-700 focus:outline-none"
-          />
-          {onMeasure ? (
-            <button
-              type="button"
-              onClick={onMeasure}
-              title="Importer une mesure du client (ou en prendre une nouvelle)"
-              className="rounded-md bg-blue-500/15 p-1 text-blue-300 hover:bg-blue-500/25"
-            >
-              <Ruler className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-        </div>
+        <input
+          type="number"
+          step="0.001"
+          min="0"
+          value={quantity}
+          onChange={(e) => setQuantity(e.target.value)}
+          onBlur={() => commit("quantity")}
+          className="w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-right text-sm text-white focus:border-brand-700 focus:outline-none"
+        />
       </td>
       <td className="px-3 py-3 w-24">
         <input
@@ -1402,6 +1365,8 @@ function ActionCard({
  */
 function StreetViewEmbed({ address }: { address: string }) {
   const mapRef = useRef<HTMLDivElement | null>(null);
+  const [coords, setCoords] = useState<[number, number] | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     let map: unknown = null; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -1432,6 +1397,7 @@ function StreetViewEmbed({ address }: { address: string }) {
         /* ignore */
       }
       if (cancelled) return;
+      setCoords(center);
       const m = L.map(mapRef.current, {
         center,
         zoom: 19,
@@ -1462,13 +1428,31 @@ function StreetViewEmbed({ address }: { address: string }) {
   const gstreetUrl = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${encodeURIComponent(
     address
   )}`;
+  // Embedded Street View — Google's lightweight iframe endpoint that
+  // works without an API key. Uses coordinates if we geocoded them,
+  // otherwise falls back to the address string.
+  const svEmbedSrc = coords
+    ? `https://maps.google.com/maps?q=&layer=c&cbll=${coords[0]},${coords[1]}&cbp=11,0,0,0,0&output=svembed`
+    : `https://maps.google.com/maps?q=${encodeURIComponent(
+        address
+      )}&layer=c&output=svembed`;
 
   return (
     <div className="mt-3 space-y-2">
-      <div
-        ref={mapRef}
-        className="h-64 w-full overflow-hidden rounded-lg border border-brand-800 bg-brand-950"
-      />
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div
+          ref={mapRef}
+          className="h-64 w-full overflow-hidden rounded-lg border border-brand-800 bg-brand-950"
+        />
+        <iframe
+          key={svEmbedSrc}
+          src={svEmbedSrc}
+          className="h-64 w-full overflow-hidden rounded-lg border border-brand-800 bg-brand-950"
+          loading="lazy"
+          referrerPolicy="no-referrer-when-downgrade"
+          title="Street View"
+        />
+      </div>
       <div className="flex flex-wrap gap-2 text-xs">
         <a
           href={gmapsUrl}
@@ -1484,7 +1468,7 @@ function StreetViewEmbed({ address }: { address: string }) {
           rel="noopener noreferrer"
           className="inline-flex items-center gap-1 rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-white/70 hover:border-accent-500 hover:text-white"
         >
-          👁️ Voir en Street View
+          👁️ Ouvrir Street View en grand
         </a>
       </div>
     </div>

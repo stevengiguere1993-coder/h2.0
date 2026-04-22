@@ -15,6 +15,7 @@ type Prospect = {
   email: string;
   status: string;
   project_type: string;
+  address: string | null;
 };
 
 function yyyyMmDd(date: Date): string {
@@ -46,6 +47,7 @@ export default function NewSoumissionPage() {
     prefilledContactId || ""
   );
   const [title, setTitle] = useState("");
+  const [propertyAddress, setPropertyAddress] = useState("");
   const [validUntil, setValidUntil] = useState<string>(() => {
     const d = new Date();
     d.setDate(d.getDate() + 30);
@@ -62,7 +64,15 @@ export default function NewSoumissionPage() {
         const res = await authedFetch("/api/v1/contact?limit=200");
         if (!res.ok) throw new Error();
         const data = (await res.json()) as Prospect[];
-        if (!cancelled) setProspects(data);
+        if (!cancelled) {
+          setProspects(data);
+          // Auto-fill address when the page is pre-wired to a specific
+          // prospect (coming from "Créer soumission" on the CRM fiche).
+          if (prefilledContactId) {
+            const p = data.find((x) => String(x.id) === prefilledContactId);
+            if (p?.address) setPropertyAddress(p.address);
+          }
+        }
       } catch {
         /* ignore — dropdown will be empty */
       } finally {
@@ -73,7 +83,7 @@ export default function NewSoumissionPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [prefilledContactId]);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -95,6 +105,9 @@ export default function NewSoumissionPage() {
       }
       if (contactRequestId) {
         payload.contact_request_id = Number(contactRequestId);
+      }
+      if (propertyAddress.trim()) {
+        payload.property_address = propertyAddress.trim();
       }
 
       const res = await authedFetch("/api/v1/soumissions", {
@@ -173,6 +186,9 @@ export default function NewSoumissionPage() {
                 if (p && !title) {
                   setTitle(`Projet ${p.project_type} — ${p.name}`);
                 }
+                if (p?.address && !propertyAddress) {
+                  setPropertyAddress(p.address);
+                }
               }}
               className="input"
               disabled={loadingProspects}
@@ -199,6 +215,24 @@ export default function NewSoumissionPage() {
               placeholder="Ex. Rénovation salle de bain — 123 rue Example"
               className="input"
             />
+          </div>
+
+          <div>
+            <label htmlFor="property_address" className="label">
+              Adresse du chantier
+            </label>
+            <input
+              id="property_address"
+              type="text"
+              value={propertyAddress}
+              onChange={(e) => setPropertyAddress(e.target.value)}
+              placeholder="Ex. 32 Croissant d'Avaugour, Laval, QC"
+              className="input"
+            />
+            <p className="mt-1 text-xs text-white/50">
+              Pré-remplie depuis le prospect si disponible. Street View
+              disponible après création sur la page de la soumission.
+            </p>
           </div>
 
           <div>

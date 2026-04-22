@@ -390,11 +390,11 @@ def _render_bytes(
     story.append(totals_wrap)
     story.append(Spacer(1, 18))
 
-    # Notes
-    if sm.notes:
-        story.append(Paragraph("NOTES", s["accent"]))
-        story.append(Paragraph(sm.notes.replace("\n", "<br/>"), s["body"]))
-        story.append(Spacer(1, 12))
+    # NB: on ne rend PAS `sm.notes` ici — c'est un champ INTERNE
+    # ("Notes privées non visibles par le client") utilisé par
+    # l'équipe pour consigner les motifs de refus, la marge voulue,
+    # les particularités du chantier, etc. La description publique
+    # côté client est `sm.description`, rendue plus haut.
 
     # Conditions
     story.append(Paragraph("CONDITIONS", s["accent"]))
