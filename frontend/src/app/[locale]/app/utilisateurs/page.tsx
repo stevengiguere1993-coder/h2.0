@@ -157,8 +157,15 @@ export default function UtilisateursPage() {
       return;
     }
     const action = u.is_active ? "deactivate" : "activate";
-    if (!(await confirm(`${u.is_active ? "Désactiver" : "Réactiver"} ${u.email} ?`)))
-      return;
+    const ok = await confirm({
+      title: `${u.is_active ? "Désactiver" : "Réactiver"} ${u.email} ?`,
+      description: u.is_active
+        ? "L'utilisateur ne pourra plus se connecter. Tu pourras le réactiver à tout moment."
+        : "L'utilisateur pourra à nouveau se connecter avec son mot de passe existant.",
+      confirmLabel: u.is_active ? "Désactiver" : "Réactiver",
+      destructive: u.is_active // rouge pour désactiver, accent pour réactiver
+    });
+    if (!ok) return;
     setBusyUser(u.id);
     try {
       const res = await authedFetch(`/api/v1/users/${u.id}/${action}`, {
@@ -169,6 +176,41 @@ export default function UtilisateursPage() {
       setUsers((xs) => xs.map((x) => (x.id === u.id ? updated : x)));
     } catch {
       setError("Action échouée.");
+    } finally {
+      setBusyUser(null);
+    }
+  }
+
+  async function removeUser(u: User) {
+    if (
+      !(await confirm({
+        title: `Supprimer définitivement ${u.email} ?`,
+        description:
+          "Le compte est effacé de la base. Les enregistrements liés (notifs, audit log, assignations projet) sont nettoyés ou détachés. L'historique des actions reste consultable mais sera anonymisé.",
+        confirmLabel: "Supprimer",
+        destructive: true
+      }))
+    )
+      return;
+    setBusyUser(u.id);
+    setError(null);
+    try {
+      const res = await authedFetch(`/api/v1/users/${u.id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) {
+        const t = await res.text();
+        try {
+          const j = JSON.parse(t);
+          throw new Error(j.detail || `http_${res.status}`);
+        } catch {
+          throw new Error(t.slice(0, 200) || `http_${res.status}`);
+        }
+      }
+      setUsers((xs) => xs.filter((x) => x.id !== u.id));
+      if (selected === u.id) setSelected(null);
+    } catch (e) {
+      setError(`Suppression échouée : ${(e as Error).message}`);
     } finally {
       setBusyUser(null);
     }
@@ -322,23 +364,40 @@ export default function UtilisateursPage() {
             <section className="rounded-xl border border-brand-800 bg-brand-900">
               {selectedUser ? (
                 <>
-                  <div className="border-b border-brand-800 px-4 py-3">
-                    <p className="text-lg font-bold text-white">
-                      {selectedUser.email}
-                    </p>
-                    <p className="mt-0.5 text-xs text-white/50">
-                      Créé le{" "}
-                      {new Date(selectedUser.created_at).toLocaleDateString(
-                        "fr-CA",
-                        {
-                          day: "numeric",
-                          month: "short",
-                          year: "numeric"
-                        }
-                      )}
-                    </p>
+                  <div className="flex items-start justify-between gap-3 border-b border-brand-800 px-4 py-3">
+                    <div className="min-w-0">
+                      <p className="text-lg font-bold text-white">
+                        {selectedUser.email}
+                      </p>
+                      <p className="mt-0.5 text-xs text-white/50">
+                        Créé le{" "}
+                        {new Date(selectedUser.created_at).toLocaleDateString(
+                          "fr-CA",
+                          {
+                            day: "numeric",
+                            month: "short",
+                            year: "numeric"
+                          }
+                        )}
+                      </p>
+                    </div>
+                    {selectedUser.id !== me?.id ? (
+                      <button
+                        type="button"
+                        onClick={() => removeUser(selectedUser)}
+                        disabled={busyUser === selectedUser.id}
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/20 disabled:opacity-60"
+                        title="Supprimer définitivement ce compte"
+                      >
+                        {busyUser === selectedUser.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <UserX className="h-3.5 w-3.5" />
+                        )}
+                        Supprimer le compte
+                      </button>
+                    ) : null}
                   </div>
-
                   <div className="space-y-4 border-b border-brand-800 p-4">
                     <div>
                       <label className="text-xs font-semibold uppercase tracking-wider text-accent-500">

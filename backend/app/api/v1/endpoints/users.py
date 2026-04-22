@@ -157,6 +157,61 @@ async def set_password(
     return UserRead.model_validate(u)
 
 
+@router.delete(
+    "/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Supprimer définitivement un compte utilisateur (owner)",
+)
+async def delete_user(
+    user_id: int,
+    db: DBSession,
+    owner: RequireOwner,
+) -> None:
+    """Hard-delete : supprime la ligne. Les FK pointant vers ce user
+    (ProjectMember, Notifications, AuditLog, AvailabilitySlot, feed
+    iCal…) sont géré·es par les ON DELETE de leurs propres déclarations
+    (CASCADE ou SET NULL).
+
+    Sécurités :
+      - Un owner ne peut pas se supprimer lui-même
+      - On bloque la suppression du dernier owner actif (sinon plus
+        personne ne peut gérer les rôles)
+    """
+    if user_id == owner.id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Tu ne peux pas supprimer ton propre compte.",
+        )
+    u = (
+        await db.execute(select(User).where(User.id == user_id))
+    ).scalar_one_or_none()
+    if u is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+
+    if u.role == UserRole.OWNER.value:
+        # Compte les autres owners actifs encore présents.
+        from sqlalchemy import func
+
+        remaining = (
+            await db.execute(
+                select(func.count(User.id)).where(
+                    User.role == UserRole.OWNER.value,
+                    User.is_active.is_(True),
+                    User.id != user_id,
+                )
+            )
+        ).scalar_one()
+        if int(remaining or 0) == 0:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "Impossible de supprimer le dernier propriétaire actif. "
+                "Crée un autre owner d'abord.",
+            )
+
+    await db.delete(u)
+    await db.flush()
+
+
 @router.post("/{user_id}/force-password-change", response_model=UserRead)
 async def force_password_change(
     user_id: int,
