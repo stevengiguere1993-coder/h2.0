@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Calendar, Copy, Loader2, RefreshCw } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type Me = {
   user_email: string;
@@ -26,9 +27,24 @@ type Me = {
 };
 
 export default function MobileProfil() {
+  const confirm = useConfirm();
   const [data, setData] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [feedUrl, setFeedUrl] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [rotating, setRotating] = useState(false);
+
+  const loadFeed = useCallback(async () => {
+    try {
+      const res = await authedFetch("/api/v1/calendar/my-agenda-url");
+      if (!res.ok) return;
+      const r = (await res.json()) as { url: string };
+      setFeedUrl(r.url);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -44,10 +60,45 @@ export default function MobileProfil() {
       }
     }
     load();
+    void loadFeed();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadFeed]);
+
+  async function copyFeedUrl() {
+    if (!feedUrl) return;
+    try {
+      await navigator.clipboard.writeText(feedUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function rotateFeed() {
+    if (
+      !(await confirm({
+        title: "Régénérer l'URL de l'agenda ?",
+        description:
+          "Les calendriers actuellement abonnés cesseront de se mettre à jour. Tu devras ré-abonner chaque appareil avec la nouvelle URL.",
+        confirmLabel: "Régénérer"
+      }))
+    )
+      return;
+    setRotating(true);
+    try {
+      const res = await authedFetch("/api/v1/calendar/my-agenda-url", {
+        method: "POST"
+      });
+      if (!res.ok) return;
+      const r = (await res.json()) as { url: string };
+      setFeedUrl(r.url);
+    } finally {
+      setRotating(false);
+    }
+  }
 
   return (
     <>
@@ -133,6 +184,55 @@ export default function MobileProfil() {
                   </dd>
                 </div>
               </dl>
+            </section>
+
+            <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+              <p className="flex items-center gap-2 text-xs uppercase tracking-wider text-white/50">
+                <Calendar className="h-3.5 w-3.5" /> Mon agenda dans mon calendrier
+              </p>
+              <p className="mt-2 text-xs text-white/70">
+                Copie cette URL dans Google / Apple / Outlook (&laquo;&nbsp;Ajouter
+                un calendrier par URL&nbsp;&raquo;). Tes RDV assignés apparaîtront
+                dans ton calendrier personnel.
+              </p>
+              {feedUrl ? (
+                <>
+                  <div className="mt-3 flex items-center gap-2 overflow-hidden rounded-lg border border-brand-800 bg-brand-950">
+                    <input
+                      type="text"
+                      value={feedUrl}
+                      readOnly
+                      onFocus={(e) => e.currentTarget.select()}
+                      className="flex-1 bg-transparent px-3 py-2 text-[11px] text-white/80 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={copyFeedUrl}
+                      className="flex items-center gap-1 border-l border-brand-800 px-3 py-2 text-xs text-accent-300 hover:bg-brand-900"
+                    >
+                      <Copy className="h-3 w-3" />
+                      {copied ? "Copié !" : "Copier"}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={rotateFeed}
+                    disabled={rotating}
+                    className="mt-2 inline-flex items-center gap-1 text-[11px] text-white/50 hover:text-rose-300 disabled:opacity-50"
+                  >
+                    {rotating ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3 w-3" />
+                    )}
+                    Régénérer l&apos;URL
+                  </button>
+                </>
+              ) : (
+                <p className="mt-2 text-[11px] text-white/40">
+                  Chargement de l&apos;URL…
+                </p>
+              )}
             </section>
 
             <Link

@@ -8,6 +8,7 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     appointments,
+    audit,
     auth,
     blog,
     calendar,
@@ -24,6 +25,7 @@ from app.api.v1.endpoints import (
     leave_requests,
     measurements,
     mobile,
+    notifications,
     payments,
     sales_tasks,
     service_templates,
@@ -38,6 +40,7 @@ from app.api.v1.endpoints import (
     public_soumission,
     punch_ops,
     qbo_token,
+    search,
     soumission_items,
     soumission_qbo,
     soumission_send,
@@ -85,6 +88,9 @@ api_router.include_router(sales_tasks.router)
 api_router.include_router(mobile.router)
 api_router.include_router(leave_requests.router)
 api_router.include_router(service_templates.router)
+api_router.include_router(search.router)
+api_router.include_router(notifications.router)
+api_router.include_router(audit.router)
 
 # Business
 api_router.include_router(employes_router)

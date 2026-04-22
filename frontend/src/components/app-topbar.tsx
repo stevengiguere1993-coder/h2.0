@@ -3,6 +3,8 @@
 import { Menu, Search } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
+import { GlobalSearch } from "@/components/global-search";
+import { NotificationBell } from "@/components/notification-bell";
 
 type Crumb = { label: string; href?: string };
 
@@ -59,17 +61,21 @@ export function AppTopbar({
         })}
       </nav>
 
+      <NotificationBell />
+
       {onSearch ? (
         <div className="relative hidden min-w-[220px] md:block">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
           <input
             type="search"
-            placeholder={searchPlaceholder || "Rechercher…"}
+            placeholder={searchPlaceholder || "Filtrer…"}
             onChange={(e) => onSearch(e.target.value)}
             className="w-full rounded-lg border border-brand-800 bg-brand-900 py-2 pl-9 pr-3 text-sm text-white placeholder:text-white/40 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-500/40"
           />
         </div>
-      ) : null}
+      ) : (
+        <GlobalSearch />
+      )}
 
       {rightSlot ? <div className="flex items-center gap-2">{rightSlot}</div> : null}
     </header>

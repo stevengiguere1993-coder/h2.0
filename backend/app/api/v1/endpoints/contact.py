@@ -44,6 +44,10 @@ ALLOWED_CONTENT_TYPES = {
     "image/webp",
     "image/heic",
     "image/heif",
+    # Staff upload path accepts PDFs too (plans, devis concurrents,
+    # anciennes factures) — the public form still filters client-side
+    # to image/* for safety.
+    "application/pdf",
 }
 
 
@@ -142,6 +146,26 @@ async def submit_contact(
     background_tasks.add_task(
         push_contact_to_monday, record, reference, None, photo_payloads or None
     )
+
+    # Fan-out a notification to every manager+ so they see the new
+    # prospect in the bell immediately.
+    try:
+        from app.services.notifications import notify_role
+
+        await notify_role(
+            db,
+            min_role="manager",
+            kind="prospect.created",
+            title=f"Nouveau prospect : {record.name}",
+            body=(
+                (record.message or "").strip()[:200]
+                or f"{record.email} — {record.project_type}"
+            ),
+            href=f"/app/crm/{record.id}",
+        )
+    except Exception:
+        # Never fail the public form on a notification error.
+        pass
 
     return ContactRequestPublicAck(reference=reference)
 
