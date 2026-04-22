@@ -167,6 +167,16 @@ async def submit_contact(
         # Never fail the public form on a notification error.
         pass
 
+    # Démarre la cadence de suivi commercial : « Premier appel » dans 24 h.
+    try:
+        from app.services.follow_up import schedule_first_followup
+
+        await schedule_first_followup(
+            db, subject_type="prospect", subject_id=record.id
+        )
+    except Exception:
+        pass
+
     return ContactRequestPublicAck(reference=reference)
 
 

@@ -14,6 +14,7 @@ from app.api.v1.endpoints import (
     calendar,
     clients,
     employes,
+    follow_ups,
     contact,
     dashboard,
     achat_receipt,
@@ -93,6 +94,7 @@ api_router.include_router(service_templates.router)
 api_router.include_router(search.router)
 api_router.include_router(notifications.router)
 api_router.include_router(audit.router)
+api_router.include_router(follow_ups.router)
 
 # Business
 api_router.include_router(employes.router)

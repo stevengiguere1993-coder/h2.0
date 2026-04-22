@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { FollowUpTimeline } from "@/components/follow-up-timeline";
 import { MeasurementsPanel } from "@/components/measurements-panel";
 import { SalesTasksPanel } from "@/components/sales-tasks-panel";
 import { Link } from "@/i18n/navigation";
@@ -353,6 +354,12 @@ export default function ProspectDetailPage() {
                     label="Langue"
                     value={p.locale === "fr" ? "Français" : "Anglais"}
                   />
+                  <div className="lg:col-span-3">
+                    <FollowUpTimeline
+                      subjectType="prospect"
+                      subjectId={p.id}
+                    />
+                  </div>
                 </div>
               ) : null}
 

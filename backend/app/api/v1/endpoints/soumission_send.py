@@ -46,6 +46,20 @@ async def send_soumission_endpoint(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         )
+
+    # Démarre la cadence de suivi : « Confirmer réception » dans 24 h.
+    try:
+        from app.services.follow_up import schedule_first_followup
+
+        await schedule_first_followup(
+            db,
+            subject_type="soumission",
+            subject_id=sm.id,
+            performed_by_user_id=_.id,
+        )
+    except Exception:
+        pass
+
     return SoumissionRead.model_validate(sm)
 
 

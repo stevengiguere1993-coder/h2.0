@@ -21,6 +21,7 @@ from app.models.contact_request_photo import ContactRequestPhoto
 from app.models.employe import Employe
 from app.models.facture import Facture
 from app.models.facture_item import FactureItem
+from app.models.follow_up import FollowUp
 from app.models.fournisseur import Fournisseur
 from app.models.leave_request import LeaveRequest, LeaveStatus  # noqa: F401
 from app.models.measurement import MeasurementSnapshot
@@ -57,6 +58,7 @@ __all__ = [
     "Employe",
     "Facture",
     "FactureItem",
+    "FollowUp",
     "Fournisseur",
     "LeaveRequest",
     "MeasurementSnapshot",
