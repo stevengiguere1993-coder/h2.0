@@ -79,21 +79,12 @@ async def get_current_user(
 async def get_current_admin(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
+    """Legacy admin guard — accepts owner or admin roles.
+
+    Kept for backward compatibility; new code should prefer the
+    role-specific deps below (RequireManager, RequireAdmin, RequireOwner).
     """
-    Dependency to get the current admin user.
-
-    Requires the user to have admin privileges.
-
-    Args:
-        current_user: The authenticated user
-
-    Returns:
-        The authenticated admin User
-
-    Raises:
-        HTTPException: 403 if user is not an admin
-    """
-    if not current_user.is_admin:
+    if not (current_user.is_admin or current_user.role in ("owner", "admin")):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privileges required",
@@ -101,7 +92,31 @@ async def get_current_admin(
     return current_user
 
 
+# --- Role-based guards (phase A/B) ---
+
+
+def _require_min_role(min_role: str):
+    async def check(
+        current_user: Annotated[User, Depends(get_current_user)],
+    ) -> User:
+        if not current_user.has_min_role(min_role):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Permissions insuffisantes.",
+            )
+        return current_user
+    return check
+
+
+get_current_manager = _require_min_role("manager")
+get_current_admin_role = _require_min_role("admin")
+get_current_owner = _require_min_role("owner")
+
+
 # Type aliases for cleaner dependency injection
 CurrentUser = Annotated[User, Depends(get_current_user)]
 CurrentAdmin = Annotated[User, Depends(get_current_admin)]
+RequireManager = Annotated[User, Depends(get_current_manager)]
+RequireAdminRole = Annotated[User, Depends(get_current_admin_role)]
+RequireOwner = Annotated[User, Depends(get_current_owner)]
 DBSession = Annotated[AsyncSession, Depends(get_db)]

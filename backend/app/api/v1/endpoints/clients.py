@@ -8,7 +8,7 @@ from typing import List
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from app.api.deps import CurrentAdmin, CurrentUser, DBSession
+from app.api.deps import CurrentAdmin, DBSession, RequireManager
 from app.schemas.client import (
     ClientCreate,
     ClientRead,
@@ -45,7 +45,7 @@ async def create_client(
 )
 async def list_clients(
     db: DBSession,
-    current_user: CurrentUser,
+    current_user: RequireManager,
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=200, ge=1, le=500),
 ) -> List[ClientRead]:
@@ -63,7 +63,7 @@ async def list_clients(
 async def get_client(
     client_id: int,
     db: DBSession,
-    current_user: CurrentUser,
+    current_user: RequireManager,
 ) -> ClientReadWithProjects:
     """Get a client with its projects. Requires authentication."""
     service = ClientService(db)

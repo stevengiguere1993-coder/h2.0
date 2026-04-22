@@ -24,6 +24,7 @@ from app.api.v1.endpoints import (
     payments,
     sales_tasks,
     service_templates,
+    users,
     project_finances,
     project_photos,
     project_tasks,
@@ -57,6 +58,7 @@ api_router = APIRouter()
 
 # Core
 api_router.include_router(auth.router)
+api_router.include_router(users.router)
 api_router.include_router(clients.router)
 # Nested project routes MUST be registered before projects.router so
 # /projects/{id}/photos etc. are matched before /projects/{item_id}.

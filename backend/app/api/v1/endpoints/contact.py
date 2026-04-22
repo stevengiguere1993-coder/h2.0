@@ -17,7 +17,7 @@ from fastapi import (
 )
 from pydantic import ValidationError
 
-from app.api.deps import CurrentUser, DBSession
+from app.api.deps import CurrentUser, DBSession, RequireManager
 from app.integrations.monday_bridge import push_contact_to_monday
 from app.models.contact_request import ContactRequestStatus, ProjectType
 from app.schemas.contact_request import (
@@ -133,7 +133,7 @@ async def submit_contact(
 )
 async def list_contact_requests(
     db: DBSession,
-    current_user: CurrentUser,
+    current_user: RequireManager,
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=1000),
     status_filter: Optional[ContactRequestStatus] = Query(default=None, alias="status"),

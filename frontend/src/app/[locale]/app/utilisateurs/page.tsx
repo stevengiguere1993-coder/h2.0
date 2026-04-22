@@ -1,0 +1,469 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Check,
+  Loader2,
+  ShieldCheck,
+  UserX,
+  Users
+} from "lucide-react";
+
+import { AppTopbar } from "@/components/app-topbar";
+import { useAppLayout } from "../layout";
+import { authedFetch, type UserRole } from "@/lib/auth";
+import { useCurrentUser } from "@/hooks/use-current-user";
+
+type User = {
+  id: number;
+  email: string;
+  is_active: boolean;
+  is_admin: boolean;
+  role: UserRole;
+  created_at: string;
+};
+
+type Project = {
+  id: number;
+  name: string;
+  address: string | null;
+  status: string;
+};
+
+type ProjectMini = {
+  id: number;
+  name: string;
+  address: string | null;
+  status: string | null;
+};
+
+const ROLE_LABEL: Record<UserRole, string> = {
+  owner: "Propriétaire",
+  admin: "Administrateur",
+  manager: "Gestionnaire",
+  employee: "Employé"
+};
+
+const ROLE_DESC: Record<UserRole, string> = {
+  owner: "Accès total · gère les utilisateurs et leurs rôles",
+  admin: "Accès total sauf gestion des rôles",
+  manager: "CRM, clients, finances, approbations de congés",
+  employee: "Projets assignés, agenda et congés personnels"
+};
+
+const ROLE_CLASS: Record<UserRole, string> = {
+  owner: "bg-accent-500/15 text-accent-500 border-accent-500/40",
+  admin: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
+  manager: "bg-sky-500/15 text-sky-300 border-sky-500/40",
+  employee: "bg-white/5 text-white/60 border-brand-800"
+};
+
+export default function UtilisateursPage() {
+  const { onOpenSidebar } = useAppLayout();
+  const { user: me } = useCurrentUser();
+  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [assignments, setAssignments] = useState<ProjectMini[]>([]);
+  const [allProjects, setAllProjects] = useState<Project[]>([]);
+  const [busyUser, setBusyUser] = useState<number | null>(null);
+  const [savingProjects, setSavingProjects] = useState(false);
+  const [dirtyIds, setDirtyIds] = useState<Set<number> | null>(null);
+
+  const loadUsers = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await authedFetch("/api/v1/users");
+      if (!res.ok) {
+        if (res.status === 403) {
+          setError(
+            "Seul un propriétaire peut gérer les utilisateurs."
+          );
+          setUsers([]);
+          return;
+        }
+        throw new Error();
+      }
+      setUsers((await res.json()) as User[]);
+    } catch {
+      setError("Chargement échoué.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const loadAssignments = useCallback(async (userId: number) => {
+    setSavingProjects(false);
+    setDirtyIds(null);
+    try {
+      const [aRes, pRes] = await Promise.all([
+        authedFetch(`/api/v1/users/${userId}/projects`),
+        authedFetch("/api/v1/projects?limit=500")
+      ]);
+      if (aRes.ok) setAssignments((await aRes.json()) as ProjectMini[]);
+      if (pRes.ok) setAllProjects((await pRes.json()) as Project[]);
+    } catch {
+      setError("Chargement des projets échoué.");
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadUsers();
+  }, [loadUsers]);
+
+  useEffect(() => {
+    if (selected != null) void loadAssignments(selected);
+    else {
+      setAssignments([]);
+      setDirtyIds(null);
+    }
+  }, [selected, loadAssignments]);
+
+  async function changeRole(u: User, newRole: UserRole) {
+    if (u.id === me?.id && newRole !== "owner") {
+      alert(
+        "Tu ne peux pas rétrograder ton propre compte (sécurité)."
+      );
+      return;
+    }
+    setBusyUser(u.id);
+    try {
+      const res = await authedFetch(`/api/v1/users/${u.id}/role`, {
+        method: "PATCH",
+        body: JSON.stringify({ role: newRole })
+      });
+      if (!res.ok) throw new Error();
+      const updated = (await res.json()) as User;
+      setUsers((xs) => xs.map((x) => (x.id === u.id ? updated : x)));
+    } catch {
+      setError("Changement de rôle échoué.");
+    } finally {
+      setBusyUser(null);
+    }
+  }
+
+  async function toggleActive(u: User) {
+    if (u.id === me?.id) {
+      alert("Tu ne peux pas te désactiver toi-même.");
+      return;
+    }
+    const action = u.is_active ? "deactivate" : "activate";
+    if (!confirm(`${u.is_active ? "Désactiver" : "Réactiver"} ${u.email} ?`))
+      return;
+    setBusyUser(u.id);
+    try {
+      const res = await authedFetch(`/api/v1/users/${u.id}/${action}`, {
+        method: "POST"
+      });
+      if (!res.ok) throw new Error();
+      const updated = (await res.json()) as User;
+      setUsers((xs) => xs.map((x) => (x.id === u.id ? updated : x)));
+    } catch {
+      setError("Action échouée.");
+    } finally {
+      setBusyUser(null);
+    }
+  }
+
+  function toggleAssignment(projectId: number) {
+    setDirtyIds((prev) => {
+      const next = new Set(prev ?? new Set(assignments.map((a) => a.id)));
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+  }
+
+  async function saveProjects() {
+    if (selected == null || dirtyIds == null) return;
+    setSavingProjects(true);
+    try {
+      const res = await authedFetch(
+        `/api/v1/users/${selected}/projects`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ project_ids: Array.from(dirtyIds) })
+        }
+      );
+      if (!res.ok) throw new Error();
+      // Reload assigned list fresh.
+      await loadAssignments(selected);
+    } catch {
+      setError("Sauvegarde des projets échouée.");
+    } finally {
+      setSavingProjects(false);
+    }
+  }
+
+  const currentAssignedIds = useMemo(
+    () => new Set(assignments.map((a) => a.id)),
+    [assignments]
+  );
+  const effectiveIds = dirtyIds ?? currentAssignedIds;
+  const hasChanges =
+    dirtyIds != null &&
+    (dirtyIds.size !== currentAssignedIds.size ||
+      Array.from(dirtyIds).some((id) => !currentAssignedIds.has(id)));
+
+  const selectedUser = users.find((x) => x.id === selected) || null;
+
+  return (
+    <>
+      <AppTopbar
+        breadcrumbs={[
+          { label: "Construction", href: "/app" },
+          { label: "Utilisateurs" }
+        ]}
+        onOpenSidebar={onOpenSidebar}
+      />
+
+      <div className="p-4 lg:p-6">
+        {error ? (
+          <p className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
+            {error}
+          </p>
+        ) : null}
+
+        {loading ? (
+          <div className="flex min-h-[30vh] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
+          </div>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
+            {/* Users list */}
+            <section className="rounded-xl border border-brand-800 bg-brand-900">
+              <h2 className="border-b border-brand-800 px-4 py-3 text-xs uppercase tracking-wider text-accent-500">
+                Utilisateurs ({users.length})
+              </h2>
+              {users.length === 0 ? (
+                <p className="px-4 py-10 text-center text-sm text-white/50">
+                  Aucun utilisateur.
+                </p>
+              ) : (
+                <ul className="divide-y divide-brand-800">
+                  {users.map((u) => (
+                    <li
+                      key={u.id}
+                      className={`cursor-pointer px-4 py-3 transition hover:bg-brand-950/40 ${
+                        selected === u.id ? "bg-accent-500/10" : ""
+                      }`}
+                      onClick={() => setSelected(u.id)}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p
+                            className={`truncate text-sm font-semibold ${
+                              u.is_active ? "text-white" : "text-white/40"
+                            }`}
+                          >
+                            {u.email}
+                            {u.id === me?.id ? (
+                              <span className="ml-2 rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-normal text-white/60">
+                                toi
+                              </span>
+                            ) : null}
+                          </p>
+                          <p
+                            className={`mt-1 inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
+                              ROLE_CLASS[u.role]
+                            }`}
+                          >
+                            {ROLE_LABEL[u.role]}
+                          </p>
+                          {!u.is_active ? (
+                            <p className="mt-1 text-[10px] uppercase text-rose-300">
+                              Désactivé
+                            </p>
+                          ) : null}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleActive(u);
+                          }}
+                          disabled={busyUser === u.id || u.id === me?.id}
+                          title={
+                            u.is_active
+                              ? "Désactiver l'utilisateur"
+                              : "Réactiver l'utilisateur"
+                          }
+                          className="rounded-md p-1.5 text-white/40 hover:bg-white/5 disabled:opacity-30"
+                        >
+                          <UserX className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            {/* Editor */}
+            <section className="rounded-xl border border-brand-800 bg-brand-900">
+              {selectedUser ? (
+                <>
+                  <div className="border-b border-brand-800 px-4 py-3">
+                    <p className="text-lg font-bold text-white">
+                      {selectedUser.email}
+                    </p>
+                    <p className="mt-0.5 text-xs text-white/50">
+                      Créé le{" "}
+                      {new Date(selectedUser.created_at).toLocaleDateString(
+                        "fr-CA",
+                        {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric"
+                        }
+                      )}
+                    </p>
+                  </div>
+
+                  <div className="space-y-4 border-b border-brand-800 p-4">
+                    <div>
+                      <label className="text-xs font-semibold uppercase tracking-wider text-accent-500">
+                        Rôle
+                      </label>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        {(
+                          [
+                            "owner",
+                            "admin",
+                            "manager",
+                            "employee"
+                          ] as UserRole[]
+                        ).map((r) => {
+                          const active = selectedUser.role === r;
+                          return (
+                            <button
+                              key={r}
+                              type="button"
+                              onClick={() => changeRole(selectedUser, r)}
+                              disabled={busyUser === selectedUser.id || active}
+                              className={`rounded-lg border px-3 py-2 text-left transition ${
+                                active
+                                  ? `${ROLE_CLASS[r]} opacity-100`
+                                  : "border-brand-800 bg-brand-950 text-white/70 hover:border-accent-500"
+                              } ${busyUser === selectedUser.id ? "opacity-60" : ""}`}
+                            >
+                              <div className="flex items-center gap-2 text-sm font-semibold">
+                                {active ? (
+                                  <Check className="h-3.5 w-3.5" />
+                                ) : (
+                                  <span className="h-3.5 w-3.5" />
+                                )}
+                                {ROLE_LABEL[r]}
+                              </div>
+                              <p className="mt-1 text-[11px] opacity-80">
+                                {ROLE_DESC[r]}
+                              </p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  {selectedUser.role === "employee" ? (
+                    <div className="p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <label className="text-xs font-semibold uppercase tracking-wider text-accent-500">
+                            Projets assignés
+                          </label>
+                          <p className="mt-1 text-xs text-white/60">
+                            Coche les projets que cet employé peut voir.
+                          </p>
+                        </div>
+                        {hasChanges ? (
+                          <button
+                            type="button"
+                            onClick={saveProjects}
+                            disabled={savingProjects}
+                            className="btn-accent text-xs disabled:opacity-60"
+                          >
+                            {savingProjects ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              "Sauvegarder"
+                            )}
+                          </button>
+                        ) : null}
+                      </div>
+
+                      {allProjects.length === 0 ? (
+                        <p className="mt-3 rounded border border-dashed border-brand-800 bg-brand-950 px-3 py-4 text-center text-xs text-white/50">
+                          Aucun projet. Crée-en dans la section Projets.
+                        </p>
+                      ) : (
+                        <ul className="mt-3 max-h-80 space-y-1 overflow-y-auto">
+                          {allProjects.map((p) => {
+                            const checked = effectiveIds.has(p.id);
+                            return (
+                              <li key={p.id}>
+                                <label
+                                  className={`flex cursor-pointer items-center gap-2 rounded-md border border-brand-800 px-3 py-2 text-sm transition hover:border-accent-500 ${
+                                    checked
+                                      ? "bg-accent-500/10"
+                                      : "bg-brand-950"
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => toggleAssignment(p.id)}
+                                    className="h-4 w-4 accent-accent-500"
+                                  />
+                                  <span className="flex-1 min-w-0">
+                                    <span
+                                      className={`block truncate font-semibold ${
+                                        checked
+                                          ? "text-white"
+                                          : "text-white/80"
+                                      }`}
+                                    >
+                                      {p.name}
+                                    </span>
+                                    {p.address ? (
+                                      <span className="block truncate text-[11px] text-white/50">
+                                        {p.address}
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                </label>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex items-start gap-3 p-4 text-xs text-white/60">
+                      <ShieldCheck className="mt-0.5 h-4 w-4 text-accent-500" />
+                      <p>
+                        Les <strong>{ROLE_LABEL[selectedUser.role]}</strong>{" "}
+                        voient tous les projets. Les assignations par projet
+                        sont réservées au rôle <strong>Employé</strong>.
+                      </p>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="p-10 text-center text-sm text-white/50">
+                  <Users className="mx-auto h-8 w-8 text-white/30" />
+                  <p className="mt-3">
+                    Sélectionne un utilisateur à gauche pour gérer son rôle
+                    et ses projets assignés.
+                  </p>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}

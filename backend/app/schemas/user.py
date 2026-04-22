@@ -58,6 +58,7 @@ class UserRead(UserBase):
     id: int
     is_active: bool
     is_admin: bool
+    role: str = "employee"
     created_at: datetime
 
 
