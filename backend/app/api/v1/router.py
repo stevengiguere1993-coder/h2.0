@@ -26,6 +26,7 @@ from app.api.v1.endpoints import (
     service_templates,
     users,
     project_finances,
+    project_phases,
     project_photos,
     project_tasks,
     project_to_facture,
@@ -64,6 +65,7 @@ api_router.include_router(clients.router)
 # /projects/{id}/photos etc. are matched before /projects/{item_id}.
 api_router.include_router(project_photos.router)
 api_router.include_router(project_tasks.router)
+api_router.include_router(project_phases.router)
 api_router.include_router(project_finances.router)
 api_router.include_router(projects.router)
 api_router.include_router(contact.router)

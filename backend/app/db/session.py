@@ -123,6 +123,7 @@ async def init_db() -> None:
             ("bons_travail", "signature_image", "BYTEA"),
             ("bons_travail", "signature_image_content_type", "VARCHAR(100)"),
             ("users", "role", "VARCHAR(16) NOT NULL DEFAULT 'employee'"),
+            ("project_tasks", "phase_id", "INTEGER"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

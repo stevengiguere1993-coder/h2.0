@@ -27,6 +27,14 @@ class ProjectTask(Base):
         nullable=False,
         index=True,
     )
+    # Optional grouping under a project phase. Nullable so tasks can
+    # live outside any phase (e.g. quick TODOs that aren't tied to a
+    # stage of the planning).
+    phase_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("project_phases.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

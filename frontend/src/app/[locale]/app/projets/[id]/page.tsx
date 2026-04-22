@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter as useNextRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -51,10 +51,12 @@ const STATUS_CLASS: Record<string, string> = {
   delivered: "bg-emerald-500/20 text-emerald-300"
 };
 
-type TabId = "summary" | "photos" | "tasks" | "finances";
+type TabId = "summary" | "planification" | "agenda" | "photos" | "tasks" | "finances";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "summary", label: "Résumé" },
+  { id: "planification", label: "Planification" },
+  { id: "agenda", label: "Agenda chantier" },
   { id: "finances", label: "Finances" },
   { id: "photos", label: "Photos" },
   { id: "tasks", label: "Tâches" }
@@ -434,6 +436,10 @@ export default function ProjectDetailPage() {
                   saving={saving}
                   onSave={saveAll}
                 />
+              ) : tab === "planification" ? (
+                <PlanificationTab projectId={id} />
+              ) : tab === "agenda" ? (
+                <ChantierAgendaTab projectId={id} projectName={p?.name || ""} />
               ) : tab === "finances" ? (
                 <FinancesTab projectId={id} />
               ) : tab === "photos" ? (
@@ -1510,3 +1516,771 @@ function FinanceKpi({
   );
 }
 
+
+// ---------- Planification (phases + tâches) ----------
+
+type Phase = {
+  id: number;
+  project_id: number;
+  name: string;
+  position: number;
+  start_date: string | null;
+  duration_days: number | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type PhaseTask = {
+  id: number;
+  project_id: number;
+  phase_id: number | null;
+  title: string;
+  description: string | null;
+  assignee_id: number | null;
+  due_date: string | null;
+  done: boolean;
+  done_at: string | null;
+  position: number;
+};
+
+function addDays(iso: string, days: number): string {
+  const d = new Date(iso + "T12:00:00");
+  d.setDate(d.getDate() + days);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function PlanificationTab({ projectId }: { projectId: number }) {
+  const [phases, setPhases] = useState<Phase[]>([]);
+  const [tasks, setTasks] = useState<PhaseTask[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [busyPhase, setBusyPhase] = useState<number | "new" | null>(null);
+  const [busyTask, setBusyTask] = useState<number | "new" | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [phRes, tRes] = await Promise.all([
+        authedFetch(`/api/v1/projects/${projectId}/phases`),
+        authedFetch(`/api/v1/projects/${projectId}/tasks`)
+      ]);
+      if (!phRes.ok) throw new Error();
+      setPhases((await phRes.json()) as Phase[]);
+      if (tRes.ok) setTasks((await tRes.json()) as PhaseTask[]);
+    } catch {
+      setErr("Chargement échoué.");
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function addPhase() {
+    setBusyPhase("new");
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/phases`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            name: "Nouvelle phase",
+            position: phases.length,
+            duration_days: 5
+          })
+        }
+      );
+      if (!res.ok) throw new Error();
+      const created = (await res.json()) as Phase;
+      setPhases((xs) => [...xs, created]);
+    } catch {
+      setErr("Ajout phase échoué.");
+    } finally {
+      setBusyPhase(null);
+    }
+  }
+
+  async function patchPhase(id: number, patch: Partial<Phase>) {
+    setBusyPhase(id);
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/phases/${id}`,
+        { method: "PATCH", body: JSON.stringify(patch) }
+      );
+      if (!res.ok) throw new Error();
+      const updated = (await res.json()) as Phase;
+      setPhases((xs) => xs.map((x) => (x.id === id ? updated : x)));
+    } catch {
+      setErr("Mise à jour échouée.");
+    } finally {
+      setBusyPhase(null);
+    }
+  }
+
+  async function removePhase(id: number) {
+    if (!confirm("Supprimer cette phase ? Les tâches qui y sont seront détachées.")) return;
+    setBusyPhase(id);
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/phases/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) throw new Error();
+      setPhases((xs) => xs.filter((x) => x.id !== id));
+      setTasks((xs) =>
+        xs.map((t) => (t.phase_id === id ? { ...t, phase_id: null } : t))
+      );
+    } catch {
+      setErr("Suppression échouée.");
+    } finally {
+      setBusyPhase(null);
+    }
+  }
+
+  async function movePhase(id: number, delta: number) {
+    const idx = phases.findIndex((p) => p.id === id);
+    if (idx < 0) return;
+    const next = [...phases];
+    const [moved] = next.splice(idx, 1);
+    next.splice(Math.max(0, Math.min(next.length, idx + delta)), 0, moved);
+    setPhases(next);
+    try {
+      await authedFetch(
+        `/api/v1/projects/${projectId}/phases/reorder`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ phase_ids: next.map((p) => p.id) })
+        }
+      );
+    } catch {
+      setErr("Réordonnancement échoué.");
+    }
+  }
+
+  async function addTask(phaseId: number | null) {
+    setBusyTask("new");
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/tasks`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            title: "Nouvelle tâche",
+            phase_id: phaseId,
+            position: tasks.filter((t) => t.phase_id === phaseId).length
+          })
+        }
+      );
+      if (!res.ok) throw new Error();
+      const created = (await res.json()) as PhaseTask;
+      setTasks((xs) => [...xs, created]);
+    } catch {
+      setErr("Ajout tâche échoué.");
+    } finally {
+      setBusyTask(null);
+    }
+  }
+
+  async function patchTask(id: number, patch: Partial<PhaseTask>) {
+    setBusyTask(id);
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/tasks/${id}`,
+        { method: "PATCH", body: JSON.stringify(patch) }
+      );
+      if (!res.ok) throw new Error();
+      const updated = (await res.json()) as PhaseTask;
+      setTasks((xs) => xs.map((x) => (x.id === id ? updated : x)));
+    } catch {
+      setErr("Mise à jour échouée.");
+    } finally {
+      setBusyTask(null);
+    }
+  }
+
+  async function removeTask(id: number) {
+    if (!confirm("Supprimer cette tâche ?")) return;
+    setBusyTask(id);
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/tasks/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) throw new Error();
+      setTasks((xs) => xs.filter((x) => x.id !== id));
+    } catch {
+      setErr("Suppression échouée.");
+    } finally {
+      setBusyTask(null);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[30vh] items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
+      </div>
+    );
+  }
+
+  const unplaced = tasks.filter((t) => t.phase_id === null);
+
+  return (
+    <div className="space-y-4">
+      {err ? (
+        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {err}
+        </p>
+      ) : null}
+
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-white/60">
+          Découpe le projet en phases (ex. Démolition, Fondation,
+          Plomberie, Finition). Chaque phase a une date de début et une
+          durée en jours — la fin est calculée automatiquement.
+        </p>
+        <button
+          type="button"
+          onClick={addPhase}
+          disabled={busyPhase === "new"}
+          className="btn-accent text-xs disabled:opacity-60"
+        >
+          {busyPhase === "new" ? (
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
+          )}
+          Nouvelle phase
+        </button>
+      </div>
+
+      {phases.length === 0 ? (
+        <p className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
+          Aucune phase définie. Commence par en créer une.
+        </p>
+      ) : (
+        <ol className="space-y-3">
+          {phases.map((ph, idx) => (
+            <PhaseCard
+              key={ph.id}
+              phase={ph}
+              index={idx}
+              count={phases.length}
+              tasks={tasks.filter((t) => t.phase_id === ph.id)}
+              busyPhase={busyPhase === ph.id}
+              busyTask={busyTask}
+              onPatch={(patch) => patchPhase(ph.id, patch)}
+              onRemove={() => removePhase(ph.id)}
+              onMoveUp={() => movePhase(ph.id, -1)}
+              onMoveDown={() => movePhase(ph.id, 1)}
+              onAddTask={() => addTask(ph.id)}
+              onPatchTask={patchTask}
+              onRemoveTask={removeTask}
+            />
+          ))}
+        </ol>
+      )}
+
+      {/* Floating bucket for tasks not tied to a phase. */}
+      <section className="rounded-xl border border-brand-800 bg-brand-900/40 p-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-white/60">
+            Tâches sans phase ({unplaced.length})
+          </h3>
+          <button
+            type="button"
+            onClick={() => addTask(null)}
+            disabled={busyTask === "new"}
+            className="btn-secondary text-xs disabled:opacity-60"
+          >
+            <Plus className="mr-1.5 h-3.5 w-3.5" /> Ajouter
+          </button>
+        </div>
+        {unplaced.length > 0 ? (
+          <ul className="mt-3 space-y-2">
+            {unplaced.map((t) => (
+              <PhaseTaskRow
+                key={t.id}
+                task={t}
+                busy={busyTask === t.id}
+                phases={phases}
+                onPatch={(patch) => patchTask(t.id, patch)}
+                onRemove={() => removeTask(t.id)}
+              />
+            ))}
+          </ul>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function PhaseCard({
+  phase,
+  index,
+  count,
+  tasks,
+  busyPhase,
+  busyTask,
+  onPatch,
+  onRemove,
+  onMoveUp,
+  onMoveDown,
+  onAddTask,
+  onPatchTask,
+  onRemoveTask
+}: {
+  phase: Phase;
+  index: number;
+  count: number;
+  tasks: PhaseTask[];
+  busyPhase: boolean;
+  busyTask: number | "new" | null;
+  onPatch: (patch: Partial<Phase>) => void;
+  onRemove: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onAddTask: () => void;
+  onPatchTask: (id: number, patch: Partial<PhaseTask>) => void;
+  onRemoveTask: (id: number) => void;
+}) {
+  const [name, setName] = useState(phase.name);
+  const [startDate, setStartDate] = useState(phase.start_date || "");
+  const [durationDays, setDurationDays] = useState(
+    phase.duration_days != null ? String(phase.duration_days) : ""
+  );
+  useEffect(() => {
+    setName(phase.name);
+    setStartDate(phase.start_date || "");
+    setDurationDays(
+      phase.duration_days != null ? String(phase.duration_days) : ""
+    );
+  }, [phase.id, phase.name, phase.start_date, phase.duration_days]);
+
+  const endDate =
+    startDate && durationDays
+      ? addDays(startDate, Math.max(0, Number(durationDays) - 1))
+      : null;
+
+  return (
+    <li className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+      <div className="flex items-start gap-3">
+        <span className="mt-1 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-accent-500 text-xs font-bold text-brand-950">
+          {index + 1}
+        </span>
+        <div className="flex-1 min-w-0">
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={() => name.trim() && name !== phase.name && onPatch({ name: name.trim() })}
+            className="w-full bg-transparent text-lg font-bold text-white focus:outline-none"
+          />
+          <div className="mt-2 grid gap-3 sm:grid-cols-3">
+            <label className="text-xs text-white/60">
+              Début
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                onBlur={() =>
+                  startDate !== (phase.start_date || "") &&
+                  onPatch({ start_date: startDate || null })
+                }
+                className="mt-1 w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
+              />
+            </label>
+            <label className="text-xs text-white/60">
+              Durée (jours)
+              <input
+                type="number"
+                min="0"
+                value={durationDays}
+                onChange={(e) => setDurationDays(e.target.value)}
+                onBlur={() => {
+                  const n = durationDays === "" ? null : Number(durationDays);
+                  if (n !== phase.duration_days)
+                    onPatch({ duration_days: n });
+                }}
+                className="mt-1 w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
+              />
+            </label>
+            <div className="text-xs text-white/60">
+              Fin (calculée)
+              <p className="mt-1 rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-sm font-semibold text-accent-500">
+                {endDate || "—"}
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-shrink-0 flex-col items-end gap-1">
+          <button
+            type="button"
+            onClick={onMoveUp}
+            disabled={index === 0 || busyPhase}
+            className="rounded p-1 text-white/40 hover:text-white disabled:opacity-20"
+            title="Monter"
+          >
+            ▲
+          </button>
+          <button
+            type="button"
+            onClick={onMoveDown}
+            disabled={index === count - 1 || busyPhase}
+            className="rounded p-1 text-white/40 hover:text-white disabled:opacity-20"
+            title="Descendre"
+          >
+            ▼
+          </button>
+          <button
+            type="button"
+            onClick={onRemove}
+            disabled={busyPhase}
+            className="rounded p-1 text-rose-300 hover:text-rose-200 disabled:opacity-30"
+            title="Supprimer la phase"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-4 border-t border-brand-800 pt-3">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-semibold uppercase tracking-wider text-white/60">
+            Tâches ({tasks.length})
+          </p>
+          <button
+            type="button"
+            onClick={onAddTask}
+            disabled={busyTask === "new"}
+            className="btn-secondary text-xs disabled:opacity-60"
+          >
+            {busyTask === "new" ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            Tâche
+          </button>
+        </div>
+        {tasks.length > 0 ? (
+          <ul className="mt-3 space-y-2">
+            {tasks.map((t) => (
+              <PhaseTaskRow
+                key={t.id}
+                task={t}
+                busy={busyTask === t.id}
+                phases={[]}
+                onPatch={(patch) => onPatchTask(t.id, patch)}
+                onRemove={() => onRemoveTask(t.id)}
+              />
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-3 text-xs text-white/40">
+            Aucune tâche dans cette phase.
+          </p>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function PhaseTaskRow({
+  task,
+  busy,
+  phases,
+  onPatch,
+  onRemove
+}: {
+  task: PhaseTask;
+  busy: boolean;
+  phases: Phase[];
+  onPatch: (patch: Partial<PhaseTask>) => void;
+  onRemove: () => void;
+}) {
+  const [title, setTitle] = useState(task.title);
+  useEffect(() => setTitle(task.title), [task.id, task.title]);
+  return (
+    <li className="flex items-center gap-2 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm">
+      <input
+        type="checkbox"
+        checked={task.done}
+        onChange={(e) => onPatch({ done: e.target.checked })}
+        disabled={busy}
+        className="h-4 w-4 accent-emerald-500"
+      />
+      <input
+        type="text"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onBlur={() =>
+          title.trim() && title !== task.title && onPatch({ title: title.trim() })
+        }
+        className={`flex-1 bg-transparent focus:outline-none ${
+          task.done ? "text-white/40 line-through" : "text-white"
+        }`}
+      />
+      {phases.length > 0 ? (
+        <select
+          value={task.phase_id ?? ""}
+          onChange={(e) =>
+            onPatch({
+              phase_id: e.target.value ? Number(e.target.value) : null
+            })
+          }
+          className="rounded border border-brand-800 bg-brand-900 px-1.5 py-0.5 text-xs text-white/70"
+          title="Déplacer dans une phase"
+        >
+          <option value="">— Sans phase —</option>
+          {phases.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      ) : null}
+      <button
+        type="button"
+        onClick={onRemove}
+        disabled={busy}
+        className="rounded p-1 text-white/40 hover:text-rose-300 disabled:opacity-30"
+        aria-label="Supprimer"
+      >
+        {busy ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Trash2 className="h-3.5 w-3.5" />
+        )}
+      </button>
+    </li>
+  );
+}
+
+// ---------- Agenda chantier ----------
+
+type ChantierEvent = {
+  id: number;
+  title: string;
+  description: string | null;
+  location: string | null;
+  start_at: string;
+  end_at: string | null;
+  all_day: boolean;
+  project_id: number | null;
+  assignee_id: number | null;
+  event_type: string;
+};
+
+function ChantierAgendaTab({
+  projectId,
+  projectName
+}: {
+  projectId: number;
+  projectName: string;
+}) {
+  const [events, setEvents] = useState<ChantierEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await authedFetch(`/api/v1/agenda?limit=500`);
+      if (!res.ok) throw new Error();
+      const all = (await res.json()) as ChantierEvent[];
+      setEvents(all.filter((e) => e.project_id === projectId));
+    } catch {
+      setError("Chargement échoué.");
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function quickAdd() {
+    const title = prompt("Titre de l'événement chantier ?");
+    if (!title || !title.trim()) return;
+    const date = prompt("Date (AAAA-MM-JJ) :");
+    if (!date) return;
+    const time = prompt("Heure (HH:MM), vide = journée complète :", "08:00");
+    const startIso = time
+      ? new Date(`${date}T${time}:00`).toISOString()
+      : new Date(`${date}T00:00:00`).toISOString();
+    setCreating(true);
+    try {
+      const res = await authedFetch(`/api/v1/agenda`, {
+        method: "POST",
+        body: JSON.stringify({
+          title: title.trim(),
+          start_at: startIso,
+          all_day: !time,
+          project_id: projectId,
+          event_type: "chantier"
+        })
+      });
+      if (!res.ok) throw new Error();
+      await load();
+    } catch {
+      setError("Ajout échoué.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function removeEvent(id: number) {
+    if (!confirm("Supprimer cet événement ?")) return;
+    try {
+      const res = await authedFetch(`/api/v1/agenda/${id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) throw new Error();
+      setEvents((xs) => xs.filter((e) => e.id !== id));
+    } catch {
+      setError("Suppression échouée.");
+    }
+  }
+
+  const upcoming = events
+    .filter((e) => new Date(e.start_at) >= new Date(Date.now() - 86_400_000))
+    .sort(
+      (a, b) =>
+        new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
+    );
+  const past = events
+    .filter((e) => new Date(e.start_at) < new Date(Date.now() - 86_400_000))
+    .sort(
+      (a, b) =>
+        new Date(b.start_at).getTime() - new Date(a.start_at).getTime()
+    );
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[30vh] items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {error ? (
+        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {error}
+        </p>
+      ) : null}
+
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-white/60">
+          Tous les événements agenda liés à ce projet — visites, livraisons,
+          inspections, etc. Chaque employé voit ces événements dans son
+          agenda personnel quand il lui est assigné.
+        </p>
+        <button
+          type="button"
+          onClick={quickAdd}
+          disabled={creating}
+          className="btn-accent text-xs disabled:opacity-60"
+        >
+          <Plus className="mr-1.5 h-3.5 w-3.5" /> Ajouter un événement
+        </button>
+      </div>
+
+      <section>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-accent-500">
+          À venir ({upcoming.length})
+        </h3>
+        {upcoming.length === 0 ? (
+          <p className="mt-2 text-xs text-white/50">
+            Aucun événement à venir.
+          </p>
+        ) : (
+          <ul className="mt-3 space-y-2">
+            {upcoming.map((e) => (
+              <EventRow
+                key={e.id}
+                event={e}
+                projectName={projectName}
+                onRemove={() => removeEvent(e.id)}
+              />
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {past.length > 0 ? (
+        <section>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-white/50">
+            Passés ({past.length})
+          </h3>
+          <ul className="mt-3 space-y-2 opacity-70">
+            {past.slice(0, 10).map((e) => (
+              <EventRow
+                key={e.id}
+                event={e}
+                projectName={projectName}
+                onRemove={() => removeEvent(e.id)}
+              />
+            ))}
+          </ul>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+function EventRow({
+  event,
+  projectName,
+  onRemove
+}: {
+  event: ChantierEvent;
+  projectName: string;
+  onRemove: () => void;
+}) {
+  const s = new Date(event.start_at);
+  const dayFmt = s.toLocaleDateString("fr-CA", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric"
+  });
+  const timeFmt = event.all_day
+    ? "Journée complète"
+    : s.toLocaleTimeString("fr-CA", {
+        hour: "2-digit",
+        minute: "2-digit"
+      });
+  return (
+    <li className="flex items-start justify-between gap-3 rounded-xl border border-brand-800 bg-brand-900 p-3">
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-white">{event.title}</p>
+        <p className="mt-0.5 text-xs text-white/60">
+          {dayFmt} · {timeFmt}
+        </p>
+        {event.location ? (
+          <p className="mt-0.5 text-xs text-white/50">📍 {event.location}</p>
+        ) : null}
+        <span className="mt-1 inline-flex rounded bg-white/5 px-1.5 py-0.5 text-[10px] uppercase text-white/50">
+          {event.event_type} · {projectName}
+        </span>
+      </div>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="rounded p-1 text-white/40 hover:text-rose-300"
+        aria-label="Supprimer"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+    </li>
+  );
+}

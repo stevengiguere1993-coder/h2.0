@@ -19,6 +19,7 @@ from app.models.leave_request import LeaveRequest, LeaveStatus  # noqa: F401
 from app.models.payment import Payment
 from app.models.project import Project
 from app.models.project_member import ProjectMember
+from app.models.project_phase import ProjectPhase
 from app.models.project_photo import ProjectPhoto
 from app.models.project_task import ProjectTask
 from app.models.punch import Punch
@@ -46,6 +47,7 @@ __all__ = [
     "Payment",
     "Project",
     "ProjectMember",
+    "ProjectPhase",
     "ProjectPhoto",
     "ProjectTask",
     "Punch",
