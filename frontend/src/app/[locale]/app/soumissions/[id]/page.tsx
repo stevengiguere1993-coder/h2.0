@@ -761,6 +761,29 @@ export default function SoumissionDetailPage() {
                 </p>
               ) : (
                 <div className="overflow-x-auto">
+                  {/* Suggestions d'unités — le champ reste éditable pour
+                      garder les valeurs custom existantes (ex. "seau 20L"). */}
+                  <datalist id="soumission-units">
+                    <option value="unité" />
+                    <option value="pièce" />
+                    <option value="forfait" />
+                    <option value="ft²" />
+                    <option value="pi²" />
+                    <option value="m²" />
+                    <option value="ft" />
+                    <option value="pi" />
+                    <option value="m" />
+                    <option value="verge²" />
+                    <option value="verge³" />
+                    <option value="heure" />
+                    <option value="jour" />
+                    <option value="semaine" />
+                    <option value="lot" />
+                    <option value="kg" />
+                    <option value="lb" />
+                    <option value="L" />
+                    <option value="gal" />
+                  </datalist>
                   <table className="w-full text-sm">
                     <thead className="border-b border-brand-800 text-xs uppercase tracking-wider text-white/50">
                       <tr>
@@ -1237,9 +1260,10 @@ function ItemRow({
           className="w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-right text-sm text-white focus:border-brand-700 focus:outline-none"
         />
       </td>
-      <td className="px-3 py-3 w-24">
+      <td className="px-3 py-3 w-28">
         <input
           type="text"
+          list="soumission-units"
           value={unit}
           onChange={(e) => setUnit(e.target.value)}
           onBlur={() => commit("unit")}
