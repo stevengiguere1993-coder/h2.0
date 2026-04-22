@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   Camera,
@@ -10,11 +10,14 @@ import {
   Loader2,
   MapPin,
   Palmtree,
+  Ruler as RulerIcon,
   StickyNote
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { MapMeasureModal } from "@/components/map-measure";
+import { MeasurementChecklistModal } from "@/components/measurement-checklist-modal";
 
 type AgendaEvent = {
   id: number;
@@ -33,6 +36,7 @@ type Project = {
   address: string | null;
   description: string | null;
   notes: string | null;
+  client_id: number | null;
 };
 
 type Photo = {
@@ -347,6 +351,13 @@ export default function MobileIntervention() {
               </div>
             </section>
 
+            {project ? (
+              <MobileMeasurementsSection
+                clientId={project.client_id}
+                defaultAddress={project.address || event?.location || null}
+              />
+            ) : null}
+
             {photos.length > 0 ? (
               <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
                 <p className="text-xs uppercase tracking-wider text-white/50">
@@ -439,3 +450,196 @@ function LeaveSummaryCard({ event }: { event: AgendaEvent | null }) {
   );
 }
 
+
+// ---------- Mesures (mobile capture during a site visit) ----------
+
+type Mesure = {
+  id: number;
+  label: string;
+  area_ft2: number;
+  kind: string;
+  template_type: string | null;
+  captured_at: string;
+};
+
+function MobileMeasurementsSection({
+  clientId,
+  defaultAddress
+}: {
+  clientId: number | null;
+  defaultAddress: string | null;
+}) {
+  const [items, setItems] = useState<Mesure[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [mapOpen, setMapOpen] = useState(false);
+  const [checklistOpen, setChecklistOpen] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!clientId) {
+      setLoading(false);
+      return;
+    }
+    try {
+      const res = await authedFetch(
+        `/api/v1/measurements?client_id=${clientId}`
+      );
+      if (!res.ok) throw new Error();
+      setItems((await res.json()) as Mesure[]);
+    } catch {
+      setError("Chargement échoué.");
+    } finally {
+      setLoading(false);
+    }
+  }, [clientId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (!clientId) {
+    return null;
+  }
+
+  return (
+    <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+      <div className="flex items-center justify-between">
+        <p className="flex items-center gap-2 text-xs uppercase tracking-wider text-accent-500">
+          <RulerIcon className="h-3.5 w-3.5" /> Mesures
+        </p>
+        <button
+          type="button"
+          onClick={() => setPickerOpen((v) => !v)}
+          className="rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-bold text-brand-950"
+        >
+          + Prendre
+        </button>
+      </div>
+
+      {pickerOpen ? (
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setPickerOpen(false);
+              setMapOpen(true);
+            }}
+            className="rounded-lg border border-brand-800 bg-brand-950 px-3 py-3 text-xs font-semibold text-white"
+          >
+            📐 Polygone carte
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setPickerOpen(false);
+              setChecklistOpen(true);
+            }}
+            className="rounded-lg border border-brand-800 bg-brand-950 px-3 py-3 text-xs font-semibold text-white"
+          >
+            📋 Relevé pièce
+          </button>
+        </div>
+      ) : null}
+
+      {error ? (
+        <p className="mt-3 text-xs text-rose-300">{error}</p>
+      ) : null}
+
+      <div className="mt-3">
+        {loading ? (
+          <Loader2 className="mx-auto h-4 w-4 animate-spin text-white/40" />
+        ) : items.length === 0 ? (
+          <p className="text-center text-xs text-white/40">
+            Aucune mesure pour ce client.
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {items.slice(0, 5).map((m) => (
+              <li
+                key={m.id}
+                className="flex items-center justify-between rounded-lg border border-brand-800 bg-brand-950 px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-semibold text-white">
+                    {m.label}
+                  </p>
+                  <p className="text-[10px] text-white/50">
+                    {new Date(m.captured_at).toLocaleDateString("fr-CA", {
+                      day: "numeric",
+                      month: "short"
+                    })}
+                  </p>
+                </div>
+                {Number(m.area_ft2) > 0 ? (
+                  <p className="text-sm font-bold text-accent-500">
+                    {Number(m.area_ft2).toFixed(0)} ft²
+                  </p>
+                ) : null}
+              </li>
+            ))}
+            {items.length > 5 ? (
+              <p className="text-center text-[10px] text-white/40">
+                +{items.length - 5} autres mesures…
+              </p>
+            ) : null}
+          </ul>
+        )}
+      </div>
+
+      {mapOpen ? (
+        <MapMeasureModal
+          address={defaultAddress}
+          onClose={() => setMapOpen(false)}
+          onDone={async (r) => {
+            setMapOpen(false);
+            try {
+              const res = await authedFetch("/api/v1/measurements", {
+                method: "POST",
+                body: JSON.stringify({
+                  client_id: clientId,
+                  label:
+                    (r.kind === "vertical" ? "Mur" : "Surface") +
+                    ` (${r.area_ft2} ft²)`,
+                  kind: r.kind,
+                  area_ft2: r.area_ft2,
+                  wall_height_ft: r.wall_height_ft || null,
+                  coords_json: JSON.stringify(r.coords),
+                  address: defaultAddress
+                })
+              });
+              if (!res.ok) throw new Error();
+              await load();
+            } catch {
+              setError("Sauvegarde échouée.");
+            }
+          }}
+        />
+      ) : null}
+
+      {checklistOpen ? (
+        <MeasurementChecklistModal
+          onClose={() => setChecklistOpen(false)}
+          onSubmit={async (payload) => {
+            const res = await authedFetch("/api/v1/measurements", {
+              method: "POST",
+              body: JSON.stringify({
+                client_id: clientId,
+                label: payload.label,
+                kind: "checklist",
+                area_ft2: payload.area_ft2,
+                notes: payload.notes || null,
+                template_type: payload.template.id,
+                template_data_json: JSON.stringify(payload.data),
+                address: defaultAddress
+              })
+            });
+            if (!res.ok) throw new Error("Sauvegarde échouée");
+            setChecklistOpen(false);
+            await load();
+          }}
+        />
+      ) : null}
+    </section>
+  );
+}

@@ -43,10 +43,21 @@ class MeasurementSnapshot(Base):
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # "horizontal" (toiture/terrain/dalle — area of the polygon) or
-    # "vertical" (mur — perimeter × wall_height).
+    # "horizontal" (toiture/terrain/dalle — area of the polygon),
+    # "vertical" (mur — perimeter × wall_height), or "checklist"
+    # (structured room-type form, no polygon).
     kind: Mapped[str] = mapped_column(
         String(16), nullable=False, default="horizontal"
+    )
+    # When kind = "checklist", template_type identifies which preset
+    # was used (cuisine, salle_bain, sous_sol, multilogement,
+    # renovation_complete). template_data_json holds the filled values
+    # as a JSON-encoded {key: value} map.
+    template_type: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True, index=True
+    )
+    template_data_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
     )
     area_ft2: Mapped[float] = mapped_column(
         Numeric(12, 2), nullable=False, default=0
