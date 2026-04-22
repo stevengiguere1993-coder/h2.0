@@ -19,6 +19,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { Link } from "@/i18n/navigation";
+import { formatPhone } from "@/lib/utils";
 
 type Client = {
   id: number;
@@ -478,7 +479,7 @@ export default function ClientsPage() {
                         {r.email || "—"}
                       </td>
                       <td className="px-3 py-3 text-white/70">
-                        {r.phone || "—"}
+                        {r.phone ? formatPhone(r.phone) : "—"}
                       </td>
                       <td className="px-3 py-3 text-right text-xs text-white/40">
                         {r.extra}
@@ -610,7 +611,7 @@ function KanbanCard({ row: r }: { row: Row }) {
       {r.phone ? (
         <p className="mt-1 flex items-center gap-1.5 text-xs text-white/60">
           <Phone className="h-3 w-3" />
-          <span className="truncate">{r.phone}</span>
+          <span className="truncate">{formatPhone(r.phone)}</span>
         </p>
       ) : null}
       {r.email ? (

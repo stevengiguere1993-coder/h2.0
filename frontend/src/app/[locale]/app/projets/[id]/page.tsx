@@ -1790,6 +1790,8 @@ function PlanificationTab({ projectId }: { projectId: number }) {
         </p>
       ) : null}
 
+      <ProjectTeamSection projectId={projectId} />
+
       <div className="flex items-center justify-between">
         <p className="text-xs text-white/60">
           Découpe le projet en phases (ex. Démolition, Fondation,
@@ -2499,5 +2501,181 @@ function EventRow({
         <Trash2 className="h-3.5 w-3.5" />
       </button>
     </li>
+  );
+}
+
+// ---------- Team assignment on a project ----------
+
+type TeamMember = {
+  id: number;
+  email: string;
+  role: string;
+};
+
+function ProjectTeamSection({ projectId }: { projectId: number }) {
+  const [members, setMembers] = useState<TeamMember[]>([]);
+  const [allUsers, setAllUsers] = useState<TeamMember[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [picking, setPicking] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [mRes, uRes] = await Promise.all([
+        authedFetch(`/api/v1/projects/${projectId}/members`),
+        authedFetch("/api/v1/users")
+      ]);
+      if (mRes.ok) setMembers((await mRes.json()) as TeamMember[]);
+      if (uRes.ok) setAllUsers((await uRes.json()) as TeamMember[]);
+    } catch {
+      setErr("Chargement de l'équipe échoué.");
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function addMember(userId: number) {
+    setSaving(true);
+    setErr(null);
+    try {
+      const nextIds = [...new Set([...members.map((m) => m.id), userId])];
+      const res = await authedFetch(`/api/v1/projects/${projectId}/members`, {
+        method: "PUT",
+        body: JSON.stringify({ user_ids: nextIds })
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`${res.status} — ${txt.slice(0, 200)}`);
+      }
+      setMembers((await res.json()) as TeamMember[]);
+      setPicking(false);
+    } catch (e) {
+      setErr(`Ajout membre échoué : ${(e as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeMember(userId: number) {
+    setSaving(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/members/${userId}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) throw new Error();
+      setMembers((xs) => xs.filter((m) => m.id !== userId));
+    } catch {
+      setErr("Retrait membre échoué.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const notAssigned = allUsers.filter(
+    (u) => !members.some((m) => m.id === u.id)
+  );
+
+  return (
+    <section
+      className={`rounded-2xl border p-4 ${
+        members.length === 0
+          ? "border-rose-500/40 bg-rose-500/5"
+          : "border-emerald-500/30 bg-emerald-500/5"
+      }`}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-sm font-semibold text-white">
+          {members.length === 0 ? "⚠️" : "🛠️"} Équipe sur ce projet
+        </p>
+        <span className="text-xs text-white/60">
+          ({members.length} {members.length === 1 ? "personne" : "personnes"})
+        </span>
+        <button
+          type="button"
+          onClick={() => setPicking((v) => !v)}
+          disabled={saving || notAssigned.length === 0}
+          className="ml-auto btn-accent text-xs disabled:opacity-50"
+          title={
+            notAssigned.length === 0
+              ? "Tous les utilisateurs sont déjà assignés"
+              : "Ajouter un membre"
+          }
+        >
+          {picking ? "Fermer" : "+ Ajouter"}
+        </button>
+      </div>
+
+      {err ? (
+        <p className="mt-2 text-xs text-rose-300">{err}</p>
+      ) : null}
+
+      {loading ? (
+        <div className="mt-3 flex items-center gap-2 text-xs text-white/50">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Chargement…
+        </div>
+      ) : members.length === 0 ? (
+        <p className="mt-2 text-xs text-rose-200/90">
+          Aucune personne assignée. L&apos;agenda affiche ce projet en rouge
+          ⚠️ tant qu&apos;au moins une personne n&apos;est pas ajoutée.
+        </p>
+      ) : (
+        <ul className="mt-3 flex flex-wrap gap-2">
+          {members.map((m) => (
+            <li
+              key={m.id}
+              className="group flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-white"
+            >
+              <span className="font-semibold">{m.email}</span>
+              <span className="rounded bg-white/10 px-1.5 py-0.5 text-[9px] uppercase text-white/60">
+                {m.role}
+              </span>
+              <button
+                type="button"
+                onClick={() => removeMember(m.id)}
+                disabled={saving}
+                className="text-white/40 hover:text-rose-300"
+                aria-label="Retirer du projet"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {picking ? (
+        <div className="mt-3 rounded-lg border border-brand-800 bg-brand-950 p-3">
+          <p className="text-xs text-white/60">
+            Choisis une personne à ajouter au projet :
+          </p>
+          <ul className="mt-2 max-h-48 overflow-y-auto space-y-1">
+            {notAssigned.map((u) => (
+              <li key={u.id}>
+                <button
+                  type="button"
+                  onClick={() => addMember(u.id)}
+                  disabled={saving}
+                  className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-xs text-white hover:bg-accent-500/10"
+                >
+                  <span>{u.email}</span>
+                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] uppercase text-white/50">
+                    {u.role}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </section>
   );
 }

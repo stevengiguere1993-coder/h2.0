@@ -75,9 +75,11 @@ export function PwaRegister() {
   if (installed) return null;
   if (!installEvent && !showIosHint) return null;
 
-  function dismiss() {
+  function dismiss(forever = false) {
     try {
-      window.localStorage.setItem(DISMISS_KEY, "1");
+      // forever → stored in localStorage, ne plus demander entre onglets
+      //           et sessions. "plus tard" → juste cacher cet onglet.
+      if (forever) window.localStorage.setItem(DISMISS_KEY, "1");
     } catch {
       /* ignore */
     }
@@ -92,7 +94,7 @@ export function PwaRegister() {
     if (outcome === "accepted") {
       setInstallEvent(null);
     } else {
-      dismiss();
+      dismiss(true);
     }
   }
 
@@ -113,7 +115,7 @@ export function PwaRegister() {
           </p>
         )}
         {installEvent ? (
-          <div className="mt-3 flex gap-2">
+          <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
               onClick={accept}
@@ -123,17 +125,34 @@ export function PwaRegister() {
             </button>
             <button
               type="button"
-              onClick={dismiss}
+              onClick={() => dismiss(false)}
               className="rounded-lg border border-brand-800 px-3 py-1.5 text-xs text-white/70"
             >
               Plus tard
             </button>
+            <button
+              type="button"
+              onClick={() => dismiss(true)}
+              className="rounded-lg px-3 py-1.5 text-xs text-white/50 hover:text-white"
+            >
+              Ne plus demander
+            </button>
           </div>
-        ) : null}
+        ) : (
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => dismiss(true)}
+              className="rounded-lg px-3 py-1.5 text-xs text-white/60 hover:text-white"
+            >
+              Ne plus demander
+            </button>
+          </div>
+        )}
       </div>
       <button
         type="button"
-        onClick={dismiss}
+        onClick={() => dismiss(false)}
         aria-label="Fermer"
         className="rounded-md p-1 text-white/50 hover:bg-white/5"
       >

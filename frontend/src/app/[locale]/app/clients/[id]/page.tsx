@@ -2,7 +2,16 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter as useNextRouter } from "next/navigation";
-import { ArrowLeft, Loader2, Save, Trash2 } from "lucide-react";
+import {
+  ArrowLeft,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Image as ImageIcon,
+  Loader2,
+  Save,
+  Trash2
+} from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
@@ -162,7 +171,18 @@ export default function ClientDetailPage() {
                     month: "long",
                     year: "numeric"
                   })}
-                  {c.contact_request_id ? " · Converti d'un prospect" : ""}
+                  {c.contact_request_id ? (
+                    <>
+                      {" · "}
+                      <Link
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={`/app/crm/${c.contact_request_id}` as any}
+                        className="underline decoration-dotted hover:text-accent-500"
+                      >
+                        Converti d&apos;un prospect
+                      </Link>
+                    </>
+                  ) : null}
                 </p>
               </div>
               <button
@@ -288,7 +308,10 @@ export default function ClientDetailPage() {
                 )}
               </button>
 
-              <ClientDocuments clientId={c.id} />
+              <ClientDocuments
+                clientId={c.id}
+                contactRequestId={c.contact_request_id}
+              />
 
               <MeasurementsPanel
                 clientId={c.id}
@@ -336,10 +359,62 @@ type BonTravail = {
   signed_name: string | null;
 };
 
-function ClientDocuments({ clientId }: { clientId: number }) {
+type ProspectFile = {
+  id: number;
+  content_type: string;
+  filename: string | null;
+  created_at: string;
+};
+
+function DocSection({
+  title,
+  count,
+  icon,
+  defaultOpen = false,
+  children
+}: {
+  title: string;
+  count: number;
+  icon: React.ReactNode;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-white/70 transition hover:bg-brand-950/40"
+      >
+        {open ? (
+          <ChevronDown className="h-3.5 w-3.5 text-accent-500" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 text-white/40" />
+        )}
+        <span className="text-accent-500">{icon}</span>
+        <span className="text-white">{title}</span>
+        <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/70">
+          {count}
+        </span>
+      </button>
+      {open ? <div className="border-t border-brand-800 p-4">{children}</div> : null}
+    </div>
+  );
+}
+
+function ClientDocuments({
+  clientId,
+  contactRequestId
+}: {
+  clientId: number;
+  contactRequestId: number | null;
+}) {
   const [soumissions, setSoumissions] = useState<Soumission[]>([]);
   const [factures, setFactures] = useState<Facture[]>([]);
   const [bons, setBons] = useState<BonTravail[]>([]);
+  const [prospectFiles, setProspectFiles] = useState<ProspectFile[]>([]);
+  const [fileUrls, setFileUrls] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -347,11 +422,19 @@ function ClientDocuments({ clientId }: { clientId: number }) {
     (async () => {
       setLoading(true);
       try {
-        const [sRes, fRes, bRes] = await Promise.all([
+        const baseCalls = [
           authedFetch("/api/v1/soumissions?limit=500"),
           authedFetch("/api/v1/factures?limit=500"),
           authedFetch("/api/v1/bons-travail?limit=500")
-        ]);
+        ];
+        // Seuls les clients convertis d'un prospect ont des photos /
+        // PDF du formulaire public — inutile d'appeler sinon.
+        if (contactRequestId) {
+          baseCalls.push(
+            authedFetch(`/api/v1/contact/${contactRequestId}/photos`)
+          );
+        }
+        const [sRes, fRes, bRes, pRes] = await Promise.all(baseCalls);
         if (cancelled) return;
         if (sRes.ok) {
           const all = (await sRes.json()) as Array<
@@ -369,6 +452,9 @@ function ClientDocuments({ clientId }: { clientId: number }) {
           const all = (await bRes.json()) as BonTravail[];
           setBons(all.filter((x) => x.client_id === clientId));
         }
+        if (pRes && pRes.ok) {
+          setProspectFiles((await pRes.json()) as ProspectFile[]);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -376,13 +462,51 @@ function ClientDocuments({ clientId }: { clientId: number }) {
     return () => {
       cancelled = true;
     };
-  }, [clientId]);
+  }, [clientId, contactRequestId]);
+
+  // Blob URLs for the prospect-era files (images + PDFs alike).
+  useEffect(() => {
+    if (!contactRequestId) return;
+    let cancelled = false;
+    (async () => {
+      for (const f of prospectFiles) {
+        if (fileUrls[f.id]) continue;
+        const res = await authedFetch(
+          `/api/v1/contact/${contactRequestId}/photos/${f.id}/image`
+        );
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        setFileUrls((prev) => ({ ...prev, [f.id]: url }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [prospectFiles, contactRequestId, fileUrls]);
+
+  useEffect(() => {
+    return () => {
+      for (const u of Object.values(fileUrls)) URL.revokeObjectURL(u);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const signedSoumissions = soumissions.filter(
     (s) => s.status === "accepted" || s.accepted_at
   );
   const signedBons = bons.filter(
     (b) => b.status === "signed" || b.accepted_at
+  );
+  const prospectPhotos = prospectFiles.filter((f) =>
+    f.content_type.startsWith("image/")
+  );
+  const prospectOther = prospectFiles.filter(
+    (f) => !f.content_type.startsWith("image/")
   );
 
   function fmtMoney(n: number | string | null): string {
@@ -395,151 +519,239 @@ function ClientDocuments({ clientId }: { clientId: number }) {
   }
 
   return (
-    <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-        Documents du client
-      </h2>
-      <p className="mt-1 text-xs text-white/60">
-        Soumissions signées · contrats (bons de travail signés) · factures.
-      </p>
+    <section className="space-y-2">
+      <div>
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          Documents du client
+        </h2>
+        <p className="mt-1 text-xs text-white/60">
+          Soumissions signées · contrats · factures
+          {contactRequestId ? " · photos et documents du formulaire prospect" : ""}.
+        </p>
+      </div>
 
       {loading ? (
         <div className="flex items-center justify-center py-6">
           <Loader2 className="h-5 w-5 animate-spin text-white/40" />
         </div>
       ) : (
-        <div className="mt-4 space-y-5">
-          <DocGroup
-            title={`Soumissions signées (${signedSoumissions.length})`}
-            empty="Aucune soumission acceptée."
+        <>
+          <DocSection
+            title="Soumissions signées"
+            count={signedSoumissions.length}
+            icon={<FileText className="h-3.5 w-3.5" />}
+            defaultOpen={signedSoumissions.length > 0}
           >
-            {signedSoumissions.map((s) => (
-              <Link
-                key={s.id}
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                href={`/app/soumissions/${s.id}` as any}
-                className="flex items-start justify-between gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-sm hover:border-emerald-500/50"
-              >
-                <div className="min-w-0">
-                  <p className="truncate font-semibold text-white">
-                    {s.reference} — {s.title}
-                  </p>
-                  <p className="text-[11px] text-white/50">
-                    Signée
-                    {s.signed_name ? ` par ${s.signed_name}` : ""}
-                    {s.accepted_at
-                      ? ` le ${new Date(s.accepted_at).toLocaleDateString("fr-CA")}`
-                      : ""}
-                  </p>
-                </div>
-                <span className="shrink-0 text-sm font-semibold text-emerald-300">
-                  {fmtMoney(s.total)}
-                </span>
-              </Link>
-            ))}
-          </DocGroup>
+            {signedSoumissions.length === 0 ? (
+              <p className="text-xs text-white/40">Aucune soumission acceptée.</p>
+            ) : (
+              <ul className="space-y-2">
+                {signedSoumissions.map((s) => (
+                  <li key={s.id}>
+                    <Link
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      href={`/app/soumissions/${s.id}` as any}
+                      className="flex items-start justify-between gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-sm hover:border-emerald-500/50"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-white">
+                          {s.reference} — {s.title}
+                        </p>
+                        <p className="text-[11px] text-white/50">
+                          Signée
+                          {s.signed_name ? ` par ${s.signed_name}` : ""}
+                          {s.accepted_at
+                            ? ` le ${new Date(s.accepted_at).toLocaleDateString("fr-CA")}`
+                            : ""}
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-sm font-semibold text-emerald-300">
+                        {fmtMoney(s.total)}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </DocSection>
 
-          <DocGroup
-            title={`Contrats signés (${signedBons.length})`}
-            empty="Aucun bon de travail signé."
+          <DocSection
+            title="Contrats signés"
+            count={signedBons.length}
+            icon={<FileText className="h-3.5 w-3.5" />}
+            defaultOpen={signedBons.length > 0}
           >
-            {signedBons.map((b) => (
-              <Link
-                key={b.id}
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                href={`/app/bons/${b.id}` as any}
-                className="flex items-start justify-between gap-3 rounded-lg border border-sky-500/20 bg-sky-500/5 px-3 py-2 text-sm hover:border-sky-500/50"
-              >
-                <div className="min-w-0">
-                  <p className="truncate font-semibold text-white">
-                    {b.reference} — {b.title}
-                  </p>
-                  <p className="text-[11px] text-white/50">
-                    Signé
-                    {b.signed_name ? ` par ${b.signed_name}` : ""}
-                    {b.accepted_at
-                      ? ` le ${new Date(b.accepted_at).toLocaleDateString("fr-CA")}`
-                      : ""}
-                  </p>
-                </div>
-                <span className="shrink-0 rounded bg-sky-500/15 px-2 py-0.5 text-[10px] uppercase text-sky-300">
-                  {b.status}
-                </span>
-              </Link>
-            ))}
-          </DocGroup>
+            {signedBons.length === 0 ? (
+              <p className="text-xs text-white/40">Aucun bon de travail signé.</p>
+            ) : (
+              <ul className="space-y-2">
+                {signedBons.map((b) => (
+                  <li key={b.id}>
+                    <Link
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      href={`/app/bons/${b.id}` as any}
+                      className="flex items-start justify-between gap-3 rounded-lg border border-sky-500/20 bg-sky-500/5 px-3 py-2 text-sm hover:border-sky-500/50"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-white">
+                          {b.reference} — {b.title}
+                        </p>
+                        <p className="text-[11px] text-white/50">
+                          Signé
+                          {b.signed_name ? ` par ${b.signed_name}` : ""}
+                          {b.accepted_at
+                            ? ` le ${new Date(b.accepted_at).toLocaleDateString("fr-CA")}`
+                            : ""}
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded bg-sky-500/15 px-2 py-0.5 text-[10px] uppercase text-sky-300">
+                        {b.status}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </DocSection>
 
-          <DocGroup
-            title={`Factures (${factures.length})`}
-            empty="Aucune facture."
+          <DocSection
+            title="Factures"
+            count={factures.length}
+            icon={<FileText className="h-3.5 w-3.5" />}
+            defaultOpen={false}
           >
-            {factures.map((f) => (
-              <Link
-                key={f.id}
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                href={`/app/facturation/${f.id}` as any}
-                className="flex items-start justify-between gap-3 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm hover:border-accent-500/50"
+            {factures.length === 0 ? (
+              <p className="text-xs text-white/40">Aucune facture.</p>
+            ) : (
+              <ul className="space-y-2">
+                {factures.map((f) => (
+                  <li key={f.id}>
+                    <Link
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      href={`/app/facturation/${f.id}` as any}
+                      className="flex items-start justify-between gap-3 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm hover:border-accent-500/50"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-white">
+                          {f.reference}
+                        </p>
+                        <p className="text-[11px] text-white/50">
+                          {f.issued_at
+                            ? `Émise le ${new Date(f.issued_at).toLocaleDateString("fr-CA")}`
+                            : "Brouillon"}
+                          {f.paid_at
+                            ? ` · Payée le ${new Date(f.paid_at).toLocaleDateString("fr-CA")}`
+                            : ""}
+                        </p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className="text-sm font-semibold text-white">
+                          {fmtMoney(f.total)}
+                        </p>
+                        <p
+                          className={`text-[10px] uppercase ${
+                            f.status === "paid"
+                              ? "text-emerald-300"
+                              : f.status === "overdue"
+                              ? "text-rose-300"
+                              : "text-white/50"
+                          }`}
+                        >
+                          {f.status}
+                        </p>
+                      </div>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </DocSection>
+
+          {contactRequestId ? (
+            <>
+              <DocSection
+                title="Photos (du formulaire prospect)"
+                count={prospectPhotos.length}
+                icon={<ImageIcon className="h-3.5 w-3.5" />}
+                defaultOpen={false}
               >
-                <div className="min-w-0">
-                  <p className="truncate font-semibold text-white">
-                    {f.reference}
-                  </p>
-                  <p className="text-[11px] text-white/50">
-                    {f.issued_at
-                      ? `Émise le ${new Date(f.issued_at).toLocaleDateString("fr-CA")}`
-                      : "Brouillon"}
-                    {f.paid_at
-                      ? ` · Payée le ${new Date(f.paid_at).toLocaleDateString("fr-CA")}`
-                      : ""}
-                  </p>
-                </div>
-                <div className="shrink-0 text-right">
-                  <p className="text-sm font-semibold text-white">
-                    {fmtMoney(f.total)}
-                  </p>
-                  <p
-                    className={`text-[10px] uppercase ${
-                      f.status === "paid"
-                        ? "text-emerald-300"
-                        : f.status === "overdue"
-                        ? "text-rose-300"
-                        : "text-white/50"
-                    }`}
-                  >
-                    {f.status}
-                  </p>
-                </div>
-              </Link>
-            ))}
-          </DocGroup>
-        </div>
+                {prospectPhotos.length === 0 ? (
+                  <p className="text-xs text-white/40">Aucune photo.</p>
+                ) : (
+                  <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {prospectPhotos.map((p) => (
+                      <li
+                        key={p.id}
+                        className="overflow-hidden rounded-xl border border-brand-800 bg-brand-900"
+                      >
+                        <a
+                          href={fileUrls[p.id] || "#"}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block aspect-video w-full overflow-hidden bg-black"
+                        >
+                          {fileUrls[p.id] ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              alt={p.filename || "Photo"}
+                              src={fileUrls[p.id]}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full items-center justify-center">
+                              <Loader2 className="h-4 w-4 animate-spin text-white/40" />
+                            </div>
+                          )}
+                        </a>
+                        <p className="truncate p-2 text-[11px] text-white/60">
+                          {p.filename || `photo-${p.id}`}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </DocSection>
+
+              <DocSection
+                title="Autres documents (du prospect)"
+                count={prospectOther.length}
+                icon={<FileText className="h-3.5 w-3.5" />}
+                defaultOpen={false}
+              >
+                {prospectOther.length === 0 ? (
+                  <p className="text-xs text-white/40">Aucun PDF ou document.</p>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {prospectOther.map((d) => (
+                      <li key={d.id}>
+                        <a
+                          href={fileUrls[d.id] || "#"}
+                          target="_blank"
+                          rel="noreferrer"
+                          download={d.filename || `document-${d.id}`}
+                          className="flex items-center gap-2 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white hover:border-accent-500"
+                        >
+                          <FileText className="h-4 w-4 shrink-0 text-accent-500" />
+                          <div className="min-w-0">
+                            <p className="truncate">
+                              {d.filename || `document-${d.id}`}
+                            </p>
+                            <p className="text-[10px] text-white/40">
+                              {d.content_type} ·{" "}
+                              {new Date(d.created_at).toLocaleDateString("fr-CA")}
+                            </p>
+                          </div>
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </DocSection>
+            </>
+          ) : null}
+        </>
       )}
     </section>
   );
 }
 
-function DocGroup({
-  title,
-  empty,
-  children
-}: {
-  title: string;
-  empty: string;
-  children: React.ReactNode;
-}) {
-  const hasChildren = Array.isArray(children)
-    ? children.length > 0
-    : Boolean(children);
-  return (
-    <div>
-      <p className="text-xs font-semibold uppercase tracking-wider text-white/60">
-        {title}
-      </p>
-      {hasChildren ? (
-        <div className="mt-2 space-y-1.5">{children}</div>
-      ) : (
-        <p className="mt-2 text-xs text-white/40">{empty}</p>
-      )}
-    </div>
-  );
-}
