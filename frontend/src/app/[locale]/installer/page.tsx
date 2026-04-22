@@ -84,6 +84,32 @@ export default function InstallerPage() {
           />
         </div>
 
+        {/* Big primary CTA on all tabs — once the app is open, the
+            in-app PwaRegister banner handles the actual install. iOS
+            Safari refuses to trigger Add-to-Home-Screen from an API,
+            but at least the user lands inside the app. */}
+        {tab !== "desktop" ? (
+          <div className="mt-8 rounded-2xl border border-accent-500/40 bg-accent-500/10 p-5 text-center">
+            <p className="text-sm text-accent-200">
+              Démarrage rapide
+            </p>
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/m" as any}
+              className="btn-accent mt-3 inline-flex items-center text-base"
+            >
+              <Download className="mr-2 h-4 w-4" />
+              Ouvrir / Installer l&apos;application
+              <ChevronRight className="ml-1 h-4 w-4" />
+            </Link>
+            <p className="mt-3 text-[11px] text-brand-300">
+              {tab === "ios"
+                ? "Sur iOS, ouvre ce lien dans Safari puis suis les 3 étapes ci-dessous."
+                : "Sur Android, une bannière d'installation apparaît automatiquement une fois l'app ouverte."}
+            </p>
+          </div>
+        ) : null}
+
         <div className="mt-8">
           {tab === "ios" ? <IosSteps /> : null}
           {tab === "android" ? <AndroidSteps /> : null}

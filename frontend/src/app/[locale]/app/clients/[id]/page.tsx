@@ -6,6 +6,7 @@ import { ArrowLeft, Loader2, Save, Trash2 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
+import { MeasurementsPanel } from "@/components/measurements-panel";
 import { SalesTasksPanel } from "@/components/sales-tasks-panel";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
@@ -285,6 +286,10 @@ export default function ClientDetailPage() {
                 )}
               </button>
 
+              <MeasurementsPanel
+                clientId={c.id}
+                defaultAddress={c.address}
+              />
               <SalesTasksPanel clientId={c.id} />
             </div>
           </>
