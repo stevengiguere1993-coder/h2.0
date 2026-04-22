@@ -2084,17 +2084,40 @@ function ChantierAgendaTab({
   projectName: string;
 }) {
   const [events, setEvents] = useState<ChantierEvent[]>([]);
+  const [employes, setEmployes] = useState<Array<{ id: number; full_name: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
+  // Inline form state for adding an event (replaces broken window.prompt
+  // flow which is blocked in PWA standalone mode on iOS and Android).
+  const [formOpen, setFormOpen] = useState(false);
+  const [fTitle, setFTitle] = useState("");
+  const [fDate, setFDate] = useState(() => {
+    const d = new Date();
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  });
+  const [fTime, setFTime] = useState("08:00");
+  const [fAllDay, setFAllDay] = useState(false);
+  const [fAssignee, setFAssignee] = useState("");
+  const [fDescription, setFDescription] = useState("");
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await authedFetch(`/api/v1/agenda?limit=500`);
-      if (!res.ok) throw new Error();
-      const all = (await res.json()) as ChantierEvent[];
+      const [evRes, empRes] = await Promise.all([
+        authedFetch(`/api/v1/agenda?limit=500`),
+        authedFetch(`/api/v1/employes?limit=200`)
+      ]);
+      if (!evRes.ok) throw new Error();
+      const all = (await evRes.json()) as ChantierEvent[];
       setEvents(all.filter((e) => e.project_id === projectId));
+      if (empRes.ok) {
+        setEmployes(
+          (await empRes.json()) as Array<{ id: number; full_name: string }>
+        );
+      }
     } catch {
       setError("Chargement échoué.");
     } finally {
@@ -2106,31 +2129,52 @@ function ChantierAgendaTab({
     void load();
   }, [load]);
 
-  async function quickAdd() {
-    const title = prompt("Titre de l'événement chantier ?");
-    if (!title || !title.trim()) return;
-    const date = prompt("Date (AAAA-MM-JJ) :");
-    if (!date) return;
-    const time = prompt("Heure (HH:MM), vide = journée complète :", "08:00");
-    const startIso = time
-      ? new Date(`${date}T${time}:00`).toISOString()
-      : new Date(`${date}T00:00:00`).toISOString();
+  function resetForm() {
+    setFTitle("");
+    setFTime("08:00");
+    setFAllDay(false);
+    setFAssignee("");
+    setFDescription("");
+  }
+
+  async function submitForm(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!fTitle.trim()) {
+      setError("Le titre est requis.");
+      return;
+    }
+    if (!fDate) {
+      setError("La date est requise.");
+      return;
+    }
+    const startIso =
+      fAllDay || !fTime
+        ? new Date(`${fDate}T00:00:00`).toISOString()
+        : new Date(`${fDate}T${fTime}:00`).toISOString();
     setCreating(true);
+    setError(null);
     try {
       const res = await authedFetch(`/api/v1/agenda`, {
         method: "POST",
         body: JSON.stringify({
-          title: title.trim(),
+          title: fTitle.trim(),
+          description: fDescription.trim() || null,
           start_at: startIso,
-          all_day: !time,
+          all_day: fAllDay,
           project_id: projectId,
+          assignee_id: fAssignee ? Number(fAssignee) : null,
           event_type: "chantier"
         })
       });
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt.slice(0, 200));
+      }
+      resetForm();
+      setFormOpen(false);
       await load();
-    } catch {
-      setError("Ajout échoué.");
+    } catch (e) {
+      setError(`Ajout échoué : ${(e as Error).message}`);
     } finally {
       setCreating(false);
     }
@@ -2178,7 +2222,7 @@ function ChantierAgendaTab({
         </p>
       ) : null}
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-white/60">
           Tous les événements agenda liés à ce projet — visites, livraisons,
           inspections, etc. Chaque employé voit ces événements dans son
@@ -2186,13 +2230,114 @@ function ChantierAgendaTab({
         </p>
         <button
           type="button"
-          onClick={quickAdd}
-          disabled={creating}
-          className="btn-accent text-xs disabled:opacity-60"
+          onClick={() => setFormOpen((v) => !v)}
+          className="btn-accent shrink-0 text-xs"
         >
-          <Plus className="mr-1.5 h-3.5 w-3.5" /> Ajouter un événement
+          <Plus className="mr-1.5 h-3.5 w-3.5" />
+          {formOpen ? "Fermer" : "Ajouter un événement"}
         </button>
       </div>
+
+      {formOpen ? (
+        <form
+          onSubmit={submitForm}
+          className="space-y-3 rounded-xl border border-accent-500/30 bg-accent-500/5 p-4"
+        >
+          <div>
+            <label className="label">Titre *</label>
+            <input
+              type="text"
+              value={fTitle}
+              onChange={(e) => setFTitle(e.target.value)}
+              placeholder="Ex. Livraison matériaux, inspection finale…"
+              className="input"
+              autoFocus
+              required
+            />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div>
+              <label className="label">Date *</label>
+              <input
+                type="date"
+                value={fDate}
+                onChange={(e) => setFDate(e.target.value)}
+                className="input"
+                required
+              />
+            </div>
+            <div>
+              <label className="label">Heure</label>
+              <input
+                type="time"
+                value={fTime}
+                onChange={(e) => setFTime(e.target.value)}
+                disabled={fAllDay}
+                className="input disabled:opacity-50"
+              />
+            </div>
+            <div className="flex items-end">
+              <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-brand-800 bg-brand-900 px-3 py-2.5 text-sm text-white">
+                <input
+                  type="checkbox"
+                  checked={fAllDay}
+                  onChange={(e) => setFAllDay(e.target.checked)}
+                  className="h-4 w-4 accent-accent-500"
+                />
+                <span>Journée complète</span>
+              </label>
+            </div>
+          </div>
+          <div>
+            <label className="label">Assigné à</label>
+            <select
+              value={fAssignee}
+              onChange={(e) => setFAssignee(e.target.value)}
+              className="input"
+            >
+              <option value="">— Personne assignée —</option>
+              {employes.map((e) => (
+                <option key={e.id} value={String(e.id)}>
+                  {e.full_name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Notes</label>
+            <textarea
+              rows={2}
+              value={fDescription}
+              onChange={(e) => setFDescription(e.target.value)}
+              className="input"
+              placeholder="Détails, adresse, contact…"
+            />
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                resetForm();
+                setFormOpen(false);
+              }}
+              className="btn-secondary text-xs"
+              disabled={creating}
+            >
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={creating}
+              className="btn-accent text-xs disabled:opacity-60"
+            >
+              {creating ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Créer l&apos;événement
+            </button>
+          </div>
+        </form>
+      ) : null}
 
       <section>
         <h3 className="text-xs font-semibold uppercase tracking-wider text-accent-500">
