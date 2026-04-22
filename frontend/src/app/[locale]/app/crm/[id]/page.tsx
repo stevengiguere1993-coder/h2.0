@@ -437,6 +437,7 @@ function ProspectDocuments({
   const [urls, setUrls] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -503,13 +504,59 @@ function ProspectDocuments({
     }
   }
 
+  async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (files.length === 0) return;
+    setUploading(true);
+    setError(null);
+    try {
+      for (const f of files) {
+        const form = new FormData();
+        form.append("file", f);
+        const res = await authedFetch(
+          `/api/v1/contact/${contactRequestId}/photos`,
+          { method: "POST", body: form }
+        );
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(txt.slice(0, 240) || `http_${res.status}`);
+        }
+        const created = (await res.json()) as ProspectPhoto;
+        setPhotos((xs) => [...xs, created]);
+      }
+    } catch (e) {
+      setError(`Envoi échoué : ${(e as Error).message}`);
+    } finally {
+      setUploading(false);
+    }
+  }
+
   return (
     <section className="space-y-4">
-      <div className="flex items-center gap-2">
-        <ImageIcon className="h-4 w-4 text-accent-500" />
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-          Photos transmises par le prospect
-        </h3>
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2">
+          <ImageIcon className="h-4 w-4 text-accent-500" />
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+            Photos transmises par le prospect
+          </h3>
+        </div>
+        <label className="ml-auto inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-brand-800 bg-brand-900 px-3 py-1.5 text-xs text-white hover:border-accent-500">
+          {uploading ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <ImageIcon className="h-3.5 w-3.5" />
+          )}
+          Ajouter une photo
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            onChange={onUpload}
+            disabled={uploading}
+          />
+        </label>
       </div>
 
       {loading ? (
