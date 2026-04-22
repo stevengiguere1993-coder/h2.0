@@ -46,8 +46,11 @@ export default function MobileConge() {
       }
       setSuccess(true);
       setTimeout(() => {
+        // Route to the personal history so the user sees the newly
+        // created "pending" request immediately (easier to diagnose
+        // if the submission isn't persisting).
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        router.push("/m" as any);
+        router.push("/m/conges" as any);
       }, 1200);
     } catch (e) {
       setError((e as Error).message);

@@ -33,31 +33,29 @@ export default function InstallerPage() {
     setTab(d);
   }, []);
 
-  // Build the absolute URL for the mobile app so the QR code deep-links
-  // straight to /m (and users skip the homepage).
   const mobileUrl = useMemo(() => {
     if (typeof window === "undefined") return "/m";
     return `${window.location.origin}/fr/m`;
   }, []);
 
-  // Free QR code via api.qrserver.com (no key, no limits for this volume).
   const qrSrc = useMemo(() => {
     const enc = encodeURIComponent(mobileUrl);
+    // White QR on dark background to match the site theme.
     return `https://api.qrserver.com/v1/create-qr-code/?size=360x360&color=ffffff&bgcolor=0b0d10&margin=10&data=${enc}`;
   }, [mobileUrl]);
 
   return (
     <section className="section">
-      <div className="container max-w-4xl">
+      <div className="container mx-auto max-w-4xl px-4">
         <header className="text-center">
-          <span className="inline-flex items-center gap-2 rounded-full bg-accent-500/15 px-3 py-1 text-xs font-semibold text-accent-500">
+          <span className="eyebrow">
             <Download className="h-3.5 w-3.5" />
             Installation en 10 secondes — sans App Store
           </span>
-          <h1 className="mt-4 text-3xl font-bold text-brand-950 sm:text-4xl">
+          <h1 className="mt-4 text-3xl font-bold text-white sm:text-4xl">
             Installer l&apos;application Horizon
           </h1>
-          <p className="mt-3 text-base text-brand-700">
+          <p className="mt-3 text-base text-brand-100">
             Notre application employé fonctionne directement depuis ton
             navigateur — pas besoin de passer par l&apos;App Store ou
             Google Play. Icône sur l&apos;écran d&apos;accueil, plein
@@ -65,8 +63,7 @@ export default function InstallerPage() {
           </p>
         </header>
 
-        {/* Device tabs */}
-        <div className="mx-auto mt-8 flex max-w-md items-center justify-center rounded-full border border-brand-200 bg-white p-1 text-sm">
+        <div className="mx-auto mt-8 flex max-w-md items-center justify-center rounded-full border border-brand-800 bg-brand-900 p-1 text-sm">
           <DeviceTab
             active={tab === "ios"}
             onClick={() => setTab("ios")}
@@ -95,9 +92,8 @@ export default function InstallerPage() {
           ) : null}
         </div>
 
-        {/* Launch / direct link */}
-        <div className="mt-10 rounded-2xl border border-brand-200 bg-white p-6 text-center">
-          <p className="text-sm text-brand-700">
+        <div className="mt-10 rounded-2xl border border-brand-800 bg-brand-900 p-6 text-center">
+          <p className="text-sm text-brand-100">
             Déjà installée ? Ouvre-la directement :
           </p>
           <Link
@@ -107,7 +103,7 @@ export default function InstallerPage() {
           >
             Ouvrir l&apos;application <ChevronRight className="ml-1 h-4 w-4" />
           </Link>
-          <p className="mt-3 text-[11px] text-brand-500">
+          <p className="mt-3 text-[11px] text-brand-300">
             Détection auto : tu es sur{" "}
             {device === "ios"
               ? "iPhone"
@@ -118,7 +114,7 @@ export default function InstallerPage() {
           </p>
         </div>
 
-        <p className="mt-6 text-center text-xs text-brand-600">
+        <p className="mt-6 text-center text-xs text-brand-300">
           Besoin d&apos;aide ?{" "}
           <a
             href="mailto:info@immohorizon.com"
@@ -149,8 +145,8 @@ function DeviceTab({
       onClick={onClick}
       className={`flex flex-1 items-center justify-center gap-2 rounded-full px-4 py-2 font-semibold transition ${
         active
-          ? "bg-brand-950 text-white"
-          : "text-brand-700 hover:text-brand-950"
+          ? "bg-accent-500 text-brand-950"
+          : "text-brand-100 hover:text-white"
       }`}
     >
       <Icon className="h-4 w-4" />
@@ -169,13 +165,13 @@ function Step({
   children: React.ReactNode;
 }) {
   return (
-    <li className="flex gap-4 rounded-xl border border-brand-200 bg-white p-5">
+    <li className="flex gap-4 rounded-xl border border-brand-800 bg-brand-900 p-5">
       <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-accent-500 text-sm font-bold text-brand-950">
         {n}
       </span>
       <div className="min-w-0 flex-1">
-        <p className="text-base font-semibold text-brand-950">{title}</p>
-        <div className="mt-1 text-sm text-brand-700">{children}</div>
+        <p className="text-base font-semibold text-white">{title}</p>
+        <div className="mt-1 text-sm text-brand-100">{children}</div>
       </div>
     </li>
   );
@@ -186,8 +182,8 @@ function IosSteps() {
     <ol className="space-y-3">
       <Step n={1} title="Ouvre Safari (pas Chrome !)">
         Sur iPhone, l&apos;installation ne fonctionne que depuis{" "}
-        <strong>Safari</strong>. Va à{" "}
-        <code className="rounded bg-brand-100 px-1 py-0.5 text-xs">
+        <strong className="text-white">Safari</strong>. Va à{" "}
+        <code className="rounded bg-brand-950 px-1 py-0.5 text-xs text-accent-500">
           immohorizon.com/fr/m
         </code>
         .
@@ -195,12 +191,15 @@ function IosSteps() {
       <Step n={2} title="Tape le bouton Partager">
         Dans la barre d&apos;outils de Safari (en bas), tape l&apos;icône{" "}
         <Share className="inline h-4 w-4 -translate-y-0.5 text-accent-500" />{" "}
-        <strong>Partager</strong>.
+        <strong className="text-white">Partager</strong>.
       </Step>
       <Step n={3} title="« Ajouter à l'écran d'accueil »">
         Dans le menu qui apparaît, fais défiler et tape{" "}
-        <strong>« Ajouter à l&apos;écran d&apos;accueil »</strong>. Confirme
-        avec <strong>Ajouter</strong> en haut à droite.
+        <strong className="text-white">
+          « Ajouter à l&apos;écran d&apos;accueil »
+        </strong>
+        . Confirme avec{" "}
+        <strong className="text-white">Ajouter</strong> en haut à droite.
       </Step>
       <Step n={4} title="L'icône Horizon apparaît">
         Ferme Safari, l&apos;icône{" "}
@@ -219,20 +218,27 @@ function AndroidSteps() {
     <ol className="space-y-3">
       <Step n={1} title="Ouvre Chrome (ou Edge)">
         Va à{" "}
-        <code className="rounded bg-brand-100 px-1 py-0.5 text-xs">
+        <code className="rounded bg-brand-950 px-1 py-0.5 text-xs text-accent-500">
           immohorizon.com/fr/m
         </code>
         .
       </Step>
       <Step n={2} title="Bannière d'installation automatique">
         Une bannière apparaît en bas d&apos;écran : tape{" "}
-        <strong>Installer</strong>.
+        <strong className="text-white">Installer</strong>.
       </Step>
       <Step n={3} title="Ou via le menu">
         Si la bannière n&apos;apparaît pas, tape le menu{" "}
-        <strong>⋮</strong> (trois points) en haut à droite, puis{" "}
-        <strong>« Installer l&apos;application »</strong> ou{" "}
-        <strong>« Ajouter à l&apos;écran d&apos;accueil »</strong>.
+        <strong className="text-white">⋮</strong> (trois points) en haut à
+        droite, puis{" "}
+        <strong className="text-white">
+          « Installer l&apos;application »
+        </strong>{" "}
+        ou{" "}
+        <strong className="text-white">
+          « Ajouter à l&apos;écran d&apos;accueil »
+        </strong>
+        .
       </Step>
       <Step n={4} title="L'app est installée">
         L&apos;icône Horizon apparaît dans le tiroir d&apos;applications
@@ -251,33 +257,33 @@ function DesktopSteps({
 }) {
   return (
     <div className="grid gap-6 sm:grid-cols-2">
-      <div className="rounded-xl border border-brand-200 bg-white p-6 text-center">
+      <div className="rounded-xl border border-brand-800 bg-brand-900 p-6 text-center">
         <p className="text-xs font-semibold uppercase tracking-wider text-accent-500">
           Pour installer sur ton téléphone
         </p>
-        <p className="mt-2 text-sm text-brand-700">
+        <p className="mt-2 text-sm text-brand-100">
           Scanne ce code QR avec la caméra de ton iPhone ou Android :
         </p>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={qrSrc}
           alt={`QR code vers ${mobileUrl}`}
-          className="mx-auto mt-4 h-56 w-56 rounded-lg"
+          className="mx-auto mt-4 h-56 w-56 rounded-lg bg-brand-950"
         />
-        <p className="mt-3 text-[11px] text-brand-500 break-all">
+        <p className="mt-3 break-all text-[11px] text-brand-300">
           {mobileUrl}
         </p>
       </div>
 
       <div className="space-y-3">
-        <div className="rounded-xl border border-brand-200 bg-white p-5">
+        <div className="rounded-xl border border-brand-800 bg-brand-900 p-5">
           <div className="flex items-start gap-3">
-            <CheckCircle2 className="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-500" />
+            <CheckCircle2 className="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-400" />
             <div>
-              <p className="font-semibold text-brand-950">
+              <p className="font-semibold text-white">
                 Installer sur Windows / macOS
               </p>
-              <p className="mt-1 text-sm text-brand-700">
+              <p className="mt-1 text-sm text-brand-100">
                 Ouvre{" "}
                 <a
                   href="/fr/m"
@@ -294,14 +300,14 @@ function DesktopSteps({
           </div>
         </div>
 
-        <div className="rounded-xl border border-brand-200 bg-white p-5">
+        <div className="rounded-xl border border-brand-800 bg-brand-900 p-5">
           <div className="flex items-start gap-3">
-            <CheckCircle2 className="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-500" />
+            <CheckCircle2 className="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-400" />
             <div>
-              <p className="font-semibold text-brand-950">
+              <p className="font-semibold text-white">
                 Ouvre-la depuis le menu Démarrer / Dock
               </p>
-              <p className="mt-1 text-sm text-brand-700">
+              <p className="mt-1 text-sm text-brand-100">
                 Une fois installée, Horizon ouvre dans sa propre fenêtre
                 (sans barre de navigation) — tout comme Slack ou Spotify.
               </p>
