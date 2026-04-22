@@ -30,6 +30,7 @@ class SoumissionItemCreate(BaseModel):
     unit: Optional[str] = Field(default=None, max_length=32)
     quantity: float = Field(default=1)
     unit_price: float = Field(default=0)
+    cost_per_unit: float = Field(default=0)
     tps_applicable: bool = Field(default=True)
     tvq_applicable: bool = Field(default=True)
     kind: str = Field(default="service", pattern="^(service|frais|rabais)$")
@@ -41,6 +42,7 @@ class SoumissionItemUpdate(BaseModel):
     unit: Optional[str] = Field(default=None, max_length=32)
     quantity: Optional[float] = Field(default=None)
     unit_price: Optional[float] = Field(default=None)
+    cost_per_unit: Optional[float] = Field(default=None)
     tps_applicable: Optional[bool] = Field(default=None)
     tvq_applicable: Optional[bool] = Field(default=None)
     kind: Optional[str] = Field(default=None, pattern="^(service|frais|rabais)$")
@@ -57,6 +59,7 @@ class SoumissionItemRead(BaseModel):
     quantity: float
     unit_price: float
     total: float
+    cost_per_unit: float = 0
     tps_applicable: bool
     tvq_applicable: bool
     kind: str
@@ -116,6 +119,7 @@ async def create_item(
         unit=(data.unit or None),
         quantity=qty,
         unit_price=unit_price,
+        cost_per_unit=data.cost_per_unit,
         total=total,
         tps_applicable=(False if data.kind == "frais" else data.tps_applicable),
         tvq_applicable=(False if data.kind == "frais" else data.tvq_applicable),

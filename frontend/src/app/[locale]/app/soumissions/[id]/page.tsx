@@ -57,6 +57,7 @@ type Item = {
   unit: string | null;
   quantity: number;
   unit_price: number;
+  cost_per_unit: number;
   total: number;
   tps_applicable: boolean;
   tvq_applicable: boolean;
@@ -194,6 +195,24 @@ export default function SoumissionDetailPage() {
     [items]
   );
   const total = +(subtotal + tps + tvq).toFixed(2);
+
+  // Internal (non-client-facing) metrics: projected cost from each
+  // line's cost_per_unit × quantity, and the resulting margin vs the
+  // client-facing subtotal. These are rendered in the staff UI only —
+  // the public soumission JSON + PDF never include cost_per_unit.
+  const projectedCost = useMemo(
+    () =>
+      +items
+        .reduce(
+          (s, it) => s + Number(it.cost_per_unit || 0) * Number(it.quantity || 0),
+          0
+        )
+        .toFixed(2),
+    [items]
+  );
+  const projectedProfit = +(subtotal - projectedCost).toFixed(2);
+  const projectedMarginPct =
+    subtotal > 0 ? +((projectedProfit / subtotal) * 100).toFixed(1) : 0;
 
   const metaDirty =
     s !== null &&
@@ -715,7 +734,7 @@ export default function SoumissionDetailPage() {
                     ) : (
                       <Plus className="mr-1.5 h-3.5 w-3.5" />
                     )}
-                    Service
+                    Ajouter item
                   </button>
                   <button
                     type="button"
@@ -748,6 +767,12 @@ export default function SoumissionDetailPage() {
                         <th className="px-5 py-3 text-left font-semibold">Description</th>
                         <th className="px-3 py-3 text-right font-semibold">Qté</th>
                         <th className="px-3 py-3 text-left font-semibold">Unité</th>
+                        <th
+                          className="px-3 py-3 text-right font-semibold text-amber-400"
+                          title="Coût interne — invisible par le client"
+                        >
+                          Coût $/u 🔒
+                        </th>
                         <th className="px-3 py-3 text-right font-semibold">Prix unit.</th>
                         <th className="px-3 py-3 text-center font-semibold" title="TPS applicable">TPS</th>
                         <th className="px-3 py-3 text-center font-semibold" title="TVQ applicable">TVQ</th>
@@ -896,6 +921,51 @@ export default function SoumissionDetailPage() {
                   </dl>
                   <p className="mt-3 text-xs text-white/40">
                     Les taxes sont calculées à partir de la somme des items.
+                  </p>
+                </div>
+
+                {/* Internal margin panel — never sent to the client. */}
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-5">
+                  <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-amber-400">
+                    🔒 Coût interne (non visible client)
+                  </h2>
+                  <dl className="mt-4 space-y-2 text-sm">
+                    <div className="flex items-center justify-between">
+                      <dt className="text-white/60">Coût projeté</dt>
+                      <dd className="text-amber-200">
+                        {fmtMoney(projectedCost)}
+                      </dd>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <dt className="text-white/60">Profit projeté</dt>
+                      <dd
+                        className={
+                          projectedProfit >= 0
+                            ? "text-emerald-300"
+                            : "text-rose-300"
+                        }
+                      >
+                        {fmtMoney(projectedProfit)}
+                      </dd>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-brand-800 pt-2">
+                      <dt className="text-white/60">Marge brute</dt>
+                      <dd
+                        className={`text-lg font-bold ${
+                          projectedMarginPct >= 30
+                            ? "text-emerald-300"
+                            : projectedMarginPct >= 0
+                            ? "text-amber-300"
+                            : "text-rose-300"
+                        }`}
+                      >
+                        {projectedMarginPct.toFixed(1)} %
+                      </dd>
+                    </div>
+                  </dl>
+                  <p className="mt-3 text-[11px] text-white/50">
+                    Ces chiffres ne figurent jamais sur le PDF ni sur la
+                    page publique du client.
                   </p>
                 </div>
 
@@ -1118,18 +1188,35 @@ function ItemRow({
   const [unit, setUnit] = useState(item.unit || "");
   const [quantity, setQuantity] = useState(String(item.quantity));
   const [unitPrice, setUnitPrice] = useState(String(item.unit_price));
+  const [costPerUnit, setCostPerUnit] = useState(
+    String(item.cost_per_unit ?? 0)
+  );
 
   useEffect(() => {
     setDescription(item.description);
     setUnit(item.unit || "");
     setQuantity(String(item.quantity));
     setUnitPrice(String(item.unit_price));
-  }, [item.id, item.description, item.unit, item.quantity, item.unit_price]);
+    setCostPerUnit(String(item.cost_per_unit ?? 0));
+  }, [
+    item.id,
+    item.description,
+    item.unit,
+    item.quantity,
+    item.unit_price,
+    item.cost_per_unit
+  ]);
 
   const computedTotal = useMemo(
     () => +(Number(quantity || 0) * Number(unitPrice || 0)).toFixed(2),
     [quantity, unitPrice]
   );
+  const computedMargin = useMemo(() => {
+    const price = Number(unitPrice || 0);
+    const cost = Number(costPerUnit || 0);
+    if (price <= 0) return null;
+    return +(((price - cost) / price) * 100).toFixed(0);
+  }, [unitPrice, costPerUnit]);
 
   function commit(field: keyof Item) {
     if (field === "description" && description !== item.description) {
@@ -1140,6 +1227,11 @@ function ItemRow({
       onPatch({ quantity: Number(quantity) || 0 });
     } else if (field === "unit_price" && Number(unitPrice) !== Number(item.unit_price)) {
       onPatch({ unit_price: Number(unitPrice) || 0 });
+    } else if (
+      field === "cost_per_unit" &&
+      Number(costPerUnit) !== Number(item.cost_per_unit || 0)
+    ) {
+      onPatch({ cost_per_unit: Number(costPerUnit) || 0 });
     }
   }
 
@@ -1187,6 +1279,18 @@ function ItemRow({
           className="w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm text-white placeholder:text-white/30 focus:border-brand-700 focus:outline-none"
         />
       </td>
+      <td className="px-3 py-3 w-28">
+        {/* Cost per unit — internal only, never sent to client. */}
+        <input
+          type="number"
+          step="0.01"
+          value={costPerUnit}
+          onChange={(e) => setCostPerUnit(e.target.value)}
+          onBlur={() => commit("cost_per_unit")}
+          className="w-full rounded-md border border-amber-500/20 bg-amber-500/5 px-2 py-1.5 text-right text-sm text-amber-200 focus:border-amber-500/60 focus:outline-none"
+          aria-label="Coût par unité (interne)"
+        />
+      </td>
       <td className="px-3 py-3 w-32">
         <input
           type="number"
@@ -1196,6 +1300,15 @@ function ItemRow({
           onBlur={() => commit("unit_price")}
           className="w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-right text-sm text-white focus:border-brand-700 focus:outline-none"
         />
+        {computedMargin !== null && Number(costPerUnit) > 0 ? (
+          <p
+            className={`mt-0.5 text-right text-[10px] ${
+              computedMargin >= 0 ? "text-emerald-300" : "text-rose-300"
+            }`}
+          >
+            marge {computedMargin}%
+          </p>
+        ) : null}
       </td>
       <td className="px-3 py-3 w-12 text-center">
         <input

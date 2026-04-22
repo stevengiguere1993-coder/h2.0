@@ -13,10 +13,12 @@ type Template = {
   description: string | null;
   default_unit: string | null;
   default_unit_price: number | null;
+  default_cost_per_unit: number | null;
   is_active: boolean;
 };
 
 type TemplateItem = {
+  default_cost_per_unit?: number;
   id: number;
   template_id: number;
   position: number;

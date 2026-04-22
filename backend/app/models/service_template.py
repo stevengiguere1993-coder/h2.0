@@ -35,6 +35,11 @@ class ServiceTemplate(Base):
     default_unit_price: Mapped[Optional[float]] = mapped_column(
         Numeric(12, 2), nullable=True
     )
+    # Reference cost used as the baseline "Rona list price" when the
+    # item is copied into a soumission. Staff can override per-item.
+    default_cost_per_unit: Mapped[Optional[float]] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(
         nullable=False, default=True, server_default="true", index=True
     )
@@ -62,4 +67,7 @@ class ServiceTemplateItem(Base):
     )
     default_unit_price: Mapped[float] = mapped_column(
         Numeric(12, 2), nullable=False, default=0
+    )
+    default_cost_per_unit: Mapped[float] = mapped_column(
+        Numeric(12, 2), nullable=False, default=0, server_default="0"
     )

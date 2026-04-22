@@ -36,6 +36,7 @@ class TemplateItemCreate(BaseModel):
     unit: Optional[str] = Field(default=None, max_length=32)
     default_quantity: float = Field(default=1, ge=0)
     default_unit_price: float = Field(default=0, ge=0)
+    default_cost_per_unit: float = Field(default=0, ge=0)
 
 
 class TemplateItemUpdate(BaseModel):
@@ -44,6 +45,7 @@ class TemplateItemUpdate(BaseModel):
     unit: Optional[str] = Field(default=None, max_length=32)
     default_quantity: Optional[float] = Field(default=None, ge=0)
     default_unit_price: Optional[float] = Field(default=None, ge=0)
+    default_cost_per_unit: Optional[float] = Field(default=None, ge=0)
 
 
 class TemplateItemRead(BaseModel):
@@ -55,6 +57,7 @@ class TemplateItemRead(BaseModel):
     unit: Optional[str]
     default_quantity: float
     default_unit_price: float
+    default_cost_per_unit: float = 0
 
 
 class TemplateCreate(BaseModel):
@@ -62,6 +65,7 @@ class TemplateCreate(BaseModel):
     description: Optional[str] = None
     default_unit: Optional[str] = Field(default=None, max_length=32)
     default_unit_price: Optional[float] = None
+    default_cost_per_unit: Optional[float] = None
 
 
 class TemplateUpdate(BaseModel):
@@ -69,6 +73,7 @@ class TemplateUpdate(BaseModel):
     description: Optional[str] = None
     default_unit: Optional[str] = Field(default=None, max_length=32)
     default_unit_price: Optional[float] = None
+    default_cost_per_unit: Optional[float] = None
     is_active: Optional[bool] = None
 
 
@@ -79,6 +84,7 @@ class TemplateRead(BaseModel):
     description: Optional[str]
     default_unit: Optional[str]
     default_unit_price: Optional[float]
+    default_cost_per_unit: Optional[float] = None
     is_active: bool
 
 
@@ -127,6 +133,7 @@ async def create_template(
         description=(data.description.strip() if data.description else None),
         default_unit=data.default_unit,
         default_unit_price=data.default_unit_price,
+        default_cost_per_unit=data.default_cost_per_unit,
     )
     db.add(t)
     await db.flush()
@@ -202,6 +209,7 @@ async def create_template_item(
         unit=data.unit,
         default_quantity=data.default_quantity,
         default_unit_price=data.default_unit_price,
+        default_cost_per_unit=data.default_cost_per_unit,
     )
     db.add(it)
     await db.flush()
@@ -311,6 +319,7 @@ async def apply_to_soumission(
             unit=t.default_unit,
             quantity=1,
             unit_price=float(t.default_unit_price or 0),
+            cost_per_unit=float(t.default_cost_per_unit or 0),
             total=float(t.default_unit_price or 0),
         )
         db.add(si)
@@ -329,6 +338,7 @@ async def apply_to_soumission(
                 unit=it.unit,
                 quantity=float(it.default_quantity),
                 unit_price=float(it.default_unit_price),
+                cost_per_unit=float(it.default_cost_per_unit or 0),
                 total=total,
             )
             db.add(si)
