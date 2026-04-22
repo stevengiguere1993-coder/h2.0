@@ -7,8 +7,10 @@ Main router that aggregates all API v1 endpoints.
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    appointments,
     auth,
     blog,
+    calendar,
     clients,
     contact,
     dashboard,
@@ -26,6 +28,7 @@ from app.api.v1.endpoints import (
     service_templates,
     users,
     project_finances,
+    project_phases,
     project_photos,
     project_tasks,
     project_to_facture,
@@ -64,6 +67,7 @@ api_router.include_router(clients.router)
 # /projects/{id}/photos etc. are matched before /projects/{item_id}.
 api_router.include_router(project_photos.router)
 api_router.include_router(project_tasks.router)
+api_router.include_router(project_phases.router)
 api_router.include_router(project_finances.router)
 api_router.include_router(projects.router)
 api_router.include_router(contact.router)
@@ -73,6 +77,8 @@ api_router.include_router(public_soumission.router)
 api_router.include_router(public_bon.router)
 api_router.include_router(qbo_token.router)
 api_router.include_router(dashboard.router)
+api_router.include_router(calendar.router)
+api_router.include_router(appointments.router)
 api_router.include_router(sales_tasks.router)
 api_router.include_router(mobile.router)
 api_router.include_router(leave_requests.router)

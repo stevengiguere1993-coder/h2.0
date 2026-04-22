@@ -1,0 +1,109 @@
+"""Send confirmation + reminder emails to prospects when an agenda
+event is scheduled against their ContactRequest.
+
+Triggered on AgendaEvent create via a small hook in the agenda CRUD
+flow (mobile + desktop); a daily cron sends the 24h reminder.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from typing import Optional
+
+from app.integrations.email_graph import get_mailer
+from app.models.agenda_event import AgendaEvent
+from app.models.contact_request import ContactRequest
+
+
+log = logging.getLogger(__name__)
+
+
+def _fmt(dt: datetime) -> str:
+    # Local-looking format, readable by the prospect.
+    return dt.astimezone(timezone.utc).strftime("%A %d %B %Y à %H:%M UTC")
+
+
+def _body(
+    *,
+    prospect_name: str,
+    event: AgendaEvent,
+    when_phrase: str,
+    reminder: bool,
+) -> str:
+    prefix = (
+        "Rappel — " if reminder else ""
+    )
+    loc_line = (
+        f"<p style='margin:4px 0'><strong>Lieu :</strong> {event.location}</p>"
+        if event.location
+        else ""
+    )
+    return f"""\
+<div style="font-family:Helvetica,Arial,sans-serif;color:#111;line-height:1.5;max-width:640px">
+  <p>Bonjour {prospect_name},</p>
+  <p>{prefix}Nous confirmons notre rendez-vous :</p>
+  <div style="padding:12px 16px;background:#f4f1ec;border-left:3px solid #d89b3c;margin:12px 0">
+    <p style="margin:0 0 4px 0"><strong>{event.title}</strong></p>
+    <p style="margin:4px 0"><strong>Quand :</strong> {when_phrase}</p>
+    {loc_line}
+  </div>
+  <p>Si tu dois modifier ou annuler, réponds simplement à ce courriel.</p>
+  <p style="margin-top:24px;color:#555;font-size:12px">
+    Horizon Services Immobiliers<br>
+    RBQ 5868-5991-01 — info@immohorizon.com
+  </p>
+</div>
+"""
+
+
+async def send_appointment_confirmation(
+    prospect: ContactRequest,
+    event: AgendaEvent,
+) -> bool:
+    mailer = get_mailer()
+    if not mailer.ready or not prospect.email:
+        return False
+    try:
+        await mailer.send(
+            to=[prospect.email],
+            subject=f"Confirmation — {event.title}",
+            html_body=_body(
+                prospect_name=prospect.name,
+                event=event,
+                when_phrase=_fmt(event.start_at),
+                reminder=False,
+            ),
+        )
+        return True
+    except Exception as exc:
+        log.exception(
+            "Appointment confirmation failed for prospect %s: %s",
+            prospect.id,
+            exc,
+        )
+        return False
+
+
+async def send_appointment_reminder(
+    prospect: ContactRequest,
+    event: AgendaEvent,
+) -> bool:
+    mailer = get_mailer()
+    if not mailer.ready or not prospect.email:
+        return False
+    try:
+        await mailer.send(
+            to=[prospect.email],
+            subject=f"Rappel 24h — {event.title}",
+            html_body=_body(
+                prospect_name=prospect.name,
+                event=event,
+                when_phrase=_fmt(event.start_at),
+                reminder=True,
+            ),
+        )
+        return True
+    except Exception as exc:
+        log.exception("Reminder failed: %s", exc)
+        return False

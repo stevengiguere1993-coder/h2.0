@@ -145,6 +145,7 @@ class AgendaEventCreate(BaseModel):
     all_day: bool = False
     project_id: Optional[int] = None
     assignee_id: Optional[int] = None
+    contact_request_id: Optional[int] = None
     event_type: str = "chantier"
 
 
@@ -157,6 +158,7 @@ class AgendaEventUpdate(BaseModel):
     all_day: Optional[bool] = None
     project_id: Optional[int] = None
     assignee_id: Optional[int] = None
+    contact_request_id: Optional[int] = None
     event_type: Optional[str] = None
 
 
@@ -170,6 +172,7 @@ class AgendaEventRead(_Base):
     all_day: bool
     project_id: Optional[int]
     assignee_id: Optional[int]
+    contact_request_id: Optional[int] = None
     event_type: str
     created_at: datetime
 

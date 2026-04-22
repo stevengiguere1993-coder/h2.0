@@ -25,6 +25,7 @@ class TaskCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     assignee_id: Optional[int] = Field(default=None, gt=0)
+    phase_id: Optional[int] = Field(default=None, gt=0)
     due_date: Optional[date] = None
     position: int = Field(default=0, ge=0)
 
@@ -33,6 +34,7 @@ class TaskUpdate(BaseModel):
     title: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = None
     assignee_id: Optional[int] = Field(default=None, gt=0)
+    phase_id: Optional[int] = None  # allow null to detach from phase
     due_date: Optional[date] = None
     done: Optional[bool] = None
     position: Optional[int] = Field(default=None, ge=0)
@@ -45,6 +47,7 @@ class TaskRead(BaseModel):
     title: str
     description: Optional[str]
     assignee_id: Optional[int]
+    phase_id: Optional[int] = None
     due_date: Optional[date]
     done: bool
     done_at: Optional[datetime]
@@ -94,6 +97,7 @@ async def create_task(
         title=data.title.strip(),
         description=data.description,
         assignee_id=data.assignee_id,
+        phase_id=data.phase_id,
         due_date=data.due_date,
         position=data.position,
     )

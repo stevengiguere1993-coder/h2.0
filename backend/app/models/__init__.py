@@ -9,6 +9,11 @@ from app.models.achat import Achat
 from app.models.agenda_event import AgendaEvent
 from app.models.bon_item import BonItem
 from app.models.bon_travail import BonTravail
+from app.models.calendar_sync import (
+    AvailabilitySlot,
+    ExternalBusyBlock,
+    UserCalendarFeed,
+)
 from app.models.client import Client
 from app.models.contact_request import ContactRequest
 from app.models.employe import Employe
@@ -19,6 +24,7 @@ from app.models.leave_request import LeaveRequest, LeaveStatus  # noqa: F401
 from app.models.payment import Payment
 from app.models.project import Project
 from app.models.project_member import ProjectMember
+from app.models.project_phase import ProjectPhase
 from app.models.project_photo import ProjectPhoto
 from app.models.project_task import ProjectTask
 from app.models.punch import Punch
@@ -36,6 +42,9 @@ __all__ = [
     "AgendaEvent",
     "BonItem",
     "BonTravail",
+    "AvailabilitySlot",
+    "ExternalBusyBlock",
+    "UserCalendarFeed",
     "Client",
     "ContactRequest",
     "Employe",
@@ -46,6 +55,7 @@ __all__ = [
     "Payment",
     "Project",
     "ProjectMember",
+    "ProjectPhase",
     "ProjectPhoto",
     "ProjectTask",
     "Punch",
