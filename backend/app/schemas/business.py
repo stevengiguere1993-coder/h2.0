@@ -21,6 +21,14 @@ class EmployeCreate(BaseModel):
     hourly_rate: Optional[float] = Field(default=None, ge=0)
     is_partner: bool = False
     notes: Optional[str] = None
+    address: Optional[str] = Field(default=None, max_length=500)
+    license_number: Optional[str] = Field(default=None, max_length=64)
+    emergency_contact_name: Optional[str] = Field(default=None, max_length=255)
+    emergency_contact_phone: Optional[str] = Field(default=None, max_length=50)
+    is_ccq: bool = False
+    cnesst_rate: Optional[float] = Field(default=None, ge=0, le=1)
+    ccq_rate: Optional[float] = Field(default=None, ge=0, le=1)
+    employeur_d_url: Optional[str] = Field(default=None, max_length=500)
 
 
 class EmployeUpdate(BaseModel):
@@ -32,6 +40,14 @@ class EmployeUpdate(BaseModel):
     is_partner: Optional[bool] = None
     active: Optional[bool] = None
     notes: Optional[str] = None
+    address: Optional[str] = None
+    license_number: Optional[str] = None
+    emergency_contact_name: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+    is_ccq: Optional[bool] = None
+    cnesst_rate: Optional[float] = Field(default=None, ge=0, le=1)
+    ccq_rate: Optional[float] = Field(default=None, ge=0, le=1)
+    employeur_d_url: Optional[str] = None
 
 
 class EmployeRead(_Base):
@@ -44,6 +60,14 @@ class EmployeRead(_Base):
     is_partner: bool
     active: bool
     notes: Optional[str]
+    address: Optional[str] = None
+    license_number: Optional[str] = None
+    emergency_contact_name: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+    is_ccq: bool = False
+    cnesst_rate: Optional[float] = None
+    ccq_rate: Optional[float] = None
+    employeur_d_url: Optional[str] = None
     created_at: datetime
 
 

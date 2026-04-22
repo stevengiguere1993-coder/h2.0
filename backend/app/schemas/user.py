@@ -67,6 +67,7 @@ class UserRead(UserBase):
     is_active: bool
     is_admin: bool
     role: str = "employee"
+    must_change_password: bool = False
     created_at: datetime
 
 

@@ -36,6 +36,10 @@ export const routing = defineRouting({
       fr: "/connexion",
       en: "/login"
     },
+    "/changer-mot-de-passe": {
+      fr: "/changer-mot-de-passe",
+      en: "/change-password"
+    },
     "/blog": {
       fr: "/blog",
       en: "/blog"

@@ -24,6 +24,7 @@ type User = {
   is_active: boolean;
   is_admin: boolean;
   role: UserRole;
+  must_change_password: boolean;
   created_at: string;
 };
 
@@ -383,6 +384,15 @@ export default function UtilisateursPage() {
                     </div>
                   </div>
 
+                  <PasswordActions
+                    user={selectedUser}
+                    onUpdated={(u) =>
+                      setUsers((xs) =>
+                        xs.map((x) => (x.id === u.id ? u : x))
+                      )
+                    }
+                  />
+
                   {selectedUser.role === "employee" ? (
                     <div className="p-4">
                       <div className="flex items-center justify-between">
@@ -492,6 +502,171 @@ export default function UtilisateursPage() {
         />
       ) : null}
     </>
+  );
+}
+
+function PasswordActions({
+  user,
+  onUpdated
+}: {
+  user: User;
+  onUpdated: (u: User) => void;
+}) {
+  const confirm = useConfirm();
+  const [busy, setBusy] = useState<"set" | "force" | null>(null);
+  const [showSet, setShowSet] = useState(false);
+  const [pwd, setPwd] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  function randomPassword() {
+    const alphabet =
+      "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!#$%&*";
+    let out = "";
+    for (let i = 0; i < 16; i++)
+      out += alphabet[Math.floor(Math.random() * alphabet.length)];
+    setPwd(out);
+  }
+
+  async function setPassword() {
+    if (pwd.length < 8) {
+      setError("8 caractères minimum.");
+      return;
+    }
+    setBusy("set");
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/users/${user.id}/set-password`,
+        {
+          method: "POST",
+          body: JSON.stringify({ password: pwd, must_change: true })
+        }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 200) || `http_${res.status}`);
+      }
+      onUpdated((await res.json()) as User);
+      setShowSet(false);
+      setPwd("");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function forceChange() {
+    if (
+      !(await confirm({
+        title: `Forcer ${user.email} à changer son mot de passe ?`,
+        description:
+          "Au prochain login, l'utilisateur sera bloqué sur l'écran de changement de mot de passe avant d'accéder à l'app. Le mot de passe actuel n'est pas modifié."
+      }))
+    )
+      return;
+    setBusy("force");
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/users/${user.id}/force-password-change`,
+        { method: "POST" }
+      );
+      if (!res.ok) throw new Error();
+      onUpdated((await res.json()) as User);
+    } catch {
+      setError("Impossible de forcer le changement.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="border-b border-brand-800 p-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-accent-500">
+            Mot de passe
+          </p>
+          <p className="mt-1 text-xs text-white/60">
+            {user.must_change_password
+              ? "⚠️ L'utilisateur doit changer son mot de passe au prochain login."
+              : "Mot de passe actuel valide."}
+          </p>
+        </div>
+      </div>
+
+      {error ? (
+        <p className="mt-2 text-xs text-rose-300">{error}</p>
+      ) : null}
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => setShowSet((v) => !v)}
+          disabled={busy !== null}
+          className="rounded-lg border border-brand-800 bg-brand-950 px-3 py-1.5 text-xs text-white hover:border-accent-500"
+        >
+          {showSet ? "Annuler" : "Définir un mot de passe"}
+        </button>
+        <button
+          type="button"
+          onClick={forceChange}
+          disabled={busy !== null || user.must_change_password}
+          className="rounded-lg border border-brand-800 bg-brand-950 px-3 py-1.5 text-xs text-white hover:border-accent-500 disabled:opacity-50"
+          title={
+            user.must_change_password
+              ? "Déjà flaggé"
+              : "L'utilisateur sera forcé de changer son mot de passe au prochain login"
+          }
+        >
+          {busy === "force" ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            "Forcer le changement au prochain login"
+          )}
+        </button>
+      </div>
+
+      {showSet ? (
+        <div className="mt-3 rounded-lg border border-accent-500/30 bg-accent-500/5 p-3">
+          <label className="label">Nouveau mot de passe (8+ caractères)</label>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={pwd}
+              onChange={(e) => setPwd(e.target.value)}
+              className="input font-mono"
+              minLength={8}
+              autoFocus
+            />
+            <button
+              type="button"
+              onClick={randomPassword}
+              className="btn-secondary shrink-0 text-xs"
+            >
+              Auto
+            </button>
+            <button
+              type="button"
+              onClick={setPassword}
+              disabled={busy !== null}
+              className="btn-accent shrink-0 text-xs disabled:opacity-60"
+            >
+              {busy === "set" ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                "Définir"
+              )}
+            </button>
+          </div>
+          <p className="mt-2 text-[11px] text-white/50">
+            L&apos;utilisateur devra changer ce mot de passe à son prochain
+            login (la case « must change » est levée automatiquement).
+          </p>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
