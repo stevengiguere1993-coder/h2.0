@@ -46,6 +46,10 @@ class LeaveCreate(BaseModel):
     start_at: datetime
     end_at: datetime
     reason: Optional[str] = Field(default=None, max_length=500)
+    kind: str = Field(
+        default="vacation",
+        pattern="^(vacation|sick|personal)$",
+    )
 
 
 class LeaveReview(BaseModel):
@@ -57,6 +61,7 @@ class LeaveRead(BaseModel):
     id: int
     employe_id: int
     employe_name: Optional[str] = None
+    kind: str = "vacation"
     start_at: datetime
     end_at: datetime
     reason: Optional[str]
@@ -156,6 +161,7 @@ async def create_leave(
         )
     lr = LeaveRequest(
         employe_id=emp.id,
+        kind=body.kind,
         start_at=body.start_at,
         end_at=body.end_at,
         reason=(body.reason.strip() if body.reason else None),
@@ -287,6 +293,73 @@ async def pending_count(db: DBSession, user: CurrentUser) -> int:
         )
     ).scalar_one()
     return int(n or 0)
+
+
+class AdminLeaveCreate(BaseModel):
+    """Permet à un admin de logger un jour maladie / absence pour un
+    employé (cas typique : appel matinal). Auto-approuvé puisque
+    l'admin a la décision."""
+
+    employe_id: int = Field(..., gt=0)
+    start_at: datetime
+    end_at: datetime
+    reason: Optional[str] = Field(default=None, max_length=500)
+    kind: str = Field(default="sick", pattern="^(vacation|sick|personal)$")
+
+
+@router.post(
+    "/admin",
+    response_model=LeaveRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Logger un jour maladie / absence côté admin (auto-approuvé)",
+)
+async def admin_log_leave(
+    body: AdminLeaveCreate,
+    db: DBSession,
+    user: CurrentUser,
+) -> LeaveRead:
+    if not user.is_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin requis.")
+    if body.end_at <= body.start_at:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Plage horaire invalide."
+        )
+    emp = (
+        await db.execute(select(Employe).where(Employe.id == body.employe_id))
+    ).scalar_one_or_none()
+    if emp is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Employé introuvable."
+        )
+    lr = LeaveRequest(
+        employe_id=emp.id,
+        kind=body.kind,
+        start_at=body.start_at,
+        end_at=body.end_at,
+        reason=(body.reason.strip() if body.reason else None),
+        status=LeaveStatus.APPROVED.value,
+        reviewed_by_user_id=user.id,
+        reviewed_at=datetime.now(timezone.utc),
+    )
+    db.add(lr)
+    await db.flush()
+
+    # Crée le bloc agenda comme la route /approve normale
+    ev = AgendaEvent(
+        title=f"{ {'sick': 'Maladie', 'personal': 'Absence', 'vacation': 'Vacances'}.get(body.kind, 'Absence') } — {emp.full_name}",
+        description=lr.reason,
+        start_at=lr.start_at,
+        end_at=lr.end_at,
+        all_day=False,
+        assignee_id=emp.id,
+        event_type="conge",
+    )
+    db.add(ev)
+    await db.flush()
+    lr.agenda_event_id = ev.id
+    await db.flush()
+    await db.refresh(lr)
+    return await _to_read(db, lr)
 
 
 @router.post("/{leave_id}/approve", response_model=LeaveRead)

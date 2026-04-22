@@ -34,6 +34,17 @@ class LeaveRequest(Base):
         index=True,
     )
 
+    # vacation / sick / personal — défaut « vacation » pour ne rien
+    # casser des entrées existantes. Les sick days sont auto-approuvés
+    # côté UI (l'employé déclare, l'admin n'a qu'à valider).
+    kind: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="vacation",
+        server_default="vacation",
+        index=True,
+    )
+
     start_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
