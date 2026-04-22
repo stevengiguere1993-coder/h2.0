@@ -15,6 +15,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 import { Link, useRouter } from "@/i18n/navigation";
 
 type Prospect = {
@@ -91,6 +92,7 @@ function saveCustomColumns(cols: Column[]) {
 }
 
 export default function CrmKanbanPage() {
+  const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
   const router = useRouter();
   const [items, setItems] = useState<Prospect[]>([]);
@@ -192,7 +194,7 @@ export default function CrmKanbanPage() {
   }
 
   async function deleteProspect(id: number, name: string) {
-    if (!confirm(`Supprimer définitivement le prospect « ${name} » ?`)) return;
+    if (!(await confirm(`Supprimer définitivement le prospect « ${name} » ?`))) return;
     const prev = items;
     setItems((xs) => xs.filter((x) => x.id !== id));
     try {

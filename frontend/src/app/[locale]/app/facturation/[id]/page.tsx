@@ -19,6 +19,7 @@ import { PaymentsPanel } from "@/components/payments-panel";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type Facture = {
   id: number;
@@ -106,6 +107,7 @@ async function explainError(res: Response): Promise<string> {
 }
 
 export default function FactureDetailPage() {
+  const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
@@ -317,7 +319,7 @@ export default function FactureDetailPage() {
   }
 
   async function deleteItem(item_id: number) {
-    if (!confirm("Supprimer cet item ?")) return;
+    if (!(await confirm("Supprimer cet item ?"))) return;
     setItemBusy(item_id);
     try {
       const res = await authedFetch(
@@ -335,7 +337,7 @@ export default function FactureDetailPage() {
 
   async function deleteFacture() {
     if (!f) return;
-    if (!confirm(`Supprimer la facture ${f.reference} ?`)) return;
+    if (!(await confirm(`Supprimer la facture ${f.reference} ?`))) return;
     setDeleting(true);
     try {
       const res = await authedFetch(`/api/v1/factures/${id}`, {

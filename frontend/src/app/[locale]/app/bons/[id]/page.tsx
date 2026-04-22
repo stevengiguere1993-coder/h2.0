@@ -18,6 +18,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type Bon = {
   id: number;
@@ -73,6 +74,7 @@ function money(n: number | string | null): string {
 }
 
 export default function BonDetailPage() {
+  const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
@@ -192,7 +194,7 @@ export default function BonDetailPage() {
   }
 
   async function deleteItem(item_id: number) {
-    if (!confirm("Supprimer cet item ?")) return;
+    if (!(await confirm("Supprimer cet item ?"))) return;
     setItemBusy(item_id);
     try {
       const res = await authedFetch(
@@ -255,7 +257,7 @@ export default function BonDetailPage() {
 
   async function onDelete() {
     if (!b) return;
-    if (!confirm(`Supprimer ${b.reference} ?`)) return;
+    if (!(await confirm(`Supprimer ${b.reference} ?`))) return;
     setDeleting(true);
     try {
       const res = await authedFetch(`/api/v1/bons-travail/${id}`, {

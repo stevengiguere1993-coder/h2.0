@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { ConfirmProvider } from "@/components/confirm-dialog";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -39,7 +40,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             each page; the burger is inside the page topbar and talks to
             the context below. */}
         <AppLayoutContextProvider onOpenSidebar={() => setSidebarOpen(true)}>
-          <main className="flex-1 overflow-x-hidden">{children}</main>
+          <ConfirmProvider>
+            <main className="flex-1 overflow-x-hidden">{children}</main>
+          </ConfirmProvider>
         </AppLayoutContextProvider>
       </div>
     </div>

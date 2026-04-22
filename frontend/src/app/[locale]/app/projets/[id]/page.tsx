@@ -19,6 +19,7 @@ import { AddressInput } from "@/components/address-input";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type Project = {
   id: number;
@@ -78,6 +79,7 @@ function isoToDateInput(iso: string | null): string {
 }
 
 export default function ProjectDetailPage() {
+  const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
@@ -262,7 +264,7 @@ export default function ProjectDetailPage() {
 
   async function onDelete() {
     if (!p) return;
-    if (!confirm(`Supprimer définitivement le projet « ${p.name} » ?`)) return;
+    if (!(await confirm(`Supprimer définitivement le projet « ${p.name} » ?`))) return;
     setDeleting(true);
     try {
       const res = await authedFetch(`/api/v1/projects/${id}`, {
@@ -823,6 +825,7 @@ type Photo = {
 };
 
 function PhotosTab({ projectId }: { projectId: number }) {
+  const confirm = useConfirm();
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -877,7 +880,7 @@ function PhotosTab({ projectId }: { projectId: number }) {
   }
 
   async function remove(id: number) {
-    if (!confirm("Supprimer cette photo ?")) return;
+    if (!(await confirm("Supprimer cette photo ?"))) return;
     try {
       const res = await authedFetch(
         `/api/v1/projects/${projectId}/photos/${id}`,
@@ -1015,6 +1018,7 @@ type Task = {
 };
 
 function TasksTab({ projectId }: { projectId: number }) {
+  const confirm = useConfirm();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [employes, setEmployes] = useState<Array<{ id: number; full_name: string }>>([]);
   const [loading, setLoading] = useState(true);
@@ -1096,7 +1100,7 @@ function TasksTab({ projectId }: { projectId: number }) {
   }
 
   async function remove(id: number) {
-    if (!confirm("Supprimer cette tâche ?")) return;
+    if (!(await confirm("Supprimer cette tâche ?"))) return;
     try {
       const res = await authedFetch(
         `/api/v1/projects/${projectId}/tasks/${id}`,
@@ -1552,6 +1556,7 @@ function addDays(iso: string, days: number): string {
 }
 
 function PlanificationTab({ projectId }: { projectId: number }) {
+  const confirm = useConfirm();
   const [phases, setPhases] = useState<Phase[]>([]);
   const [tasks, setTasks] = useState<PhaseTask[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1622,7 +1627,7 @@ function PlanificationTab({ projectId }: { projectId: number }) {
   }
 
   async function removePhase(id: number) {
-    if (!confirm("Supprimer cette phase ? Les tâches qui y sont seront détachées.")) return;
+    if (!(await confirm("Supprimer cette phase ? Les tâches qui y sont seront détachées."))) return;
     setBusyPhase(id);
     try {
       const res = await authedFetch(
@@ -1703,7 +1708,7 @@ function PlanificationTab({ projectId }: { projectId: number }) {
   }
 
   async function removeTask(id: number) {
-    if (!confirm("Supprimer cette tâche ?")) return;
+    if (!(await confirm("Supprimer cette tâche ?"))) return;
     setBusyTask(id);
     try {
       const res = await authedFetch(
@@ -2083,6 +2088,7 @@ function ChantierAgendaTab({
   projectId: number;
   projectName: string;
 }) {
+  const confirm = useConfirm();
   const [events, setEvents] = useState<ChantierEvent[]>([]);
   const [employes, setEmployes] = useState<Array<{ id: number; full_name: string }>>([]);
   const [loading, setLoading] = useState(true);
@@ -2181,7 +2187,7 @@ function ChantierAgendaTab({
   }
 
   async function removeEvent(id: number) {
-    if (!confirm("Supprimer cet événement ?")) return;
+    if (!(await confirm("Supprimer cet événement ?"))) return;
     try {
       const res = await authedFetch(`/api/v1/agenda/${id}`, {
         method: "DELETE"

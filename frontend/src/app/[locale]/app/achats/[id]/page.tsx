@@ -9,6 +9,7 @@ import { ReceiptScanner } from "@/components/receipt-scanner";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type Achat = {
   id: number;
@@ -43,6 +44,7 @@ function isoToDateInput(iso: string | null): string {
 }
 
 export default function AchatDetailPage() {
+  const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
@@ -180,7 +182,7 @@ export default function AchatDetailPage() {
 
   async function deleteReceipt() {
     if (!a) return;
-    if (!confirm("Supprimer la photo / le PDF du reçu ?")) return;
+    if (!(await confirm("Supprimer la photo / le PDF du reçu ?"))) return;
     setUploadBusy(true);
     try {
       const res = await authedFetch(`/api/v1/achats/${id}/receipt`, {
@@ -211,7 +213,7 @@ export default function AchatDetailPage() {
 
   async function onDelete() {
     if (!a) return;
-    if (!confirm(`Supprimer l'achat ${a.reference} ?`)) return;
+    if (!(await confirm(`Supprimer l'achat ${a.reference} ?`))) return;
     setDeleting(true);
     try {
       const res = await authedFetch(`/api/v1/achats/${id}`, {

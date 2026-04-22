@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type Payment = {
   id: number;
@@ -79,6 +80,7 @@ export function PaymentsPanel({
   factureTotal: number;
   onStatusMayHaveChanged?: () => void;
 }) {
+  const confirm = useConfirm();
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -113,7 +115,7 @@ export function PaymentsPanel({
     factureTotal > 0 ? Math.min(100, (paidSum / factureTotal) * 100) : 0;
 
   async function remove(pid: number) {
-    if (!confirm("Supprimer ce paiement ?")) return;
+    if (!(await confirm("Supprimer ce paiement ?"))) return;
     try {
       const res = await authedFetch(
         `/api/v1/factures/${factureId}/payments/${pid}`,

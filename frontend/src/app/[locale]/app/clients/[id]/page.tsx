@@ -11,6 +11,7 @@ import { SalesTasksPanel } from "@/components/sales-tasks-panel";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type Client = {
   id: number;
@@ -25,6 +26,7 @@ type Client = {
 };
 
 export default function ClientDetailPage() {
+  const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
@@ -109,7 +111,7 @@ export default function ClientDetailPage() {
 
   async function onDelete() {
     if (!c) return;
-    if (!confirm(`Supprimer définitivement « ${c.name} » et tous ses projets ?`))
+    if (!(await confirm(`Supprimer définitivement « ${c.name} » et tous ses projets ?`)))
       return;
     setDeleting(true);
     try {

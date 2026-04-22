@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 import { MapMeasureModal, type MeasureResult } from "@/components/map-measure";
 import { MeasurementChecklistModal } from "@/components/measurement-checklist-modal";
 import {
@@ -60,6 +61,7 @@ export function MeasurementsPanel({
   contactRequestId?: number | null;
   defaultAddress?: string | null;
 }) {
+  const confirm = useConfirm();
   const [items, setItems] = useState<Measurement[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -188,7 +190,7 @@ export function MeasurementsPanel({
   }
 
   async function remove(id: number) {
-    if (!confirm("Supprimer cette mesure ?")) return;
+    if (!(await confirm("Supprimer cette mesure ?"))) return;
     try {
       const res = await authedFetch(`/api/v1/measurements/${id}`, {
         method: "DELETE"

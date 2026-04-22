@@ -6,6 +6,7 @@ import { FileText, Loader2, Plus, Trash2 } from "lucide-react";
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 import { Link } from "@/i18n/navigation";
 
 type Soumission = {
@@ -48,6 +49,7 @@ function fmtMoney(n: number | null): string {
 }
 
 export default function SoumissionsPage() {
+  const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
   const [items, setItems] = useState<Soumission[]>([]);
   const [loading, setLoading] = useState(true);
@@ -122,7 +124,7 @@ export default function SoumissionsPage() {
   }
 
   async function deleteSoumission(id: number, ref: string) {
-    if (!confirm(`Supprimer la soumission ${ref} ?`)) return;
+    if (!(await confirm(`Supprimer la soumission ${ref} ?`))) return;
     const prev = items;
     setItems((xs) => xs.filter((x) => x.id !== id));
     try {
