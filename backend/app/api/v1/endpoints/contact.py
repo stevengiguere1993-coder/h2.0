@@ -4,6 +4,8 @@ Contact request endpoints.
 
 from typing import List, Optional
 
+from datetime import datetime
+
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -15,11 +17,14 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import ValidationError
+from fastapi.responses import Response
+from pydantic import BaseModel, ConfigDict, ValidationError
+from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession, RequireManager
 from app.integrations.monday_bridge import push_contact_to_monday
 from app.models.contact_request import ContactRequestStatus, ProjectType
+from app.models.contact_request_photo import ContactRequestPhoto
 from app.schemas.contact_request import (
     ContactRequestCreate,
     ContactRequestPublicAck,
@@ -119,6 +124,21 @@ async def submit_contact(
                 continue
             photo_payloads.append((up.filename or "photo.jpg", content, ct))
 
+    # Persist the validated photos alongside the contact request so
+    # the admin zone can display them in the prospect's Documents tab
+    # (independent of the Monday.com push, which is best-effort).
+    for filename, content, ct in photo_payloads:
+        db.add(
+            ContactRequestPhoto(
+                contact_request_id=record.id,
+                image=content,
+                content_type=ct,
+                filename=filename,
+            )
+        )
+    if photo_payloads:
+        await db.flush()
+
     background_tasks.add_task(
         push_contact_to_monday, record, reference, None, photo_payloads or None
     )
@@ -205,3 +225,92 @@ def _client_ip(request: Request) -> Optional[str]:
     if request.client:
         return request.client.host
     return None
+
+
+# ---------- Photos attached to a prospect contact request ----------
+
+
+class ContactPhotoRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    contact_request_id: int
+    content_type: str
+    filename: Optional[str]
+    created_at: datetime
+
+
+@router.get(
+    "/{request_id}/photos",
+    response_model=List[ContactPhotoRead],
+    summary="List photos attached to a contact request (staff)",
+)
+async def list_contact_photos(
+    request_id: int, db: DBSession, _: CurrentUser
+) -> List[ContactPhotoRead]:
+    rows = (
+        await db.execute(
+            select(ContactRequestPhoto)
+            .where(ContactRequestPhoto.contact_request_id == request_id)
+            .order_by(ContactRequestPhoto.created_at.asc())
+        )
+    ).scalars().all()
+    return [ContactPhotoRead.model_validate(r) for r in rows]
+
+
+@router.get(
+    "/{request_id}/photos/{photo_id}/image",
+    summary="Stream the photo bytes inline (staff)",
+)
+async def stream_contact_photo(
+    request_id: int, photo_id: int, db: DBSession, _: CurrentUser
+) -> Response:
+    p = (
+        await db.execute(
+            select(ContactRequestPhoto).where(
+                ContactRequestPhoto.id == photo_id,
+                ContactRequestPhoto.contact_request_id == request_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if p is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Photo introuvable."
+        )
+    await db.refresh(p, attribute_names=["image"])
+    if not p.image:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Photo vide."
+        )
+    return Response(
+        content=bytes(p.image),
+        media_type=p.content_type,
+        headers={
+            "Content-Disposition": (
+                f'inline; filename="{p.filename or f"photo-{p.id}"}"'
+            )
+        },
+    )
+
+
+@router.delete(
+    "/{request_id}/photos/{photo_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a photo from a contact request (staff)",
+)
+async def delete_contact_photo(
+    request_id: int, photo_id: int, db: DBSession, _: CurrentUser
+) -> None:
+    p = (
+        await db.execute(
+            select(ContactRequestPhoto).where(
+                ContactRequestPhoto.id == photo_id,
+                ContactRequestPhoto.contact_request_id == request_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if p is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Photo introuvable."
+        )
+    await db.delete(p)
+    await db.flush()

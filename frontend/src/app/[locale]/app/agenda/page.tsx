@@ -12,6 +12,7 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
+import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 
@@ -29,7 +30,14 @@ type AgendaEvent = {
   created_at: string;
 };
 
-type Project = { id: number; name: string; status: string };
+type Project = {
+  id: number;
+  name: string;
+  status: string;
+  start_date: string | null;
+  end_date: string | null;
+  members?: Array<{ employe_id: number }> | null;
+};
 type Employe = { id: number; full_name: string };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -166,6 +174,53 @@ export default function AgendaPage() {
   }, [events, fType, fProject, fAssignee]);
 
   const grid = useMemo(() => buildMonthGrid(ref), [ref]);
+
+  // For each day, figure out which projects span it (start_date ≤ day ≤ end_date).
+  // Active projects are drawn as a colored band at the top of the day cell so
+  // the team sees at a glance "there's a project running — need to assign
+  // people".
+  const projectsByDay = useMemo(() => {
+    const map = new Map<string, Project[]>();
+    const active = projects.filter(
+      (p) =>
+        p.start_date &&
+        p.end_date &&
+        (!fProject || String(p.id) === fProject) &&
+        p.status !== "archived" &&
+        p.status !== "done"
+    );
+    for (const d of grid) {
+      const key = d.toDateString();
+      const hits: Project[] = [];
+      for (const p of active) {
+        const s = new Date(p.start_date as string);
+        const e = new Date(p.end_date as string);
+        // Compare at day granularity.
+        const ds = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+        const de = new Date(e.getFullYear(), e.getMonth(), e.getDate());
+        const dd = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        if (dd >= ds && dd <= de) hits.push(p);
+      }
+      if (hits.length > 0) map.set(key, hits);
+    }
+    return map;
+  }, [grid, projects, fProject]);
+
+  // Has the project any assigned employee?  A project band is shown in red
+  // when there's still nobody assigned (signal to the user: "assigne une
+  // équipe !").  ProjectMember rows aren't exposed on the list endpoint
+  // today — we fall back to checking events linked to the project.
+  const projectHasTeam = useMemo(() => {
+    const map = new Map<number, boolean>();
+    for (const p of projects) {
+      const hasMembers = (p.members?.length || 0) > 0;
+      const hasAssignedEvent = events.some(
+        (e) => e.project_id === p.id && e.assignee_id
+      );
+      map.set(p.id, hasMembers || hasAssignedEvent);
+    }
+    return map;
+  }, [projects, events]);
 
   const eventsByDay = useMemo(() => {
     const map = new Map<string, AgendaEvent[]>();
@@ -320,6 +375,8 @@ export default function AgendaPage() {
             grid={grid}
             ref={ref}
             eventsByDay={eventsByDay}
+            projectsByDay={projectsByDay}
+            projectHasTeam={projectHasTeam}
             onDayClick={(d) => setModal({ date: d })}
             onEventClick={(e) => setModal(e)}
           />
@@ -355,12 +412,16 @@ function MonthView({
   grid,
   ref,
   eventsByDay,
+  projectsByDay,
+  projectHasTeam,
   onDayClick,
   onEventClick
 }: {
   grid: Date[];
   ref: Date;
   eventsByDay: Map<string, AgendaEvent[]>;
+  projectsByDay: Map<string, Project[]>;
+  projectHasTeam: Map<number, boolean>;
   onDayClick: (d: Date) => void;
   onEventClick: (e: AgendaEvent) => void;
 }) {
@@ -379,6 +440,7 @@ function MonthView({
           const inMonth = d.getMonth() === ref.getMonth();
           const isToday = sameDay(d, today);
           const dayEvents = eventsByDay.get(d.toDateString()) || [];
+          const dayProjects = projectsByDay.get(d.toDateString()) || [];
           return (
             <div
               key={i}
@@ -409,6 +471,41 @@ function MonthView({
                   </span>
                 ) : null}
               </div>
+
+              {/* Project bands — one colored line per active project on
+                  that day. Red if no team assigned (visual call-to-action
+                  to assign someone). */}
+              {dayProjects.length > 0 ? (
+                <div className="mt-1 space-y-0.5">
+                  {dayProjects.slice(0, 2).map((p) => {
+                    const hasTeam = projectHasTeam.get(p.id) ?? false;
+                    const bg = hasTeam
+                      ? "bg-emerald-500/30 border-emerald-500/60 text-emerald-100"
+                      : "bg-rose-500/30 border-rose-500/60 text-rose-100";
+                    return (
+                      <Link
+                        key={p.id}
+                        href={`/app/projets/${p.id}` as never}
+                        onClick={(ev) => ev.stopPropagation()}
+                        title={
+                          hasTeam
+                            ? `Projet : ${p.name}`
+                            : `Projet : ${p.name} — aucune équipe assignée`
+                        }
+                        className={`block truncate rounded-sm border px-1 py-0.5 text-[10px] font-medium ${bg}`}
+                      >
+                        {hasTeam ? "🛠️" : "⚠️"} {p.name}
+                      </Link>
+                    );
+                  })}
+                  {dayProjects.length > 2 ? (
+                    <p className="text-[9px] text-white/40">
+                      +{dayProjects.length - 2} projet(s)
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
               <div className="mt-1 space-y-0.5">
                 {dayEvents.slice(0, 3).map((e) => (
                   <button
