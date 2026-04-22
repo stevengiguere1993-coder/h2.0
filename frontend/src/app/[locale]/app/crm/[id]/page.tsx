@@ -537,6 +537,9 @@ function ProspectDocuments({
   const signedSoumissions = soumissions.filter(
     (s) => s.status === "accepted" || s.accepted_at
   );
+  const pendingSoumissions = soumissions.filter(
+    (s) => s.status === "sent" && !s.accepted_at
+  );
 
   // Lazy-load blob URLs for both photos (thumbnail preview) and
   // other documents (PDF download link). The endpoint requires a
@@ -716,6 +719,44 @@ function ProspectDocuments({
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </DocSection>
+
+          {/* ---- Soumissions envoyées (en attente de signature) ---- */}
+          <DocSection
+            title="Soumissions envoyées (en attente)"
+            count={pendingSoumissions.length}
+            icon={<FileText className="h-3.5 w-3.5" />}
+            defaultOpen={false}
+          >
+            {pendingSoumissions.length === 0 ? (
+              <p className="text-xs text-white/40">
+                Aucune soumission en attente.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {pendingSoumissions.map((s) => (
+                  <li key={s.id}>
+                    <Link
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      href={`/app/soumissions/${s.id}` as any}
+                      className="flex items-start justify-between gap-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm hover:border-amber-500/50"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-white">
+                          {s.reference} — {s.title}
+                        </p>
+                        <p className="text-[11px] text-amber-200/80">
+                          Envoyée — pas encore signée
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-sm font-semibold text-amber-300">
+                        {fmtMoney(s.total)}
+                      </span>
+                    </Link>
                   </li>
                 ))}
               </ul>

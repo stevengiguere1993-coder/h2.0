@@ -189,6 +189,12 @@ export default function AgendaPage() {
     // explicitement « chantier » — sinon ça pollue la vue quand on
     // cherche juste ses visites ou ses réunions.
     if (fType && fType !== "chantier") return map;
+    // Quand on filtre sur un assigné en particulier, on cache aussi
+    // les bandes : elles ne tiennent pas compte de qui est sur quel
+    // projet, juste les dates, donc les laisser créerait de fausses
+    // alertes rouges sur des projets qui ne concernent pas la
+    // personne sélectionnée.
+    if (fAssignee) return map;
     const active = projects.filter(
       (p) =>
         p.start_date &&
@@ -212,7 +218,7 @@ export default function AgendaPage() {
       if (hits.length > 0) map.set(key, hits);
     }
     return map;
-  }, [grid, projects, fProject, fType]);
+  }, [grid, projects, fProject, fType, fAssignee]);
 
   // Has the project any assigned employee?  A project band is shown in red
   // when there's still nobody assigned (signal to the user: "assigne une
