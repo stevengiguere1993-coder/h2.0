@@ -88,6 +88,10 @@ export const routing = defineRouting({
       fr: "/app/agenda",
       en: "/app/agenda"
     },
+    "/app/suivis": {
+      fr: "/app/suivis",
+      en: "/app/follow-ups"
+    },
     "/app/punch": {
       fr: "/app/punch",
       en: "/app/punch"

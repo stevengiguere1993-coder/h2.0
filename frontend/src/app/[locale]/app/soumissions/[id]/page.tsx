@@ -20,6 +20,7 @@ import {
 
 import { AddressInput } from "@/components/address-input";
 import { AppTopbar } from "@/components/app-topbar";
+import { FollowUpTimeline } from "@/components/follow-up-timeline";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -823,6 +824,10 @@ export default function SoumissionDetailPage() {
                 </div>
               )}
             </section>
+
+            <div className="mt-8">
+              <FollowUpTimeline subjectType="soumission" subjectId={s.id} />
+            </div>
 
             <div className="mt-8 grid gap-6 lg:grid-cols-3">
               <div className="lg:col-span-2 space-y-5 rounded-xl border border-brand-800 bg-brand-900 p-5">

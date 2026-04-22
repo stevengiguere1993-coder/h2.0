@@ -139,3 +139,25 @@ services:
         value: "info@immohorizon.com"
       - key: MAIL_FROM_NAME
         value: "Horizon Services Immobiliers"
+
+  # --------------------------------------------------------------
+  # Cron — hourly follow-up reminders (notif cloche) :
+  #   - relances de suivi en retard (overdue)
+  #   - prospects créés depuis +24 h sans aucun contact
+  # Pas de courriel, juste la notification dans l'app.
+  # --------------------------------------------------------------
+  - type: cron
+    name: h2-0-follow-up-reminders
+    runtime: python
+    region: oregon
+    plan: free
+    rootDir: backend
+    branch: main
+    schedule: "0 * * * *"   # toutes les heures, à la minute :00
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.jobs.follow_up_reminders
+    envVars:
+      - key: ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
