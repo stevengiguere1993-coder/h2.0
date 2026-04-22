@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
-from app.api.deps import CurrentUser, DBSession
+from app.api.deps import CurrentUser, DBSession, RequireManager
 from app.models.employe import Employe
 from app.models.punch import Punch
 
@@ -311,4 +311,286 @@ async def weekly_report(
         week_end=week_end,
         total_hours=round(total, 2),
         days=[WeeklyEntry(day=d, hours=round(h, 2)) for d, h in sorted(by_day.items())],
+    )
+
+
+# ---------- Approval (manager+) ----------
+
+class PunchPending(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    employe_id: int
+    employe_name: Optional[str] = None
+    project_id: Optional[int]
+    contact_request_id: Optional[int]
+    started_at: datetime
+    ended_at: Optional[datetime]
+    hours: Optional[float]
+    task: Optional[str]
+    notes: Optional[str]
+
+
+@router.get(
+    "/pending",
+    response_model=list[PunchPending],
+    summary="Closed punches awaiting approval (manager+)",
+)
+async def list_pending(
+    db: DBSession,
+    _: RequireManager,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[PunchPending]:
+    # Only finished (ended_at set) and not yet approved. Open punches
+    # aren't "pending approval" — they're still in progress.
+    rows = (
+        await db.execute(
+            select(Punch, Employe.full_name)
+            .join(Employe, Employe.id == Punch.employe_id)
+            .where(Punch.ended_at.is_not(None), Punch.approved.is_(False))
+            .order_by(Punch.started_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    out: list[PunchPending] = []
+    for punch, full_name in rows:
+        data = PunchPending.model_validate(punch)
+        data.employe_name = full_name
+        out.append(data)
+    return out
+
+
+@router.get(
+    "/pending-count",
+    response_model=int,
+    summary="Number of punches awaiting approval (manager+)",
+)
+async def pending_count(db: DBSession, _: RequireManager) -> int:
+    n = (
+        await db.execute(
+            select(func.count(Punch.id)).where(
+                Punch.ended_at.is_not(None), Punch.approved.is_(False)
+            )
+        )
+    ).scalar_one()
+    return int(n or 0)
+
+
+@router.post(
+    "/{punch_id}/approve",
+    response_model=PunchPending,
+    summary="Approve a punch (manager+)",
+)
+async def approve_punch(
+    punch_id: int,
+    db: DBSession,
+    _: RequireManager,
+) -> PunchPending:
+    p = (
+        await db.execute(select(Punch).where(Punch.id == punch_id))
+    ).scalar_one_or_none()
+    if p is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Punch introuvable.")
+    if p.ended_at is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Impossible d'approuver un punch encore ouvert.",
+        )
+    p.approved = True
+    await db.flush()
+    await db.refresh(p)
+    emp = (
+        await db.execute(select(Employe).where(Employe.id == p.employe_id))
+    ).scalar_one_or_none()
+    data = PunchPending.model_validate(p)
+    if emp:
+        data.employe_name = emp.full_name
+    return data
+
+
+@router.post(
+    "/{punch_id}/reject",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a punch (reject) — manager+",
+)
+async def reject_punch(
+    punch_id: int,
+    db: DBSession,
+    _: RequireManager,
+) -> None:
+    """Rejecting a punch simply deletes it. The employee can redo the
+    entry if needed. We don't try to keep a soft-deleted audit trail
+    at this stage — admins who want history can approve+add notes."""
+    p = (
+        await db.execute(select(Punch).where(Punch.id == punch_id))
+    ).scalar_one_or_none()
+    if p is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Punch introuvable.")
+    await db.delete(p)
+    await db.flush()
+
+
+# ---------- Payroll monthly report (manager+) ----------
+
+class PayrollRow(BaseModel):
+    employe_id: int
+    employe_name: str
+    hourly_rate: Optional[float]
+    approved_hours: float
+    pending_hours: float
+    total_hours: float
+    approved_revenue: float
+    total_revenue: float
+
+
+class PayrollReport(BaseModel):
+    month: str  # "YYYY-MM"
+    period_start: date
+    period_end: date
+    rows: list[PayrollRow]
+    total_approved_hours: float
+    total_approved_revenue: float
+
+
+def _month_bounds(month: str) -> tuple[date, date]:
+    """Return (first day, last day) for a YYYY-MM string."""
+    y, m = month.split("-")
+    year = int(y)
+    month_num = int(m)
+    start = date(year, month_num, 1)
+    if month_num == 12:
+        next_start = date(year + 1, 1, 1)
+    else:
+        next_start = date(year, month_num + 1, 1)
+    end = next_start - timedelta(days=1)
+    return start, end
+
+
+@router.get(
+    "/payroll",
+    response_model=PayrollReport,
+    summary="Monthly payroll report by employee (manager+)",
+)
+async def payroll_report(
+    db: DBSession,
+    _: RequireManager,
+    month: Optional[str] = Query(
+        default=None,
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+        description="YYYY-MM, defaults to current month",
+    ),
+) -> PayrollReport:
+    today = date.today()
+    if not month:
+        month = f"{today.year:04d}-{today.month:02d}"
+    start, end = _month_bounds(month)
+    start_dt = datetime(
+        start.year, start.month, start.day, tzinfo=timezone.utc
+    )
+    end_dt = datetime(
+        end.year, end.month, end.day, 23, 59, 59, tzinfo=timezone.utc
+    )
+
+    # Sum hours by (employe, approved) over the period.
+    stmt = (
+        select(
+            Employe.id,
+            Employe.full_name,
+            Employe.hourly_rate,
+            Punch.approved,
+            func.coalesce(func.sum(Punch.hours), 0).label("h"),
+        )
+        .join(Punch, Punch.employe_id == Employe.id)
+        .where(
+            Punch.started_at >= start_dt,
+            Punch.started_at <= end_dt,
+            Punch.ended_at.is_not(None),
+        )
+        .group_by(Employe.id, Employe.full_name, Employe.hourly_rate, Punch.approved)
+    )
+    rows = (await db.execute(stmt)).all()
+
+    # Fold into per-employee aggregates.
+    agg: dict[int, PayrollRow] = {}
+    for r in rows:
+        emp_id = int(r[0])
+        if emp_id not in agg:
+            agg[emp_id] = PayrollRow(
+                employe_id=emp_id,
+                employe_name=r[1] or f"#{emp_id}",
+                hourly_rate=float(r[2]) if r[2] is not None else None,
+                approved_hours=0.0,
+                pending_hours=0.0,
+                total_hours=0.0,
+                approved_revenue=0.0,
+                total_revenue=0.0,
+            )
+        h = float(r[4] or 0)
+        if bool(r[3]):
+            agg[emp_id].approved_hours += h
+        else:
+            agg[emp_id].pending_hours += h
+        agg[emp_id].total_hours += h
+
+    for row in agg.values():
+        rate = float(row.hourly_rate or 0)
+        row.approved_revenue = round(row.approved_hours * rate, 2)
+        row.total_revenue = round(row.total_hours * rate, 2)
+        # Round hours for display consistency.
+        row.approved_hours = round(row.approved_hours, 2)
+        row.pending_hours = round(row.pending_hours, 2)
+        row.total_hours = round(row.total_hours, 2)
+
+    sorted_rows = sorted(agg.values(), key=lambda x: x.employe_name.lower())
+
+    return PayrollReport(
+        month=month,
+        period_start=start,
+        period_end=end,
+        rows=sorted_rows,
+        total_approved_hours=round(
+            sum(r.approved_hours for r in sorted_rows), 2
+        ),
+        total_approved_revenue=round(
+            sum(r.approved_revenue for r in sorted_rows), 2
+        ),
+    )
+
+
+@router.get(
+    "/payroll.csv",
+    summary="Monthly payroll report (CSV for accounting)",
+)
+async def payroll_csv(
+    db: DBSession,
+    _: RequireManager,
+    month: Optional[str] = Query(
+        default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$"
+    ),
+):
+    from fastapi.responses import Response
+    report = await payroll_report(db, _, month)  # type: ignore[arg-type]
+    lines = [
+        "employe_id,employe_name,hourly_rate,approved_hours,pending_hours,"
+        "total_hours,approved_revenue,total_revenue"
+    ]
+    for r in report.rows:
+        name = (r.employe_name or "").replace('"', "'")
+        lines.append(
+            f'{r.employe_id},"{name}",{r.hourly_rate or 0},'
+            f"{r.approved_hours},{r.pending_hours},{r.total_hours},"
+            f"{r.approved_revenue},{r.total_revenue}"
+        )
+    lines.append("")
+    lines.append(
+        f",,TOTAUX,{report.total_approved_hours},,,"
+        f"{report.total_approved_revenue},"
+    )
+    body = "\n".join(lines)
+    filename = f"paie-{report.month}.csv"
+    return Response(
+        content=body,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
     )

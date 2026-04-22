@@ -1,19 +1,47 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   AlarmClock,
   Calendar,
   LogOut,
   Monitor,
   Palmtree,
+  ShieldCheck,
   User
 } from "lucide-react";
 
 import { Link, useRouter } from "@/i18n/navigation";
-import { setToken } from "@/lib/auth";
+import { authedFetch, setToken } from "@/lib/auth";
+import { useCurrentUser } from "@/hooks/use-current-user";
 
 export default function MobilePlus() {
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const role = user?.role || "employee";
+  const isManagerPlus = ["owner", "admin", "manager"].includes(role);
+  const [pendingPunches, setPendingPunches] = useState(0);
+
+  useEffect(() => {
+    if (!isManagerPlus) return;
+    let cancelled = false;
+    async function poll() {
+      try {
+        const res = await authedFetch("/api/v1/punch/pending-count");
+        if (!res.ok) return;
+        const n = (await res.json()) as number;
+        if (!cancelled) setPendingPunches(Number(n) || 0);
+      } catch {
+        /* ignore */
+      }
+    }
+    void poll();
+    const t = setInterval(poll, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [isManagerPlus]);
 
   function logout() {
     if (!confirm("Déconnexion ?")) return;
@@ -42,6 +70,31 @@ export default function MobilePlus() {
             Mon profil
           </span>
         </Link>
+
+        {isManagerPlus ? (
+          <>
+            <div className="pt-2">
+              <p className="text-xs uppercase tracking-wider text-white/50">
+                Gestion
+              </p>
+            </div>
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/m/approbations" as any}
+              className="flex w-full items-center gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3.5 text-amber-100"
+            >
+              <ShieldCheck className="h-5 w-5 text-amber-300" />
+              <span className="flex-1 text-left text-sm font-bold">
+                Approuver les punches
+              </span>
+              {pendingPunches > 0 ? (
+                <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-bold text-white">
+                  {pendingPunches}
+                </span>
+              ) : null}
+            </Link>
+          </>
+        ) : null}
 
         <div className="pt-2">
           <p className="text-xs uppercase tracking-wider text-white/50">

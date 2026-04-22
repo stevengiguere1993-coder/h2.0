@@ -145,6 +145,7 @@ export const routing = defineRouting({
     "/m/plus": { fr: "/m/plus", en: "/m/plus" },
     "/m/conge": { fr: "/m/conge", en: "/m/conge" },
     "/m/conges": { fr: "/m/conges", en: "/m/conges" },
+    "/m/approbations": { fr: "/m/approbations", en: "/m/approbations" },
     "/m/intervention/[id]": {
       fr: "/m/intervention/[id]",
       en: "/m/intervention/[id]"
