@@ -166,7 +166,6 @@ export default function ParametresPage() {
           </Link>
         ) : null}
 
-        {isOwner ? <MailerDiagnosticCard /> : null}
 
         <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
           <header className="flex items-center gap-3">
