@@ -34,6 +34,7 @@ type Project = {
   start_date: string | null;
   end_date: string | null;
   budget: number | string | null;
+  estimated_hours_override: number | string | null;
   created_at: string;
   updated_at: string;
 };
@@ -108,6 +109,7 @@ export default function ProjectDetailPage() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [budget, setBudget] = useState("");
+  const [estimatedHoursOverride, setEstimatedHoursOverride] = useState("");
   const [description, setDescription] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -128,6 +130,11 @@ export default function ProjectDetailPage() {
         setStartDate(isoToDateInput(data.start_date));
         setEndDate(isoToDateInput(data.end_date));
         setBudget(data.budget != null ? String(data.budget) : "");
+        setEstimatedHoursOverride(
+          data.estimated_hours_override != null
+            ? String(data.estimated_hours_override)
+            : ""
+        );
         setDescription(data.description || "");
         setNotes(data.notes || "");
         // Load the client list in parallel so the selector has options.
@@ -156,11 +163,16 @@ export default function ProjectDetailPage() {
       startDate !== isoToDateInput(p.start_date) ||
       endDate !== isoToDateInput(p.end_date) ||
       budget !== (p.budget != null ? String(p.budget) : "") ||
+      estimatedHoursOverride !==
+        (p.estimated_hours_override != null
+          ? String(p.estimated_hours_override)
+          : "") ||
       description !== (p.description || "") ||
       notes !== (p.notes || "")
     );
   }, [
-    p, name, clientId, address, startDate, endDate, budget, description, notes,
+    p, name, clientId, address, startDate, endDate, budget,
+    estimatedHoursOverride, description, notes,
   ]);
 
   async function updateStatus(newStatus: string) {
@@ -193,6 +205,9 @@ export default function ProjectDetailPage() {
         start_date: startDate || null,
         end_date: endDate || null,
         budget: budget ? Number(budget) : null,
+        estimated_hours_override: estimatedHoursOverride
+          ? Number(estimatedHoursOverride)
+          : null,
         description: description.trim() || null,
         notes: notes.trim() || null
       };
@@ -430,6 +445,8 @@ export default function ProjectDetailPage() {
                   onEndDate={setEndDate}
                   budget={budget}
                   onBudget={setBudget}
+                  estimatedHoursOverride={estimatedHoursOverride}
+                  onEstimatedHoursOverride={setEstimatedHoursOverride}
                   description={description}
                   onDescription={setDescription}
                   notes={notes}
@@ -671,6 +688,8 @@ function SummaryTab(props: {
   onEndDate: (v: string) => void;
   budget: string;
   onBudget: (v: string) => void;
+  estimatedHoursOverride: string;
+  onEstimatedHoursOverride: (v: string) => void;
   description: string;
   onDescription: (v: string) => void;
   notes: string;
@@ -763,6 +782,27 @@ function SummaryTab(props: {
               onChange={(e) => props.onBudget(e.target.value)}
               className="input"
             />
+          </div>
+          <div>
+            <label className="label" htmlFor="p_hours_override">
+              Heures main-d&apos;œuvre (override)
+            </label>
+            <input
+              id="p_hours_override"
+              type="number"
+              step="0.5"
+              min="0"
+              value={props.estimatedHoursOverride}
+              onChange={(e) =>
+                props.onEstimatedHoursOverride(e.target.value)
+              }
+              placeholder="Auto si vide"
+              className="input"
+            />
+            <p className="mt-1 text-[11px] text-white/40">
+              Laisse vide pour le calcul automatique (somme des phases ×
+              personnes assignées). Saisis un total pour forcer.
+            </p>
           </div>
         </div>
       </section>
@@ -1338,6 +1378,12 @@ function FinancesTab({ projectId }: { projectId: number }) {
         <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
           Main-d&apos;œuvre
         </h3>
+        <p className="mt-1 text-[11px] text-white/50">
+          Heures = somme des phases (durée × 8 h × personnes assignées),
+          jours ouvrables seulement. Coût horaire = taux base ×
+          (1 + prime CNESST + prime CCQ). Tu peux fixer un total manuel
+          plus bas pour overrider.
+        </p>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <div>
             <p className="text-xs text-white/50">Prévue</p>

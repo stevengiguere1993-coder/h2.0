@@ -68,6 +68,13 @@ class Project(Base):
 
     budget: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
 
+    # Permet à l'utilisateur de remplacer le calcul automatique des
+    # heures de main-d'œuvre projetées (sinon = somme des phases ×
+    # personnes assignées × 8 h/jour ouvrable). Exprimé en heures.
+    estimated_hours_override: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(8, 2), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

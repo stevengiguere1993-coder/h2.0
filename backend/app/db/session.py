@@ -155,6 +155,7 @@ async def init_db() -> None:
             ("employes", "employeur_d_url", "VARCHAR(500)"),
             ("project_phases", "assignee_employe_id", "INTEGER"),
             ("project_phases", "assignee_sous_traitant_id", "INTEGER"),
+            ("projects", "estimated_hours_override", "NUMERIC(8, 2)"),
             (
                 "leave_requests",
                 "kind",
