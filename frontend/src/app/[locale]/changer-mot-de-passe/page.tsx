@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 
 import { useRouter } from "@/i18n/navigation";
 import { authedFetch, getMe, getToken } from "@/lib/auth";
@@ -10,6 +11,7 @@ export default function ChangePasswordPage() {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [showNext, setShowNext] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [me, setMe] = useState<{
@@ -139,19 +141,50 @@ export default function ChangePasswordPage() {
               />
             </div>
             <div>
-              <label htmlFor="new" className="label">
-                Nouveau mot de passe (8+ caractères)
-              </label>
+              <div className="flex items-center justify-between">
+                <label htmlFor="new" className="label">
+                  Nouveau mot de passe (8+ caractères)
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowNext((v) => !v)}
+                  className="flex items-center gap-1 text-xs text-brand-700 hover:text-brand-950"
+                  aria-label={
+                    showNext ? "Masquer le mot de passe" : "Afficher le mot de passe"
+                  }
+                >
+                  {showNext ? (
+                    <>
+                      <EyeOff className="h-3.5 w-3.5" /> Masquer
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="h-3.5 w-3.5" /> Afficher
+                    </>
+                  )}
+                </button>
+              </div>
               <input
                 id="new"
-                type="password"
+                type={showNext ? "text" : "password"}
                 value={next}
                 onChange={(e) => setNext(e.target.value)}
-                autoComplete="new-password"
+                // autoComplete=off désactive la suggestion automatique du
+                // navigateur (Safari/Chrome propose sinon un mot de passe
+                // généré que l'utilisateur accepte sans s'en rendre
+                // compte). On veut qu'il CHOISISSE explicitement.
+                autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 required
                 minLength={8}
                 className="input"
               />
+              <p className="mt-1 text-[11px] text-brand-700">
+                Clique « Afficher » pour voir ce que tu tapes — évite d&apos;accepter
+                une suggestion de ton navigateur/iOS sans la noter.
+              </p>
             </div>
             <div>
               <label htmlFor="conf" className="label">
@@ -159,10 +192,13 @@ export default function ChangePasswordPage() {
               </label>
               <input
                 id="conf"
-                type="password"
+                type={showNext ? "text" : "password"}
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
-                autoComplete="new-password"
+                autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 required
                 minLength={8}
                 className="input"
