@@ -358,6 +358,39 @@ async def request_leave(
     db.add(lr)
     await db.flush()
     await db.refresh(lr)
+
+    # Notif cloche aux managers+ pour qu'ils voient la demande sans
+    # avoir à regarder le badge du menu Administration à chaque fois.
+    try:
+        from app.services.notifications import notify_role
+
+        kind_label = {
+            "vacation": "🌴 Vacances",
+            "sick": "🤒 Maladie",
+            "personal": "📋 Absence personnelle",
+        }.get(body.kind, "Congé")
+        from datetime import datetime as _dt
+
+        def _fmt(d: _dt) -> str:
+            return d.strftime("%Y-%m-%d")
+
+        period = (
+            _fmt(body.start_at)
+            if body.start_at.date() == body.end_at.date()
+            else f"{_fmt(body.start_at)} → {_fmt(body.end_at)}"
+        )
+        await notify_role(
+            db,
+            min_role="manager",
+            kind="leave.requested",
+            title=f"Demande de congé : {emp.full_name}",
+            body=f"{kind_label} · {period}"
+            + (f" — {lr.reason}" if lr.reason else ""),
+            href="/app/conges",
+        )
+    except Exception:
+        pass
+
     return LeaveResponse.model_validate(lr)
 
 

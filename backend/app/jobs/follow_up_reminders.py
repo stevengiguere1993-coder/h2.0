@@ -148,11 +148,76 @@ async def _run() -> None:
             except Exception as exc:
                 log.warning("notif lead %s failed: %s", p.id, exc)
 
+        # 3) Backfill : demandes de congé en attente qui n'ont pas de
+        # notification cloche associée (cas d'une demande créée avant
+        # l'activation du hook ou en cas d'échec du notify_role en
+        # ligne). Une seule notif par LeaveRequest.
+        from app.models.leave_request import LeaveRequest, LeaveStatus
+        from app.models.notification import Notification
+        from app.services.notifications import notify_role
+
+        pending_leaves = (
+            await db.execute(
+                select(LeaveRequest).where(
+                    LeaveRequest.status == LeaveStatus.PENDING.value
+                ).limit(200)
+            )
+        ).scalars().all()
+        leave_notified = 0
+        for lr in pending_leaves:
+            already = (
+                await db.execute(
+                    select(Notification.id).where(
+                        Notification.kind == "leave.requested",
+                        Notification.href.like(f"%/app/conges%"),
+                        Notification.body.like(f"%#{lr.id}%"),
+                    ).limit(1)
+                )
+            ).first() is not None
+            if already:
+                continue
+            # Look up employee name
+            from app.models.employe import Employe
+
+            emp = (
+                await db.execute(
+                    select(Employe).where(Employe.id == lr.employe_id)
+                )
+            ).scalar_one_or_none()
+            name = emp.full_name if emp else f"Employé #{lr.employe_id}"
+            kind_label = {
+                "vacation": "🌴 Vacances",
+                "sick": "🤒 Maladie",
+                "personal": "📋 Absence",
+            }.get(lr.kind or "vacation", "Congé")
+            try:
+                await notify_role(
+                    db,
+                    min_role="manager",
+                    kind="leave.requested",
+                    title=f"Demande de congé : {name}",
+                    body=(
+                        f"{kind_label} · "
+                        f"{lr.start_at.strftime('%Y-%m-%d')}"
+                        + (
+                            f" → {lr.end_at.strftime('%Y-%m-%d')}"
+                            if lr.start_at.date() != lr.end_at.date()
+                            else ""
+                        )
+                        + f" (ref #{lr.id})"
+                    ),
+                    href="/app/conges",
+                )
+                leave_notified += 1
+            except Exception as exc:
+                log.warning("notif leave %s failed: %s", lr.id, exc)
+
         await db.commit()
         log.info(
-            "follow-up reminders: %d overdue, %d prospects scanned",
+            "follow-up reminders: %d overdue, %d prospects, %d leaves notified",
             len(rows),
             len(prospects),
+            leave_notified,
         )
 
         # Touch the soumissions table so the linter doesn't complain
