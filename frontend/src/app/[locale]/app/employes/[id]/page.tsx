@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter as useNextRouter } from "next/navigation";
 import { ArrowLeft, Loader2, Save, Trash2 } from "lucide-react";
 
+import { AddressInput } from "@/components/address-input";
 import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
@@ -448,12 +449,11 @@ export default function EmployeDetailPage() {
                 <div className="mt-4 grid gap-4 sm:grid-cols-2">
                   <div className="sm:col-span-2">
                     <label htmlFor="e_addr" className="label">Adresse</label>
-                    <input
+                    <AddressInput
                       id="e_addr"
-                      type="text"
                       value={address}
-                      onChange={(e) => setAddress(e.target.value)}
-                      className="input"
+                      onChange={setAddress}
+                      placeholder="Commence à taper — on propose les adresses canadiennes"
                     />
                   </div>
                   <div>
