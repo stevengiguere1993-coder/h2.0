@@ -34,6 +34,7 @@ type Project = {
   start_date: string | null;
   end_date: string | null;
   budget: number | string | null;
+  estimated_hours_override: number | string | null;
   created_at: string;
   updated_at: string;
 };
@@ -108,6 +109,7 @@ export default function ProjectDetailPage() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [budget, setBudget] = useState("");
+  const [estimatedHoursOverride, setEstimatedHoursOverride] = useState("");
   const [description, setDescription] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -128,6 +130,11 @@ export default function ProjectDetailPage() {
         setStartDate(isoToDateInput(data.start_date));
         setEndDate(isoToDateInput(data.end_date));
         setBudget(data.budget != null ? String(data.budget) : "");
+        setEstimatedHoursOverride(
+          data.estimated_hours_override != null
+            ? String(data.estimated_hours_override)
+            : ""
+        );
         setDescription(data.description || "");
         setNotes(data.notes || "");
         // Load the client list in parallel so the selector has options.
@@ -156,11 +163,16 @@ export default function ProjectDetailPage() {
       startDate !== isoToDateInput(p.start_date) ||
       endDate !== isoToDateInput(p.end_date) ||
       budget !== (p.budget != null ? String(p.budget) : "") ||
+      estimatedHoursOverride !==
+        (p.estimated_hours_override != null
+          ? String(p.estimated_hours_override)
+          : "") ||
       description !== (p.description || "") ||
       notes !== (p.notes || "")
     );
   }, [
-    p, name, clientId, address, startDate, endDate, budget, description, notes,
+    p, name, clientId, address, startDate, endDate, budget,
+    estimatedHoursOverride, description, notes,
   ]);
 
   async function updateStatus(newStatus: string) {
@@ -193,6 +205,9 @@ export default function ProjectDetailPage() {
         start_date: startDate || null,
         end_date: endDate || null,
         budget: budget ? Number(budget) : null,
+        estimated_hours_override: estimatedHoursOverride
+          ? Number(estimatedHoursOverride)
+          : null,
         description: description.trim() || null,
         notes: notes.trim() || null
       };
@@ -430,6 +445,8 @@ export default function ProjectDetailPage() {
                   onEndDate={setEndDate}
                   budget={budget}
                   onBudget={setBudget}
+                  estimatedHoursOverride={estimatedHoursOverride}
+                  onEstimatedHoursOverride={setEstimatedHoursOverride}
                   description={description}
                   onDescription={setDescription}
                   notes={notes}
@@ -671,6 +688,8 @@ function SummaryTab(props: {
   onEndDate: (v: string) => void;
   budget: string;
   onBudget: (v: string) => void;
+  estimatedHoursOverride: string;
+  onEstimatedHoursOverride: (v: string) => void;
   description: string;
   onDescription: (v: string) => void;
   notes: string;
@@ -763,6 +782,27 @@ function SummaryTab(props: {
               onChange={(e) => props.onBudget(e.target.value)}
               className="input"
             />
+          </div>
+          <div>
+            <label className="label" htmlFor="p_hours_override">
+              Heures main-d&apos;œuvre (override)
+            </label>
+            <input
+              id="p_hours_override"
+              type="number"
+              step="0.5"
+              min="0"
+              value={props.estimatedHoursOverride}
+              onChange={(e) =>
+                props.onEstimatedHoursOverride(e.target.value)
+              }
+              placeholder="Auto si vide"
+              className="input"
+            />
+            <p className="mt-1 text-[11px] text-white/40">
+              Laisse vide pour le calcul automatique (somme des phases ×
+              personnes assignées). Saisis un total pour forcer.
+            </p>
           </div>
         </div>
       </section>
@@ -1338,6 +1378,12 @@ function FinancesTab({ projectId }: { projectId: number }) {
         <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
           Main-d&apos;œuvre
         </h3>
+        <p className="mt-1 text-[11px] text-white/50">
+          Heures = somme des phases (durée × 8 h × personnes assignées),
+          jours ouvrables seulement. Coût horaire = taux base ×
+          (1 + prime CNESST + prime CCQ). Tu peux fixer un total manuel
+          plus bas pour overrider.
+        </p>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <div>
             <p className="text-xs text-white/50">Prévue</p>
@@ -1607,6 +1653,28 @@ function PlanificationTab({ projectId }: { projectId: number }) {
     void load();
   }, [load]);
 
+  // Auto-seed des 3 phases de base (Démolition / Plomberie /
+  // Électricité) la première fois qu'on ouvre le tab Planification
+  // pour ce projet et qu'il n'a aucune phase. On stocke un flag local
+  // pour ne pas re-seeder si l'utilisateur les supprime toutes
+  // volontairement.
+  useEffect(() => {
+    if (loading) return;
+    if (phases.length > 0) return;
+    const flagKey = `phases-seeded-${projectId}`;
+    if (typeof window === "undefined") return;
+    try {
+      if (window.localStorage.getItem(flagKey) === "1") return;
+      window.localStorage.setItem(flagKey, "1");
+    } catch {
+      return;
+    }
+    void seedDefaultPhases();
+    // seedDefaultPhases est défini plus bas — la fonction lit l'état
+    // courant donc on ne dépend pas de la référence.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, projectId]);
+
   async function addPhase(name?: string, durationDays = 5) {
     setBusyPhase("new");
     setErr(null);
@@ -1643,8 +1711,8 @@ function PlanificationTab({ projectId }: { projectId: number }) {
     // stable côté backend (chaque POST calcule la position suivante).
     const defaults = [
       { name: "Démolition", days: 3 },
-      { name: "Électricité", days: 5 },
-      { name: "Plomberie", days: 5 }
+      { name: "Plomberie", days: 5 },
+      { name: "Électricité", days: 5 }
     ];
     setBusyPhase("new");
     setErr(null);
@@ -1820,39 +1888,26 @@ function PlanificationTab({ projectId }: { projectId: number }) {
           Plomberie, Finition). Chaque phase a une date de début et une
           durée en jours — la fin est calculée automatiquement.
         </p>
-        <div className="flex items-center gap-2">
-          {phases.length === 0 ? (
-            <button
-              type="button"
-              onClick={() => seedDefaultPhases()}
-              disabled={busyPhase === "new"}
-              className="btn-secondary text-xs disabled:opacity-60"
-              title="Démolition · Électricité · Plomberie"
-            >
-              ⚡ Phases de base
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => addPhase()}
-            disabled={busyPhase === "new"}
-            className="btn-accent text-xs disabled:opacity-60"
-          >
-            {busyPhase === "new" ? (
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-            )}
-            Nouvelle phase
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => addPhase()}
+          disabled={busyPhase === "new"}
+          className="btn-accent text-xs disabled:opacity-60"
+        >
+          {busyPhase === "new" ? (
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
+          )}
+          Nouvelle phase
+        </button>
       </div>
 
       {phases.length === 0 ? (
         <p className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
-          Aucune phase définie. Clique « Phases de base » pour insérer
-          Démolition / Électricité / Plomberie d&apos;un coup, ou «
-          Nouvelle phase » pour en créer une vide.
+          Aucune phase. Clique « Nouvelle phase » pour en créer une.
+          (Démolition, Plomberie et Électricité sont créées
+          automatiquement à la première ouverture du projet.)
         </p>
       ) : (
         <ol className="space-y-3">

@@ -17,9 +17,13 @@ from app.models.employe import Employe
 from app.models.facture import Facture, FactureStatus
 from app.models.payment import Payment
 from app.models.project import Project
+from app.models.project_member import ProjectMember
+from app.models.project_phase import ProjectPhase
 from app.models.punch import Punch
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
+from app.models.sous_traitant import SousTraitant
+from app.models.user import User
 
 
 router = APIRouter(prefix="/projects", tags=["project-finances"])
@@ -105,17 +109,169 @@ async def get_finances(
     projected_service_cost = sum(it.total for it in service_lines)
 
     # --- Projected labour ---
-    # If project has a budget field, use it as the service-cost floor.
-    # Otherwise derive from start_date/end_date * 40h/week and $35/h.
-    projected_labour_hours = 0.0
-    projected_labour_cost = 0.0
-    if proj.start_date and proj.end_date:
-        days = max(1, (proj.end_date - proj.start_date).days + 1)
-        projected_labour_hours = days * 8  # 8h/day
-    # Average rate — pragmatic fallback.
+    # Heuristique :
+    #   1. heures = somme des phases (duration_days × 8h × jours
+    #      ouvrables / jours calendaires) × nombre de personnes
+    #      assignées au projet (membres ProjectMember + assignees de
+    #      phase distincts). Au minimum 1 personne pour qu'une phase
+    #      compte.
+    #   2. Si aucune phase, fallback à start_date/end_date du projet
+    #      × 8 h × 1 personne (jours ouvrables seulement).
+    #   3. Si l'utilisateur a saisi estimated_hours_override, on
+    #      l'utilise directement (override total).
+    #   4. coût = somme(heures attribuées à chaque personne × taux
+    #      réel avec primes CNESST/CCQ). Pour les phases assignées à
+    #      un sous-traitant, on multiplie par leur taux propre. Pour
+    #      les phases sans assignee précis on utilise la moyenne des
+    #      coûts réels des membres du projet.
     avg_rate_stmt = select(func.coalesce(func.avg(Employe.hourly_rate), 35.0))
     avg_rate = float((await db.execute(avg_rate_stmt)).scalar_one() or 35.0)
-    projected_labour_cost = round(projected_labour_hours * avg_rate, 2)
+
+    def _real_cost_for_employe(emp: Optional[Employe]) -> float:
+        """Coût horaire réel = base × (1 + cnesst + ccq actif)."""
+        if emp is None:
+            return float(avg_rate)
+        base = float(emp.hourly_rate or avg_rate)
+        cnesst = float(emp.cnesst_rate or 0)
+        ccq = float(emp.ccq_rate or 0) if bool(emp.is_ccq) else 0.0
+        return round(base * (1.0 + cnesst + ccq), 2)
+
+    def _business_days(start, end) -> int:
+        """Compte les jours lundi-vendredi inclus dans [start, end]."""
+        from datetime import timedelta as _td
+
+        if start is None or end is None or end < start:
+            return 0
+        d = start
+        n = 0
+        while d <= end:
+            if d.weekday() < 5:
+                n += 1
+            d = d + _td(days=1)
+        return n
+
+    # Membres du projet (ProjectMember.user_id → email → Employe)
+    members_emails: list[str] = []
+    if True:
+        member_users = (
+            await db.execute(
+                select(User)
+                .join(ProjectMember, ProjectMember.user_id == User.id)
+                .where(ProjectMember.project_id == project_id)
+            )
+        ).scalars().all()
+        members_emails = [u.email for u in member_users if u.email]
+
+    members_employes: list[Employe] = []
+    if members_emails:
+        members_employes = list(
+            (
+                await db.execute(
+                    select(Employe).where(Employe.email.in_(members_emails))
+                )
+            ).scalars().all()
+        )
+
+    # Phases du projet (avec leurs assignees éventuels)
+    phases = (
+        await db.execute(
+            select(ProjectPhase)
+            .where(ProjectPhase.project_id == project_id)
+            .order_by(ProjectPhase.position.asc())
+        )
+    ).scalars().all()
+
+    projected_labour_hours = 0.0
+    projected_labour_cost = 0.0
+
+    if phases:
+        # Coût moyen "réel" des membres du projet — fallback pour les
+        # phases non-assignées explicitement.
+        if members_employes:
+            members_avg_cost = round(
+                sum(_real_cost_for_employe(m) for m in members_employes)
+                / len(members_employes),
+                2,
+            )
+        else:
+            members_avg_cost = float(avg_rate)
+
+        for ph in phases:
+            days = int(ph.duration_days or 0)
+            if days <= 0:
+                continue
+            hours = days * 8
+
+            # Quel coût appliquer ?
+            cost_per_hour = members_avg_cost
+            if ph.assignee_employe_id:
+                emp = (
+                    await db.execute(
+                        select(Employe).where(
+                            Employe.id == ph.assignee_employe_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                cost_per_hour = _real_cost_for_employe(emp)
+            elif ph.assignee_sous_traitant_id:
+                # Pour un sous-traitant on prend hourly_rate (s'il existe
+                # dans le modèle SousTraitant) — sinon avg_rate.
+                st = (
+                    await db.execute(
+                        select(SousTraitant).where(
+                            SousTraitant.id == ph.assignee_sous_traitant_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                st_rate = (
+                    float(getattr(st, "hourly_rate", None) or avg_rate)
+                    if st
+                    else float(avg_rate)
+                )
+                cost_per_hour = st_rate
+
+            # Multiplier par le nombre de personnes : si un assignee
+            # explicite, c'est 1 ; sinon membres du projet (au moins 1).
+            persons = 1
+            if not ph.assignee_employe_id and not ph.assignee_sous_traitant_id:
+                persons = max(1, len(members_employes))
+
+            phase_hours = hours * persons
+            projected_labour_hours += phase_hours
+            projected_labour_cost += phase_hours * cost_per_hour
+    elif proj.start_date and proj.end_date:
+        # Fallback ancien comportement, mais en jours OUVRABLES seulement.
+        biz_days = max(1, _business_days(proj.start_date, proj.end_date))
+        persons = max(1, len(members_employes))
+        if members_employes:
+            avg_real = (
+                sum(_real_cost_for_employe(m) for m in members_employes)
+                / len(members_employes)
+            )
+        else:
+            avg_real = float(avg_rate)
+        projected_labour_hours = biz_days * 8 * persons
+        projected_labour_cost = projected_labour_hours * avg_real
+
+    # Override manuel : si l'utilisateur a fixé un nombre d'heures, on
+    # garde le coût horaire moyen calculé ci-dessus mais on remplace
+    # les heures.
+    override = (
+        float(proj.estimated_hours_override)
+        if getattr(proj, "estimated_hours_override", None) is not None
+        else None
+    )
+    if override is not None:
+        rate = (
+            (projected_labour_cost / projected_labour_hours)
+            if projected_labour_hours > 0
+            else float(avg_rate)
+        )
+        projected_labour_hours = override
+        projected_labour_cost = override * rate
+
+    projected_labour_hours = round(projected_labour_hours, 2)
+    projected_labour_cost = round(projected_labour_cost, 2)
 
     projected_total_cost = round(
         projected_service_cost + projected_labour_cost, 2
@@ -152,14 +308,16 @@ async def get_finances(
     ).scalars().all()
     actual_labour_hours = sum(float(p.hours or 0) for p in punches)
 
-    # Pull each punched employé's rate and total individually
+    # Pull each punched employé's REAL cost (with CNESST + CCQ) and
+    # total individually. C'est le coût qui charge réellement le projet.
     actual_labour_cost = 0.0
     for p in punches:
-        rate_stmt = select(Employe.hourly_rate).where(
-            Employe.id == p.employe_id
-        )
-        rate = (await db.execute(rate_stmt)).scalar_one_or_none()
-        actual_labour_cost += float(p.hours or 0) * float(rate or avg_rate)
+        emp = (
+            await db.execute(
+                select(Employe).where(Employe.id == p.employe_id)
+            )
+        ).scalar_one_or_none()
+        actual_labour_cost += float(p.hours or 0) * _real_cost_for_employe(emp)
     actual_labour_cost = round(actual_labour_cost, 2)
 
     actual_total_cost = round(actual_material_cost + actual_labour_cost, 2)

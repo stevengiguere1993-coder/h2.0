@@ -24,6 +24,7 @@ class ProjectCreate(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     budget: Optional[Decimal] = Field(default=None, ge=0)
+    estimated_hours_override: Optional[Decimal] = Field(default=None, ge=0)
 
 
 class ProjectUpdate(BaseModel):
@@ -38,6 +39,7 @@ class ProjectUpdate(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     budget: Optional[Decimal] = Field(default=None, ge=0)
+    estimated_hours_override: Optional[Decimal] = Field(default=None, ge=0)
 
 
 class ProjectRead(BaseModel):
@@ -55,6 +57,7 @@ class ProjectRead(BaseModel):
     start_date: Optional[date]
     end_date: Optional[date]
     budget: Optional[Decimal]
+    estimated_hours_override: Optional[Decimal] = None
     created_at: datetime
     updated_at: datetime
 
