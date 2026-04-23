@@ -29,9 +29,6 @@ export default function ChangePasswordPage() {
     getMe(t)
       .then((u) => {
         setMe(u);
-        // Pré-remplit le champ avec « Horizon » quand l'utilisateur
-        // est forcé de changer — évite le placeholder ambigu.
-        if (u.must_change_password) setCurrent("Horizon");
       })
       .catch(() => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
