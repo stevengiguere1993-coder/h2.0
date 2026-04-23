@@ -77,8 +77,18 @@ export function NotificationBell() {
       );
       setUnread((u) => Math.max(0, u - 1));
     }
+    setOpen(false);
     if (n.href) {
-      window.location.href = `/fr${n.href}`;
+      // Detect the current locale prefix on the fly so we don't force
+      // the user back to French when they're navigating in English.
+      const path = window.location.pathname;
+      const locale =
+        path.startsWith("/en/") || path === "/en" ? "/en" : "/fr";
+      // n.href starts with /app/... or /m/... — prepend locale.
+      const target = n.href.startsWith("/")
+        ? `${locale}${n.href}`
+        : `${locale}/${n.href}`;
+      window.location.href = target;
     }
   }
 
