@@ -25,7 +25,12 @@ export default function ChangePasswordPage() {
       return;
     }
     getMe(t)
-      .then((u) => setMe(u))
+      .then((u) => {
+        setMe(u);
+        // Pré-remplit le champ avec « Horizon » quand l'utilisateur
+        // est forcé de changer — évite le placeholder ambigu.
+        if (u.must_change_password) setCurrent("Horizon");
+      })
       .catch(() => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         router.replace("/connexion" as any);
@@ -54,12 +59,36 @@ export default function ChangePasswordPage() {
       });
       if (!res.ok) {
         const t = await res.text();
+        let msg = `Erreur ${res.status}`;
         try {
-          const j = JSON.parse(t);
-          throw new Error(j.detail || t.slice(0, 200));
+          const j = JSON.parse(t) as {
+            detail?:
+              | string
+              | Array<{ loc?: (string | number)[]; msg?: string }>;
+          };
+          if (typeof j.detail === "string") {
+            msg = j.detail;
+          } else if (Array.isArray(j.detail)) {
+            // Pydantic 422 : tableau { loc, msg, type, ... }
+            msg = j.detail
+              .map((d) => {
+                const field =
+                  d.loc?.filter((p) => p !== "body").join(".") || "champ";
+                const m = d.msg || "";
+                if (m.includes("at least 1 character")) {
+                  return `${field} : requis`;
+                }
+                if (m.includes("at least 8 characters")) {
+                  return `${field} : 8 caractères minimum`;
+                }
+                return `${field} : ${m}`;
+              })
+              .join(" · ");
+          }
         } catch {
-          throw new Error(t.slice(0, 200) || `http_${res.status}`);
+          msg = t.slice(0, 200) || `http_${res.status}`;
         }
+        throw new Error(msg);
       }
       // Success — go where the user normally lands
       const dest =
