@@ -7,9 +7,12 @@ import {
   CheckCircle2,
   ChevronLeft,
   ClipboardList,
+  ExternalLink,
   Loader2,
+  Mail,
   MapPin,
   Palmtree,
+  Phone,
   Ruler as RulerIcon,
   StickyNote
 } from "lucide-react";
@@ -155,6 +158,58 @@ export default function MobileIntervention() {
             );
             if (phRes.ok && !cancelled)
               setPhotos((await phRes.json()) as Photo[]);
+            // Récupère le client attaché au projet
+            if (p.client_id) {
+              const cRes = await authedFetch(
+                `/api/v1/clients/${p.client_id}`
+              );
+              if (cRes.ok && !cancelled) {
+                const c = (await cRes.json()) as {
+                  id: number;
+                  name: string;
+                  email: string | null;
+                  phone: string | null;
+                  address: string | null;
+                };
+                setContact({
+                  kind: "client",
+                  id: c.id,
+                  name: c.name,
+                  email: c.email,
+                  phone: c.phone,
+                  address: c.address,
+                });
+              }
+            }
+          }
+        }
+
+        // Si l'événement est lié à un prospect (visite pré-soumission,
+        // non lié à un projet), on fetch le prospect.
+        if (ev && ev.contact_request_id && !cancelled) {
+          try {
+            const crRes = await authedFetch(
+              `/api/v1/contact/${ev.contact_request_id}`
+            );
+            if (crRes.ok && !cancelled) {
+              const cr = (await crRes.json()) as {
+                id: number;
+                name: string;
+                email: string | null;
+                phone: string | null;
+                address: string | null;
+              };
+              setContact({
+                kind: "prospect",
+                id: cr.id,
+                name: cr.name,
+                email: cr.email,
+                phone: cr.phone,
+                address: cr.address,
+              });
+            }
+          } catch {
+            /* ignore — prospect indisponible */
           }
         }
       } catch {
@@ -270,6 +325,60 @@ export default function MobileIntervention() {
                 </p>
               ) : null}
             </section>
+
+            {contact ? (
+              <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+                <p className="text-xs uppercase tracking-wider text-accent-500">
+                  {contact.kind === "client" ? "Client" : "Prospect"}
+                </p>
+                <p className="mt-2 text-base font-bold text-white">
+                  {contact.name}
+                </p>
+                <div className="mt-3 grid gap-2">
+                  {contact.phone ? (
+                    <a
+                      href={`tel:${contact.phone.replace(/[^\d+]/g, "")}`}
+                      className="flex items-center gap-2 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2.5 text-sm text-white active:bg-brand-800"
+                    >
+                      <Phone className="h-4 w-4 text-accent-500" />
+                      <span className="flex-1">{contact.phone}</span>
+                      <ExternalLink className="h-3.5 w-3.5 text-white/40" />
+                    </a>
+                  ) : null}
+                  {contact.email ? (
+                    <a
+                      href={`mailto:${contact.email}`}
+                      className="flex items-center gap-2 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2.5 text-sm text-white active:bg-brand-800"
+                    >
+                      <Mail className="h-4 w-4 text-accent-500" />
+                      <span className="flex-1 truncate">{contact.email}</span>
+                      <ExternalLink className="h-3.5 w-3.5 text-white/40" />
+                    </a>
+                  ) : null}
+                  {(project?.address ||
+                    event?.location ||
+                    contact.address) ? (
+                    <a
+                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                        project?.address ||
+                          event?.location ||
+                          contact.address ||
+                          ""
+                      )}`}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="flex items-center gap-2 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2.5 text-sm text-white active:bg-brand-800"
+                    >
+                      <MapPin className="h-4 w-4 text-accent-500" />
+                      <span className="flex-1 truncate">
+                        Itinéraire Google Maps
+                      </span>
+                      <ExternalLink className="h-3.5 w-3.5 text-white/40" />
+                    </a>
+                  ) : null}
+                </div>
+              </section>
+            ) : null}
 
             {project ? (
               <ul className="space-y-3">
