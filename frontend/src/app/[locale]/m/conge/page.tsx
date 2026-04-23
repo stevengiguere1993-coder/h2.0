@@ -12,9 +12,13 @@ function today(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+type Kind = "vacation" | "sick" | "personal";
+
 export default function MobileConge() {
   const router = useRouter();
-  const [date, setDate] = useState(today());
+  const [kind, setKind] = useState<Kind>("vacation");
+  const [startDate, setStartDate] = useState(today());
+  const [endDate, setEndDate] = useState(today());
   const [startHour, setStartHour] = useState("08");
   const [startMin, setStartMin] = useState("00");
   const [endHour, setEndHour] = useState("17");
@@ -24,17 +28,26 @@ export default function MobileConge() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
+  // Pour les vacances, on prend la période complète (start 08:00 → end
+  // 17:00). Pour une journée maladie / personnelle courte, on peut
+  // choisir des heures précises le même jour.
+  const multiDay = kind === "vacation";
+
   async function submit() {
     setBusy(true);
     setError(null);
     try {
+      const effectiveEnd = multiDay ? endDate : startDate;
       const startIso = new Date(
-        `${date}T${startHour}:${startMin}:00`
+        `${startDate}T${startHour}:${startMin}:00`
       ).toISOString();
-      const endIso = new Date(`${date}T${endHour}:${endMin}:00`).toISOString();
+      const endIso = new Date(
+        `${effectiveEnd}T${endHour}:${endMin}:00`
+      ).toISOString();
       const res = await authedFetch("/api/v1/mobile/leave", {
         method: "POST",
         body: JSON.stringify({
+          kind,
           start_at: startIso,
           end_at: endIso,
           reason: reason.trim() || null
@@ -46,9 +59,6 @@ export default function MobileConge() {
       }
       setSuccess(true);
       setTimeout(() => {
-        // Route to the personal history so the user sees the newly
-        // created "pending" request immediately (easier to diagnose
-        // if the submission isn't persisting).
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         router.push("/m/conges" as any);
       }, 1200);
@@ -59,6 +69,12 @@ export default function MobileConge() {
     }
   }
 
+  const kindLabel: Record<Kind, { title: string; emoji: string }> = {
+    vacation: { title: "Demander des vacances", emoji: "🌴" },
+    sick: { title: "Déclarer une journée maladie", emoji: "🤒" },
+    personal: { title: "Déclarer une absence personnelle", emoji: "📋" }
+  };
+
   return (
     <>
       <header
@@ -67,7 +83,9 @@ export default function MobileConge() {
       >
         <div className="flex items-center gap-2">
           <Palmtree className="h-4 w-4 text-accent-500" />
-          <h1 className="text-base font-bold text-white">Demander un congé</h1>
+          <h1 className="text-base font-bold text-white">
+            {kindLabel[kind].title}
+          </h1>
         </div>
         <button
           type="button"
@@ -83,44 +101,105 @@ export default function MobileConge() {
       <div className="space-y-4 p-4">
         {success ? (
           <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
-            Demande envoyée. Retour à l&apos;accueil…
+            Demande envoyée. Retour à la liste…
           </div>
         ) : null}
 
         <div>
           <label className="text-xs font-medium uppercase tracking-wider text-white/60">
-            Date
+            Type de demande
           </label>
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2.5 text-white"
-          />
+          <div className="mt-1 grid grid-cols-3 gap-2">
+            {(["vacation", "sick", "personal"] as Kind[]).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setKind(k)}
+                className={`rounded-lg border px-2 py-2 text-xs ${
+                  kind === k
+                    ? "border-accent-500 bg-accent-500/15 text-white"
+                    : "border-brand-800 bg-brand-900 text-white/60"
+                }`}
+              >
+                {kindLabel[k].emoji}{" "}
+                {k === "vacation"
+                  ? "Vacances"
+                  : k === "sick"
+                  ? "Maladie"
+                  : "Personnel"}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-xs font-medium uppercase tracking-wider text-white/60">
-              Heure de début
+              {multiDay ? "Du" : "Date"}
             </label>
-            <div className="mt-1 flex items-center gap-1">
-              <Stepper value={startHour} setValue={setStartHour} max={23} />
-              <span className="text-white/50">:</span>
-              <Stepper value={startMin} setValue={setStartMin} max={59} step={5} />
-            </div>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => {
+                setStartDate(e.target.value);
+                // Garde la date de fin ≥ date de début
+                if (multiDay && e.target.value > endDate) {
+                  setEndDate(e.target.value);
+                }
+              }}
+              className="mt-1 w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2.5 text-white"
+            />
           </div>
-          <div>
-            <label className="text-xs font-medium uppercase tracking-wider text-white/60">
-              Heure de fin
-            </label>
-            <div className="mt-1 flex items-center gap-1">
-              <Stepper value={endHour} setValue={setEndHour} max={23} />
-              <span className="text-white/50">:</span>
-              <Stepper value={endMin} setValue={setEndMin} max={59} step={5} />
+          {multiDay ? (
+            <div>
+              <label className="text-xs font-medium uppercase tracking-wider text-white/60">
+                Au
+              </label>
+              <input
+                type="date"
+                value={endDate}
+                min={startDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2.5 text-white"
+              />
             </div>
-          </div>
+          ) : null}
         </div>
+
+        {!multiDay ? (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium uppercase tracking-wider text-white/60">
+                Heure de début
+              </label>
+              <div className="mt-1 flex items-center gap-1">
+                <Stepper value={startHour} setValue={setStartHour} max={23} />
+                <span className="text-white/50">:</span>
+                <Stepper
+                  value={startMin}
+                  setValue={setStartMin}
+                  max={59}
+                  step={5}
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs font-medium uppercase tracking-wider text-white/60">
+                Heure de fin
+              </label>
+              <div className="mt-1 flex items-center gap-1">
+                <Stepper value={endHour} setValue={setEndHour} max={23} />
+                <span className="text-white/50">:</span>
+                <Stepper
+                  value={endMin}
+                  setValue={setEndMin}
+                  max={59}
+                  step={5}
+                />
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <div>
           <label className="text-xs font-medium uppercase tracking-wider text-white/60">
@@ -130,28 +209,15 @@ export default function MobileConge() {
             rows={3}
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            placeholder="Ajouter une note ou raison pour ce congé…"
+            placeholder={
+              kind === "vacation"
+                ? "Ex. Voyage en famille, vacances d'été…"
+                : kind === "sick"
+                ? "Ex. Grippe, rendez-vous médical…"
+                : "Note ou raison"
+            }
             className="mt-1 w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2.5 text-sm text-white"
           />
-        </div>
-
-        <div className="rounded-xl bg-rose-500/90 px-4 py-3 text-white">
-          <p className="flex items-center gap-2 text-sm">
-            <Palmtree className="h-4 w-4" />
-            Vous serez en congé le{" "}
-            <strong>
-              {date.split("-").reverse().join("/")}
-            </strong>{" "}
-            de{" "}
-            <strong>
-              {startHour}:{startMin}
-            </strong>{" "}
-            à{" "}
-            <strong>
-              {endHour}:{endMin}
-            </strong>
-            .
-          </p>
         </div>
 
         {error ? <p className="text-sm text-rose-300">{error}</p> : null}
@@ -170,14 +236,14 @@ export default function MobileConge() {
             type="button"
             onClick={submit}
             disabled={busy}
-            className="flex flex-[2] items-center justify-center gap-2 rounded-xl bg-rose-500 px-4 py-3 text-sm font-bold text-white disabled:opacity-60"
+            className="flex flex-[2] items-center justify-center gap-2 rounded-xl bg-accent-500 px-4 py-3 text-sm font-bold text-brand-950 disabled:opacity-60"
           >
             {busy ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <Palmtree className="h-4 w-4" />
             )}
-            Demander un congé
+            Envoyer la demande
           </button>
         </div>
       </div>

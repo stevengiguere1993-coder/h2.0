@@ -38,6 +38,7 @@ class EmployeMini(BaseModel):
     email: Optional[str]
     role: Optional[str]
     hourly_rate: Optional[float]
+    employeur_d_url: Optional[str] = None
 
 
 class OpenPunch(BaseModel):
@@ -113,6 +114,9 @@ class LeaveRequestBody(BaseModel):
     start_at: datetime
     end_at: datetime
     reason: Optional[str] = Field(default=None, max_length=500)
+    kind: str = Field(
+        default="vacation", pattern="^(vacation|sick|personal)$"
+    )
 
 
 async def _resolve_employe(db, user_email: str) -> Optional[Employe]:
@@ -345,6 +349,7 @@ async def request_leave(
         )
     lr = LeaveRequest(
         employe_id=emp.id,
+        kind=body.kind,
         start_at=body.start_at,
         end_at=body.end_at,
         reason=(body.reason.strip() if body.reason else None),

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Calendar, Copy, Loader2, RefreshCw } from "lucide-react";
+import { Calendar, Copy, ExternalLink, Loader2, RefreshCw, Wallet } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
@@ -15,6 +15,7 @@ type Me = {
     email: string | null;
     role: string | null;
     hourly_rate: number | null;
+    employeur_d_url?: string | null;
   } | null;
   week: {
     hours_worked: number;
@@ -185,6 +186,27 @@ export default function MobileProfil() {
                 </div>
               </dl>
             </section>
+
+            {data?.employe?.employeur_d_url ? (
+              <section className="rounded-2xl border border-accent-500/30 bg-accent-500/5 p-4">
+                <p className="flex items-center gap-2 text-xs uppercase tracking-wider text-accent-500">
+                  <Wallet className="h-3.5 w-3.5" /> Talon de paie (Employeur D)
+                </p>
+                <p className="mt-2 text-xs text-white/70">
+                  Accès direct à ton espace personnel Employeur D pour
+                  consulter tes talons de paie, T4 et relevés.
+                </p>
+                <a
+                  href={data.employe.employeur_d_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 inline-flex items-center gap-2 rounded-lg bg-accent-500 px-3 py-2 text-sm font-bold text-brand-950"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  Ouvrir Employeur D
+                </a>
+              </section>
+            ) : null}
 
             <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
               <p className="flex items-center gap-2 text-xs uppercase tracking-wider text-white/50">
