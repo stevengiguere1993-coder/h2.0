@@ -1083,64 +1083,92 @@ function ItemRow({
     onPatch({ [field]: value } as Partial<Item>);
   }
 
+  // Étiquettes mobile pour distinguer Description / Unité / Quantité /
+  // Prix unitaire / Total quand le grid se déstacke verticalement
+  // (mêmes étiquettes que sur la page bons de travail).
   return (
     <div className="grid gap-2 px-5 py-3 text-sm sm:grid-cols-[1fr_80px_80px_120px_120px_32px] sm:items-center">
-      <input
-        type="text"
-        value={description}
-        onChange={(e) => setDescription(e.target.value)}
-        onBlur={() => {
-          if (description !== item.description) persist("description", description);
-        }}
-        disabled={busy}
-        className="input text-sm"
-      />
-      <input
-        type="text"
-        value={unit}
-        onChange={(e) => setUnit(e.target.value)}
-        onBlur={() => {
-          if (unit !== (item.unit || ""))
-            persist("unit", unit || null);
-        }}
-        disabled={busy}
-        placeholder="unité"
-        className="input text-sm"
-      />
-      <input
-        type="number"
-        step="0.01"
-        min="0"
-        value={quantity}
-        onChange={(e) => setQuantity(e.target.value)}
-        onBlur={() => {
-          if (Number(quantity) !== item.quantity)
-            persist("quantity", Number(quantity));
-        }}
-        disabled={busy}
-        className="input text-sm"
-      />
-      <input
-        type="number"
-        step="0.01"
-        min="0"
-        value={unitPrice}
-        onChange={(e) => setUnitPrice(e.target.value)}
-        onBlur={() => {
-          if (Number(unitPrice) !== item.unit_price)
-            persist("unit_price", Number(unitPrice));
-        }}
-        disabled={busy}
-        className="input text-sm"
-      />
-      <span className="text-right font-semibold text-white">
-        {fmtMoney(computedTotal)}
-      </span>
+      <div>
+        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-white/40 sm:hidden">
+          Description
+        </label>
+        <input
+          type="text"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          onBlur={() => {
+            if (description !== item.description) persist("description", description);
+          }}
+          disabled={busy}
+          className="input text-sm w-full"
+        />
+      </div>
+      <div>
+        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-white/40 sm:hidden">
+          Unité
+        </label>
+        <input
+          type="text"
+          value={unit}
+          onChange={(e) => setUnit(e.target.value)}
+          onBlur={() => {
+            if (unit !== (item.unit || ""))
+              persist("unit", unit || null);
+          }}
+          disabled={busy}
+          placeholder="unité"
+          className="input text-sm w-full"
+        />
+      </div>
+      <div>
+        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-white/40 sm:hidden">
+          Quantité
+        </label>
+        <input
+          type="number"
+          step="0.01"
+          min="0"
+          value={quantity}
+          onChange={(e) => setQuantity(e.target.value)}
+          onBlur={() => {
+            if (Number(quantity) !== item.quantity)
+              persist("quantity", Number(quantity));
+          }}
+          disabled={busy}
+          className="input text-sm w-full"
+        />
+      </div>
+      <div>
+        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-white/40 sm:hidden">
+          Prix unitaire ($)
+        </label>
+        <input
+          type="number"
+          step="0.01"
+          min="0"
+          value={unitPrice}
+          onChange={(e) => setUnitPrice(e.target.value)}
+          onBlur={() => {
+            if (Number(unitPrice) !== item.unit_price)
+              persist("unit_price", Number(unitPrice));
+          }}
+          disabled={busy}
+          className="input text-sm w-full"
+        />
+      </div>
+      <div className="flex items-center justify-between sm:block sm:text-right">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40 sm:hidden">
+          Total
+        </span>
+        <span className="font-semibold text-white">
+          {fmtMoney(computedTotal)}
+        </span>
+      </div>
       <button
         type="button"
         onClick={onDelete}
         disabled={busy}
-        className="text-rose-400 hover:text-rose-300 disabled:opacity-40"
+        className="flex items-center gap-1 text-rose-400 hover:text-rose-300 disabled:opacity-40 sm:justify-center"
         aria-label="Supprimer l'item"
       >
         {busy ? (
@@ -1148,6 +1176,7 @@ function ItemRow({
         ) : (
           <Trash2 className="h-4 w-4" />
         )}
+        <span className="text-xs sm:hidden">Supprimer</span>
       </button>
     </div>
   );
