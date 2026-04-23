@@ -27,7 +27,17 @@ type AgendaEvent = {
   start_at: string;
   end_at: string | null;
   project_id: number | null;
+  contact_request_id: number | null;
   event_type: string;
+};
+
+type ContactInfo = {
+  kind: "client" | "prospect";
+  id: number;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
 };
 
 type Project = {
@@ -101,6 +111,7 @@ export default function MobileIntervention() {
 
   const [event, setEvent] = useState<AgendaEvent | null>(null);
   const [project, setProject] = useState<Project | null>(null);
+  const [contact, setContact] = useState<ContactInfo | null>(null);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
