@@ -484,3 +484,213 @@ async def punch_contexts(
             for p in prospects
         ],
     )
+
+
+# ---------- Tâches assignées à l'employé ----------
+
+class TaskMini(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    project_id: int
+    project_name: Optional[str] = None
+    phase_id: Optional[int]
+    phase_name: Optional[str] = None
+    title: str
+    description: Optional[str]
+    due_date: Optional[date] = None
+    done: bool
+    done_at: Optional[datetime]
+
+
+@router.get("/tasks", response_model=List[TaskMini])
+async def my_tasks(
+    db: DBSession,
+    user: CurrentUser,
+    include_done: bool = False,
+) -> List[TaskMini]:
+    """Liste les ProjectTask dont assignee_id = id de l'employé courant.
+    Par défaut on exclut les tâches cochées. Trie par due_date asc
+    (null à la fin) puis par created_at."""
+    from app.models.project_task import ProjectTask
+    from app.models.project_phase import ProjectPhase
+
+    emp = await _resolve_employe(db, user.email)
+    if emp is None:
+        return []
+    stmt = select(ProjectTask).where(ProjectTask.assignee_id == emp.id)
+    if not include_done:
+        stmt = stmt.where(ProjectTask.done.is_(False))
+    stmt = stmt.order_by(
+        ProjectTask.due_date.asc().nullslast(),
+        ProjectTask.created_at.asc(),
+    )
+    tasks = (await db.execute(stmt)).scalars().all()
+
+    # Enrichit avec le nom du projet + phase.
+    proj_ids = list({t.project_id for t in tasks})
+    phase_ids = list({t.phase_id for t in tasks if t.phase_id})
+    proj_names = {}
+    if proj_ids:
+        rows = (
+            await db.execute(
+                select(Project.id, Project.name).where(
+                    Project.id.in_(proj_ids)
+                )
+            )
+        ).all()
+        proj_names = {r[0]: r[1] for r in rows}
+    phase_names = {}
+    if phase_ids:
+        rows = (
+            await db.execute(
+                select(ProjectPhase.id, ProjectPhase.name).where(
+                    ProjectPhase.id.in_(phase_ids)
+                )
+            )
+        ).all()
+        phase_names = {r[0]: r[1] for r in rows}
+
+    out: List[TaskMini] = []
+    for t in tasks:
+        out.append(
+            TaskMini(
+                id=t.id,
+                project_id=t.project_id,
+                project_name=proj_names.get(t.project_id),
+                phase_id=t.phase_id,
+                phase_name=(
+                    phase_names.get(t.phase_id) if t.phase_id else None
+                ),
+                title=t.title,
+                description=t.description,
+                due_date=t.due_date,
+                done=t.done,
+                done_at=t.done_at,
+            )
+        )
+    return out
+
+
+@router.post("/tasks/{task_id}/toggle", response_model=TaskMini)
+async def toggle_task(
+    task_id: int, db: DBSession, user: CurrentUser
+) -> TaskMini:
+    """Marque la tâche faite / à faire. Limité aux tâches assignées à
+    l'employé (on ne veut pas qu'un ouvrier coche la tâche d'un autre)."""
+    from app.models.project_task import ProjectTask
+
+    emp = await _resolve_employe(db, user.email)
+    if emp is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Aucun employé n'est lié à ce compte.",
+        )
+    t = (
+        await db.execute(
+            select(ProjectTask).where(ProjectTask.id == task_id)
+        )
+    ).scalar_one_or_none()
+    if t is None or t.assignee_id != emp.id:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Tâche introuvable."
+        )
+    from datetime import datetime as _dt, timezone as _tz
+
+    if t.done:
+        t.done = False
+        t.done_at = None
+    else:
+        t.done = True
+        t.done_at = _dt.now(_tz.utc)
+    await db.flush()
+    await db.refresh(t)
+    return TaskMini(
+        id=t.id,
+        project_id=t.project_id,
+        phase_id=t.phase_id,
+        title=t.title,
+        description=t.description,
+        due_date=t.due_date,
+        done=t.done,
+        done_at=t.done_at,
+    )
+
+
+# ---------- Projets assignés à l'employé ----------
+
+class ProjectMini(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    address: Optional[str]
+    status: str
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+
+
+@router.get("/projects", response_model=List[ProjectMini])
+async def my_projects(
+    db: DBSession, user: CurrentUser
+) -> List[ProjectMini]:
+    """Projets où l'employé est impliqué : membre formel
+    (ProjectMember via User.email ↔ Employe.email) OU assigné sur au
+    moins une phase du projet OU sur au moins un AgendaEvent du projet."""
+    from app.models.project_member import ProjectMember
+    from app.models.project_phase import ProjectPhase
+
+    emp = await _resolve_employe(db, user.email)
+    project_ids: set[int] = set()
+
+    # Membres du projet (via User → ProjectMember)
+    if user.email:
+        from app.models.user import User as UserModel
+
+        u = (
+            await db.execute(
+                select(UserModel).where(
+                    func.lower(UserModel.email) == user.email.lower()
+                )
+            )
+        ).scalar_one_or_none()
+        if u:
+            rows = (
+                await db.execute(
+                    select(ProjectMember.project_id).where(
+                        ProjectMember.user_id == u.id
+                    )
+                )
+            ).all()
+            project_ids.update(int(r[0]) for r in rows)
+
+    if emp:
+        # Phases dont l'assignee est cet employé
+        rows = (
+            await db.execute(
+                select(ProjectPhase.project_id).where(
+                    ProjectPhase.assignee_employe_id == emp.id
+                )
+            )
+        ).all()
+        project_ids.update(int(r[0]) for r in rows)
+
+        # AgendaEvents dont l'assignee est cet employé → on capte le projet
+        rows = (
+            await db.execute(
+                select(AgendaEvent.project_id).where(
+                    AgendaEvent.assignee_id == emp.id,
+                    AgendaEvent.project_id.is_not(None),
+                )
+            )
+        ).all()
+        project_ids.update(int(r[0]) for r in rows if r[0] is not None)
+
+    if not project_ids:
+        return []
+    rows = (
+        await db.execute(
+            select(Project)
+            .where(Project.id.in_(project_ids))
+            .order_by(Project.created_at.desc())
+        )
+    ).scalars().all()
+    return [ProjectMini.model_validate(p) for p in rows]

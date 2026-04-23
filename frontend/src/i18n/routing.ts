@@ -152,6 +152,8 @@ export const routing = defineRouting({
     "/m/agenda": { fr: "/m/agenda", en: "/m/agenda" },
     "/m/punch": { fr: "/m/punch", en: "/m/punch" },
     "/m/ops": { fr: "/m/ops", en: "/m/ops" },
+    "/m/projets": { fr: "/m/projets", en: "/m/projets" },
+    "/m/taches": { fr: "/m/taches", en: "/m/taches" },
     "/m/clients": { fr: "/m/clients", en: "/m/clients" },
     "/m/profil": { fr: "/m/profil", en: "/m/profil" },
     "/m/plus": { fr: "/m/plus", en: "/m/plus" },

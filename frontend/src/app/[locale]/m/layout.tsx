@@ -3,11 +3,11 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter as useNextRouter } from "next/navigation";
 import {
+  Briefcase,
   Calendar,
-  ClipboardList,
+  CheckSquare,
   Home,
-  Menu,
-  Users
+  Menu
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
@@ -23,8 +23,8 @@ type Tab = {
 const TABS: Tab[] = [
   { href: "/m", label: "Accueil", icon: Home },
   { href: "/m/agenda", label: "Agenda", icon: Calendar },
-  { href: "/m/ops", label: "Ops", icon: ClipboardList },
-  { href: "/m/clients", label: "Clients", icon: Users },
+  { href: "/m/projets", label: "Projets", icon: Briefcase },
+  { href: "/m/taches", label: "Tâches", icon: CheckSquare },
   { href: "/m/plus", label: "Plus", icon: Menu }
 ];
 
