@@ -86,6 +86,20 @@ async def register(
             detail="Email already registered",
         )
 
+    # Envoi du courriel d'accueil avec le mdp temporaire. Best-effort —
+    # si le mailer n'est pas configuré ou tombe, on log et on continue.
+    try:
+        from app.services.welcome_email import send_welcome_email
+
+        await send_welcome_email(
+            to_email=user.email,
+            temporary_password=user_data.password,
+            role=user.role,
+            created_by=current_admin.email,
+        )
+    except Exception:
+        pass
+
     return UserRead.model_validate(user)
 
 

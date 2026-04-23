@@ -132,10 +132,12 @@ async def activate(
 
 class SetPasswordBody(BaseModel):
     """Admin sets a user's password directly. If `must_change` is True,
-    the user is forced to change it at next login."""
+    the user is forced to change it at next login. `send_email` envoie
+    automatiquement un courriel d'accueil avec le nouveau mot de passe."""
 
     password: str = Field(..., min_length=8, max_length=128)
     must_change: bool = Field(default=True)
+    send_email: bool = Field(default=True)
 
 
 @router.post("/{user_id}/set-password", response_model=UserRead)
@@ -143,7 +145,7 @@ async def set_password(
     user_id: int,
     body: SetPasswordBody,
     db: DBSession,
-    _: RequireAdminRole,
+    admin: RequireAdminRole,
 ) -> UserRead:
     u = (
         await db.execute(select(User).where(User.id == user_id))
@@ -154,6 +156,20 @@ async def set_password(
     u.must_change_password = body.must_change
     await db.flush()
     await db.refresh(u)
+
+    if body.send_email and u.email:
+        try:
+            from app.services.welcome_email import send_welcome_email
+
+            await send_welcome_email(
+                to_email=u.email,
+                temporary_password=body.password,
+                role=u.role,
+                created_by=admin.email,
+            )
+        except Exception:
+            pass
+
     return UserRead.model_validate(u)
 
 

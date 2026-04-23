@@ -95,6 +95,19 @@ async def create_employe(
             )
             db.add(u)
             await db.flush()
+
+            # Courriel d'accueil avec mdp temporaire "Horizon".
+            try:
+                from app.services.welcome_email import send_welcome_email
+
+                await send_welcome_email(
+                    to_email=e.email,
+                    temporary_password=TEMPORARY_PASSWORD,
+                    full_name=e.full_name,
+                    role=UserRole.EMPLOYEE.value,
+                )
+            except Exception:
+                pass
     return EmployeRead.model_validate(e)
 
 
