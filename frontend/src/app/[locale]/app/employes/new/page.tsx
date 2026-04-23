@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter as useNextRouter } from "next/navigation";
 import { ArrowLeft, Loader2 } from "lucide-react";
 
+import { AddressInput } from "@/components/address-input";
 import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
@@ -17,6 +18,7 @@ export default function NewEmployePage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("");
+  const [address, setAddress] = useState("");
   const [hourlyRate, setHourlyRate] = useState("");
   const [isPartner, setIsPartner] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -38,6 +40,7 @@ export default function NewEmployePage() {
       if (email.trim()) payload.email = email.trim();
       if (phone.trim()) payload.phone = phone.trim();
       if (role.trim()) payload.role = role.trim();
+      if (address.trim()) payload.address = address.trim();
       if (hourlyRate) payload.hourly_rate = Number(hourlyRate);
 
       const res = await authedFetch("/api/v1/employes", {
@@ -130,6 +133,16 @@ export default function NewEmployePage() {
                 className="input"
               />
             </div>
+          </div>
+
+          <div>
+            <label htmlFor="e_new_addr" className="label">Adresse</label>
+            <AddressInput
+              id="e_new_addr"
+              value={address}
+              onChange={setAddress}
+              placeholder="Commence à taper — on propose les adresses canadiennes"
+            />
           </div>
 
           <div>
