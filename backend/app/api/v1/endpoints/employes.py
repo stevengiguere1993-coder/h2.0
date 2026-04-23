@@ -15,7 +15,7 @@ déjà pris, pour éviter d'avoir un employé orphelin sans compte.
 from __future__ import annotations
 
 import logging
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
@@ -62,19 +62,33 @@ async def get_employe(
     return EmployeRead.model_validate(e)
 
 
+class EmployeCreatedRead(EmployeRead):
+    """Employe + drapeaux diagnostiques (pour informer le staff si
+    l'auto-création de compte et/ou le courriel d'accueil ont
+    effectivement eu lieu)."""
+
+    user_created: bool = False
+    welcome_email_sent: bool = False
+    welcome_email_error: Optional[str] = None
+
+
 @router.post(
     "",
-    response_model=EmployeRead,
+    response_model=EmployeCreatedRead,
     status_code=status.HTTP_201_CREATED,
     summary="Crée un employé + son compte utilisateur (mot de passe temporaire)",
 )
 async def create_employe(
     data: EmployeCreate, db: DBSession, _: RequireManager
-) -> EmployeRead:
+) -> EmployeCreatedRead:
     e = Employe(**data.model_dump(exclude_unset=True))
     db.add(e)
     await db.flush()
     await db.refresh(e)
+
+    user_created = False
+    welcome_email_sent = False
+    welcome_email_error: Optional[str] = None
 
     if e.email:
         # Un User existe peut-être déjà pour ce courriel (le proprio
@@ -95,20 +109,39 @@ async def create_employe(
             )
             db.add(u)
             await db.flush()
+            user_created = True
 
             # Courriel d'accueil avec mdp temporaire "Horizon".
             try:
                 from app.services.welcome_email import send_welcome_email
 
-                await send_welcome_email(
+                welcome_email_sent = await send_welcome_email(
                     to_email=e.email,
                     temporary_password=TEMPORARY_PASSWORD,
                     full_name=e.full_name,
                     role=UserRole.EMPLOYEE.value,
                 )
-            except Exception:
-                pass
-    return EmployeRead.model_validate(e)
+                if not welcome_email_sent:
+                    welcome_email_error = (
+                        "Mailer non disponible (Azure Graph non "
+                        "configuré ou courriel invalide)."
+                    )
+            except Exception as exc:
+                log.exception("welcome email failed: %s", exc)
+                welcome_email_error = f"Erreur mailer : {exc}"
+        else:
+            welcome_email_error = (
+                "Un compte utilisateur existe déjà pour ce courriel — "
+                "aucun mot de passe temporaire créé, aucun courriel "
+                "envoyé. Utilise Paramètres → Utilisateurs & rôles "
+                "pour réinitialiser le mdp manuellement."
+            )
+
+    out = EmployeCreatedRead.model_validate(e)
+    out.user_created = user_created
+    out.welcome_email_sent = welcome_email_sent
+    out.welcome_email_error = welcome_email_error
+    return out
 
 
 @router.patch("/{item_id}", response_model=EmployeRead)
