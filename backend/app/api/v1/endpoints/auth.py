@@ -4,7 +4,7 @@ Authentication endpoints.
 Handles user login, registration, and profile retrieval.
 """
 
-from typing import Annotated
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, Form, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -133,6 +133,58 @@ class PasswordChange(BaseModel):
 
     current_password: str = Field(..., min_length=1, max_length=128)
     new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class MailerStatus(BaseModel):
+    ready: bool
+    tenant_configured: bool
+    client_id_configured: bool
+    client_secret_configured: bool
+    sender_configured: bool
+    sender: Optional[str] = None
+    last_test_sent: Optional[bool] = None
+    last_test_error: Optional[str] = None
+
+
+@router.get(
+    "/mailer-status",
+    response_model=MailerStatus,
+    summary="Diagnostique: est-ce que le mailer Microsoft Graph est configuré ?",
+)
+async def mailer_status(
+    _: CurrentAdmin,
+    test_to: Optional[str] = None,
+) -> MailerStatus:
+    """Admins can hit this to verify that Azure credentials are set
+    and (optionally) that an actual send works. Pass ?test_to=email
+    to try sending a small test email."""
+    from app.core.config import settings as app_settings
+    from app.integrations.email_graph import get_mailer
+
+    mailer = get_mailer()
+    out = MailerStatus(
+        ready=mailer.ready,
+        tenant_configured=bool(app_settings.azure_tenant_id),
+        client_id_configured=bool(app_settings.azure_client_id),
+        client_secret_configured=bool(app_settings.azure_client_secret),
+        sender_configured=bool(app_settings.mail_from_email),
+        sender=app_settings.mail_from_email,
+    )
+    if test_to and mailer.ready:
+        try:
+            await mailer.send(
+                to=[test_to],
+                subject="Test Horizon — mailer OK",
+                html_body=(
+                    "<p>Ce courriel confirme que l'intégration Microsoft "
+                    "Graph est fonctionnelle pour Horizon.</p>"
+                ),
+            )
+            out.last_test_sent = True
+        except Exception as exc:
+            out.last_test_sent = False
+            out.last_test_error = str(exc)[:500]
+    return out
 
 
 @router.post(

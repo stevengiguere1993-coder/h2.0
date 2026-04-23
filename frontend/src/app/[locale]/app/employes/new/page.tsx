@@ -51,7 +51,29 @@ export default function NewEmployePage() {
         const txt = await res.text();
         throw new Error(txt.slice(0, 240) || `http_${res.status}`);
       }
-      const created = (await res.json()) as { id: number };
+      const created = (await res.json()) as {
+        id: number;
+        user_created?: boolean;
+        welcome_email_sent?: boolean;
+        welcome_email_error?: string | null;
+      };
+      // Surface the welcome-email outcome before navigating away.
+      if (created.user_created) {
+        if (created.welcome_email_sent) {
+          alert(
+            `Compte créé et courriel d'accueil envoyé à ${email.trim()} (mot de passe temporaire : Horizon).`
+          );
+        } else {
+          alert(
+            "Compte créé avec mot de passe temporaire « Horizon », MAIS le courriel d'accueil n'a pas pu être envoyé.\n\n" +
+              (created.welcome_email_error ||
+                "Raison inconnue — va dans Paramètres → Utilisateurs pour envoyer le mdp manuellement.") +
+              "\n\nVérifie le mailer via : GET /api/v1/auth/mailer-status (admin)."
+          );
+        }
+      } else if (email.trim() && created.welcome_email_error) {
+        alert(created.welcome_email_error);
+      }
       router.replace(`/app/employes/${created.id}`);
     } catch (err) {
       setError((err as Error).message);

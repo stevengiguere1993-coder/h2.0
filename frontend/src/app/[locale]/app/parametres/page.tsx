@@ -166,6 +166,8 @@ export default function ParametresPage() {
           </Link>
         ) : null}
 
+        {isOwner ? <MailerDiagnosticCard /> : null}
+
         <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
           <header className="flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
@@ -318,5 +320,142 @@ export default function ParametresPage() {
         </section>
       </div>
     </>
+  );
+}
+
+type MailerStatusResp = {
+  ready: boolean;
+  tenant_configured: boolean;
+  client_id_configured: boolean;
+  client_secret_configured: boolean;
+  sender_configured: boolean;
+  sender: string | null;
+  last_test_sent: boolean | null;
+  last_test_error: string | null;
+};
+
+function MailerDiagnosticCard() {
+  const [status, setStatus] = useState<MailerStatusResp | null>(null);
+  const [testTo, setTestTo] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function load(sendTestTo?: string) {
+    setBusy(true);
+    try {
+      const q = sendTestTo ? `?test_to=${encodeURIComponent(sendTestTo)}` : "";
+      const res = await authedFetch(`/api/v1/auth/mailer-status${q}`);
+      if (res.ok) setStatus((await res.json()) as MailerStatusResp);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  if (!status) {
+    return (
+      <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+        <p className="text-xs text-white/50">Chargement du mailer…</p>
+      </section>
+    );
+  }
+
+  const ok = status.ready;
+  return (
+    <section
+      className={`mt-6 rounded-2xl border p-5 ${
+        ok
+          ? "border-emerald-500/30 bg-emerald-500/5"
+          : "border-rose-500/40 bg-rose-500/10"
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <span
+          className={`flex h-10 w-10 items-center justify-center rounded-xl ${
+            ok ? "bg-emerald-500/15 text-emerald-300" : "bg-rose-500/15 text-rose-300"
+          }`}
+        >
+          {ok ? (
+            <CheckCircle2 className="h-5 w-5" />
+          ) : (
+            <AlertCircle className="h-5 w-5" />
+          )}
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-base font-bold text-white">
+            Courriels automatiques (Microsoft Graph)
+          </h2>
+          <p className="mt-0.5 text-xs text-white/60">
+            {ok
+              ? `Configuré — envois depuis ${status.sender || "(aucun expéditeur)"}.`
+              : "Non configuré — aucun courriel d'accueil ni rappel facture ne partira. Vérifie les variables Azure sur Render."}
+          </p>
+          <ul className="mt-3 grid gap-1 text-[11px] text-white/70 sm:grid-cols-2">
+            <li>
+              <DiagFlag ok={status.tenant_configured} label="AZURE_TENANT_ID" />
+            </li>
+            <li>
+              <DiagFlag
+                ok={status.client_id_configured}
+                label="AZURE_CLIENT_ID"
+              />
+            </li>
+            <li>
+              <DiagFlag
+                ok={status.client_secret_configured}
+                label="AZURE_CLIENT_SECRET"
+              />
+            </li>
+            <li>
+              <DiagFlag ok={status.sender_configured} label="MAIL_FROM_EMAIL" />
+            </li>
+          </ul>
+
+          {ok ? (
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <input
+                type="email"
+                value={testTo}
+                onChange={(e) => setTestTo(e.target.value)}
+                placeholder="ton@courriel.com"
+                className="input max-w-xs"
+              />
+              <button
+                type="button"
+                onClick={() => void load(testTo)}
+                disabled={busy || !testTo.includes("@")}
+                className="btn-accent text-xs disabled:opacity-60"
+              >
+                Envoyer un courriel de test
+              </button>
+            </div>
+          ) : null}
+
+          {status.last_test_sent === true ? (
+            <p className="mt-3 text-xs text-emerald-300">
+              ✅ Courriel de test envoyé avec succès.
+            </p>
+          ) : null}
+          {status.last_test_sent === false ? (
+            <p className="mt-3 text-xs text-rose-300">
+              ❌ Échec :{" "}
+              <code className="font-mono text-[10px]">
+                {status.last_test_error || "erreur inconnue"}
+              </code>
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function DiagFlag({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <span className={ok ? "text-emerald-300" : "text-rose-300"}>
+      {ok ? "✓" : "✗"} {label}
+    </span>
   );
 }
