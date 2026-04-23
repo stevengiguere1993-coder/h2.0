@@ -13,6 +13,7 @@ import {
   Palmtree,
   Play,
   Square,
+  X,
   XCircle
 } from "lucide-react";
 
@@ -120,6 +121,33 @@ export default function MobileHome() {
     end_at: string;
     review_note: string | null;
   } | null>(null);
+  const [dismissedLeaveIds, setDismissedLeaveIds] = useState<Set<number>>(
+    () => {
+      if (typeof window === "undefined") return new Set();
+      try {
+        const raw = window.localStorage.getItem("hsi-dismissed-leaves");
+        return new Set(raw ? (JSON.parse(raw) as number[]) : []);
+      } catch {
+        return new Set();
+      }
+    }
+  );
+
+  function dismissLeave(id: number) {
+    setDismissedLeaveIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      try {
+        window.localStorage.setItem(
+          "hsi-dismissed-leaves",
+          JSON.stringify(Array.from(next))
+        );
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -198,7 +226,12 @@ export default function MobileHome() {
           </p>
         ) : null}
 
-        {recentLeave ? <LeaveBanner leave={recentLeave} /> : null}
+        {recentLeave && !dismissedLeaveIds.has(recentLeave.id) ? (
+          <LeaveBanner
+            leave={recentLeave}
+            onDismiss={() => dismissLeave(recentLeave.id)}
+          />
+        ) : null}
 
         {/* Profile card */}
         <section className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
@@ -479,7 +512,8 @@ function EventLine({ event: e }: { event: EventMini }) {
 }
 
 function LeaveBanner({
-  leave
+  leave,
+  onDismiss
 }: {
   leave: {
     id: number;
@@ -488,6 +522,7 @@ function LeaveBanner({
     end_at: string;
     review_note: string | null;
   };
+  onDismiss: () => void;
 }) {
   if (leave.status === "cancelled") return null;
   const when =
@@ -505,62 +540,54 @@ function LeaveBanner({
           month: "short"
         })}`;
 
-  if (leave.status === "pending") {
-    return (
-      <Link
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        href={"/m/conges" as any}
-        className="flex items-center gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-amber-200"
-      >
-        <Palmtree className="h-5 w-5 flex-shrink-0" />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold">
-            Demande de congé en attente
-          </p>
-          <p className="mt-0.5 text-xs opacity-80">
-            {when} · en attente d&apos;approbation
-          </p>
-        </div>
-        <ChevronRight className="h-4 w-4 flex-shrink-0 opacity-60" />
-      </Link>
-    );
-  }
-  if (leave.status === "approved") {
-    return (
-      <Link
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        href={"/m/conges" as any}
-        className="flex items-center gap-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3 text-emerald-200"
-      >
-        <CheckCircle2 className="h-5 w-5 flex-shrink-0" />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold">
-            Congé approuvé ✅
-          </p>
-          <p className="mt-0.5 text-xs opacity-80">
-            {when}{leave.review_note ? ` · ${leave.review_note}` : ""}
-          </p>
-        </div>
-        <ChevronRight className="h-4 w-4 flex-shrink-0 opacity-60" />
-      </Link>
-    );
-  }
-  // rejected
+  const config =
+    leave.status === "pending"
+      ? {
+          tone: "border-amber-500/40 bg-amber-500/10 text-amber-200",
+          Icon: Palmtree,
+          title: "Demande de congé en attente",
+          sub: `${when} · en attente d'approbation`
+        }
+      : leave.status === "approved"
+        ? {
+            tone:
+              "border-emerald-500/40 bg-emerald-500/10 text-emerald-200",
+            Icon: CheckCircle2,
+            title: "Congé approuvé ✅",
+            sub: `${when}${leave.review_note ? ` · ${leave.review_note}` : ""}`
+          }
+        : {
+            tone: "border-rose-500/40 bg-rose-500/10 text-rose-200",
+            Icon: XCircle,
+            title: "Demande de congé refusée",
+            sub: `${when}${leave.review_note ? ` · ${leave.review_note}` : ""}`
+          };
+
+  const { Icon } = config;
   return (
-    <Link
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      href={"/m/conges" as any}
-      className="flex items-center gap-3 rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-rose-200"
+    <div
+      className={`relative flex items-center gap-3 rounded-xl border p-3 ${config.tone}`}
     >
-      <XCircle className="h-5 w-5 flex-shrink-0" />
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold">Demande de congé refusée</p>
-        <p className="mt-0.5 text-xs opacity-80">
-          {when}
-          {leave.review_note ? ` · ${leave.review_note}` : ""}
-        </p>
-      </div>
-      <ChevronRight className="h-4 w-4 flex-shrink-0 opacity-60" />
-    </Link>
+      <Icon className="h-5 w-5 flex-shrink-0" />
+      <Link
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        href={"/m/conges" as any}
+        className="flex min-w-0 flex-1 items-center gap-2"
+      >
+        <div className="flex-1 min-w-0 pr-6">
+          <p className="text-sm font-semibold">{config.title}</p>
+          <p className="mt-0.5 text-xs opacity-80">{config.sub}</p>
+        </div>
+        <ChevronRight className="h-4 w-4 flex-shrink-0 opacity-60" />
+      </Link>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Fermer"
+        className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full text-current opacity-70 transition hover:bg-white/10 hover:opacity-100"
+      >
+        <X className="h-4 w-4" />
+      </button>
+    </div>
   );
 }
