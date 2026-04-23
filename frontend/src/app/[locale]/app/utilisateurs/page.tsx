@@ -620,7 +620,9 @@ function PasswordActions({
       !(await confirm({
         title: `Forcer ${user.email} à changer son mot de passe ?`,
         description:
-          "Au prochain login, l'utilisateur sera bloqué sur l'écran de changement de mot de passe avant d'accéder à l'app. Le mot de passe actuel n'est pas modifié."
+          "Au prochain login, l'utilisateur sera bloqué sur l'écran de changement de mot de passe avant d'accéder à l'app. Le mot de passe actuel n'est pas modifié.",
+        confirmLabel: "Confirmer",
+        destructive: false
       }))
     )
       return;
