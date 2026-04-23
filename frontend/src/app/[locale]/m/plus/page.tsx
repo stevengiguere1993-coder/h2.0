@@ -132,7 +132,7 @@ export default function MobilePlus() {
         >
           <Palmtree className="h-5 w-5" />
           <span className="flex-1 text-left text-sm font-bold">
-            Demander un congé
+            Demande de congés / vacances
           </span>
         </Link>
         <Link
