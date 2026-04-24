@@ -513,11 +513,21 @@ async def my_tasks(
     (null à la fin) puis par created_at."""
     from app.models.project_task import ProjectTask
     from app.models.project_phase import ProjectPhase
+    from app.models.project_assignees import ProjectTaskAssignee
 
     emp = await _resolve_employe(db, user.email)
     if emp is None:
         return []
-    stmt = select(ProjectTask).where(ProjectTask.assignee_id == emp.id)
+    # Multi-assignation : on considère tâches où l'employé est dans la
+    # table de jointure OU (legacy) où assignee_id == emp.id. Un UNION
+    # implicite via ProjectTask.id IN (... join ... OR legacy).
+    joined_ids_stmt = select(ProjectTaskAssignee.task_id).where(
+        ProjectTaskAssignee.employe_id == emp.id
+    )
+    stmt = select(ProjectTask).where(
+        (ProjectTask.assignee_id == emp.id)
+        | (ProjectTask.id.in_(joined_ids_stmt))
+    )
     if not include_done:
         stmt = stmt.where(ProjectTask.done.is_(False))
     stmt = stmt.order_by(
@@ -578,6 +588,7 @@ async def toggle_task(
     """Marque la tâche faite / à faire. Limité aux tâches assignées à
     l'employé (on ne veut pas qu'un ouvrier coche la tâche d'un autre)."""
     from app.models.project_task import ProjectTask
+    from app.models.project_assignees import ProjectTaskAssignee
 
     emp = await _resolve_employe(db, user.email)
     if emp is None:
@@ -590,7 +601,23 @@ async def toggle_task(
             select(ProjectTask).where(ProjectTask.id == task_id)
         )
     ).scalar_one_or_none()
-    if t is None or t.assignee_id != emp.id:
+    if t is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Tâche introuvable."
+        )
+    # Autorise tout assigné (legacy primaire OU table de jointure).
+    is_primary = t.assignee_id == emp.id
+    is_coassignee = False
+    if not is_primary:
+        is_coassignee = (
+            await db.execute(
+                select(ProjectTaskAssignee.id).where(
+                    ProjectTaskAssignee.task_id == task_id,
+                    ProjectTaskAssignee.employe_id == emp.id,
+                )
+            )
+        ).scalar_one_or_none() is not None
+    if not is_primary and not is_coassignee:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "Tâche introuvable."
         )
@@ -663,12 +690,44 @@ async def my_projects(
             project_ids.update(int(r[0]) for r in rows)
 
     if emp:
-        # Phases dont l'assignee est cet employé
+        from app.models.project_assignees import (
+            ProjectPhaseAssignee,
+            ProjectTaskAssignee,
+        )
+
+        # Phases dont l'employé fait partie des assignés (legacy +
+        # table de jointure multi-personnes).
         rows = (
             await db.execute(
                 select(ProjectPhase.project_id).where(
                     ProjectPhase.assignee_employe_id == emp.id
                 )
+            )
+        ).all()
+        project_ids.update(int(r[0]) for r in rows)
+        rows = (
+            await db.execute(
+                select(ProjectPhase.project_id)
+                .join(
+                    ProjectPhaseAssignee,
+                    ProjectPhaseAssignee.phase_id == ProjectPhase.id,
+                )
+                .where(ProjectPhaseAssignee.employe_id == emp.id)
+            )
+        ).all()
+        project_ids.update(int(r[0]) for r in rows)
+
+        # Tâches assignées via la table de jointure — on capte leur
+        # projet pour qu'une tâche seule fasse aussi remonter le
+        # chantier dans la liste mobile.
+        rows = (
+            await db.execute(
+                select(ProjectTask.project_id)
+                .join(
+                    ProjectTaskAssignee,
+                    ProjectTaskAssignee.task_id == ProjectTask.id,
+                )
+                .where(ProjectTaskAssignee.employe_id == emp.id)
             )
         ).all()
         project_ids.update(int(r[0]) for r in rows)

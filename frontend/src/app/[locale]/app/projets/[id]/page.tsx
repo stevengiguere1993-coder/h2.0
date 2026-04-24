@@ -1579,6 +1579,8 @@ type Phase = {
   notes: string | null;
   assignee_employe_id: number | null;
   assignee_sous_traitant_id: number | null;
+  assignee_employe_ids: number[];
+  assignee_sous_traitant_ids: number[];
   created_at: string;
   updated_at: string;
 };
@@ -2074,80 +2076,110 @@ function PhaseCard({
           </div>
 
           <div className="mt-3">
-            <p className="text-xs text-white/60">Assigné à</p>
-            <div className="mt-2 grid gap-2 sm:grid-cols-3">
-              <label className="flex cursor-pointer items-center gap-2 rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white/80">
-                <input
-                  type="radio"
-                  name={`assign-${phase.id}`}
-                  checked={
-                    !phase.assignee_employe_id &&
-                    !phase.assignee_sous_traitant_id
-                  }
-                  onChange={() =>
-                    onPatch({
-                      assignee_employe_id: null,
-                      assignee_sous_traitant_id: null
-                    })
-                  }
-                />
-                Personne assigné
-              </label>
-              <select
-                value={
-                  phase.assignee_employe_id
-                    ? `e:${phase.assignee_employe_id}`
-                    : ""
-                }
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (!v) {
-                    if (phase.assignee_employe_id)
-                      onPatch({ assignee_employe_id: null });
-                  } else {
-                    onPatch({
-                      assignee_employe_id: Number(v.slice(2)),
-                      assignee_sous_traitant_id: null
-                    });
-                  }
-                }}
-                className="rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white"
-              >
-                <option value="">— Employé interne —</option>
-                {employes.map((e) => (
-                  <option key={e.id} value={`e:${e.id}`}>
-                    {e.full_name}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={
-                  phase.assignee_sous_traitant_id
-                    ? `s:${phase.assignee_sous_traitant_id}`
-                    : ""
-                }
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (!v) {
-                    if (phase.assignee_sous_traitant_id)
-                      onPatch({ assignee_sous_traitant_id: null });
-                  } else {
-                    onPatch({
-                      assignee_sous_traitant_id: Number(v.slice(2)),
-                      assignee_employe_id: null
-                    });
-                  }
-                }}
-                className="rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-xs text-white"
-              >
-                <option value="">— Sous-traitant —</option>
-                {sousTraitants.map((s) => (
-                  <option key={s.id} value={`s:${s.id}`}>
-                    {s.full_name}
-                    {s.trade ? ` · ${s.trade}` : ""}
-                  </option>
-                ))}
-              </select>
+            <p className="text-xs text-white/60">
+              Assignés à
+              {phase.assignee_employe_ids.length +
+                phase.assignee_sous_traitant_ids.length >
+              0 ? (
+                <span className="ml-1 text-white/40">
+                  ({phase.assignee_employe_ids.length +
+                    phase.assignee_sous_traitant_ids.length}{" "}
+                  personne
+                  {phase.assignee_employe_ids.length +
+                    phase.assignee_sous_traitant_ids.length >
+                  1
+                    ? "s"
+                    : ""}
+                  )
+                </span>
+              ) : null}
+            </p>
+            <div className="mt-2 space-y-2">
+              {employes.length > 0 ? (
+                <div>
+                  <p className="mb-1 text-[10px] uppercase tracking-wider text-white/40">
+                    Employés
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {employes.map((e) => {
+                      const on = phase.assignee_employe_ids.includes(e.id);
+                      return (
+                        <button
+                          key={e.id}
+                          type="button"
+                          onClick={() => {
+                            const next = on
+                              ? phase.assignee_employe_ids.filter(
+                                  (x) => x !== e.id
+                                )
+                              : [...phase.assignee_employe_ids, e.id];
+                            onPatch({
+                              assignee_employe_ids: next
+                            });
+                          }}
+                          className={`rounded-full border px-2.5 py-1 text-[11px] transition ${
+                            on
+                              ? "border-accent-500 bg-accent-500/20 text-accent-200"
+                              : "border-brand-700 bg-brand-950 text-white/60 hover:border-accent-500/50 hover:text-white"
+                          }`}
+                        >
+                          {on ? "✓ " : ""}
+                          {e.full_name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+              {sousTraitants.length > 0 ? (
+                <div>
+                  <p className="mb-1 text-[10px] uppercase tracking-wider text-white/40">
+                    Sous-traitants
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {sousTraitants.map((s) => {
+                      const on =
+                        phase.assignee_sous_traitant_ids.includes(s.id);
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => {
+                            const next = on
+                              ? phase.assignee_sous_traitant_ids.filter(
+                                  (x) => x !== s.id
+                                )
+                              : [
+                                  ...phase.assignee_sous_traitant_ids,
+                                  s.id
+                                ];
+                            onPatch({
+                              assignee_sous_traitant_ids: next
+                            });
+                          }}
+                          className={`rounded-full border px-2.5 py-1 text-[11px] transition ${
+                            on
+                              ? "border-fuchsia-500 bg-fuchsia-500/20 text-fuchsia-200"
+                              : "border-brand-700 bg-brand-950 text-white/60 hover:border-fuchsia-500/50 hover:text-white"
+                          }`}
+                        >
+                          {on ? "✓ " : ""}
+                          {s.full_name}
+                          {s.trade ? ` · ${s.trade}` : ""}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+              {phase.assignee_employe_ids.length +
+                phase.assignee_sous_traitant_ids.length ===
+              0 ? (
+                <p className="text-[11px] text-white/40">
+                  Clique sur une personne ci-dessus pour l&apos;assigner
+                  à cette phase.
+                </p>
+              ) : null}
             </div>
           </div>
         </div>

@@ -209,6 +209,47 @@ async def init_db() -> None:
                 # Column may not exist yet on a brand-new DB — harmless.
                 pass
 
+        # Backfill des tables de jointure pour les assignations
+        # multi-personnes sur phases et tâches. Idempotent : ON CONFLICT
+        # DO NOTHING sur la contrainte d'unicité. Migre les assignations
+        # historiques (1 personne max) vers le nouveau modèle (N).
+        try:
+            await conn.execute(
+                text(
+                    "INSERT INTO project_phase_assignees "
+                    "(phase_id, employe_id, sous_traitant_id) "
+                    "SELECT id, assignee_employe_id, NULL "
+                    "FROM project_phases "
+                    "WHERE assignee_employe_id IS NOT NULL "
+                    "ON CONFLICT DO NOTHING"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO project_phase_assignees "
+                    "(phase_id, employe_id, sous_traitant_id) "
+                    "SELECT id, NULL, assignee_sous_traitant_id "
+                    "FROM project_phases "
+                    "WHERE assignee_sous_traitant_id IS NOT NULL "
+                    "ON CONFLICT DO NOTHING"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO project_task_assignees "
+                    "(task_id, employe_id, sous_traitant_id) "
+                    "SELECT id, assignee_id, NULL "
+                    "FROM project_tasks "
+                    "WHERE assignee_id IS NOT NULL "
+                    "ON CONFLICT DO NOTHING"
+                )
+            )
+        except Exception:
+            # Tables ou colonnes absentes lors du tout premier boot
+            # (avant create_all) — harmless, le backfill retentera au
+            # prochain démarrage.
+            pass
+
 
 async def close_db() -> None:
     """
