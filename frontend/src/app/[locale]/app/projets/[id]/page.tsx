@@ -1880,7 +1880,7 @@ function PlanificationTab({ projectId }: { projectId: number }) {
         </p>
       ) : null}
 
-      <ProjectTeamSection projectId={projectId} />
+      <ProjectTeamSection projectId={projectId} phases={phases} />
 
       <div className="flex items-center justify-between">
         <p className="text-xs text-white/60">
@@ -2673,7 +2673,13 @@ type TeamMember = {
   role: string;
 };
 
-function ProjectTeamSection({ projectId }: { projectId: number }) {
+function ProjectTeamSection({
+  projectId,
+  phases
+}: {
+  projectId: number;
+  phases: Phase[];
+}) {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [allUsers, setAllUsers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2744,20 +2750,39 @@ function ProjectTeamSection({ projectId }: { projectId: number }) {
     (u) => !members.some((m) => m.id === u.id)
   );
 
+  // Une personne assignée à au moins une phase compte comme "sur le
+  // projet" pour éviter le warning rouge alors qu'une ressource est
+  // déjà prévue. On déduplique sur (employe_id, sous_traitant_id).
+  const phaseAssigneeKeys = new Set<string>();
+  for (const ph of phases) {
+    if (ph.assignee_employe_id) {
+      phaseAssigneeKeys.add(`emp-${ph.assignee_employe_id}`);
+    }
+    if (ph.assignee_sous_traitant_id) {
+      phaseAssigneeKeys.add(`st-${ph.assignee_sous_traitant_id}`);
+    }
+  }
+  const phaseAssigneeCount = phaseAssigneeKeys.size;
+  const hasAnyTeam = members.length > 0 || phaseAssigneeCount > 0;
+
   return (
     <section
       className={`rounded-2xl border p-4 ${
-        members.length === 0
-          ? "border-rose-500/40 bg-rose-500/5"
-          : "border-emerald-500/30 bg-emerald-500/5"
+        hasAnyTeam
+          ? "border-emerald-500/30 bg-emerald-500/5"
+          : "border-rose-500/40 bg-rose-500/5"
       }`}
     >
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-sm font-semibold text-white">
-          {members.length === 0 ? "⚠️" : "🛠️"} Équipe sur ce projet
+          {hasAnyTeam ? "🛠️" : "⚠️"} Équipe sur ce projet
         </p>
         <span className="text-xs text-white/60">
-          ({members.length} {members.length === 1 ? "personne" : "personnes"})
+          ({members.length} {members.length === 1 ? "personne" : "personnes"}
+          {phaseAssigneeCount > 0
+            ? ` + ${phaseAssigneeCount} via phases`
+            : ""}
+          )
         </span>
         <button
           type="button"
@@ -2783,10 +2808,17 @@ function ProjectTeamSection({ projectId }: { projectId: number }) {
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           Chargement…
         </div>
-      ) : members.length === 0 ? (
+      ) : members.length === 0 && phaseAssigneeCount === 0 ? (
         <p className="mt-2 text-xs text-rose-200/90">
           Aucune personne assignée. L&apos;agenda affiche ce projet en rouge
-          ⚠️ tant qu&apos;au moins une personne n&apos;est pas ajoutée.
+          ⚠️ tant qu&apos;au moins une personne n&apos;est pas ajoutée (soit
+          ici, soit sur une phase plus bas).
+        </p>
+      ) : members.length === 0 ? (
+        <p className="mt-2 text-xs text-emerald-200/90">
+          {phaseAssigneeCount} personne{phaseAssigneeCount > 1 ? "s" : ""}{" "}
+          assignée{phaseAssigneeCount > 1 ? "s" : ""} via des phases — ajoute
+          un membre ici pour un accès global au projet.
         </p>
       ) : (
         <ul className="mt-3 flex flex-wrap gap-2">
