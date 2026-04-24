@@ -142,6 +142,16 @@ function diffDays(a: Date, b: Date): number {
   return Math.round((db - da) / MS);
 }
 
+function dayLabel(d: Date): string {
+  const s = d.toLocaleDateString("fr-CA", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  });
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function timelineRangeLabel(ref: Date, span: number): string {
   const start = mondayOf(ref);
   const end = new Date(start);
@@ -158,7 +168,7 @@ export default function AgendaPage() {
   const { onOpenSidebar } = useAppLayout();
   const [ref, setRef] = useState(() => new Date());
   const [view, setView] = useState<
-    "month" | "list" | "by-project" | "by-person"
+    "day" | "week" | "month" | "list" | "by-project" | "by-person"
   >("month");
   // Timeline span (days) for the Gantt-like views.
   const [spanDays, setSpanDays] = useState<7 | 14 | 28>(14);
@@ -345,7 +355,11 @@ export default function AgendaPage() {
               type="button"
               onClick={() => {
                 const d = new Date(ref);
-                if (view === "by-project" || view === "by-person") {
+                if (view === "day") {
+                  d.setDate(d.getDate() - 1);
+                } else if (view === "week") {
+                  d.setDate(d.getDate() - 7);
+                } else if (view === "by-project" || view === "by-person") {
                   d.setDate(d.getDate() - spanDays);
                 } else {
                   d.setMonth(d.getMonth() - 1);
@@ -357,16 +371,24 @@ export default function AgendaPage() {
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
-            <span className="min-w-[140px] px-2 text-center text-sm font-semibold text-white">
-              {view === "by-project" || view === "by-person"
-                ? timelineRangeLabel(ref, spanDays)
-                : monthLabel(ref)}
+            <span className="min-w-[180px] px-2 text-center text-sm font-semibold text-white">
+              {view === "day"
+                ? dayLabel(ref)
+                : view === "week"
+                  ? timelineRangeLabel(ref, 7)
+                  : view === "by-project" || view === "by-person"
+                    ? timelineRangeLabel(ref, spanDays)
+                    : monthLabel(ref)}
             </span>
             <button
               type="button"
               onClick={() => {
                 const d = new Date(ref);
-                if (view === "by-project" || view === "by-person") {
+                if (view === "day") {
+                  d.setDate(d.getDate() + 1);
+                } else if (view === "week") {
+                  d.setDate(d.getDate() + 7);
+                } else if (view === "by-project" || view === "by-person") {
                   d.setDate(d.getDate() + spanDays);
                 } else {
                   d.setMonth(d.getMonth() + 1);
@@ -402,6 +424,8 @@ export default function AgendaPage() {
               }
               className="input w-40"
             >
+              <option value="day">Journalier</option>
+              <option value="week">Hebdomadaire</option>
               <option value="month">Mois</option>
               <option value="list">Liste</option>
               <option value="by-project">Par chantier</option>
@@ -463,6 +487,14 @@ export default function AgendaPage() {
           <div className="flex min-h-[40vh] items-center justify-center">
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
+        ) : view === "day" || view === "week" ? (
+          <TimeGridView
+            ref={ref}
+            days={view === "day" ? 1 : 7}
+            events={filteredEvents}
+            onSlotClick={(d) => setModal({ date: d })}
+            onEventClick={(e) => setModal(e)}
+          />
         ) : view === "month" ? (
           <MonthView
             grid={grid}
@@ -1442,6 +1474,370 @@ function TimelineView({
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TimeGridView — classic day/week calendar with hourly rows.
+// Used by the "Journalier" (days=1) and "Hebdomadaire" (days=7) views.
+// ---------------------------------------------------------------------------
+
+const HOUR_START = 6;
+const HOUR_END = 22; // exclusive — renders 06:00..22:00 (16 rows)
+const ROW_HEIGHT = 48; // px per hour
+
+function TimeGridView({
+  ref,
+  days,
+  events,
+  onSlotClick,
+  onEventClick
+}: {
+  ref: Date;
+  days: 1 | 7;
+  events: AgendaEvent[];
+  onSlotClick: (d: Date) => void;
+  onEventClick: (e: AgendaEvent) => void;
+}) {
+  const start = useMemo(() => {
+    if (days === 7) return mondayOf(ref);
+    return new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
+  }, [ref, days]);
+
+  const dayList = useMemo(
+    () =>
+      Array.from({ length: days }, (_, i) => {
+        const d = new Date(start);
+        d.setDate(start.getDate() + i);
+        return d;
+      }),
+    [start, days]
+  );
+
+  const hours = useMemo(
+    () =>
+      Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START + i),
+    []
+  );
+
+  // Split events into timed vs all-day (or multi-day) for the "All-day" strip.
+  type PlacedEvent = AgendaEvent & {
+    dayIdx: number;
+    startMin: number; // minutes from HOUR_START
+    endMin: number;
+  };
+  type AllDayBar = {
+    e: AgendaEvent;
+    startIdx: number; // 0..days-1
+    endIdx: number;
+  };
+
+  const { timed, allDay } = useMemo(() => {
+    const t: PlacedEvent[] = [];
+    const a: AllDayBar[] = [];
+    const rangeEnd = new Date(start);
+    rangeEnd.setDate(rangeEnd.getDate() + days);
+    for (const ev of events) {
+      const s = new Date(ev.start_at);
+      const e = ev.end_at ? new Date(ev.end_at) : new Date(ev.start_at);
+      if (e < start || s >= rangeEnd) continue;
+      const sameLocalDay =
+        s.toDateString() === e.toDateString() && !ev.all_day;
+      if (ev.all_day || !sameLocalDay) {
+        const sIdx = Math.max(0, diffDays(start, s));
+        const eIdx = Math.min(days - 1, diffDays(start, e));
+        a.push({ e: ev, startIdx: sIdx, endIdx: eIdx });
+        continue;
+      }
+      const dIdx = diffDays(start, s);
+      if (dIdx < 0 || dIdx >= days) continue;
+      const startMin =
+        (s.getHours() - HOUR_START) * 60 + s.getMinutes();
+      const endMin =
+        (e.getHours() - HOUR_START) * 60 + e.getMinutes();
+      // Clamp visible range: HOUR_START..HOUR_END.
+      const clampedStart = Math.max(0, startMin);
+      const clampedEnd = Math.max(
+        clampedStart + 15,
+        Math.min((HOUR_END - HOUR_START) * 60, endMin)
+      );
+      t.push({
+        ...ev,
+        dayIdx: dIdx,
+        startMin: clampedStart,
+        endMin: clampedEnd
+      });
+    }
+    return { timed: t, allDay: a };
+  }, [events, start, days]);
+
+  // Place overlapping timed events side-by-side within the same day column.
+  type LaidOut = PlacedEvent & { col: number; colCount: number };
+  const laidOut: LaidOut[] = useMemo(() => {
+    const out: LaidOut[] = [];
+    for (let d = 0; d < days; d++) {
+      const dayEvents = timed
+        .filter((ev) => ev.dayIdx === d)
+        .sort((a, b) =>
+          a.startMin !== b.startMin
+            ? a.startMin - b.startMin
+            : a.endMin - b.endMin
+        );
+      // Group into clusters of overlapping events, then assign columns.
+      type Cluster = { items: LaidOut[]; endMax: number };
+      let cluster: Cluster | null = null;
+      const clusters: Cluster[] = [];
+      for (const ev of dayEvents) {
+        if (cluster && ev.startMin < cluster.endMax) {
+          cluster.items.push({ ...ev, col: 0, colCount: 1 });
+          cluster.endMax = Math.max(cluster.endMax, ev.endMin);
+        } else {
+          cluster = {
+            items: [{ ...ev, col: 0, colCount: 1 }],
+            endMax: ev.endMin
+          };
+          clusters.push(cluster);
+        }
+      }
+      for (const c of clusters) {
+        // Assign each item to the first column whose last event ended
+        // before this one starts.
+        const trackEnds: number[] = [];
+        for (const it of c.items) {
+          let tIdx = -1;
+          for (let i = 0; i < trackEnds.length; i++) {
+            if (trackEnds[i] <= it.startMin) {
+              tIdx = i;
+              break;
+            }
+          }
+          if (tIdx === -1) {
+            tIdx = trackEnds.length;
+            trackEnds.push(it.endMin);
+          } else {
+            trackEnds[tIdx] = it.endMin;
+          }
+          it.col = tIdx;
+        }
+        const count = trackEnds.length;
+        for (const it of c.items) it.colCount = count;
+        out.push(...c.items);
+      }
+    }
+    return out;
+  }, [timed, days]);
+
+  const today = new Date();
+  const todayCol = diffDays(start, today);
+  const todayInRange = todayCol >= 0 && todayCol < days;
+  const nowMin =
+    (today.getHours() - HOUR_START) * 60 + today.getMinutes();
+  const nowInRange = nowMin >= 0 && nowMin <= (HOUR_END - HOUR_START) * 60;
+
+  const gridCols = `56px repeat(${days}, minmax(0, 1fr))`;
+  const bodyHeight = (HOUR_END - HOUR_START) * ROW_HEIGHT;
+
+  function slotFromClick(dayIdx: number, e: React.MouseEvent) {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const totalMin = Math.max(0, Math.min(bodyHeight, y)) *
+      (60 / ROW_HEIGHT);
+    const hour = Math.floor(totalMin / 60) + HOUR_START;
+    const minute = Math.round((totalMin % 60) / 30) * 30; // snap 30 min
+    const d = new Date(dayList[dayIdx]);
+    d.setHours(hour, minute, 0, 0);
+    onSlotClick(d);
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-xl border border-brand-800 bg-brand-900">
+      <div className="min-w-[560px]">
+        {/* Header: day labels */}
+        <div
+          className="grid border-b border-brand-800 text-xs"
+          style={{ gridTemplateColumns: gridCols }}
+        >
+          <div />
+          {dayList.map((d, i) => {
+            const isToday = sameDay(d, today);
+            return (
+              <div
+                key={i}
+                className={`border-l border-brand-800 px-2 py-2 text-center ${
+                  isToday ? "text-accent-400" : "text-white/60"
+                }`}
+              >
+                <p className="text-[10px] uppercase">
+                  {WEEKDAYS[(d.getDay() + 6) % 7]}
+                </p>
+                <p
+                  className={`text-sm ${
+                    isToday ? "font-bold text-accent-400" : "text-white"
+                  }`}
+                >
+                  {d.getDate()}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* All-day strip */}
+        {allDay.length > 0 ? (
+          <div
+            className="grid border-b border-brand-800 bg-brand-900/60"
+            style={{ gridTemplateColumns: gridCols }}
+          >
+            <div className="flex items-center justify-end px-2 py-1 text-[10px] uppercase tracking-wider text-white/40">
+              Toute
+            </div>
+            <div
+              className="relative py-1"
+              style={{
+                gridColumn: `2 / span ${days}`,
+                minHeight: "28px"
+              }}
+            >
+              <div
+                className="absolute inset-0 grid"
+                style={{
+                  gridTemplateColumns: `repeat(${days}, minmax(0, 1fr))`
+                }}
+              >
+                {dayList.map((_, i) => (
+                  <div key={i} className="border-l border-brand-800/60" />
+                ))}
+              </div>
+              {allDay.map(({ e, startIdx, endIdx }, k) => {
+                const left = (startIdx / days) * 100;
+                const width = ((endIdx - startIdx + 1) / days) * 100;
+                return (
+                  <button
+                    key={`ad-${e.id}-${k}`}
+                    type="button"
+                    onClick={() => onEventClick(e)}
+                    className={`absolute top-1 z-[2] rounded-md border px-2 py-0.5 text-left text-[11px] font-semibold shadow-sm hover:brightness-110 ${eventAccent(e.event_type)}`}
+                    style={{
+                      left: `calc(${left}% + 2px)`,
+                      width: `calc(${width}% - 4px)`,
+                      height: "22px"
+                    }}
+                    title={e.title}
+                  >
+                    <span className="truncate block">{e.title}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
+        {/* Body: hour rows × day columns */}
+        <div
+          className="grid"
+          style={{ gridTemplateColumns: gridCols }}
+        >
+          {/* Hour labels */}
+          <div className="border-r border-brand-800">
+            {hours.map((h) => (
+              <div
+                key={h}
+                className="flex items-start justify-end pr-2 pt-0.5 text-[10px] text-white/40"
+                style={{ height: `${ROW_HEIGHT}px` }}
+              >
+                {String(h).padStart(2, "0")}:00
+              </div>
+            ))}
+          </div>
+          {/* Day columns */}
+          {dayList.map((d, i) => {
+            const isToday = sameDay(d, today);
+            return (
+              <div
+                key={i}
+                onClick={(e) => slotFromClick(i, e)}
+                className={`relative cursor-pointer border-l border-brand-800 ${
+                  isToday ? "bg-accent-500/5" : ""
+                }`}
+                style={{ height: `${bodyHeight}px` }}
+              >
+                {/* Hour lines */}
+                {hours.map((h, idx) => (
+                  <div
+                    key={h}
+                    className="pointer-events-none absolute left-0 right-0 border-t border-brand-800/60"
+                    style={{ top: `${idx * ROW_HEIGHT}px` }}
+                  />
+                ))}
+                {/* Half-hour lines (dashed, lighter) */}
+                {hours.map((h, idx) => (
+                  <div
+                    key={`half-${h}`}
+                    className="pointer-events-none absolute left-0 right-0 border-t border-dashed border-brand-800/30"
+                    style={{ top: `${idx * ROW_HEIGHT + ROW_HEIGHT / 2}px` }}
+                  />
+                ))}
+                {/* Now line */}
+                {todayInRange && todayCol === i && nowInRange ? (
+                  <div
+                    className="pointer-events-none absolute left-0 right-0 z-[3] flex items-center"
+                    style={{
+                      top: `${(nowMin / 60) * ROW_HEIGHT}px`
+                    }}
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full bg-accent-500" />
+                    <span className="h-px flex-1 bg-accent-500" />
+                  </div>
+                ) : null}
+                {/* Events */}
+                {laidOut
+                  .filter((ev) => ev.dayIdx === i)
+                  .map((ev) => {
+                    const top = (ev.startMin / 60) * ROW_HEIGHT;
+                    const height = Math.max(
+                      22,
+                      ((ev.endMin - ev.startMin) / 60) * ROW_HEIGHT - 2
+                    );
+                    const colWidth = 100 / ev.colCount;
+                    const left = ev.col * colWidth;
+                    const width = colWidth;
+                    return (
+                      <button
+                        key={`ev-${ev.id}`}
+                        type="button"
+                        onClick={(evt) => {
+                          evt.stopPropagation();
+                          onEventClick(ev);
+                        }}
+                        className={`absolute z-[2] overflow-hidden rounded-md border text-left shadow-sm hover:brightness-110 ${eventAccent(ev.event_type)}`}
+                        style={{
+                          top: `${top}px`,
+                          height: `${height}px`,
+                          left: `calc(${left}% + 2px)`,
+                          width: `calc(${width}% - 4px)`
+                        }}
+                        title={`${ev.title} — ${fmtTime(ev.start_at)}${
+                          ev.end_at ? ` → ${fmtTime(ev.end_at)}` : ""
+                        }`}
+                      >
+                        <div className="px-1.5 py-0.5">
+                          <p className="truncate text-[11px] font-semibold leading-tight">
+                            {ev.title}
+                          </p>
+                          <p className="truncate text-[10px] opacity-80">
+                            {fmtTime(ev.start_at)}
+                            {ev.end_at ? ` → ${fmtTime(ev.end_at)}` : ""}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
