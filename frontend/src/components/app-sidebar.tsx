@@ -49,6 +49,7 @@ const CONSTRUCTION_NAV: NavItem[] = [
 ];
 
 const ADMINISTRATION_NAV: NavItem[] = [
+  { href: "/app/assignations", label: "Assignations", icon: HardHat, minRole: "manager" },
   { href: "/app/conges", label: "Vacances & congés", icon: Palmtree, minRole: "manager" }
 ];
 
