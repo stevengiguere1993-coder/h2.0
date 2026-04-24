@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter as useNextRouter } from "next/navigation";
 import {
   ArrowLeft,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
+  ExternalLink,
   FileText,
   Image as ImageIcon,
   Loader2,
@@ -30,6 +32,7 @@ type Client = {
   address: string | null;
   notes: string | null;
   contact_request_id: number | null;
+  qbo_customer_id: string | null;
   created_at: string;
   projects?: Array<{ id: number; name: string; status: string }>;
 };
@@ -185,19 +188,26 @@ export default function ClientDetailPage() {
                   ) : null}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={onDelete}
-                disabled={deleting}
-                className="inline-flex items-center gap-2 self-start rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
-              >
-                {deleting ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Trash2 className="h-4 w-4" />
-                )}
-                Supprimer
-              </button>
+              <div className="flex flex-wrap items-start gap-2">
+                <QboPushButton client={c} onSynced={(qboId) =>
+                  setC((prev) =>
+                    prev ? { ...prev, qbo_customer_id: qboId } : prev
+                  )
+                } />
+                <button
+                  type="button"
+                  onClick={onDelete}
+                  disabled={deleting}
+                  className="inline-flex items-center gap-2 self-start rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
+                >
+                  {deleting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                  Supprimer
+                </button>
+              </div>
             </header>
 
             {error ? (
@@ -323,6 +333,99 @@ export default function ClientDetailPage() {
         ) : null}
       </div>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// QuickBooks push — envoie le client vers la compagnie QBO connectée
+// ---------------------------------------------------------------------------
+
+function QboPushButton({
+  client,
+  onSynced
+}: {
+  client: Client;
+  onSynced: (qboCustomerId: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [justSynced, setJustSynced] = useState(false);
+
+  async function push() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/clients/${client.id}/push-to-qbo`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(
+          text.slice(0, 240) || `http_${res.status}`
+        );
+      }
+      const data = (await res.json()) as {
+        qbo_customer_id: string;
+        display_name: string;
+        created: boolean;
+      };
+      onSynced(data.qbo_customer_id);
+      setJustSynced(true);
+      setTimeout(() => setJustSynced(false), 4000);
+    } catch (e) {
+      setErr(`Push QBO échoué : ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (client.qbo_customer_id) {
+    return (
+      <div className="flex flex-col items-start gap-1">
+        <div className="inline-flex items-center gap-2 self-start rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-sm font-medium text-emerald-300">
+          <CheckCircle2 className="h-4 w-4" />
+          QB ✓ #{client.qbo_customer_id}
+        </div>
+        <button
+          type="button"
+          onClick={push}
+          disabled={busy}
+          className="text-[11px] text-white/50 underline decoration-dotted hover:text-accent-400 disabled:opacity-40"
+        >
+          {busy ? "Mise à jour…" : "Re-synchroniser"}
+        </button>
+        {err ? (
+          <p className="text-[11px] text-rose-300">{err}</p>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-start gap-1">
+      <button
+        type="button"
+        onClick={push}
+        disabled={busy}
+        className="inline-flex items-center gap-2 self-start rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-2.5 text-sm font-medium text-accent-200 hover:bg-accent-500/20 disabled:opacity-50"
+      >
+        {busy ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <ExternalLink className="h-4 w-4" />
+        )}
+        Envoyer vers QuickBooks
+      </button>
+      {justSynced ? (
+        <p className="text-[11px] text-emerald-300">
+          Synchronisé avec QuickBooks.
+        </p>
+      ) : null}
+      {err ? (
+        <p className="text-[11px] text-rose-300">{err}</p>
+      ) : null}
+    </div>
   );
 }
 

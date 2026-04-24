@@ -37,6 +37,8 @@ class ClientRead(ClientBase):
 
     id: int
     created_at: datetime
+    # Customer.Id QBO rempli par /api/v1/clients/{id}/push-to-qbo.
+    qbo_customer_id: Optional[str] = None
 
 
 class ClientReadWithProjects(ClientRead):

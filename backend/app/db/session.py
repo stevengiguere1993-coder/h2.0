@@ -171,6 +171,9 @@ async def init_db() -> None:
                 "connected_at",
                 "TIMESTAMP WITH TIME ZONE",
             ),
+            # Liaison client ↔ QBO Customer (push manuel + évite les
+            # doublons à chaque re-push).
+            ("clients", "qbo_customer_id", "VARCHAR(64)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
