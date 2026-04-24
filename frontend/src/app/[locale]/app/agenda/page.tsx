@@ -49,6 +49,8 @@ type Phase = {
   duration_days: number | null;
   assignee_employe_id: number | null;
   assignee_sous_traitant_id: number | null;
+  assignee_employe_ids?: number[];
+  assignee_sous_traitant_ids?: number[];
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -293,7 +295,11 @@ export default function AgendaPage() {
       const hasAssignedPhase = phases.some(
         (ph) =>
           ph.project_id === p.id &&
-          (ph.assignee_employe_id || ph.assignee_sous_traitant_id)
+          ((ph.assignee_employe_ids && ph.assignee_employe_ids.length > 0) ||
+            (ph.assignee_sous_traitant_ids &&
+              ph.assignee_sous_traitant_ids.length > 0) ||
+            ph.assignee_employe_id ||
+            ph.assignee_sous_traitant_id)
       );
       map.set(
         p.id,
@@ -1290,13 +1296,23 @@ function TimelineView({
     e.setDate(e.getDate() + p.duration_days - 1);
     if (e < start || s >= endExclusive) return null;
     const proj = projectById.get(p.project_id);
-    const emp = p.assignee_employe_id
-      ? employeById.get(p.assignee_employe_id)
-      : null;
+    const empIds =
+      p.assignee_employe_ids && p.assignee_employe_ids.length > 0
+        ? p.assignee_employe_ids
+        : p.assignee_employe_id
+          ? [p.assignee_employe_id]
+          : [];
+    const empNames = empIds
+      .map((id) => employeById.get(id)?.full_name)
+      .filter(Boolean) as string[];
+    const empLabel =
+      empNames.length > 2
+        ? `${empNames.slice(0, 2).join(", ")} +${empNames.length - 2}`
+        : empNames.join(", ");
     const sub =
       mode === "project"
-        ? emp
-          ? `Phase · ${emp.full_name}`
+        ? empLabel
+          ? `Phase · ${empLabel}`
           : "Phase"
         : proj
           ? `Phase · ${proj.name}`
@@ -1356,14 +1372,27 @@ function TimelineView({
       for (const ph of phases) {
         const item = phaseToItem(ph);
         if (!item) continue;
-        const key = ph.assignee_employe_id
-          ? `emp-${ph.assignee_employe_id}`
-          : "emp-none";
-        const label = ph.assignee_employe_id
-          ? employeById.get(ph.assignee_employe_id)?.full_name ||
-            `Employé #${ph.assignee_employe_id}`
-          : "Non-assigné";
-        ensureRow(key, label).items.push(item);
+        // Multi-assignation : on émet une barre par employé assigné
+        // pour que tous apparaissent dans la vue « Par personne ».
+        const employeIds =
+          ph.assignee_employe_ids && ph.assignee_employe_ids.length > 0
+            ? ph.assignee_employe_ids
+            : ph.assignee_employe_id
+              ? [ph.assignee_employe_id]
+              : [];
+        if (employeIds.length === 0) {
+          ensureRow("emp-none", "Non-assigné").items.push(item);
+        } else {
+          for (const empId of employeIds) {
+            const key = `emp-${empId}`;
+            const label =
+              employeById.get(empId)?.full_name || `Employé #${empId}`;
+            ensureRow(key, label).items.push({
+              ...item,
+              key: `${item.key}-e${empId}`
+            });
+          }
+        }
       }
     }
 
