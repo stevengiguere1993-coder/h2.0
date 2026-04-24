@@ -60,6 +60,15 @@ class Settings(BaseSettings):
     quickbooks_env: str = "sandbox"
     qbo_refresh_token: Optional[str] = None
     qbo_realm_id: Optional[str] = None
+    # OAuth redirect URI — doit être enregistrée à l'identique dans
+    # l'app Intuit (onglet Keys & credentials → Redirect URIs).
+    # Pointe sur le backend (h2-0), pas sur le frontend (h2-0-web).
+    quickbooks_redirect_uri: str = (
+        "https://h2-0.onrender.com/api/v1/qbo/callback"
+    )
+    # URL du frontend pour rediriger l'utilisateur après le callback
+    # OAuth Intuit. Défaut = production Render.
+    frontend_url: str = "https://h2-0-web.onrender.com"
 
     # Microsoft Graph (email)
     azure_tenant_id: Optional[str] = None

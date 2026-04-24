@@ -42,6 +42,7 @@ from app.api.v1.endpoints import (
     public_bon,
     public_soumission,
     punch_ops,
+    qbo_oauth,
     qbo_token,
     search,
     soumission_items,
@@ -84,6 +85,7 @@ api_router.include_router(webhooks.router)
 api_router.include_router(public_soumission.router)
 api_router.include_router(public_bon.router)
 api_router.include_router(qbo_token.router)
+api_router.include_router(qbo_oauth.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(calendar.router)
 api_router.include_router(appointments.router)
