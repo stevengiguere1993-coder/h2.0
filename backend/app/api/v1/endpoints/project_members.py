@@ -15,13 +15,14 @@ l'agenda de rouge (personne assigné) à vert (équipe en place).
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, func, insert, select
 
 from app.api.deps import DBSession, RequireManager
+from app.models.employe import Employe
 from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.user import User
@@ -35,6 +36,7 @@ class MemberRead(BaseModel):
     id: int
     email: str
     role: str
+    full_name: Optional[str] = None
 
 
 class MembersUpdate(BaseModel):
@@ -48,6 +50,39 @@ async def _ensure_project(db, project_id: int) -> Project:
     if p is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
     return p
+
+
+def _member_read(u: User, full_name: Optional[str]) -> MemberRead:
+    return MemberRead(
+        id=u.id,
+        email=u.email,
+        role=u.role,
+        full_name=full_name,
+    )
+
+
+async def _resolve_names(db, users: List[User]) -> dict[int, str]:
+    """Return {user_id: employe.full_name} by matching on email (lower)."""
+    if not users:
+        return {}
+    emails = {u.email.lower() for u in users if u.email}
+    if not emails:
+        return {}
+    rows = (
+        await db.execute(
+            select(Employe.email, Employe.full_name).where(
+                func.lower(Employe.email).in_(emails)
+            )
+        )
+    ).all()
+    by_email = {
+        (e or "").lower(): fn for e, fn in rows if fn
+    }
+    return {
+        u.id: by_email[u.email.lower()]
+        for u in users
+        if u.email and u.email.lower() in by_email
+    }
 
 
 @router.get(
@@ -65,7 +100,8 @@ async def list_members(
         .order_by(User.email.asc())
     )
     rows = (await db.execute(stmt)).scalars().all()
-    return [MemberRead.model_validate(r) for r in rows]
+    names = await _resolve_names(db, list(rows))
+    return [_member_read(r, names.get(r.id)) for r in rows]
 
 
 @router.put(
