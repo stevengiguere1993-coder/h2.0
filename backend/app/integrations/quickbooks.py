@@ -60,6 +60,9 @@ class QuickBooksClient:
         self._db_loaded = False
 
     async def _load_refresh_from_db(self) -> None:
+        """Pull refresh_token + realm_id + environment from the DB (set
+        by the OAuth callback). Falls back to whatever was seeded via
+        env vars if the row is missing."""
         if self._db_loaded:
             return
         try:
@@ -67,8 +70,21 @@ class QuickBooksClient:
                 row = (
                     await db.execute(select(QboToken).where(QboToken.id == 1))
                 ).scalar_one_or_none()
-                if row and row.refresh_token:
-                    self.tokens.refresh_token = row.refresh_token
+                if row:
+                    if row.refresh_token:
+                        self.tokens.refresh_token = row.refresh_token
+                    # La connexion via OAuth remplit ces deux champs;
+                    # on les réutilise pour que le client cible la
+                    # bonne compagnie + le bon environnement.
+                    if row.realm_id:
+                        self.realm_id = row.realm_id
+                    if row.environment:
+                        self.env = row.environment.lower()
+                        self.base_url = (
+                            _PROD_API
+                            if self.env == "production"
+                            else _SANDBOX_API
+                        )
         except Exception as exc:
             log.warning("Could not load QBO refresh token from DB: %s", exc)
         finally:

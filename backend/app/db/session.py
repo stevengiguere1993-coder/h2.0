@@ -161,6 +161,16 @@ async def init_db() -> None:
                 "kind",
                 "VARCHAR(16) NOT NULL DEFAULT 'vacation'",
             ),
+            # QBO OAuth: colonnes ajoutées pour le flow /qbo/connect.
+            ("qbo_tokens", "realm_id", "VARCHAR(64)"),
+            ("qbo_tokens", "environment", "VARCHAR(16)"),
+            ("qbo_tokens", "company_name", "VARCHAR(255)"),
+            ("qbo_tokens", "connected_by_user_id", "INTEGER"),
+            (
+                "qbo_tokens",
+                "connected_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

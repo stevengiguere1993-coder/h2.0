@@ -166,6 +166,7 @@ export default function ParametresPage() {
           </Link>
         ) : null}
 
+        {hasMinRole(me, "admin") ? <QuickBooksSection /> : null}
 
         <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
           <header className="flex items-center gap-3">
@@ -456,5 +457,216 @@ function DiagFlag({ ok, label }: { ok: boolean; label: string }) {
     <span className={ok ? "text-emerald-300" : "text-rose-300"}>
       {ok ? "✓" : "✗"} {label}
     </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// QuickBooks Online — connexion OAuth
+// ---------------------------------------------------------------------------
+
+type QboStatus = {
+  connected: boolean;
+  environment: string | null;
+  realm_id: string | null;
+  company_name: string | null;
+  connected_at: string | null;
+};
+
+function QuickBooksSection() {
+  const [status, setStatus] = useState<QboStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await authedFetch("/api/v1/qbo/status");
+      if (res.ok) setStatus((await res.json()) as QboStatus);
+    } catch {
+      // silencieux — le widget affiche juste "Non connecté"
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+    // Le callback QBO redirige vers /app/parametres?qbo=connected — on
+    // recharge le statut quand on arrive avec ce paramètre pour voir
+    // immédiatement le nouvel état.
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      const qbo = url.searchParams.get("qbo");
+      if (qbo) {
+        // Enlève le param de l'URL pour ne pas re-déclencher au reload
+        url.searchParams.delete("qbo");
+        window.history.replaceState({}, "", url.toString());
+        if (qbo === "connected") {
+          // Déjà rechargé plus haut — on affichera le toast via err state
+          setErr(null);
+        } else if (qbo.startsWith("error:")) {
+          setErr(`Connexion QuickBooks échouée : ${qbo.slice(6)}`);
+        }
+      }
+    }
+  }, [load]);
+
+  async function connect() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch("/api/v1/qbo/connect");
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      const data = (await res.json()) as { auth_url: string };
+      window.location.href = data.auth_url;
+    } catch (e) {
+      setErr(`Impossible de lancer la connexion : ${(e as Error).message}`);
+      setBusy(false);
+    }
+  }
+
+  async function disconnect() {
+    if (
+      !window.confirm(
+        "Déconnecter QuickBooks ? Les synchronisations seront désactivées jusqu'à la prochaine reconnexion."
+      )
+    )
+      return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch("/api/v1/qbo/disconnect", {
+        method: "POST"
+      });
+      if (!res.ok && res.status !== 204) throw new Error();
+      await load();
+    } catch {
+      setErr("Déconnexion échouée.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const connected = !!status?.connected;
+  const env = status?.environment || "sandbox";
+  const envLabel = env === "production" ? "Production" : "Sandbox (test)";
+  const envClass =
+    env === "production"
+      ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+      : "bg-amber-500/15 text-amber-300 border-amber-500/30";
+
+  return (
+    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <header className="flex items-center gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500 font-bold">
+          QB
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-base font-bold text-white">
+            Comptabilité — QuickBooks Online
+          </h2>
+          <p className="mt-0.5 text-xs text-white/60">
+            Connecte une compagnie QBO pour pousser automatiquement les
+            clients, soumissions et factures vers ta comptabilité.
+          </p>
+        </div>
+        <span
+          className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${envClass}`}
+          title="Environnement QBO actif"
+        >
+          {envLabel}
+        </span>
+      </header>
+
+      {err ? (
+        <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {err}
+        </p>
+      ) : null}
+
+      {loading ? (
+        <div className="mt-4 flex items-center gap-2 text-xs text-white/50">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+        </div>
+      ) : connected ? (
+        <div className="mt-4 space-y-3">
+          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-4 py-3">
+            <p className="flex items-center gap-2 text-sm font-semibold text-emerald-200">
+              <CheckCircle2 className="h-4 w-4" />
+              Connecté à {status?.company_name || "QuickBooks"}
+            </p>
+            <dl className="mt-2 grid grid-cols-1 gap-1 text-xs text-white/60 sm:grid-cols-2">
+              <div>
+                <dt className="text-white/40">Environnement</dt>
+                <dd className="font-mono text-white/80">{envLabel}</dd>
+              </div>
+              <div>
+                <dt className="text-white/40">Realm ID</dt>
+                <dd className="font-mono text-white/80">
+                  {status?.realm_id || "—"}
+                </dd>
+              </div>
+              {status?.connected_at ? (
+                <div className="sm:col-span-2">
+                  <dt className="text-white/40">Connecté le</dt>
+                  <dd className="text-white/80">
+                    {new Date(status.connected_at).toLocaleString("fr-CA")}
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={connect}
+              disabled={busy}
+              className="btn-secondary text-xs"
+            >
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              Reconnecter
+            </button>
+            <button
+              type="button"
+              onClick={disconnect}
+              disabled={busy}
+              className="inline-flex items-center rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
+            >
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              Déconnecter
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-4 space-y-3">
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-amber-200">
+            <p className="flex items-center gap-2 font-semibold">
+              <AlertCircle className="h-4 w-4" />
+              Aucune compagnie QBO connectée.
+            </p>
+            <p className="mt-1 opacity-80">
+              La connexion se fait via OAuth Intuit : tu seras redirigé
+              vers QuickBooks pour autoriser Horizon, puis reviens ici
+              automatiquement. Environnement actif :{" "}
+              <span className="font-semibold">{envLabel}</span>.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={connect}
+            disabled={busy}
+            className="btn-accent text-sm"
+          >
+            {busy ? (
+              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+            ) : (
+              <ExternalLink className="mr-1.5 h-4 w-4" />
+            )}
+            Connecter QuickBooks
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
