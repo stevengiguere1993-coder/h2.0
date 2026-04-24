@@ -708,9 +708,10 @@ export default function SoumissionDetailPage() {
                   Convertir en projet
                 </button>
                 <p className="w-full text-xs text-white/50">
-                  La conversion en client est normalement automatique quand tu
-                  acceptes la soumission; utilise ce bouton si elle n&apos;a pas
-                  été faite (soumission déjà acceptée avant la MAJ).
+                  Crée le projet et génère automatiquement une facture
+                  d&apos;acompte de 25 % (TPS + TVQ incluses) en
+                  <span className="text-accent-300"> brouillon</span> dans la
+                  facturation.
                 </p>
               </div>
             ) : null}
