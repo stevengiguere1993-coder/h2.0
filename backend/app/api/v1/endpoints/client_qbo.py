@@ -28,6 +28,20 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/clients", tags=["clients-qbo"])
 
 
+def _format_phone(raw: Optional[str]) -> Optional[str]:
+    """Normalise vers (XXX) XXX-XXXX avant de pousser à QBO, comme
+    partout ailleurs dans l'app. Renvoie la valeur brute pour les
+    formats étrangers ou incomplets."""
+    if not raw:
+        return None
+    digits = "".join(c for c in raw if c.isdigit())
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    if len(digits) != 10:
+        return raw
+    return f"({digits[0:3]}) {digits[3:6]}-{digits[6:]}"
+
+
 class PushToQboResponse(BaseModel):
     ok: bool
     client_id: int
@@ -75,7 +89,7 @@ async def push_client_to_qbo(
         customer = await qbo.ensure_customer(
             display_name=client.name,
             email=client.email,
-            phone=client.phone,
+            phone=_format_phone(client.phone),
             billing_address=client.address,
         )
     except QuickBooksError as exc:
