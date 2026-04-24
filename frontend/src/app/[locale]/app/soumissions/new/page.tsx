@@ -18,6 +18,13 @@ type Prospect = {
   address: string | null;
 };
 
+type ClientLite = {
+  id: number;
+  name: string;
+  email: string | null;
+  address: string | null;
+};
+
 function yyyyMmDd(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -41,10 +48,14 @@ export default function NewSoumissionPage() {
   const prefilledContactId = searchParams.get("contact_request_id");
 
   const [prospects, setProspects] = useState<Prospect[]>([]);
-  const [loadingProspects, setLoadingProspects] = useState(true);
+  const [clients, setClients] = useState<ClientLite[]>([]);
+  const [loadingTargets, setLoadingTargets] = useState(true);
 
-  const [contactRequestId, setContactRequestId] = useState<string>(
-    prefilledContactId || ""
+  // Une soumission peut viser un prospect OU un client existant. On
+  // encode le choix dans une seule valeur « prospect:{id} » ou
+  // « client:{id} », puis on éclate en payload au submit.
+  const [target, setTarget] = useState<string>(
+    prefilledContactId ? `prospect:${prefilledContactId}` : ""
   );
   const [title, setTitle] = useState("");
   const [propertyAddress, setPropertyAddress] = useState("");
@@ -61,22 +72,29 @@ export default function NewSoumissionPage() {
     let cancelled = false;
     async function load() {
       try {
-        const res = await authedFetch("/api/v1/contact?limit=200");
-        if (!res.ok) throw new Error();
-        const data = (await res.json()) as Prospect[];
+        const [prospectsRes, clientsRes] = await Promise.all([
+          authedFetch("/api/v1/contact?limit=200"),
+          authedFetch("/api/v1/clients?limit=500")
+        ]);
+        if (!prospectsRes.ok) throw new Error();
+        const prospectsData = (await prospectsRes.json()) as Prospect[];
+        const clientsData = clientsRes.ok
+          ? ((await clientsRes.json()) as ClientLite[])
+          : [];
         if (!cancelled) {
-          setProspects(data);
-          // Auto-fill address when the page is pre-wired to a specific
-          // prospect (coming from "Créer soumission" on the CRM fiche).
+          setProspects(prospectsData);
+          setClients(clientsData);
           if (prefilledContactId) {
-            const p = data.find((x) => String(x.id) === prefilledContactId);
+            const p = prospectsData.find(
+              (x) => String(x.id) === prefilledContactId
+            );
             if (p?.address) setPropertyAddress(p.address);
           }
         }
       } catch {
         /* ignore — dropdown will be empty */
       } finally {
-        if (!cancelled) setLoadingProspects(false);
+        if (!cancelled) setLoadingTargets(false);
       }
     }
     load();
@@ -103,8 +121,10 @@ export default function NewSoumissionPage() {
       if (validUntil) {
         payload.valid_until = new Date(validUntil).toISOString();
       }
-      if (contactRequestId) {
-        payload.contact_request_id = Number(contactRequestId);
+      if (target.startsWith("prospect:")) {
+        payload.contact_request_id = Number(target.slice("prospect:".length));
+      } else if (target.startsWith("client:")) {
+        payload.client_id = Number(target.slice("client:".length));
       }
       if (propertyAddress.trim()) {
         payload.property_address = propertyAddress.trim();
@@ -172,34 +192,65 @@ export default function NewSoumissionPage() {
 
         <form onSubmit={onSubmit} className="mt-6 max-w-3xl space-y-5">
           <div>
-            <label htmlFor="prospect" className="label">
-              Prospect (optionnel)
+            <label htmlFor="target" className="label">
+              Prospect ou client (optionnel)
             </label>
             <select
-              id="prospect"
-              value={contactRequestId}
+              id="target"
+              value={target}
               onChange={(e) => {
-                setContactRequestId(e.target.value);
-                const p = prospects.find(
-                  (x) => String(x.id) === e.target.value
-                );
-                if (p && !title) {
-                  setTitle(`Projet ${p.project_type} — ${p.name}`);
-                }
-                if (p?.address && !propertyAddress) {
-                  setPropertyAddress(p.address);
+                const val = e.target.value;
+                setTarget(val);
+                if (val.startsWith("prospect:")) {
+                  const id = val.slice("prospect:".length);
+                  const p = prospects.find((x) => String(x.id) === id);
+                  if (p && !title) {
+                    setTitle(`Projet ${p.project_type} — ${p.name}`);
+                  }
+                  if (p?.address && !propertyAddress) {
+                    setPropertyAddress(p.address);
+                  }
+                } else if (val.startsWith("client:")) {
+                  const id = val.slice("client:".length);
+                  const c = clients.find((x) => String(x.id) === id);
+                  if (c && !title) {
+                    setTitle(`Projet — ${c.name}`);
+                  }
+                  if (c?.address && !propertyAddress) {
+                    setPropertyAddress(c.address);
+                  }
                 }
               }}
               className="input"
-              disabled={loadingProspects}
+              disabled={loadingTargets}
             >
-              <option value="">— Soumission sans prospect associé —</option>
-              {prospects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} · {p.email}
-                </option>
-              ))}
+              <option value="">— Soumission sans destinataire associé —</option>
+              {prospects.length > 0 ? (
+                <optgroup label="Prospects">
+                  {prospects.map((p) => (
+                    <option key={`p-${p.id}`} value={`prospect:${p.id}`}>
+                      {p.name} · {p.email}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
+              {clients.length > 0 ? (
+                <optgroup label="Clients existants">
+                  {clients.map((c) => (
+                    <option key={`c-${c.id}`} value={`client:${c.id}`}>
+                      {c.name}
+                      {c.email ? ` · ${c.email}` : ""}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
             </select>
+            <p className="mt-1 text-xs text-white/50">
+              Un prospect devient un client une fois sa soumission acceptée —
+              choisis un <strong>client existant</strong> pour ajouter une
+              soumission complémentaire (travaux additionnels, second projet,
+              etc.).
+            </p>
           </div>
 
           <div>
