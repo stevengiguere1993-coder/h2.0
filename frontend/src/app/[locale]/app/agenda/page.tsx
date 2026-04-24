@@ -287,10 +287,21 @@ export default function AgendaPage() {
       const hasAssignedEvent = events.some(
         (e) => e.project_id === p.id && e.assignee_id
       );
-      map.set(p.id, hasMembers || hasAssignedEvent);
+      // Une phase assignée (à un employé ou un sous-traitant) compte
+      // aussi : le projet a au moins une ressource prévue, donc on
+      // n'affiche plus la bande rouge ⚠️.
+      const hasAssignedPhase = phases.some(
+        (ph) =>
+          ph.project_id === p.id &&
+          (ph.assignee_employe_id || ph.assignee_sous_traitant_id)
+      );
+      map.set(
+        p.id,
+        hasMembers || hasAssignedEvent || hasAssignedPhase
+      );
     }
     return map;
-  }, [projects, events]);
+  }, [projects, events, phases]);
 
   const eventsByDay = useMemo(() => {
     const map = new Map<string, AgendaEvent[]>();
