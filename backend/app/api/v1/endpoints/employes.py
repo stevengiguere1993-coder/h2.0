@@ -156,9 +156,101 @@ async def update_employe(
     ).scalar_one_or_none()
     if e is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Employé introuvable.")
-    for field, value in data.model_dump(exclude_unset=True).items():
+    was_active = bool(e.is_active)
+    patch = data.model_dump(exclude_unset=True)
+    for field, value in patch.items():
         setattr(e, field, value)
     await db.flush()
+    # Détection désactivation : si on passe de actif → inactif ET que
+    # l'employé avait des assignations futures (phase, tâche, agenda),
+    # on avertit les managers pour qu'ils réassignent avant que les
+    # travaux ne soient affectés. Idempotent : l'alerte n'est envoyée
+    # qu'une seule fois, à la transition.
+    if was_active and "is_active" in patch and not bool(patch["is_active"]):
+        from datetime import date as _date, datetime as _dt, timezone as _tz
+
+        from app.models.agenda_event import AgendaEvent
+        from app.models.project_assignees import (
+            ProjectPhaseAssignee,
+            ProjectTaskAssignee,
+        )
+        from app.models.project_phase import ProjectPhase
+        from app.models.project_task import ProjectTask
+        from app.services.notifications import notify_role
+
+        today = _date.today()
+        now_utc = _dt.now(_tz.utc)
+        # Phases futures (fin ≥ aujourd'hui)
+        phase_ids = (
+            await db.execute(
+                select(ProjectPhase.id).where(
+                    ProjectPhase.assignee_employe_id == e.id,
+                    ProjectPhase.start_date.is_not(None),
+                )
+            )
+        ).all()
+        joined_phase_ids = (
+            await db.execute(
+                select(ProjectPhaseAssignee.phase_id).where(
+                    ProjectPhaseAssignee.employe_id == e.id
+                )
+            )
+        ).all()
+        has_future_phase = bool(phase_ids or joined_phase_ids)
+        open_task_count = (
+            await db.execute(
+                select(ProjectTask.id).where(
+                    ProjectTask.assignee_id == e.id,
+                    ProjectTask.done.is_(False),
+                )
+            )
+        ).all()
+        joined_task_count = (
+            await db.execute(
+                select(ProjectTaskAssignee.task_id)
+                .join(
+                    ProjectTask,
+                    ProjectTask.id == ProjectTaskAssignee.task_id,
+                )
+                .where(
+                    ProjectTaskAssignee.employe_id == e.id,
+                    ProjectTask.done.is_(False),
+                )
+            )
+        ).all()
+        has_open_task = bool(open_task_count or joined_task_count)
+        future_events = (
+            await db.execute(
+                select(AgendaEvent.id).where(
+                    AgendaEvent.assignee_id == e.id,
+                    AgendaEvent.start_at >= now_utc,
+                )
+            )
+        ).all()
+        has_future_event = bool(future_events)
+        if has_future_phase or has_open_task or has_future_event:
+            pieces: list[str] = []
+            if has_future_phase:
+                pieces.append("des phases de chantier")
+            if has_open_task:
+                pieces.append("des tâches ouvertes")
+            if has_future_event:
+                pieces.append("des événements d'agenda")
+            await notify_role(
+                db,
+                min_role="manager",
+                kind="employe.deactivated_with_assignments",
+                title=(
+                    f"{e.full_name} désactivé avec assignations en cours"
+                ),
+                body=(
+                    f"{e.full_name} vient d'être désactivé mais avait "
+                    f"encore {', '.join(pieces)}. Pense à les réaffecter "
+                    f"depuis /app/assignations. (ref: emp-{e.id}-"
+                    f"{today.isoformat()})"
+                ),
+                href="/app/assignations",
+            )
     await db.refresh(e)
     return EmployeRead.model_validate(e)
 
