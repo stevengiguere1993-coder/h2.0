@@ -309,22 +309,52 @@ export default function AgendaPage() {
     return map;
   }, [projects, events, phases]);
 
-  const eventsByDay = useMemo(() => {
-    const map = new Map<string, AgendaEvent[]>();
+  // On sépare événements « mono-jour » (rendus dans la case) des
+  // événements « multi-jours » (rendus en bande continue qui traverse
+  // les cases, comme les phases de chantier). Les all_day qui couvrent
+  // exactement un jour restent dans la case — pas la peine d'en faire
+  // une bande.
+  const { eventsByDay, multiDayEventsByDay } = useMemo(() => {
+    const single = new Map<string, AgendaEvent[]>();
+    const multi = new Map<string, AgendaEvent[]>();
     for (const e of filteredEvents) {
-      const d = new Date(e.start_at);
-      const key = d.toDateString();
-      const arr = map.get(key) || [];
-      arr.push(e);
-      map.set(key, arr);
+      const s = new Date(e.start_at);
+      const endRaw = e.end_at ? new Date(e.end_at) : s;
+      const sDay = new Date(
+        s.getFullYear(),
+        s.getMonth(),
+        s.getDate()
+      );
+      const eDay = new Date(
+        endRaw.getFullYear(),
+        endRaw.getMonth(),
+        endRaw.getDate()
+      );
+      if (sDay.getTime() === eDay.getTime()) {
+        const key = sDay.toDateString();
+        const arr = single.get(key) || [];
+        arr.push(e);
+        single.set(key, arr);
+      } else {
+        // Chaque jour couvert pointe vers cet event pour l'algo de
+        // placement en bandes par semaine.
+        const cursor = new Date(sDay);
+        while (cursor.getTime() <= eDay.getTime()) {
+          const key = cursor.toDateString();
+          const arr = multi.get(key) || [];
+          arr.push(e);
+          multi.set(key, arr);
+          cursor.setDate(cursor.getDate() + 1);
+        }
+      }
     }
-    // Sort each day by time
-    for (const arr of map.values()) {
+    for (const arr of single.values()) {
       arr.sort(
-        (a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
+        (a, b) =>
+          new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
       );
     }
-    return map;
+    return { eventsByDay: single, multiDayEventsByDay: multi };
   }, [filteredEvents]);
 
   function upsertEvent(saved: AgendaEvent) {
@@ -517,6 +547,7 @@ export default function AgendaPage() {
             grid={grid}
             ref={ref}
             eventsByDay={eventsByDay}
+            multiDayEventsByDay={multiDayEventsByDay}
             projectsByDay={projectsByDay}
             projectHasTeam={projectHasTeam}
             onDayClick={(d) => setModal({ date: d })}
@@ -565,6 +596,7 @@ function MonthView({
   grid,
   ref,
   eventsByDay,
+  multiDayEventsByDay,
   projectsByDay,
   projectHasTeam,
   onDayClick,
@@ -573,6 +605,7 @@ function MonthView({
   grid: Date[];
   ref: Date;
   eventsByDay: Map<string, AgendaEvent[]>;
+  multiDayEventsByDay: Map<string, AgendaEvent[]>;
   projectsByDay: Map<string, Project[]>;
   projectHasTeam: Map<number, boolean>;
   onDayClick: (d: Date) => void;
@@ -589,50 +622,111 @@ function MonthView({
     grid.slice(w * 7, w * 7 + 7)
   );
 
-  type WeekBar = {
-    project: Project;
-    startCol: number;
-    endCol: number;
-    track: number;
-  };
+  // Unifie les bandes hebdomadaires : chantiers (phases de projet)
+  // ET événements agenda multi-jours partagent le même système de
+  // pistes, avec des couleurs différentes selon le type. Permet de
+  // les empiler proprement quand ils se chevauchent.
+  type WeekBar =
+    | {
+        kind: "project";
+        key: string;
+        project: Project;
+        startCol: number;
+        endCol: number;
+        track: number;
+      }
+    | {
+        kind: "event";
+        key: string;
+        event: AgendaEvent;
+        startCol: number;
+        endCol: number;
+        track: number;
+      };
 
   const weeksWithBars = weeks.map((week) => {
-    const spans = new Map<
-      number,
-      { project: Project; startCol: number; endCol: number }
-    >();
+    type Span = { startCol: number; endCol: number };
+    const projectSpans = new Map<number, Span & { project: Project }>();
+    const eventSpans = new Map<number, Span & { event: AgendaEvent }>();
     for (let i = 0; i < 7; i++) {
       const d = week[i];
-      const projs = projectsByDay.get(d.toDateString()) || [];
-      for (const p of projs) {
-        const ex = spans.get(p.id);
+      const key = d.toDateString();
+      for (const p of projectsByDay.get(key) || []) {
+        const ex = projectSpans.get(p.id);
         if (!ex) {
-          spans.set(p.id, { project: p, startCol: i, endCol: i });
+          projectSpans.set(p.id, { project: p, startCol: i, endCol: i });
+        } else {
+          ex.endCol = i;
+        }
+      }
+      for (const ev of multiDayEventsByDay.get(key) || []) {
+        const ex = eventSpans.get(ev.id);
+        if (!ex) {
+          eventSpans.set(ev.id, { event: ev, startCol: i, endCol: i });
         } else {
           ex.endCol = i;
         }
       }
     }
-    const sorted = Array.from(spans.values()).sort(
-      (a, b) => a.startCol - b.startCol
+
+    type Candidate =
+      | { kind: "project"; project: Project; startCol: number; endCol: number }
+      | { kind: "event"; event: AgendaEvent; startCol: number; endCol: number };
+
+    const candidates: Candidate[] = [
+      ...Array.from(projectSpans.values()).map((s) => ({
+        kind: "project" as const,
+        project: s.project,
+        startCol: s.startCol,
+        endCol: s.endCol
+      })),
+      ...Array.from(eventSpans.values()).map((s) => ({
+        kind: "event" as const,
+        event: s.event,
+        startCol: s.startCol,
+        endCol: s.endCol
+      }))
+    ].sort((a, b) =>
+      a.startCol !== b.startCol
+        ? a.startCol - b.startCol
+        : a.endCol - b.endCol
     );
+
     const trackEnds: number[] = [];
     const placed: WeekBar[] = [];
-    for (const b of sorted) {
+    for (const c of candidates) {
       let t = -1;
       for (let i = 0; i < trackEnds.length; i++) {
-        if (trackEnds[i] < b.startCol) {
+        if (trackEnds[i] < c.startCol) {
           t = i;
           break;
         }
       }
       if (t === -1) {
         t = trackEnds.length;
-        trackEnds.push(b.endCol);
+        trackEnds.push(c.endCol);
       } else {
-        trackEnds[t] = b.endCol;
+        trackEnds[t] = c.endCol;
       }
-      placed.push({ ...b, track: t });
+      if (c.kind === "project") {
+        placed.push({
+          kind: "project",
+          key: `p-${c.project.id}`,
+          project: c.project,
+          startCol: c.startCol,
+          endCol: c.endCol,
+          track: t
+        });
+      } else {
+        placed.push({
+          kind: "event",
+          key: `e-${c.event.id}`,
+          event: c.event,
+          startCol: c.startCol,
+          endCol: c.endCol,
+          track: t
+        });
+      }
     }
     return { week, bars: placed, trackCount: trackEnds.length };
   });
@@ -717,37 +811,69 @@ function MonthView({
             })}
 
             {bars.map((bar) => {
-              const hasTeam = projectHasTeam.get(bar.project.id) ?? false;
-              const bg = hasTeam
-                ? "bg-emerald-500/40 border-emerald-500/60 text-emerald-100"
-                : "bg-rose-500/40 border-rose-500/60 text-rose-100";
               const leftPct = (bar.startCol / 7) * 100;
               const widthPct = ((bar.endCol - bar.startCol + 1) / 7) * 100;
               const top =
                 BAR_TOP_OFFSET + bar.track * (BAR_HEIGHT + BAR_GAP);
+              const style: React.CSSProperties = {
+                left: `calc(${leftPct}% + 2px)`,
+                width: `calc(${widthPct}% - 4px)`,
+                top: `${top}px`,
+                height: `${BAR_HEIGHT}px`
+              };
+
+              if (bar.kind === "project") {
+                const hasTeam =
+                  projectHasTeam.get(bar.project.id) ?? false;
+                const bg = hasTeam
+                  ? "bg-emerald-500/40 border-emerald-500/60 text-emerald-100"
+                  : "bg-rose-500/40 border-rose-500/60 text-rose-100";
+                return (
+                  <Link
+                    key={bar.key}
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    href={`/app/projets/${bar.project.id}` as any}
+                    onClick={(ev) => ev.stopPropagation()}
+                    title={
+                      hasTeam
+                        ? `Projet : ${bar.project.name}`
+                        : `Projet : ${bar.project.name} — aucune équipe assignée`
+                    }
+                    className={`absolute z-[2] flex items-center overflow-hidden rounded-md border px-1.5 text-[10px] font-medium shadow-sm ${bg}`}
+                    style={style}
+                  >
+                    <span className="truncate">
+                      {hasTeam ? "🛠️" : "⚠️"} {bar.project.name}
+                    </span>
+                  </Link>
+                );
+              }
+
+              // Événement multi-jours — même look que les event pills
+              // mono-jour mais rendu en bande continue. Garde la couleur
+              // du type (chantier jaune, visite bleue, etc.).
+              const ev = bar.event;
+              const typeClass =
+                TYPE_CLASS[ev.event_type] || TYPE_CLASS.autre;
               return (
-                <Link
-                  key={bar.project.id}
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  href={`/app/projets/${bar.project.id}` as any}
-                  onClick={(ev) => ev.stopPropagation()}
-                  title={
-                    hasTeam
-                      ? `Projet : ${bar.project.name}`
-                      : `Projet : ${bar.project.name} — aucune équipe assignée`
-                  }
-                  className={`absolute z-[2] flex items-center overflow-hidden rounded-md border px-1.5 text-[10px] font-medium shadow-sm ${bg}`}
-                  style={{
-                    left: `calc(${leftPct}% + 2px)`,
-                    width: `calc(${widthPct}% - 4px)`,
-                    top: `${top}px`,
-                    height: `${BAR_HEIGHT}px`
+                <button
+                  key={bar.key}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onEventClick(ev);
                   }}
+                  title={`${ev.title}${
+                    ev.location ? ` · ${ev.location}` : ""
+                  }`}
+                  className={`absolute z-[2] flex items-center overflow-hidden rounded-md border px-1.5 text-left text-[10px] font-medium shadow-sm ${typeClass}`}
+                  style={style}
                 >
                   <span className="truncate">
-                    {hasTeam ? "🛠️" : "⚠️"} {bar.project.name}
+                    {!ev.all_day ? `${fmtTime(ev.start_at)} ` : ""}
+                    {ev.title}
                   </span>
-                </Link>
+                </button>
               );
             })}
           </div>
