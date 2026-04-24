@@ -132,6 +132,10 @@ export const routing = defineRouting({
       fr: "/app/conges",
       en: "/app/conges"
     },
+    "/app/assignations": {
+      fr: "/app/assignations",
+      en: "/app/assignations"
+    },
     "/app/utilisateurs": {
       fr: "/app/utilisateurs",
       en: "/app/utilisateurs"
