@@ -67,8 +67,10 @@ class Settings(BaseSettings):
         "https://h2-0.onrender.com/api/v1/qbo/callback"
     )
     # URL du frontend pour rediriger l'utilisateur après le callback
-    # OAuth Intuit. Défaut = production Render.
-    frontend_url: str = "https://h2-0-web.onrender.com"
+    # OAuth Intuit. Défaut = domaine de production (immohorizon.com).
+    # Override via l'env var FRONTEND_URL si on veut tester contre un
+    # autre domaine (preview Render, local, etc.).
+    frontend_url: str = "https://immohorizon.com"
 
     # Microsoft Graph (email)
     azure_tenant_id: Optional[str] = None
