@@ -18,10 +18,11 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, func, insert, select
 
 from app.api.deps import DBSession, RequireAdminRole, RequireOwner
 from app.core.security import get_password_hash
+from app.models.employe import Employe
 from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.user import User, UserRole
@@ -38,6 +39,43 @@ class UserRead(BaseModel):
     is_admin: bool
     role: str
     created_at: datetime
+    # Tiré de la table Employe (match sur email, insensible à la casse).
+    # Sert à afficher « Olivier Therrien » plutôt que l'adresse email
+    # partout dans l'UI (équipe projet, sélecteurs, etc.).
+    full_name: Optional[str] = None
+
+
+async def _user_full_names(db, users: List[User]) -> dict[int, str]:
+    if not users:
+        return {}
+    emails = {u.email.lower() for u in users if u.email}
+    if not emails:
+        return {}
+    rows = (
+        await db.execute(
+            select(Employe.email, Employe.full_name).where(
+                func.lower(Employe.email).in_(emails)
+            )
+        )
+    ).all()
+    by_email = {(e or "").lower(): fn for e, fn in rows if fn}
+    return {
+        u.id: by_email[u.email.lower()]
+        for u in users
+        if u.email and u.email.lower() in by_email
+    }
+
+
+def _user_read(u: User, full_name: Optional[str]) -> UserRead:
+    return UserRead(
+        id=u.id,
+        email=u.email,
+        is_active=u.is_active,
+        is_admin=u.is_admin,
+        role=u.role,
+        created_at=u.created_at,
+        full_name=full_name,
+    )
 
 
 class RoleUpdate(BaseModel):
@@ -61,7 +99,8 @@ async def list_users(db: DBSession, _: RequireOwner) -> List[UserRead]:
     rows = (
         await db.execute(select(User).order_by(User.email.asc()))
     ).scalars().all()
-    return [UserRead.model_validate(r) for r in rows]
+    names = await _user_full_names(db, list(rows))
+    return [_user_read(r, names.get(r.id)) for r in rows]
 
 
 @router.patch("/{user_id}/role", response_model=UserRead)

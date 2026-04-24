@@ -2671,6 +2671,7 @@ type TeamMember = {
   id: number;
   email: string;
   role: string;
+  full_name?: string | null;
 };
 
 function ProjectTeamSection({
@@ -2822,26 +2823,30 @@ function ProjectTeamSection({
         </p>
       ) : (
         <ul className="mt-3 flex flex-wrap gap-2">
-          {members.map((m) => (
-            <li
-              key={m.id}
-              className="group flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-white"
-            >
-              <span className="font-semibold">{m.email}</span>
-              <span className="rounded bg-white/10 px-1.5 py-0.5 text-[9px] uppercase text-white/60">
-                {m.role}
-              </span>
-              <button
-                type="button"
-                onClick={() => removeMember(m.id)}
-                disabled={saving}
-                className="text-white/40 hover:text-rose-300"
-                aria-label="Retirer du projet"
+          {members.map((m) => {
+            const displayName = m.full_name || m.email;
+            return (
+              <li
+                key={m.id}
+                className="group flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-white"
+                title={m.full_name ? m.email : undefined}
               >
-                <Trash2 className="h-3 w-3" />
-              </button>
-            </li>
-          ))}
+                <span className="font-semibold">{displayName}</span>
+                <span className="rounded bg-white/10 px-1.5 py-0.5 text-[9px] uppercase text-white/60">
+                  {m.role}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removeMember(m.id)}
+                  disabled={saving}
+                  className="text-white/40 hover:text-rose-300"
+                  aria-label="Retirer du projet"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
 
@@ -2857,9 +2862,16 @@ function ProjectTeamSection({
                   type="button"
                   onClick={() => addMember(u.id)}
                   disabled={saving}
-                  className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-xs text-white hover:bg-accent-500/10"
+                  className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs text-white hover:bg-accent-500/10"
                 >
-                  <span>{u.email}</span>
+                  <span className="min-w-0 truncate">
+                    <span className="font-medium">
+                      {u.full_name || u.email}
+                    </span>
+                    {u.full_name ? (
+                      <span className="ml-2 text-white/40">{u.email}</span>
+                    ) : null}
+                  </span>
                   <span className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] uppercase text-white/50">
                     {u.role}
                   </span>
