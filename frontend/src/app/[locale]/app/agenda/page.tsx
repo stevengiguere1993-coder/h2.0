@@ -573,6 +573,68 @@ function MonthView({
   onEventClick: (e: AgendaEvent) => void;
 }) {
   const today = new Date();
+
+  // Découpe la grille en 6 semaines pour dessiner des bandes de projet
+  // continues qui traversent plusieurs cases (style Google Calendar).
+  // Un projet qui dépasse le dimanche est scindé en 2 bandes — une par
+  // semaine. Les chevauchements sont placés sur des pistes distinctes
+  // via un algo glouton.
+  const weeks = Array.from({ length: 6 }, (_, w) =>
+    grid.slice(w * 7, w * 7 + 7)
+  );
+
+  type WeekBar = {
+    project: Project;
+    startCol: number;
+    endCol: number;
+    track: number;
+  };
+
+  const weeksWithBars = weeks.map((week) => {
+    const spans = new Map<
+      number,
+      { project: Project; startCol: number; endCol: number }
+    >();
+    for (let i = 0; i < 7; i++) {
+      const d = week[i];
+      const projs = projectsByDay.get(d.toDateString()) || [];
+      for (const p of projs) {
+        const ex = spans.get(p.id);
+        if (!ex) {
+          spans.set(p.id, { project: p, startCol: i, endCol: i });
+        } else {
+          ex.endCol = i;
+        }
+      }
+    }
+    const sorted = Array.from(spans.values()).sort(
+      (a, b) => a.startCol - b.startCol
+    );
+    const trackEnds: number[] = [];
+    const placed: WeekBar[] = [];
+    for (const b of sorted) {
+      let t = -1;
+      for (let i = 0; i < trackEnds.length; i++) {
+        if (trackEnds[i] < b.startCol) {
+          t = i;
+          break;
+        }
+      }
+      if (t === -1) {
+        t = trackEnds.length;
+        trackEnds.push(b.endCol);
+      } else {
+        trackEnds[t] = b.endCol;
+      }
+      placed.push({ ...b, track: t });
+    }
+    return { week, bars: placed, trackCount: trackEnds.length };
+  });
+
+  const BAR_HEIGHT = 18;
+  const BAR_GAP = 2;
+  const BAR_TOP_OFFSET = 30; // sous la pastille de date
+
   return (
     <div className="overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
       <div className="grid grid-cols-7 border-b border-brand-800 text-xs font-semibold text-white/50">
@@ -582,99 +644,109 @@ function MonthView({
           </div>
         ))}
       </div>
-      <div className="grid grid-cols-7">
-        {grid.map((d, i) => {
-          const inMonth = d.getMonth() === ref.getMonth();
-          const isToday = sameDay(d, today);
-          const dayEvents = eventsByDay.get(d.toDateString()) || [];
-          const dayProjects = projectsByDay.get(d.toDateString()) || [];
-          return (
-            <div
-              key={i}
-              onClick={() => {
-                const at = new Date(d);
-                at.setHours(9, 0, 0, 0);
-                onDayClick(at);
-              }}
-              className={`min-h-[96px] cursor-pointer border-b border-r border-brand-800 p-1.5 transition hover:bg-brand-800/50 ${
-                inMonth ? "bg-brand-900" : "bg-brand-950/50"
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span
-                  className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs ${
-                    isToday
-                      ? "bg-accent-500 font-bold text-brand-950"
-                      : inMonth
-                      ? "text-white/80"
-                      : "text-white/30"
+      {weeksWithBars.map(({ week, bars, trackCount }, wIdx) => {
+        const reservedBarsHeight =
+          trackCount > 0 ? trackCount * (BAR_HEIGHT + BAR_GAP) : 0;
+        return (
+          <div key={wIdx} className="relative grid grid-cols-7">
+            {week.map((d, i) => {
+              const inMonth = d.getMonth() === ref.getMonth();
+              const isToday = sameDay(d, today);
+              const dayEvents = eventsByDay.get(d.toDateString()) || [];
+              return (
+                <div
+                  key={i}
+                  onClick={() => {
+                    const at = new Date(d);
+                    at.setHours(9, 0, 0, 0);
+                    onDayClick(at);
+                  }}
+                  className={`min-h-[96px] cursor-pointer border-b border-r border-brand-800 p-1.5 transition hover:bg-brand-800/50 ${
+                    inMonth ? "bg-brand-900" : "bg-brand-950/50"
                   }`}
                 >
-                  {d.getDate()}
-                </span>
-                {dayEvents.length > 3 ? (
-                  <span className="text-[10px] text-white/40">
-                    +{dayEvents.length - 3}
-                  </span>
-                ) : null}
-              </div>
+                  <div className="flex items-center justify-between">
+                    <span
+                      className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs ${
+                        isToday
+                          ? "bg-accent-500 font-bold text-brand-950"
+                          : inMonth
+                          ? "text-white/80"
+                          : "text-white/30"
+                      }`}
+                    >
+                      {d.getDate()}
+                    </span>
+                    {dayEvents.length > 3 ? (
+                      <span className="text-[10px] text-white/40">
+                        +{dayEvents.length - 3}
+                      </span>
+                    ) : null}
+                  </div>
 
-              {/* Project bands — one colored line per active project on
-                  that day. Red if no team assigned (visual call-to-action
-                  to assign someone). */}
-              {dayProjects.length > 0 ? (
-                <div className="mt-1 space-y-0.5">
-                  {dayProjects.slice(0, 2).map((p) => {
-                    const hasTeam = projectHasTeam.get(p.id) ?? false;
-                    const bg = hasTeam
-                      ? "bg-emerald-500/30 border-emerald-500/60 text-emerald-100"
-                      : "bg-rose-500/30 border-rose-500/60 text-rose-100";
-                    return (
-                      <Link
-                        key={p.id}
-                        href={`/app/projets/${p.id}` as never}
-                        onClick={(ev) => ev.stopPropagation()}
-                        title={
-                          hasTeam
-                            ? `Projet : ${p.name}`
-                            : `Projet : ${p.name} — aucune équipe assignée`
-                        }
-                        className={`block truncate rounded-sm border px-1 py-0.5 text-[10px] font-medium ${bg}`}
-                      >
-                        {hasTeam ? "🛠️" : "⚠️"} {p.name}
-                      </Link>
-                    );
-                  })}
-                  {dayProjects.length > 2 ? (
-                    <p className="text-[9px] text-white/40">
-                      +{dayProjects.length - 2} projet(s)
-                    </p>
+                  {reservedBarsHeight > 0 ? (
+                    <div style={{ height: `${reservedBarsHeight}px` }} />
                   ) : null}
-                </div>
-              ) : null}
 
-              <div className="mt-1 space-y-0.5">
-                {dayEvents.slice(0, 3).map((e) => (
-                  <button
-                    key={e.id}
-                    type="button"
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      onEventClick(e);
-                    }}
-                    className={`block w-full truncate rounded border px-1 py-0.5 text-left text-[10px] font-medium ${
-                      TYPE_CLASS[e.event_type] || TYPE_CLASS.autre
-                    }`}
-                  >
-                    {!e.all_day ? `${fmtTime(e.start_at)} ` : ""}
-                    {e.title}
-                  </button>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+                  <div className="mt-1 space-y-0.5">
+                    {dayEvents.slice(0, 3).map((e) => (
+                      <button
+                        key={e.id}
+                        type="button"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          onEventClick(e);
+                        }}
+                        className={`block w-full truncate rounded border px-1 py-0.5 text-left text-[10px] font-medium ${
+                          TYPE_CLASS[e.event_type] || TYPE_CLASS.autre
+                        }`}
+                      >
+                        {!e.all_day ? `${fmtTime(e.start_at)} ` : ""}
+                        {e.title}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+
+            {bars.map((bar) => {
+              const hasTeam = projectHasTeam.get(bar.project.id) ?? false;
+              const bg = hasTeam
+                ? "bg-emerald-500/40 border-emerald-500/60 text-emerald-100"
+                : "bg-rose-500/40 border-rose-500/60 text-rose-100";
+              const leftPct = (bar.startCol / 7) * 100;
+              const widthPct = ((bar.endCol - bar.startCol + 1) / 7) * 100;
+              const top =
+                BAR_TOP_OFFSET + bar.track * (BAR_HEIGHT + BAR_GAP);
+              return (
+                <Link
+                  key={bar.project.id}
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  href={`/app/projets/${bar.project.id}` as any}
+                  onClick={(ev) => ev.stopPropagation()}
+                  title={
+                    hasTeam
+                      ? `Projet : ${bar.project.name}`
+                      : `Projet : ${bar.project.name} — aucune équipe assignée`
+                  }
+                  className={`absolute z-[2] flex items-center overflow-hidden rounded-md border px-1.5 text-[10px] font-medium shadow-sm ${bg}`}
+                  style={{
+                    left: `calc(${leftPct}% + 2px)`,
+                    width: `calc(${widthPct}% - 4px)`,
+                    top: `${top}px`,
+                    height: `${BAR_HEIGHT}px`
+                  }}
+                >
+                  <span className="truncate">
+                    {hasTeam ? "🛠️" : "⚠️"} {bar.project.name}
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+        );
+      })}
     </div>
   );
 }
