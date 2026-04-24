@@ -129,8 +129,35 @@ def _build_estimate_payload(
         "CustomerMemo": {"value": soumission.title or ""},
         "Line": lines,
     }
+    # ExpirationDate : soit la date saisie par l'utilisateur, soit
+    # défaut +30 jours pour que QBO ait toujours une valeur (sinon le
+    # champ reste vide dans l'UI, ce qui ressemble à un bug côté h2.0).
+    from datetime import timedelta as _td
     if soumission.valid_until:
         payload["ExpirationDate"] = soumission.valid_until.date().isoformat()
+    else:
+        payload["ExpirationDate"] = (
+            date.today() + _td(days=30)
+        ).isoformat()
+
+    # Taxes canadiennes — on recalcule à partir des lignes pour éviter
+    # les incohérences avec la colonne DB (souvent null en pratique
+    # puisqu'elle n'est populée qu'au rendu PDF). TPS 5 % + TVQ 9.975 %
+    # == taux par défaut du Québec. GlobalTaxCalculation="TaxExcluded"
+    # dit à QBO que les montants de ligne n'incluent pas les taxes :
+    # le total inclut donc sous-total + taxes.
+    subtotal = 0.0
+    for line in lines:
+        try:
+            subtotal += float(line.get("Amount") or 0)
+        except (TypeError, ValueError):
+            continue
+    tps = round(subtotal * 0.05, 2)
+    tvq = round(subtotal * 0.09975, 2)
+    total_tax = round(tps + tvq, 2)
+    if total_tax > 0:
+        payload["GlobalTaxCalculation"] = "TaxExcluded"
+        payload["TxnTaxDetail"] = {"TotalTax": total_tax}
 
     if existing_estimate_id and existing_sync_token is not None:
         payload["Id"] = existing_estimate_id
