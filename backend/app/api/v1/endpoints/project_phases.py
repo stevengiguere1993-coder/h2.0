@@ -232,3 +232,30 @@ async def reorder_phases(
         rows, key=lambda r: (r.position, r.id)
     )
     return [PhaseRead.model_validate(r) for r in rows_sorted]
+
+
+# ---------------------------------------------------------------------------
+# Bulk listing — used by the agenda timeline (Par chantier / Par personne).
+# Returns every phase the current user can see, across all visible projects.
+# Kept on a separate router prefix so the URL is /api/v1/phases (flat).
+# ---------------------------------------------------------------------------
+
+phases_router = APIRouter(prefix="/phases", tags=["project-phases"])
+
+
+@phases_router.get("", response_model=List[PhaseRead])
+async def list_all_phases(
+    db: DBSession, user: CurrentUser
+) -> List[PhaseRead]:
+    visible = await visible_project_ids(db, user)
+    stmt = select(ProjectPhase).order_by(
+        ProjectPhase.project_id.asc(),
+        ProjectPhase.position.asc(),
+        ProjectPhase.id.asc(),
+    )
+    if visible is not None:
+        if not visible:
+            return []
+        stmt = stmt.where(ProjectPhase.project_id.in_(visible))
+    rows = (await db.execute(stmt)).scalars().all()
+    return [PhaseRead.model_validate(r) for r in rows]

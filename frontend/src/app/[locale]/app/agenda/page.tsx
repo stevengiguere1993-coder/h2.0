@@ -40,6 +40,16 @@ type Project = {
   members?: Array<{ employe_id: number }> | null;
 };
 type Employe = { id: number; full_name: string };
+type Phase = {
+  id: number;
+  project_id: number;
+  name: string;
+  position: number;
+  start_date: string | null;
+  duration_days: number | null;
+  assignee_employe_id: number | null;
+  assignee_sous_traitant_id: number | null;
+};
 
 const TYPE_LABELS: Record<string, string> = {
   chantier: "Chantier",
@@ -116,14 +126,47 @@ function fmtTime(iso: string): string {
   ).padStart(2, "0")}`;
 }
 
+// Monday of the ISO week containing `d`, at local midnight.
+function mondayOf(d: Date): Date {
+  const m = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const w = (m.getDay() + 6) % 7; // Mon=0 ... Sun=6
+  m.setDate(m.getDate() - w);
+  return m;
+}
+
+// Difference in whole days between two dates (ignoring DST).
+function diffDays(a: Date, b: Date): number {
+  const MS = 24 * 60 * 60 * 1000;
+  const da = new Date(a.getFullYear(), a.getMonth(), a.getDate()).getTime();
+  const db = new Date(b.getFullYear(), b.getMonth(), b.getDate()).getTime();
+  return Math.round((db - da) / MS);
+}
+
+function timelineRangeLabel(ref: Date, span: number): string {
+  const start = mondayOf(ref);
+  const end = new Date(start);
+  end.setDate(end.getDate() + span - 1);
+  const fmt = (d: Date) =>
+    d.toLocaleDateString("fr-CA", {
+      day: "numeric",
+      month: "short"
+    });
+  return `${fmt(start)} → ${fmt(end)}`;
+}
+
 export default function AgendaPage() {
   const { onOpenSidebar } = useAppLayout();
   const [ref, setRef] = useState(() => new Date());
-  const [view, setView] = useState<"month" | "list">("month");
+  const [view, setView] = useState<
+    "month" | "list" | "by-project" | "by-person"
+  >("month");
+  // Timeline span (days) for the Gantt-like views.
+  const [spanDays, setSpanDays] = useState<7 | 14 | 28>(14);
 
   const [events, setEvents] = useState<AgendaEvent[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [employes, setEmployes] = useState<Employe[]>([]);
+  const [phases, setPhases] = useState<Phase[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -141,19 +184,22 @@ export default function AgendaPage() {
       setLoading(true);
       setError(null);
       try {
-        const [evRes, prRes, empRes] = await Promise.all([
+        const [evRes, prRes, empRes, phRes] = await Promise.all([
           authedFetch("/api/v1/agenda?limit=500"),
           authedFetch("/api/v1/projects?limit=200"),
-          authedFetch("/api/v1/employes?limit=200")
+          authedFetch("/api/v1/employes?limit=200"),
+          authedFetch("/api/v1/phases")
         ]);
         if (!evRes.ok) throw new Error(`http_${evRes.status}`);
         const evs = (await evRes.json()) as AgendaEvent[];
         const prs = prRes.ok ? ((await prRes.json()) as Project[]) : [];
         const emps = empRes.ok ? ((await empRes.json()) as Employe[]) : [];
+        const phs = phRes.ok ? ((await phRes.json()) as Phase[]) : [];
         if (!cancelled) {
           setEvents(evs);
           setProjects(prs);
           setEmployes(emps);
+          setPhases(phs);
         }
       } catch {
         if (!cancelled) setError("Impossible de charger l'agenda.");
@@ -299,26 +345,36 @@ export default function AgendaPage() {
               type="button"
               onClick={() => {
                 const d = new Date(ref);
-                d.setMonth(d.getMonth() - 1);
+                if (view === "by-project" || view === "by-person") {
+                  d.setDate(d.getDate() - spanDays);
+                } else {
+                  d.setMonth(d.getMonth() - 1);
+                }
                 setRef(d);
               }}
               className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
-              aria-label="Mois précédent"
+              aria-label="Période précédente"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
             <span className="min-w-[140px] px-2 text-center text-sm font-semibold text-white">
-              {monthLabel(ref)}
+              {view === "by-project" || view === "by-person"
+                ? timelineRangeLabel(ref, spanDays)
+                : monthLabel(ref)}
             </span>
             <button
               type="button"
               onClick={() => {
                 const d = new Date(ref);
-                d.setMonth(d.getMonth() + 1);
+                if (view === "by-project" || view === "by-person") {
+                  d.setDate(d.getDate() + spanDays);
+                } else {
+                  d.setMonth(d.getMonth() + 1);
+                }
                 setRef(d);
               }}
               className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
-              aria-label="Mois suivant"
+              aria-label="Période suivante"
             >
               <ChevronRight className="h-4 w-4" />
             </button>
@@ -335,12 +391,35 @@ export default function AgendaPage() {
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <select
               value={view}
-              onChange={(e) => setView(e.target.value as "month" | "list")}
-              className="input w-28"
+              onChange={(e) =>
+                setView(
+                  e.target.value as
+                    | "month"
+                    | "list"
+                    | "by-project"
+                    | "by-person"
+                )
+              }
+              className="input w-40"
             >
               <option value="month">Mois</option>
               <option value="list">Liste</option>
+              <option value="by-project">Par chantier</option>
+              <option value="by-person">Par personne</option>
             </select>
+            {view === "by-project" || view === "by-person" ? (
+              <select
+                value={String(spanDays)}
+                onChange={(e) =>
+                  setSpanDays(Number(e.target.value) as 7 | 14 | 28)
+                }
+                className="input w-28"
+              >
+                <option value="7">7 jours</option>
+                <option value="14">14 jours</option>
+                <option value="28">28 jours</option>
+              </select>
+            ) : null}
             <select
               value={fType}
               onChange={(e) => setFType(e.target.value)}
@@ -394,9 +473,20 @@ export default function AgendaPage() {
             onDayClick={(d) => setModal({ date: d })}
             onEventClick={(e) => setModal(e)}
           />
-        ) : (
+        ) : view === "list" ? (
           <ListView
             events={filteredEvents}
+            onEventClick={(e) => setModal(e)}
+          />
+        ) : (
+          <TimelineView
+            mode={view === "by-project" ? "project" : "person"}
+            ref={ref}
+            spanDays={spanDays}
+            events={filteredEvents}
+            phases={phases}
+            projects={projects}
+            employes={employes}
             onEventClick={(e) => setModal(e)}
           />
         )}
@@ -921,6 +1011,438 @@ function EventModal({
           </div>
         </div>
       </form>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TimelineView — Gantt-style grouping by project or by person.
+// Shows each event / project phase as a horizontal bar spanning its date
+// range. Clicking an event bar opens the edit modal; clicking a phase bar
+// navigates to the project's phase planner.
+// ---------------------------------------------------------------------------
+
+type TimelineItem = {
+  key: string;
+  kind: "event" | "phase";
+  title: string;
+  subtitle: string;
+  startIdx: number;
+  endIdx: number;
+  accent: string; // tailwind background classes
+  raw?: AgendaEvent;
+  href?: string;
+  onClick?: () => void;
+};
+
+type TimelineRow = {
+  key: string;
+  label: string;
+  sublabel?: string;
+  tone?: string;
+  items: TimelineItem[];
+};
+
+function assignTracks(items: TimelineItem[]): {
+  placed: Array<TimelineItem & { track: number }>;
+  trackCount: number;
+} {
+  const sorted = [...items].sort((a, b) =>
+    a.startIdx !== b.startIdx
+      ? a.startIdx - b.startIdx
+      : a.endIdx - b.endIdx
+  );
+  const tracksLastEnd: number[] = [];
+  const placed: Array<TimelineItem & { track: number }> = [];
+  for (const it of sorted) {
+    let t = -1;
+    for (let i = 0; i < tracksLastEnd.length; i++) {
+      if (tracksLastEnd[i] < it.startIdx) {
+        t = i;
+        break;
+      }
+    }
+    if (t === -1) {
+      t = tracksLastEnd.length;
+      tracksLastEnd.push(it.endIdx);
+    } else {
+      tracksLastEnd[t] = it.endIdx;
+    }
+    placed.push({ ...it, track: t });
+  }
+  return { placed, trackCount: Math.max(1, tracksLastEnd.length) };
+}
+
+function eventAccent(type: string): string {
+  switch (type) {
+    case "chantier":
+      return "bg-accent-500/80 border-accent-400 text-brand-950";
+    case "visite":
+      return "bg-blue-500/80 border-blue-400 text-white";
+    case "reunion":
+      return "bg-violet-500/80 border-violet-400 text-white";
+    case "livraison":
+      return "bg-emerald-500/80 border-emerald-400 text-white";
+    case "conge":
+      return "bg-orange-500/80 border-orange-400 text-white";
+    default:
+      return "bg-white/20 border-white/30 text-white";
+  }
+}
+
+function TimelineView({
+  mode,
+  ref,
+  spanDays,
+  events,
+  phases,
+  projects,
+  employes,
+  onEventClick
+}: {
+  mode: "project" | "person";
+  ref: Date;
+  spanDays: number;
+  events: AgendaEvent[];
+  phases: Phase[];
+  projects: Project[];
+  employes: Employe[];
+  onEventClick: (e: AgendaEvent) => void;
+}) {
+  const start = useMemo(() => mondayOf(ref), [ref]);
+  const days = useMemo(
+    () =>
+      Array.from({ length: spanDays }, (_, i) => {
+        const d = new Date(start);
+        d.setDate(start.getDate() + i);
+        return d;
+      }),
+    [start, spanDays]
+  );
+  const endExclusive = useMemo(() => {
+    const d = new Date(start);
+    d.setDate(d.getDate() + spanDays);
+    return d;
+  }, [start, spanDays]);
+
+  const projectById = useMemo(() => {
+    const m = new Map<number, Project>();
+    for (const p of projects) m.set(p.id, p);
+    return m;
+  }, [projects]);
+  const employeById = useMemo(() => {
+    const m = new Map<number, Employe>();
+    for (const e of employes) m.set(e.id, e);
+    return m;
+  }, [employes]);
+
+  function clampIdx(d: Date): number {
+    const i = diffDays(start, d);
+    return Math.max(0, Math.min(spanDays - 1, i));
+  }
+
+  function eventToItem(e: AgendaEvent): TimelineItem | null {
+    const s = new Date(e.start_at);
+    const endRaw = e.end_at ? new Date(e.end_at) : new Date(e.start_at);
+    if (endRaw < start || s >= endExclusive) return null;
+    const emp = e.assignee_id ? employeById.get(e.assignee_id) : null;
+    const proj = e.project_id ? projectById.get(e.project_id) : null;
+    const sub =
+      mode === "project"
+        ? emp
+          ? `${TYPE_LABELS[e.event_type] || "Événement"} · ${emp.full_name}`
+          : TYPE_LABELS[e.event_type] || "Événement"
+        : proj
+          ? `${TYPE_LABELS[e.event_type] || "Événement"} · ${proj.name}`
+          : TYPE_LABELS[e.event_type] || "Événement";
+    return {
+      key: `e-${e.id}`,
+      kind: "event",
+      title: e.title,
+      subtitle: sub,
+      startIdx: clampIdx(s),
+      endIdx: clampIdx(endRaw),
+      accent: eventAccent(e.event_type),
+      raw: e,
+      onClick: () => onEventClick(e)
+    };
+  }
+
+  function phaseToItem(p: Phase): TimelineItem | null {
+    if (!p.start_date || !p.duration_days || p.duration_days <= 0) return null;
+    const s = new Date(p.start_date);
+    const e = new Date(s);
+    e.setDate(e.getDate() + p.duration_days - 1);
+    if (e < start || s >= endExclusive) return null;
+    const proj = projectById.get(p.project_id);
+    const emp = p.assignee_employe_id
+      ? employeById.get(p.assignee_employe_id)
+      : null;
+    const sub =
+      mode === "project"
+        ? emp
+          ? `Phase · ${emp.full_name}`
+          : "Phase"
+        : proj
+          ? `Phase · ${proj.name}`
+          : "Phase";
+    return {
+      key: `p-${p.id}`,
+      kind: "phase",
+      title: p.name,
+      subtitle: sub,
+      startIdx: clampIdx(s),
+      endIdx: clampIdx(e),
+      accent: "bg-fuchsia-500/80 border-fuchsia-400 text-white",
+      href: `/app/projets/${p.project_id}`
+    };
+  }
+
+  const rows: TimelineRow[] = useMemo(() => {
+    const rowMap = new Map<string, TimelineRow>();
+    const ensureRow = (key: string, label: string, sublabel?: string) => {
+      const existing = rowMap.get(key);
+      if (existing) return existing;
+      const r: TimelineRow = { key, label, sublabel, items: [] };
+      rowMap.set(key, r);
+      return r;
+    };
+
+    if (mode === "project") {
+      for (const ev of events) {
+        const item = eventToItem(ev);
+        if (!item) continue;
+        const key = ev.project_id ? `proj-${ev.project_id}` : "proj-none";
+        const label = ev.project_id
+          ? projectById.get(ev.project_id)?.name || `Projet #${ev.project_id}`
+          : "Sans chantier";
+        ensureRow(key, label).items.push(item);
+      }
+      for (const ph of phases) {
+        const item = phaseToItem(ph);
+        if (!item) continue;
+        const key = `proj-${ph.project_id}`;
+        const label =
+          projectById.get(ph.project_id)?.name || `Projet #${ph.project_id}`;
+        const sub = projectById.get(ph.project_id)?.status || undefined;
+        ensureRow(key, label, sub).items.push(item);
+      }
+    } else {
+      for (const ev of events) {
+        const item = eventToItem(ev);
+        if (!item) continue;
+        const key = ev.assignee_id ? `emp-${ev.assignee_id}` : "emp-none";
+        const label = ev.assignee_id
+          ? employeById.get(ev.assignee_id)?.full_name ||
+            `Employé #${ev.assignee_id}`
+          : "Non-assigné";
+        ensureRow(key, label).items.push(item);
+      }
+      for (const ph of phases) {
+        const item = phaseToItem(ph);
+        if (!item) continue;
+        const key = ph.assignee_employe_id
+          ? `emp-${ph.assignee_employe_id}`
+          : "emp-none";
+        const label = ph.assignee_employe_id
+          ? employeById.get(ph.assignee_employe_id)?.full_name ||
+            `Employé #${ph.assignee_employe_id}`
+          : "Non-assigné";
+        ensureRow(key, label).items.push(item);
+      }
+    }
+
+    const arr = Array.from(rowMap.values());
+    arr.sort((a, b) => {
+      if (a.key === "proj-none" || a.key === "emp-none") return 1;
+      if (b.key === "proj-none" || b.key === "emp-none") return -1;
+      return a.label.localeCompare(b.label);
+    });
+    return arr;
+    // eventToItem / phaseToItem close over deps listed below; exhaustive-deps
+    // doesn't track inner function captures so we enumerate the real deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    mode,
+    events,
+    phases,
+    projectById,
+    employeById,
+    start,
+    endExclusive,
+    spanDays,
+    onEventClick
+  ]);
+
+  const today = new Date();
+  const todayIdx = diffDays(start, today);
+  const todayInRange = todayIdx >= 0 && todayIdx < spanDays;
+
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-14 text-center">
+        <CalendarIcon className="mx-auto h-8 w-8 text-white/30" />
+        <p className="mt-3 text-sm text-white/60">
+          Aucun événement ni phase sur cette période.
+        </p>
+      </div>
+    );
+  }
+
+  const gridCols = `200px repeat(${spanDays}, minmax(44px, 1fr))`;
+
+  return (
+    <div className="overflow-x-auto rounded-xl border border-brand-800 bg-brand-900">
+      <div className="min-w-[720px]">
+        {/* Header row */}
+        <div
+          className="sticky top-0 z-10 grid border-b border-brand-800 bg-brand-900/95 text-xs"
+          style={{ gridTemplateColumns: gridCols }}
+        >
+          <div className="px-3 py-2 font-semibold text-white/50 uppercase tracking-wider">
+            {mode === "project" ? "Chantier" : "Personne"}
+          </div>
+          {days.map((d, i) => {
+            const isToday = sameDay(d, today);
+            const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+            return (
+              <div
+                key={i}
+                className={`border-l border-brand-800 px-1.5 py-2 text-center ${
+                  isWeekend ? "bg-brand-950/40" : ""
+                } ${isToday ? "text-accent-400" : "text-white/60"}`}
+              >
+                <p className="text-[10px] uppercase">{WEEKDAYS[(d.getDay() + 6) % 7]}</p>
+                <p className="text-[11px] font-semibold">
+                  {d.getDate()}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Rows */}
+        {rows.map((row) => {
+          const { placed, trackCount } = assignTracks(row.items);
+          const rowHeight = Math.max(1, trackCount) * 34 + 10;
+          return (
+            <div
+              key={row.key}
+              className="grid border-b border-brand-800"
+              style={{ gridTemplateColumns: gridCols }}
+            >
+              <div className="flex min-w-0 flex-col justify-center border-r border-brand-800 px-3 py-2">
+                <p className="truncate text-sm font-semibold text-white">
+                  {row.label}
+                </p>
+                {row.sublabel ? (
+                  <p className="truncate text-[11px] text-white/50">
+                    {row.sublabel}
+                  </p>
+                ) : null}
+              </div>
+              <div
+                className="relative"
+                style={{
+                  gridColumn: `2 / span ${spanDays}`,
+                  height: `${rowHeight}px`
+                }}
+              >
+                {/* Day column grid background */}
+                <div
+                  className="pointer-events-none absolute inset-0 grid"
+                  style={{
+                    gridTemplateColumns: `repeat(${spanDays}, minmax(0, 1fr))`
+                  }}
+                >
+                  {days.map((d, i) => {
+                    const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+                    return (
+                      <div
+                        key={i}
+                        className={`border-l border-brand-800/60 ${
+                          isWeekend ? "bg-brand-950/30" : ""
+                        }`}
+                      />
+                    );
+                  })}
+                </div>
+                {/* Today vertical line */}
+                {todayInRange ? (
+                  <div
+                    className="pointer-events-none absolute top-0 bottom-0 z-[1] w-px bg-accent-500/70"
+                    style={{
+                      left: `calc(${(todayIdx + 0.5) / spanDays} * 100%)`
+                    }}
+                  />
+                ) : null}
+                {/* Items */}
+                {placed.map((it) => {
+                  const left = (it.startIdx / spanDays) * 100;
+                  const width =
+                    ((it.endIdx - it.startIdx + 1) / spanDays) * 100;
+                  const top = it.track * 34 + 5;
+                  const content = (
+                    <div className="flex h-full min-w-0 items-center gap-1 px-2">
+                      <span className="truncate text-[11px] font-semibold">
+                        {it.title}
+                      </span>
+                      <span className="truncate text-[10px] opacity-80">
+                        {it.subtitle}
+                      </span>
+                    </div>
+                  );
+                  const className = `absolute z-[2] rounded-md border shadow-sm transition hover:brightness-110 ${it.accent}`;
+                  const style = {
+                    left: `${left}%`,
+                    width: `calc(${width}% - 4px)`,
+                    top: `${top}px`,
+                    height: "28px"
+                  } as React.CSSProperties;
+                  if (it.onClick) {
+                    return (
+                      <button
+                        key={it.key}
+                        type="button"
+                        onClick={it.onClick}
+                        className={`${className} cursor-pointer text-left`}
+                        style={style}
+                        title={`${it.title} — ${it.subtitle}`}
+                      >
+                        {content}
+                      </button>
+                    );
+                  }
+                  if (it.href) {
+                    return (
+                      <Link
+                        key={it.key}
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={it.href as any}
+                        className={className}
+                        style={style}
+                        title={`${it.title} — ${it.subtitle}`}
+                      >
+                        {content}
+                      </Link>
+                    );
+                  }
+                  return (
+                    <div
+                      key={it.key}
+                      className={className}
+                      style={style}
+                      title={`${it.title} — ${it.subtitle}`}
+                    >
+                      {content}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
