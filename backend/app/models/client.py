@@ -34,6 +34,13 @@ class Client(Base, TimestampMixin):
         index=True,
     )
 
+    # QuickBooks Online customer id (Customer.Id). Rempli par le
+    # bouton « Envoyer vers QuickBooks » sur la fiche client ; sert à
+    # éviter les doublons au prochain push et affiche le badge « QB ✓ ».
+    qbo_customer_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+
     # Relationships
     projects: Mapped[List["Project"]] = relationship(
         "Project",
