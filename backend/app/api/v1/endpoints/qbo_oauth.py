@@ -145,9 +145,11 @@ async def qbo_callback(
     frontend = settings.frontend_url.rstrip("/")
 
     def _redirect(reason: str) -> RedirectResponse:
-        # fr = langue par défaut; le middleware next-intl gère le préfixe.
+        # next-intl est configuré en localePrefix "as-needed" : la locale
+        # par défaut (fr) NE doit PAS être préfixée dans l'URL, sinon
+        # Next.js renvoie 404. On cible donc directement /app/...
         return RedirectResponse(
-            f"{frontend}/fr/app/parametres?qbo={reason}",
+            f"{frontend}/app/parametres?qbo={reason}",
             status_code=status.HTTP_302_FOUND,
         )
 
