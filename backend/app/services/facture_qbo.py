@@ -118,6 +118,9 @@ async def sync_facture_to_qbo(
     db: AsyncSession, facture_id: int
 ) -> Dict[str, Any]:
     qbo = get_qbo()
+    # Charge les tokens persistés avant de vérifier ready — sinon après
+    # un redeploy l'in-memory client ne sait pas qu'on a OAuth-connecté.
+    await qbo._load_refresh_from_db()
     if not qbo.ready:
         raise FactureSyncError(
             "QuickBooks n'est pas configuré (client id / secret / refresh token / realm)."

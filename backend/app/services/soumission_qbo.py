@@ -148,6 +148,10 @@ async def sync_soumission_to_qbo(
     Raises SoumissionSyncError if QBO is not configured or the push fails.
     """
     qbo = get_qbo()
+    # Charge d'abord les tokens persistés (OAuth callback /qbo/callback).
+    # Sinon qbo.ready retourne False juste après un redeploy même si la
+    # compagnie est connectée en DB — l'env peut être vide.
+    await qbo._load_refresh_from_db()
     if not qbo.ready:
         raise SoumissionSyncError(
             "QuickBooks not configured (missing client id / secret / refresh token / realm)."
