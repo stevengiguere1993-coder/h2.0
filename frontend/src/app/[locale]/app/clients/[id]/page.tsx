@@ -216,122 +216,261 @@ export default function ClientDetailPage() {
               </p>
             ) : null}
 
-            <div className="mt-6 max-w-3xl space-y-6">
-              <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-                  Coordonnées
-                </h2>
-                <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <div className="sm:col-span-2">
-                    <label htmlFor="c_name" className="label">Nom</label>
-                    <input
-                      id="c_name"
-                      type="text"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      className="input"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="c_email" className="label">Courriel</label>
-                    <input
-                      id="c_email"
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="input"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="c_phone" className="label">Téléphone</label>
-                    <input
-                      id="c_phone"
-                      type="tel"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      className="input"
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label htmlFor="c_address" className="label">Adresse</label>
-                    <AddressInput
-                      id="c_address"
-                      value={address}
-                      onChange={setAddress}
-                    />
-                  </div>
-                </div>
-              </section>
-
-              <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-                  Notes internes
-                </h2>
-                <textarea
-                  rows={4}
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Préférences, historique, personnes contact…"
-                  className="input mt-3"
-                />
-              </section>
-
-              {c.projects && c.projects.length > 0 ? (
-                <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-                    Projets
-                  </h2>
-                  <ul className="mt-3 divide-y divide-brand-800 text-sm">
-                    {c.projects.map((p) => (
-                      <li key={p.id} className="py-2">
-                        <Link
-                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                          href={`/app/projets/${p.id}` as any}
-                          className="flex items-center justify-between hover:text-accent-500"
-                        >
-                          <span className="text-white">{p.name}</span>
-                          <span className="text-xs text-white/50">
-                            {p.status}
-                          </span>
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-
-              <button
-                type="button"
-                onClick={saveAll}
-                disabled={saving || !dirty}
-                className="btn-accent text-sm"
-              >
-                {saving ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sauvegarde…
-                  </>
-                ) : (
-                  <>
-                    <Save className="mr-2 h-4 w-4" />
-                    {dirty ? "Sauvegarder" : "Aucun changement"}
-                  </>
-                )}
-              </button>
-
-              <ClientDocuments
-                clientId={c.id}
-                contactRequestId={c.contact_request_id}
+            <div className="mt-6 max-w-3xl">
+              <ClientTabs
+                client={c}
+                name={name}
+                setName={setName}
+                email={email}
+                setEmail={setEmail}
+                phone={phone}
+                setPhone={setPhone}
+                address={address}
+                setAddress={setAddress}
+                notes={notes}
+                setNotes={setNotes}
+                saving={saving}
+                dirty={dirty}
+                onSave={saveAll}
               />
-
-              <MeasurementsPanel
-                clientId={c.id}
-                defaultAddress={c.address}
-              />
-              <SalesTasksPanel clientId={c.id} />
             </div>
           </>
         ) : null}
       </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ClientTabs — navigation horizontale entre les sections de la fiche
+// ---------------------------------------------------------------------------
+
+type TabKey = "infos" | "projets" | "documents" | "mesures" | "suivi";
+
+function ClientTabs({
+  client,
+  name,
+  setName,
+  email,
+  setEmail,
+  phone,
+  setPhone,
+  address,
+  setAddress,
+  notes,
+  setNotes,
+  saving,
+  dirty,
+  onSave
+}: {
+  client: Client;
+  name: string;
+  setName: (v: string) => void;
+  email: string;
+  setEmail: (v: string) => void;
+  phone: string;
+  setPhone: (v: string) => void;
+  address: string;
+  setAddress: (v: string) => void;
+  notes: string;
+  setNotes: (v: string) => void;
+  saving: boolean;
+  dirty: boolean;
+  onSave: () => void;
+}) {
+  const [active, setActive] = useState<TabKey>(() => {
+    if (typeof window === "undefined") return "infos";
+    const hash = window.location.hash.replace("#", "") as TabKey;
+    if (
+      hash === "infos" ||
+      hash === "projets" ||
+      hash === "documents" ||
+      hash === "mesures" ||
+      hash === "suivi"
+    ) {
+      return hash;
+    }
+    return "infos";
+  });
+
+  function selectTab(k: TabKey) {
+    setActive(k);
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", `#${k}`);
+    }
+  }
+
+  const projectsCount = client.projects?.length || 0;
+
+  const tabs: Array<{ key: TabKey; label: string; badge?: number }> = [
+    { key: "infos", label: "Infos" },
+    { key: "projets", label: "Projets", badge: projectsCount },
+    { key: "documents", label: "Documents" },
+    { key: "mesures", label: "Mesures" },
+    { key: "suivi", label: "Suivi commercial" }
+  ];
+
+  return (
+    <>
+      <div
+        className="sticky top-0 z-20 -mx-4 mb-5 overflow-x-auto border-b border-brand-800 bg-brand-950/95 px-4 backdrop-blur lg:-mx-6 lg:px-6"
+        role="tablist"
+      >
+        <div className="flex min-w-max gap-1">
+          {tabs.map((t) => {
+            const isActive = active === t.key;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => selectTab(t.key)}
+                className={`relative whitespace-nowrap px-4 py-3 text-sm transition ${
+                  isActive
+                    ? "font-semibold text-accent-500"
+                    : "text-white/60 hover:text-white"
+                }`}
+              >
+                {t.label}
+                {t.badge && t.badge > 0 ? (
+                  <span className="ml-1.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-accent-500/20 px-1 text-[10px] font-semibold text-accent-300">
+                    {t.badge}
+                  </span>
+                ) : null}
+                {isActive ? (
+                  <span className="absolute inset-x-3 -bottom-px h-0.5 rounded-t bg-accent-500" />
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {active === "infos" ? (
+        <div className="space-y-6">
+          <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+              Coordonnées
+            </h2>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <label htmlFor="c_name" className="label">Nom</label>
+                <input
+                  id="c_name"
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="input"
+                />
+              </div>
+              <div>
+                <label htmlFor="c_email" className="label">Courriel</label>
+                <input
+                  id="c_email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="input"
+                />
+              </div>
+              <div>
+                <label htmlFor="c_phone" className="label">Téléphone</label>
+                <input
+                  id="c_phone"
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  className="input"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label htmlFor="c_address" className="label">Adresse</label>
+                <AddressInput
+                  id="c_address"
+                  value={address}
+                  onChange={setAddress}
+                />
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+              Notes internes
+            </h2>
+            <textarea
+              rows={4}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Préférences, historique, personnes contact…"
+              className="input mt-3"
+            />
+          </section>
+
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={saving || !dirty}
+            className="btn-accent text-sm"
+          >
+            {saving ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sauvegarde…
+              </>
+            ) : (
+              <>
+                <Save className="mr-2 h-4 w-4" />
+                {dirty ? "Sauvegarder" : "Aucun changement"}
+              </>
+            )}
+          </button>
+        </div>
+      ) : null}
+
+      {active === "projets" ? (
+        <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+            Projets
+          </h2>
+          {projectsCount === 0 ? (
+            <p className="mt-3 text-sm text-white/50">
+              Aucun projet pour ce client.
+            </p>
+          ) : (
+            <ul className="mt-3 divide-y divide-brand-800 text-sm">
+              {client.projects?.map((p) => (
+                <li key={p.id} className="py-2">
+                  <Link
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    href={`/app/projets/${p.id}` as any}
+                    className="flex items-center justify-between hover:text-accent-500"
+                  >
+                    <span className="text-white">{p.name}</span>
+                    <span className="text-xs text-white/50">{p.status}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
+
+      {active === "documents" ? (
+        <ClientDocuments
+          clientId={client.id}
+          contactRequestId={client.contact_request_id}
+        />
+      ) : null}
+
+      {active === "mesures" ? (
+        <MeasurementsPanel
+          clientId={client.id}
+          defaultAddress={client.address}
+        />
+      ) : null}
+
+      {active === "suivi" ? <SalesTasksPanel clientId={client.id} /> : null}
     </>
   );
 }
