@@ -44,8 +44,11 @@ class ConvertToProjectRequest(BaseModel):
         ),
     )
     due_in_days: int = Field(
-        default=30, ge=0, le=365,
-        description="Délai de paiement de l'acompte (jours).",
+        default=0, ge=0, le=365,
+        description=(
+            "Délai de paiement de l'acompte (jours). 0 = payable sur "
+            "réception (défaut pour un dépôt)."
+        ),
     )
 
 
