@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     mail_from_email: str = "info@immohorizon.com"
     mail_from_name: str = "Horizon Services Immobiliers"
 
+    # Cron triggers — secret partagé avec GitHub Actions /
+    # cron-job.org pour authentifier les hits HTTP qui lancent les
+    # jobs (alternative gratuite aux Render Cron Jobs payants).
+    cron_secret: Optional[str] = None
+
     # Anthropic (SEO content + validation)
     anthropic_api_key: Optional[str] = None
     claude_model: str = "claude-sonnet-4-5"

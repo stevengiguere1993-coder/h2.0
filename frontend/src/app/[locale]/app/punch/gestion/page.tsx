@@ -956,7 +956,7 @@ function PayrollExportButton() {
 }
 
 // ---------------------------------------------------------------------------
-// GeolocationDisplay — parse "lat,lng[|lat,lng]" et affiche un lien Maps
+// GeolocationDisplay — parse "lat,lng[|lat,lng]" + reverse-geocode via Photon
 // ---------------------------------------------------------------------------
 
 function GeolocationDisplay({ raw }: { raw: string }) {
@@ -969,7 +969,7 @@ function GeolocationDisplay({ raw }: { raw: string }) {
       <p className="text-xs uppercase tracking-wider text-white/50">
         📍 Lieu du punch
       </p>
-      <div className="mt-1 space-y-1">
+      <div className="mt-1 space-y-2">
         <GeoLine label="Début" geo={start} />
         {end ? <GeoLine label="Fin" geo={end} /> : null}
       </div>
@@ -984,21 +984,94 @@ function GeoLine({
   label: string;
   geo: { lat: number; lng: number };
 }) {
-  const url = `https://www.google.com/maps?q=${geo.lat},${geo.lng}`;
+  const [address, setAddress] = useState<string | null>(null);
+  const [loadingAddr, setLoadingAddr] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function reverse() {
+      try {
+        const res = await fetch(
+          `https://photon.komoot.io/reverse?lon=${geo.lng}&lat=${geo.lat}&lang=fr`
+        );
+        if (!res.ok) throw new Error();
+        const data = (await res.json()) as {
+          features?: Array<{
+            properties?: {
+              housenumber?: string;
+              street?: string;
+              city?: string;
+              state?: string;
+              postcode?: string;
+              name?: string;
+            };
+          }>;
+        };
+        const props = data.features?.[0]?.properties;
+        if (!props) {
+          if (!cancelled) setAddress(null);
+          return;
+        }
+        const line1 = [props.housenumber, props.street]
+          .filter(Boolean)
+          .join(" ");
+        const line2 = [props.city, props.state, props.postcode]
+          .filter(Boolean)
+          .join(", ");
+        const formatted =
+          [line1, line2].filter(Boolean).join(" · ") ||
+          props.name ||
+          null;
+        if (!cancelled) setAddress(formatted);
+      } catch {
+        if (!cancelled) setAddress(null);
+      } finally {
+        if (!cancelled) setLoadingAddr(false);
+      }
+    }
+    void reverse();
+    return () => {
+      cancelled = true;
+    };
+  }, [geo.lat, geo.lng]);
+
+  const mapsUrl = `https://www.google.com/maps?q=${geo.lat},${geo.lng}`;
   return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="w-12 shrink-0 text-white/50">{label} :</span>
-      <a
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="flex items-center gap-1 text-accent-300 hover:text-accent-200 hover:underline"
-      >
-        <span className="font-mono">
-          {geo.lat.toFixed(5)}, {geo.lng.toFixed(5)}
-        </span>
-        <span className="text-[10px]">↗ Maps</span>
-      </a>
+    <div className="text-xs">
+      <div className="flex items-baseline gap-2">
+        <span className="w-12 shrink-0 text-white/50">{label} :</span>
+        <div className="min-w-0 flex-1">
+          {loadingAddr ? (
+            <span className="text-white/40">Recherche de l&apos;adresse…</span>
+          ) : address ? (
+            <a
+              href={mapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-white hover:text-accent-300 hover:underline"
+              title="Ouvrir dans Google Maps"
+            >
+              {address}{" "}
+              <span className="text-[10px] text-accent-400">↗ Maps</span>
+            </a>
+          ) : (
+            <a
+              href={mapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-accent-300 hover:underline"
+            >
+              {geo.lat.toFixed(5)}, {geo.lng.toFixed(5)}{" "}
+              <span className="text-[10px]">↗ Maps</span>
+            </a>
+          )}
+          <p className="text-[10px] text-white/40">
+            <span className="font-mono">
+              {geo.lat.toFixed(5)}, {geo.lng.toFixed(5)}
+            </span>
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

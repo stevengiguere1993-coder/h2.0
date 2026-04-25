@@ -1,0 +1,105 @@
+# Cron jobs déclenchés via GitHub Actions (alternative gratuite aux
+# Render Cron Jobs payants). Chaque job hit un endpoint protégé du
+# backend avec un secret partagé (X-Cron-Secret) pour authentifier
+# l'appel.
+#
+# Setup requis (une seule fois) :
+# 1. Génère un secret aléatoire long (ex. `openssl rand -hex 32`).
+# 2. Sur Render, ajoute l'env var CRON_SECRET=<ton-secret> au backend.
+# 3. Sur GitHub, va dans Settings → Secrets and variables → Actions,
+#    crée un nouveau secret nommé CRON_SECRET avec la même valeur.
+# 4. Push, et c'est parti.
+#
+# Les schedules sont en UTC. Le Quebec est UTC-5 (EST) ou UTC-4 (EDT).
+# Pour ~21h heure locale, on cible 02:00 UTC (= 22h EDT / 21h EST).
+
+name: cron-jobs
+
+on:
+  schedule:
+    # 02:00 UTC chaque jour = ~21-22h Québec la veille.
+    # Le job _run() filtre lui-même les jours non-ouvrés.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    # Permet de tester manuellement depuis l'UI GitHub Actions.
+    inputs:
+      job:
+        description: "Lequel exécuter (par défaut: tous)"
+        required: false
+        default: all
+
+env:
+  BACKEND_URL: https://h2-0.onrender.com
+
+jobs:
+  unassigned-day-alerts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: |
+      github.event_name == 'schedule' ||
+      github.event.inputs.job == 'all' ||
+      github.event.inputs.job == 'unassigned-day-alerts'
+    steps:
+      - name: Trigger unassigned-day-alerts
+        run: |
+          set -e
+          curl -fsS -X POST \
+            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
+            -H "Accept: application/json" \
+            --max-time 120 \
+            "$BACKEND_URL/api/v1/cron/run/unassigned-day-alerts" \
+            -w "\nhttp_status=%{http_code}\n"
+
+  follow-up-reminders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: |
+      github.event_name == 'schedule' ||
+      github.event.inputs.job == 'all' ||
+      github.event.inputs.job == 'follow-up-reminders'
+    steps:
+      - name: Trigger follow-up-reminders
+        run: |
+          set -e
+          curl -fsS -X POST \
+            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
+            -H "Accept: application/json" \
+            --max-time 120 \
+            "$BACKEND_URL/api/v1/cron/run/follow-up-reminders" \
+            -w "\nhttp_status=%{http_code}\n"
+
+  facture-reminders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: |
+      github.event_name == 'schedule' ||
+      github.event.inputs.job == 'all' ||
+      github.event.inputs.job == 'facture-reminders'
+    steps:
+      - name: Trigger facture-reminders
+        run: |
+          set -e
+          curl -fsS -X POST \
+            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
+            -H "Accept: application/json" \
+            --max-time 120 \
+            "$BACKEND_URL/api/v1/cron/run/facture-reminders" \
+            -w "\nhttp_status=%{http_code}\n"
+
+  appointment-reminders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: |
+      github.event_name == 'schedule' ||
+      github.event.inputs.job == 'all' ||
+      github.event.inputs.job == 'appointment-reminders'
+    steps:
+      - name: Trigger appointment-reminders
+        run: |
+          set -e
+          curl -fsS -X POST \
+            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
+            -H "Accept: application/json" \
+            --max-time 120 \
+            "$BACKEND_URL/api/v1/cron/run/appointment-reminders" \
+            -w "\nhttp_status=%{http_code}\n"
