@@ -22,7 +22,7 @@ type Employe = {
   full_name: string;
   email: string | null;
   role: string | null;
-  is_active: boolean;
+  active: boolean;
 };
 
 type Project = {
@@ -169,7 +169,7 @@ export default function AssignationsPage() {
   const visibleEmployes = useMemo(() => {
     const s = q.trim().toLowerCase();
     return employes
-      .filter((e) => (showInactive ? true : e.is_active))
+      .filter((e) => (showInactive ? true : e.active))
       .filter(
         (e) =>
           !s ||
@@ -354,17 +354,17 @@ export default function AssignationsPage() {
                         >
                           <UserCircle
                             className={`h-5 w-5 shrink-0 ${
-                              emp.is_active ? "text-accent-500" : "text-white/30"
+                              emp.active ? "text-accent-500" : "text-white/30"
                             }`}
                           />
                           <div className="min-w-0 flex-1">
                             <p
                               className={`truncate text-sm ${
-                                emp.is_active ? "text-white" : "text-white/40"
+                                emp.active ? "text-white" : "text-white/40"
                               } ${selected ? "font-semibold" : ""}`}
                             >
                               {emp.full_name}
-                              {!emp.is_active ? " (inactif)" : ""}
+                              {!emp.active ? " (inactif)" : ""}
                             </p>
                             <p className="text-[11px] text-white/50">
                               {count} assignation{count !== 1 ? "s" : ""}
@@ -403,7 +403,7 @@ export default function AssignationsPage() {
                       <p className="mt-0.5 text-xs text-white/50">
                         {selectedEmp.email || "—"}
                         {selectedEmp.role ? ` · ${selectedEmp.role}` : ""}
-                        {!selectedEmp.is_active ? " · INACTIF" : ""}
+                        {!selectedEmp.active ? " · INACTIF" : ""}
                       </p>
                     </div>
                     <Link

@@ -156,7 +156,7 @@ async def update_employe(
     ).scalar_one_or_none()
     if e is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Employé introuvable.")
-    was_active = bool(e.is_active)
+    was_active = bool(e.active)
     patch = data.model_dump(exclude_unset=True)
     for field, value in patch.items():
         setattr(e, field, value)
@@ -166,7 +166,7 @@ async def update_employe(
     # on avertit les managers pour qu'ils réassignent avant que les
     # travaux ne soient affectés. Idempotent : l'alerte n'est envoyée
     # qu'une seule fois, à la transition.
-    if was_active and "is_active" in patch and not bool(patch["is_active"]):
+    if was_active and "active" in patch and not bool(patch["active"]):
         from datetime import date as _date, datetime as _dt, timezone as _tz
 
         from app.models.agenda_event import AgendaEvent
