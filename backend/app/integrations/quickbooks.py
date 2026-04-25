@@ -403,6 +403,93 @@ class QuickBooksClient:
             "POST", "/invoice", json_body=payload, params={"minorversion": "70"}
         )
 
+    # ------------------------------------------------------------------
+    # Vendors (= fournisseurs)
+    # ------------------------------------------------------------------
+    async def find_vendor_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        safe = name.replace("'", "''")
+        rows = await self.query(
+            f"SELECT * FROM Vendor WHERE DisplayName='{safe}' MAXRESULTS 1"
+        )
+        return rows[0] if rows else None
+
+    async def find_vendor_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        safe = email.replace("'", "''")
+        rows = await self.query(
+            f"SELECT * FROM Vendor WHERE PrimaryEmailAddr='{safe}' MAXRESULTS 1"
+        )
+        return rows[0] if rows else None
+
+    async def create_vendor(
+        self,
+        *,
+        display_name: str,
+        email: Optional[str] = None,
+        phone: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {"DisplayName": display_name[:100]}
+        if email:
+            body["PrimaryEmailAddr"] = {"Address": email}
+        if phone:
+            body["PrimaryPhone"] = {"FreeFormNumber": phone}
+        data = await self._request(
+            "POST", "/vendor", json_body=body, params={"minorversion": "70"}
+        )
+        return data.get("Vendor") or data
+
+    async def ensure_vendor(
+        self,
+        *,
+        display_name: str,
+        email: Optional[str] = None,
+        phone: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if email:
+            existing = await self.find_vendor_by_email(email)
+            if existing:
+                return existing
+        existing = await self.find_vendor_by_name(display_name)
+        if existing:
+            return existing
+        return await self.create_vendor(
+            display_name=display_name, email=email, phone=phone
+        )
+
+    # ------------------------------------------------------------------
+    # Accounts (Expense / Income lookup for Bill lines)
+    # ------------------------------------------------------------------
+    async def first_expense_account(self) -> Optional[Dict[str, Any]]:
+        # Bill lines doivent référencer un AccountRef de type Expense
+        # (souvent « Cost of Goods Sold » ou « Job Materials »). On
+        # prend le premier dispo — l'utilisateur peut reclasser dans
+        # QB si besoin.
+        rows = await self.query(
+            "SELECT * FROM Account WHERE AccountType IN ("
+            "'Cost of Goods Sold', 'Expense', 'Other Expense'"
+            ") MAXRESULTS 1"
+        )
+        return rows[0] if rows else None
+
+    # ------------------------------------------------------------------
+    # Bills (= factures fournisseur, ce que charge un PO h2.0)
+    # ------------------------------------------------------------------
+    async def get_bill(self, bill_id: str) -> Dict[str, Any]:
+        data = await self._request("GET", f"/bill/{bill_id}")
+        return data.get("Bill") or data
+
+    async def create_bill(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        data = await self._request(
+            "POST", "/bill", json_body=payload, params={"minorversion": "70"}
+        )
+        return data.get("Bill") or data
+
+    async def update_bill(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        # Update requires Id + SyncToken in the payload (QBO semantics).
+        data = await self._request(
+            "POST", "/bill", json_body=payload, params={"minorversion": "70"}
+        )
+        return data.get("Bill") or data
+
 
 _qbo: Optional[QuickBooksClient] = None
 

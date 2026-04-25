@@ -44,7 +44,7 @@ async def _ensure_row(db: AsyncSession) -> NumberingCounter:
 
 
 async def _next(
-    db: AsyncSession, kind: Literal["facture", "soumission"]
+    db: AsyncSession, kind: Literal["facture", "soumission", "po"]
 ) -> int:
     """Atomic read+increment via UPDATE … RETURNING.
 
@@ -54,11 +54,12 @@ async def _next(
     si on bascule QB sandbox→prod, etc.
     """
     await _ensure_row(db)
-    column = (
-        NumberingCounter.next_facture_number
-        if kind == "facture"
-        else NumberingCounter.next_soumission_number
-    )
+    if kind == "facture":
+        column = NumberingCounter.next_facture_number
+    elif kind == "soumission":
+        column = NumberingCounter.next_soumission_number
+    else:
+        column = NumberingCounter.next_po_number
     stmt = (
         update(NumberingCounter)
         .where(NumberingCounter.id == 1)
@@ -81,3 +82,10 @@ async def next_facture_number(db: AsyncSession) -> str:
 async def next_soumission_number(db: AsyncSession) -> str:
     n = await _next(db, "soumission")
     return str(n)
+
+
+async def next_po_number(db: AsyncSession) -> str:
+    """Numérotation PO format `PO-0027` (préfixe + zero-pad 4 chiffres).
+    Cohérent avec ce que la cie utilise déjà (PO-0026, PO-0025, …)."""
+    n = await _next(db, "po")
+    return f"PO-{n:04d}"

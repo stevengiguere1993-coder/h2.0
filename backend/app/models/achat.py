@@ -51,6 +51,19 @@ class Achat(Base, TimestampUpdateMixin):
     )
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Liaison QuickBooks Online — l'achat est poussé comme un Bill
+    # (facture fournisseur) qui charge le coût matériel sur le projet.
+    # Le numéro PO interne reste dans Memo / PrivateNote du Bill.
+    qbo_bill_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    qbo_doc_number: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    qbo_sync_token: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+
     @property
     def has_receipt_image(self) -> bool:
         # Cheap check: the blob itself is deferred from list queries;

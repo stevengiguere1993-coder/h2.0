@@ -337,7 +337,9 @@ class FactureRead(_Base):
 
 # ---------- Achat ----------
 class AchatCreate(BaseModel):
-    reference: str = Field(..., max_length=32)
+    # Optionnel : si non fourni, l'endpoint utilise next_po_number
+    # pour attribuer un PO-XXXX séquentiel.
+    reference: Optional[str] = Field(default=None, max_length=32)
     fournisseur_id: Optional[int] = None
     project_id: Optional[int] = None
     description: Optional[str] = None
@@ -352,6 +354,8 @@ class AchatUpdate(BaseModel):
     received_at: Optional[datetime] = None
     receipt_url: Optional[str] = None
     notes: Optional[str] = None
+    fournisseur_id: Optional[int] = None
+    project_id: Optional[int] = None
 
 
 class AchatRead(_Base):
@@ -369,5 +373,8 @@ class AchatRead(_Base):
     # GET /api/v1/achats/{id}/receipt).
     has_receipt_image: bool = False
     receipt_image_content_type: Optional[str] = None
+    # Liaison QuickBooks Online (Bill).
+    qbo_bill_id: Optional[str] = None
+    qbo_doc_number: Optional[str] = None
     notes: Optional[str]
     created_at: datetime

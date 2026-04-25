@@ -679,6 +679,7 @@ function QuickBooksSection() {
 type Numbering = {
   next_facture_number: number;
   next_soumission_number: number;
+  next_po_number: number;
 };
 
 function NumberingSection() {
@@ -688,6 +689,7 @@ function NumberingSection() {
   const [editing, setEditing] = useState(false);
   const [factureN, setFactureN] = useState("");
   const [soumissionN, setSoumissionN] = useState("");
+  const [poN, setPoN] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
@@ -700,6 +702,7 @@ function NumberingSection() {
       setData(d);
       setFactureN(String(d.next_facture_number));
       setSoumissionN(String(d.next_soumission_number));
+      setPoN(String(d.next_po_number));
     } catch {
       setErr("Chargement échoué.");
     } finally {
@@ -717,17 +720,22 @@ function NumberingSection() {
     try {
       const fn = Number(factureN);
       const sn = Number(soumissionN);
+      const pn = Number(poN);
       if (!Number.isInteger(fn) || fn < 1) {
         throw new Error("Numéro de facture invalide.");
       }
       if (!Number.isInteger(sn) || sn < 1) {
         throw new Error("Numéro de devis invalide.");
       }
+      if (!Number.isInteger(pn) || pn < 1) {
+        throw new Error("Numéro de PO invalide.");
+      }
       const res = await authedFetch("/api/v1/settings/numbering", {
         method: "PATCH",
         body: JSON.stringify({
           next_facture_number: fn,
-          next_soumission_number: sn
+          next_soumission_number: sn,
+          next_po_number: pn
         })
       });
       if (!res.ok) throw new Error(`http_${res.status}`);
@@ -771,7 +779,7 @@ function NumberingSection() {
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
         </div>
       ) : (
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <div className="rounded-lg border border-brand-800 bg-brand-950 p-3">
             <p className="text-[10px] uppercase tracking-wider text-white/50">
               Prochaine facture
@@ -808,6 +816,24 @@ function NumberingSection() {
               </p>
             )}
           </div>
+          <div className="rounded-lg border border-brand-800 bg-brand-950 p-3">
+            <p className="text-[10px] uppercase tracking-wider text-white/50">
+              Prochain PO (achat)
+            </p>
+            {editing ? (
+              <input
+                type="number"
+                min={1}
+                value={poN}
+                onChange={(e) => setPoN(e.target.value)}
+                className="input mt-1 w-full"
+              />
+            ) : (
+              <p className="mt-1 font-mono text-2xl text-white">
+                PO-{String(data?.next_po_number ?? 1).padStart(4, "0")}
+              </p>
+            )}
+          </div>
         </div>
       )}
 
@@ -831,6 +857,7 @@ function NumberingSection() {
                 setEditing(false);
                 setFactureN(String(data?.next_facture_number ?? ""));
                 setSoumissionN(String(data?.next_soumission_number ?? ""));
+                setPoN(String(data?.next_po_number ?? ""));
                 setErr(null);
               }}
               disabled={saving}
