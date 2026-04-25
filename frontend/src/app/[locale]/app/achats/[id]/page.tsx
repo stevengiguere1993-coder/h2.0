@@ -420,29 +420,27 @@ export default function AchatDetailPage() {
                   </div>
                   <div>
                     <label htmlFor="af" className="label">Fournisseur</label>
-                    <div className="flex items-center gap-2">
-                      <select
-                        id="af"
-                        value={fournisseurId}
-                        onChange={(e) => setFournisseurId(e.target.value)}
-                        className="input flex-1"
-                      >
-                        <option value="">— Aucun —</option>
-                        {fournisseurs.map((fr) => (
-                          <option key={fr.id} value={String(fr.id)}>
-                            {fr.name}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => setShowFournisseurModal(true)}
-                        className="btn-secondary shrink-0 text-xs"
-                        title="Créer un nouveau fournisseur"
-                      >
-                        + Nouveau
-                      </button>
-                    </div>
+                    <select
+                      id="af"
+                      value={fournisseurId}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === "__new__") {
+                          setShowFournisseurModal(true);
+                          return;
+                        }
+                        setFournisseurId(v);
+                      }}
+                      className="input"
+                    >
+                      <option value="">— Aucun —</option>
+                      {fournisseurs.map((fr) => (
+                        <option key={fr.id} value={String(fr.id)}>
+                          {fr.name}
+                        </option>
+                      ))}
+                      <option value="__new__">+ Nouveau fournisseur…</option>
+                    </select>
                   </div>
                 </div>
                 <div className="mt-4 grid gap-4 sm:grid-cols-2">
