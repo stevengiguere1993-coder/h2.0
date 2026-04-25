@@ -32,8 +32,15 @@ from app.models.project import Project
 from app.models.qbo_account_map import QboAccountMap
 
 
-# Modes considérés comme « payés cash » → Purchase QB
-PAID_METHODS = {"cc_steven", "cc_michael", "cash", "interac"}
+# Modes considérés comme paiement immédiat → Purchase QB.
+# (Tout sauf bill_to_pay, qui devient un Bill A/P.)
+PAID_METHODS = {
+    "cheque_horizon",
+    "cc_steven",
+    "cc_michael",
+    "cc_olivier",
+    "cc_christian",
+}
 
 
 log = logging.getLogger(__name__)
@@ -134,12 +141,10 @@ def _build_purchase_payload(
 
 def _payment_type_for(method: Optional[str]) -> str:
     """QBO Purchase.PaymentType : Cash / Check / CreditCard."""
-    if method in ("cc_steven", "cc_michael"):
+    if method and method.startswith("cc_"):
         return "CreditCard"
-    if method in ("interac",):
-        # Interac est techniquement un débit immédiat, on le marque
-        # « Cash » qui regroupe debit/cash dans QB.
-        return "Cash"
+    if method == "cheque_horizon":
+        return "Check"
     return "Cash"
 
 
@@ -163,12 +168,12 @@ async def _resolve_payment_account(
         name = map_row.cc_steven_account
     elif method == "cc_michael":
         name = map_row.cc_michael_account
-    elif method == "cash":
-        name = map_row.cash_account
-    elif method == "interac":
-        name = map_row.interac_account
-    elif method == "operations":
-        name = map_row.operations_account
+    elif method == "cc_olivier":
+        name = map_row.cc_olivier_account
+    elif method == "cc_christian":
+        name = map_row.cc_christian_account
+    elif method == "cheque_horizon":
+        name = map_row.cheque_horizon_account
     if not name:
         return None
     acc = await qbo.find_account_by_name(name)
@@ -250,7 +255,7 @@ async def sync_achat_to_qbo(
                 "type 'Cost of Goods Sold' / 'Expense' dans QB."
             )
 
-        method = (achat.payment_method or "operations").lower()
+        method = (achat.payment_method or "bill_to_pay").lower()
         as_purchase = method in PAID_METHODS
 
         if as_purchase:

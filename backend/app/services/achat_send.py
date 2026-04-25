@@ -38,11 +38,12 @@ class AchatSendError(Exception):
 
 
 _PAYMENT_LABELS = {
-    "operations": "Sur compte fournisseur (Opérations)",
-    "interac": "Virement Interac",
-    "cc_steven": "Carte de crédit Steven",
-    "cc_michael": "Carte de crédit Michael",
-    "cash": "Comptant",
+    "bill_to_pay": "Sur compte fournisseur (à payer plus tard)",
+    "cheque_horizon": "Compte chèque Horizon",
+    "cc_steven": "CC Horizon Steven Giguère",
+    "cc_michael": "CC Horizon Michael Villiard",
+    "cc_olivier": "CC Horizon Olivier Therrien",
+    "cc_christian": "CC Horizon Christian Villiard",
 }
 
 

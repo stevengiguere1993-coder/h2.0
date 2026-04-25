@@ -12,11 +12,28 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { FournisseurModal } from "@/components/fournisseur-modal";
 import { ReceiptScanner } from "@/components/receipt-scanner";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
+
+const PAYMENT_OPTIONS = [
+  { value: "bill_to_pay", label: "Sur compte fournisseur (à payer plus tard)" },
+  { value: "cheque_horizon", label: "Compte chèque Horizon" },
+  { value: "cc_steven", label: "CC Horizon Steven Giguère" },
+  { value: "cc_michael", label: "CC Horizon Michael Villiard" },
+  { value: "cc_olivier", label: "CC Horizon Olivier Therrien" },
+  { value: "cc_christian", label: "CC Horizon Christian Villiard" }
+];
+
+type Employe = {
+  id: number;
+  full_name: string;
+  email: string | null;
+  active?: boolean;
+};
 
 type Achat = {
   id: number;
@@ -35,6 +52,8 @@ type Achat = {
   created_at: string;
   qbo_bill_id: string | null;
   qbo_doc_number: string | null;
+  assigned_employe_id: number | null;
+  payment_method: string | null;
 };
 
 type Project = { id: number; name: string };
@@ -62,6 +81,7 @@ export default function AchatDetailPage() {
   const [a, setA] = useState<Achat | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
+  const [employes, setEmployes] = useState<Employe[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -76,6 +96,11 @@ export default function AchatDetailPage() {
   const [receivedAt, setReceivedAt] = useState("");
   const [receiptUrl, setReceiptUrl] = useState("");
   const [notes, setNotes] = useState("");
+  const [assignedEmpId, setAssignedEmpId] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("");
+  const [showFournisseurModal, setShowFournisseurModal] = useState(false);
+  const [sendingPo, setSendingPo] = useState(false);
+  const [poNotice, setPoNotice] = useState<string | null>(null);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [pendingReceipt, setPendingReceipt] = useState<File | null>(null);
 
@@ -85,10 +110,11 @@ export default function AchatDetailPage() {
       setLoading(true);
       setError(null);
       try {
-        const [aRes, pRes, frRes] = await Promise.all([
+        const [aRes, pRes, frRes, eRes] = await Promise.all([
           authedFetch(`/api/v1/achats/${id}`),
           authedFetch("/api/v1/projects?limit=500"),
-          authedFetch("/api/v1/fournisseurs?limit=500")
+          authedFetch("/api/v1/fournisseurs?limit=500"),
+          authedFetch("/api/v1/employes?limit=500")
         ]);
         if (!aRes.ok) throw new Error(`http_${aRes.status}`);
         const data = (await aRes.json()) as Achat;
@@ -105,8 +131,13 @@ export default function AchatDetailPage() {
         setReceivedAt(isoToDateInput(data.received_at));
         setReceiptUrl(data.receipt_url || "");
         setNotes(data.notes || "");
+        setAssignedEmpId(
+          data.assigned_employe_id ? String(data.assigned_employe_id) : ""
+        );
+        setPaymentMethod(data.payment_method || "");
         if (pRes.ok) setProjects((await pRes.json()) as Project[]);
         if (frRes.ok) setFournisseurs((await frRes.json()) as Fournisseur[]);
+        if (eRes.ok) setEmployes((await eRes.json()) as Employe[]);
       } catch {
         if (!cancelled) setError("Achat introuvable.");
       } finally {
@@ -130,11 +161,14 @@ export default function AchatDetailPage() {
       orderedAt !== isoToDateInput(a.ordered_at) ||
       receivedAt !== isoToDateInput(a.received_at) ||
       receiptUrl !== (a.receipt_url || "") ||
-      notes !== (a.notes || "")
+      notes !== (a.notes || "") ||
+      assignedEmpId !==
+        (a.assigned_employe_id ? String(a.assigned_employe_id) : "") ||
+      paymentMethod !== (a.payment_method || "")
     );
   }, [
     a, projectId, fournisseurId, description, amount, statusStr,
-    orderedAt, receivedAt, receiptUrl, notes
+    orderedAt, receivedAt, receiptUrl, notes, assignedEmpId, paymentMethod
   ]);
 
   async function saveAll() {
@@ -149,7 +183,11 @@ export default function AchatDetailPage() {
         ordered_at: orderedAt ? new Date(orderedAt).toISOString() : null,
         received_at: receivedAt ? new Date(receivedAt).toISOString() : null,
         receipt_url: receiptUrl.trim() || null,
-        notes: notes.trim() || null
+        notes: notes.trim() || null,
+        fournisseur_id: fournisseurId ? Number(fournisseurId) : null,
+        project_id: projectId ? Number(projectId) : null,
+        assigned_employe_id: assignedEmpId ? Number(assignedEmpId) : null,
+        payment_method: paymentMethod || null
       };
       const res = await authedFetch(`/api/v1/achats/${id}`, {
         method: "PATCH",
@@ -265,6 +303,51 @@ export default function AchatDetailPage() {
             <header className="mt-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <h1 className="text-2xl font-bold text-white">{a.reference}</h1>
               <div className="flex flex-wrap items-start gap-2">
+                {a.assigned_employe_id ? (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setSendingPo(true);
+                      setPoNotice(null);
+                      try {
+                        const res = await authedFetch(
+                          `/api/v1/achats/${id}/send-po`,
+                          {
+                            method: "POST",
+                            body: JSON.stringify({})
+                          }
+                        );
+                        if (!res.ok) {
+                          const t = await res.text();
+                          throw new Error(t.slice(0, 200));
+                        }
+                        const u = (await res.json()) as Achat;
+                        setA(u);
+                        setStatusStr(u.status);
+                        setPoNotice("PO envoyé par courriel.");
+                        setTimeout(() => setPoNotice(null), 4000);
+                      } catch (e) {
+                        setPoNotice(`Échec : ${(e as Error).message}`);
+                      } finally {
+                        setSendingPo(false);
+                      }
+                    }}
+                    disabled={sendingPo || !fournisseurId || !amount}
+                    className="inline-flex items-center gap-2 self-start rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2.5 text-sm font-medium text-blue-200 hover:bg-blue-500/20 disabled:opacity-50"
+                    title={
+                      !fournisseurId || !amount
+                        ? "Fournisseur + montant requis avant d'envoyer le PO"
+                        : "Envoyer le PO par courriel à l'employé assigné"
+                    }
+                  >
+                    {sendingPo ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <ExternalLink className="h-4 w-4" />
+                    )}
+                    Envoyer le PO
+                  </button>
+                ) : null}
                 <AchatQboPushButton
                   achat={a}
                   onSynced={(billId, docNumber) =>
@@ -294,6 +377,18 @@ export default function AchatDetailPage() {
                 </button>
               </div>
             </header>
+
+            {poNotice ? (
+              <p
+                className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
+                  poNotice.startsWith("Échec")
+                    ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+                    : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                }`}
+              >
+                {poNotice}
+              </p>
+            ) : null}
 
             {error ? (
               <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
@@ -325,19 +420,75 @@ export default function AchatDetailPage() {
                   </div>
                   <div>
                     <label htmlFor="af" className="label">Fournisseur</label>
+                    <div className="flex items-center gap-2">
+                      <select
+                        id="af"
+                        value={fournisseurId}
+                        onChange={(e) => setFournisseurId(e.target.value)}
+                        className="input flex-1"
+                      >
+                        <option value="">— Aucun —</option>
+                        {fournisseurs.map((fr) => (
+                          <option key={fr.id} value={String(fr.id)}>
+                            {fr.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => setShowFournisseurModal(true)}
+                        className="btn-secondary shrink-0 text-xs"
+                        title="Créer un nouveau fournisseur"
+                      >
+                        + Nouveau
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="ae" className="label">
+                      Employé assigné
+                    </label>
                     <select
-                      id="af"
-                      value={fournisseurId}
-                      onChange={(e) => setFournisseurId(e.target.value)}
+                      id="ae"
+                      value={assignedEmpId}
+                      onChange={(e) => setAssignedEmpId(e.target.value)}
                       className="input"
                     >
                       <option value="">— Aucun —</option>
-                      {fournisseurs.map((fr) => (
-                        <option key={fr.id} value={String(fr.id)}>
-                          {fr.name}
+                      {employes
+                        .filter((e) => e.active !== false)
+                        .map((e) => (
+                          <option key={e.id} value={String(e.id)}>
+                            {e.full_name}
+                          </option>
+                        ))}
+                    </select>
+                    <p className="mt-1 text-[11px] text-white/50">
+                      Reçoit le PO par courriel lors de l&apos;envoi.
+                    </p>
+                  </div>
+                  <div>
+                    <label htmlFor="apm" className="label">
+                      Mode de paiement
+                    </label>
+                    <select
+                      id="apm"
+                      value={paymentMethod}
+                      onChange={(e) => setPaymentMethod(e.target.value)}
+                      className="input"
+                    >
+                      <option value="">— Non défini —</option>
+                      {PAYMENT_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
                         </option>
                       ))}
                     </select>
+                    <p className="mt-1 text-[11px] text-white/50">
+                      Détermine le routage QuickBooks (Bill vs Purchase).
+                    </p>
                   </div>
                 </div>
               </section>
@@ -527,6 +678,15 @@ export default function AchatDetailPage() {
           </>
         ) : null}
       </div>
+      <FournisseurModal
+        open={showFournisseurModal}
+        onClose={() => setShowFournisseurModal(false)}
+        onCreated={(f) => {
+          setFournisseurs((prev) => [...prev, f]);
+          setFournisseurId(String(f.id));
+          setShowFournisseurModal(false);
+        }}
+      />
     </>
   );
 }

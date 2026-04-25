@@ -1,10 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter as useNextRouter } from "next/navigation";
+import {
+  useRouter as useNextRouter,
+  useSearchParams
+} from "next/navigation";
 import { ArrowLeft, Loader2 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { FournisseurModal } from "@/components/fournisseur-modal";
 import { ReceiptScanner } from "@/components/receipt-scanner";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
@@ -12,28 +16,39 @@ import { authedFetch } from "@/lib/auth";
 
 type Project = { id: number; name: string };
 type Fournisseur = { id: number; name: string };
+type Employe = {
+  id: number;
+  full_name: string;
+  email: string | null;
+  active?: boolean;
+};
 
-function buildRef(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return (
-    `PO-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
-    `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
-  );
-}
+const PAYMENT_OPTIONS = [
+  { value: "bill_to_pay", label: "Sur compte fournisseur (à payer plus tard)" },
+  { value: "cheque_horizon", label: "Compte chèque Horizon" },
+  { value: "cc_steven", label: "CC Horizon Steven Giguère" },
+  { value: "cc_michael", label: "CC Horizon Michael Villiard" },
+  { value: "cc_olivier", label: "CC Horizon Olivier Therrien" },
+  { value: "cc_christian", label: "CC Horizon Christian Villiard" }
+];
 
 export default function NewAchatPage() {
   const { onOpenSidebar } = useAppLayout();
   const router = useNextRouter();
+  const searchParams = useSearchParams();
+  const prefilledProjectId = searchParams.get("project_id");
 
-  const [reference] = useState(() => buildRef());
-  const [projectId, setProjectId] = useState("");
+  const [projectId, setProjectId] = useState(prefilledProjectId || "");
   const [fournisseurId, setFournisseurId] = useState("");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
+  const [assignedEmpId, setAssignedEmpId] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("");
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
+  const [employes, setEmployes] = useState<Employe[]>([]);
+  const [showFournisseurModal, setShowFournisseurModal] = useState(false);
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,13 +57,16 @@ export default function NewAchatPage() {
     let cancelled = false;
     async function load() {
       try {
-        const [pRes, frRes] = await Promise.all([
+        const [pRes, frRes, eRes] = await Promise.all([
           authedFetch("/api/v1/projects?limit=500"),
-          authedFetch("/api/v1/fournisseurs?limit=500")
+          authedFetch("/api/v1/fournisseurs?limit=500"),
+          authedFetch("/api/v1/employes?limit=500")
         ]);
         if (!cancelled) {
           if (pRes.ok) setProjects((await pRes.json()) as Project[]);
-          if (frRes.ok) setFournisseurs((await frRes.json()) as Fournisseur[]);
+          if (frRes.ok)
+            setFournisseurs((await frRes.json()) as Fournisseur[]);
+          if (eRes.ok) setEmployes((await eRes.json()) as Employe[]);
         }
       } catch {
         /* ignore */
@@ -65,11 +83,13 @@ export default function NewAchatPage() {
     setError(null);
     setSubmitting(true);
     try {
-      const payload: Record<string, unknown> = { reference };
+      const payload: Record<string, unknown> = {};
       if (projectId) payload.project_id = Number(projectId);
       if (fournisseurId) payload.fournisseur_id = Number(fournisseurId);
       if (description.trim()) payload.description = description.trim();
       if (amount) payload.amount = Number(amount);
+      if (assignedEmpId) payload.assigned_employe_id = Number(assignedEmpId);
+      if (paymentMethod) payload.payment_method = paymentMethod;
 
       const res = await authedFetch("/api/v1/achats", {
         method: "POST",
@@ -81,8 +101,6 @@ export default function NewAchatPage() {
       }
       const created = (await res.json()) as { id: number };
 
-      // If a receipt photo/PDF was picked, upload it right after the
-      // create so the achat is complete before we land on the detail.
       if (receiptFile) {
         const fd = new FormData();
         fd.append("file", receiptFile, receiptFile.name);
@@ -92,7 +110,6 @@ export default function NewAchatPage() {
         );
         if (!up.ok && up.status !== 204) {
           const txt = await up.text();
-          // Don't block navigation — the achat itself was created.
           setError(
             "Achat créé, mais l'upload du reçu a échoué : " +
               (txt.slice(0, 200) || `http_${up.status}`)
@@ -110,7 +127,11 @@ export default function NewAchatPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Achats / PO", href: "/app/achats" }, { label: "Nouveau" }]}
+        breadcrumbs={[
+          { label: "Construction", href: "/app" },
+          { label: "Achats / PO", href: "/app/achats" },
+          { label: "Nouveau" }
+        ]}
         onOpenSidebar={onOpenSidebar}
       />
 
@@ -123,61 +144,134 @@ export default function NewAchatPage() {
           <ArrowLeft className="mr-1 h-4 w-4" /> Retour aux achats
         </Link>
 
-        <h1 className="mt-6 text-2xl font-bold text-white">Nouvel achat</h1>
+        <h1 className="mt-6 text-2xl font-bold text-white">
+          Nouveau PO / achat
+        </h1>
         <p className="mt-1 text-sm text-white/60">
-          Référence : <span className="text-accent-500">{reference}</span>
+          Le numéro PO sera attribué automatiquement (suite alignée
+          sur ta numérotation QuickBooks).
         </p>
 
         <form onSubmit={onSubmit} className="mt-6 max-w-2xl space-y-5">
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label htmlFor="project" className="label">Projet</label>
+              <label htmlFor="project" className="label">
+                Projet
+              </label>
               <select
                 id="project"
                 value={projectId}
                 onChange={(e) => setProjectId(e.target.value)}
                 className="input"
               >
-                <option value="">— Aucun —</option>
+                <option value="">— Aucun (frais généraux) —</option>
                 {projects.map((p) => (
                   <option key={p.id} value={String(p.id)}>
                     {p.name}
                   </option>
                 ))}
               </select>
+              <p className="mt-1 text-[11px] text-white/50">
+                Vide = matériaux généraux (caulking, vis, outils
+                partagés).
+              </p>
             </div>
             <div>
-              <label htmlFor="fournisseur" className="label">Fournisseur</label>
+              <label htmlFor="fournisseur" className="label">
+                Fournisseur
+              </label>
+              <div className="flex items-center gap-2">
+                <select
+                  id="fournisseur"
+                  value={fournisseurId}
+                  onChange={(e) => setFournisseurId(e.target.value)}
+                  className="input flex-1"
+                >
+                  <option value="">— Aucun —</option>
+                  {fournisseurs.map((fr) => (
+                    <option key={fr.id} value={String(fr.id)}>
+                      {fr.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setShowFournisseurModal(true)}
+                  className="btn-secondary shrink-0 text-xs"
+                  title="Créer un nouveau fournisseur"
+                >
+                  + Nouveau
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor="ae" className="label">
+                Employé assigné
+              </label>
               <select
-                id="fournisseur"
-                value={fournisseurId}
-                onChange={(e) => setFournisseurId(e.target.value)}
+                id="ae"
+                value={assignedEmpId}
+                onChange={(e) => setAssignedEmpId(e.target.value)}
                 className="input"
               >
                 <option value="">— Aucun —</option>
-                {fournisseurs.map((fr) => (
-                  <option key={fr.id} value={String(fr.id)}>
-                    {fr.name}
+                {employes
+                  .filter((e) => e.active !== false)
+                  .map((e) => (
+                    <option key={e.id} value={String(e.id)}>
+                      {e.full_name}
+                    </option>
+                  ))}
+              </select>
+              <p className="mt-1 text-[11px] text-white/50">
+                Recevra le PO par courriel quand tu cliques sur
+                « Envoyer le PO ».
+              </p>
+            </div>
+            <div>
+              <label htmlFor="apm" className="label">
+                Mode de paiement
+              </label>
+              <select
+                id="apm"
+                value={paymentMethod}
+                onChange={(e) => setPaymentMethod(e.target.value)}
+                className="input"
+              >
+                <option value="">— À définir —</option>
+                {PAYMENT_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
                   </option>
                 ))}
               </select>
+              <p className="mt-1 text-[11px] text-white/50">
+                Détermine le routage QuickBooks (Bill vs Purchase).
+              </p>
             </div>
           </div>
 
           <div>
-            <label htmlFor="description" className="label">Description</label>
+            <label htmlFor="description" className="label">
+              Description / matériel
+            </label>
             <input
               id="description"
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Ex. Bois traité 2x4 x 20"
+              placeholder="Ex. 70 tubes caulking, vis 2 1/2 (2 boîtes)…"
               className="input"
             />
           </div>
 
           <div>
-            <label htmlFor="amount" className="label">Montant (CAD)</label>
+            <label htmlFor="amount" className="label">
+              Montant (CAD) — max autorisé
+            </label>
             <input
               id="amount"
               type="number"
@@ -191,7 +285,7 @@ export default function NewAchatPage() {
           </div>
 
           <div>
-            <label className="label">Facture / reçu</label>
+            <label className="label">Facture / reçu (optionnel)</label>
             <ReceiptScanner value={receiptFile} onChange={setReceiptFile} />
           </div>
 
@@ -208,7 +302,7 @@ export default function NewAchatPage() {
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Création…
                 </>
               ) : (
-                "Créer l'achat"
+                "Créer le PO"
               )}
             </button>
             <Link
@@ -221,6 +315,16 @@ export default function NewAchatPage() {
           </div>
         </form>
       </div>
+
+      <FournisseurModal
+        open={showFournisseurModal}
+        onClose={() => setShowFournisseurModal(false)}
+        onCreated={(f) => {
+          setFournisseurs((prev) => [...prev, f]);
+          setFournisseurId(String(f.id));
+          setShowFournisseurModal(false);
+        }}
+      />
     </>
   );
 }

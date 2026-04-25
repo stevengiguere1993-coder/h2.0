@@ -27,20 +27,20 @@ router = APIRouter(prefix="/settings/qbo-accounts", tags=["qbo-account-map"])
 class QboAccountMapRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     default_expense_account: Optional[str] = None
-    operations_account: Optional[str] = None
+    cheque_horizon_account: Optional[str] = None
     cc_steven_account: Optional[str] = None
     cc_michael_account: Optional[str] = None
-    interac_account: Optional[str] = None
-    cash_account: Optional[str] = None
+    cc_olivier_account: Optional[str] = None
+    cc_christian_account: Optional[str] = None
 
 
 class QboAccountMapUpdate(BaseModel):
     default_expense_account: Optional[str] = Field(default=None, max_length=255)
-    operations_account: Optional[str] = Field(default=None, max_length=255)
+    cheque_horizon_account: Optional[str] = Field(default=None, max_length=255)
     cc_steven_account: Optional[str] = Field(default=None, max_length=255)
     cc_michael_account: Optional[str] = Field(default=None, max_length=255)
-    interac_account: Optional[str] = Field(default=None, max_length=255)
-    cash_account: Optional[str] = Field(default=None, max_length=255)
+    cc_olivier_account: Optional[str] = Field(default=None, max_length=255)
+    cc_christian_account: Optional[str] = Field(default=None, max_length=255)
 
 
 async def _ensure_row(db) -> QboAccountMap:

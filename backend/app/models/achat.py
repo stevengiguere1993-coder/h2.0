@@ -20,20 +20,24 @@ class AchatStatus(str, Enum):
 class PaymentMethod(str, Enum):
     """Mode de paiement de l'achat → détermine le routage QB.
 
-    - operations / interac / cheque : crée un Bill (facture fournisseur)
-      qui apparaît dans les comptes fournisseurs jusqu'au paiement
-    - cc_steven / cc_michael / cash : crée un Purchase (déjà payé)
-      qui charge directement la dépense + crédite le compte de paiement
+    Comptes Horizon réels (mappés dans /app/parametres → Comptes QB) :
 
-    Le mapping vers les noms de comptes QBO réels se fait dans
-    /app/parametres → Comptes QuickBooks par mode de paiement.
+    - bill_to_pay        Sur compte fournisseur, facture à payer plus
+                         tard (net-30) → Bill QB (A/P).
+    - cheque_horizon     Compte chèque Horizon (paiement immédiat) →
+                         Purchase QB.
+    - cc_steven          CC Horizon Steven Giguère → Purchase QB.
+    - cc_michael         CC Horizon Michael Villiard → Purchase QB.
+    - cc_olivier         CC Horizon Olivier Therrien → Purchase QB.
+    - cc_christian       CC Horizon Christian Villiard → Purchase QB.
     """
 
-    OPERATIONS = "operations"      # chèque / sur compte fournisseur
-    INTERAC = "interac"            # virement bancaire
+    BILL_TO_PAY = "bill_to_pay"
+    CHEQUE_HORIZON = "cheque_horizon"
     CC_STEVEN = "cc_steven"
     CC_MICHAEL = "cc_michael"
-    CASH = "cash"
+    CC_OLIVIER = "cc_olivier"
+    CC_CHRISTIAN = "cc_christian"
 
 
 class Achat(Base, TimestampUpdateMixin):
