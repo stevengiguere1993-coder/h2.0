@@ -53,12 +53,20 @@ const STATUS_CLASS: Record<string, string> = {
   delivered: "bg-emerald-500/20 text-emerald-300"
 };
 
-type TabId = "summary" | "planification" | "agenda" | "photos" | "tasks" | "finances";
+type TabId =
+  | "summary"
+  | "planification"
+  | "agenda"
+  | "achats"
+  | "photos"
+  | "tasks"
+  | "finances";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "summary", label: "Résumé" },
   { id: "planification", label: "Planification" },
   { id: "agenda", label: "Agenda chantier" },
+  { id: "achats", label: "Achats / PO" },
   { id: "finances", label: "Finances" },
   { id: "photos", label: "Photos" },
   { id: "tasks", label: "Tâches" }
@@ -459,6 +467,8 @@ export default function ProjectDetailPage() {
                 <PlanificationTab projectId={id} />
               ) : tab === "agenda" ? (
                 <ChantierAgendaTab projectId={id} projectName={p?.name || ""} />
+              ) : tab === "achats" ? (
+                <ProjectAchatsTab projectId={id} />
               ) : tab === "finances" ? (
                 <FinancesTab projectId={id} />
               ) : tab === "photos" ? (
@@ -3062,6 +3072,288 @@ function ProjectTeamSection({
           </ul>
         </div>
       ) : null}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Onglet Achats / PO dans la fiche projet — liste filtrée par projet,
+// avec totaux par statut et bouton « + Nouveau PO » qui pré-remplit le
+// projet courant.
+// ---------------------------------------------------------------------------
+
+type ProjectAchat = {
+  id: number;
+  reference: string;
+  fournisseur_id: number | null;
+  description: string | null;
+  amount: number | string | null;
+  status: string;
+  ordered_at: string | null;
+  received_at: string | null;
+  created_at: string;
+  payment_method: string | null;
+  qbo_bill_id: string | null;
+};
+
+type ProjectFournisseur = { id: number; name: string };
+
+const ACHAT_STATUS_LABEL: Record<string, string> = {
+  draft: "Planifié",
+  ordered: "PO envoyé",
+  received: "Reçu",
+  cancelled: "Annulé"
+};
+
+const ACHAT_STATUS_BG: Record<string, string> = {
+  draft: "bg-white/10 text-white/70 border-white/20",
+  ordered: "bg-blue-500/15 text-blue-300 border-blue-500/30",
+  received: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+  cancelled: "bg-rose-500/15 text-rose-300 border-rose-500/30"
+};
+
+const ACHAT_PAYMENT_LABEL: Record<string, string> = {
+  bill_to_pay: "Sur compte",
+  cheque_horizon: "Chèque",
+  cc_steven: "CC Steven",
+  cc_michael: "CC Michael",
+  cc_olivier: "CC Olivier",
+  cc_christian: "CC Christian"
+};
+
+function ProjectAchatsTab({ projectId }: { projectId: number }) {
+  const [achats, setAchats] = useState<ProjectAchat[]>([]);
+  const [fournisseurs, setFournisseurs] = useState<ProjectFournisseur[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<"all" | "draft" | "ordered" | "received">(
+    "all"
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const [aRes, frRes] = await Promise.all([
+          authedFetch("/api/v1/achats?limit=500"),
+          authedFetch("/api/v1/fournisseurs?limit=500")
+        ]);
+        if (!aRes.ok) throw new Error();
+        const all = (await aRes.json()) as ProjectAchat[];
+        const onlyThis = all.filter(
+          (a: ProjectAchat & { project_id?: number | null }) =>
+            (a as { project_id?: number | null }).project_id === projectId
+        );
+        if (!cancelled) {
+          setAchats(onlyThis);
+          setFournisseurs(
+            frRes.ok
+              ? ((await frRes.json()) as ProjectFournisseur[])
+              : []
+          );
+        }
+      } catch {
+        if (!cancelled) setError("Chargement échoué.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  const fournisseurById = useMemo(() => {
+    const m = new Map<number, ProjectFournisseur>();
+    fournisseurs.forEach((f) => m.set(f.id, f));
+    return m;
+  }, [fournisseurs]);
+
+  const filtered = useMemo(() => {
+    if (tab === "all") return achats;
+    return achats.filter((a) => a.status === tab);
+  }, [achats, tab]);
+
+  const totals = useMemo(() => {
+    const sum = (rows: ProjectAchat[]) =>
+      rows.reduce(
+        (s, a) => s + (a.amount != null ? Number(a.amount) : 0),
+        0
+      );
+    return {
+      draft: sum(achats.filter((a) => a.status === "draft")),
+      ordered: sum(achats.filter((a) => a.status === "ordered")),
+      received: sum(achats.filter((a) => a.status === "received")),
+      all: sum(achats)
+    };
+  }, [achats]);
+
+  function fmt(n: number): string {
+    return new Intl.NumberFormat("fr-CA", {
+      style: "currency",
+      currency: "CAD",
+      maximumFractionDigits: 0
+    }).format(n);
+  }
+
+  return (
+    <section className="space-y-4">
+      <header className="flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <h2 className="text-base font-bold text-white">Achats / PO</h2>
+          <p className="mt-0.5 text-xs text-white/60">
+            Tous les bons de commande et achats rattachés à ce projet —
+            ils chargent automatiquement la section{" "}
+            <span className="text-accent-400">Coût matériel réel</span>{" "}
+            de l&apos;onglet Finances.
+          </p>
+        </div>
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={`/app/achats/new?project_id=${projectId}` as any}
+          className="btn-accent text-xs"
+        >
+          + Nouveau PO
+        </Link>
+      </header>
+
+      {error ? (
+        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {error}
+        </p>
+      ) : null}
+
+      <div className="grid gap-2 sm:grid-cols-4">
+        {(
+          [
+            { key: "all", label: "Tous", color: "text-white" },
+            { key: "draft", label: "Planifiés", color: "text-white/70" },
+            {
+              key: "ordered",
+              label: "PO envoyés",
+              color: "text-blue-300"
+            },
+            { key: "received", label: "Reçus", color: "text-emerald-300" }
+          ] as const
+        ).map((t) => {
+          const active = tab === t.key;
+          const count =
+            t.key === "all"
+              ? achats.length
+              : achats.filter((a) => a.status === t.key).length;
+          const total = totals[t.key];
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={`rounded-xl border px-3 py-2.5 text-left transition ${
+                active
+                  ? "border-accent-500/60 bg-accent-500/10"
+                  : "border-brand-800 bg-brand-900 hover:border-accent-500/30"
+              }`}
+            >
+              <p className="text-[10px] uppercase tracking-wider text-white/50">
+                {t.label}
+              </p>
+              <p className={`mt-1 text-lg font-bold ${t.color}`}>
+                {count}
+              </p>
+              <p className="text-[10px] text-white/50">{fmt(total)}</p>
+            </button>
+          );
+        })}
+      </div>
+
+      {loading ? (
+        <div className="flex min-h-[20vh] items-center justify-center">
+          <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/50 px-6 py-10 text-center text-sm text-white/50">
+          Aucun {tab === "all" ? "achat" : ACHAT_STATUS_LABEL[tab]?.toLowerCase()}{" "}
+          pour ce projet.
+          <br />
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={`/app/achats/new?project_id=${projectId}` as any}
+            className="mt-3 inline-block text-accent-400 underline decoration-dotted hover:text-accent-300"
+          >
+            Créer un nouveau PO →
+          </Link>
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
+          <table className="w-full text-sm">
+            <thead className="border-b border-brand-800 bg-brand-950/50 text-left text-[11px] uppercase tracking-wider text-white/50">
+              <tr>
+                <th className="px-3 py-2">PO</th>
+                <th className="px-3 py-2">Fournisseur</th>
+                <th className="px-3 py-2">Description</th>
+                <th className="px-3 py-2">Paiement</th>
+                <th className="px-3 py-2 text-right">Montant</th>
+                <th className="px-3 py-2 text-center">Statut</th>
+                <th className="px-3 py-2 text-center">QB</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-brand-800">
+              {filtered.map((a) => {
+                const fr = a.fournisseur_id
+                  ? fournisseurById.get(a.fournisseur_id)
+                  : null;
+                const amt = a.amount != null ? Number(a.amount) : 0;
+                return (
+                  <tr key={a.id} className="hover:bg-brand-800/30">
+                    <td className="px-3 py-2">
+                      <Link
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={`/app/achats/${a.id}` as any}
+                        className="font-mono text-accent-400 hover:underline"
+                      >
+                        {a.reference}
+                      </Link>
+                    </td>
+                    <td className="px-3 py-2 text-white/80">
+                      {fr?.name || "—"}
+                    </td>
+                    <td className="px-3 py-2 text-white/70">
+                      <span className="line-clamp-1">
+                        {a.description || "—"}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-[11px] text-white/60">
+                      {ACHAT_PAYMENT_LABEL[a.payment_method || ""] ||
+                        (a.payment_method ? a.payment_method : "—")}
+                    </td>
+                    <td className="px-3 py-2 text-right font-semibold text-white">
+                      {fmt(amt)}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                          ACHAT_STATUS_BG[a.status] ||
+                          "border-white/20 bg-white/10 text-white/70"
+                        }`}
+                      >
+                        {ACHAT_STATUS_LABEL[a.status] || a.status}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      {a.qbo_bill_id ? (
+                        <span className="text-xs text-emerald-400">✓</span>
+                      ) : (
+                        <span className="text-xs text-white/30">—</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </section>
   );
 }
