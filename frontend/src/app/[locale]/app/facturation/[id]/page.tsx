@@ -633,11 +633,60 @@ export default function FactureDetailPage() {
             <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900 p-5">
               <div className="flex flex-wrap items-center gap-3">
                 <label className="label mb-0">Échéance</label>
+                <select
+                  value={(() => {
+                    if (!dueAt) return "custom";
+                    const issued = f?.issued_at
+                      ? new Date(f.issued_at)
+                      : new Date();
+                    const due = new Date(dueAt);
+                    const diffDays = Math.round(
+                      (due.getTime() -
+                        new Date(
+                          issued.getFullYear(),
+                          issued.getMonth(),
+                          issued.getDate()
+                        ).getTime()) /
+                        86400000
+                    );
+                    if (diffDays === 0) return "0";
+                    if ([10, 15, 30, 45, 60].includes(diffDays))
+                      return String(diffDays);
+                    return "custom";
+                  })()}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "custom") return; // user éditera la date à droite
+                    const issued = f?.issued_at
+                      ? new Date(f.issued_at)
+                      : new Date();
+                    const base = new Date(
+                      issued.getFullYear(),
+                      issued.getMonth(),
+                      issued.getDate()
+                    );
+                    base.setDate(base.getDate() + Number(v));
+                    const yyyy = base.getFullYear();
+                    const mm = String(base.getMonth() + 1).padStart(2, "0");
+                    const dd = String(base.getDate()).padStart(2, "0");
+                    setDueAt(`${yyyy}-${mm}-${dd}`);
+                  }}
+                  className="input w-48"
+                >
+                  <option value="0">Payable sur réception</option>
+                  <option value="10">Net 10 jours</option>
+                  <option value="15">Net 15 jours</option>
+                  <option value="30">Net 30 jours</option>
+                  <option value="45">Net 45 jours</option>
+                  <option value="60">Net 60 jours</option>
+                  <option value="custom">Date personnalisée</option>
+                </select>
                 <input
                   type="date"
                   value={dueAt}
                   onChange={(e) => setDueAt(e.target.value)}
-                  className="input w-48"
+                  className="input w-44"
+                  title="Date d'échéance — modifie pour personnaliser"
                 />
                 <button
                   type="button"
@@ -652,6 +701,11 @@ export default function FactureDetailPage() {
                   )}
                 </button>
               </div>
+              <p className="mt-2 text-[11px] text-white/50">
+                Une facture d&apos;acompte se règle généralement{" "}
+                <strong>sur réception</strong>. Les soldes finaux suivent
+                tes conditions habituelles (souvent net 30).
+              </p>
             </section>
 
             <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900 p-5">

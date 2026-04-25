@@ -283,6 +283,13 @@ def _render_bytes(
         f"{COMPANY_NAME} sont acceptés. Pour toute question, contacte-"
         "nous à info@immohorizon.com.", s["small"],
     ))
+    story.append(Spacer(1, 4))
+    story.append(Paragraph(
+        "<b>Tout retard de paiement après l'échéance est facturé "
+        "à 2 % par mois (24 % par an), conformément à nos "
+        "conditions générales.</b>",
+        s["small"],
+    ))
     story.append(Spacer(1, 16))
     story.append(Paragraph(
         f"{COMPANY_NAME} &middot; {COMPANY_RBQ} &middot; {COMPANY_EMAIL}",
