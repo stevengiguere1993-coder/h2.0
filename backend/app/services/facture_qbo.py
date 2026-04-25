@@ -106,6 +106,24 @@ def _build_invoice_payload(
     if facture.due_at:
         payload["DueDate"] = facture.due_at.date().isoformat()
 
+    # Taxes canadiennes — recalculées à partir des montants de ligne
+    # pour rester cohérent avec ce que h2.0 affiche, indépendamment de
+    # ce qui est stocké dans facture.tps/tvq (souvent null car calculé
+    # au PDF). TPS 5 % + TVQ 9.975 %. GlobalTaxCalculation=TaxExcluded
+    # dit à QBO que les lignes n'incluent pas la taxe.
+    subtotal = 0.0
+    for line in lines:
+        try:
+            subtotal += float(line.get("Amount") or 0)
+        except (TypeError, ValueError):
+            continue
+    tps = round(subtotal * 0.05, 2)
+    tvq = round(subtotal * 0.09975, 2)
+    total_tax = round(tps + tvq, 2)
+    if total_tax > 0:
+        payload["GlobalTaxCalculation"] = "TaxExcluded"
+        payload["TxnTaxDetail"] = {"TotalTax": total_tax}
+
     if existing_invoice_id and existing_sync_token is not None:
         payload["Id"] = existing_invoice_id
         payload["SyncToken"] = existing_sync_token
