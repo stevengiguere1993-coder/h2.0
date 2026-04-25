@@ -344,6 +344,9 @@ class AchatCreate(BaseModel):
     project_id: Optional[int] = None
     description: Optional[str] = None
     amount: Optional[float] = None
+    assigned_employe_id: Optional[int] = None
+    payment_method: Optional[str] = Field(default=None, max_length=32)
+    status: Optional[str] = Field(default=None, max_length=32)
 
 
 class AchatUpdate(BaseModel):
@@ -356,6 +359,8 @@ class AchatUpdate(BaseModel):
     notes: Optional[str] = None
     fournisseur_id: Optional[int] = None
     project_id: Optional[int] = None
+    assigned_employe_id: Optional[int] = None
+    payment_method: Optional[str] = Field(default=None, max_length=32)
 
 
 class AchatRead(_Base):
@@ -373,7 +378,10 @@ class AchatRead(_Base):
     # GET /api/v1/achats/{id}/receipt).
     has_receipt_image: bool = False
     receipt_image_content_type: Optional[str] = None
-    # Liaison QuickBooks Online (Bill).
+    # Workflow PO
+    assigned_employe_id: Optional[int] = None
+    payment_method: Optional[str] = None
+    # Liaison QuickBooks Online (Bill ou Purchase).
     qbo_bill_id: Optional[str] = None
     qbo_doc_number: Optional[str] = None
     notes: Optional[str]

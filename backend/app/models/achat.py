@@ -11,10 +11,29 @@ from app.db.base import Base, TimestampUpdateMixin
 
 
 class AchatStatus(str, Enum):
-    DRAFT = "draft"
-    ORDERED = "ordered"
-    RECEIVED = "received"
+    DRAFT = "draft"          # Planifié, pas encore envoyé
+    ORDERED = "ordered"      # PO envoyé à un employé qui doit aller chercher
+    RECEIVED = "received"    # Marchandise + facture en main
     CANCELLED = "cancelled"
+
+
+class PaymentMethod(str, Enum):
+    """Mode de paiement de l'achat → détermine le routage QB.
+
+    - operations / interac / cheque : crée un Bill (facture fournisseur)
+      qui apparaît dans les comptes fournisseurs jusqu'au paiement
+    - cc_steven / cc_michael / cash : crée un Purchase (déjà payé)
+      qui charge directement la dépense + crédite le compte de paiement
+
+    Le mapping vers les noms de comptes QBO réels se fait dans
+    /app/parametres → Comptes QuickBooks par mode de paiement.
+    """
+
+    OPERATIONS = "operations"      # chèque / sur compte fournisseur
+    INTERAC = "interac"            # virement bancaire
+    CC_STEVEN = "cc_steven"
+    CC_MICHAEL = "cc_michael"
+    CASH = "cash"
 
 
 class Achat(Base, TimestampUpdateMixin):
@@ -32,6 +51,19 @@ class Achat(Base, TimestampUpdateMixin):
 
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     amount: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
+
+    # Employé qui va chercher la marchandise (foreman habituellement).
+    # Reçoit le PO par courriel lors de l'envoi.
+    assigned_employe_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("employes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Mode de paiement — détermine le routage QB.
+    payment_method: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True, index=True
+    )
 
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=AchatStatus.DRAFT.value, index=True
