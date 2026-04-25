@@ -180,7 +180,7 @@ async def _already_notified(db, marker: str) -> bool:
 def _active_non_admin_employes(rows: Iterable[Employe]) -> list[Employe]:
     out: list[Employe] = []
     for e in rows:
-        if not e.is_active:
+        if not e.active:
             continue
         if e.email:
             # On veut garder les employés de terrain (role "employee").
@@ -198,7 +198,7 @@ async def _run() -> None:
         target = _next_business_day(today)
 
         employes_rows = (
-            await db.execute(select(Employe).where(Employe.is_active.is_(True)))
+            await db.execute(select(Employe).where(Employe.active.is_(True)))
         ).scalars().all()
 
         # Map email → user role pour filtrer les admin/owner.
