@@ -27,6 +27,7 @@ from app.models.project import Project, ProjectStatus
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
 from app.schemas.project import ProjectRead
+from app.services.numbering import next_facture_number
 
 
 router = APIRouter(prefix="/soumissions", tags=["soumission-to-project"])
@@ -146,7 +147,7 @@ async def convert_soumission_to_project(
             grand_total = round(deposit_subtotal + tps + tvq, 2)
 
             facture = Facture(
-                reference=_build_facture_ref(),
+                reference=await next_facture_number(db),
                 client_id=project.client_id,
                 project_id=project.id,
                 status=FactureStatus.DRAFT.value,

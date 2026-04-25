@@ -77,6 +77,22 @@ def make_crud_router(
 
     @router.post("", status_code=status.HTTP_201_CREATED)
     async def create(data: create_schema, db: DBSession, _: AuthWrite):  # type: ignore[valid-type]
+        # Numérotation séquentielle auto pour Soumission / Facture si
+        # la référence n'est pas fournie (alignée sur la séquence
+        # QuickBooks via /api/v1/settings/numbering).
+        if hasattr(data, "reference") and getattr(data, "reference", None) in (
+            None,
+            "",
+        ):
+            from app.services.numbering import (
+                next_facture_number,
+                next_soumission_number,
+            )
+
+            if model is Soumission:
+                data.reference = await next_soumission_number(db)
+            elif model is Facture:
+                data.reference = await next_facture_number(db)
         crud = GenericCrud(db, model)
         obj = await crud.create(data)
         return read_schema.model_validate(obj)
