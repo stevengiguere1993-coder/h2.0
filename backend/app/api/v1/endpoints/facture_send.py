@@ -1,9 +1,10 @@
 """Send a facture to a client by email (PDF attached).
 Also exposes GET /pdf for direct preview."""
 
+import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from fastapi.responses import Response
 from pydantic import BaseModel, EmailStr, Field
 
@@ -13,7 +14,29 @@ from app.services.facture_pdf import render_facture_pdf
 from app.services.facture_send import FactureSendError, send_facture
 
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/factures", tags=["factures"])
+
+
+async def _autopush_to_qbo(facture_id: int) -> None:
+    """Auto-push de la facture vers QBO Invoice en arrière-plan,
+    juste après l'envoi au client. Silencieux : si QBO n'est pas
+    connecté ou si la sync échoue, on log mais on ne bloque pas
+    l'envoi du courriel."""
+    from app.db.session import AsyncSessionLocal
+    from app.services.facture_qbo import sync_facture_to_qbo
+
+    try:
+        async with AsyncSessionLocal() as db:
+            await sync_facture_to_qbo(db, facture_id)
+            await db.commit()
+        log.info("Auto-push QBO facture %s ok", facture_id)
+    except Exception as exc:
+        log.warning(
+            "Auto-push QBO facture %s a échoué (silencieux): %s",
+            facture_id,
+            exc,
+        )
 
 
 class FactureSendRequest(BaseModel):
@@ -32,6 +55,7 @@ async def send_facture_endpoint(
     facture_id: int,
     data: FactureSendRequest,
     db: DBSession,
+    background: BackgroundTasks,
     _: CurrentUser,
 ) -> FactureRead:
     try:
@@ -45,6 +69,11 @@ async def send_facture_endpoint(
         )
     except FactureSendError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    # Auto-push vers QBO Invoice après l'envoi (background pour ne
+    # pas ralentir la réponse).
+    background.add_task(_autopush_to_qbo, fa.id)
+
     return FactureRead.model_validate(fa)
 
 
