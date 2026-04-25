@@ -163,6 +163,52 @@ export default function AchatsPage() {
           </p>
         ) : null}
 
+        {/* Onglets rapides par statut — reflètent le cycle de vie
+            Planifié → PO envoyé → Reçu. Le sélecteur du dessous
+            permet de filtrer plus finement ou de tout afficher. */}
+        <div className="mb-3 flex flex-wrap gap-1 border-b border-brand-800">
+          {(
+            [
+              { value: "", label: "Tous" },
+              { value: "draft", label: "Planifiés" },
+              { value: "ordered", label: "PO envoyés" },
+              { value: "received", label: "Reçus" }
+            ] as const
+          ).map((tab) => {
+            const count =
+              tab.value === ""
+                ? items.length
+                : items.filter((a) => a.status === tab.value).length;
+            const active = fStatus === tab.value;
+            return (
+              <button
+                key={tab.value}
+                type="button"
+                onClick={() => setFStatus(tab.value)}
+                className={`relative whitespace-nowrap px-4 py-2.5 text-sm transition ${
+                  active
+                    ? "font-semibold text-accent-500"
+                    : "text-white/60 hover:text-white"
+                }`}
+              >
+                {tab.label}
+                <span
+                  className={`ml-1.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-semibold ${
+                    active
+                      ? "bg-accent-500/20 text-accent-300"
+                      : "bg-white/5 text-white/50"
+                  }`}
+                >
+                  {count}
+                </span>
+                {active ? (
+                  <span className="absolute inset-x-3 -bottom-px h-0.5 rounded-t bg-accent-500" />
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <select
             value={fStatus}

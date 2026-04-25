@@ -168,6 +168,7 @@ export default function ParametresPage() {
 
         {hasMinRole(me, "admin") ? <QuickBooksSection /> : null}
         {hasMinRole(me, "admin") ? <NumberingSection /> : null}
+        {hasMinRole(me, "admin") ? <QboAccountMapSection /> : null}
 
         <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
           <header className="flex items-center gap-3">
@@ -886,6 +887,274 @@ function NumberingSection() {
         Astuce : si tu bascules QuickBooks de sandbox vers production
         plus tard, reviens ici réinitialiser les compteurs au dernier
         numéro QB de ta vraie compagnie + 1.
+      </p>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Mapping mode paiement → compte QuickBooks (pour le routage Bill/Purchase)
+// ---------------------------------------------------------------------------
+
+type QboAccountMap = {
+  default_expense_account: string | null;
+  cheque_horizon_account: string | null;
+  cc_steven_account: string | null;
+  cc_michael_account: string | null;
+  cc_olivier_account: string | null;
+  cc_christian_account: string | null;
+};
+
+const ACCOUNT_FIELDS: Array<{
+  key: keyof QboAccountMap;
+  label: string;
+  hint: string;
+  placeholder: string;
+}> = [
+  {
+    key: "default_expense_account",
+    label: "Compte de dépense par défaut",
+    hint: "Compte d'expense (Cost of Goods Sold ou Expense) utilisé pour la ligne de coût des Bills/Purchases. Ex. « Matériaux et fournitures ».",
+    placeholder: "Ex. Matériaux et fournitures"
+  },
+  {
+    key: "cheque_horizon_account",
+    label: "Compte chèque Horizon",
+    hint: "Compte bancaire utilisé pour les paiements par chèque immédiats.",
+    placeholder: "Ex. Compte chèque Horizon"
+  },
+  {
+    key: "cc_steven_account",
+    label: "Carte de crédit Steven Giguère",
+    hint: "Compte de carte de crédit dans QB pour Steven.",
+    placeholder: "Ex. CC Horizon Steven Giguère"
+  },
+  {
+    key: "cc_michael_account",
+    label: "Carte de crédit Michael Villiard",
+    hint: "Compte de carte de crédit dans QB pour Michael.",
+    placeholder: "Ex. CC Horizon Michael Villiard"
+  },
+  {
+    key: "cc_olivier_account",
+    label: "Carte de crédit Olivier Therrien",
+    hint: "Compte de carte de crédit dans QB pour Olivier.",
+    placeholder: "Ex. CC Horizon Olivier Therrien"
+  },
+  {
+    key: "cc_christian_account",
+    label: "Carte de crédit Christian Villiard",
+    hint: "Compte de carte de crédit dans QB pour Christian.",
+    placeholder: "Ex. CC Horizon Christian Villiard"
+  }
+];
+
+function QboAccountMapSection() {
+  const [data, setData] = useState<QboAccountMap | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<QboAccountMap>({
+    default_expense_account: "",
+    cheque_horizon_account: "",
+    cc_steven_account: "",
+    cc_michael_account: "",
+    cc_olivier_account: "",
+    cc_christian_account: ""
+  });
+  const [err, setErr] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await authedFetch("/api/v1/settings/qbo-accounts");
+      if (!res.ok) throw new Error();
+      const d = (await res.json()) as QboAccountMap;
+      setData(d);
+      setDraft({
+        default_expense_account: d.default_expense_account || "",
+        cheque_horizon_account: d.cheque_horizon_account || "",
+        cc_steven_account: d.cc_steven_account || "",
+        cc_michael_account: d.cc_michael_account || "",
+        cc_olivier_account: d.cc_olivier_account || "",
+        cc_christian_account: d.cc_christian_account || ""
+      });
+    } catch {
+      setErr("Chargement échoué.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function save() {
+    setSaving(true);
+    setErr(null);
+    try {
+      const res = await authedFetch("/api/v1/settings/qbo-accounts", {
+        method: "PATCH",
+        body: JSON.stringify(draft)
+      });
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      const updated = (await res.json()) as QboAccountMap;
+      setData(updated);
+      setEditing(false);
+      setSavedAt(Date.now());
+    } catch (e) {
+      setErr((e as Error).message || "Sauvegarde échouée.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const filledCount = data
+    ? ACCOUNT_FIELDS.filter((f) => (data[f.key] || "").trim().length > 0)
+        .length
+    : 0;
+
+  return (
+    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <header className="flex items-start gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500 font-bold">
+          $
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-base font-bold text-white">
+            Comptes QuickBooks par mode de paiement
+          </h2>
+          <p className="mt-0.5 text-xs text-white/60">
+            Saisis le <strong>nom exact</strong> du compte tel qu&apos;il
+            apparaît dans ton QB → Comptabilité → Plan comptable. Ces
+            mappings déterminent où chaque PO/achat va atterrir dans
+            QuickBooks selon le mode de paiement choisi sur la fiche
+            achat.
+          </p>
+        </div>
+        <span className="shrink-0 rounded-full border border-accent-500/30 bg-accent-500/10 px-2 py-0.5 text-[10px] font-semibold text-accent-300">
+          {filledCount}/{ACCOUNT_FIELDS.length}
+        </span>
+      </header>
+
+      {err ? (
+        <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {err}
+        </p>
+      ) : null}
+
+      {loading ? (
+        <div className="mt-4 flex items-center gap-2 text-xs text-white/50">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+        </div>
+      ) : (
+        <div className="mt-4 space-y-3">
+          {ACCOUNT_FIELDS.map((f) => {
+            const value =
+              (editing ? draft[f.key] : data?.[f.key]) || "";
+            return (
+              <div
+                key={f.key}
+                className="rounded-lg border border-brand-800 bg-brand-950 p-3"
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="text-xs font-semibold text-white">
+                    {f.label}
+                  </p>
+                  {!editing && !value ? (
+                    <span className="text-[10px] text-amber-400">
+                      Non configuré
+                    </span>
+                  ) : null}
+                </div>
+                {editing ? (
+                  <input
+                    type="text"
+                    value={draft[f.key] || ""}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        [f.key]: e.target.value
+                      }))
+                    }
+                    placeholder={f.placeholder}
+                    className="input mt-2 w-full"
+                  />
+                ) : (
+                  <p className="mt-1 font-mono text-sm text-white">
+                    {value || (
+                      <span className="text-white/30">—</span>
+                    )}
+                  </p>
+                )}
+                <p className="mt-1 text-[11px] text-white/50">{f.hint}</p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        {editing ? (
+          <>
+            <button
+              type="button"
+              onClick={save}
+              disabled={saving}
+              className="btn-accent text-xs"
+            >
+              {saving ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Enregistrer
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEditing(false);
+                if (data) {
+                  setDraft({
+                    default_expense_account:
+                      data.default_expense_account || "",
+                    cheque_horizon_account:
+                      data.cheque_horizon_account || "",
+                    cc_steven_account: data.cc_steven_account || "",
+                    cc_michael_account: data.cc_michael_account || "",
+                    cc_olivier_account: data.cc_olivier_account || "",
+                    cc_christian_account:
+                      data.cc_christian_account || ""
+                  });
+                }
+                setErr(null);
+              }}
+              disabled={saving}
+              className="btn-secondary text-xs"
+            >
+              Annuler
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="btn-secondary text-xs"
+          >
+            Modifier les comptes
+          </button>
+        )}
+        {savedAt && Date.now() - savedAt < 5000 ? (
+          <span className="text-[11px] text-emerald-300">
+            ✓ Comptes mis à jour.
+          </span>
+        ) : null}
+      </div>
+
+      <p className="mt-3 text-[11px] text-white/40">
+        Astuce : pour trouver les noms exacts, va dans QB →{" "}
+        <strong>Comptabilité → Plan comptable</strong>. Copie-colle le
+        nom complet (sensible aux accents et à la casse).
       </p>
     </section>
   );
