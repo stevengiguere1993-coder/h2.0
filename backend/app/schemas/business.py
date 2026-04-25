@@ -108,7 +108,9 @@ class FournisseurRead(_Base):
 
 # ---------- Soumission ----------
 class SoumissionCreate(BaseModel):
-    reference: str = Field(..., max_length=32)
+    # Optionnel : si non fourni, l'endpoint utilise next_soumission_number
+    # pour générer une référence séquentielle alignée avec QuickBooks.
+    reference: Optional[str] = Field(default=None, max_length=32)
     contact_request_id: Optional[int] = None
     client_id: Optional[int] = None
     title: str = Field(..., min_length=1, max_length=255)

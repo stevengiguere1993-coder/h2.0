@@ -22,6 +22,7 @@ from app.models.punch import Punch
 from app.models.soumission import Soumission, SoumissionStatus
 from app.models.soumission_item import SoumissionItem
 from app.schemas.business import FactureRead
+from app.services.numbering import next_facture_number
 
 
 router = APIRouter(prefix="/projects", tags=["project-to-facture"])
@@ -90,7 +91,7 @@ async def convert_project_to_facture(
         due_at = datetime.now(timezone.utc) + timedelta(days=data.due_in_days)
 
     facture = Facture(
-        reference=_build_ref(),
+        reference=await next_facture_number(db),
         client_id=project.client_id,
         project_id=project.id,
         status=FactureStatus.DRAFT.value,

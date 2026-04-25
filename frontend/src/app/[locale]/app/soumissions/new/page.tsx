@@ -32,14 +32,9 @@ function yyyyMmDd(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-function buildReference(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return (
-    `SUM-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
-    `-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
-  );
-}
+// Référence séquentielle (devis 1011, 1012, …) attribuée par le
+// backend via /api/v1/settings/numbering — alignée sur la suite
+// QuickBooks. Plus de génération côté client.
 
 export default function NewSoumissionPage() {
   const { onOpenSidebar } = useAppLayout();
@@ -64,7 +59,6 @@ export default function NewSoumissionPage() {
     d.setDate(d.getDate() + 30);
     return yyyyMmDd(d);
   });
-  const [reference] = useState<string>(() => buildReference());
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -115,7 +109,6 @@ export default function NewSoumissionPage() {
     setSubmitting(true);
     try {
       const payload: Record<string, unknown> = {
-        reference,
         title: title.trim()
       };
       if (validUntil) {
@@ -177,7 +170,8 @@ export default function NewSoumissionPage() {
 
         <h1 className="mt-6 text-2xl font-bold text-white">Nouvelle soumission</h1>
         <p className="mt-1 text-sm text-white/60">
-          Référence générée : <span className="text-accent-500">{reference}</span>
+          Le numéro de devis sera attribué automatiquement à la création
+          (suite alignée sur QuickBooks).
         </p>
 
         <div className="mt-6 flex max-w-3xl items-start gap-3 rounded-lg border border-accent-500/30 bg-accent-500/5 p-4 text-sm text-brand-100">
