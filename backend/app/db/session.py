@@ -183,6 +183,12 @@ async def init_db() -> None:
             ("achats", "qbo_bill_id", "VARCHAR(64)"),
             ("achats", "qbo_doc_number", "VARCHAR(64)"),
             ("achats", "qbo_sync_token", "VARCHAR(32)"),
+            # Workflow PO complet : assigné à l'employé qui va chercher
+            # la marchandise + mode de paiement (routage QB Bill vs
+            # Purchase).
+            ("achats", "assigned_employe_id", "INTEGER"),
+            ("achats", "payment_method", "VARCHAR(32)"),
+            # Table de mapping mode de paiement → compte QBO.
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

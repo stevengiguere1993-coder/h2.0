@@ -11,10 +11,33 @@ from app.db.base import Base, TimestampUpdateMixin
 
 
 class AchatStatus(str, Enum):
-    DRAFT = "draft"
-    ORDERED = "ordered"
-    RECEIVED = "received"
+    DRAFT = "draft"          # Planifié, pas encore envoyé
+    ORDERED = "ordered"      # PO envoyé à un employé qui doit aller chercher
+    RECEIVED = "received"    # Marchandise + facture en main
     CANCELLED = "cancelled"
+
+
+class PaymentMethod(str, Enum):
+    """Mode de paiement de l'achat → détermine le routage QB.
+
+    Comptes Horizon réels (mappés dans /app/parametres → Comptes QB) :
+
+    - bill_to_pay        Sur compte fournisseur, facture à payer plus
+                         tard (net-30) → Bill QB (A/P).
+    - cheque_horizon     Compte chèque Horizon (paiement immédiat) →
+                         Purchase QB.
+    - cc_steven          CC Horizon Steven Giguère → Purchase QB.
+    - cc_michael         CC Horizon Michael Villiard → Purchase QB.
+    - cc_olivier         CC Horizon Olivier Therrien → Purchase QB.
+    - cc_christian       CC Horizon Christian Villiard → Purchase QB.
+    """
+
+    BILL_TO_PAY = "bill_to_pay"
+    CHEQUE_HORIZON = "cheque_horizon"
+    CC_STEVEN = "cc_steven"
+    CC_MICHAEL = "cc_michael"
+    CC_OLIVIER = "cc_olivier"
+    CC_CHRISTIAN = "cc_christian"
 
 
 class Achat(Base, TimestampUpdateMixin):
@@ -32,6 +55,19 @@ class Achat(Base, TimestampUpdateMixin):
 
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     amount: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
+
+    # Employé qui va chercher la marchandise (foreman habituellement).
+    # Reçoit le PO par courriel lors de l'envoi.
+    assigned_employe_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("employes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Mode de paiement — détermine le routage QB.
+    payment_method: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True, index=True
+    )
 
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=AchatStatus.DRAFT.value, index=True

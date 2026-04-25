@@ -1,22 +1,26 @@
-"""Push an Achat (PO) to QuickBooks Online as a Bill.
+"""Push an Achat (PO) to QuickBooks Online as a Bill or Purchase.
 
     POST /api/v1/achats/{id}/qbo/sync   — push manuel
+    POST /api/v1/achats/{id}/send-po    — envoie le PO par courriel
     autopush_achat(achat_id)            — utilisé par les hooks auto
 
-Le module expose `autopush_achat` pour être appelé silencieusement
-par le hook update du CRUD générique quand on fait passer un achat
-en statut "received" (cas usuel: facture fournisseur reçue).
+Le routage Bill vs Purchase est déterminé par achat.payment_method
+(voir services/achat_qbo.py).
 """
 
 from __future__ import annotations
 
 import logging
 
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.api.deps import CurrentUser, DBSession
+from app.schemas.business import AchatRead
 from app.services.achat_qbo import AchatSyncError, sync_achat_to_qbo
+from app.services.achat_send import AchatSendError, send_achat_po
 
 
 log = logging.getLogger(__name__)
@@ -46,6 +50,32 @@ async def push_achat_to_qbo(
             detail=f"QBO sync failed: {exc}",
         )
     return AchatQboSyncResult(**result)
+
+
+class SendPoRequest(BaseModel):
+    extra_message: Optional[str] = Field(default=None, max_length=2000)
+
+
+@router.post(
+    "/{achat_id}/send-po",
+    response_model=AchatRead,
+    summary="Envoyer le PO par courriel à l'employé assigné",
+)
+async def send_po_endpoint(
+    achat_id: int,
+    data: SendPoRequest,
+    db: DBSession,
+    _: CurrentUser,
+) -> AchatRead:
+    try:
+        achat = await send_achat_po(
+            db, achat_id, extra_message=data.extra_message
+        )
+    except AchatSendError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        )
+    return AchatRead.model_validate(achat)
 
 
 async def autopush_achat(achat_id: int) -> None:

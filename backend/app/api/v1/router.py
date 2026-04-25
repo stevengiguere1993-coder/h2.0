@@ -46,6 +46,7 @@ from app.api.v1.endpoints import (
     client_qbo,
     cron_runner,
     numbering,
+    qbo_account_map,
     qbo_oauth,
     qbo_token,
     search,
@@ -94,6 +95,7 @@ api_router.include_router(client_qbo.router)
 api_router.include_router(achat_qbo.router)
 api_router.include_router(cron_runner.router)
 api_router.include_router(numbering.router)
+api_router.include_router(qbo_account_map.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(calendar.router)
 api_router.include_router(appointments.router)

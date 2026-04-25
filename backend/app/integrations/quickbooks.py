@@ -490,6 +490,39 @@ class QuickBooksClient:
         )
         return data.get("Bill") or data
 
+    # ------------------------------------------------------------------
+    # Purchases (= achats déjà payés, charge dépense + paiement direct)
+    # ------------------------------------------------------------------
+    async def get_purchase(self, purchase_id: str) -> Dict[str, Any]:
+        data = await self._request("GET", f"/purchase/{purchase_id}")
+        return data.get("Purchase") or data
+
+    async def create_purchase(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        data = await self._request(
+            "POST", "/purchase", json_body=payload,
+            params={"minorversion": "70"},
+        )
+        return data.get("Purchase") or data
+
+    async def update_purchase(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        data = await self._request(
+            "POST", "/purchase", json_body=payload,
+            params={"minorversion": "70"},
+        )
+        return data.get("Purchase") or data
+
+    # ------------------------------------------------------------------
+    # Account lookup by Name (utilisé pour le mapping mode paiement)
+    # ------------------------------------------------------------------
+    async def find_account_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        if not name:
+            return None
+        safe = name.replace("'", "''")
+        rows = await self.query(
+            f"SELECT * FROM Account WHERE Name = '{safe}' MAXRESULTS 1"
+        )
+        return rows[0] if rows else None
+
 
 _qbo: Optional[QuickBooksClient] = None
 

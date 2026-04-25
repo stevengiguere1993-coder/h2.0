@@ -39,6 +39,7 @@ from app.models.project_assignees import (
 from app.models.project_photo import ProjectPhoto
 from app.models.project_task import ProjectTask
 from app.models.punch import Punch
+from app.models.qbo_account_map import QboAccountMap
 from app.models.qbo_token import QboToken
 from app.models.sales_task import SalesTask, sales_task_assignees  # noqa: F401
 from app.models.seo_article import SeoArticle
@@ -79,6 +80,7 @@ __all__ = [
     "ProjectTask",
     "ProjectTaskAssignee",
     "Punch",
+    "QboAccountMap",
     "QboToken",
     "SalesTask",
     "SeoArticle",
