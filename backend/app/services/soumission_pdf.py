@@ -65,6 +65,7 @@ _LOGO_PATH = os.path.join(
 
 COMPANY_NAME = "Horizon Services Immobiliers"
 COMPANY_RBQ = "RBQ 5868-5991-01"
+COMPANY_INSURANCE = "Police d'assurance : SUM-CGL-44100-001"
 COMPANY_SITE = "immohorizon.com"
 COMPANY_EMAIL = "info@immohorizon.com"
 
@@ -219,6 +220,7 @@ def _render_bytes(
     left_cell.extend([
         Paragraph(f"<b>{COMPANY_NAME}</b>", s["h2"]),
         Paragraph(COMPANY_RBQ, s["small"]),
+        Paragraph(COMPANY_INSURANCE, s["small"]),
         Paragraph(
             f"{COMPANY_SITE} &middot; {COMPANY_EMAIL}", s["small"]
         ),
@@ -421,7 +423,8 @@ def _render_bytes(
     story.append(Spacer(1, 16))
     story.append(
         Paragraph(
-            f"{COMPANY_NAME} &middot; {COMPANY_RBQ} &middot; {COMPANY_EMAIL}",
+            f"{COMPANY_NAME} &middot; {COMPANY_RBQ} &middot; "
+            f"{COMPANY_INSURANCE} &middot; {COMPANY_EMAIL}",
             s["small"],
         )
     )
