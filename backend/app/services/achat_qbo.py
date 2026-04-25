@@ -60,7 +60,10 @@ def _build_line(
     achat: Achat, expense_account_id: str, project_name: Optional[str]
 ) -> Dict[str, Any]:
     amount = float(achat.amount or 0)
-    description = achat.description or f"Achat {achat.reference}"
+    description = (
+        achat.description
+        or f"Achat #{achat.id}"
+    )
     if project_name:
         description = f"{description} — {project_name}"
     return {
@@ -73,29 +76,52 @@ def _build_line(
     }
 
 
+def _doc_number(achat: Achat, po_reference: Optional[str]) -> str:
+    """DocNumber = # facture fournisseur si fourni, sinon PO source si
+    lié, sinon « A-{id} » comme dernier recours."""
+    if achat.supplier_invoice_number:
+        return achat.supplier_invoice_number[:21]
+    if po_reference:
+        return po_reference[:21]
+    return f"A-{achat.id}"[:21]
+
+
+def _txn_date(achat: Achat) -> str:
+    if achat.invoice_date:
+        return achat.invoice_date.isoformat()
+    if achat.received_at:
+        return achat.received_at.date().isoformat()
+    return date.today().isoformat()
+
+
+def _private_note(
+    achat: Achat, po_reference: Optional[str], project_name: Optional[str]
+) -> str:
+    parts = [f"Source: Horizon h2.0 Achat #{achat.id}"]
+    if po_reference:
+        parts.append(f"PO source: {po_reference}")
+    if achat.supplier_invoice_number:
+        parts.append(f"Facture fournisseur: {achat.supplier_invoice_number}")
+    if project_name:
+        parts.append(f"Projet: {project_name}")
+    return " | ".join(parts)
+
+
 def _build_bill_payload(
     *,
     achat: Achat,
     vendor_id: str,
     expense_account_id: str,
+    po_reference: Optional[str],
     project_name: Optional[str],
     existing_bill_id: Optional[str] = None,
     existing_sync_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "VendorRef": {"value": str(vendor_id)},
-        "TxnDate": (
-            achat.ordered_at.date().isoformat()
-            if achat.ordered_at
-            else date.today().isoformat()
-        ),
-        # DocNumber sur le Bill = notre numéro PO. Comme ça le
-        # comptable retrouve « PO-0027 » directement dans QB.
-        "DocNumber": achat.reference[:21],
-        "PrivateNote": (
-            f"Source: Horizon h2.0 PO {achat.reference}"
-            + (f" — projet {project_name}" if project_name else "")
-        ),
+        "TxnDate": _txn_date(achat),
+        "DocNumber": _doc_number(achat, po_reference),
+        "PrivateNote": _private_note(achat, po_reference, project_name),
         "Line": [_build_line(achat, expense_account_id, project_name)],
     }
     if existing_bill_id and existing_sync_token is not None:
@@ -112,6 +138,7 @@ def _build_purchase_payload(
     expense_account_id: str,
     payment_account_id: str,
     payment_type: str,  # "Cash" | "Check" | "CreditCard"
+    po_reference: Optional[str],
     project_name: Optional[str],
     existing_purchase_id: Optional[str] = None,
     existing_sync_token: Optional[str] = None,
@@ -120,16 +147,9 @@ def _build_purchase_payload(
         "AccountRef": {"value": str(payment_account_id)},
         "PaymentType": payment_type,
         "EntityRef": {"value": str(vendor_id), "type": "Vendor"},
-        "TxnDate": (
-            achat.ordered_at.date().isoformat()
-            if achat.ordered_at
-            else date.today().isoformat()
-        ),
-        "DocNumber": achat.reference[:21],
-        "PrivateNote": (
-            f"Source: Horizon h2.0 PO {achat.reference}"
-            + (f" — projet {project_name}" if project_name else "")
-        ),
+        "TxnDate": _txn_date(achat),
+        "DocNumber": _doc_number(achat, po_reference),
+        "PrivateNote": _private_note(achat, po_reference, project_name),
         "Line": [_build_line(achat, expense_account_id, project_name)],
     }
     if existing_purchase_id and existing_sync_token is not None:
@@ -229,6 +249,21 @@ async def sync_achat_to_qbo(
                 select(Project).where(Project.id == achat.project_id)
             )
         ).scalar_one_or_none()
+    # PO source (optionnel) — sa référence sert de DocNumber fallback
+    # quand le # de facture fournisseur n'est pas fourni.
+    po_reference: Optional[str] = None
+    if achat.purchase_order_id:
+        from app.models.purchase_order import PurchaseOrder
+
+        po = (
+            await db.execute(
+                select(PurchaseOrder).where(
+                    PurchaseOrder.id == achat.purchase_order_id
+                )
+            )
+        ).scalar_one_or_none()
+        if po:
+            po_reference = po.reference
 
     if fournisseur is None or not (fournisseur.name or "").strip():
         raise AchatSyncError(
@@ -278,6 +313,7 @@ async def sync_achat_to_qbo(
                 expense_account_id=expense_account_id,
                 payment_account_id=payment_account_id,
                 payment_type=_payment_type_for(method),
+                po_reference=po_reference,
                 project_name=project.name if project else None,
                 existing_purchase_id=achat.qbo_bill_id,
                 existing_sync_token=achat.qbo_sync_token,
@@ -292,6 +328,7 @@ async def sync_achat_to_qbo(
                 achat=achat,
                 vendor_id=vendor_id,
                 expense_account_id=expense_account_id,
+                po_reference=po_reference,
                 project_name=project.name if project else None,
                 existing_bill_id=achat.qbo_bill_id,
                 existing_sync_token=achat.qbo_sync_token,
