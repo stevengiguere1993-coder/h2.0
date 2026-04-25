@@ -1289,17 +1289,85 @@ function FinancesTab({ projectId }: { projectId: number }) {
   const [data, setData] = useState<Finances | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  // Heures estimées manuelles (override). Chargées depuis le projet
+  // (champ estimated_hours_override) — quand non null, prend le pas
+  // sur le calcul auto somme-des-phases.
+  const [overrideHours, setOverrideHours] = useState<string>("");
+  const [overrideOriginal, setOverrideOriginal] = useState<string>("");
+  const [editingHours, setEditingHours] = useState(false);
+  const [savingHours, setSavingHours] = useState(false);
+
+  async function loadAll() {
+    setLoading(true);
+    try {
+      const [finRes, projRes] = await Promise.all([
+        authedFetch(`/api/v1/projects/${projectId}/finances`),
+        authedFetch(`/api/v1/projects/${projectId}`)
+      ]);
+      if (!finRes.ok) throw new Error();
+      setData((await finRes.json()) as Finances);
+      if (projRes.ok) {
+        const p = (await projRes.json()) as {
+          estimated_hours_override?: number | string | null;
+        };
+        const v =
+          p.estimated_hours_override != null
+            ? String(p.estimated_hours_override)
+            : "";
+        setOverrideHours(v);
+        setOverrideOriginal(v);
+      }
+    } catch {
+      setErr("Chargement des finances échoué.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveOverrideHours() {
+    setSavingHours(true);
+    try {
+      const value =
+        overrideHours.trim() === "" ? null : Number(overrideHours);
+      const res = await authedFetch(`/api/v1/projects/${projectId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ estimated_hours_override: value })
+      });
+      if (!res.ok) throw new Error();
+      setOverrideOriginal(overrideHours);
+      setEditingHours(false);
+      // Recharge les finances pour voir l'impact (nouvelles heures
+      // prévues + nouveau coût main-d'œuvre prévu).
+      await loadAll();
+    } catch {
+      setErr("Sauvegarde des heures estimées échouée.");
+    } finally {
+      setSavingHours(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       setLoading(true);
       try {
-        const res = await authedFetch(
-          `/api/v1/projects/${projectId}/finances`
-        );
-        if (!res.ok) throw new Error();
-        if (!cancelled) setData((await res.json()) as Finances);
+        const [finRes, projRes] = await Promise.all([
+          authedFetch(`/api/v1/projects/${projectId}/finances`),
+          authedFetch(`/api/v1/projects/${projectId}`)
+        ]);
+        if (!finRes.ok) throw new Error();
+        if (!cancelled) setData((await finRes.json()) as Finances);
+        if (projRes.ok && !cancelled) {
+          const p = (await projRes.json()) as {
+            estimated_hours_override?: number | string | null;
+          };
+          const v =
+            p.estimated_hours_override != null
+              ? String(p.estimated_hours_override)
+              : "";
+          setOverrideHours(v);
+          setOverrideOriginal(v);
+        }
       } catch {
         if (!cancelled) setErr("Chargement des finances échoué.");
       } finally {
@@ -1375,18 +1443,99 @@ function FinancesTab({ projectId }: { projectId: number }) {
 
       {/* Labour budget vs actual */}
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-          Main-d&apos;œuvre
-        </h3>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+            Main-d&apos;œuvre
+          </h3>
+          {!editingHours ? (
+            <button
+              type="button"
+              onClick={() => setEditingHours(true)}
+              className="text-[11px] text-accent-300 underline decoration-dotted hover:text-accent-200"
+            >
+              ✏️ Modifier l&apos;estimation d&apos;heures
+            </button>
+          ) : null}
+        </div>
         <p className="mt-1 text-[11px] text-white/50">
-          Heures = somme des phases (durée × 8 h × personnes assignées),
-          jours ouvrables seulement. Coût horaire = taux base ×
-          (1 + prime CNESST + prime CCQ). Tu peux fixer un total manuel
-          plus bas pour overrider.
+          {overrideOriginal !== "" ? (
+            <>
+              Heures fixées manuellement : <strong>{overrideOriginal} h</strong>.
+              Le calcul automatique (somme des phases) est ignoré.
+            </>
+          ) : (
+            <>
+              Calcul automatique : somme des phases (durée × 8 h ×
+              personnes assignées), jours ouvrables seulement.
+              Tu peux fixer un total manuel pour overrider.
+            </>
+          )}
+          {" "}Coût horaire = taux base × (1 + prime CNESST + prime CCQ).
         </p>
+
+        {editingHours ? (
+          <div className="mt-3 rounded-lg border border-accent-500/30 bg-accent-500/5 p-3">
+            <label
+              htmlFor="hours_estimate"
+              className="text-[11px] uppercase tracking-wider text-accent-300"
+            >
+              Heures estimées du projet
+            </label>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <input
+                id="hours_estimate"
+                type="number"
+                step="0.5"
+                min="0"
+                value={overrideHours}
+                onChange={(e) => setOverrideHours(e.target.value)}
+                placeholder="Laisse vide = calcul auto"
+                className="input w-44"
+              />
+              <span className="text-xs text-white/50">heures</span>
+              <button
+                type="button"
+                onClick={saveOverrideHours}
+                disabled={savingHours}
+                className="btn-accent text-xs"
+              >
+                {savingHours ? "Enregistrement…" : "Enregistrer"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingHours(false);
+                  setOverrideHours(overrideOriginal);
+                }}
+                disabled={savingHours}
+                className="btn-secondary text-xs"
+              >
+                Annuler
+              </button>
+            </div>
+            <p className="mt-2 text-[11px] text-white/60">
+              Saisis le nombre d&apos;heures total estimé pour le
+              chantier (ex. 120 h pour une réno de salle de bain
+              standard). Laisse vide pour revenir au calcul automatique
+              à partir des phases planifiées.
+            </p>
+          </div>
+        ) : null}
+
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <div>
-            <p className="text-xs text-white/50">Prévue</p>
+            <p className="text-xs text-white/50">
+              Prévue
+              {overrideOriginal !== "" ? (
+                <span className="ml-1 text-[10px] text-accent-400">
+                  (manuel)
+                </span>
+              ) : (
+                <span className="ml-1 text-[10px] text-white/40">
+                  (auto)
+                </span>
+              )}
+            </p>
             <p className="mt-1 text-lg font-bold text-white">
               {data.projected_labour_hours.toFixed(0)} h
             </p>
