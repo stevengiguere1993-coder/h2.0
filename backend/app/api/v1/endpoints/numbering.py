@@ -26,11 +26,13 @@ class NumberingRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     next_facture_number: int
     next_soumission_number: int
+    next_po_number: int
 
 
 class NumberingUpdate(BaseModel):
     next_facture_number: Optional[int] = Field(default=None, ge=1, le=999_999_999)
     next_soumission_number: Optional[int] = Field(default=None, ge=1, le=999_999_999)
+    next_po_number: Optional[int] = Field(default=None, ge=1, le=999_999_999)
 
 
 @router.get("", response_model=NumberingRead)
@@ -51,6 +53,8 @@ async def update_numbering(
         row.next_facture_number = data.next_facture_number
     if data.next_soumission_number is not None:
         row.next_soumission_number = data.next_soumission_number
+    if data.next_po_number is not None:
+        row.next_po_number = data.next_po_number
     await db.flush()
     await db.commit()
     fresh = (

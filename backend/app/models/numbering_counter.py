@@ -30,6 +30,9 @@ class NumberingCounter(Base):
     next_soumission_number: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
+    next_po_number: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

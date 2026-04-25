@@ -86,6 +86,7 @@ def make_crud_router(
         ):
             from app.services.numbering import (
                 next_facture_number,
+                next_po_number,
                 next_soumission_number,
             )
 
@@ -93,8 +94,24 @@ def make_crud_router(
                 data.reference = await next_soumission_number(db)
             elif model is Facture:
                 data.reference = await next_facture_number(db)
+            elif model is Achat:
+                data.reference = await next_po_number(db)
         crud = GenericCrud(db, model)
         obj = await crud.create(data)
+        # Auto-push QBO si l'achat est créé déjà reçu (cas usuel:
+        # facture fournisseur saisie après-coup) — voir aussi le hook
+        # update plus bas qui couvre la transition draft/ordered → received.
+        if model is Achat and getattr(obj, "status", None) == "received":
+            from fastapi import BackgroundTasks  # local import OK
+
+            # On lance en arrière-plan via un task autonome plutôt
+            # qu'un BackgroundTasks (injection lourde ici). Silencieux
+            # si QB non connecté.
+            import asyncio
+
+            from app.api.v1.endpoints.achat_qbo import autopush_achat
+
+            asyncio.create_task(autopush_achat(int(obj.id)))
         return read_schema.model_validate(obj)
 
     @router.get("", response_model=List[read_schema])  # type: ignore[valid-type]
@@ -122,7 +139,20 @@ def make_crud_router(
         obj = await crud.get(item_id)
         if obj is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+        # Capture pre-update status pour détecter la transition
+        # vers received sur les achats → autopush QBO en background.
+        prev_status = (
+            getattr(obj, "status", None) if model is Achat else None
+        )
         obj = await crud.update(obj, data)
+        if model is Achat:
+            new_status = getattr(obj, "status", None)
+            if prev_status != "received" and new_status == "received":
+                import asyncio
+
+                from app.api.v1.endpoints.achat_qbo import autopush_achat
+
+                asyncio.create_task(autopush_achat(int(obj.id)))
         return read_schema.model_validate(obj)
 
     @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)

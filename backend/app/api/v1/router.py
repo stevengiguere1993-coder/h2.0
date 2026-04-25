@@ -42,6 +42,7 @@ from app.api.v1.endpoints import (
     public_bon,
     public_soumission,
     punch_ops,
+    achat_qbo,
     client_qbo,
     cron_runner,
     numbering,
@@ -90,6 +91,7 @@ api_router.include_router(public_bon.router)
 api_router.include_router(qbo_token.router)
 api_router.include_router(qbo_oauth.router)
 api_router.include_router(client_qbo.router)
+api_router.include_router(achat_qbo.router)
 api_router.include_router(cron_runner.router)
 api_router.include_router(numbering.router)
 api_router.include_router(dashboard.router)

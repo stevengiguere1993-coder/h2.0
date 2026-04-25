@@ -174,6 +174,15 @@ async def init_db() -> None:
             # Liaison client ↔ QBO Customer (push manuel + évite les
             # doublons à chaque re-push).
             ("clients", "qbo_customer_id", "VARCHAR(64)"),
+            # Compteur PO + numérotation QBO sur les achats.
+            (
+                "numbering_counters",
+                "next_po_number",
+                "INTEGER NOT NULL DEFAULT 1",
+            ),
+            ("achats", "qbo_bill_id", "VARCHAR(64)"),
+            ("achats", "qbo_doc_number", "VARCHAR(64)"),
+            ("achats", "qbo_sync_token", "VARCHAR(32)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

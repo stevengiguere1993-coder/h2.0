@@ -2,7 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter as useNextRouter } from "next/navigation";
-import { ArrowLeft, Loader2, Save, Trash2 } from "lucide-react";
+import {
+  ArrowLeft,
+  CheckCircle2,
+  ExternalLink,
+  Loader2,
+  Save,
+  Trash2
+} from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { ReceiptScanner } from "@/components/receipt-scanner";
@@ -26,6 +33,8 @@ type Achat = {
   receipt_image_content_type: string | null;
   notes: string | null;
   created_at: string;
+  qbo_bill_id: string | null;
+  qbo_doc_number: string | null;
 };
 
 type Project = { id: number; name: string };
@@ -255,19 +264,35 @@ export default function AchatDetailPage() {
           <>
             <header className="mt-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <h1 className="text-2xl font-bold text-white">{a.reference}</h1>
-              <button
-                type="button"
-                onClick={onDelete}
-                disabled={deleting}
-                className="inline-flex items-center gap-2 self-start rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
-              >
-                {deleting ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Trash2 className="h-4 w-4" />
-                )}
-                Supprimer
-              </button>
+              <div className="flex flex-wrap items-start gap-2">
+                <AchatQboPushButton
+                  achat={a}
+                  onSynced={(billId, docNumber) =>
+                    setA((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            qbo_bill_id: billId,
+                            qbo_doc_number: docNumber
+                          }
+                        : prev
+                    )
+                  }
+                />
+                <button
+                  type="button"
+                  onClick={onDelete}
+                  disabled={deleting}
+                  className="inline-flex items-center gap-2 self-start rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-500/20"
+                >
+                  {deleting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                  Supprimer
+                </button>
+              </div>
             </header>
 
             {error ? (
@@ -503,5 +528,92 @@ export default function AchatDetailPage() {
         ) : null}
       </div>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// QuickBooks push — pousse l'achat vers QBO comme un Bill (facture
+// fournisseur). Affiche un bouton ou un badge selon l'état actuel.
+// ---------------------------------------------------------------------------
+
+function AchatQboPushButton({
+  achat,
+  onSynced
+}: {
+  achat: Achat;
+  onSynced: (billId: string, docNumber: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [justSynced, setJustSynced] = useState(false);
+
+  async function push() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/achats/${achat.id}/qbo/sync`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text.slice(0, 240) || `http_${res.status}`);
+      }
+      const data = (await res.json()) as {
+        qbo_bill_id: string;
+        qbo_doc_number: string;
+      };
+      onSynced(data.qbo_bill_id, data.qbo_doc_number);
+      setJustSynced(true);
+      setTimeout(() => setJustSynced(false), 4000);
+    } catch (e) {
+      setErr(`Push QBO échoué : ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (achat.qbo_bill_id) {
+    return (
+      <div className="flex flex-col items-start gap-1">
+        <div className="inline-flex items-center gap-2 self-start rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-sm font-medium text-emerald-300">
+          <CheckCircle2 className="h-4 w-4" />
+          QB Bill ✓ #{achat.qbo_bill_id}
+        </div>
+        <button
+          type="button"
+          onClick={push}
+          disabled={busy}
+          className="text-[11px] text-white/50 underline decoration-dotted hover:text-accent-400 disabled:opacity-40"
+        >
+          {busy ? "Mise à jour…" : "Re-synchroniser"}
+        </button>
+        {err ? <p className="text-[11px] text-rose-300">{err}</p> : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-start gap-1">
+      <button
+        type="button"
+        onClick={push}
+        disabled={busy}
+        className="inline-flex items-center gap-2 self-start rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-2.5 text-sm font-medium text-accent-200 hover:bg-accent-500/20 disabled:opacity-50"
+      >
+        {busy ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <ExternalLink className="h-4 w-4" />
+        )}
+        Envoyer vers QuickBooks
+      </button>
+      {justSynced ? (
+        <p className="text-[11px] text-emerald-300">
+          Bill créée dans QuickBooks.
+        </p>
+      ) : null}
+      {err ? <p className="text-[11px] text-rose-300">{err}</p> : null}
+    </div>
   );
 }
