@@ -54,6 +54,22 @@ type Item = {
 };
 
 type Client = { id: number; name: string; email: string | null };
+type ProjectMini = {
+  id: number;
+  name: string;
+  status: string;
+  address: string | null;
+};
+type ProjectFinances = {
+  projected_revenue: number;
+  projected_total_cost: number;
+  projected_profit: number;
+  actual_total_cost: number;
+  actual_profit: number | null;
+  invoiced_amount: number;
+  paid_amount: number;
+  balance_due: number;
+};
 
 const STATUS_LABELS: Record<string, string> = {
   draft: "Brouillon",
@@ -118,6 +134,8 @@ export default function FactureDetailPage() {
   const [f, setF] = useState<Facture | null>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [client, setClient] = useState<Client | null>(null);
+  const [project, setProject] = useState<ProjectMini | null>(null);
+  const [projFin, setProjFin] = useState<ProjectFinances | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -174,6 +192,21 @@ export default function FactureDetailPage() {
             const cd = (await cr.json()) as Client;
             setClient(cd);
             if (cd.email) setSendTo(cd.email);
+          }
+        }
+        // Charge projet + finances en parallèle si la facture est liée
+        // à un chantier — sert à montrer en temps réel l'impact de la
+        // facture sur les revenus et le solde dû du projet.
+        if (fd.project_id) {
+          const [pr, finRes] = await Promise.all([
+            authedFetch(`/api/v1/projects/${fd.project_id}`),
+            authedFetch(`/api/v1/projects/${fd.project_id}/finances`)
+          ]);
+          if (pr.ok && !cancelled) {
+            setProject((await pr.json()) as ProjectMini);
+          }
+          if (finRes.ok && !cancelled) {
+            setProjFin((await finRes.json()) as ProjectFinances);
           }
         }
       } catch {
@@ -497,7 +530,21 @@ export default function FactureDetailPage() {
               <div>
                 <h1 className="text-2xl font-bold text-white">{f.reference}</h1>
                 <p className="mt-1 text-xs text-white/50">
-                  {client ? `Client : ${client.name} · ` : ""}Émise le{" "}
+                  {client ? `Client : ${client.name} · ` : ""}
+                  {project ? (
+                    <>
+                      Projet :{" "}
+                      <Link
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={`/app/projets/${project.id}` as any}
+                        className="underline decoration-dotted hover:text-accent-500"
+                      >
+                        {project.name}
+                      </Link>
+                      {" · "}
+                    </>
+                  ) : null}
+                  Émise le{" "}
                   {new Date(f.issued_at || f.created_at).toLocaleDateString(
                     "fr-CA",
                     { day: "numeric", month: "long", year: "numeric" }
@@ -707,6 +754,123 @@ export default function FactureDetailPage() {
                 tes conditions habituelles (souvent net 30).
               </p>
             </section>
+
+            {project && projFin ? (
+              <section className="mt-6 rounded-xl border border-accent-500/30 bg-accent-500/5 p-5">
+                <header className="flex flex-wrap items-baseline justify-between gap-2">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    💰 Finances du projet
+                  </h2>
+                  <Link
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    href={`/app/projets/${project.id}#finances` as any}
+                    className="text-xs text-white/60 underline decoration-dotted hover:text-accent-300"
+                  >
+                    Voir le détail →
+                  </Link>
+                </header>
+                <p className="mt-1 text-xs text-white/60">
+                  Cette facture impacte le projet{" "}
+                  <span className="text-white">{project.name}</span> en
+                  temps réel — chaque sauvegarde se reflète ici.
+                </p>
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-lg border border-brand-800 bg-brand-950 p-3">
+                    <p className="text-[10px] uppercase tracking-wider text-white/50">
+                      Revenus prévus (devis)
+                    </p>
+                    <p className="mt-1 text-lg font-bold text-white">
+                      {projFin.projected_revenue.toLocaleString("fr-CA", {
+                        style: "currency",
+                        currency: "CAD",
+                        maximumFractionDigits: 0
+                      })}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+                    <p className="text-[10px] uppercase tracking-wider text-emerald-300/80">
+                      Facturé à date
+                    </p>
+                    <p className="mt-1 text-lg font-bold text-emerald-300">
+                      {projFin.invoiced_amount.toLocaleString("fr-CA", {
+                        style: "currency",
+                        currency: "CAD",
+                        maximumFractionDigits: 0
+                      })}
+                    </p>
+                    <p className="mt-0.5 text-[10px] text-white/50">
+                      dont {projFin.paid_amount.toLocaleString("fr-CA", {
+                        style: "currency",
+                        currency: "CAD",
+                        maximumFractionDigits: 0
+                      })}{" "}
+                      payé
+                    </p>
+                  </div>
+                  <div
+                    className={`rounded-lg border p-3 ${
+                      projFin.balance_due > 0
+                        ? "border-amber-500/30 bg-amber-500/5"
+                        : "border-brand-800 bg-brand-950"
+                    }`}
+                  >
+                    <p
+                      className={`text-[10px] uppercase tracking-wider ${
+                        projFin.balance_due > 0
+                          ? "text-amber-300/80"
+                          : "text-white/50"
+                      }`}
+                    >
+                      Solde dû
+                    </p>
+                    <p
+                      className={`mt-1 text-lg font-bold ${
+                        projFin.balance_due > 0
+                          ? "text-amber-300"
+                          : "text-white"
+                      }`}
+                    >
+                      {projFin.balance_due.toLocaleString("fr-CA", {
+                        style: "currency",
+                        currency: "CAD",
+                        maximumFractionDigits: 0
+                      })}
+                    </p>
+                  </div>
+                </div>
+                {projFin.projected_revenue > 0 ? (
+                  <div className="mt-3">
+                    <div className="flex items-center justify-between text-[11px] text-white/50">
+                      <span>Avancement de facturation</span>
+                      <span className="font-mono text-white/70">
+                        {Math.min(
+                          100,
+                          Math.round(
+                            (projFin.invoiced_amount /
+                              projFin.projected_revenue) *
+                              100
+                          )
+                        )}
+                        %
+                      </span>
+                    </div>
+                    <div className="mt-1 h-2 overflow-hidden rounded-full bg-brand-950">
+                      <div
+                        className="h-full bg-accent-500 transition-all"
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            (projFin.invoiced_amount /
+                              projFin.projected_revenue) *
+                              100
+                          )}%`
+                        }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
 
             <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900 p-5">
               <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
