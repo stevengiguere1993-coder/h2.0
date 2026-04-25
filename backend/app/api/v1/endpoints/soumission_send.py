@@ -1,8 +1,9 @@
 """Send a soumission to a client by email (PDF attached)."""
 
+import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from fastapi.responses import Response
 from pydantic import BaseModel, EmailStr, Field
 
@@ -12,7 +13,29 @@ from app.services.soumission_pdf import render_soumission_pdf
 from app.services.soumission_send import SoumissionSendError, send_soumission
 
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/soumissions", tags=["soumissions"])
+
+
+async def _autopush_to_qbo(soumission_id: int) -> None:
+    """Auto-push de la soumission vers QBO en arrière-plan, juste
+    après l'envoi au client. Silencieux côté staff : si QBO n'est pas
+    connecté, ou si la sync échoue, on log mais on ne bloque pas
+    l'envoi du courriel (qui a déjà réussi)."""
+    from app.db.session import AsyncSessionLocal
+    from app.services.soumission_qbo import sync_soumission_to_qbo
+
+    try:
+        async with AsyncSessionLocal() as db:
+            await sync_soumission_to_qbo(db, soumission_id)
+            await db.commit()
+        log.info("Auto-push QBO soumission %s ok", soumission_id)
+    except Exception as exc:
+        log.warning(
+            "Auto-push QBO soumission %s a échoué (silencieux): %s",
+            soumission_id,
+            exc,
+        )
 
 
 class SoumissionSendRequest(BaseModel):
@@ -31,6 +54,7 @@ async def send_soumission_endpoint(
     soumission_id: int,
     data: SoumissionSendRequest,
     db: DBSession,
+    background: BackgroundTasks,
     _: CurrentUser,
 ) -> SoumissionRead:
     try:
@@ -59,6 +83,10 @@ async def send_soumission_endpoint(
         )
     except Exception:
         pass
+
+    # Auto-push vers QBO Estimate après l'envoi (background pour ne
+    # pas ralentir la réponse).
+    background.add_task(_autopush_to_qbo, sm.id)
 
     return SoumissionRead.model_validate(sm)
 
