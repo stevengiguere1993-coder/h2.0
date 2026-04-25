@@ -281,10 +281,15 @@ async def punch_start(
     return OpenPunch.model_validate(p)
 
 
+class PunchStopBody(BaseModel):
+    geolocation: Optional[str] = Field(default=None, max_length=128)
+
+
 @router.post("/punch/stop", response_model=OpenPunch)
 async def punch_stop(
     db: DBSession,
     user: CurrentUser,
+    body: Optional[PunchStopBody] = None,
 ) -> OpenPunch:
     emp = await _resolve_employe(db, user.email)
     if emp is None:
@@ -307,6 +312,14 @@ async def punch_stop(
     p.ended_at = now
     delta = (now - p.started_at).total_seconds() / 3600.0
     p.hours = round(delta, 2)
+    # Concatène le geolocation de fin si fourni — séparateur '|' pour
+    # qu'on puisse distinguer début et fin dans l'historique admin.
+    if body and body.geolocation:
+        end_geo = body.geolocation.strip()
+        if p.geolocation:
+            p.geolocation = f"{p.geolocation}|{end_geo}"[:128]
+        else:
+            p.geolocation = end_geo[:128]
     await db.flush()
     await db.refresh(p)
     return OpenPunch.model_validate(p)

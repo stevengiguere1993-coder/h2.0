@@ -187,8 +187,35 @@ export default function MobileHome() {
   async function punchStop() {
     setPunchBusy(true);
     try {
+      // Best-effort geo capture pour ajouter le lieu d'arrêt à
+      // l'historique. Pas bloquant si l'utilisateur refuse / pas dispo.
+      let geo: string | null = null;
+      if (typeof navigator !== "undefined" && navigator.geolocation) {
+        geo = await new Promise<string | null>((resolve) => {
+          const timeoutId = setTimeout(() => resolve(null), 6000);
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              clearTimeout(timeoutId);
+              const { latitude, longitude } = pos.coords;
+              resolve(
+                `${latitude.toFixed(6)},${longitude.toFixed(6)}`
+              );
+            },
+            () => {
+              clearTimeout(timeoutId);
+              resolve(null);
+            },
+            {
+              enableHighAccuracy: true,
+              timeout: 5000,
+              maximumAge: 30000
+            }
+          );
+        });
+      }
       const res = await authedFetch("/api/v1/mobile/punch/stop", {
-        method: "POST"
+        method: "POST",
+        body: JSON.stringify(geo ? { geolocation: geo } : {})
       });
       if (!res.ok) throw new Error();
       await load();

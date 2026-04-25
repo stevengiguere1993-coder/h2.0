@@ -103,13 +103,39 @@ export default function MobilePunch() {
     return () => clearInterval(t);
   }, [data?.open_punch]);
 
+  // Capture la position GPS de l'utilisateur — best-effort. Si l'API
+  // n'est pas dispo (HTTP, navigateur old, refusé), on retourne null
+  // et le punch part sans coordonnées (pas bloquant).
+  async function captureGeo(): Promise<string | null> {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      return null;
+    }
+    return new Promise<string | null>((resolve) => {
+      const timeoutId = setTimeout(() => resolve(null), 6000);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          clearTimeout(timeoutId);
+          const { latitude, longitude } = pos.coords;
+          resolve(`${latitude.toFixed(6)},${longitude.toFixed(6)}`);
+        },
+        () => {
+          clearTimeout(timeoutId);
+          resolve(null);
+        },
+        { enableHighAccuracy: true, timeout: 5000, maximumAge: 30000 }
+      );
+    });
+  }
+
   async function start(body: Record<string, unknown>) {
     setBusy(true);
     setError(null);
     try {
+      const geo = await captureGeo();
+      const payload = geo ? { ...body, geolocation: geo } : body;
       const res = await authedFetch("/api/v1/mobile/punch/start", {
         method: "POST",
-        body: JSON.stringify(body)
+        body: JSON.stringify(payload)
       });
       if (!res.ok) {
         const txt = await res.text();
@@ -129,8 +155,10 @@ export default function MobilePunch() {
     setBusy(true);
     setError(null);
     try {
+      const geo = await captureGeo();
       const res = await authedFetch("/api/v1/mobile/punch/stop", {
-        method: "POST"
+        method: "POST",
+        body: JSON.stringify(geo ? { geolocation: geo } : {})
       });
       if (!res.ok) {
         const txt = await res.text();

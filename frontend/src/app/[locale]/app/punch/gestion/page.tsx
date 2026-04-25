@@ -612,6 +612,10 @@ function PunchModal({
             </span>
           </div>
 
+          {existing?.geolocation ? (
+            <GeolocationDisplay raw={existing.geolocation} />
+          ) : null}
+
           <div>
             <label htmlFor="p_task" className="label">Tâche</label>
             <input
@@ -949,4 +953,61 @@ function PayrollExportButton() {
       ) : null}
     </>
   );
+}
+
+// ---------------------------------------------------------------------------
+// GeolocationDisplay — parse "lat,lng[|lat,lng]" et affiche un lien Maps
+// ---------------------------------------------------------------------------
+
+function GeolocationDisplay({ raw }: { raw: string }) {
+  const parts = raw.split("|");
+  const start = parseLatLng(parts[0]);
+  const end = parts.length > 1 ? parseLatLng(parts[1]) : null;
+  if (!start) return null;
+  return (
+    <div className="rounded-md border border-brand-800 bg-brand-900 px-3 py-2 text-sm">
+      <p className="text-xs uppercase tracking-wider text-white/50">
+        📍 Lieu du punch
+      </p>
+      <div className="mt-1 space-y-1">
+        <GeoLine label="Début" geo={start} />
+        {end ? <GeoLine label="Fin" geo={end} /> : null}
+      </div>
+    </div>
+  );
+}
+
+function GeoLine({
+  label,
+  geo
+}: {
+  label: string;
+  geo: { lat: number; lng: number };
+}) {
+  const url = `https://www.google.com/maps?q=${geo.lat},${geo.lng}`;
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="w-12 shrink-0 text-white/50">{label} :</span>
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center gap-1 text-accent-300 hover:text-accent-200 hover:underline"
+      >
+        <span className="font-mono">
+          {geo.lat.toFixed(5)}, {geo.lng.toFixed(5)}
+        </span>
+        <span className="text-[10px]">↗ Maps</span>
+      </a>
+    </div>
+  );
+}
+
+function parseLatLng(s: string): { lat: number; lng: number } | null {
+  if (!s) return null;
+  const [latStr, lngStr] = s.split(",");
+  const lat = Number(latStr);
+  const lng = Number(lngStr);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
 }
