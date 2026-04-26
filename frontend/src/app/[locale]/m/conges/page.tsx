@@ -81,7 +81,14 @@ export default function MobileMesConges() {
   }, [load]);
 
   async function cancel(id: number) {
-    if (!(await confirm("Annuler cette demande ?"))) return;
+    if (
+      !(await confirm({
+        title: "Annuler cette demande ?",
+        confirmLabel: "Annuler la demande",
+        cancelLabel: "Garder"
+      }))
+    )
+      return;
     setBusy(id);
     try {
       const res = await authedFetch(`/api/v1/leaves/${id}/cancel`, {

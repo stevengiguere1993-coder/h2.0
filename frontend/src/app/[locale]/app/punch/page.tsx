@@ -217,7 +217,14 @@ export default function PunchPage() {
 
   async function stopPunch() {
     if (!me?.active) return;
-    if (!(await confirm("Terminer le punch maintenant ?"))) return;
+    if (
+      !(await confirm({
+        title: "Terminer le punch maintenant ?",
+        confirmLabel: "Terminer",
+        destructive: false
+      }))
+    )
+      return;
     setBusy(true);
     setError(null);
     try {
