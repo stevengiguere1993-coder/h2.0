@@ -57,7 +57,10 @@ async def _load_achat(db: AsyncSession, achat_id: int) -> Optional[Achat]:
 
 
 def _build_line(
-    achat: Achat, expense_account_id: str, project_name: Optional[str]
+    achat: Achat,
+    expense_account_id: str,
+    project_name: Optional[str],
+    customer_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     amount = float(achat.amount or 0)
     description = (
@@ -66,13 +69,21 @@ def _build_line(
     )
     if project_name:
         description = f"{description} — {project_name}"
+    detail: Dict[str, Any] = {
+        "AccountRef": {"value": str(expense_account_id)},
+    }
+    # Si le projet est rattaché à un Client QB, l'achat devient
+    # « Billable » (refacturable au client) avec CustomerRef pointant
+    # sur ce client. C'est le mécanisme QB pour repasser une dépense
+    # dans la prochaine facture.
+    if customer_id:
+        detail["CustomerRef"] = {"value": str(customer_id)}
+        detail["BillableStatus"] = "Billable"
     return {
         "DetailType": "AccountBasedExpenseLineDetail",
         "Amount": round(amount, 2),
         "Description": description[:4000],
-        "AccountBasedExpenseLineDetail": {
-            "AccountRef": {"value": str(expense_account_id)},
-        },
+        "AccountBasedExpenseLineDetail": detail,
     }
 
 
@@ -112,6 +123,26 @@ def _private_note(
     return " | ".join(parts)
 
 
+def _add_quebec_taxes(payload: Dict[str, Any], lines: list) -> None:
+    """Quand l'achat est rattaché à un projet (donc refacturable),
+    on ajoute TPS 5 % + TVQ 9.975 % calculés sur la somme des lignes,
+    avec GlobalTaxCalculation=TaxExcluded (les Amount des lignes ne
+    contiennent pas la taxe). Permet à QB d'avoir le montant total
+    avec taxes pour le rapprochement comptable."""
+    subtotal = 0.0
+    for line in lines:
+        try:
+            subtotal += float(line.get("Amount") or 0)
+        except (TypeError, ValueError):
+            continue
+    tps = round(subtotal * 0.05, 2)
+    tvq = round(subtotal * 0.09975, 2)
+    total_tax = round(tps + tvq, 2)
+    if total_tax > 0:
+        payload["GlobalTaxCalculation"] = "TaxExcluded"
+        payload["TxnTaxDetail"] = {"TotalTax": total_tax}
+
+
 def _build_bill_payload(
     *,
     achat: Achat,
@@ -119,16 +150,24 @@ def _build_bill_payload(
     expense_account_id: str,
     po_reference: Optional[str],
     project_name: Optional[str],
+    customer_id: Optional[str] = None,
     existing_bill_id: Optional[str] = None,
     existing_sync_token: Optional[str] = None,
 ) -> Dict[str, Any]:
+    lines = [
+        _build_line(
+            achat, expense_account_id, project_name, customer_id=customer_id
+        )
+    ]
     payload: Dict[str, Any] = {
         "VendorRef": {"value": str(vendor_id)},
         "TxnDate": _txn_date(achat),
         "DocNumber": _doc_number(achat, po_reference),
         "PrivateNote": _private_note(achat, po_reference, project_name),
-        "Line": [_build_line(achat, expense_account_id, project_name)],
+        "Line": lines,
     }
+    if customer_id:
+        _add_quebec_taxes(payload, lines)
     if existing_bill_id and existing_sync_token is not None:
         payload["Id"] = existing_bill_id
         payload["SyncToken"] = existing_sync_token
@@ -145,9 +184,15 @@ def _build_purchase_payload(
     payment_type: str,  # "Cash" | "Check" | "CreditCard"
     po_reference: Optional[str],
     project_name: Optional[str],
+    customer_id: Optional[str] = None,
     existing_purchase_id: Optional[str] = None,
     existing_sync_token: Optional[str] = None,
 ) -> Dict[str, Any]:
+    lines = [
+        _build_line(
+            achat, expense_account_id, project_name, customer_id=customer_id
+        )
+    ]
     payload: Dict[str, Any] = {
         "AccountRef": {"value": str(payment_account_id)},
         "PaymentType": payment_type,
@@ -155,8 +200,10 @@ def _build_purchase_payload(
         "TxnDate": _txn_date(achat),
         "DocNumber": _doc_number(achat, po_reference),
         "PrivateNote": _private_note(achat, po_reference, project_name),
-        "Line": [_build_line(achat, expense_account_id, project_name)],
+        "Line": lines,
     }
+    if customer_id:
+        _add_quebec_taxes(payload, lines)
     if existing_purchase_id and existing_sync_token is not None:
         payload["Id"] = existing_purchase_id
         payload["SyncToken"] = existing_sync_token
@@ -248,12 +295,26 @@ async def sync_achat_to_qbo(
             )
         ).scalar_one_or_none()
     project: Optional[Project] = None
+    customer_id: Optional[str] = None
     if achat.project_id:
         project = (
             await db.execute(
                 select(Project).where(Project.id == achat.project_id)
             )
         ).scalar_one_or_none()
+        # Si le projet a un client lié et que ce client a un Customer
+        # QB attaché, l'achat devient « Billable » côté QB et on calcule
+        # les taxes québécoises (TPS + TVQ) sur la ligne.
+        if project and project.client_id:
+            from app.models.client import Client
+
+            client = (
+                await db.execute(
+                    select(Client).where(Client.id == project.client_id)
+                )
+            ).scalar_one_or_none()
+            if client and client.qbo_customer_id:
+                customer_id = str(client.qbo_customer_id)
     # PO source (optionnel) — sa référence sert de DocNumber fallback
     # quand le # de facture fournisseur n'est pas fourni.
     po_reference: Optional[str] = None
@@ -320,6 +381,7 @@ async def sync_achat_to_qbo(
                 payment_type=_payment_type_for(method),
                 po_reference=po_reference,
                 project_name=project.name if project else None,
+                customer_id=customer_id,
                 existing_purchase_id=achat.qbo_bill_id,
                 existing_sync_token=achat.qbo_sync_token,
             )
@@ -335,6 +397,7 @@ async def sync_achat_to_qbo(
                 expense_account_id=expense_account_id,
                 po_reference=po_reference,
                 project_name=project.name if project else None,
+                customer_id=customer_id,
                 existing_bill_id=achat.qbo_bill_id,
                 existing_sync_token=achat.qbo_sync_token,
             )
