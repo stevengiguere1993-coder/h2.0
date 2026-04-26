@@ -360,6 +360,37 @@ async def sync_achat_to_qbo(
         "Pushed Achat %s to QBO %s %s (DocNumber=%s)",
         achat.id, kind, qbo_id, doc_number,
     )
+
+    # Joindre la facture fournisseur (image / PDF) si l'employé en a
+    # uploadé une. On le fait après création du Bill/Purchase ; en cas
+    # d'échec on log mais on ne bloque pas le push principal.
+    if achat.receipt_image and qbo_id:
+        try:
+            ctype = (
+                achat.receipt_image_content_type
+                or "application/octet-stream"
+            )
+            ext = "pdf" if "pdf" in ctype else "jpg"
+            if "png" in ctype:
+                ext = "png"
+            file_name = f"facture-A{achat.id}.{ext}"
+            await qbo.upload_attachment(
+                entity_type=kind,
+                entity_id=qbo_id,
+                file_name=file_name,
+                content_type=ctype,
+                content=bytes(achat.receipt_image),
+            )
+            log.info(
+                "Attached receipt to QBO %s %s (file=%s)",
+                kind, qbo_id, file_name,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "Receipt upload failed for Achat %s -> QBO %s %s: %s",
+                achat.id, kind, qbo_id, exc,
+            )
+
     return {
         "ok": True,
         "qbo_bill_id": qbo_id,

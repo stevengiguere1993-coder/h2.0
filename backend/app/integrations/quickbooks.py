@@ -15,6 +15,7 @@ via the Render API so the next boot picks it up.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import os
 import time
@@ -522,6 +523,76 @@ class QuickBooksClient:
             f"SELECT * FROM Account WHERE Name = '{safe}' MAXRESULTS 1"
         )
         return rows[0] if rows else None
+
+    # ------------------------------------------------------------------
+    # Attachable upload — joint un fichier (image, PDF) à une entité QBO
+    # (Bill, Purchase, Invoice, etc.) via /v3/company/{id}/upload.
+    # Utilise un payload multipart : metadata JSON + contenu binaire.
+    # ------------------------------------------------------------------
+    async def upload_attachment(
+        self,
+        *,
+        entity_type: str,
+        entity_id: str,
+        file_name: str,
+        content_type: str,
+        content: bytes,
+    ) -> Dict[str, Any]:
+        token = await self._access()
+        url = f"{self.base_url}/v3/company/{self.realm_id}/upload"
+
+        attachable = {
+            "AttachableRef": [
+                {
+                    "EntityRef": {
+                        "type": entity_type,
+                        "value": entity_id,
+                    }
+                }
+            ],
+            "FileName": file_name,
+            "ContentType": content_type,
+        }
+        # multipart : la métadonnée JSON puis les bytes. Les noms de
+        # parts ("file_metadata_01", "file_content_01") doivent
+        # correspondre au suffixe d'index, c'est ce qui dit à QBO de les
+        # corréler.
+        files = [
+            (
+                "file_metadata_01",
+                (
+                    "metadata.json",
+                    json.dumps(attachable).encode("utf-8"),
+                    "application/json",
+                ),
+            ),
+            (
+                "file_content_01",
+                (file_name, content, content_type),
+            ),
+        ]
+        async with httpx.AsyncClient(timeout=60.0) as http:
+            r = await http.post(
+                url,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {token}",
+                },
+                files=files,
+            )
+            if r.status_code >= 400:
+                try:
+                    payload = r.json()
+                except Exception:
+                    payload = {"error": r.text}
+                log.warning(
+                    "QBO upload (%s %s) -> %s %s",
+                    entity_type, entity_id, r.status_code, payload,
+                )
+                raise QuickBooksError(
+                    f"QBO upload failed: {r.status_code} {payload}"
+                )
+            return r.json()
 
 
 _qbo: Optional[QuickBooksClient] = None
