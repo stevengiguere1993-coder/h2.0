@@ -326,35 +326,48 @@ async def import_all(
     devis_by_mid = {d["id"]: d for d in devis_items}
     proj_by_mid = {p["id"]: p for p in proj_items}
 
-    # ---- Étape 1 : filtrer les Clients à ceux liés à au moins une
-    # CRM Soumission (la relation Monday est unidirectionnelle, posée
-    # côté CRM Soum, donc on construit le set en inversant).
-    # Pour chaque Monday Client, on stocke aussi les statuts des CRM
-    # Soum et Devis qui pointent vers lui pour décider Client vs CR.
-    crm_to_client: Dict[str, str] = {}  # CRM Soum mid → Client mid
-    client_to_crms: Dict[str, List[str]] = {}  # Client mid → [CRM Soum mids]
+    # ---- Étape 1 : filtrer les Clients à ceux référencés depuis au
+    # moins UN board (CRM Soum, Devis ou Projet). La relation Monday
+    # est unidirectionnelle, posée côté enfant, donc on construit le
+    # set en inversant. Cela assure qu'on ne perd ni devis ni projet
+    # par manque de client lié.
+    crm_to_client: Dict[str, str] = {}
+    client_to_crms: Dict[str, List[str]] = {}
     for crm in soum_items:
-        cl_ids = parse_relation_ids(crm, "board_relation_mm21vrg1")
-        for cid in cl_ids:
+        for cid in parse_relation_ids(crm, "board_relation_mm21vrg1"):
             crm_to_client[crm["id"]] = cid
             client_to_crms.setdefault(cid, []).append(crm["id"])
 
     devis_to_client: Dict[str, str] = {}
     client_to_devis: Dict[str, List[str]] = {}
     for dv in devis_items:
-        cl_ids = parse_relation_ids(dv, "board_relation_mm0bkm34")
-        for cid in cl_ids:
+        for cid in parse_relation_ids(dv, "board_relation_mm0bkm34"):
             devis_to_client[dv["id"]] = cid
             client_to_devis.setdefault(cid, []).append(dv["id"])
+
+    proj_to_client: Dict[str, str] = {}
+    client_to_projs: Dict[str, List[str]] = {}
+    for mp in proj_items:
+        for cid in parse_relation_ids(mp, "board_relation_mm08k3pb"):
+            proj_to_client[mp["id"]] = cid
+            client_to_projs.setdefault(cid, []).append(mp["id"])
+
+    # Set complet des clients à importer (référencés depuis n'importe
+    # quel des 3 boards)
+    referenced_client_ids = (
+        set(client_to_crms.keys())
+        | set(client_to_devis.keys())
+        | set(client_to_projs.keys())
+    )
 
     h2_by_monday_client_id: Dict[str, Dict[str, Any]] = {}
 
     for mc in clients_items:
         mid = mc["id"]
-        linked_crm_ids = client_to_crms.get(mid, [])
-        if not linked_crm_ids:
+        if mid not in referenced_client_ids:
             counts["clients_filtered_out"] += 1
             continue
+        linked_crm_ids = client_to_crms.get(mid, [])
 
         name = mc["name"]
         email = parse_email(mc, "email_mm085sgh")
