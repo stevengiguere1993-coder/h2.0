@@ -69,16 +69,10 @@ function columnsForTab(tab: TabKey): ColumnDef[] {
   if (tab === "clients") {
     return [
       {
-        id: "converti",
-        label: "Convertis",
+        id: "all_clients",
+        label: "Clients actifs",
         dot: "bg-emerald-400",
-        match: (r) => r.kind === "client" && r.extra === "Converti"
-      },
-      {
-        id: "manuel",
-        label: "Manuels",
-        dot: "bg-accent-500",
-        match: (r) => r.kind === "client" && r.extra === "Manuel"
+        match: (r) => r.kind === "client"
       }
     ];
   }
