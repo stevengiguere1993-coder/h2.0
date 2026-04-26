@@ -51,7 +51,7 @@ type Row = {
   extra?: string;
 };
 
-type TabKey = "all" | "clients" | "prospects";
+type TabKey = "clients" | "prospects" | "lost" | "all";
 type ViewMode = "list" | "kanban";
 
 const VIEW_PREF_KEY = "hsi_clients_view_v1";
@@ -92,14 +92,14 @@ function columnsForTab(tab: TabKey): ColumnDef[] {
       },
       {
         id: "contacted",
-        label: "À rappeler",
+        label: "Suivi à faire",
         dot: "bg-amber-400",
         match: (r) => r.kind === "prospect" && r.extra === "contacted"
       },
       {
         id: "qualified",
-        label: "Qualifié",
-        dot: "bg-sky-400",
+        label: "Soumission en préparation",
+        dot: "bg-fuchsia-400",
         match: (r) => r.kind === "prospect" && r.extra === "qualified"
       },
       {
@@ -107,10 +107,14 @@ function columnsForTab(tab: TabKey): ColumnDef[] {
         label: "Soumission envoyée",
         dot: "bg-blue-400",
         match: (r) => r.kind === "prospect" && r.extra === "quoted"
-      },
+      }
+    ];
+  }
+  if (tab === "lost") {
+    return [
       {
         id: "lost",
-        label: "Refusés",
+        label: "Perdu (refusé, sans projet)",
         dot: "bg-rose-500",
         match: (r) => r.kind === "prospect" && r.extra === "lost"
       }
@@ -140,7 +144,7 @@ export default function ClientsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [tab, setTab] = useState<TabKey>("all");
+  const [tab, setTab] = useState<TabKey>("clients");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [view, setView] = useState<ViewMode>("list");
 
@@ -196,7 +200,7 @@ export default function ClientsPage() {
       address: c.address,
       extra: c.contact_request_id ? "Converti" : "Manuel"
     }));
-    const prospectRows: Row[] = prospects
+    const allProspectRows: Row[] = prospects
       .filter((p) => p.status !== "won")
       .map((p) => ({
         kind: "prospect",
@@ -207,9 +211,17 @@ export default function ClientsPage() {
         address: p.address,
         extra: p.status
       }));
+    // Onglet Prospects = leads actifs (exclut les perdus)
+    const activeProspectRows = allProspectRows.filter(
+      (r) => r.extra !== "lost"
+    );
+    const lostProspectRows = allProspectRows.filter(
+      (r) => r.extra === "lost"
+    );
     if (tab === "clients") return clientRows;
-    if (tab === "prospects") return prospectRows;
-    return [...clientRows, ...prospectRows];
+    if (tab === "prospects") return activeProspectRows;
+    if (tab === "lost") return lostProspectRows;
+    return [...clientRows, ...allProspectRows];
   }, [clients, prospects, tab]);
 
   const filtered = useMemo(() => {
@@ -329,11 +341,28 @@ export default function ClientsPage() {
           <div className="flex flex-1 rounded-lg border border-brand-800 bg-brand-900 p-1 text-sm">
             {(
               [
-                { id: "all" as TabKey, label: `Tous (${clients.length + prospects.filter((p) => p.status !== "won").length})` },
-                { id: "clients" as TabKey, label: `Clients (${clients.length})` },
+                {
+                  id: "clients" as TabKey,
+                  label: `Clients (${clients.length})`
+                },
                 {
                   id: "prospects" as TabKey,
                   label: `Prospects (${
+                    prospects.filter(
+                      (p) => p.status !== "won" && p.status !== "lost"
+                    ).length
+                  })`
+                },
+                {
+                  id: "lost" as TabKey,
+                  label: `Perdu (${
+                    prospects.filter((p) => p.status === "lost").length
+                  })`
+                },
+                {
+                  id: "all" as TabKey,
+                  label: `Tous (${
+                    clients.length +
                     prospects.filter((p) => p.status !== "won").length
                   })`
                 }
