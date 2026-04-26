@@ -77,12 +77,17 @@ def _build_line(
 
 
 def _doc_number(achat: Achat, po_reference: Optional[str]) -> str:
-    """DocNumber = # facture fournisseur si fourni, sinon PO source si
-    lié, sinon « A-{id} » comme dernier recours."""
-    if achat.supplier_invoice_number:
-        return achat.supplier_invoice_number[:21]
+    """DocNumber = numéro de PO si l'achat est lié à un PO, sinon
+    # facture fournisseur, sinon « A-{id} » en dernier recours.
+
+    Quand un PO existe, on l'utilise comme identifiant canonique côté
+    QB pour que le comptable retrouve facilement le lien interne.
+    Le # de facture fournisseur reste dans PrivateNote pour le
+    rapprochement avec la facture papier."""
     if po_reference:
         return po_reference[:21]
+    if achat.supplier_invoice_number:
+        return achat.supplier_invoice_number[:21]
     return f"A-{achat.id}"[:21]
 
 
