@@ -79,6 +79,7 @@ async def convert_po_to_achat(
     data: ConvertToAchatRequest,
     db: DBSession,
     _: CurrentUser,
+    defer_sync: bool = False,
 ) -> AchatRead:
     """Crée un Achat (transaction comptable) lié à ce PO. Pré-remplit
     fournisseur, projet et mode de paiement depuis le PO ; l'utilisateur
@@ -86,6 +87,10 @@ async def convert_po_to_achat(
 
     Marque le PO comme `fulfilled` et crée l'Achat en statut `received`.
     L'auto-push QBO démarre en arrière-plan (selon le mode de paiement).
+
+    `defer_sync=true` saute le push automatique pour permettre au client
+    d'uploader la facture en pièce jointe AVANT de pousser dans QB. Le
+    client doit ensuite appeler POST /achats/{id}/qbo/sync.
     """
 
     po = (
@@ -130,14 +135,16 @@ async def convert_po_to_achat(
     po.status = PurchaseOrderStatus.FULFILLED.value
     await db.flush()
 
-    # Auto-push vers QBO en arrière-plan.
-    try:
-        import asyncio
+    # Auto-push vers QBO en arrière-plan, sauf si on diffère pour
+    # permettre l'upload d'une pièce jointe avant le push.
+    if not defer_sync:
+        try:
+            import asyncio
 
-        from app.api.v1.endpoints.achat_qbo import autopush_achat
+            from app.api.v1.endpoints.achat_qbo import autopush_achat
 
-        asyncio.create_task(autopush_achat(int(achat.id)))
-    except Exception as exc:
-        log.warning("Auto-push QBO planning échoué: %s", exc)
+            asyncio.create_task(autopush_achat(int(achat.id)))
+        except Exception as exc:
+            log.warning("Auto-push QBO planning échoué: %s", exc)
 
     return AchatRead.model_validate(achat)

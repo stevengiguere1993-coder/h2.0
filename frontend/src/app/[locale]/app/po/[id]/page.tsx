@@ -5,8 +5,10 @@ import { useParams, useRouter as useNextRouter } from "next/navigation";
 import {
   ArrowLeft,
   ArrowRightCircle,
+  Camera,
   CheckCircle2,
   ExternalLink,
+  FileText,
   Loader2,
   Save,
   Trash2,
@@ -579,7 +581,9 @@ function ConvertToAchatModal({
     po.payment_method || ""
   );
   const [notes, setNotes] = useState("");
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const [step, setStep] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
@@ -587,8 +591,15 @@ function ConvertToAchatModal({
     setBusy(true);
     setErr(null);
     try {
+      // 1) Création de l'Achat — on diffère le push QBO pour pouvoir
+      //    uploader la facture d'abord, sinon QB reçoit le Bill/Purchase
+      //    sans pièce jointe.
+      const hasReceipt = receiptFile !== null;
+      setStep(hasReceipt ? "Création de l'achat…" : "Création + push QB…");
       const res = await authedFetch(
-        `/api/v1/purchase-orders/${po.id}/convert-to-achat`,
+        `/api/v1/purchase-orders/${po.id}/convert-to-achat${
+          hasReceipt ? "?defer_sync=true" : ""
+        }`,
         {
           method: "POST",
           body: JSON.stringify({
@@ -605,11 +616,43 @@ function ConvertToAchatModal({
         throw new Error(t.slice(0, 200) || `http_${res.status}`);
       }
       const created = (await res.json()) as { id: number };
+
+      if (hasReceipt && receiptFile) {
+        // 2) Upload de la facture (multipart)
+        setStep("Téléversement de la facture…");
+        const fd = new FormData();
+        fd.append("file", receiptFile);
+        const upRes = await authedFetch(
+          `/api/v1/achats/${created.id}/receipt`,
+          { method: "POST", body: fd }
+        );
+        if (!upRes.ok) {
+          const t = await upRes.text();
+          throw new Error(
+            `Upload facture échoué : ${t.slice(0, 200) || upRes.status}`
+          );
+        }
+
+        // 3) Push QB maintenant que la facture est attachée à l'achat
+        setStep("Push QuickBooks…");
+        const syncRes = await authedFetch(
+          `/api/v1/achats/${created.id}/qbo/sync`,
+          { method: "POST" }
+        );
+        if (!syncRes.ok) {
+          const t = await syncRes.text();
+          // Ne pas bloquer l'utilisateur — l'achat est créé et la facture
+          // attachée, le push pourra être retenté depuis la fiche achat.
+          console.warn("Sync QBO échoué :", t.slice(0, 200));
+        }
+      }
+
       onConverted(created.id);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
       setBusy(false);
+      setStep("");
     }
   }
 
@@ -715,7 +758,67 @@ function ConvertToAchatModal({
               className="input"
             />
           </div>
+
+          <div>
+            <label className="label">Joindre la facture</label>
+            <p className="mb-2 text-[11px] text-white/50">
+              Photo ou PDF de la facture fournisseur. Sera attachée à
+              l&apos;achat et envoyée comme pièce jointe dans QuickBooks.
+            </p>
+            {receiptFile ? (
+              <div className="flex items-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2">
+                <FileText className="h-4 w-4 text-emerald-300" />
+                <span className="flex-1 truncate text-xs text-emerald-200">
+                  {receiptFile.name} (
+                  {Math.round(receiptFile.size / 1024)} Ko)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setReceiptFile(null)}
+                  className="rounded-md p-1 text-emerald-300 hover:bg-emerald-500/15"
+                  aria-label="Retirer"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-brand-700 bg-brand-900 px-3 py-2 text-xs text-white/80 hover:border-accent-500/40 hover:text-white">
+                  <Camera className="h-3.5 w-3.5" />
+                  Scanner avec la caméra
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={(e) =>
+                      setReceiptFile(e.target.files?.[0] || null)
+                    }
+                    className="sr-only"
+                  />
+                </label>
+                <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-brand-700 bg-brand-900 px-3 py-2 text-xs text-white/80 hover:border-accent-500/40 hover:text-white">
+                  <FileText className="h-3.5 w-3.5" />
+                  Choisir un fichier
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/heic,application/pdf"
+                    onChange={(e) =>
+                      setReceiptFile(e.target.files?.[0] || null)
+                    }
+                    className="sr-only"
+                  />
+                </label>
+              </div>
+            )}
+          </div>
         </div>
+
+        {busy && step ? (
+          <p className="mt-3 rounded-md border border-brand-800 bg-brand-900 px-3 py-2 text-[11px] text-white/70">
+            <Loader2 className="mr-1.5 inline h-3 w-3 animate-spin" />
+            {step}
+          </p>
+        ) : null}
 
         <div className="mt-5 flex items-center justify-end gap-2">
           <button
