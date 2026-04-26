@@ -677,6 +677,7 @@ async def my_projects(
     moins une phase du projet OU sur au moins un AgendaEvent du projet."""
     from app.models.project_member import ProjectMember
     from app.models.project_phase import ProjectPhase
+    from app.models.project_task import ProjectTask
 
     emp = await _resolve_employe(db, user.email)
     project_ids: set[int] = set()

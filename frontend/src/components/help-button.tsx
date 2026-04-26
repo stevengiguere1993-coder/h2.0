@@ -15,7 +15,16 @@ import { authedFetch } from "@/lib/auth";
 
 type Tab = "question" | "bug";
 
-export function HelpButton() {
+export function HelpButton({
+  triggerClassName,
+  triggerStyle
+}: {
+  /** Override pour la position du bouton flottant. Par défaut, en bas-droite
+   *  sur le desktop (`bottom-5 right-5`). La PWA mobile a une nav fixe en bas
+   *  donc on monte le bouton au-dessus. */
+  triggerClassName?: string;
+  triggerStyle?: React.CSSProperties;
+} = {}) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("question");
 
@@ -119,7 +128,11 @@ export function HelpButton() {
         type="button"
         onClick={() => setOpen(true)}
         title="Aide"
-        className="fixed bottom-5 right-5 z-40 inline-flex items-center gap-2 rounded-full bg-accent-500 px-4 py-3 text-sm font-semibold text-brand-950 shadow-lg ring-1 ring-accent-500/40 hover:bg-accent-400"
+        className={
+          triggerClassName ??
+          "fixed bottom-5 right-5 z-40 inline-flex items-center gap-2 rounded-full bg-accent-500 px-4 py-3 text-sm font-semibold text-brand-950 shadow-lg ring-1 ring-accent-500/40 hover:bg-accent-400"
+        }
+        style={triggerStyle}
       >
         <HelpCircle className="h-5 w-5" />
         Aide
