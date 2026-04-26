@@ -10,6 +10,7 @@ import {
   ExternalLink,
   FileText,
   Loader2,
+  Plus,
   Save,
   Trash2,
   X
@@ -465,6 +466,14 @@ export default function PurchaseOrderDetailPage() {
                   className="input"
                 />
               </div>
+              {/* Articles : liste façon « épicerie » avec total qui peut
+                  pré-remplir le montant max ci-dessous. */}
+              <POItemsSection
+                poId={po.id}
+                onSuggestAmountMax={(total) =>
+                  setAmountMax(total.toFixed(2))
+                }
+              />
               <div>
                 <label htmlFor="amax" className="label">
                   Montant max autorisé (CAD)
@@ -478,6 +487,10 @@ export default function PurchaseOrderDetailPage() {
                   onChange={(e) => setAmountMax(e.target.value)}
                   className="input sm:w-48"
                 />
+                <p className="mt-1 text-[11px] text-white/50">
+                  Si tu remplis des articles ci-dessus, clique « Utiliser
+                  le total » pour reprendre la somme automatiquement.
+                </p>
               </div>
               <div>
                 <label htmlFor="anotes" className="label">Notes internes</label>
@@ -841,6 +854,328 @@ function ConvertToAchatModal({
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Articles d'un PO — liste « épicerie ». Édition inline (description, qty,
+// unit, prix unitaire). Total recalculé côté client. Bouton pour reprendre
+// la somme dans le champ « Montant max autorisé » du PO.
+// ---------------------------------------------------------------------------
+
+type POItem = {
+  id: number;
+  purchase_order_id: number;
+  position: number;
+  description: string;
+  unit: string | null;
+  quantity: number | string;
+  unit_price: number | string;
+  total: number | string;
+};
+
+function POItemsSection({
+  poId,
+  onSuggestAmountMax
+}: {
+  poId: number;
+  onSuggestAmountMax: (total: number) => void;
+}) {
+  const [items, setItems] = useState<POItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Brouillon pour ajouter une ligne
+  const [draftDesc, setDraftDesc] = useState("");
+  const [draftQty, setDraftQty] = useState("1");
+  const [draftUnit, setDraftUnit] = useState("");
+  const [draftPrice, setDraftPrice] = useState("");
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await authedFetch(`/api/v1/purchase-orders/${poId}/items`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setItems((await res.json()) as POItem[]);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [poId]);
+
+  const total = items.reduce(
+    (s, it) => s + (it.total != null ? Number(it.total) : 0),
+    0
+  );
+
+  async function addItem() {
+    if (draftDesc.trim().length < 1) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/purchase-orders/${poId}/items`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            description: draftDesc.trim(),
+            unit: draftUnit.trim() || null,
+            quantity: Number(draftQty) || 1,
+            unit_price: Number(draftPrice) || 0,
+            position: items.length
+          })
+        }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const created = (await res.json()) as POItem;
+      setItems((prev) => [...prev, created]);
+      setDraftDesc("");
+      setDraftQty("1");
+      setDraftUnit("");
+      setDraftPrice("");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function patchItem(id: number, patch: Partial<POItem>) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/purchase-orders/${poId}/items/${id}`,
+        { method: "PATCH", body: JSON.stringify(patch) }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const updated = (await res.json()) as POItem;
+      setItems((prev) => prev.map((it) => (it.id === id ? updated : it)));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeItem(id: number) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/purchase-orders/${poId}/items/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setItems((prev) => prev.filter((it) => it.id !== id));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <label className="label">Articles à acheter</label>
+        {items.length > 0 ? (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-white/60">
+              Total :{" "}
+              <span className="font-semibold text-white">
+                {total.toLocaleString("fr-CA", {
+                  style: "currency",
+                  currency: "CAD"
+                })}
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={() => onSuggestAmountMax(total)}
+              className="rounded-md border border-accent-500/40 bg-accent-500/10 px-2 py-1 text-[11px] font-semibold text-accent-300 hover:bg-accent-500/20"
+            >
+              Utiliser le total
+            </button>
+          </div>
+        ) : null}
+      </div>
+      <p className="mb-2 text-[11px] text-white/50">
+        Liste « épicerie » que l&apos;employé apporte chez le fournisseur.
+        Pas de taxes ici (un PO est interne).
+      </p>
+
+      {error ? (
+        <p className="mb-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-[11px] text-rose-300">
+          {error}
+        </p>
+      ) : null}
+
+      {loading ? (
+        <div className="flex items-center gap-2 px-2 py-3 text-xs text-white/50">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Chargement…
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {items.map((it) => (
+            <POItemRow
+              key={it.id}
+              item={it}
+              busy={busy}
+              onPatch={(patch) => patchItem(it.id, patch)}
+              onRemove={() => removeItem(it.id)}
+            />
+          ))}
+
+          {/* Ligne d'ajout */}
+          <div className="grid grid-cols-12 gap-1.5 rounded-md border border-dashed border-brand-700 bg-brand-900/40 p-2">
+            <input
+              type="text"
+              value={draftDesc}
+              onChange={(e) => setDraftDesc(e.target.value)}
+              placeholder="Ex. Tubes caulking"
+              className="input col-span-12 sm:col-span-5"
+            />
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={draftQty}
+              onChange={(e) => setDraftQty(e.target.value)}
+              placeholder="Qté"
+              className="input col-span-3 sm:col-span-1"
+            />
+            <input
+              type="text"
+              value={draftUnit}
+              onChange={(e) => setDraftUnit(e.target.value)}
+              placeholder="boîte"
+              className="input col-span-3 sm:col-span-2"
+            />
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={draftPrice}
+              onChange={(e) => setDraftPrice(e.target.value)}
+              placeholder="Prix unit."
+              className="input col-span-4 sm:col-span-2"
+            />
+            <button
+              type="button"
+              onClick={addItem}
+              disabled={busy || draftDesc.trim().length < 1}
+              className="btn-accent col-span-2 sm:col-span-2 text-xs disabled:opacity-50"
+            >
+              <Plus className="mr-1 inline h-3.5 w-3.5" />
+              Ajouter
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function POItemRow({
+  item,
+  busy,
+  onPatch,
+  onRemove
+}: {
+  item: POItem;
+  busy: boolean;
+  onPatch: (patch: Partial<POItem>) => void;
+  onRemove: () => void;
+}) {
+  const [desc, setDesc] = useState(item.description);
+  const [qty, setQty] = useState(String(item.quantity));
+  const [unit, setUnit] = useState(item.unit || "");
+  const [price, setPrice] = useState(String(item.unit_price));
+
+  // Re-sync si l'item change (refresh externe)
+  useEffect(() => {
+    setDesc(item.description);
+    setQty(String(item.quantity));
+    setUnit(item.unit || "");
+    setPrice(String(item.unit_price));
+  }, [item.id, item.description, item.quantity, item.unit, item.unit_price]);
+
+  function commit(patch: Partial<POItem>) {
+    onPatch(patch);
+  }
+
+  return (
+    <div className="grid grid-cols-12 gap-1.5 rounded-md border border-brand-800 bg-brand-900 p-2">
+      <input
+        type="text"
+        value={desc}
+        onChange={(e) => setDesc(e.target.value)}
+        onBlur={() => {
+          if (desc !== item.description) commit({ description: desc });
+        }}
+        className="input col-span-12 sm:col-span-5"
+      />
+      <input
+        type="number"
+        step="0.01"
+        min="0"
+        value={qty}
+        onChange={(e) => setQty(e.target.value)}
+        onBlur={() => {
+          const n = Number(qty);
+          if (!Number.isNaN(n) && n !== Number(item.quantity))
+            commit({ quantity: n });
+        }}
+        className="input col-span-3 sm:col-span-1"
+      />
+      <input
+        type="text"
+        value={unit}
+        onChange={(e) => setUnit(e.target.value)}
+        onBlur={() => {
+          const v = unit.trim();
+          if (v !== (item.unit || "")) commit({ unit: v || null });
+        }}
+        className="input col-span-3 sm:col-span-2"
+      />
+      <input
+        type="number"
+        step="0.01"
+        min="0"
+        value={price}
+        onChange={(e) => setPrice(e.target.value)}
+        onBlur={() => {
+          const n = Number(price);
+          if (!Number.isNaN(n) && n !== Number(item.unit_price))
+            commit({ unit_price: n });
+        }}
+        className="input col-span-4 sm:col-span-2"
+      />
+      <span className="col-span-2 self-center text-right text-xs text-white/70 sm:col-span-1">
+        {Number(item.total).toLocaleString("fr-CA", {
+          style: "currency",
+          currency: "CAD"
+        })}
+      </span>
+      <button
+        type="button"
+        onClick={onRemove}
+        disabled={busy}
+        className="col-span-12 inline-flex items-center justify-center rounded-md border border-rose-500/30 bg-rose-500/5 py-1.5 text-[11px] text-rose-300 hover:bg-rose-500/15 disabled:opacity-50 sm:col-span-1 sm:py-0"
+        aria-label="Supprimer"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
     </div>
   );
 }

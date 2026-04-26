@@ -113,11 +113,44 @@ async def convert_po_to_achat(
         except Exception:
             invoice_dt = None
 
+    # Description : si l'utilisateur n'a rien fourni, on essaie de
+    # concaténer les articles du PO (« 70 tubes caulking · 2 boîtes
+    # de vis 2 1/2 · ... »). Sinon fallback sur la description du PO.
+    description = data.description
+    if not description:
+        from app.models.purchase_order_item import PurchaseOrderItem
+
+        items = (
+            await db.execute(
+                select(PurchaseOrderItem)
+                .where(PurchaseOrderItem.purchase_order_id == po.id)
+                .order_by(
+                    PurchaseOrderItem.position.asc(),
+                    PurchaseOrderItem.id.asc(),
+                )
+            )
+        ).scalars().all()
+        if items:
+            parts = []
+            for it in items:
+                qty_int = (
+                    int(it.quantity)
+                    if float(it.quantity).is_integer()
+                    else float(it.quantity)
+                )
+                qty_str = f"{qty_int}"
+                if it.unit:
+                    qty_str = f"{qty_str} {it.unit}"
+                parts.append(f"{qty_str} × {it.description}")
+            description = " · ".join(parts)
+        else:
+            description = po.description
+
     achat = Achat(
         purchase_order_id=po.id,
         fournisseur_id=po.fournisseur_id,
         project_id=po.project_id,
-        description=(data.description or po.description),
+        description=description,
         amount=(data.amount if data.amount is not None else po.amount_max),
         supplier_invoice_number=data.supplier_invoice_number,
         invoice_date=invoice_dt,

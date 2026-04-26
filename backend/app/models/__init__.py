@@ -34,6 +34,7 @@ from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.project_phase import ProjectPhase
 from app.models.purchase_order import PurchaseOrder
+from app.models.purchase_order_item import PurchaseOrderItem
 from app.models.project_assignees import (
     ProjectPhaseAssignee,
     ProjectTaskAssignee,
@@ -83,6 +84,7 @@ __all__ = [
     "ProjectTask",
     "ProjectTaskAssignee",
     "PurchaseOrder",
+    "PurchaseOrderItem",
     "Punch",
     "QboAccountMap",
     "QboToken",
