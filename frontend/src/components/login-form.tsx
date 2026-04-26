@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, Monitor, Smartphone } from "lucide-react";
+import { Loader2, MapPin, Monitor, Smartphone } from "lucide-react";
 
 import { useRouter } from "@/i18n/navigation";
 import { getMe, login, setToken } from "@/lib/auth";
@@ -128,6 +128,31 @@ export function LoginForm() {
                 Employé sur chantier — poinçonner, agenda, intervention
                 avec photos.
               </span>
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              router.replace("/prospection" as any);
+            }}
+            className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-accent-500 hover:bg-brand-800"
+          >
+            <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400 group-hover:bg-emerald-500 group-hover:text-brand-950">
+              <MapPin className="h-6 w-6" />
+            </span>
+            <span className="flex-1">
+              <span className="block text-base font-bold text-white">
+                Prospection
+              </span>
+              <span className="mt-0.5 block text-xs text-white/60">
+                Repérage de chantiers — drive-by, photos, lookup
+                propriétaire, campagnes de contact.
+              </span>
+            </span>
+            <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+              En développement
             </span>
           </button>
         </div>

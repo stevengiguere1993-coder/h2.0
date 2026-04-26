@@ -161,6 +161,7 @@ export const routing = defineRouting({
       en: "/bon/[token]"
     },
     "/m": { fr: "/m", en: "/m" },
+    "/prospection": { fr: "/prospection", en: "/prospection" },
     "/m/agenda": { fr: "/m/agenda", en: "/m/agenda" },
     "/m/punch": { fr: "/m/punch", en: "/m/punch" },
     "/m/ops": { fr: "/m/ops", en: "/m/ops" },
