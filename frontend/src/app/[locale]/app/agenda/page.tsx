@@ -128,6 +128,16 @@ function fmtTime(iso: string): string {
   ).padStart(2, "0")}`;
 }
 
+// Parse "YYYY-MM-DD" en Date locale (sinon JS prend UTC minuit, ce qui
+// décale la date d'un jour à Montréal).
+function parseLocalDate(s: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (m) {
+    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  }
+  return new Date(s);
+}
+
 // Monday of the ISO week containing `d`, at local midnight.
 function mondayOf(d: Date): Date {
   const m = new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -265,11 +275,11 @@ export default function AgendaPage() {
       const key = d.toDateString();
       const hits: Project[] = [];
       for (const p of active) {
-        const s = new Date(p.start_date as string);
-        const e = new Date(p.end_date as string);
-        // Compare at day granularity.
-        const ds = new Date(s.getFullYear(), s.getMonth(), s.getDate());
-        const de = new Date(e.getFullYear(), e.getMonth(), e.getDate());
+        // start_date / end_date sont des dates pures (YYYY-MM-DD), il
+        // faut les parser en local sinon UTC midnight les recule d'un
+        // jour à Montréal (UTC-4/5).
+        const ds = parseLocalDate(p.start_date as string);
+        const de = parseLocalDate(p.end_date as string);
         const dd = new Date(d.getFullYear(), d.getMonth(), d.getDate());
         if (dd >= ds && dd <= de) hits.push(p);
       }
@@ -1417,7 +1427,7 @@ function TimelineView({
 
   function phaseToItem(p: Phase): TimelineItem | null {
     if (!p.start_date || !p.duration_days || p.duration_days <= 0) return null;
-    const s = new Date(p.start_date);
+    const s = parseLocalDate(p.start_date);
     const e = new Date(s);
     e.setDate(e.getDate() + p.duration_days - 1);
     if (e < start || s >= endExclusive) return null;
