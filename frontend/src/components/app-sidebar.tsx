@@ -277,6 +277,18 @@ export function AppSidebar({
               })}
             </ul>
           </div>
+
+          <div className="mt-6 border-t border-brand-800 pt-3">
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/connexion" as any}
+              onClick={onClose}
+              className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-white/70 hover:bg-brand-900 hover:text-white"
+            >
+              <Home className="h-4 w-4" />
+              Accueil du portail
+            </Link>
+          </div>
         </nav>
 
         <div className="border-t border-brand-800 px-3 py-4">
