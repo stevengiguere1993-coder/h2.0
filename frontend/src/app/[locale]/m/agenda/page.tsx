@@ -19,7 +19,13 @@ type EventMini = {
 };
 
 function ymd(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  if (Number.isNaN(d.getTime())) return "0000-00-00";
+  // Use local components — la PWA iOS rendrait sinon une date UTC
+  // qui décale d'un jour à Montréal.
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 export default function MobileAgenda() {
@@ -34,7 +40,12 @@ export default function MobileAgenda() {
       try {
         const res = await authedFetch("/api/v1/mobile/agenda?days=30");
         if (!res.ok) throw new Error(`http_${res.status}`);
-        if (!cancelled) setEvents((await res.json()) as EventMini[]);
+        const body = (await res.json()) as unknown;
+        if (!cancelled) {
+          // Backend doit renvoyer un tableau ; on durcit pour ne pas
+          // planter le render si jamais c'est un objet d'erreur.
+          setEvents(Array.isArray(body) ? (body as EventMini[]) : []);
+        }
       } catch {
         if (!cancelled) setError("Chargement échoué.");
       } finally {
@@ -49,7 +60,9 @@ export default function MobileAgenda() {
 
   const grouped = useMemo(() => {
     const map = new Map<string, EventMini[]>();
+    if (!Array.isArray(events)) return [];
     for (const e of events) {
+      if (!e || !e.start_at) continue;
       const d = ymd(new Date(e.start_at));
       if (!map.has(d)) map.set(d, []);
       map.get(d)!.push(e);
