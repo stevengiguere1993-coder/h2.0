@@ -154,7 +154,13 @@ export function HelpButton({
             role="dialog"
             aria-modal="true"
           >
-            <header className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
+            <header
+              className="flex items-center justify-between border-b border-brand-800 px-4 py-3"
+              style={{
+                paddingTop:
+                  "max(env(safe-area-inset-top), 0.75rem)"
+              }}
+            >
               <div>
                 <h2 className="text-base font-bold text-white">
                   Centre d&apos;aide
