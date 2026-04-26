@@ -147,10 +147,15 @@ async def fetch_all_items(board_id: int, token: str) -> List[Dict[str, Any]]:
     cursor: Optional[str] = None
     while True:
         cursor_arg = f', cursor: "{cursor}"' if cursor else ""
+        # NB: Monday API v2 ne renvoie pas les linked_item_ids dans
+        # `value` pour les colonnes board_relation. Il faut utiliser
+        # le fragment GraphQL spécifique BoardRelationValue.
         query = (
             f"query {{ boards(ids: [{board_id}]) {{ items_page(limit: 100"
             f"{cursor_arg}) {{ cursor items {{ id name "
-            "column_values { id text value } } } } }"
+            "column_values { id text value type "
+            "... on BoardRelationValue { linked_item_ids } "
+            "} } } } }"
         )
         data = await monday_query(query, token)
         page = data["boards"][0]["items_page"]
@@ -177,20 +182,19 @@ def get_col_value(item: Dict[str, Any], col_id: str) -> Optional[str]:
 
 
 def parse_relation_ids(item: Dict[str, Any], col_id: str) -> List[str]:
-    raw = get_col_value(item, col_id)
-    if not raw:
-        return []
-    try:
-        v = json.loads(raw)
-    except (ValueError, TypeError):
-        return []
-    if isinstance(v, dict):
-        ids = v.get("linkedPulseIds") or []
-        return [
-            str(x.get("linkedPulseId"))
-            for x in ids
-            if x.get("linkedPulseId")
-        ]
+    """Extrait les IDs liés depuis une colonne board_relation.
+
+    Monday API v2 expose les liens via le fragment GraphQL
+    BoardRelationValue → champ `linked_item_ids` (tableau de strings).
+    Si on n'utilise pas le fragment, le champ `value` est null et on
+    n'a aucune info sur les liens.
+    """
+    for cv in item.get("column_values", []):
+        if cv.get("id") == col_id:
+            ids = cv.get("linked_item_ids")
+            if ids:
+                return [str(i) for i in ids]
+            return []
     return []
 
 
@@ -322,14 +326,32 @@ async def import_all(
     devis_by_mid = {d["id"]: d for d in devis_items}
     proj_by_mid = {p["id"]: p for p in proj_items}
 
-    # ---- Étape 1 : filtrer les Clients à ceux liés à au moins
-    # un CRM Soum, et déterminer Client vs ContactRequest selon les
-    # statuts des soumissions/devis liés.
+    # ---- Étape 1 : filtrer les Clients à ceux liés à au moins une
+    # CRM Soumission (la relation Monday est unidirectionnelle, posée
+    # côté CRM Soum, donc on construit le set en inversant).
+    # Pour chaque Monday Client, on stocke aussi les statuts des CRM
+    # Soum et Devis qui pointent vers lui pour décider Client vs CR.
+    crm_to_client: Dict[str, str] = {}  # CRM Soum mid → Client mid
+    client_to_crms: Dict[str, List[str]] = {}  # Client mid → [CRM Soum mids]
+    for crm in soum_items:
+        cl_ids = parse_relation_ids(crm, "board_relation_mm21vrg1")
+        for cid in cl_ids:
+            crm_to_client[crm["id"]] = cid
+            client_to_crms.setdefault(cid, []).append(crm["id"])
+
+    devis_to_client: Dict[str, str] = {}
+    client_to_devis: Dict[str, List[str]] = {}
+    for dv in devis_items:
+        cl_ids = parse_relation_ids(dv, "board_relation_mm0bkm34")
+        for cid in cl_ids:
+            devis_to_client[dv["id"]] = cid
+            client_to_devis.setdefault(cid, []).append(dv["id"])
+
     h2_by_monday_client_id: Dict[str, Dict[str, Any]] = {}
 
     for mc in clients_items:
         mid = mc["id"]
-        linked_crm_ids = parse_relation_ids(mc, "board_relation_mm2146bs")
+        linked_crm_ids = client_to_crms.get(mid, [])
         if not linked_crm_ids:
             counts["clients_filtered_out"] += 1
             continue
@@ -342,9 +364,7 @@ async def import_all(
         type_client = get_col(mc, "color_mm08pyts")
         qb_cust_id = get_col(mc, "text_mm1rqzmx")
 
-        # Décider Client (h2.0) vs ContactRequest (prospect)
-        # → Client si une soum CRM est « Convertie en projet » OU si
-        #   un Devis est « accepte ».
+        # Client h2.0 si soumission convertie OU devis accepté
         is_accepted = False
         for crm_id in linked_crm_ids:
             crm = soum_by_mid.get(crm_id)
@@ -356,11 +376,9 @@ async def import_all(
                 is_accepted = True
                 break
         if not is_accepted:
-            # Aussi vérifier les Devis associés à ce client (board_relation
-            # côté client : on n'a pas, mais on peut chercher inverse)
-            for dv in devis_items:
-                dv_clients = parse_relation_ids(dv, "board_relation_mm0bkm34")
-                if mid in dv_clients and (
+            for dv_id in client_to_devis.get(mid, []):
+                dv = devis_by_mid.get(dv_id)
+                if dv and (
                     get_col(dv, "color_mm0b7x8g") or ""
                 ).lower() == "accepte":
                     is_accepted = True
