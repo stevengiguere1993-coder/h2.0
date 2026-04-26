@@ -3,13 +3,9 @@
 import { useState } from "react";
 import { usePathname } from "next/navigation";
 import {
-  ArrowLeftRight,
-  HelpCircle,
   LogOut,
-  Mail,
   Map,
   MapPin,
-  Settings as SettingsIcon,
   Smartphone,
   UserCircle,
   X
@@ -156,21 +152,6 @@ export function ProspectionSidebar({
             >
               <Smartphone className="h-4 w-4" />
               Drive-by (PWA)
-            </Link>
-          </div>
-
-          <div className="mt-6 border-t border-brand-800 pt-3">
-            <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">
-              Naviguer
-            </p>
-            <Link
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              href={"/app" as any}
-              onClick={onClose}
-              className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-white/70 hover:bg-brand-900 hover:text-white"
-            >
-              <ArrowLeftRight className="h-4 w-4" />
-              Aller à Construction
             </Link>
           </div>
         </nav>
