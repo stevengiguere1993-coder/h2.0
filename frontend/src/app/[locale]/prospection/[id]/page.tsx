@@ -603,6 +603,66 @@ export default function ProspectionDetailPage() {
                       />
                     </div>
                   ) : null}
+
+                  {/* Recherche dans le Registraire des entreprises QC */}
+                  <div className="mt-2 rounded-lg border border-brand-700 bg-brand-950/40 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-400">
+                      Rechercher dans le REQ
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-white/50">
+                      Pour les multi-logements détenus par des
+                      compagnies à numéro. Ouvre une recherche dans
+                      un nouvel onglet.
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {address.trim() ? (
+                        <a
+                          href={`https://www.google.com/search?q=${encodeURIComponent(
+                            `site:registreentreprises.gouv.qc.ca "${address.trim()}"${
+                              city.trim() ? ` "${city.trim()}"` : ""
+                            }`
+                          )}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] text-emerald-300 hover:bg-emerald-500/20"
+                        >
+                          🔍 Par adresse
+                        </a>
+                      ) : null}
+                      {ownerName.trim() ? (
+                        <a
+                          href={`https://www.google.com/search?q=${encodeURIComponent(
+                            `site:registreentreprises.gouv.qc.ca "${ownerName.trim()}"`
+                          )}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] text-emerald-300 hover:bg-emerald-500/20"
+                        >
+                          🔍 Par nom
+                        </a>
+                      ) : null}
+                      {ownerNeq.trim() ? (
+                        <a
+                          href={`https://www.registreentreprises.gouv.qc.ca/RQAnonymeGR/GR/GR03/GR03A2_19A_PIU_RechEnt_PC/PageRechSimple.aspx?NEQ=${encodeURIComponent(
+                            ownerNeq.trim()
+                          )}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] text-emerald-300 hover:bg-emerald-500/20"
+                        >
+                          🔗 Ouvrir par NEQ
+                        </a>
+                      ) : null}
+                      <a
+                        href="https://www.registreentreprises.gouv.qc.ca/RQAnonymeGR/GR/GR03/GR03A2_19A_PIU_RechEnt_PC/PageRechSimple.aspx"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-md border border-brand-700 bg-brand-900 px-2.5 py-1.5 text-[11px] text-white/70 hover:bg-brand-800 hover:text-white"
+                      >
+                        🔗 REQ recherche libre
+                      </a>
+                    </div>
+                  </div>
                 </div>
               </section>
 
