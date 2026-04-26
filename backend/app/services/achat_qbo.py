@@ -364,7 +364,17 @@ async def sync_achat_to_qbo(
     # Joindre la facture fournisseur (image / PDF) si l'employé en a
     # uploadé une. On le fait après création du Bill/Purchase ; en cas
     # d'échec on log mais on ne bloque pas le push principal.
-    if achat.receipt_image and qbo_id:
+    # NB: receipt_image est une colonne `deferred` — non chargée par
+    # défaut. Il faut explicitement rafraîchir pour la lire.
+    receipt_attached = False
+    receipt_error: Optional[str] = None
+    if qbo_id and achat.receipt_image_content_type:
+        try:
+            await db.refresh(achat, attribute_names=["receipt_image"])
+        except Exception as exc:  # noqa: BLE001
+            receipt_error = f"refresh: {exc}"
+            log.warning("Refresh receipt_image failed: %s", exc)
+    if qbo_id and achat.receipt_image:
         try:
             ctype = (
                 achat.receipt_image_content_type
@@ -381,11 +391,13 @@ async def sync_achat_to_qbo(
                 content_type=ctype,
                 content=bytes(achat.receipt_image),
             )
+            receipt_attached = True
             log.info(
                 "Attached receipt to QBO %s %s (file=%s)",
                 kind, qbo_id, file_name,
             )
         except Exception as exc:  # noqa: BLE001
+            receipt_error = str(exc)[:200]
             log.warning(
                 "Receipt upload failed for Achat %s -> QBO %s %s: %s",
                 achat.id, kind, qbo_id, exc,
@@ -396,4 +408,6 @@ async def sync_achat_to_qbo(
         "qbo_bill_id": qbo_id,
         "qbo_doc_number": doc_number,
         "qbo_vendor_id": vendor_id,
+        "receipt_attached": receipt_attached,
+        "receipt_error": receipt_error,
     }
