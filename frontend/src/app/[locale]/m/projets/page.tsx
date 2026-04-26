@@ -34,7 +34,13 @@ const STATUS_CLASS: Record<string, string> = {
 function fmtDate(s: string | null): string {
   if (!s) return "";
   try {
-    return new Date(s).toLocaleDateString("fr-CA", {
+    // Parser local pour éviter le décalage UTC → 1 jour en moins à
+    // Montréal sur les dates pures YYYY-MM-DD.
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+    const d = m
+      ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+      : new Date(s);
+    return d.toLocaleDateString("fr-CA", {
       day: "2-digit",
       month: "short"
     });
@@ -53,12 +59,25 @@ export default function MobileProjets() {
     let cancelled = false;
     async function load() {
       setLoading(true);
+      setError(null);
       try {
         const res = await authedFetch("/api/v1/mobile/projects");
-        if (!res.ok) throw new Error();
-        if (!cancelled) setItems((await res.json()) as Project[]);
-      } catch {
-        if (!cancelled) setError("Chargement échoué.");
+        if (!res.ok) {
+          const txt = await res.text().catch(() => "");
+          throw new Error(
+            `HTTP ${res.status}${txt ? ` — ${txt.slice(0, 120)}` : ""}`
+          );
+        }
+        const body = (await res.json()) as unknown;
+        if (!cancelled) {
+          setItems(Array.isArray(body) ? (body as Project[]) : []);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            `Chargement échoué — ${(err as Error).message || "erreur réseau"}`
+          );
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
