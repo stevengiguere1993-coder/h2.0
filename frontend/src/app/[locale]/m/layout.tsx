@@ -12,6 +12,7 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { ConfirmProvider } from "@/components/confirm-dialog";
+import { HelpButton } from "@/components/help-button";
 import { getToken, getMe, type CurrentUser } from "@/lib/auth";
 
 type Tab = {
@@ -100,6 +101,15 @@ export default function MobileLayout({
           })}
         </ul>
       </nav>
+
+      {/* Bouton flottant Aide — placé au-dessus de la nav bottom (≈60px
+          + safe-area-inset-bottom). calc() pour suivre le padding iOS. */}
+      <HelpButton
+        triggerClassName="fixed right-4 z-40 inline-flex items-center gap-1.5 rounded-full bg-accent-500 px-3.5 py-2.5 text-xs font-semibold text-brand-950 shadow-lg ring-1 ring-accent-500/40 hover:bg-accent-400"
+        triggerStyle={{
+          bottom: "calc(env(safe-area-inset-bottom) + 4.5rem)"
+        }}
+      />
 
       {/* Expose current user email in a global for deep pages if needed */}
       <span id="hsi-me" data-email={me?.email || ""} className="hidden" />
