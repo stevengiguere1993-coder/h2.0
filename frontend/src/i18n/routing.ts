@@ -148,13 +148,9 @@ export const routing = defineRouting({
       fr: "/app/parametres",
       en: "/app/parametres"
     },
-    "/app/prospection": {
-      fr: "/app/prospection",
-      en: "/app/prospection"
-    },
-    "/app/prospection/[id]": {
-      fr: "/app/prospection/[id]",
-      en: "/app/prospection/[id]"
+    "/prospection/[id]": {
+      fr: "/prospection/[id]",
+      en: "/prospection/[id]"
     },
     "/app/paie": {
       fr: "/app/paie",
