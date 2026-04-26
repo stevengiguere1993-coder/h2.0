@@ -17,6 +17,7 @@ from app.api.v1.endpoints import (
     follow_ups,
     contact,
     dashboard,
+    help,
     achat_receipt,
     bon_items,
     bon_send,
@@ -148,3 +149,4 @@ api_router.include_router(project_to_facture.router)
 api_router.include_router(achat_receipt.router)
 api_router.include_router(achats_router)
 api_router.include_router(purchase_orders_router)
+api_router.include_router(help.router)

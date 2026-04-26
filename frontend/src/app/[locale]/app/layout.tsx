@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ConfirmProvider } from "@/components/confirm-dialog";
+import { HelpButton } from "@/components/help-button";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -42,6 +43,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <AppLayoutContextProvider onOpenSidebar={() => setSidebarOpen(true)}>
           <ConfirmProvider>
             <main className="flex-1 overflow-x-hidden">{children}</main>
+            <HelpButton />
           </ConfirmProvider>
         </AppLayoutContextProvider>
       </div>
