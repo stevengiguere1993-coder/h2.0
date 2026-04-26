@@ -407,14 +407,6 @@ export default function CrmKanbanPage() {
                 </div>
               );
             })}
-
-            <button
-              type="button"
-              onClick={addCustomColumn}
-              className="flex h-12 w-80 min-w-[320px] flex-shrink-0 items-center justify-center gap-2 rounded-xl border border-dashed border-brand-800 text-sm font-medium text-white/50 transition hover:border-accent-500 hover:text-accent-500"
-            >
-              <Plus className="h-4 w-4" /> Ajouter une colonne
-            </button>
           </div>
         )}
       </div>
