@@ -15,7 +15,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
-import { useAppLayout } from "../../layout";
+import { useProspectionLayout } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
 
 type Lead = {
@@ -77,7 +77,7 @@ const OWNER_KIND_OPTIONS = [
 ];
 
 export default function ProspectionDetailPage() {
-  const { onOpenSidebar } = useAppLayout();
+  const { onOpenSidebar } = useProspectionLayout();
   const confirm = useConfirm();
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
@@ -241,7 +241,7 @@ export default function ProspectionDetailPage() {
       method: "DELETE"
     });
     if (res.ok || res.status === 204) {
-      window.location.href = "/app/prospection";
+      window.location.href = "/prospection";
     }
   }
 
@@ -249,7 +249,7 @@ export default function ProspectionDetailPage() {
     <>
       <AppTopbar
         breadcrumbs={[
-          { label: "Prospection", href: "/app/prospection" },
+          { label: "Prospection", href: "/prospection" },
           { label: lead?.name || "Chargement…" }
         ]}
         onOpenSidebar={onOpenSidebar}
@@ -258,7 +258,7 @@ export default function ProspectionDetailPage() {
       <div className="p-4 lg:p-6">
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={"/app/prospection" as any}
+          href={"/prospection" as any}
           className="inline-flex items-center text-sm text-white/60 hover:text-accent-500"
         >
           <ArrowLeft className="mr-1 h-4 w-4" /> Retour à la carte
