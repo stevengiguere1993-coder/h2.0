@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ClipboardCheck, Loader2, Plus, Search } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 
@@ -52,6 +52,7 @@ function fmtMoney(n: number | string | null): string {
 
 export default function PurchaseOrdersListPage() {
   const { onOpenSidebar } = useAppLayout();
+  const router = useRouter();
   const [items, setItems] = useState<PurchaseOrder[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
@@ -259,11 +260,21 @@ export default function PurchaseOrdersListPage() {
                     ? empById.get(po.assigned_employe_id)
                     : null;
                   return (
-                    <tr key={po.id} className="hover:bg-brand-800/30">
+                    <tr
+                      key={po.id}
+                      onClick={() =>
+                        router.push(
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          `/app/po/${po.id}` as any
+                        )
+                      }
+                      className="cursor-pointer hover:bg-brand-800/30"
+                    >
                       <td className="px-3 py-2">
                         <Link
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           href={`/app/po/${po.id}` as any}
+                          onClick={(e) => e.stopPropagation()}
                           className="font-mono text-accent-400 hover:underline"
                         >
                           {po.reference}
