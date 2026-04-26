@@ -43,6 +43,7 @@ from app.api.v1.endpoints import (
     public_soumission,
     punch_ops,
     achat_qbo,
+    purchase_order_actions,
     client_qbo,
     cron_runner,
     numbering,
@@ -60,6 +61,7 @@ from app.api.v1.endpoints import (
 )
 from app.api.v1.endpoints.business import (
     achats_router,
+    purchase_orders_router,
     agenda_router,
     bons_router,
     factures_router,
@@ -93,6 +95,7 @@ api_router.include_router(qbo_token.router)
 api_router.include_router(qbo_oauth.router)
 api_router.include_router(client_qbo.router)
 api_router.include_router(achat_qbo.router)
+api_router.include_router(purchase_order_actions.router)
 api_router.include_router(cron_runner.router)
 api_router.include_router(numbering.router)
 api_router.include_router(qbo_account_map.router)
@@ -144,3 +147,4 @@ api_router.include_router(project_to_facture.router)
 # "receipt" as an integer.
 api_router.include_router(achat_receipt.router)
 api_router.include_router(achats_router)
+api_router.include_router(purchase_orders_router)

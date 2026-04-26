@@ -17,6 +17,7 @@ from app.models.employe import Employe
 from app.models.facture import Facture
 from app.models.fournisseur import Fournisseur
 from app.models.punch import Punch
+from app.models.purchase_order import PurchaseOrder
 from app.models.soumission import Soumission
 from app.models.sous_traitant import SousTraitant
 from app.repositories.generic import GenericCrud
@@ -42,6 +43,9 @@ from app.schemas.business import (
     PunchCreate,
     PunchRead,
     PunchUpdate,
+    PurchaseOrderCreate,
+    PurchaseOrderRead,
+    PurchaseOrderUpdate,
     SoumissionCreate,
     SoumissionRead,
     SoumissionUpdate,
@@ -94,19 +98,13 @@ def make_crud_router(
                 data.reference = await next_soumission_number(db)
             elif model is Facture:
                 data.reference = await next_facture_number(db)
-            elif model is Achat:
+            elif model is PurchaseOrder:
                 data.reference = await next_po_number(db)
         crud = GenericCrud(db, model)
         obj = await crud.create(data)
-        # Auto-push QBO si l'achat est créé déjà reçu (cas usuel:
-        # facture fournisseur saisie après-coup) — voir aussi le hook
-        # update plus bas qui couvre la transition draft/ordered → received.
+        # Auto-push QBO pour tout Achat créé en statut « received »
+        # (cas usuel : facture fournisseur saisie en différé).
         if model is Achat and getattr(obj, "status", None) == "received":
-            from fastapi import BackgroundTasks  # local import OK
-
-            # On lance en arrière-plan via un task autonome plutôt
-            # qu'un BackgroundTasks (injection lourde ici). Silencieux
-            # si QB non connecté.
             import asyncio
 
             from app.api.v1.endpoints.achat_qbo import autopush_achat
@@ -207,4 +205,11 @@ factures_router = make_crud_router(
 achats_router = make_crud_router(
     prefix="/achats", tag="achats",
     model=Achat, create_schema=AchatCreate, update_schema=AchatUpdate, read_schema=AchatRead,
+)
+purchase_orders_router = make_crud_router(
+    prefix="/purchase-orders", tag="purchase-orders",
+    model=PurchaseOrder,
+    create_schema=PurchaseOrderCreate,
+    update_schema=PurchaseOrderUpdate,
+    read_schema=PurchaseOrderRead,
 )

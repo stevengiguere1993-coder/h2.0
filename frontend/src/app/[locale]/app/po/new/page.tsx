@@ -9,13 +9,18 @@ import { ArrowLeft, Loader2 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { FournisseurModal } from "@/components/fournisseur-modal";
-import { ReceiptScanner } from "@/components/receipt-scanner";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 
 type Project = { id: number; name: string };
 type Fournisseur = { id: number; name: string };
+type Employe = {
+  id: number;
+  full_name: string;
+  email: string | null;
+  active?: boolean;
+};
 
 const PAYMENT_OPTIONS = [
   { value: "bill_to_pay", label: "Sur compte fournisseur (à payer plus tard)" },
@@ -26,15 +31,7 @@ const PAYMENT_OPTIONS = [
   { value: "cc_christian", label: "CC Horizon Christian Villiard" }
 ];
 
-function todayIso(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
-    2,
-    "0"
-  )}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-export default function NewAchatPage() {
+export default function NewPurchaseOrderPage() {
   const { onOpenSidebar } = useAppLayout();
   const router = useNextRouter();
   const searchParams = useSearchParams();
@@ -43,15 +40,14 @@ export default function NewAchatPage() {
   const [projectId, setProjectId] = useState(prefilledProjectId || "");
   const [fournisseurId, setFournisseurId] = useState("");
   const [description, setDescription] = useState("");
-  const [amount, setAmount] = useState("");
+  const [amountMax, setAmountMax] = useState("");
+  const [assignedEmpId, setAssignedEmpId] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
-  const [supplierInvoiceNumber, setSupplierInvoiceNumber] = useState("");
-  const [invoiceDate, setInvoiceDate] = useState(() => todayIso());
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
+  const [employes, setEmployes] = useState<Employe[]>([]);
   const [showFournisseurModal, setShowFournisseurModal] = useState(false);
-  const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,14 +55,16 @@ export default function NewAchatPage() {
     let cancelled = false;
     async function load() {
       try {
-        const [pRes, frRes] = await Promise.all([
+        const [pRes, frRes, eRes] = await Promise.all([
           authedFetch("/api/v1/projects?limit=500"),
-          authedFetch("/api/v1/fournisseurs?limit=500")
+          authedFetch("/api/v1/fournisseurs?limit=500"),
+          authedFetch("/api/v1/employes?limit=500")
         ]);
         if (!cancelled) {
           if (pRes.ok) setProjects((await pRes.json()) as Project[]);
           if (frRes.ok)
             setFournisseurs((await frRes.json()) as Fournisseur[]);
+          if (eRes.ok) setEmployes((await eRes.json()) as Employe[]);
         }
       } catch {
         /* ignore */
@@ -83,21 +81,15 @@ export default function NewAchatPage() {
     setError(null);
     setSubmitting(true);
     try {
-      const payload: Record<string, unknown> = {
-        // Achat direct = received dès la création
-        status: "received"
-      };
+      const payload: Record<string, unknown> = {};
       if (projectId) payload.project_id = Number(projectId);
       if (fournisseurId) payload.fournisseur_id = Number(fournisseurId);
       if (description.trim()) payload.description = description.trim();
-      if (amount) payload.amount = Number(amount);
+      if (amountMax) payload.amount_max = Number(amountMax);
+      if (assignedEmpId) payload.assigned_employe_id = Number(assignedEmpId);
       if (paymentMethod) payload.payment_method = paymentMethod;
-      if (supplierInvoiceNumber.trim()) {
-        payload.supplier_invoice_number = supplierInvoiceNumber.trim();
-      }
-      if (invoiceDate) payload.invoice_date = invoiceDate;
 
-      const res = await authedFetch("/api/v1/achats", {
+      const res = await authedFetch("/api/v1/purchase-orders", {
         method: "POST",
         body: JSON.stringify(payload)
       });
@@ -106,24 +98,7 @@ export default function NewAchatPage() {
         throw new Error(txt.slice(0, 240) || `http_${res.status}`);
       }
       const created = (await res.json()) as { id: number };
-
-      if (receiptFile) {
-        const fd = new FormData();
-        fd.append("file", receiptFile, receiptFile.name);
-        const up = await authedFetch(
-          `/api/v1/achats/${created.id}/receipt`,
-          { method: "POST", body: fd }
-        );
-        if (!up.ok && up.status !== 204) {
-          const txt = await up.text();
-          setError(
-            "Achat créé, mais l'upload du reçu a échoué : " +
-              (txt.slice(0, 200) || `http_${up.status}`)
-          );
-        }
-      }
-
-      router.replace(`/app/achats/${created.id}`);
+      router.replace(`/app/po/${created.id}`);
     } catch (err) {
       setError((err as Error).message);
       setSubmitting(false);
@@ -135,7 +110,7 @@ export default function NewAchatPage() {
       <AppTopbar
         breadcrumbs={[
           { label: "Construction", href: "/app" },
-          { label: "Achats / dépenses", href: "/app/achats" },
+          { label: "Bons de commande", href: "/app/po" },
           { label: "Nouveau" }
         ]}
         onOpenSidebar={onOpenSidebar}
@@ -144,19 +119,19 @@ export default function NewAchatPage() {
       <div className="p-4 lg:p-6">
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={"/app/achats" as any}
+          href={"/app/po" as any}
           className="inline-flex items-center text-sm text-white/70 hover:text-accent-500"
         >
-          <ArrowLeft className="mr-1 h-4 w-4" /> Retour aux achats
+          <ArrowLeft className="mr-1 h-4 w-4" /> Retour aux PO
         </Link>
 
         <h1 className="mt-6 text-2xl font-bold text-white">
-          Nouvel achat (sans PO)
+          Nouveau bon de commande
         </h1>
         <p className="mt-1 text-sm text-white/60">
-          Saisi directement avec la facture du fournisseur. Si tu as un
-          PO existant, ouvre-le et clique « Convertir en achat » pour
-          conserver le lien.
+          Le numéro PO sera attribué automatiquement (suite alignée
+          sur ta numérotation QuickBooks). Aucun impact comptable
+          tant qu&apos;un Achat n&apos;est pas créé à partir de ce PO.
         </p>
 
         <form onSubmit={onSubmit} className="mt-6 max-w-2xl space-y-5">
@@ -178,6 +153,10 @@ export default function NewAchatPage() {
                   </option>
                 ))}
               </select>
+              <p className="mt-1 text-[11px] text-white/50">
+                Vide = matériaux généraux (caulking, vis, outils
+                partagés).
+              </p>
             </div>
             <div>
               <label htmlFor="fournisseur" className="label">
@@ -209,51 +188,28 @@ export default function NewAchatPage() {
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label htmlFor="sin" className="label">
-                # facture fournisseur
+              <label htmlFor="ae" className="label">
+                Employé assigné
               </label>
-              <input
-                id="sin"
-                type="text"
-                value={supplierInvoiceNumber}
-                onChange={(e) => setSupplierInvoiceNumber(e.target.value)}
-                placeholder="Ex. RNS-204582"
+              <select
+                id="ae"
+                value={assignedEmpId}
+                onChange={(e) => setAssignedEmpId(e.target.value)}
                 className="input"
-              />
+              >
+                <option value="">— Aucun —</option>
+                {employes
+                  .filter((e) => e.active !== false)
+                  .map((e) => (
+                    <option key={e.id} value={String(e.id)}>
+                      {e.full_name}
+                    </option>
+                  ))}
+              </select>
               <p className="mt-1 text-[11px] text-white/50">
-                Apparaît comme DocNumber dans QuickBooks pour
-                rapprochement.
+                Recevra le PO par courriel quand tu cliques sur
+                « Envoyer le PO ».
               </p>
-            </div>
-            <div>
-              <label htmlFor="idate" className="label">
-                Date de facture
-              </label>
-              <input
-                id="idate"
-                type="date"
-                value={invoiceDate}
-                onChange={(e) => setInvoiceDate(e.target.value)}
-                className="input"
-              />
-            </div>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label htmlFor="amount" className="label">
-                Montant (CAD)
-              </label>
-              <input
-                id="amount"
-                type="number"
-                step="0.01"
-                min="0"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="0.00"
-                className="input"
-              />
             </div>
             <div>
               <label htmlFor="apm" className="label">
@@ -272,26 +228,46 @@ export default function NewAchatPage() {
                   </option>
                 ))}
               </select>
+              <p className="mt-1 text-[11px] text-white/50">
+                Pré-rempli sur l&apos;Achat dérivé. Détermine le
+                routage QB (Bill ou Purchase).
+              </p>
             </div>
           </div>
 
           <div>
             <label htmlFor="description" className="label">
-              Description
+              Description / matériel
             </label>
             <input
               id="description"
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Ex. Bois traité 2x4, vis 2 1/2 (boîte)…"
+              placeholder="Ex. 70 tubes caulking, vis 2 1/2 (2 boîtes)…"
               className="input"
             />
           </div>
 
           <div>
-            <label className="label">Facture / reçu (optionnel)</label>
-            <ReceiptScanner value={receiptFile} onChange={setReceiptFile} />
+            <label htmlFor="amount_max" className="label">
+              Montant max autorisé (CAD)
+            </label>
+            <input
+              id="amount_max"
+              type="number"
+              step="0.01"
+              min="0"
+              value={amountMax}
+              onChange={(e) => setAmountMax(e.target.value)}
+              placeholder="0.00"
+              className="input sm:w-48"
+            />
+            <p className="mt-1 text-[11px] text-white/50">
+              Plafond budgétaire indicatif pour l&apos;employé. Le
+              montant réel sera saisi sur l&apos;Achat à la
+              conversion.
+            </p>
           </div>
 
           {error ? <p className="text-sm text-rose-400">{error}</p> : null}
@@ -307,12 +283,12 @@ export default function NewAchatPage() {
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Création…
                 </>
               ) : (
-                "Créer l'achat"
+                "Créer le PO"
               )}
             </button>
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              href={"/app/achats" as any}
+              href={"/app/po" as any}
               className="btn-secondary text-sm"
             >
               Annuler

@@ -27,16 +27,14 @@ type Project = { id: number; name: string };
 type Fournisseur = { id: number; name: string };
 
 const STATUS_LABELS: Record<string, string> = {
-  draft: "Brouillon",
-  ordered: "Commandé",
   received: "Reçu",
+  paid: "Payé",
   cancelled: "Annulé"
 };
 
 const STATUS_CLASS: Record<string, string> = {
-  draft: "bg-white/10 text-white",
-  ordered: "bg-blue-500/20 text-blue-300",
-  received: "bg-emerald-500/20 text-emerald-300",
+  received: "bg-amber-500/20 text-amber-300",
+  paid: "bg-emerald-500/20 text-emerald-300",
   cancelled: "bg-white/5 text-white/50"
 };
 
@@ -141,7 +139,7 @@ export default function AchatsPage() {
   return (
     <>
       <AppTopbar
-        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Achats / PO" }]}
+        breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Achats / dépenses" }]}
         onOpenSidebar={onOpenSidebar}
         onSearch={setSearch}
         searchPlaceholder="Référence, description…"
@@ -170,9 +168,8 @@ export default function AchatsPage() {
           {(
             [
               { value: "", label: "Tous" },
-              { value: "draft", label: "Planifiés" },
-              { value: "ordered", label: "PO envoyés" },
-              { value: "received", label: "Reçus" }
+              { value: "received", label: "Reçus / à payer" },
+              { value: "paid", label: "Payés" }
             ] as const
           ).map((tab) => {
             const count =

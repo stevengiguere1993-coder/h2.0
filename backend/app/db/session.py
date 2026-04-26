@@ -188,7 +188,11 @@ async def init_db() -> None:
             # Purchase).
             ("achats", "assigned_employe_id", "INTEGER"),
             ("achats", "payment_method", "VARCHAR(32)"),
-            # Table de mapping mode de paiement → compte QBO.
+            # Refonte PO/Achat (Avril 2026) — Achat = vraie transaction.
+            ("achats", "purchase_order_id", "INTEGER"),
+            ("achats", "supplier_invoice_number", "VARCHAR(64)"),
+            ("achats", "invoice_date", "DATE"),
+            ("achats", "paid_at", "TIMESTAMP WITH TIME ZONE"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
@@ -215,6 +219,9 @@ async def init_db() -> None:
         # ALTER ... DROP NOT NULL is idempotent on PostgreSQL.
         for table, column in (
             ("projects", "client_id"),
+            # Le modèle Achat ne sépare plus PO et achat ; le champ
+            # reference n'est plus obligatoire.
+            ("achats", "reference"),
         ):
             try:
                 await conn.execute(
@@ -223,6 +230,55 @@ async def init_db() -> None:
             except Exception:
                 # Column may not exist yet on a brand-new DB — harmless.
                 pass
+
+        # Refonte PO/Achat (Avril 2026) : sépare proprement les bons
+        # de commande (en planification) des achats (transactions
+        # comptables). Migre les anciens « achats » qui étaient en
+        # réalité des POs (status draft/ordered, jamais reçus) vers
+        # la nouvelle table purchase_orders, puis les supprime de la
+        # table achats. Idempotent : un second run ne trouve plus de
+        # candidats à migrer.
+        try:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO purchase_orders (
+                        reference, fournisseur_id, project_id,
+                        assigned_employe_id, description, amount_max,
+                        payment_method, status, sent_at, notes,
+                        created_at, updated_at
+                    )
+                    SELECT
+                        reference, fournisseur_id, project_id,
+                        assigned_employe_id, description, amount,
+                        payment_method,
+                        CASE
+                            WHEN status = 'ordered' THEN 'sent'
+                            WHEN status = 'draft'   THEN 'draft'
+                            ELSE 'cancelled'
+                        END,
+                        ordered_at, notes,
+                        COALESCE(created_at, NOW()),
+                        COALESCE(updated_at, NOW())
+                    FROM achats
+                    WHERE status IN ('draft', 'ordered')
+                       OR (status = 'cancelled' AND received_at IS NULL)
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM achats
+                    WHERE status IN ('draft', 'ordered')
+                       OR (status = 'cancelled' AND received_at IS NULL)
+                    """
+                )
+            )
+        except Exception:
+            # Tables ou colonnes absentes au tout premier boot — sera
+            # ré-essayé au démarrage suivant.
+            pass
 
         # Backfill des tables de jointure pour les assignations
         # multi-personnes sur phases et tâches. Idempotent : ON CONFLICT

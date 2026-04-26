@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -336,52 +336,97 @@ class FactureRead(_Base):
 
 
 # ---------- Achat ----------
-class AchatCreate(BaseModel):
+class PurchaseOrderCreate(BaseModel):
     # Optionnel : si non fourni, l'endpoint utilise next_po_number
-    # pour attribuer un PO-XXXX séquentiel.
+    # pour attribuer une référence PO-XXXX séquentielle.
     reference: Optional[str] = Field(default=None, max_length=32)
     fournisseur_id: Optional[int] = None
     project_id: Optional[int] = None
-    description: Optional[str] = None
-    amount: Optional[float] = None
     assigned_employe_id: Optional[int] = None
+    description: Optional[str] = None
+    amount_max: Optional[float] = None
     payment_method: Optional[str] = Field(default=None, max_length=32)
+    notes: Optional[str] = None
     status: Optional[str] = Field(default=None, max_length=32)
 
 
-class AchatUpdate(BaseModel):
-    description: Optional[str] = None
-    amount: Optional[float] = None
-    status: Optional[str] = None
-    ordered_at: Optional[datetime] = None
-    received_at: Optional[datetime] = None
-    receipt_url: Optional[str] = None
-    notes: Optional[str] = None
+class PurchaseOrderUpdate(BaseModel):
     fournisseur_id: Optional[int] = None
     project_id: Optional[int] = None
     assigned_employe_id: Optional[int] = None
+    description: Optional[str] = None
+    amount_max: Optional[float] = None
     payment_method: Optional[str] = Field(default=None, max_length=32)
+    notes: Optional[str] = None
+    status: Optional[str] = Field(default=None, max_length=32)
+    sent_at: Optional[datetime] = None
 
 
-class AchatRead(_Base):
+class PurchaseOrderRead(_Base):
     id: int
     reference: str
     fournisseur_id: Optional[int]
     project_id: Optional[int]
+    assigned_employe_id: Optional[int]
+    description: Optional[str]
+    amount_max: Optional[float]
+    payment_method: Optional[str]
+    status: str
+    sent_at: Optional[datetime]
+    notes: Optional[str]
+    created_at: datetime
+
+
+class AchatCreate(BaseModel):
+    # Référence interne libre (ex. mémo court). Pas de séquence
+    # automatique pour les achats — voir supplier_invoice_number pour
+    # l'identification comptable.
+    reference: Optional[str] = Field(default=None, max_length=32)
+    purchase_order_id: Optional[int] = None
+    fournisseur_id: Optional[int] = None
+    project_id: Optional[int] = None
+    description: Optional[str] = None
+    amount: Optional[float] = None
+    supplier_invoice_number: Optional[str] = Field(default=None, max_length=64)
+    invoice_date: Optional[date] = None
+    payment_method: Optional[str] = Field(default=None, max_length=32)
+    notes: Optional[str] = None
+    status: Optional[str] = Field(default=None, max_length=32)
+
+
+class AchatUpdate(BaseModel):
+    purchase_order_id: Optional[int] = None
+    description: Optional[str] = None
+    amount: Optional[float] = None
+    status: Optional[str] = None
+    received_at: Optional[datetime] = None
+    paid_at: Optional[datetime] = None
+    receipt_url: Optional[str] = None
+    notes: Optional[str] = None
+    fournisseur_id: Optional[int] = None
+    project_id: Optional[int] = None
+    payment_method: Optional[str] = Field(default=None, max_length=32)
+    supplier_invoice_number: Optional[str] = Field(default=None, max_length=64)
+    invoice_date: Optional[date] = None
+
+
+class AchatRead(_Base):
+    id: int
+    reference: Optional[str]
+    purchase_order_id: Optional[int]
+    fournisseur_id: Optional[int]
+    project_id: Optional[int]
     description: Optional[str]
     amount: Optional[float]
+    supplier_invoice_number: Optional[str]
+    invoice_date: Optional[date]
     status: str
-    ordered_at: Optional[datetime]
     received_at: Optional[datetime]
+    paid_at: Optional[datetime]
     receipt_url: Optional[str]
-    # True when a scanned receipt image is attached (served via
-    # GET /api/v1/achats/{id}/receipt).
     has_receipt_image: bool = False
     receipt_image_content_type: Optional[str] = None
-    # Workflow PO
-    assigned_employe_id: Optional[int] = None
     payment_method: Optional[str] = None
-    # Liaison QuickBooks Online (Bill ou Purchase).
     qbo_bill_id: Optional[str] = None
     qbo_doc_number: Optional[str] = None
     notes: Optional[str]
