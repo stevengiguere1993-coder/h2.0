@@ -213,7 +213,10 @@ export default function SoumissionsPage() {
                       {fmtMoney(
                         cards.reduce(
                           (sum, s) =>
-                            sum + Number(s.total ?? s.subtotal ?? 0),
+                            sum +
+                            (Number(s.total) > 0
+                              ? Number(s.total)
+                              : Number(s.subtotal || 0)),
                           0
                         )
                       )}
@@ -299,7 +302,9 @@ function SoumissionCard({
         </p>
         <div className="mt-3 flex items-center justify-between">
           <span className="text-sm font-bold text-white">
-            {fmtMoney(s.total ?? s.subtotal)}
+            {fmtMoney(
+              Number(s.total) > 0 ? s.total : s.subtotal
+            )}
           </span>
           <span className="text-[10px] text-white/40">
             {new Date(s.created_at).toLocaleDateString("fr-CA", {
