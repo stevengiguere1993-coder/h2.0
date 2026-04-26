@@ -19,6 +19,7 @@ import {
   Truck,
   UserCircle,
   Users,
+  Wallet,
   X
 } from "lucide-react";
 
@@ -44,6 +45,7 @@ const CONSTRUCTION_NAV: NavItem[] = [
   { href: "/app/agenda", label: "Agenda", icon: Calendar, minRole: "employee" },
   { href: "/app/bons", label: "Bons de travail", icon: ClipboardCheck, minRole: "manager" },
   { href: "/app/punch", label: "Punch / Temps", icon: Clock, minRole: "manager" },
+  { href: "/app/paie", label: "Paie (bi-hebdo)", icon: Wallet, minRole: "manager" },
   { href: "/app/facturation", label: "Facturation", icon: DollarSign, minRole: "manager" },
   { href: "/app/po", label: "Bons de commande (PO)", icon: ClipboardCheck, minRole: "manager" },
   { href: "/app/achats", label: "Achats / dépenses", icon: ShoppingCart, minRole: "manager" }
