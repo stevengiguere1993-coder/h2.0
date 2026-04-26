@@ -36,10 +36,13 @@ export default function NewPurchaseOrderPage() {
   const router = useNextRouter();
   const searchParams = useSearchParams();
   const prefilledProjectId = searchParams.get("project_id");
+  const phaseHint = searchParams.get("phase_hint");
 
   const [projectId, setProjectId] = useState(prefilledProjectId || "");
   const [fournisseurId, setFournisseurId] = useState("");
-  const [description, setDescription] = useState("");
+  const [description, setDescription] = useState(
+    phaseHint ? `Phase ${phaseHint} — ` : ""
+  );
   const [amountMax, setAmountMax] = useState("");
   const [assignedEmpId, setAssignedEmpId] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
