@@ -84,6 +84,7 @@ export default function ProspectionDetailPage() {
 
   const [lead, setLead] = useState<Lead | null>(null);
   const [photos, setPhotos] = useState<Photo[]>([]);
+  const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -144,7 +145,30 @@ export default function ProspectionDetailPage() {
       setOwnerPhone(data.owner_phone || "");
       setOwnerNeq(data.owner_neq || "");
       if (photosRes.ok) {
-        setPhotos((await photosRes.json()) as Photo[]);
+        const ps = (await photosRes.json()) as Photo[];
+        setPhotos(ps);
+        // Fetch chaque photo via authedFetch (l'endpoint exige le bearer)
+        // et convertit en blob URL pour pouvoir l'afficher dans <img>.
+        const urls: Record<number, string> = {};
+        await Promise.all(
+          ps.map(async (p) => {
+            try {
+              const r = await authedFetch(
+                `/api/v1/prospection/${id}/photos/${p.id}/content`
+              );
+              if (!r.ok) return;
+              const blob = await r.blob();
+              urls[p.id] = URL.createObjectURL(blob);
+            } catch {
+              /* ignore */
+            }
+          })
+        );
+        setPhotoUrls((prev) => {
+          // Révoque les anciennes URLs avant de remplacer
+          Object.values(prev).forEach((u) => URL.revokeObjectURL(u));
+          return urls;
+        });
       }
     } catch (err) {
       setError((err as Error).message);
@@ -157,6 +181,14 @@ export default function ProspectionDetailPage() {
     if (id) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // Cleanup des blob URLs au démontage
+  useEffect(() => {
+    return () => {
+      Object.values(photoUrls).forEach((u) => URL.revokeObjectURL(u));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function save() {
     if (saving) return;
@@ -205,6 +237,19 @@ export default function ProspectionDetailPage() {
     if (res.ok) {
       const newPhoto = (await res.json()) as Photo;
       setPhotos((prev) => [...prev, newPhoto]);
+      // Pré-charge le blob URL pour la nouvelle photo
+      try {
+        const r = await authedFetch(
+          `/api/v1/prospection/${id}/photos/${newPhoto.id}/content`
+        );
+        if (r.ok) {
+          const blob = await r.blob();
+          const url = URL.createObjectURL(blob);
+          setPhotoUrls((prev) => ({ ...prev, [newPhoto.id]: url }));
+        }
+      } catch {
+        /* ignore */
+      }
     } else {
       setError(`Upload photo échoué (HTTP ${res.status})`);
     }
@@ -224,6 +269,13 @@ export default function ProspectionDetailPage() {
     );
     if (res.ok || res.status === 204) {
       setPhotos((prev) => prev.filter((p) => p.id !== photoId));
+      setPhotoUrls((prev) => {
+        const url = prev[photoId];
+        if (url) URL.revokeObjectURL(url);
+        const next = { ...prev };
+        delete next[photoId];
+        return next;
+      });
     }
   }
 
@@ -597,12 +649,18 @@ export default function ProspectionDetailPage() {
                         key={p.id}
                         className="group relative overflow-hidden rounded-md border border-brand-800 bg-brand-950"
                       >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={`/api/v1/prospection/${id}/photos/${p.id}/content`}
-                          alt={p.caption || `Photo ${p.id}`}
-                          className="h-32 w-full object-cover"
-                        />
+                        {photoUrls[p.id] ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={photoUrls[p.id]}
+                            alt={p.caption || `Photo ${p.id}`}
+                            className="h-32 w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-32 w-full items-center justify-center bg-brand-950 text-[11px] text-white/30">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          </div>
+                        )}
                         <button
                           type="button"
                           onClick={() => deletePhoto(p.id)}
