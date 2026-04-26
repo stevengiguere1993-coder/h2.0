@@ -209,13 +209,29 @@ async def create_lead(
     priority: int = Form(default=3),
     photo: Optional[UploadFile] = File(default=None),
 ) -> LeadRead:
+    final_address = (address or "").strip() or None
+    final_city = (city or "").strip() or None
+    final_postal = (postal_code or "").strip() or None
+
+    # Reverse-geocoding : si on a des coordonnées GPS mais pas d'adresse
+    # encore saisie, on demande à Nominatim (OpenStreetMap, gratuit) de
+    # résoudre lat/lng → adresse + ville + code postal.
+    if lat is not None and lng is not None and not final_address:
+        from app.integrations.nominatim import reverse_geocode
+
+        geo = await reverse_geocode(lat, lng)
+        if geo:
+            final_address = final_address or geo.get("address")
+            final_city = final_city or geo.get("city")
+            final_postal = final_postal or geo.get("postal_code")
+
     lead = ProspectionLead(
         created_by_user_id=user.id,
         name=name.strip(),
         kind=kind,
-        address=(address or "").strip() or None,
-        city=(city or "").strip() or None,
-        postal_code=(postal_code or "").strip() or None,
+        address=final_address,
+        city=final_city,
+        postal_code=final_postal,
         lat=lat,
         lng=lng,
         notes=(notes or "").strip() or None,
@@ -270,6 +286,47 @@ async def update_lead(
     update = data.model_dump(exclude_unset=True)
     for k, v in update.items():
         setattr(lead, k, v)
+    await db.flush()
+    await db.refresh(lead)
+    photos_count = await _photos_count_for(db, lead_id)
+    return _serialize(lead, photos_count)
+
+
+@router.post(
+    "/{lead_id}/resolve-address",
+    response_model=LeadRead,
+    summary="Re-résout l'adresse du lead via Nominatim (lat/lng → adresse).",
+)
+async def resolve_address(
+    lead_id: int, db: DBSession, _: CurrentUser
+) -> LeadRead:
+    """Pour les leads créés en drive-by qui n'avaient pas encore une
+    adresse résolue, ou pour rafraîchir une adresse qui semble fausse.
+    Écrase address/city/postal_code avec ce que retourne OSM."""
+    lead = (
+        await db.execute(
+            select(ProspectionLead).where(ProspectionLead.id == lead_id)
+        )
+    ).scalar_one_or_none()
+    if lead is None:
+        raise HTTPException(404, "Prospect introuvable")
+    if lead.lat is None or lead.lng is None:
+        raise HTTPException(
+            400, "Pas de coordonnées GPS sur ce lead — impossible de résoudre."
+        )
+    from app.integrations.nominatim import reverse_geocode
+
+    geo = await reverse_geocode(float(lead.lat), float(lead.lng))
+    if geo is None:
+        raise HTTPException(
+            502, "Nominatim n'a rien retourné pour ces coordonnées."
+        )
+    if geo.get("address"):
+        lead.address = geo["address"]
+    if geo.get("city"):
+        lead.city = geo["city"]
+    if geo.get("postal_code"):
+        lead.postal_code = geo["postal_code"]
     await db.flush()
     await db.refresh(lead)
     photos_count = await _photos_count_for(db, lead_id)
