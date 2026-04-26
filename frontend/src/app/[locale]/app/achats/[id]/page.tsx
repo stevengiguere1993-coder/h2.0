@@ -37,14 +37,17 @@ type Employe = {
 
 type Achat = {
   id: number;
-  reference: string;
+  reference: string | null;
+  purchase_order_id: number | null;
   fournisseur_id: number | null;
   project_id: number | null;
   description: string | null;
   amount: number | string | null;
   status: string;
-  ordered_at: string | null;
   received_at: string | null;
+  paid_at: string | null;
+  invoice_date: string | null;
+  supplier_invoice_number: string | null;
   receipt_url: string | null;
   has_receipt_image: boolean;
   receipt_image_content_type: string | null;
@@ -52,7 +55,6 @@ type Achat = {
   created_at: string;
   qbo_bill_id: string | null;
   qbo_doc_number: string | null;
-  assigned_employe_id: number | null;
   payment_method: string | null;
 };
 
@@ -60,9 +62,8 @@ type Project = { id: number; name: string };
 type Fournisseur = { id: number; name: string };
 
 const STATUS_LABELS: Record<string, string> = {
-  draft: "Brouillon",
-  ordered: "Commandé",
   received: "Reçu",
+  paid: "Payé",
   cancelled: "Annulé"
 };
 
@@ -91,16 +92,14 @@ export default function AchatDetailPage() {
   const [fournisseurId, setFournisseurId] = useState("");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
-  const [statusStr, setStatusStr] = useState("draft");
-  const [orderedAt, setOrderedAt] = useState("");
+  const [statusStr, setStatusStr] = useState("received");
+  const [invoiceDate, setInvoiceDate] = useState("");
+  const [supplierInvoiceNumber, setSupplierInvoiceNumber] = useState("");
   const [receivedAt, setReceivedAt] = useState("");
   const [receiptUrl, setReceiptUrl] = useState("");
   const [notes, setNotes] = useState("");
-  const [assignedEmpId, setAssignedEmpId] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
   const [showFournisseurModal, setShowFournisseurModal] = useState(false);
-  const [sendingPo, setSendingPo] = useState(false);
-  const [poNotice, setPoNotice] = useState<string | null>(null);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [pendingReceipt, setPendingReceipt] = useState<File | null>(null);
 
@@ -127,13 +126,13 @@ export default function AchatDetailPage() {
         setDescription(data.description || "");
         setAmount(data.amount != null ? String(data.amount) : "");
         setStatusStr(data.status);
-        setOrderedAt(isoToDateInput(data.ordered_at));
+        setInvoiceDate(
+          data.invoice_date ? data.invoice_date.slice(0, 10) : ""
+        );
+        setSupplierInvoiceNumber(data.supplier_invoice_number || "");
         setReceivedAt(isoToDateInput(data.received_at));
         setReceiptUrl(data.receipt_url || "");
         setNotes(data.notes || "");
-        setAssignedEmpId(
-          data.assigned_employe_id ? String(data.assigned_employe_id) : ""
-        );
         setPaymentMethod(data.payment_method || "");
         if (pRes.ok) setProjects((await pRes.json()) as Project[]);
         if (frRes.ok) setFournisseurs((await frRes.json()) as Fournisseur[]);
@@ -158,17 +157,18 @@ export default function AchatDetailPage() {
       description !== (a.description || "") ||
       amount !== (a.amount != null ? String(a.amount) : "") ||
       statusStr !== a.status ||
-      orderedAt !== isoToDateInput(a.ordered_at) ||
+      invoiceDate !==
+        (a.invoice_date ? a.invoice_date.slice(0, 10) : "") ||
+      supplierInvoiceNumber !== (a.supplier_invoice_number || "") ||
       receivedAt !== isoToDateInput(a.received_at) ||
       receiptUrl !== (a.receipt_url || "") ||
       notes !== (a.notes || "") ||
-      assignedEmpId !==
-        (a.assigned_employe_id ? String(a.assigned_employe_id) : "") ||
       paymentMethod !== (a.payment_method || "")
     );
   }, [
     a, projectId, fournisseurId, description, amount, statusStr,
-    orderedAt, receivedAt, receiptUrl, notes, assignedEmpId, paymentMethod
+    invoiceDate, supplierInvoiceNumber, receivedAt, receiptUrl,
+    notes, paymentMethod
   ]);
 
   async function saveAll() {
@@ -180,13 +180,13 @@ export default function AchatDetailPage() {
         description: description.trim() || null,
         amount: amount ? Number(amount) : null,
         status: statusStr,
-        ordered_at: orderedAt ? new Date(orderedAt).toISOString() : null,
+        invoice_date: invoiceDate || null,
+        supplier_invoice_number: supplierInvoiceNumber.trim() || null,
         received_at: receivedAt ? new Date(receivedAt).toISOString() : null,
         receipt_url: receiptUrl.trim() || null,
         notes: notes.trim() || null,
         fournisseur_id: fournisseurId ? Number(fournisseurId) : null,
         project_id: projectId ? Number(projectId) : null,
-        assigned_employe_id: assignedEmpId ? Number(assignedEmpId) : null,
         payment_method: paymentMethod || null
       };
       const res = await authedFetch(`/api/v1/achats/${id}`, {
@@ -303,51 +303,6 @@ export default function AchatDetailPage() {
             <header className="mt-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <h1 className="text-2xl font-bold text-white">{a.reference}</h1>
               <div className="flex flex-wrap items-start gap-2">
-                {a.assigned_employe_id ? (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      setSendingPo(true);
-                      setPoNotice(null);
-                      try {
-                        const res = await authedFetch(
-                          `/api/v1/achats/${id}/send-po`,
-                          {
-                            method: "POST",
-                            body: JSON.stringify({})
-                          }
-                        );
-                        if (!res.ok) {
-                          const t = await res.text();
-                          throw new Error(t.slice(0, 200));
-                        }
-                        const u = (await res.json()) as Achat;
-                        setA(u);
-                        setStatusStr(u.status);
-                        setPoNotice("PO envoyé par courriel.");
-                        setTimeout(() => setPoNotice(null), 4000);
-                      } catch (e) {
-                        setPoNotice(`Échec : ${(e as Error).message}`);
-                      } finally {
-                        setSendingPo(false);
-                      }
-                    }}
-                    disabled={sendingPo || !fournisseurId || !amount}
-                    className="inline-flex items-center gap-2 self-start rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2.5 text-sm font-medium text-blue-200 hover:bg-blue-500/20 disabled:opacity-50"
-                    title={
-                      !fournisseurId || !amount
-                        ? "Fournisseur + montant requis avant d'envoyer le PO"
-                        : "Envoyer le PO par courriel à l'employé assigné"
-                    }
-                  >
-                    {sendingPo ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <ExternalLink className="h-4 w-4" />
-                    )}
-                    Envoyer le PO
-                  </button>
-                ) : null}
                 <AchatQboPushButton
                   achat={a}
                   onSynced={(billId, docNumber) =>
@@ -377,18 +332,6 @@ export default function AchatDetailPage() {
                 </button>
               </div>
             </header>
-
-            {poNotice ? (
-              <p
-                className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
-                  poNotice.startsWith("Échec")
-                    ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
-                    : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-                }`}
-              >
-                {poNotice}
-              </p>
-            ) : null}
 
             {error ? (
               <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
@@ -445,27 +388,19 @@ export default function AchatDetailPage() {
                 </div>
                 <div className="mt-4 grid gap-4 sm:grid-cols-2">
                   <div>
-                    <label htmlFor="ae" className="label">
-                      Employé assigné
+                    <label htmlFor="sin" className="label">
+                      # facture fournisseur
                     </label>
-                    <select
-                      id="ae"
-                      value={assignedEmpId}
-                      onChange={(e) => setAssignedEmpId(e.target.value)}
+                    <input
+                      id="sin"
+                      type="text"
+                      value={supplierInvoiceNumber}
+                      onChange={(e) =>
+                        setSupplierInvoiceNumber(e.target.value)
+                      }
+                      placeholder="Ex. RNS-204582"
                       className="input"
-                    >
-                      <option value="">— Aucun —</option>
-                      {employes
-                        .filter((e) => e.active !== false)
-                        .map((e) => (
-                          <option key={e.id} value={String(e.id)}>
-                            {e.full_name}
-                          </option>
-                        ))}
-                    </select>
-                    <p className="mt-1 text-[11px] text-white/50">
-                      Reçoit le PO par courriel lors de l&apos;envoi.
-                    </p>
+                    />
                   </div>
                   <div>
                     <label htmlFor="apm" className="label">
@@ -537,12 +472,14 @@ export default function AchatDetailPage() {
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div>
-                      <label htmlFor="aord" className="label">Commandé le</label>
+                      <label htmlFor="aidate" className="label">
+                        Date de facture
+                      </label>
                       <input
-                        id="aord"
+                        id="aidate"
                         type="date"
-                        value={orderedAt}
-                        onChange={(e) => setOrderedAt(e.target.value)}
+                        value={invoiceDate}
+                        onChange={(e) => setInvoiceDate(e.target.value)}
                         className="input"
                       />
                     </div>
