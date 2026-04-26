@@ -47,7 +47,14 @@ export default function MobilePlus() {
   }, [isManagerPlus]);
 
   async function logout() {
-    if (!(await confirm("Déconnexion ?"))) return;
+    if (
+      !(await confirm({
+        title: "Se déconnecter ?",
+        confirmLabel: "Déconnexion",
+        destructive: false
+      }))
+    )
+      return;
     setToken(null);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     router.push("/connexion" as any);
