@@ -16,6 +16,16 @@ import { authedFetch } from "@/lib/auth";
 
 type Project = { id: number; name: string };
 type Fournisseur = { id: number; name: string };
+type POMini = {
+  id: number;
+  reference: string;
+  fournisseur_id: number | null;
+  project_id: number | null;
+  payment_method: string | null;
+  description: string | null;
+  amount_max: number | string | null;
+  status: string;
+};
 
 const PAYMENT_OPTIONS = [
   { value: "bill_to_pay", label: "Sur compte fournisseur (à payer plus tard)" },
@@ -40,6 +50,7 @@ export default function NewAchatPage() {
   const searchParams = useSearchParams();
   const prefilledProjectId = searchParams.get("project_id");
 
+  const [purchaseOrderId, setPurchaseOrderId] = useState("");
   const [projectId, setProjectId] = useState(prefilledProjectId || "");
   const [fournisseurId, setFournisseurId] = useState("");
   const [description, setDescription] = useState("");
@@ -50,6 +61,7 @@ export default function NewAchatPage() {
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<POMini[]>([]);
   const [showFournisseurModal, setShowFournisseurModal] = useState(false);
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -59,14 +71,26 @@ export default function NewAchatPage() {
     let cancelled = false;
     async function load() {
       try {
-        const [pRes, frRes] = await Promise.all([
+        const [pRes, frRes, poRes] = await Promise.all([
           authedFetch("/api/v1/projects?limit=500"),
-          authedFetch("/api/v1/fournisseurs?limit=500")
+          authedFetch("/api/v1/fournisseurs?limit=500"),
+          authedFetch("/api/v1/purchase-orders?limit=500")
         ]);
         if (!cancelled) {
           if (pRes.ok) setProjects((await pRes.json()) as Project[]);
           if (frRes.ok)
             setFournisseurs((await frRes.json()) as Fournisseur[]);
+          if (poRes.ok) {
+            const pos = (await poRes.json()) as POMini[];
+            // Filtre : seulement les POs encore actifs (pas annulés
+            // ni déjà convertis), pour ne pas polluer la liste.
+            setPurchaseOrders(
+              pos.filter(
+                (po) =>
+                  po.status !== "cancelled" && po.status !== "fulfilled"
+              )
+            );
+          }
         }
       } catch {
         /* ignore */
@@ -87,6 +111,8 @@ export default function NewAchatPage() {
         // Achat direct = received dès la création
         status: "received"
       };
+      if (purchaseOrderId)
+        payload.purchase_order_id = Number(purchaseOrderId);
       if (projectId) payload.project_id = Number(projectId);
       if (fournisseurId) payload.fournisseur_id = Number(fournisseurId);
       if (description.trim()) payload.description = description.trim();
@@ -151,15 +177,61 @@ export default function NewAchatPage() {
         </Link>
 
         <h1 className="mt-6 text-2xl font-bold text-white">
-          Nouvel achat (sans PO)
+          Nouvel achat
         </h1>
         <p className="mt-1 text-sm text-white/60">
-          Saisi directement avec la facture du fournisseur. Si tu as un
-          PO existant, ouvre-le et clique « Convertir en achat » pour
-          conserver le lien.
+          Saisis l&apos;achat directement avec la facture du fournisseur.
+          Lie-le à un PO existant si applicable, ou laisse vide pour un
+          achat « on-the-fly ».
         </p>
 
         <form onSubmit={onSubmit} className="mt-6 max-w-2xl space-y-5">
+          <div>
+            <label htmlFor="po_source" className="label">
+              PO source (optionnel)
+            </label>
+            <select
+              id="po_source"
+              value={purchaseOrderId}
+              onChange={(e) => {
+                const v = e.target.value;
+                setPurchaseOrderId(v);
+                if (v) {
+                  // Pré-remplit depuis le PO sélectionné
+                  const po = purchaseOrders.find(
+                    (p) => String(p.id) === v
+                  );
+                  if (po) {
+                    if (po.fournisseur_id)
+                      setFournisseurId(String(po.fournisseur_id));
+                    if (po.project_id)
+                      setProjectId(String(po.project_id));
+                    if (po.payment_method)
+                      setPaymentMethod(po.payment_method);
+                    if (po.description && !description)
+                      setDescription(po.description);
+                    if (po.amount_max != null && !amount)
+                      setAmount(String(po.amount_max));
+                  }
+                }
+              }}
+              className="input"
+            >
+              <option value="">— Aucun (achat on-the-fly) —</option>
+              {purchaseOrders.map((po) => (
+                <option key={po.id} value={String(po.id)}>
+                  {po.reference}
+                  {po.description ? ` — ${po.description.slice(0, 40)}` : ""}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-[11px] text-white/50">
+              Lie cet achat à un bon de commande existant pour pré-
+              remplir fournisseur, projet et mode de paiement. Le PO
+              passe en « Convertis en achat » à la création.
+            </p>
+          </div>
+
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <label htmlFor="project" className="label">
@@ -210,20 +282,53 @@ export default function NewAchatPage() {
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <label htmlFor="sin" className="label">
-                # facture fournisseur
+                {purchaseOrderId
+                  ? "Numéro de PO (lié)"
+                  : "# facture fournisseur"}
               </label>
-              <input
-                id="sin"
-                type="text"
-                value={supplierInvoiceNumber}
-                onChange={(e) => setSupplierInvoiceNumber(e.target.value)}
-                placeholder="Ex. RNS-204582"
-                className="input"
-              />
+              {purchaseOrderId ? (
+                <div className="input flex items-center gap-2 bg-brand-950/60 font-mono text-sm">
+                  <span className="text-accent-300">
+                    {purchaseOrders.find(
+                      (po) => String(po.id) === purchaseOrderId
+                    )?.reference || "—"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPurchaseOrderId("")}
+                    className="ml-auto text-[11px] text-white/40 underline decoration-dotted hover:text-white"
+                  >
+                    Délier
+                  </button>
+                </div>
+              ) : (
+                <input
+                  id="sin"
+                  type="text"
+                  value={supplierInvoiceNumber}
+                  onChange={(e) =>
+                    setSupplierInvoiceNumber(e.target.value)
+                  }
+                  placeholder="Ex. RNS-204582"
+                  className="input"
+                />
+              )}
               <p className="mt-1 text-[11px] text-white/50">
-                Apparaît comme DocNumber dans QuickBooks pour
-                rapprochement.
+                {purchaseOrderId
+                  ? "Le numéro de PO sera utilisé comme DocNumber dans QuickBooks. Tu peux quand même ajouter le # facture fournisseur si tu l'as."
+                  : "Apparaît comme DocNumber dans QuickBooks pour rapprochement."}
               </p>
+              {purchaseOrderId ? (
+                <input
+                  type="text"
+                  value={supplierInvoiceNumber}
+                  onChange={(e) =>
+                    setSupplierInvoiceNumber(e.target.value)
+                  }
+                  placeholder="# facture fournisseur (optionnel)"
+                  className="input mt-2"
+                />
+              ) : null}
             </div>
             <div>
               <label htmlFor="idate" className="label">
