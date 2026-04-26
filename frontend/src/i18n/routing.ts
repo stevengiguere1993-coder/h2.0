@@ -148,6 +148,14 @@ export const routing = defineRouting({
       fr: "/app/parametres",
       en: "/app/parametres"
     },
+    "/app/prospection": {
+      fr: "/app/prospection",
+      en: "/app/prospection"
+    },
+    "/app/prospection/[id]": {
+      fr: "/app/prospection/[id]",
+      en: "/app/prospection/[id]"
+    },
     "/app/paie": {
       fr: "/app/paie",
       en: "/app/paie"
@@ -163,6 +171,7 @@ export const routing = defineRouting({
     "/m": { fr: "/m", en: "/m" },
     "/prospection": { fr: "/prospection", en: "/prospection" },
     "/m/agenda": { fr: "/m/agenda", en: "/m/agenda" },
+    "/m/prospection": { fr: "/m/prospection", en: "/m/prospection" },
     "/m/punch": { fr: "/m/punch", en: "/m/punch" },
     "/m/ops": { fr: "/m/ops", en: "/m/ops" },
     "/m/projets": { fr: "/m/projets", en: "/m/projets" },

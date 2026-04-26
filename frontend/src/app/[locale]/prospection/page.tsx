@@ -1,10 +1,23 @@
 "use client";
 
-import { ArrowLeft, Construction, MapPin } from "lucide-react";
+import { useEffect } from "react";
+import { ArrowLeft, Construction, MapPin, Smartphone } from "lucide-react";
 
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
+import { getToken } from "@/lib/auth";
 
-export default function ProspectionPlaceholderPage() {
+export default function ProspectionLandingPage() {
+  const router = useRouter();
+
+  useEffect(() => {
+    // Si déjà loggé : rediriger vers la PWA mobile (drive-by)
+    const token = getToken();
+    if (token) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      router.replace("/m/prospection" as any);
+    }
+  }, [router]);
+
   return (
     <main className="flex min-h-screen flex-col bg-brand-950 text-white">
       <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-4 py-12">
