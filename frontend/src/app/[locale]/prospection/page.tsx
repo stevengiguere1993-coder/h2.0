@@ -10,11 +10,14 @@ export default function ProspectionLandingPage() {
   const router = useRouter();
 
   useEffect(() => {
-    // Si déjà loggé : rediriger vers la PWA mobile (drive-by)
+    // Si déjà loggé : rediriger vers la bonne version selon la taille
+    // d'écran. Mobile (< 768px) → PWA drive-by. Desktop → carte.
     const token = getToken();
     if (token) {
+      const isMobile =
+        typeof window !== "undefined" && window.innerWidth < 768;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      router.replace("/m/prospection" as any);
+      router.replace((isMobile ? "/m/prospection" : "/app/prospection") as any);
     }
   }, [router]);
 
