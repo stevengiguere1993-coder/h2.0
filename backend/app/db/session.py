@@ -156,6 +156,8 @@ async def init_db() -> None:
             ("project_phases", "assignee_employe_id", "INTEGER"),
             ("project_phases", "assignee_sous_traitant_id", "INTEGER"),
             ("projects", "estimated_hours_override", "NUMERIC(8, 2)"),
+            # Auto-classification des achats QB par fournisseur.
+            ("fournisseurs", "qbo_expense_account", "VARCHAR(255)"),
             (
                 "leave_requests",
                 "kind",

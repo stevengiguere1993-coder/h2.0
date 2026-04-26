@@ -252,9 +252,21 @@ async def _resolve_payment_account(
     return str(acc.get("Id")) if acc else None
 
 
-async def _resolve_expense_account(db, qbo) -> Optional[str]:
-    """Compte de dépense par défaut (configuré dans /app/parametres,
-    ou premier compte d'expense disponible)."""
+async def _resolve_expense_account(
+    db, qbo, fournisseur: Optional[Fournisseur] = None
+) -> Optional[str]:
+    """Compte de dépense à utiliser pour la ligne d'achat.
+
+    Priorité :
+    1. fournisseur.qbo_expense_account (auto-classification par
+       fournisseur — ex. Rona → Matériaux)
+    2. QboAccountMap.default_expense_account (fallback global)
+    3. Premier compte d'expense disponible côté QB (dernier recours)
+    """
+    if fournisseur and fournisseur.qbo_expense_account:
+        acc = await qbo.find_account_by_name(fournisseur.qbo_expense_account)
+        if acc:
+            return str(acc.get("Id"))
     map_row = (
         await db.execute(
             select(QboAccountMap).where(QboAccountMap.id == 1)
@@ -347,7 +359,9 @@ async def sync_achat_to_qbo(
         if not vendor_id:
             raise AchatSyncError("QBO n'a pas retourné d'id vendor.")
 
-        expense_account_id = await _resolve_expense_account(db, qbo)
+        expense_account_id = await _resolve_expense_account(
+            db, qbo, fournisseur=fournisseur
+        )
         if not expense_account_id:
             raise AchatSyncError(
                 "Aucun compte de dépense disponible côté QBO. "

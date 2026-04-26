@@ -80,6 +80,7 @@ class FournisseurCreate(BaseModel):
     category: Optional[str] = None
     website: Optional[str] = None
     notes: Optional[str] = None
+    qbo_expense_account: Optional[str] = Field(default=None, max_length=255)
 
 
 class FournisseurUpdate(BaseModel):
@@ -91,6 +92,7 @@ class FournisseurUpdate(BaseModel):
     website: Optional[str] = None
     active: Optional[bool] = None
     notes: Optional[str] = None
+    qbo_expense_account: Optional[str] = Field(default=None, max_length=255)
 
 
 class FournisseurRead(_Base):
@@ -103,6 +105,7 @@ class FournisseurRead(_Base):
     website: Optional[str]
     active: bool
     notes: Optional[str]
+    qbo_expense_account: Optional[str] = None
     created_at: datetime
 
 
