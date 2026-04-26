@@ -563,20 +563,6 @@ export default function AchatDetailPage() {
                     </button>
                   ) : null}
                 </div>
-
-                <div className="mt-4 border-t border-brand-800 pt-4">
-                  <label htmlFor="aurl" className="label">
-                    Ou URL externe vers le reçu
-                  </label>
-                  <input
-                    id="aurl"
-                    type="url"
-                    value={receiptUrl}
-                    onChange={(e) => setReceiptUrl(e.target.value)}
-                    placeholder="https://…"
-                    className="input"
-                  />
-                </div>
               </section>
 
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
