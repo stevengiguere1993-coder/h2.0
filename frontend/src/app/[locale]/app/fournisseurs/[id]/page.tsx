@@ -20,6 +20,7 @@ type Fournisseur = {
   website: string | null;
   active: boolean;
   notes: string | null;
+  qbo_expense_account: string | null;
   created_at: string;
 };
 
@@ -44,6 +45,7 @@ export default function FournisseurDetailPage() {
   const [website, setWebsite] = useState("");
   const [active, setActive] = useState(true);
   const [notes, setNotes] = useState("");
+  const [qboExpenseAccount, setQboExpenseAccount] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -64,6 +66,7 @@ export default function FournisseurDetailPage() {
         setWebsite(data.website || "");
         setActive(data.active);
         setNotes(data.notes || "");
+        setQboExpenseAccount(data.qbo_expense_account || "");
       } catch {
         if (!cancelled) setError("Fournisseur introuvable.");
       } finally {
@@ -86,9 +89,21 @@ export default function FournisseurDetailPage() {
       category !== (f.category || "") ||
       website !== (f.website || "") ||
       active !== f.active ||
-      notes !== (f.notes || "")
+      notes !== (f.notes || "") ||
+      qboExpenseAccount !== (f.qbo_expense_account || "")
     );
-  }, [f, name, contactName, email, phone, category, website, active, notes]);
+  }, [
+    f,
+    name,
+    contactName,
+    email,
+    phone,
+    category,
+    website,
+    active,
+    notes,
+    qboExpenseAccount
+  ]);
 
   async function saveAll() {
     if (!f) return;
@@ -103,7 +118,8 @@ export default function FournisseurDetailPage() {
         category: category.trim() || null,
         website: website.trim() || null,
         active,
-        notes: notes.trim() || null
+        notes: notes.trim() || null,
+        qbo_expense_account: qboExpenseAccount.trim() || null
       };
       const res = await authedFetch(`/api/v1/fournisseurs/${id}`, {
         method: "PATCH",
@@ -260,6 +276,30 @@ export default function FournisseurDetailPage() {
                     />
                   </div>
                 </div>
+              </section>
+
+              <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                  QuickBooks
+                </h2>
+                <label htmlFor="qboacc" className="label mt-3">
+                  Compte de dépense par défaut
+                </label>
+                <input
+                  id="qboacc"
+                  type="text"
+                  value={qboExpenseAccount}
+                  onChange={(e) => setQboExpenseAccount(e.target.value)}
+                  placeholder="Ex. Matériaux et fournitures"
+                  className="input"
+                />
+                <p className="mt-1 text-[11px] text-white/50">
+                  Nom EXACT (sensible aux accents et à la casse) du
+                  compte du Plan comptable QuickBooks. Tous les achats
+                  de ce fournisseur seront classés ici automatiquement.
+                  Vide = compte par défaut global (Paramètres → Comptes
+                  QuickBooks).
+                </p>
               </section>
 
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
