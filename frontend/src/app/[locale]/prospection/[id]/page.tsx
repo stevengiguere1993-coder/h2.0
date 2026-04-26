@@ -87,6 +87,7 @@ export default function ProspectionDetailPage() {
   const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [resolving, setResolving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Champs éditables
@@ -224,6 +225,28 @@ export default function ProspectionDetailPage() {
       setError((err as Error).message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function resolveAddress() {
+    if (resolving) return;
+    setResolving(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/${id}/resolve-address`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      // Recharge le lead complet pour rafraîchir les champs visibles
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setResolving(false);
     }
   }
 
@@ -445,11 +468,23 @@ export default function ProspectionDetailPage() {
                     </div>
                   </div>
                   {lead.lat != null && lead.lng != null ? (
-                    <p className="flex items-center gap-1 text-[11px] text-white/50">
-                      <MapPin className="h-3 w-3" />
-                      GPS : {lead.lat.toFixed(5)},{" "}
-                      {lead.lng.toFixed(5)}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="flex items-center gap-1 text-[11px] text-white/50">
+                        <MapPin className="h-3 w-3" />
+                        GPS : {lead.lat.toFixed(5)},{" "}
+                        {lead.lng.toFixed(5)}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={resolveAddress}
+                        disabled={resolving}
+                        className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                      >
+                        {resolving
+                          ? "Résolution…"
+                          : "Résoudre l'adresse via OSM"}
+                      </button>
+                    </div>
                   ) : null}
                 </div>
               </section>
