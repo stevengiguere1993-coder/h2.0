@@ -1,20 +1,26 @@
-"""Import one-shot des données Monday → h2.0.
+"""Import one-shot Monday → h2.0 (v3).
 
-À exécuter UNE FOIS via Render Shell après avoir mis MONDAY_TOKEN dans
-les env vars du service backend :
+Source de vérité par board :
+- Clients (42 items)         → filtrés à ceux liés à au moins une
+                                 CRM Soumission. Si lié à un Devis
+                                 « accepte » → h2.0 Client, sinon
+                                 → h2.0 ContactRequest (prospect).
+- Devis clients (9 items)    → h2.0 Soumission avec vrai numéro
+                                 (1001..1010), montant, QB Estimate
+                                 ID + URL.
+- CRM Soumissions (15 items) → importé en h2.0 Soumission DRAFT
+                                 SEULEMENT pour les statuts pré-
+                                 devis (En préparation, Visite
+                                 planifiée/effectuée). Les autres
+                                 sont couverts par les Devis.
+- Projets (15 items)         → h2.0 Project lié au Client.
 
+Idempotent via --reset (efface tout import Monday précédent).
+
+Usage Render Shell :
     cd /opt/render/project/src/backend
-    python -m scripts.import_monday
-
-Idempotent : ré-exécutable sans créer de doublons (dédup par nom).
-
-Mappings :
-- CRM Soumissions board (15 items) → ContactRequest + Soumission
-  Si statut « Convertie en projet » → ajoute Client + Project liés.
-- Calendrier de construction (6 items) → Project standalone
-
-Après l'import : supprime le fichier, retire MONDAY_TOKEN des env vars,
-révoque le token côté Monday.
+    python -m scripts.import_monday --dry-run --reset
+    python -m scripts.import_monday --reset
 """
 
 from __future__ import annotations
@@ -24,14 +30,12 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# Permet de lancer ce module en standalone : ajoute le répertoire
-# parent (backend/) au sys.path pour résoudre `app.*`.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.db.session import AsyncSessionLocal  # noqa: E402
@@ -45,39 +49,72 @@ from app.models.project import Project, ProjectStatus  # noqa: E402
 from app.models.soumission import Soumission, SoumissionStatus  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Constantes Monday
+# Boards Monday — Horizon Construction
 # ---------------------------------------------------------------------------
 
 MONDAY_API_URL = "https://api.monday.com/v2"
-BOARD_CRM_SOUMISSIONS = 18400565505
-BOARD_CALENDRIER = 18399084844
+BOARD_CLIENTS = 18398667742          # 42 items
+BOARD_PROJETS = 18398627396          # 15 items
+BOARD_CRM_SOUMISSIONS = 18400565505  # 15 items
+BOARD_DEVIS = 18399132469            # 9 items
 
-# Mapping statut Monday → statut h2.0 ContactRequest
-CRM_STATUS_MAP = {
-    "Convertie en projet": ContactRequestStatus.WON,
-    "En attente de décision": ContactRequestStatus.QUOTED,
-    "En préparation": ContactRequestStatus.QUALIFIED,
-    "Relance 1": ContactRequestStatus.QUOTED,
-    "Relance 2": ContactRequestStatus.QUOTED,
-    "Perdue": ContactRequestStatus.LOST,
-    "Refusée": ContactRequestStatus.LOST,
+# ---------------------------------------------------------------------------
+# Mappings de statut
+# ---------------------------------------------------------------------------
+
+# Statuts Devis
+DEVIS_STATUS_MAP = {
+    "accepte": SoumissionStatus.ACCEPTED,
+    "envoye": SoumissionStatus.SENT,
+    "refusé": SoumissionStatus.REJECTED,
+    "refuse": SoumissionStatus.REJECTED,
+    "expiré": SoumissionStatus.EXPIRED,
+    "expire": SoumissionStatus.EXPIRED,
 }
 
-# Mapping vers SoumissionStatus
-SOUMISSION_STATUS_MAP = {
+# Statuts CRM Soum « pré-devis » : on les importe car ils ne
+# correspondent pas encore à un Devis formalisé.
+CRM_PRE_DEVIS_STATUSES = {
+    "En préparation",
+    "En preparation",
+    "Visite planifiée",
+    "Visite planifiee",
+    "Visite effectuée",
+    "Visite effectuee",
+}
+
+CRM_SOUMISSION_STATUS_MAP = {
     "Convertie en projet": SoumissionStatus.ACCEPTED,
+    "Acceptée": SoumissionStatus.ACCEPTED,
+    "Acceptee": SoumissionStatus.ACCEPTED,
     "En attente de décision": SoumissionStatus.SENT,
+    "Soumission envoyée": SoumissionStatus.SENT,
+    "Soumission envoyee": SoumissionStatus.SENT,
     "En préparation": SoumissionStatus.DRAFT,
+    "En preparation": SoumissionStatus.DRAFT,
+    "Visite effectuée": SoumissionStatus.DRAFT,
+    "Visite effectuee": SoumissionStatus.DRAFT,
+    "Visite planifiée": SoumissionStatus.DRAFT,
+    "Visite planifiee": SoumissionStatus.DRAFT,
     "Relance 1": SoumissionStatus.SENT,
     "Relance 2": SoumissionStatus.SENT,
     "Perdue": SoumissionStatus.REJECTED,
     "Refusée": SoumissionStatus.REJECTED,
 }
 
-# Mapping type projet
+PROJECT_STATUS_MAP = {
+    "Planifié": ProjectStatus.PLANNED,
+    "En cours": ProjectStatus.IN_PROGRESS,
+    "En pause": ProjectStatus.SUSPENDED,
+    "Suspendu": ProjectStatus.SUSPENDED,
+    "Livré": ProjectStatus.DELIVERED,
+    "Terminé": ProjectStatus.DELIVERED,
+}
+
 TYPE_PROJET_MAP = {
     "Residentiel": ProjectType.RENOVATION_COMPLETE,
     "multi-logements": ProjectType.MULTILOGEMENT,
+    "Multilogement": ProjectType.MULTILOGEMENT,
     "Salle de bain": ProjectType.SALLE_BAIN,
     "Cuisine": ProjectType.CUISINE,
 }
@@ -89,7 +126,6 @@ TYPE_PROJET_MAP = {
 
 
 async def monday_query(query: str, token: str) -> Dict[str, Any]:
-    """Appel HTTP à l'API Monday."""
     async with httpx.AsyncClient(timeout=30.0) as http:
         r = await http.post(
             MONDAY_API_URL,
@@ -102,16 +138,95 @@ async def monday_query(query: str, token: str) -> Dict[str, Any]:
         r.raise_for_status()
         data = r.json()
         if "errors" in data:
-            raise RuntimeError(f"Monday API error: {data['errors']}")
+            raise RuntimeError(f"Monday API: {data['errors']}")
         return data["data"]
 
 
+async def fetch_all_items(board_id: int, token: str) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    cursor: Optional[str] = None
+    while True:
+        cursor_arg = f', cursor: "{cursor}"' if cursor else ""
+        query = (
+            f"query {{ boards(ids: [{board_id}]) {{ items_page(limit: 100"
+            f"{cursor_arg}) {{ cursor items {{ id name "
+            "column_values { id text value } } } } }"
+        )
+        data = await monday_query(query, token)
+        page = data["boards"][0]["items_page"]
+        out.extend(page["items"])
+        cursor = page.get("cursor")
+        if not cursor:
+            break
+        await asyncio.sleep(0.5)
+    return out
+
+
 def get_col(item: Dict[str, Any], col_id: str) -> Optional[str]:
-    """Lit la valeur texte d'une colonne d'un item Monday."""
     for cv in item.get("column_values", []):
         if cv.get("id") == col_id:
             return cv.get("text") or None
     return None
+
+
+def get_col_value(item: Dict[str, Any], col_id: str) -> Optional[str]:
+    for cv in item.get("column_values", []):
+        if cv.get("id") == col_id:
+            return cv.get("value")
+    return None
+
+
+def parse_relation_ids(item: Dict[str, Any], col_id: str) -> List[str]:
+    raw = get_col_value(item, col_id)
+    if not raw:
+        return []
+    try:
+        v = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    if isinstance(v, dict):
+        ids = v.get("linkedPulseIds") or []
+        return [
+            str(x.get("linkedPulseId"))
+            for x in ids
+            if x.get("linkedPulseId")
+        ]
+    return []
+
+
+def parse_email(item: Dict[str, Any], col_id: str) -> Optional[str]:
+    raw = get_col_value(item, col_id)
+    if not raw:
+        return None
+    try:
+        v = json.loads(raw)
+        e = v.get("email") if isinstance(v, dict) else None
+        return e.strip().lower() if e else None
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_phone(item: Dict[str, Any], col_id: str) -> Optional[str]:
+    raw = get_col_value(item, col_id)
+    if not raw:
+        return None
+    try:
+        v = json.loads(raw)
+        p = v.get("phone") if isinstance(v, dict) else None
+        return p.strip() if p else None
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_link(item: Dict[str, Any], col_id: str) -> Optional[str]:
+    raw = get_col_value(item, col_id)
+    if not raw:
+        return None
+    try:
+        v = json.loads(raw)
+        return v.get("url") if isinstance(v, dict) else None
+    except (ValueError, TypeError):
+        return None
 
 
 def parse_date(s: Optional[str]) -> Optional[datetime]:
@@ -123,19 +238,10 @@ def parse_date(s: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def derive_email(name: str, item_id: str) -> str:
-    """Email placeholder pour l'import (ContactRequest.email est NOT NULL)."""
-    safe = (
-        "".join(c.lower() if c.isalnum() else "" for c in (name or "").strip())
-        or f"item{item_id}"
-    )[:40]
-    return f"import+{safe}.{item_id}@horizon.local"
-
-
-def derive_project_type(monday_type: Optional[str], item_name: str) -> str:
+def derive_project_type(monday_type: Optional[str], hint: str) -> str:
     if monday_type and monday_type in TYPE_PROJET_MAP:
         return TYPE_PROJET_MAP[monday_type].value
-    n = (item_name or "").lower()
+    n = (hint or "").lower()
     if "salle de bain" in n or "sdb" in n:
         return ProjectType.SALLE_BAIN.value
     if "cuisine" in n:
@@ -145,248 +251,323 @@ def derive_project_type(monday_type: Optional[str], item_name: str) -> str:
     return ProjectType.AUTRE.value
 
 
+def synthetic_email(monday_id: str) -> str:
+    return f"import+monday.{monday_id}@horizon.local"
+
+
+# ---------------------------------------------------------------------------
+# Cleanup
+# ---------------------------------------------------------------------------
+
+
+async def reset_imports(db: AsyncSession) -> Dict[str, int]:
+    counts = {}
+    res = await db.execute(
+        delete(Project).where(
+            (Project.notes.ilike("%Importé Monday%"))
+            | (Project.notes.ilike("%Importe Monday%"))
+        )
+    )
+    counts["projects_deleted"] = res.rowcount or 0
+    res = await db.execute(
+        delete(Soumission).where(
+            (Soumission.reference.like("MDY-%"))
+            | (Soumission.notes.ilike("%Importé Monday%"))
+            | (Soumission.notes.ilike("%Importe Monday%"))
+        )
+    )
+    counts["soumissions_deleted"] = res.rowcount or 0
+    res = await db.execute(
+        delete(Client).where(
+            (Client.notes.ilike("%Importé Monday%"))
+            | (Client.notes.ilike("%Importe Monday%"))
+        )
+    )
+    counts["clients_deleted"] = res.rowcount or 0
+    res = await db.execute(
+        delete(ContactRequest).where(
+            ContactRequest.source == "monday-import"
+        )
+    )
+    counts["contact_requests_deleted"] = res.rowcount or 0
+    await db.flush()
+    return counts
+
+
 # ---------------------------------------------------------------------------
 # Import logic
 # ---------------------------------------------------------------------------
 
 
-async def fetch_items(board_id: int, token: str) -> List[Dict[str, Any]]:
-    query = (
-        f"query {{ boards(ids: [{board_id}]) {{ items_page(limit: 100) "
-        "{ items { id name group { id title } "
-        "column_values { id text value } } } } }"
-    )
-    data = await monday_query(query, token)
-    return data["boards"][0]["items_page"]["items"]
-
-
-async def import_crm_soumissions(
-    db: AsyncSession, items: List[Dict[str, Any]]
+async def import_all(
+    db: AsyncSession,
+    clients_items: List[Dict[str, Any]],
+    soum_items: List[Dict[str, Any]],
+    devis_items: List[Dict[str, Any]],
+    proj_items: List[Dict[str, Any]],
 ) -> Dict[str, int]:
-    """Import des items CRM Soumissions → ContactRequest + Soumission
-    (+ Client + Project si converti)."""
     counts = {
-        "contacts_created": 0,
-        "contacts_skipped": 0,
-        "soumissions_created": 0,
-        "soumissions_skipped": 0,
+        "clients_filtered_out": 0,  # pas de lien CRM Soum
         "clients_created": 0,
+        "contact_requests_created": 0,
+        "soumissions_devis_created": 0,
+        "soumissions_crm_created": 0,
+        "soumissions_devis_skipped_no_client": 0,
         "projects_created": 0,
+        "projects_skipped_no_client": 0,
     }
 
-    for it in items:
-        title = it["name"]
-        item_id = it["id"]
-        client_name = get_col(it, "text_mm0ykm8z") or "(client à déterminer)"
-        date_demande = get_col(it, "date_mm0pb57")
-        statut_mdy = get_col(it, "color_mm0ps54") or "En préparation"
-        responsable = get_col(it, "multiple_person_mm0pqg8r")
-        location = get_col(it, "location_mm0xs8d3")
-        type_projet_mdy = get_col(it, "dropdown_mm0p14e")
-        budget_str = get_col(it, "numeric_mm0p2z9b")
-        notes_visite = get_col(it, "long_text_mm0p4j8b")
-        commentaire = get_col(it, "long_text_mm24zgv")
-        date_envoi = get_col(it, "date_mm0xdp6f")
+    # Index Monday → item
+    soum_by_mid = {s["id"]: s for s in soum_items}
+    devis_by_mid = {d["id"]: d for d in devis_items}
+    proj_by_mid = {p["id"]: p for p in proj_items}
 
-        budget = None
-        if budget_str:
-            try:
-                budget = float(budget_str)
-            except (ValueError, TypeError):
-                pass
+    # ---- Étape 1 : filtrer les Clients à ceux liés à au moins
+    # un CRM Soum, et déterminer Client vs ContactRequest selon les
+    # statuts des soumissions/devis liés.
+    h2_by_monday_client_id: Dict[str, Dict[str, Any]] = {}
 
-        # Email placeholder (ContactRequest.email est NOT NULL)
-        email = derive_email(client_name, item_id)
+    for mc in clients_items:
+        mid = mc["id"]
+        linked_crm_ids = parse_relation_ids(mc, "board_relation_mm2146bs")
+        if not linked_crm_ids:
+            counts["clients_filtered_out"] += 1
+            continue
 
-        # Dédup ContactRequest par email
-        existing_cr = (
-            await db.execute(
-                select(ContactRequest).where(ContactRequest.email == email)
-            )
-        ).scalar_one_or_none()
+        name = mc["name"]
+        email = parse_email(mc, "email_mm085sgh")
+        phone = parse_phone(mc, "phone_mm084c8b")
+        address = get_col(mc, "location_mm0aq054")
+        postal = get_col(mc, "text_mm0azq1n")
+        type_client = get_col(mc, "color_mm08pyts")
+        qb_cust_id = get_col(mc, "text_mm1rqzmx")
 
-        if existing_cr:
-            cr = existing_cr
-            counts["contacts_skipped"] += 1
-        else:
-            # Notes internes : on garde tout ce que Monday avait
-            internal_notes_parts = [
-                f"Importé depuis Monday CRM Soumissions (item {item_id})",
-                f"Statut Monday: {statut_mdy}",
-            ]
-            if responsable:
-                internal_notes_parts.append(f"Responsable: {responsable}")
-            if notes_visite:
-                internal_notes_parts.append(f"Notes visite: {notes_visite}")
-            if commentaire:
-                internal_notes_parts.append(f"Commentaire client: {commentaire}")
+        # Décider Client (h2.0) vs ContactRequest (prospect)
+        # → Client si une soum CRM est « Convertie en projet » OU si
+        #   un Devis est « accepte ».
+        is_accepted = False
+        for crm_id in linked_crm_ids:
+            crm = soum_by_mid.get(crm_id)
+            if crm and (get_col(crm, "color_mm0ps54") or "") in {
+                "Convertie en projet",
+                "Acceptée",
+                "Acceptee",
+            }:
+                is_accepted = True
+                break
+        if not is_accepted:
+            # Aussi vérifier les Devis associés à ce client (board_relation
+            # côté client : on n'a pas, mais on peut chercher inverse)
+            for dv in devis_items:
+                dv_clients = parse_relation_ids(dv, "board_relation_mm0bkm34")
+                if mid in dv_clients and (
+                    get_col(dv, "color_mm0b7x8g") or ""
+                ).lower() == "accepte":
+                    is_accepted = True
+                    break
 
-            cr = ContactRequest(
-                name=client_name,
+        full_address = (address or "").strip()
+        if postal and postal not in full_address:
+            full_address = f"{full_address}, {postal}".strip(", ")
+
+        notes = (
+            f"Importé Monday Clients (item {mid})"
+            + (f" · Type: {type_client}" if type_client else "")
+            + (f" · Code postal: {postal}" if postal else "")
+        )
+
+        if is_accepted:
+            client = Client(
+                name=name,
                 email=email,
-                phone=None,
-                address=location,
-                project_type=derive_project_type(type_projet_mdy, title),
-                message=title or "(import Monday — pas de message)",
-                status=CRM_STATUS_MAP.get(
-                    statut_mdy, ContactRequestStatus.NEW
-                ).value,
+                phone=phone,
+                address=full_address or None,
+                notes=notes,
+                qbo_customer_id=qb_cust_id or None,
+            )
+            db.add(client)
+            await db.flush()
+            counts["clients_created"] += 1
+            h2_by_monday_client_id[mid] = {"kind": "client", "id": client.id}
+        else:
+            cr = ContactRequest(
+                name=name,
+                email=email or synthetic_email(mid),
+                phone=phone,
+                address=full_address or None,
+                project_type=ProjectType.AUTRE.value,
+                message=f"Prospect importé Monday Clients #{mid}",
+                status=ContactRequestStatus.QUOTED.value,
                 source="monday-import",
                 gdpr_consent=True,
                 marketing_consent=False,
                 locale="fr",
-                internal_notes="\n".join(internal_notes_parts),
+                internal_notes=notes,
             )
             db.add(cr)
             await db.flush()
-            counts["contacts_created"] += 1
+            counts["contact_requests_created"] += 1
+            h2_by_monday_client_id[mid] = {"kind": "cr", "id": cr.id}
 
-        # Soumission liée — référence "MDY-{item_id}" pour ne pas
-        # consommer le compteur QB, mais quand même unique.
-        ref = f"MDY-{item_id}"
-        existing_s = (
-            await db.execute(
-                select(Soumission).where(Soumission.reference == ref)
-            )
-        ).scalar_one_or_none()
+    # ---- Étape 2 : Devis clients → Soumission avec vrai numéro
+    for dv in devis_items:
+        mid = dv["id"]
+        title = dv["name"]
+        numero_devis = get_col(dv, "text_mm0br2d6") or f"MDY-{mid}"
+        montant = get_col(dv, "numeric_mm0bj4fy")
+        try:
+            montant_f = float(montant) if montant else None
+        except (ValueError, TypeError):
+            montant_f = None
+        statut_dv = (get_col(dv, "color_mm0b7x8g") or "").lower()
+        date_acceptation = get_col(dv, "date_mm0b2ggn")
+        date_envoi = get_col(dv, "date_mm24zr8j")
+        date_expiration = get_col(dv, "date_mm2411qb")
+        qb_estimate_id = get_col(dv, "text_mm1wfx92")
+        qb_url = parse_link(dv, "link_mm0bkty2")
+        qb_customer_name = get_col(dv, "text_mm24e7jx")
 
-        if existing_s:
-            soum = existing_s
-            counts["soumissions_skipped"] += 1
-        else:
-            sent_at = parse_date(date_envoi)
-            soum_status = SOUMISSION_STATUS_MAP.get(
-                statut_mdy, SoumissionStatus.DRAFT
-            ).value
-            soum = Soumission(
-                reference=ref,
-                contact_request_id=cr.id,
-                title=title,
-                description=notes_visite or None,
-                subtotal=budget,
-                total=budget,  # sans calcul taxes pour l'import
-                status=soum_status,
-                sent_at=sent_at,
-                accepted_at=(
-                    datetime.now(timezone.utc)
-                    if statut_mdy == "Convertie en projet"
-                    else None
-                ),
-                notes=(
-                    f"Importé Monday {item_id}. "
-                    f"Adresse: {location or '-'}. "
-                    f"Demandée le {date_demande or '?'}."
-                ),
-            )
-            db.add(soum)
-            await db.flush()
-            counts["soumissions_created"] += 1
-
-        # Si convertie en projet → on crée Client + Project liés
-        if statut_mdy == "Convertie en projet":
-            # Client : dédup par nom (case insensitive)
-            existing_cli = (
-                await db.execute(
-                    select(Client).where(
-                        Client.name.ilike(client_name)
-                    )
-                )
-            ).scalar_one_or_none()
-            if existing_cli:
-                client = existing_cli
-            else:
-                client = Client(
-                    name=client_name,
-                    email=None,
-                    phone=None,
-                    address=location,
-                    notes=f"Importé Monday CRM Soumissions {item_id}",
-                    contact_request_id=cr.id,
-                )
-                db.add(client)
-                await db.flush()
-                counts["clients_created"] += 1
-
-            # Project : dédup par titre (case insensitive)
-            existing_proj = (
-                await db.execute(
-                    select(Project).where(Project.name.ilike(title))
-                )
-            ).scalar_one_or_none()
-            if not existing_proj:
-                proj = Project(
-                    name=title,
-                    client_id=client.id,
-                    contact_request_id=cr.id,
-                    soumission_id=soum.id,
-                    status=ProjectStatus.IN_PROGRESS.value,
-                    address=location,
-                    description=notes_visite,
-                    budget=budget,
-                    notes=f"Importé Monday CRM (item {item_id})",
-                )
-                db.add(proj)
-                await db.flush()
-                counts["projects_created"] += 1
-
-    return counts
-
-
-async def import_calendrier_construction(
-    db: AsyncSession, items: List[Dict[str, Any]]
-) -> Dict[str, int]:
-    """Import des items Calendrier de construction → Project standalone."""
-    counts = {"projects_created": 0, "projects_skipped": 0}
-
-    for it in items:
-        name = it["name"]
-        item_id = it["id"]
-        phase = get_col(it, "color_mm0a9h65")  # status
-        responsable = get_col(it, "multiple_person_mm0bg9p8")
-        date_debut = get_col(it, "date_mm0a3t1d")
-        date_fin = get_col(it, "date_mm0asjxa")
-        notes_sup = get_col(it, "long_text_mm0aexrc")
-
-        # Dédup par nom
-        existing = (
-            await db.execute(
-                select(Project).where(Project.name.ilike(name))
-            )
-        ).scalar_one_or_none()
-        if existing:
-            counts["projects_skipped"] += 1
+        linked_clients = parse_relation_ids(dv, "board_relation_mm0bkm34")
+        h2_client_id = None
+        h2_cr_id = None
+        if linked_clients:
+            target = h2_by_monday_client_id.get(linked_clients[0])
+            if target:
+                if target["kind"] == "client":
+                    h2_client_id = target["id"]
+                else:
+                    h2_cr_id = target["id"]
+        if h2_client_id is None and h2_cr_id is None:
+            counts["soumissions_devis_skipped_no_client"] += 1
             continue
 
-        # Map phase → ProjectStatus
-        # Monday phases: Démarrage, Démolition, Plomberie, Électricité,
-        # Finition, Livré...
-        if phase and "livr" in phase.lower():
-            status = ProjectStatus.DELIVERED.value
-        elif phase and "pause" in phase.lower():
-            status = ProjectStatus.SUSPENDED.value
-        else:
-            # Par défaut : in progress (le calendrier ne contient que
-            # des chantiers actifs)
-            status = ProjectStatus.IN_PROGRESS.value
+        soum = Soumission(
+            reference=numero_devis,  # ex. "1005"
+            client_id=h2_client_id,
+            contact_request_id=h2_cr_id,
+            title=title,
+            description=None,
+            subtotal=montant_f,
+            total=montant_f,
+            status=DEVIS_STATUS_MAP.get(
+                statut_dv, SoumissionStatus.SENT
+            ).value,
+            sent_at=parse_date(date_envoi),
+            accepted_at=parse_date(date_acceptation),
+            valid_until=parse_date(date_expiration),
+            qbo_estimate_id=qb_estimate_id,
+            notes=(
+                f"Importé Monday Devis (item {mid}) | Numéro QB: "
+                f"{numero_devis}"
+                + (f" | URL QB: {qb_url}" if qb_url else "")
+                + (f" | Nom QB: {qb_customer_name}" if qb_customer_name else "")
+            ),
+        )
+        db.add(soum)
+        await db.flush()
+        counts["soumissions_devis_created"] += 1
 
-        notes_parts = [
-            f"Importé Monday Calendrier de construction (item {item_id})"
-        ]
-        if phase:
-            notes_parts.append(f"Phase Monday: {phase}")
-        if responsable:
-            notes_parts.append(f"Responsable: {responsable}")
-        if notes_sup:
-            notes_parts.append(f"Notes superviseur: {notes_sup}")
+    # ---- Étape 3 : CRM Soum (pré-devis seulement)
+    for crm in soum_items:
+        mid = crm["id"]
+        title = crm["name"]
+        statut = get_col(crm, "color_mm0ps54") or "En préparation"
+        if statut not in CRM_PRE_DEVIS_STATUSES:
+            # Couvert par les Devis (statuts envoyé/accepté/refusé)
+            continue
 
+        budget = get_col(crm, "numeric_mm0p2z9b")
         try:
-            sd = (
-                datetime.fromisoformat(date_debut).date()
-                if date_debut
-                else None
-            )
+            budget_f = float(budget) if budget else None
         except (ValueError, TypeError):
-            sd = None
+            budget_f = None
+        notes_visite = get_col(crm, "long_text_mm0p4j8b")
+        date_envoi = get_col(crm, "date_mm0xdp6f")
+        location = get_col(crm, "location_mm0xs8d3")
+
+        linked_clients = parse_relation_ids(crm, "board_relation_mm21vrg1")
+        h2_client_id = None
+        h2_cr_id = None
+        if linked_clients:
+            target = h2_by_monday_client_id.get(linked_clients[0])
+            if target:
+                if target["kind"] == "client":
+                    h2_client_id = target["id"]
+                else:
+                    h2_cr_id = target["id"]
+
+        if h2_client_id is None and h2_cr_id is None:
+            # Pas de client lié → soumission orpheline = prospect
+            orphan_cr = ContactRequest(
+                name=f"(client à résoudre — {title})",
+                email=synthetic_email(f"orphan-{mid}"),
+                phone=None,
+                address=location,
+                project_type=derive_project_type(
+                    get_col(crm, "dropdown_mm0p14e"), title
+                ),
+                message=f"CRM Soum Monday non liée à un client (item {mid})",
+                status=ContactRequestStatus.NEW.value,
+                source="monday-import",
+                gdpr_consent=True,
+                marketing_consent=False,
+                locale="fr",
+                internal_notes=f"Importé Monday CRM Soum {mid}, sans lien client",
+            )
+            db.add(orphan_cr)
+            await db.flush()
+            counts["contact_requests_created"] += 1
+            h2_cr_id = orphan_cr.id
+
+        soum = Soumission(
+            reference=f"MDY-{mid}",
+            client_id=h2_client_id,
+            contact_request_id=h2_cr_id,
+            title=title,
+            description=notes_visite,
+            subtotal=budget_f,
+            total=budget_f,
+            status=CRM_SOUMISSION_STATUS_MAP.get(
+                statut, SoumissionStatus.DRAFT
+            ).value,
+            sent_at=parse_date(date_envoi),
+            notes=(
+                f"Importé Monday CRM Soum {mid} | Statut: {statut}"
+                + (f" | Lieu: {location}" if location else "")
+            ),
+        )
+        db.add(soum)
+        await db.flush()
+        counts["soumissions_crm_created"] += 1
+
+    # ---- Étape 4 : Projets → Project lié au Client
+    for mp in proj_items:
+        mid = mp["id"]
+        name = mp["name"]
+        linked_clients = parse_relation_ids(mp, "board_relation_mm08k3pb")
+        budget = get_col(mp, "numeric_mm08mhrq")
+        try:
+            budget_f = float(budget) if budget else None
+        except (ValueError, TypeError):
+            budget_f = None
+        statut_p = get_col(mp, "color_mm0bhkjm")
+        date_fin = get_col(mp, "date_mm08c670")
+        adresse = (
+            get_col(mp, "location_mm0afwxe")
+            or get_col(mp, "location_mm0xh10w")
+        )
+
+        h2_client_id = None
+        if linked_clients:
+            target = h2_by_monday_client_id.get(linked_clients[0])
+            if target and target["kind"] == "client":
+                h2_client_id = target["id"]
+
+        if h2_client_id is None:
+            counts["projects_skipped_no_client"] += 1
+            # On le crée quand même standalone — sinon on perd le projet
+            pass
+
         try:
             ed = (
                 datetime.fromisoformat(date_fin).date()
@@ -396,13 +577,23 @@ async def import_calendrier_construction(
         except (ValueError, TypeError):
             ed = None
 
+        proj_status = (
+            PROJECT_STATUS_MAP.get(statut_p, ProjectStatus.IN_PROGRESS).value
+            if statut_p
+            else ProjectStatus.IN_PROGRESS.value
+        )
+
         proj = Project(
             name=name,
-            status=status,
-            start_date=sd,
+            client_id=h2_client_id,
+            status=proj_status,
+            address=adresse,
             end_date=ed,
-            description=notes_sup,
-            notes="\n".join(notes_parts),
+            budget=budget_f,
+            notes=(
+                f"Importé Monday Projets (item {mid})"
+                + (f" | Statut Monday: {statut_p}" if statut_p else "")
+            ),
         )
         db.add(proj)
         await db.flush()
@@ -416,40 +607,42 @@ async def import_calendrier_construction(
 # ---------------------------------------------------------------------------
 
 
-async def main(dry_run: bool = False) -> None:
+async def main(dry_run: bool, do_reset: bool) -> None:
     token = os.environ.get("MONDAY_TOKEN")
     if not token:
-        print("ERROR: MONDAY_TOKEN n'est pas défini dans l'environnement.")
-        print(
-            "Ajoute-le temporairement dans Render → backend → Environment, "
-            "puis relance."
-        )
+        print("ERROR: MONDAY_TOKEN n'est pas défini.")
         sys.exit(1)
 
     print(
-        f"\n{'=' * 60}\nImport Monday → h2.0 "
-        f"({'DRY RUN' if dry_run else 'LIVE'})\n{'=' * 60}"
+        f"\n{'=' * 60}\nImport Monday → h2.0 v3 "
+        f"({'DRY RUN' if dry_run else 'LIVE'}"
+        f"{', RESET' if do_reset else ''}"
+        f")\n{'=' * 60}"
     )
 
-    # 1. Fetch les items Monday
-    print("\n→ Fetch CRM Soumissions...")
-    crm_items = await fetch_items(BOARD_CRM_SOUMISSIONS, token)
-    print(f"  {len(crm_items)} items récupérés")
+    print("\n→ Fetch Clients (42)...")
+    cli = await fetch_all_items(BOARD_CLIENTS, token)
+    print(f"  {len(cli)} récupérés")
+    print("→ Fetch CRM Soumissions (15)...")
+    soum = await fetch_all_items(BOARD_CRM_SOUMISSIONS, token)
+    print(f"  {len(soum)} récupérés")
+    print("→ Fetch Devis clients (9)...")
+    devis = await fetch_all_items(BOARD_DEVIS, token)
+    print(f"  {len(devis)} récupérés")
+    print("→ Fetch Projets (15)...")
+    proj = await fetch_all_items(BOARD_PROJETS, token)
+    print(f"  {len(proj)} récupérés")
 
-    print("→ Fetch Calendrier de construction...")
-    cal_items = await fetch_items(BOARD_CALENDRIER, token)
-    print(f"  {len(cal_items)} items récupérés")
-
-    # 2. Import en DB
     async with AsyncSessionLocal() as db:
-        print("\n→ Import CRM Soumissions...")
-        crm_counts = await import_crm_soumissions(db, crm_items)
-        for k, v in crm_counts.items():
-            print(f"  {k}: {v}")
+        if do_reset:
+            print("\n→ Cleanup imports Monday précédents...")
+            d = await reset_imports(db)
+            for k, v in d.items():
+                print(f"  {k}: {v}")
 
-        print("\n→ Import Calendrier de construction...")
-        cal_counts = await import_calendrier_construction(db, cal_items)
-        for k, v in cal_counts.items():
+        print("\n→ Import...")
+        c = await import_all(db, cli, soum, devis, proj)
+        for k, v in c.items():
             print(f"  {k}: {v}")
 
         if dry_run:
@@ -464,4 +657,5 @@ async def main(dry_run: bool = False) -> None:
 
 if __name__ == "__main__":
     dry = "--dry-run" in sys.argv or os.environ.get("DRY_RUN") == "1"
-    asyncio.run(main(dry_run=dry))
+    rst = "--reset" in sys.argv or os.environ.get("RESET") == "1"
+    asyncio.run(main(dry_run=dry, do_reset=rst))
