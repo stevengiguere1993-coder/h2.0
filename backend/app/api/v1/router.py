@@ -44,6 +44,7 @@ from app.api.v1.endpoints import (
     public_soumission,
     punch_ops,
     achat_qbo,
+    prospection,
     purchase_order_actions,
     purchase_order_items,
     client_qbo,
@@ -151,4 +152,5 @@ api_router.include_router(achat_receipt.router)
 api_router.include_router(achats_router)
 api_router.include_router(purchase_orders_router)
 api_router.include_router(purchase_order_items.router)
+api_router.include_router(prospection.router)
 api_router.include_router(help.router)

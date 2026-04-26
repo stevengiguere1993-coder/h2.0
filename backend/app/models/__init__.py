@@ -41,6 +41,8 @@ from app.models.project_assignees import (
 )
 from app.models.project_photo import ProjectPhoto
 from app.models.project_task import ProjectTask
+from app.models.prospection_lead import ProspectionLead
+from app.models.prospection_lead_photo import ProspectionLeadPhoto
 from app.models.punch import Punch
 from app.models.qbo_account_map import QboAccountMap
 from app.models.qbo_token import QboToken
@@ -82,6 +84,8 @@ __all__ = [
     "ProjectPhaseAssignee",
     "ProjectPhoto",
     "ProjectTask",
+    "ProspectionLead",
+    "ProspectionLeadPhoto",
     "ProjectTaskAssignee",
     "PurchaseOrder",
     "PurchaseOrderItem",
