@@ -333,6 +333,125 @@ async def resolve_address(
     return _serialize(lead, photos_count)
 
 
+class OwnerEnrichmentResult(BaseModel):
+    """Résultat agrégé d'un lookup propriétaire combinant rôle
+    d'évaluation Montréal + corporations REQ."""
+
+    lead: LeadRead
+    # Ce qui a été appliqué automatiquement sur le lead
+    applied: dict
+    # Corporations dont l'adresse de domicile correspond à l'adresse
+    # du lead (potentiels propriétaires si la propriété est à une cie).
+    req_candidates: list[dict] = []
+    notes: list[str] = []
+
+
+@router.post(
+    "/{lead_id}/enrich-owner",
+    response_model=OwnerEnrichmentResult,
+    summary="Enrichit le lead avec le rôle d'évaluation municipal "
+    "(Montréal) et les corporations REQ correspondantes.",
+)
+async def enrich_owner(
+    lead_id: int, db: DBSession, _: CurrentUser
+) -> OwnerEnrichmentResult:
+    """Pipeline :
+    1. Lookup dans `mtl_property_units` à partir de l'adresse → matricule,
+       nb_logements, année, superficies. Écrit ces champs sur le lead
+       seulement s'ils sont vides (ne pas écraser une saisie manuelle).
+    2. Lookup dans `req_companies` par adresse → liste de candidats
+       corporations dont le siège est à cette adresse. On retourne la
+       liste, l'utilisateur choisit (un clic remplit owner_*).
+    """
+    from app.integrations.req.companies import (
+        lookup_by_address as req_lookup_by_address,
+    )
+    from app.integrations.roles_evaluation.montreal import (
+        lookup_by_address as mtl_lookup_by_address,
+    )
+
+    lead = (
+        await db.execute(
+            select(ProspectionLead).where(ProspectionLead.id == lead_id)
+        )
+    ).scalar_one_or_none()
+    if lead is None:
+        raise HTTPException(404, "Prospect introuvable")
+    if not (lead.address or "").strip():
+        raise HTTPException(
+            400, "Le lead n'a pas d'adresse — résolvez l'adresse d'abord."
+        )
+
+    applied: dict = {}
+    notes: list[str] = []
+
+    # 1. Rôle Montréal — uniquement si la ville matche (sinon ça ne sert
+    #    à rien, voire ça remplit avec les données d'une homonymie).
+    city_norm = (lead.city or "").strip().lower()
+    if not city_norm or "montr" in city_norm:
+        mtl = await mtl_lookup_by_address(db, lead.address)
+        if mtl is None:
+            notes.append(
+                "Aucun match dans le rôle d'évaluation de Montréal pour "
+                "cette adresse. Vérifie l'orthographe ou la ville."
+            )
+        else:
+            for field in (
+                "matricule",
+                "nb_logements",
+                "annee_construction",
+                "superficie_terrain",
+            ):
+                current = getattr(lead, field)
+                new_val = mtl.get(field)
+                if new_val is not None and (current is None or current == ""):
+                    setattr(lead, field, new_val)
+                    applied[field] = new_val
+            if mtl.get("libelle_utilisation"):
+                notes.append(
+                    f"Utilisation : {mtl['libelle_utilisation']}"
+                )
+    else:
+        notes.append(
+            "Le rôle Montréal n'est pas applicable hors Montréal "
+            "(ville détectée : "
+            f"{lead.city or 'inconnue'}). À venir : Longueuil, Brossard."
+        )
+
+    # 2. REQ — candidats corporations à cette adresse
+    req_candidates: list[dict] = []
+    req_rows = await req_lookup_by_address(db, lead.address, lead.city)
+    for c in req_rows:
+        req_candidates.append(
+            {
+                "neq": c.neq,
+                "nom": c.nom,
+                "statut": c.statut,
+                "forme_juridique": c.forme_juridique,
+                "adresse": c.adresse,
+                "ville": c.ville,
+                "code_postal": c.code_postal,
+            }
+        )
+    if not req_candidates:
+        notes.append(
+            "Aucune corporation REQ trouvée à cette adresse "
+            "(soit propriétaire particulier, soit ZIP REQ pas encore "
+            "importé via /admin/data/req/import)."
+        )
+
+    if applied:
+        await db.flush()
+        await db.refresh(lead)
+    photos_count = await _photos_count_for(db, lead_id)
+    return OwnerEnrichmentResult(
+        lead=_serialize(lead, photos_count),
+        applied=applied,
+        req_candidates=req_candidates,
+        notes=notes,
+    )
+
+
 @router.delete(
     "/{lead_id}", status_code=status.HTTP_204_NO_CONTENT
 )

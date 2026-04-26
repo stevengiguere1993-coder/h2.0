@@ -7,6 +7,7 @@ Main router that aggregates all API v1 endpoints.
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    admin_data,
     appointments,
     audit,
     auth,
@@ -153,4 +154,5 @@ api_router.include_router(achats_router)
 api_router.include_router(purchase_orders_router)
 api_router.include_router(purchase_order_items.router)
 api_router.include_router(prospection.router)
+api_router.include_router(admin_data.router)
 api_router.include_router(help.router)

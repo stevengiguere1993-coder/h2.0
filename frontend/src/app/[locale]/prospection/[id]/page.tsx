@@ -4,10 +4,12 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   ArrowLeft,
+  Building2,
   Camera,
   Loader2,
   MapPin,
   Save,
+  Search,
   Trash2,
   X
 } from "lucide-react";
@@ -82,12 +84,25 @@ export default function ProspectionDetailPage() {
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
 
+  type ReqCandidate = {
+    neq: string;
+    nom: string | null;
+    statut: string | null;
+    forme_juridique: string | null;
+    adresse: string | null;
+    ville: string | null;
+    code_postal: string | null;
+  };
+
   const [lead, setLead] = useState<Lead | null>(null);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const [enriching, setEnriching] = useState(false);
+  const [enrichNotes, setEnrichNotes] = useState<string[]>([]);
+  const [reqCandidates, setReqCandidates] = useState<ReqCandidate[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   // Champs éditables
@@ -247,6 +262,64 @@ export default function ProspectionDetailPage() {
       setError((err as Error).message);
     } finally {
       setResolving(false);
+    }
+  }
+
+  async function enrichOwner() {
+    if (enriching) return;
+    setEnriching(true);
+    setError(null);
+    setEnrichNotes([]);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/${id}/enrich-owner`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as {
+        lead: Lead;
+        applied: Record<string, unknown>;
+        req_candidates: ReqCandidate[];
+        notes: string[];
+      };
+      // Met à jour les champs locaux avec ce qui a été appliqué
+      const l = data.lead;
+      setMatricule(l.matricule || "");
+      setNbLogements(
+        l.nb_logements != null ? String(l.nb_logements) : ""
+      );
+      setAnnee(
+        l.annee_construction != null
+          ? String(l.annee_construction)
+          : ""
+      );
+      setValeur(
+        l.valeur_fonciere != null ? String(l.valeur_fonciere) : ""
+      );
+      setLead(l);
+      setEnrichNotes(data.notes || []);
+      setReqCandidates(data.req_candidates || []);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setEnriching(false);
+    }
+  }
+
+  function applyReqCandidate(c: ReqCandidate) {
+    setOwnerKind("corporation");
+    setOwnerName(c.nom || "");
+    setOwnerNeq(c.neq);
+    if (c.adresse) {
+      // Pas d'effet de bord sur l'adresse du chantier — on note le
+      // siège dans une note pour mémoire.
+      setEnrichNotes((prev) => [
+        ...prev,
+        `Siège REQ : ${c.adresse}${c.ville ? ", " + c.ville : ""}`
+      ]);
     }
   }
 
@@ -490,13 +563,75 @@ export default function ProspectionDetailPage() {
               </section>
 
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-                  Données du rôle d&apos;évaluation
-                </h2>
-                <p className="mt-1 text-[11px] text-white/50">
-                  À remplir manuellement pour l&apos;instant. L&apos;auto-fill
-                  via le rôle municipal arrive en Phase 2.
-                </p>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                      Données du rôle d&apos;évaluation
+                    </h2>
+                    <p className="mt-1 text-[11px] text-white/50">
+                      Auto-fill via le rôle de la Ville de Montréal
+                      (matricule, nb logements, année, superficies).
+                      Cherche aussi les corporations REQ à cette adresse.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={enrichOwner}
+                    disabled={enriching || !address.trim()}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                  >
+                    {enriching ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Search className="h-3.5 w-3.5" />
+                    )}
+                    Trouver le propriétaire
+                  </button>
+                </div>
+                {enrichNotes.length > 0 ? (
+                  <ul className="mt-3 space-y-1 rounded-md border border-brand-700 bg-brand-950/40 p-2 text-[11px] text-white/60">
+                    {enrichNotes.map((n, i) => (
+                      <li key={i}>· {n}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {reqCandidates.length > 0 ? (
+                  <div className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-300">
+                      <Building2 className="mr-1 inline h-3 w-3" />
+                      {reqCandidates.length} corporation
+                      {reqCandidates.length > 1 ? "s" : ""} REQ à cette
+                      adresse
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-white/50">
+                      Cliquez sur une corporation pour l&apos;assigner
+                      comme propriétaire du lead.
+                    </p>
+                    <ul className="mt-2 space-y-1">
+                      {reqCandidates.map((c) => (
+                        <li key={c.neq}>
+                          <button
+                            type="button"
+                            onClick={() => applyReqCandidate(c)}
+                            className="w-full rounded-md border border-brand-700 bg-brand-900/60 px-2.5 py-1.5 text-left text-[12px] text-white/80 hover:bg-brand-800 hover:text-white"
+                          >
+                            <span className="font-medium text-emerald-300">
+                              {c.nom || "(nom manquant)"}
+                            </span>{" "}
+                            <span className="text-white/40">
+                              · NEQ {c.neq}
+                            </span>
+                            {c.statut ? (
+                              <span className="ml-2 rounded-full bg-brand-800 px-1.5 py-0.5 text-[10px] text-white/60">
+                                {c.statut}
+                              </span>
+                            ) : null}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <div>
                     <label className="label">Matricule</label>
