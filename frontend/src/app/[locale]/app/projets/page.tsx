@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Briefcase, Loader2, MapPin, Plus } from "lucide-react";
+import { Briefcase, Loader2, MapPin, Plus, Trash2 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { Link } from "@/i18n/navigation";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type Project = {
   id: number;
@@ -54,6 +55,7 @@ function fmtDate(iso: string | null): string {
 
 export default function ProjectsPage() {
   const { onOpenSidebar } = useAppLayout();
+  const confirm = useConfirm();
   const [items, setItems] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -117,6 +119,28 @@ export default function ProjectsPage() {
     } catch {
       setItems(prev);
       setError("Mise à jour du statut échouée.");
+    }
+  }
+
+  async function deleteProject(id: number, name: string) {
+    if (
+      !(await confirm({
+        title: `Supprimer « ${name} » ?`,
+        description:
+          "Le projet et toutes ses données liées (phases, tâches, photos) seront définitivement supprimés.",
+      }))
+    )
+      return;
+    const prev = items;
+    setItems((xs) => xs.filter((x) => x.id !== id));
+    try {
+      const res = await authedFetch(`/api/v1/projects/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok && res.status !== 204) throw new Error();
+    } catch {
+      setItems(prev);
+      setError("Suppression du projet échouée.");
     }
   }
 
@@ -208,6 +232,7 @@ export default function ProjectsPage() {
                             setDragging(null);
                             setHoverCol(null);
                           }}
+                          onDelete={() => deleteProject(p.id, p.name)}
                         />
                       ))
                     )}
@@ -226,12 +251,14 @@ function ProjectCard({
   project: p,
   dragging,
   onDragStart,
-  onDragEnd
+  onDragEnd,
+  onDelete
 }: {
   project: Project;
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
+  onDelete: () => void;
 }) {
   return (
     <Link
@@ -240,13 +267,26 @@ function ProjectCard({
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className={`block rounded-lg border bg-brand-950 p-3 transition ${
+      className={`group relative block rounded-lg border bg-brand-950 p-3 transition ${
         dragging
           ? "border-accent-500 opacity-60"
           : "border-brand-800 hover:border-accent-500"
       }`}
     >
-      <h3 className="text-sm font-semibold text-white">{p.name}</h3>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onDelete();
+        }}
+        aria-label="Supprimer"
+        title="Supprimer"
+        className="absolute right-2 top-2 rounded-md p-1 text-white/40 opacity-0 transition hover:bg-rose-500/15 hover:text-rose-400 group-hover:opacity-100"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+      <h3 className="pr-6 text-sm font-semibold text-white">{p.name}</h3>
       {p.address ? (
         <p className="mt-1 flex items-center gap-1 text-xs text-white/60">
           <MapPin className="h-3 w-3 flex-shrink-0" />
