@@ -56,9 +56,19 @@ export function PwaRegister() {
       path.startsWith("/en/app");
     if (!isInternalRoute) return;
 
-    // Android / Chrome / Edge
+    // Android / Chrome / Edge : le navigateur peut re-déclencher
+    // beforeinstallprompt à chaque navigation (heuristique). On
+    // re-vérifie localStorage à chaque fois pour ne pas faire
+    // ré-apparaître le bandeau après que l'utilisateur ait cliqué
+    // « Ne plus demander ».
     const onBip = (e: Event) => {
       e.preventDefault();
+      if (
+        typeof window !== "undefined" &&
+        window.localStorage.getItem(DISMISS_KEY) === "1"
+      ) {
+        return;
+      }
       setInstallEvent(e as BeforeInstallPromptEvent);
     };
     window.addEventListener("beforeinstallprompt", onBip);
