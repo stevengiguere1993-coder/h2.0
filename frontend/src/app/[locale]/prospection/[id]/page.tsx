@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   ArrowRightCircle,
   Building2,
+  Calculator,
   Camera,
   DollarSign,
   ExternalLink,
@@ -584,6 +585,19 @@ export default function ProspectionDetailPage() {
           { label: lead?.name || "Chargement…" }
         ]}
         onOpenSidebar={onOpenSidebar}
+        rightSlot={
+          lead ? (
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={
+                `/prospection/analyse/nouveau?lead_id=${lead.id}` as any
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-brand-950 hover:bg-emerald-400"
+            >
+              <Calculator className="h-4 w-4" /> Analyser
+            </Link>
+          ) : undefined
+        }
       />
 
       <div className="p-4 lg:p-6">

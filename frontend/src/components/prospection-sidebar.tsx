@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   BarChart3,
   Building2,
+  Calculator,
   Database,
   Home,
   Layers,
@@ -53,6 +54,12 @@ const PROSPECTION_NAV: NavItem[] = [
     href: "/prospection/lists",
     label: "Listes (segments)",
     icon: Layers,
+    minRole: "manager"
+  },
+  {
+    href: "/prospection/analyse",
+    label: "Analyses financières",
+    icon: Calculator,
     minRole: "manager"
   },
   {
