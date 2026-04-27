@@ -6,11 +6,15 @@ import {
   ArrowUp,
   ArrowUpDown,
   Download,
+  Layers,
   Loader2,
   MapPin,
+  Phone,
   Plus,
+  Save,
   Search,
-  Star
+  Star,
+  X
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
@@ -34,6 +38,9 @@ type Lead = {
   annee_construction: number | null;
   owner_kind: string;
   owner_name: string | null;
+  owner_phone?: string | null;
+  multi_properties_count?: number;
+  estimated_equity_pct?: number | null;
   score: number;
   tags: string[];
   photos_count: number;
@@ -226,6 +233,8 @@ export default function ProspectionLeadsPage() {
   const [sortKey, setSortKey] = useState<SortKey>("score");
   const [sortAsc, setSortAsc] = useState(false);
 
+  const [saveOpen, setSaveOpen] = useState(false);
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -401,7 +410,26 @@ export default function ProspectionLeadsPage() {
         ]}
         onOpenSidebar={onOpenSidebar}
         rightSlot={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/prospection/lists" as any}
+              className="inline-flex items-center gap-1.5 rounded-md border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs font-medium text-white/70 hover:text-white"
+              title="Listes (segments) sauvegardés"
+            >
+              <Layers className="h-3.5 w-3.5" />
+              Listes
+            </Link>
+            <button
+              type="button"
+              onClick={() => setSaveOpen(true)}
+              disabled={sorted.length === 0}
+              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-40"
+              title="Sauvegarde la vue filtrée actuelle comme liste"
+            >
+              <Save className="h-3.5 w-3.5" />
+              Sauvegarder vue
+            </button>
             <button
               type="button"
               onClick={() => downloadCsv(sorted)}
@@ -422,6 +450,20 @@ export default function ProspectionLeadsPage() {
             </Link>
           </div>
         }
+      />
+
+      <SaveAsListModal
+        open={saveOpen}
+        onClose={() => setSaveOpen(false)}
+        leadIds={sorted.map((l) => l.id)}
+        criteria={{
+          status: statusFilter || undefined,
+          kind: kindFilter || undefined,
+          city: cityFilter || undefined,
+          // Pas de min/max envoyé — sizeFilter est appliqué côté
+          // client. Si l'utilisateur veut une liste re-buildable, il
+          // saisit lui-même les critères dans le builder.
+        }}
       />
 
       <div className="p-4 lg:p-6">
@@ -601,6 +643,7 @@ export default function ProspectionLeadsPage() {
                       Propriétaire
                       <SortIcon k="owner" />
                     </th>
+                    <th className="px-3 py-2.5">Téléphone</th>
                     <th
                       onClick={() => toggleSort("status")}
                       className="cursor-pointer px-3 py-2.5 hover:text-white"
@@ -696,11 +739,42 @@ export default function ProspectionLeadsPage() {
                         {l.owner_name || (
                           <span className="text-white/30">—</span>
                         )}
-                        {l.owner_kind === "corporation" ? (
-                          <span className="ml-1 rounded bg-violet-500/15 px-1 py-0.5 text-[10px] text-violet-300">
-                            corp
-                          </span>
-                        ) : null}
+                        <div className="mt-0.5 flex flex-wrap gap-1">
+                          {l.owner_kind === "corporation" ? (
+                            <span className="rounded bg-violet-500/15 px-1 py-0.5 text-[10px] text-violet-300">
+                              Corp
+                            </span>
+                          ) : l.owner_kind === "particulier" ? (
+                            <span className="rounded bg-blue-500/15 px-1 py-0.5 text-[10px] text-blue-300">
+                              Particulier
+                            </span>
+                          ) : (
+                            <span className="rounded bg-brand-800 px-1 py-0.5 text-[10px] text-white/40">
+                              ?
+                            </span>
+                          )}
+                          {(l.multi_properties_count ?? 0) > 0 ? (
+                            <span
+                              className="rounded bg-amber-500/15 px-1 py-0.5 text-[10px] text-amber-300"
+                              title="Possède d'autres immeubles dans la liste"
+                            >
+                              +{l.multi_properties_count} autres
+                            </span>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {l.owner_phone ? (
+                          <a
+                            href={`tel:${l.owner_phone}`}
+                            className="inline-flex items-center gap-1 text-xs text-emerald-300 hover:text-emerald-200"
+                          >
+                            <Phone className="h-3 w-3" />
+                            {l.owner_phone}
+                          </a>
+                        ) : (
+                          <span className="text-[11px] text-white/30">—</span>
+                        )}
                       </td>
                       <td className="px-3 py-2.5">
                         <span
@@ -736,5 +810,207 @@ export default function ProspectionLeadsPage() {
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * Modal de création de liste à partir des leads filtrés actuels.
+ *
+ * Deux modes :
+ * - « Liste manuelle » : on crée la liste vide, puis on ajoute les
+ *   lead_ids actuellement affichés. Pas de critères stockés.
+ * - « Liste re-construisible » : on envoie les critères au backend
+ *   via /lists/from-query — la liste pourra être rebuilt plus tard
+ *   pour récupérer les nouveaux leads matchant.
+ */
+function SaveAsListModal({
+  open,
+  onClose,
+  leadIds,
+  criteria
+}: {
+  open: boolean;
+  onClose: () => void;
+  leadIds: number[];
+  criteria: {
+    status?: string;
+    kind?: string;
+    city?: string;
+  };
+}) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [mode, setMode] = useState<"manual" | "rebuildable">(
+    "rebuildable"
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setName("");
+      setDescription("");
+      setError(null);
+    }
+  }, [open]);
+
+  async function save() {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (mode === "rebuildable") {
+        const res = await authedFetch(
+          "/api/v1/prospection/lists/from-query",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              name: name.trim(),
+              description: description.trim() || null,
+              criteria
+            })
+          }
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as { id: number };
+        window.location.href = `/prospection/lists/${data.id}`;
+      } else {
+        // Mode manuel : crée vide puis add members
+        const r1 = await authedFetch("/api/v1/prospection/lists", {
+          method: "POST",
+          body: JSON.stringify({
+            name: name.trim(),
+            description: description.trim() || null
+          })
+        });
+        if (!r1.ok) throw new Error(`HTTP ${r1.status}`);
+        const created = (await r1.json()) as { id: number };
+        if (leadIds.length > 0) {
+          await authedFetch(
+            `/api/v1/prospection/lists/${created.id}/members`,
+            {
+              method: "POST",
+              body: JSON.stringify({ lead_ids: leadIds })
+            }
+          );
+        }
+        window.location.href = `/prospection/lists/${created.id}`;
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/70 p-4">
+      <div className="w-full max-w-md rounded-2xl border border-brand-800 bg-brand-950 p-5 shadow-2xl">
+        <header className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Save className="h-4 w-4 text-emerald-400" />
+            <h2 className="text-sm font-semibold text-white">
+              Sauvegarder la vue comme liste
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-1 text-white/40 hover:bg-brand-900 hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="mt-4 space-y-3">
+          <div>
+            <label className="label">Nom de la liste</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Ex: Plateau 6-12 portes"
+              className="input"
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="label">Description (optionnelle)</label>
+            <input
+              type="text"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="input"
+            />
+          </div>
+
+          <fieldset className="space-y-1">
+            <legend className="label">Type de liste</legend>
+            <label className="flex cursor-pointer items-start gap-2 rounded-md border border-brand-700 bg-brand-900 p-2 text-xs">
+              <input
+                type="radio"
+                checked={mode === "rebuildable"}
+                onChange={() => setMode("rebuildable")}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="font-medium text-white">
+                  Re-constructible (recommandé)
+                </span>
+                <span className="block text-white/50">
+                  Mémorise les filtres. Les nouveaux leads correspondants
+                  pourront être ajoutés via « Recalculer ».
+                </span>
+              </span>
+            </label>
+            <label className="flex cursor-pointer items-start gap-2 rounded-md border border-brand-700 bg-brand-900 p-2 text-xs">
+              <input
+                type="radio"
+                checked={mode === "manual"}
+                onChange={() => setMode("manual")}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="font-medium text-white">Manuelle</span>
+                <span className="block text-white/50">
+                  Capture les {leadIds.length} leads actuels. Pas de
+                  rebuild — tu ajoutes/retires à la main par la suite.
+                </span>
+              </span>
+            </label>
+          </fieldset>
+
+          {error ? (
+            <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1.5 text-xs text-rose-300">
+              {error}
+            </p>
+          ) : null}
+        </div>
+
+        <footer className="mt-4 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md px-3 py-1.5 text-xs text-white/60 hover:bg-brand-900 hover:text-white"
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={!name.trim() || busy}
+            className="btn-accent text-sm"
+          >
+            {busy ? (
+              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="mr-1.5 h-4 w-4" />
+            )}
+            Créer la liste
+          </button>
+        </footer>
+      </div>
+    </div>
   );
 }

@@ -6,6 +6,7 @@ import {
   BarChart3,
   Database,
   Home,
+  Layers,
   LogOut,
   Map,
   MapPin,
@@ -32,6 +33,12 @@ const PROSPECTION_NAV: NavItem[] = [
     href: "/prospection/leads",
     label: "Liste des leads",
     icon: MapPin,
+    minRole: "manager"
+  },
+  {
+    href: "/prospection/lists",
+    label: "Listes (segments)",
+    icon: Layers,
     minRole: "manager"
   },
   {

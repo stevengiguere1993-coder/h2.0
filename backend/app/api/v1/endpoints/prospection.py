@@ -7,7 +7,7 @@ Project.
 Lookup propriétaire via rôle d'évaluation et REQ : Phase 2.
 """
 
-from datetime import datetime, timezone
+from datetime import date as DateT, datetime, timezone
 from typing import List, Optional
 
 from fastapi import (
@@ -83,6 +83,19 @@ class LeadRead(BaseModel):
     score: int = 0
     tags: List[str] = []
     photos_count: int = 0
+    # Données financières (saisie manuelle)
+    purchase_price: Optional[float] = None
+    purchase_date: Optional[DateT] = None
+    mortgage_balance: Optional[float] = None
+    tax_delinquent: bool = False
+    tax_year_paid: Optional[int] = None
+    tax_amount: Optional[float] = None
+    mailing_address: Optional[str] = None
+    # Computed : valeur - hypothèque (si les deux sont set)
+    estimated_equity: Optional[float] = None
+    estimated_equity_pct: Optional[float] = None
+    # Nombre d'autres leads avec le même proprio (NEQ ou nom)
+    multi_properties_count: int = 0
 
 
 class LeadUpdate(BaseModel):
@@ -109,6 +122,14 @@ class LeadUpdate(BaseModel):
     owner_neq: Optional[str] = None
     archived: Optional[bool] = None
     assigned_to_user_id: Optional[int] = None
+    # Données financières
+    purchase_price: Optional[float] = Field(default=None, ge=0)
+    purchase_date: Optional[DateT] = None
+    mortgage_balance: Optional[float] = Field(default=None, ge=0)
+    tax_delinquent: Optional[bool] = None
+    tax_year_paid: Optional[int] = Field(default=None, ge=1900, le=2100)
+    tax_amount: Optional[float] = Field(default=None, ge=0)
+    mailing_address: Optional[str] = Field(default=None, max_length=500)
 
 
 _ALLOWED_PHOTO_CONTENT = {
@@ -134,12 +155,29 @@ async def _photos_count_for(db, lead_id: int) -> int:
     return len(res.all())
 
 
-def _serialize(lead: ProspectionLead, photos_count: int) -> LeadRead:
+def _serialize(
+    lead: ProspectionLead,
+    photos_count: int,
+    multi_properties_count: int = 0,
+) -> LeadRead:
     obj = LeadRead.model_validate(lead)
     obj.photos_count = photos_count
     # `tags` est stocké en JSON-string dans la DB ; on le désérialise
     # ici pour le retourner comme list[str] au client.
     obj.tags = parse_tags(lead.tags)
+
+    # Equity computée : valeur foncière - solde hypothécaire si les
+    # deux sont renseignés.
+    if lead.valeur_fonciere and lead.mortgage_balance is not None:
+        valeur = float(lead.valeur_fonciere)
+        mortgage = float(lead.mortgage_balance)
+        obj.estimated_equity = valeur - mortgage
+        if valeur > 0:
+            obj.estimated_equity_pct = round(
+                (valeur - mortgage) / valeur * 100, 1
+            )
+
+    obj.multi_properties_count = multi_properties_count
     return obj
 
 
@@ -177,7 +215,33 @@ async def list_leads(
     counts: dict[int, int] = {}
     for lead_id, _photo_id in photo_rows:
         counts[lead_id] = counts.get(lead_id, 0) + 1
-    return [_serialize(r, counts.get(r.id, 0)) for r in rows]
+
+    # Multi-properties : pour chaque lead, compte combien d'autres
+    # leads non archivés partagent le même owner_neq (corp) ou
+    # owner_name (particulier nommé). Pré-calculé en une passe.
+    by_neq: dict[str, int] = {}
+    by_name: dict[str, int] = {}
+    for r in rows:
+        if r.owner_neq:
+            by_neq[r.owner_neq] = by_neq.get(r.owner_neq, 0) + 1
+        elif r.owner_name:
+            key = r.owner_name.strip().lower()
+            if key:
+                by_name[key] = by_name.get(key, 0) + 1
+    multi: dict[int, int] = {}
+    for r in rows:
+        if r.owner_neq:
+            multi[r.id] = max(0, by_neq.get(r.owner_neq, 1) - 1)
+        elif r.owner_name:
+            key = r.owner_name.strip().lower()
+            multi[r.id] = max(0, by_name.get(key, 1) - 1)
+        else:
+            multi[r.id] = 0
+
+    return [
+        _serialize(r, counts.get(r.id, 0), multi.get(r.id, 0))
+        for r in rows
+    ]
 
 
 class DashboardStats(BaseModel):
@@ -1312,3 +1376,110 @@ async def delete_photo(
     if (res.rowcount or 0) == 0:
         raise HTTPException(404, "Photo introuvable")
     await db.flush()
+
+
+# ------------------------ Transactions historiques ------------------------
+
+
+class TransactionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    lead_id: int
+    transaction_date: DateT
+    amount: Optional[float]
+    kind: str
+    source: Optional[str]
+    notes: Optional[str]
+    created_at: datetime
+
+
+class TransactionCreate(BaseModel):
+    transaction_date: DateT
+    amount: Optional[float] = Field(default=None, ge=0)
+    kind: str = Field(
+        default="vente",
+        pattern="^(vente|succession|donation|autre)$",
+    )
+    source: Optional[str] = Field(default=None, max_length=64)
+    notes: Optional[str] = None
+
+
+@router.get(
+    "/{lead_id}/transactions",
+    response_model=List[TransactionRead],
+)
+async def list_transactions(
+    lead_id: int, db: DBSession, _: CurrentUser
+) -> List[TransactionRead]:
+    from app.models.prospection_lead_transaction import (
+        ProspectionLeadTransaction,
+    )
+
+    rows = (
+        await db.execute(
+            select(ProspectionLeadTransaction)
+            .where(ProspectionLeadTransaction.lead_id == lead_id)
+            .order_by(ProspectionLeadTransaction.transaction_date.desc())
+        )
+    ).scalars().all()
+    return [TransactionRead.model_validate(r) for r in rows]
+
+
+@router.post(
+    "/{lead_id}/transactions",
+    response_model=TransactionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_transaction(
+    lead_id: int,
+    data: TransactionCreate,
+    db: DBSession,
+    _: CurrentUser,
+) -> TransactionRead:
+    from app.models.prospection_lead_transaction import (
+        ProspectionLeadTransaction,
+    )
+
+    # Vérifie que le lead existe
+    exists = (
+        await db.execute(
+            select(ProspectionLead.id).where(
+                ProspectionLead.id == lead_id
+            )
+        )
+    ).scalar_one_or_none()
+    if exists is None:
+        raise HTTPException(404, "Prospect introuvable")
+
+    tr = ProspectionLeadTransaction(
+        lead_id=lead_id,
+        transaction_date=data.transaction_date,
+        amount=data.amount,
+        kind=data.kind,
+        source=(data.source or "").strip() or None,
+        notes=(data.notes or "").strip() or None,
+    )
+    db.add(tr)
+    await db.flush()
+    await db.refresh(tr)
+    return TransactionRead.model_validate(tr)
+
+
+@router.delete(
+    "/transactions/{tx_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_transaction(
+    tx_id: int, db: DBSession, _: CurrentUser
+) -> None:
+    from app.models.prospection_lead_transaction import (
+        ProspectionLeadTransaction,
+    )
+
+    res = await db.execute(
+        delete(ProspectionLeadTransaction).where(
+            ProspectionLeadTransaction.id == tx_id
+        )
+    )
+    if (res.rowcount or 0) == 0:
+        raise HTTPException(404, "Transaction introuvable")
