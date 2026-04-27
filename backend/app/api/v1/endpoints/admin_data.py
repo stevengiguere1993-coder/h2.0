@@ -12,6 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.api.deps import DBSession, RequireOwner
+from app.integrations.cmhc.rents import ingest_csv as ingest_cmhc_csv
 from app.integrations.req.companies import ingest_zip as ingest_req_zip
 from app.integrations.roles_evaluation.montreal import (
     MTL_CSV_URL,
@@ -75,3 +76,37 @@ async def import_req_zip(
             500, f"Échec ingestion ZIP REQ : {exc}"
         ) from exc
     return {"source": "req", **result}
+
+
+@router.post(
+    "/cmhc/import",
+    summary="Ingère un CSV SCHL/CMHC (loyers moyens par zone et "
+    "nombre de chambres). Long ou wide format accepté.",
+)
+async def import_cmhc_csv(
+    db: DBSession,
+    _: RequireOwner,
+    csv_file: UploadFile = File(...),
+    default_year: Optional[int] = Form(default=None),
+) -> dict:
+    """Le portail SCHL HMIP-PIMH exporte des CSV en plusieurs formats
+    selon les filtres choisis. Cet endpoint accepte les deux formats
+    courants (long = une ligne par bracket, wide = une colonne par
+    bracket).
+    """
+    if not (csv_file.filename or "").lower().endswith(".csv"):
+        raise HTTPException(415, "Le fichier doit être un CSV.")
+    blob = await csv_file.read()
+    if not blob:
+        raise HTTPException(400, "Fichier vide.")
+    try:
+        result = await ingest_cmhc_csv(
+            db, blob, default_year=default_year
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            500, f"Échec ingestion CSV SCHL : {exc}"
+        ) from exc
+    return {"source": "cmhc", **result}

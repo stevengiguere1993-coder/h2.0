@@ -27,6 +27,7 @@ from app.models.help_request import HelpRequest
 from app.models.leave_request import LeaveRequest, LeaveStatus  # noqa: F401
 from app.models.measurement import MeasurementSnapshot
 from app.models.measurement_photo import MeasurementPhoto
+from app.models.market_rent import MarketRent
 from app.models.montreal_property_unit import MontrealPropertyUnit
 from app.models.notification import Notification
 from app.models.numbering_counter import NumberingCounter
@@ -75,6 +76,7 @@ __all__ = [
     "Fournisseur",
     "HelpRequest",
     "LeaveRequest",
+    "MarketRent",
     "MeasurementSnapshot",
     "MeasurementPhoto",
     "MontrealPropertyUnit",

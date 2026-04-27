@@ -551,6 +551,7 @@ async def enrich_owner(
                 "adresse": c.adresse,
                 "ville": c.ville,
                 "code_postal": c.code_postal,
+                "telephone": c.telephone,
             }
         )
     if not req_candidates:
@@ -588,6 +589,320 @@ async def delete_lead(
         raise HTTPException(404, "Prospect introuvable")
     await db.delete(lead)
     await db.flush()
+
+
+# ------------------------ Phone search ------------------------
+
+
+class PhoneFound(BaseModel):
+    phone: str
+    source: str   # "lespac", "kangalou"
+    url: Optional[str] = None
+    snippet: Optional[str] = None
+    dncl_check_url: str   # URL pour vérifier sur la DNCL
+
+
+class FindPhoneOut(BaseModel):
+    results: List[PhoneFound]
+    queries_tried: List[str]
+    notes: List[str]
+
+
+def _dncl_check_url(phone: str) -> str:
+    """URL de la DNCL (Liste nationale des numéros de télécommunication
+    exclus) pour vérifier qu'un numéro n'est pas inscrit avant un appel
+    commercial. Obligation CRTC."""
+    digits = re.sub(r"\D", "", phone)
+    return f"https://lnnte-dncl.gc.ca/fr/Consumer/CheckRegistration?phone={digits}"
+
+
+@router.post(
+    "/{lead_id}/find-phone",
+    response_model=FindPhoneOut,
+    summary="Cherche le téléphone du propriétaire via les annonces "
+    "publiques (LesPAC + Kangalou). Numéros NON stockés en base.",
+)
+async def find_phone(
+    lead_id: int, db: DBSession, _: CurrentUser
+) -> FindPhoneOut:
+    """Pas de stockage du numéro en DB — chaque appel re-cherche en
+    live. L'utilisateur doit vérifier la DNCL avant tout contact
+    téléphonique commercial (obligation CRTC).
+    """
+    import re as _re
+    from app.integrations.classifieds.phones import find_phones
+
+    lead = (
+        await db.execute(
+            select(ProspectionLead).where(ProspectionLead.id == lead_id)
+        )
+    ).scalar_one_or_none()
+    if lead is None:
+        raise HTTPException(404, "Prospect introuvable")
+
+    queries: List[str] = []
+    if lead.address:
+        if lead.city:
+            queries.append(f"{lead.address} {lead.city}")
+        else:
+            queries.append(lead.address)
+    if lead.owner_name and len(lead.owner_name.strip()) > 4:
+        queries.append(lead.owner_name.strip())
+
+    notes: List[str] = []
+    if not queries:
+        notes.append(
+            "Pas d'adresse ni de nom de propriétaire — impossible "
+            "de chercher."
+        )
+        return FindPhoneOut(
+            results=[], queries_tried=[], notes=notes
+        )
+
+    raw = await find_phones(
+        address=lead.address,
+        owner_name=lead.owner_name,
+        city=lead.city,
+    )
+
+    results: List[PhoneFound] = []
+    for r in raw:
+        results.append(
+            PhoneFound(
+                phone=r["phone"],
+                source=r["source"],
+                url=r.get("url"),
+                snippet=r.get("snippet"),
+                dncl_check_url=_dncl_check_url(r["phone"]),
+            )
+        )
+
+    if not results:
+        notes.append(
+            "Aucun numéro trouvé dans les annonces récentes. Le "
+            "proprio n'a peut-être pas publié sur LesPAC ou Kangalou, "
+            "ou ses annonces ont expiré."
+        )
+    notes.append(
+        "Avant tout appel commercial : vérifier sur la DNCL (bouton à "
+        "côté du numéro). Mentionner la source de l'annonce au début "
+        "de l'appel."
+    )
+
+    return FindPhoneOut(
+        results=results, queries_tried=queries, notes=notes
+    )
+
+
+# ------------------------ Rental estimate ------------------------
+
+
+# Mapping QC nomenclature → bedroom bracket SCHL.
+# Les 5½ et 6½ utilisent le bracket "3+ BR" car la SCHL ne publie
+# pas de granularité plus fine — on note explicitement à l'UI.
+_QC_BEDROOM_TO_BRACKET = {
+    "1.5": 0,   # studio / bachelor
+    "2.5": 1,   # 1 chambre
+    "3.5": 2,   # 2 chambres
+    "4.5": 3,   # 3 chambres
+    "5.5": 3,   # 3+ (estimation)
+    "6.5": 3,   # 3+ (estimation)
+}
+
+
+class RentBracket(BaseModel):
+    qc_label: str       # "1½", "2½", ...
+    bedrooms: int       # 0..3 (bracket SCHL)
+    avg_rent: Optional[float]
+    is_estimate: bool   # True pour 5½ et 6½ (bracket 3+ utilisé)
+
+
+class RentalEstimateOut(BaseModel):
+    cma: Optional[str]
+    zone: Optional[str]
+    year: Optional[int]
+    vacancy_rate: Optional[float]
+    brackets: List[RentBracket]
+    # Si le lead a nb_logements et un mix moyen (assumed: tout en 4½),
+    # on calcule un revenu mensuel/annuel et un GRM.
+    estimated_monthly_income: Optional[float]
+    estimated_annual_income: Optional[float]
+    grm: Optional[float]
+    grm_rating: Optional[str]
+    notes: List[str]
+
+
+def _grm_rating(grm: float) -> str:
+    """Classification GRM (Gross Rent Multiplier) selon les standards
+    multi-logements — plus c'est bas, mieux c'est."""
+    if grm < 7:
+        return "excellent"
+    if grm < 10:
+        return "bon"
+    if grm < 13:
+        return "moyen"
+    return "cher"
+
+
+@router.get(
+    "/{lead_id}/rental-estimate",
+    response_model=RentalEstimateOut,
+    summary="Loyers moyens SCHL pour la zone du lead + revenu locatif "
+    "estimé + GRM (Gross Rent Multiplier).",
+)
+async def rental_estimate(
+    lead_id: int, db: DBSession, _: CurrentUser
+) -> RentalEstimateOut:
+    from app.integrations.cmhc.rents import (
+        best_match_for_lead,
+        lookup_rents,
+        normalize_zone,
+    )
+    from app.models.market_rent import MarketRent
+
+    lead = (
+        await db.execute(
+            select(ProspectionLead).where(ProspectionLead.id == lead_id)
+        )
+    ).scalar_one_or_none()
+    if lead is None:
+        raise HTTPException(404, "Prospect introuvable")
+
+    notes: List[str] = []
+
+    # On essaie de matcher la ville du lead avec une zone SCHL connue.
+    # Stratégie : (a) chercher une zone dont le nom contient lead.city ;
+    # (b) sinon agrégat CMA "Montréal" si lead.city contient "montr*".
+    cma: Optional[str] = None
+    zone: Optional[str] = None
+
+    if lead.city:
+        # Toutes les zones distinctes (CMA, zone) en base
+        rows = (
+            await db.execute(
+                select(MarketRent.cma, MarketRent.zone).distinct()
+            )
+        ).all()
+        zones_in_db = [r[1] for r in rows if r[1]]
+        match = best_match_for_lead(
+            lead_city=lead.city, available_zones=zones_in_db
+        )
+        if match:
+            zone = match
+            # Trouve le CMA correspondant
+            for c, z in rows:
+                if z == match:
+                    cma = c
+                    break
+        else:
+            # Fallback : CMA dont le nom matche la ville (ex: "Montréal")
+            city_norm = normalize_zone(lead.city)
+            for c, _z in rows:
+                if normalize_zone(c) in city_norm or city_norm in normalize_zone(
+                    c
+                ):
+                    cma = c
+                    break
+
+    if not cma:
+        notes.append(
+            "Aucune zone SCHL ne correspond à cette ville. Importe le "
+            "CSV SCHL via /prospection/sources puis réessaie."
+        )
+        return RentalEstimateOut(
+            cma=None,
+            zone=None,
+            year=None,
+            vacancy_rate=None,
+            brackets=[],
+            estimated_monthly_income=None,
+            estimated_annual_income=None,
+            grm=None,
+            grm_rating=None,
+            notes=notes,
+        )
+
+    schl_rows = await lookup_rents(db, cma=cma, zone=zone)
+    by_bracket: Dict[int, MarketRent] = {r.bedrooms: r for r in schl_rows}
+    year = schl_rows[0].year if schl_rows else None
+    vacancy = (
+        float(schl_rows[0].vacancy_rate)
+        if schl_rows and schl_rows[0].vacancy_rate is not None
+        else None
+    )
+
+    if not zone:
+        notes.append(
+            f"Pas de sous-zone SCHL pour cette ville — utilisation de "
+            f"l'agrégat « {cma} »."
+        )
+
+    qc_brackets = [
+        ("1½", "1.5"),
+        ("2½", "2.5"),
+        ("3½", "3.5"),
+        ("4½", "4.5"),
+        ("5½", "5.5"),
+        ("6½", "6.5"),
+    ]
+    brackets_out: List[RentBracket] = []
+    for label, key in qc_brackets:
+        bracket = _QC_BEDROOM_TO_BRACKET[key]
+        rent_row = by_bracket.get(bracket)
+        rent = (
+            float(rent_row.avg_rent)
+            if rent_row and rent_row.avg_rent is not None
+            else None
+        )
+        brackets_out.append(
+            RentBracket(
+                qc_label=label,
+                bedrooms=bracket,
+                avg_rent=rent,
+                # 5½ et 6½ utilisent le bracket 3+ → c'est une estimation
+                is_estimate=key in ("5.5", "6.5"),
+            )
+        )
+
+    # Estimation revenu : approche conservatrice — on prend le bracket
+    # 4½ (3 chambres) comme moyenne représentative du multi-logement
+    # typique. Si pas dispo, on prend 3½ (2 chambres) en fallback.
+    est_monthly = None
+    if lead.nb_logements:
+        ref_rent = (
+            float(by_bracket[3].avg_rent)
+            if 3 in by_bracket and by_bracket[3].avg_rent
+            else float(by_bracket[2].avg_rent)
+            if 2 in by_bracket and by_bracket[2].avg_rent
+            else None
+        )
+        if ref_rent is not None:
+            est_monthly = ref_rent * lead.nb_logements
+            notes.append(
+                f"Estimation basée sur "
+                f"{'4½' if 3 in by_bracket and by_bracket[3].avg_rent else '3½'} "
+                f"× {lead.nb_logements} logements."
+            )
+
+    est_annual = est_monthly * 12 if est_monthly is not None else None
+    grm = None
+    grm_label = None
+    if est_annual and lead.valeur_fonciere and float(lead.valeur_fonciere) > 0:
+        grm = float(lead.valeur_fonciere) / est_annual
+        grm_label = _grm_rating(grm)
+
+    return RentalEstimateOut(
+        cma=cma,
+        zone=zone,
+        year=year,
+        vacancy_rate=vacancy,
+        brackets=brackets_out,
+        estimated_monthly_income=est_monthly,
+        estimated_annual_income=est_annual,
+        grm=round(grm, 2) if grm else None,
+        grm_rating=grm_label,
+        notes=notes,
+    )
 
 
 # ------------------------ Score recompute ------------------------

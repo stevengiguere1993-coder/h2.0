@@ -43,6 +43,12 @@ class ReqCompany(Base):
         String(16), nullable=True
     )
 
+    # Téléphone du siège social — publié dans le CSV REQ.
+    # Source légitime : information d'affaires publique.
+    telephone: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+
     # Nom normalisé pour recherche insensible aux accents/casse.
     nom_normalized: Mapped[Optional[str]] = mapped_column(
         String(500), nullable=True, index=True

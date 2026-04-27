@@ -6,6 +6,7 @@ import {
   Building2,
   CheckCircle2,
   Database,
+  DollarSign,
   Download,
   ExternalLink,
   Loader2,
@@ -37,6 +38,36 @@ export default function ProspectionSourcesPage() {
   const [reqBusy, setReqBusy] = useState(false);
   const [reqResult, setReqResult] = useState<ImportResult | null>(null);
   const [reqError, setReqError] = useState<string | null>(null);
+
+  const [cmhcFile, setCmhcFile] = useState<File | null>(null);
+  const [cmhcBusy, setCmhcBusy] = useState(false);
+  const [cmhcResult, setCmhcResult] = useState<ImportResult | null>(null);
+  const [cmhcError, setCmhcError] = useState<string | null>(null);
+
+  async function importCmhc() {
+    if (cmhcBusy || !cmhcFile) return;
+    setCmhcBusy(true);
+    setCmhcError(null);
+    setCmhcResult(null);
+    try {
+      const fd = new FormData();
+      fd.append("csv_file", cmhcFile);
+      const res = await authedFetch("/api/v1/admin/data/cmhc/import", {
+        method: "POST",
+        body: fd
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      setCmhcResult((await res.json()) as ImportResult);
+      setCmhcFile(null);
+    } catch (e) {
+      setCmhcError((e as Error).message);
+    } finally {
+      setCmhcBusy(false);
+    }
+  }
 
   async function importMontreal() {
     if (mtlBusy) return;
@@ -285,6 +316,112 @@ export default function ProspectionSourcesPage() {
             {reqError ? (
               <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
                 {reqError}
+              </p>
+            ) : null}
+          </div>
+        </section>
+
+        {/* === SCHL/CMHC : Loyers moyens === */}
+        <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+          <header className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+                <DollarSign className="h-5 w-5" />
+              </span>
+              <div>
+                <h2 className="text-base font-bold text-white">
+                  Loyers moyens — SCHL / CMHC
+                </h2>
+                <p className="mt-0.5 text-xs text-white/60">
+                  Loyers moyens et taux d&apos;inoccupation par zone
+                  géographique et nombre de chambres. Permet
+                  d&apos;estimer le revenu locatif d&apos;un multi
+                  et son GRM (valeur / revenu annuel).
+                </p>
+              </div>
+            </div>
+            <a
+              href="https://www03.cmhc-schl.gc.ca/hmip-pimh/fr"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex flex-shrink-0 items-center gap-1 text-[11px] text-emerald-400 hover:text-emerald-300"
+            >
+              <ExternalLink className="h-3 w-3" />
+              source
+            </a>
+          </header>
+
+          <ol className="mt-3 space-y-1.5 rounded-md border border-brand-700 bg-brand-950/40 p-3 text-[11px] text-white/70">
+            <li>
+              <strong className="text-white/90">1.</strong> Va sur le{" "}
+              <a
+                href="https://www03.cmhc-schl.gc.ca/hmip-pimh/fr/TableMapChart/RentalMarket"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-emerald-400 hover:text-emerald-300"
+              >
+                portail SCHL
+              </a>
+              . Choisis « RMR : Montréal », « Sous-zones », « Loyer
+              moyen ($) — Appartement privé, Nombre de chambres » et
+              télécharge le CSV.
+            </li>
+            <li>
+              <strong className="text-white/90">2.</strong> Sélectionne
+              le CSV ci-dessous et lance l&apos;import. Format long
+              ou wide accepté.
+            </li>
+            <li>
+              <strong className="text-white/90">3.</strong> Ré-importer
+              chaque année (oct/nov, après publication du nouveau
+              rapport SCHL). Idempotent : ON CONFLICT (CMA, zone,
+              taille, année) → UPDATE.
+            </li>
+          </ol>
+
+          <div className="mt-4 space-y-3">
+            <label className="block">
+              <span className="label">Fichier CSV SCHL</span>
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                disabled={!isOwner || cmhcBusy}
+                onChange={(e) =>
+                  setCmhcFile(e.target.files?.[0] || null)
+                }
+                className="mt-1 block w-full cursor-pointer rounded-md border border-brand-700 bg-brand-950 px-3 py-2 text-xs text-white/80 file:mr-3 file:rounded file:border-0 file:bg-emerald-500/15 file:px-3 file:py-1.5 file:text-emerald-300 hover:file:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+              />
+            </label>
+
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={importCmhc}
+                disabled={!isOwner || !cmhcFile || cmhcBusy}
+                className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {cmhcBusy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Upload className="h-4 w-4" />
+                )}
+                {cmhcBusy
+                  ? "Ingestion en cours…"
+                  : "Importer le CSV SCHL"}
+              </button>
+
+              {cmhcResult ? (
+                <p className="flex items-center gap-1.5 text-xs text-emerald-300">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  {cmhcResult.rows_upserted.toLocaleString("fr-CA")}{" "}
+                  lignes ingérées
+                </p>
+              ) : null}
+            </div>
+
+            {cmhcError ? (
+              <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                {cmhcError}
               </p>
             ) : null}
           </div>

@@ -172,6 +172,13 @@ def _entreprise_row_to_dict(
     )
 
     adr = adresses.get(neq) or {}
+    # Téléphone : peut venir soit du fichier entreprise.csv directement
+    # (champ TEL_DOMI / TEL_SIEGE selon les versions REQ), soit de la
+    # table d'adresses.
+    telephone = (
+        _pick(row, "TEL_DOMI", "TEL_SIEGE", "TELEPHONE", "telephone")
+        or adr.get("telephone")
+    )
     return {
         "neq": neq,
         "nom": nom or None,
@@ -182,6 +189,7 @@ def _entreprise_row_to_dict(
         "adresse": adr.get("adresse"),
         "ville": adr.get("ville"),
         "code_postal": adr.get("code_postal"),
+        "telephone": telephone or None,
     }
 
 
@@ -220,6 +228,8 @@ def _parse_adresses(
             "adresse": adresse or None,
             "ville": ville or None,
             "code_postal": code_postal or None,
+            "telephone": _pick(row, "TELEPHONE", "TEL", "telephone")
+            or None,
             "_priority": new_priority,
         }
     # Nettoie les marqueurs de priorité

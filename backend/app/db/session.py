@@ -202,6 +202,8 @@ async def init_db() -> None:
                 "INTEGER NOT NULL DEFAULT 0",
             ),
             ("prospection_leads", "tags", "TEXT"),
+            # REQ : téléphone du siège social (du CSV REQ).
+            ("req_companies", "telephone", "VARCHAR(32)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

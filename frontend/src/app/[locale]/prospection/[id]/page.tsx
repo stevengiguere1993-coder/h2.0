@@ -7,12 +7,16 @@ import {
   ArrowRightCircle,
   Building2,
   Camera,
+  DollarSign,
+  ExternalLink,
   Loader2,
   MapPin,
   Mic,
   MicOff,
+  Phone,
   Save,
   Search,
+  ShieldCheck,
   Trash2,
   X
 } from "lucide-react";
@@ -423,6 +427,83 @@ export default function ProspectionDetailPage() {
   }
 
   const [converting, setConverting] = useState(false);
+
+  // Rental estimate (SCHL)
+  type RentalEstimate = {
+    cma: string | null;
+    zone: string | null;
+    year: number | null;
+    vacancy_rate: number | null;
+    brackets: {
+      qc_label: string;
+      bedrooms: number;
+      avg_rent: number | null;
+      is_estimate: boolean;
+    }[];
+    estimated_monthly_income: number | null;
+    estimated_annual_income: number | null;
+    grm: number | null;
+    grm_rating: string | null;
+    notes: string[];
+  };
+  const [rental, setRental] = useState<RentalEstimate | null>(null);
+  const [rentalBusy, setRentalBusy] = useState(false);
+  const [rentalError, setRentalError] = useState<string | null>(null);
+
+  async function loadRentalEstimate() {
+    if (rentalBusy) return;
+    setRentalBusy(true);
+    setRentalError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/${id}/rental-estimate`
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setRental((await res.json()) as RentalEstimate);
+    } catch (e) {
+      setRentalError((e as Error).message);
+    } finally {
+      setRentalBusy(false);
+    }
+  }
+
+  // Phone search (LesPAC + Kangalou)
+  type PhoneFound = {
+    phone: string;
+    source: string;
+    url: string | null;
+    snippet: string | null;
+    dncl_check_url: string;
+  };
+  const [phones, setPhones] = useState<PhoneFound[] | null>(null);
+  const [phoneNotes, setPhoneNotes] = useState<string[]>([]);
+  const [phoneBusy, setPhoneBusy] = useState(false);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+
+  async function findPhone() {
+    if (phoneBusy) return;
+    setPhoneBusy(true);
+    setPhoneError(null);
+    setPhones(null);
+    setPhoneNotes([]);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/${id}/find-phone`,
+        { method: "POST" }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as {
+        results: PhoneFound[];
+        notes: string[];
+      };
+      setPhones(data.results);
+      setPhoneNotes(data.notes || []);
+    } catch (e) {
+      setPhoneError((e as Error).message);
+    } finally {
+      setPhoneBusy(false);
+    }
+  }
 
   async function convertToContact() {
     if (!lead) return;
@@ -913,9 +994,266 @@ export default function ProspectionDetailPage() {
                       >
                         🔗 REQ recherche libre
                       </a>
+                      {ownerName.trim() ? (
+                        <a
+                          href={`https://www.canada411.ca/search/?stype=re&what=${encodeURIComponent(
+                            ownerName.trim()
+                          )}${
+                            city.trim()
+                              ? `&where=${encodeURIComponent(
+                                  city.trim() + " QC"
+                                )}`
+                              : ""
+                          }`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 rounded-md border border-brand-700 bg-brand-900 px-2.5 py-1.5 text-[11px] text-white/70 hover:bg-brand-800 hover:text-white"
+                          title="Annuaire public Canada411"
+                        >
+                          📞 Canada411
+                        </a>
+                      ) : null}
                     </div>
                   </div>
                 </div>
+              </section>
+
+              {/* === Téléphone du propriétaire === */}
+              <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                      Téléphone du propriétaire
+                    </h2>
+                    <p className="mt-1 text-[11px] text-white/50">
+                      Recherche dans les annonces publiques (LesPAC +
+                      Kangalou). Numéros NON stockés en base — chaque
+                      recherche est faite en live.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={findPhone}
+                    disabled={phoneBusy || (!address.trim() && !ownerName.trim())}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                  >
+                    {phoneBusy ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Phone className="h-3.5 w-3.5" />
+                    )}
+                    Trouver le téléphone
+                  </button>
+                </div>
+                {phoneError ? (
+                  <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                    {phoneError}
+                  </p>
+                ) : null}
+                {phones && phones.length > 0 ? (
+                  <ul className="mt-3 space-y-2">
+                    {phones.map((p, i) => (
+                      <li
+                        key={`${p.phone}-${i}`}
+                        className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <a
+                            href={`tel:${p.phone.replace(/-/g, "")}`}
+                            className="font-mono text-base font-bold text-emerald-300 hover:text-emerald-200"
+                          >
+                            {p.phone}
+                          </a>
+                          <span className="rounded-full bg-brand-800 px-2 py-0.5 text-[10px] uppercase text-white/60">
+                            {p.source}
+                          </span>
+                        </div>
+                        {p.snippet ? (
+                          <p className="mt-1 text-[11px] italic text-white/50">
+                            « {p.snippet} »
+                          </p>
+                        ) : null}
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <a
+                            href={p.dncl_check_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20"
+                            title="Liste nationale des numéros exclus du télémarketing — obligation CRTC"
+                          >
+                            <ShieldCheck className="h-3 w-3" />
+                            Vérifier DNCL
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => setOwnerPhone(p.phone)}
+                            className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20"
+                          >
+                            Utiliser ce numéro
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {phoneNotes.length > 0 ? (
+                  <ul className="mt-2 space-y-1 text-[11px] text-white/50">
+                    {phoneNotes.map((n, i) => (
+                      <li key={i}>· {n}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </section>
+
+              {/* === Revenus locatifs estimés (SCHL) === */}
+              <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                      Revenus locatifs estimés
+                    </h2>
+                    <p className="mt-1 text-[11px] text-white/50">
+                      Loyers moyens SCHL pour cette zone, par grandeur
+                      d&apos;appartement. Permet d&apos;estimer le
+                      revenu annuel et le GRM (valeur / revenu) — la
+                      métrique-clé multi-logements.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={loadRentalEstimate}
+                    disabled={rentalBusy}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                  >
+                    {rentalBusy ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <DollarSign className="h-3.5 w-3.5" />
+                    )}
+                    Estimer
+                  </button>
+                </div>
+                {rentalError ? (
+                  <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                    {rentalError}
+                  </p>
+                ) : null}
+                {rental ? (
+                  <div className="mt-3 space-y-3">
+                    {rental.cma ? (
+                      <p className="text-[11px] text-white/60">
+                        Source : SCHL ·{" "}
+                        <span className="text-emerald-300">
+                          {rental.zone || rental.cma}
+                        </span>
+                        {rental.year ? ` · ${rental.year}` : ""}
+                        {rental.vacancy_rate != null
+                          ? ` · vacance ${rental.vacancy_rate}%`
+                          : ""}
+                      </p>
+                    ) : null}
+                    {rental.brackets.length > 0 ? (
+                      <div className="overflow-hidden rounded-md border border-brand-700">
+                        <table className="w-full text-xs">
+                          <thead className="bg-brand-950/60 text-left text-[10px] uppercase tracking-wider text-white/50">
+                            <tr>
+                              <th className="px-2 py-1.5">Taille</th>
+                              <th className="px-2 py-1.5 text-right">
+                                Loyer moyen
+                              </th>
+                              <th className="px-2 py-1.5"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-brand-800">
+                            {rental.brackets.map((b) => (
+                              <tr key={b.qc_label}>
+                                <td className="px-2 py-1.5 font-medium text-white/80">
+                                  {b.qc_label}
+                                </td>
+                                <td className="px-2 py-1.5 text-right tabular-nums text-white/80">
+                                  {b.avg_rent != null
+                                    ? `${b.avg_rent.toFixed(0)} $`
+                                    : "—"}
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  {b.is_estimate ? (
+                                    <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] text-amber-300">
+                                      estimé sur 3+ BR
+                                    </span>
+                                  ) : null}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : null}
+                    {rental.estimated_annual_income ? (
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        <div className="rounded-md border border-brand-700 bg-brand-950/40 p-2">
+                          <p className="text-[10px] uppercase tracking-wider text-white/50">
+                            Revenu mensuel
+                          </p>
+                          <p className="text-sm font-bold tabular-nums text-emerald-300">
+                            {rental.estimated_monthly_income?.toLocaleString(
+                              "fr-CA",
+                              {
+                                style: "currency",
+                                currency: "CAD",
+                                maximumFractionDigits: 0
+                              }
+                            )}
+                          </p>
+                        </div>
+                        <div className="rounded-md border border-brand-700 bg-brand-950/40 p-2">
+                          <p className="text-[10px] uppercase tracking-wider text-white/50">
+                            Revenu annuel
+                          </p>
+                          <p className="text-sm font-bold tabular-nums text-emerald-300">
+                            {rental.estimated_annual_income.toLocaleString(
+                              "fr-CA",
+                              {
+                                style: "currency",
+                                currency: "CAD",
+                                maximumFractionDigits: 0
+                              }
+                            )}
+                          </p>
+                        </div>
+                        {rental.grm != null ? (
+                          <div className="rounded-md border border-brand-700 bg-brand-950/40 p-2">
+                            <p className="text-[10px] uppercase tracking-wider text-white/50">
+                              GRM (valeur ÷ revenu)
+                            </p>
+                            <p
+                              className={`text-sm font-bold tabular-nums ${
+                                rental.grm_rating === "excellent"
+                                  ? "text-emerald-300"
+                                  : rental.grm_rating === "bon"
+                                    ? "text-blue-300"
+                                    : rental.grm_rating === "moyen"
+                                      ? "text-amber-300"
+                                      : "text-rose-300"
+                              }`}
+                            >
+                              {rental.grm.toFixed(1)}
+                              <span className="ml-1 text-[10px] font-normal uppercase">
+                                {rental.grm_rating}
+                              </span>
+                            </p>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {rental.notes.length > 0 ? (
+                      <ul className="space-y-1 text-[11px] text-white/50">
+                        {rental.notes.map((n, i) => (
+                          <li key={i}>· {n}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
               </section>
 
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
