@@ -110,3 +110,23 @@ async def import_cmhc_csv(
             500, f"Échec ingestion CSV SCHL : {exc}"
         ) from exc
     return {"source": "cmhc", **result}
+
+
+@router.post(
+    "/init-db",
+    summary="Force-run init_db() (migrations additives + create_all). "
+    "Utile si Render n'a pas restart proprement après un deploy.",
+)
+async def force_init_db(_: RequireOwner) -> dict:
+    """init_db() est idempotent : create_all ne crée que les tables
+    manquantes, et ADD COLUMN IF NOT EXISTS ne fait rien si la colonne
+    existe déjà."""
+    from app.db.session import init_db
+
+    try:
+        await init_db()
+    except Exception as exc:
+        raise HTTPException(
+            500, f"init_db a échoué : {exc}"
+        ) from exc
+    return {"ok": True}
