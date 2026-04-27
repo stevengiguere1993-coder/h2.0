@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Loader2, MapPin, Monitor, Smartphone } from "lucide-react";
 
 import { useRouter } from "@/i18n/navigation";
-import { getMe, login, setToken } from "@/lib/auth";
+import { getMe, getToken, login, setToken } from "@/lib/auth";
 
 /**
  * After a successful login, we show a small picker asking the user
@@ -25,7 +25,33 @@ export function LoginForm() {
     if (typeof window === "undefined") return;
     const n = new URLSearchParams(window.location.search).get("next");
     if (n && n.startsWith("/")) setNextUrl(n);
-  }, []);
+
+    // Si l'utilisateur est déjà authentifié (a cliqué « Accueil du
+    // portail » depuis une appli déjà ouverte), saute le formulaire
+    // login et montre directement le sélecteur de portail.
+    const existing = getToken();
+    if (!existing) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const me = await getMe(existing);
+        if (cancelled) return;
+        if (me.must_change_password) return; // laisse le user voir le form
+        // Employee → bypass picker, vers /m direct
+        if (me.role === "employee") {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          router.replace("/m" as any);
+          return;
+        }
+        setAuthed(true);
+      } catch {
+        // Token invalide → laisse le user voir le formulaire login
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
