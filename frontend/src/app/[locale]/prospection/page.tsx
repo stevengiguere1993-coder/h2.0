@@ -4,9 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Loader2,
   MapPin,
+  Navigation,
   Plus,
   RefreshCw,
-  Search
+  Search,
+  X
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
@@ -29,6 +31,8 @@ type Lead = {
   valeur_fonciere: number | null;
   owner_kind: string;
   owner_name: string | null;
+  score: number;
+  tags: string[];
   photos_count: number;
   created_at: string;
 };
@@ -73,6 +77,7 @@ export default function ProspectionWebPage() {
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [kindFilter, setKindFilter] = useState<string>("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [routeOpen, setRouteOpen] = useState(false);
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   // Le ref est volontairement typed `any` parce que `leaflet` est
@@ -202,15 +207,31 @@ export default function ProspectionWebPage() {
         ]}
         onOpenSidebar={onOpenSidebar}
         rightSlot={
-          <Link
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/m/prospection" as any}
-            className="btn-accent text-sm"
-          >
-            <Plus className="mr-1.5 h-4 w-4" />
-            Nouveau (mobile)
-          </Link>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setRouteOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20"
+            >
+              <Navigation className="h-3.5 w-3.5" />
+              Planifier ma route
+            </button>
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/m/prospection" as any}
+              className="btn-accent text-sm"
+            >
+              <Plus className="mr-1.5 h-4 w-4" />
+              Nouveau (mobile)
+            </Link>
+          </div>
         }
+      />
+
+      <RouteModal
+        open={routeOpen}
+        onClose={() => setRouteOpen(false)}
+        leads={filtered}
       />
 
       <div className="flex h-[calc(100vh-4rem)] flex-col lg:flex-row">
@@ -412,4 +433,232 @@ function escapeHtml(s: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function RouteModal({
+  open,
+  onClose,
+  leads
+}: {
+  open: boolean;
+  onClose: () => void;
+  leads: Lead[];
+}) {
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [useGps, setUseGps] = useState(true);
+  const [gpsCoords, setGpsCoords] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Limite : OSRM public ne supporte pas trop de waypoints à la fois,
+  // et de toute façon une route drive-by raisonnable c'est 6-10 stops.
+  const MAX = 10;
+
+  // Reset à chaque ouverture
+  useEffect(() => {
+    if (open) {
+      setSelected(new Set());
+      setError(null);
+    }
+  }, [open]);
+
+  // Récupère la position GPS quand le toggle est activé
+  useEffect(() => {
+    if (!open || !useGps || gpsCoords) return;
+    if (typeof navigator === "undefined" || !navigator.geolocation)
+      return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) =>
+        setGpsCoords({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude
+        }),
+      () => setUseGps(false),
+      { enableHighAccuracy: true, timeout: 5000 }
+    );
+  }, [open, useGps, gpsCoords]);
+
+  const eligible = useMemo(
+    () => leads.filter((l) => l.lat != null && l.lng != null),
+    [leads]
+  );
+
+  function toggle(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else if (next.size < MAX) {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  async function plan() {
+    if (busy || selected.size < 2) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const body: Record<string, unknown> = {
+        lead_ids: Array.from(selected)
+      };
+      if (useGps && gpsCoords) {
+        body.start_lat = gpsCoords.lat;
+        body.start_lng = gpsCoords.lng;
+      }
+      const res = await authedFetch(
+        "/api/v1/prospection/route/optimize",
+        {
+          method: "POST",
+          body: JSON.stringify(body)
+        }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as {
+        google_maps_url: string;
+        total_distance_m: number;
+        total_duration_s: number;
+      };
+      window.open(data.google_maps_url, "_blank", "noopener,noreferrer");
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) return null;
+  return (
+    <div
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/70 p-4"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
+        <header className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
+          <div className="flex items-center gap-2">
+            <Navigation className="h-4 w-4 text-emerald-400" />
+            <h2 className="text-sm font-semibold text-white">
+              Planifier ma route drive-by
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-1 text-white/40 hover:bg-brand-900 hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="border-b border-brand-800 p-3 text-xs">
+          <label className="flex items-center gap-2 text-white/70">
+            <input
+              type="checkbox"
+              checked={useGps}
+              onChange={(e) => setUseGps(e.target.checked)}
+            />
+            Partir de ma position actuelle
+            {useGps && !gpsCoords ? (
+              <Loader2 className="h-3 w-3 animate-spin text-white/40" />
+            ) : null}
+            {useGps && gpsCoords ? (
+              <span className="text-emerald-400">✓</span>
+            ) : null}
+          </label>
+          <p className="mt-2 text-white/50">
+            Sélectionne les leads à visiter (max {MAX}). L&apos;ordre
+            sera optimisé via OSRM (gratuit, OpenStreetMap) puis ouvert
+            dans Google Maps.
+          </p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {eligible.length === 0 ? (
+            <p className="p-4 text-center text-xs text-white/50">
+              Aucun lead géolocalisé disponible.
+            </p>
+          ) : (
+            <ul className="divide-y divide-brand-800">
+              {eligible.map((l) => {
+                const checked = selected.has(l.id);
+                const disabled = !checked && selected.size >= MAX;
+                return (
+                  <li key={l.id}>
+                    <label
+                      className={`flex cursor-pointer items-start gap-2 px-3 py-2 text-xs transition hover:bg-brand-900 ${
+                        disabled ? "opacity-40" : ""
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={disabled}
+                        onChange={() => toggle(l.id)}
+                        className="mt-0.5"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium text-white">
+                          {l.name}
+                        </span>
+                        <span className="block truncate text-white/50">
+                          {l.address || "Sans adresse"}
+                          {l.city ? ` · ${l.city}` : ""}
+                        </span>
+                      </span>
+                      <span className="rounded bg-brand-800 px-1.5 py-0.5 text-[10px] text-white/60">
+                        {l.score}
+                      </span>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        {error ? (
+          <p className="border-t border-brand-800 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+            {error}
+          </p>
+        ) : null}
+
+        <footer className="flex items-center justify-between border-t border-brand-800 px-4 py-3">
+          <p className="text-xs text-white/50">
+            {selected.size} / {MAX} sélectionnés
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md px-3 py-1.5 text-xs text-white/60 hover:bg-brand-900 hover:text-white"
+            >
+              Annuler
+            </button>
+            <button
+              type="button"
+              onClick={plan}
+              disabled={busy || selected.size < 2}
+              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-40"
+            >
+              {busy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Navigation className="h-3.5 w-3.5" />
+              )}
+              Optimiser et ouvrir
+            </button>
+          </div>
+        </footer>
+      </div>
+    </div>
+  );
 }

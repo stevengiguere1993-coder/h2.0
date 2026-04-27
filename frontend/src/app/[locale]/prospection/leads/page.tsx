@@ -33,6 +33,8 @@ type Lead = {
   annee_construction: number | null;
   owner_kind: string;
   owner_name: string | null;
+  score: number;
+  tags: string[];
   photos_count: number;
   created_at: string;
 };
@@ -79,7 +81,31 @@ type SortKey =
   | "owner"
   | "status"
   | "priority"
+  | "score"
   | "created_at";
+
+const TAG_LABEL: Record<string, string> = {
+  "sweet-spot": "Sweet spot 6-12",
+  "petit-multi": "Petit multi",
+  "moyen-multi": "Moyen multi",
+  "gros-multi": "Gros multi",
+  "tres-vieux": "60 ans+",
+  vieux: "40 ans+",
+  mature: "25 ans+",
+  neuf: "Récent",
+  corp: "Corporation",
+  "neq-connu": "NEQ connu",
+  "contact-direct": "Contact direct",
+  "proprio-inconnu": "Proprio ?",
+  "priorite-haute": "Prio haute"
+};
+
+function scoreBadgeClass(s: number): string {
+  if (s >= 70) return "bg-emerald-500/30 text-emerald-200";
+  if (s >= 50) return "bg-amber-500/25 text-amber-200";
+  if (s >= 30) return "bg-blue-500/25 text-blue-200";
+  return "bg-brand-800 text-white/50";
+}
 
 function bucketFor(n: number | null): SizeBucket {
   if (n == null) return "";
@@ -127,7 +153,7 @@ export default function ProspectionLeadsPage() {
   const [cityFilter, setCityFilter] = useState("");
   const [sizeFilter, setSizeFilter] = useState<SizeBucket>("");
 
-  const [sortKey, setSortKey] = useState<SortKey>("created_at");
+  const [sortKey, setSortKey] = useState<SortKey>("score");
   const [sortAsc, setSortAsc] = useState(false);
 
   useEffect(() => {
@@ -219,6 +245,10 @@ export default function ProspectionLeadsPage() {
         case "priority":
           va = a.priority;
           vb = b.priority;
+          break;
+        case "score":
+          va = a.score;
+          vb = b.score;
           break;
         case "created_at":
         default:
@@ -422,6 +452,13 @@ export default function ProspectionLeadsPage() {
                 <thead className="bg-brand-950/60 text-left text-[11px] uppercase tracking-wider text-white/50">
                   <tr>
                     <th
+                      onClick={() => toggleSort("score")}
+                      className="cursor-pointer px-3 py-2.5 text-center hover:text-white"
+                    >
+                      Score
+                      <SortIcon k="score" />
+                    </th>
+                    <th
                       onClick={() => toggleSort("name")}
                       className="cursor-pointer px-3 py-2.5 hover:text-white"
                     >
@@ -486,6 +523,22 @@ export default function ProspectionLeadsPage() {
                       key={l.id}
                       className="cursor-pointer transition hover:bg-brand-800/40"
                     >
+                      <td className="px-3 py-2.5 text-center">
+                        <span
+                          className={`inline-flex h-7 w-9 items-center justify-center rounded-md text-xs font-bold tabular-nums ${scoreBadgeClass(
+                            l.score
+                          )}`}
+                          title={
+                            l.tags.length
+                              ? l.tags
+                                  .map((t) => TAG_LABEL[t] || t)
+                                  .join(" · ")
+                              : undefined
+                          }
+                        >
+                          {l.score}
+                        </span>
+                      </td>
                       <td className="px-3 py-2.5">
                         <Link
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -494,6 +547,18 @@ export default function ProspectionLeadsPage() {
                         >
                           {l.name}
                         </Link>
+                        {l.tags.length > 0 ? (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {l.tags.slice(0, 3).map((t) => (
+                              <span
+                                key={t}
+                                className="rounded bg-brand-800 px-1.5 py-0.5 text-[10px] text-white/60"
+                              >
+                                {TAG_LABEL[t] || t}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-3 py-2.5 text-white/60">
                         {KIND_LABEL[l.kind] || l.kind}

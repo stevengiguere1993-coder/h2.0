@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   ArrowLeft,
+  ArrowRightCircle,
   Building2,
   Camera,
   Loader2,
@@ -43,9 +44,35 @@ type Lead = {
   owner_email: string | null;
   owner_phone: string | null;
   owner_neq: string | null;
+  score: number;
+  tags: string[];
+  converted_to_contact_request_id: number | null;
   archived: boolean;
   created_at: string;
 };
+
+const TAG_LABEL: Record<string, string> = {
+  "sweet-spot": "Sweet spot 6-12",
+  "petit-multi": "Petit multi",
+  "moyen-multi": "Moyen multi",
+  "gros-multi": "Gros multi",
+  "tres-vieux": "60 ans+",
+  vieux: "40 ans+",
+  mature: "25 ans+",
+  neuf: "Récent",
+  corp: "Corporation",
+  "neq-connu": "NEQ connu",
+  "contact-direct": "Contact direct",
+  "proprio-inconnu": "Proprio ?",
+  "priorite-haute": "Prio haute"
+};
+
+function scoreBadgeClass(s: number): string {
+  if (s >= 70) return "bg-emerald-500/30 text-emerald-200";
+  if (s >= 50) return "bg-amber-500/25 text-amber-200";
+  if (s >= 30) return "bg-blue-500/25 text-blue-200";
+  return "bg-brand-800 text-white/50";
+}
 
 type Photo = {
   id: number;
@@ -393,6 +420,47 @@ export default function ProspectionDetailPage() {
     }
   }
 
+  const [converting, setConverting] = useState(false);
+
+  async function convertToContact() {
+    if (!lead) return;
+    if (lead.converted_to_contact_request_id) {
+      window.location.href = `/app/crm/${lead.converted_to_contact_request_id}`;
+      return;
+    }
+    if (
+      !(await confirm({
+        title: "Convertir ce lead en client ?",
+        description:
+          "Crée une demande de contact dans le CRM Construction avec l'adresse et le propriétaire pré-remplis. Le lead passe en statut « Converti »."
+      }))
+    )
+      return;
+    setConverting(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/${id}/convert-to-contact`,
+        {
+          method: "POST",
+          body: JSON.stringify({})
+        }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as {
+        contact_request_id: number;
+      };
+      window.location.href = `/app/crm/${data.contact_request_id}`;
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setConverting(false);
+    }
+  }
+
   return (
     <>
       <AppTopbar
@@ -422,6 +490,53 @@ export default function ProspectionDetailPage() {
           <div className="mt-6 grid gap-6 lg:grid-cols-3">
             {/* Colonne principale */}
             <div className="space-y-6 lg:col-span-2">
+              <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <span
+                      className={`flex h-12 w-14 items-center justify-center rounded-xl text-2xl font-bold tabular-nums ${scoreBadgeClass(
+                        lead.score
+                      )}`}
+                    >
+                      {lead.score}
+                    </span>
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wider text-white/50">
+                        Score Horizon
+                      </p>
+                      <p className="text-xs text-white/60">
+                        {lead.score >= 70
+                          ? "Lead à fort potentiel"
+                          : lead.score >= 50
+                            ? "Lead intéressant"
+                            : lead.score >= 30
+                              ? "Lead à creuser"
+                              : "Lead à compléter"}
+                      </p>
+                    </div>
+                  </div>
+                  {lead.tags.length > 0 ? (
+                    <div className="flex flex-wrap justify-end gap-1.5">
+                      {lead.tags.map((t) => (
+                        <span
+                          key={t}
+                          className="rounded-full bg-brand-800 px-2 py-0.5 text-[11px] text-white/70"
+                        >
+                          {TAG_LABEL[t] || t}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+                {lead.converted_to_contact_request_id ? (
+                  <p className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+                    ✓ Lead converti en ContactRequest #
+                    {lead.converted_to_contact_request_id} dans le CRM
+                    Construction.
+                  </p>
+                ) : null}
+              </section>
+
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                   Identité du lead
@@ -829,19 +944,36 @@ export default function ProspectionDetailPage() {
                   <Trash2 className="h-3.5 w-3.5" />
                   Supprimer
                 </button>
-                <button
-                  type="button"
-                  onClick={save}
-                  disabled={saving}
-                  className="btn-accent text-sm"
-                >
-                  {saving ? (
-                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Save className="mr-1.5 h-4 w-4" />
-                  )}
-                  Enregistrer
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={convertToContact}
+                    disabled={converting}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                  >
+                    {converting ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <ArrowRightCircle className="h-3.5 w-3.5" />
+                    )}
+                    {lead.converted_to_contact_request_id
+                      ? "Voir dans le CRM"
+                      : "Convertir en client"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={save}
+                    disabled={saving}
+                    className="btn-accent text-sm"
+                  >
+                    {saving ? (
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Save className="mr-1.5 h-4 w-4" />
+                    )}
+                    Enregistrer
+                  </button>
+                </div>
               </div>
             </div>
 

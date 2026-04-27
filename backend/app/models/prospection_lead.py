@@ -98,6 +98,15 @@ class ProspectionLead(Base, TimestampUpdateMixin):
         Integer, nullable=False, default=3, server_default="3"
     )  # 1-5 étoiles
 
+    # Scoring & tags automatiques (recalculés serveur-side à chaque
+    # modification du lead). `score` 0-100 pondère les critères Horizon
+    # (multi-logements 4-20 portes, vieux bâtiments, corp., etc.).
+    # `tags` est un JSON-encoded array de strings.
+    score: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", index=True
+    )
+    tags: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # Données du rôle d'évaluation (Phase 2 — fillées par lookup auto)
     matricule: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, index=True

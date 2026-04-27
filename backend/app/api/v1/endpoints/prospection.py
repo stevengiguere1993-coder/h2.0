@@ -31,6 +31,7 @@ from app.models.prospection_lead import (
     ProspectionOwnerKind,
 )
 from app.models.prospection_lead_photo import ProspectionLeadPhoto
+from app.services.prospection_scoring import apply_score, parse_tags
 
 router = APIRouter(prefix="/prospection", tags=["prospection"])
 
@@ -79,6 +80,8 @@ class LeadRead(BaseModel):
     converted_to_contact_request_id: Optional[int]
     converted_to_project_id: Optional[int]
     archived: bool
+    score: int = 0
+    tags: List[str] = []
     photos_count: int = 0
 
 
@@ -134,6 +137,9 @@ async def _photos_count_for(db, lead_id: int) -> int:
 def _serialize(lead: ProspectionLead, photos_count: int) -> LeadRead:
     obj = LeadRead.model_validate(lead)
     obj.photos_count = photos_count
+    # `tags` est stocké en JSON-string dans la DB ; on le désérialise
+    # ici pour le retourner comme list[str] au client.
+    obj.tags = parse_tags(lead.tags)
     return obj
 
 
@@ -239,6 +245,7 @@ async def create_lead(
         status=ProspectionLeadStatus.A_VISITER.value,
         owner_kind=ProspectionOwnerKind.INCONNU.value,
     )
+    apply_score(lead)
     db.add(lead)
     await db.flush()
 
@@ -286,6 +293,7 @@ async def update_lead(
     update = data.model_dump(exclude_unset=True)
     for k, v in update.items():
         setattr(lead, k, v)
+    apply_score(lead)
     await db.flush()
     await db.refresh(lead)
     photos_count = await _photos_count_for(db, lead_id)
@@ -441,6 +449,7 @@ async def enrich_owner(
         )
 
     if applied:
+        apply_score(lead)
         await db.flush()
         await db.refresh(lead)
     photos_count = await _photos_count_for(db, lead_id)
@@ -467,6 +476,298 @@ async def delete_lead(
         raise HTTPException(404, "Prospect introuvable")
     await db.delete(lead)
     await db.flush()
+
+
+# ------------------------ Score recompute ------------------------
+
+
+@router.post(
+    "/recompute-scores",
+    summary="Recalcule le score+tags de tous les leads non archivés "
+    "(à exécuter une fois après un changement de logique de scoring "
+    "ou pour backfiller les leads créés avant l'introduction du score).",
+)
+async def recompute_scores(
+    db: DBSession, _: CurrentUser
+) -> dict:
+    rows = (
+        await db.execute(
+            select(ProspectionLead).where(
+                ProspectionLead.archived.is_(False)
+            )
+        )
+    ).scalars().all()
+    for lead in rows:
+        apply_score(lead)
+    await db.flush()
+    return {"recomputed": len(rows)}
+
+
+# ------------------------ Route optimization ------------------------
+
+
+class RouteOptimizeIn(BaseModel):
+    """Optimisation d'un itinéraire drive-by sur N leads géolocalisés.
+
+    Si `start_lat`/`start_lng` sont fournis (typiquement la position
+    GPS courante de l'utilisateur), l'itinéraire commence par ce point.
+    """
+
+    lead_ids: List[int] = Field(min_length=2, max_length=12)
+    start_lat: Optional[float] = None
+    start_lng: Optional[float] = None
+
+
+class RouteOptimizeOut(BaseModel):
+    ordered_lead_ids: List[int]
+    total_distance_m: float
+    total_duration_s: float
+    google_maps_url: str
+
+
+@router.post(
+    "/route/optimize",
+    response_model=RouteOptimizeOut,
+    summary="Optimise l'ordre de visite de plusieurs leads via OSRM "
+    "(public, gratuit) et retourne une URL Google Maps avec waypoints.",
+)
+async def optimize_route(
+    payload: RouteOptimizeIn, db: DBSession, _: CurrentUser
+) -> RouteOptimizeOut:
+    import httpx
+
+    rows = (
+        await db.execute(
+            select(ProspectionLead).where(
+                ProspectionLead.id.in_(payload.lead_ids)
+            )
+        )
+    ).scalars().all()
+    by_id = {r.id: r for r in rows}
+    geo_leads = [
+        by_id[lid]
+        for lid in payload.lead_ids
+        if lid in by_id and by_id[lid].lat is not None
+        and by_id[lid].lng is not None
+    ]
+    if len(geo_leads) < 2:
+        raise HTTPException(
+            400,
+            "Au moins 2 leads géolocalisés sont requis pour optimiser "
+            "un itinéraire.",
+        )
+
+    # OSRM "trip" attend les coordonnées en lng,lat séparées par ;.
+    # On force le départ sur le premier point (start GPS si fourni,
+    # sinon le premier lead) et on coupe l'aller-retour (roundtrip=false).
+    coords: List[str] = []
+    if payload.start_lat is not None and payload.start_lng is not None:
+        coords.append(f"{payload.start_lng:.6f},{payload.start_lat:.6f}")
+    for lead in geo_leads:
+        coords.append(f"{float(lead.lng):.6f},{float(lead.lat):.6f}")
+
+    url = (
+        "https://router.project-osrm.org/trip/v1/driving/"
+        + ";".join(coords)
+        + "?source=first&roundtrip=false&overview=false"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as http:
+            r = await http.get(
+                url, headers={"User-Agent": "h2.0-Horizon/1.0"}
+            )
+            if r.status_code != 200:
+                raise HTTPException(
+                    502,
+                    f"OSRM indisponible (HTTP {r.status_code}).",
+                )
+            data = r.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"OSRM erreur réseau : {exc}") from exc
+
+    if data.get("code") != "Ok" or not data.get("trips"):
+        raise HTTPException(
+            502,
+            f"OSRM réponse invalide : {data.get('code')}",
+        )
+
+    trip = data["trips"][0]
+    waypoints = data.get("waypoints", [])
+    # waypoint_index = position dans l'itinéraire optimisé (0-based).
+    # Le 1er point peut être le start GPS — on l'exclut alors.
+    has_start = (
+        payload.start_lat is not None and payload.start_lng is not None
+    )
+    waypoint_to_lead: List[Optional[int]] = (
+        [None] + [g.id for g in geo_leads]
+        if has_start
+        else [g.id for g in geo_leads]
+    )
+
+    indexed: List[tuple[int, int]] = []
+    for orig_idx, wp in enumerate(waypoints):
+        order_idx = wp.get("waypoint_index")
+        if order_idx is None:
+            continue
+        lead_id = waypoint_to_lead[orig_idx]
+        if lead_id is not None:
+            indexed.append((order_idx, lead_id))
+    indexed.sort()
+    ordered_lead_ids = [lid for _, lid in indexed]
+
+    # URL Google Maps avec waypoints en ordre optimisé.
+    # Format : https://www.google.com/maps/dir/lat1,lng1/lat2,lng2/...
+    parts: List[str] = []
+    if has_start:
+        parts.append(f"{payload.start_lat:.6f},{payload.start_lng:.6f}")
+    by_id_geo = {g.id: g for g in geo_leads}
+    for lid in ordered_lead_ids:
+        g = by_id_geo[lid]
+        parts.append(f"{float(g.lat):.6f},{float(g.lng):.6f}")
+    google_maps_url = (
+        "https://www.google.com/maps/dir/" + "/".join(parts)
+    )
+
+    return RouteOptimizeOut(
+        ordered_lead_ids=ordered_lead_ids,
+        total_distance_m=float(trip.get("distance", 0)),
+        total_duration_s=float(trip.get("duration", 0)),
+        google_maps_url=google_maps_url,
+    )
+
+
+# ------------------------ Convert to CRM ------------------------
+
+
+class ConvertToContactIn(BaseModel):
+    """Conversion d'un lead Prospection vers le CRM Construction.
+
+    Crée un ContactRequest avec les champs pré-remplis depuis le lead
+    (adresse + propriétaire si dispo), marque le lead comme converti
+    et retourne l'id du nouveau ContactRequest pour que le frontend
+    puisse rediriger vers /app/crm/{id}.
+    """
+
+    project_type: Optional[str] = None  # défaut multilogement
+    message: Optional[str] = None
+    override_email: Optional[str] = None
+    override_phone: Optional[str] = None
+
+
+class ConvertToContactOut(BaseModel):
+    contact_request_id: int
+    lead: LeadRead
+
+
+@router.post(
+    "/{lead_id}/convert-to-contact",
+    response_model=ConvertToContactOut,
+    summary="Convertit le lead en ContactRequest dans le CRM "
+    "Construction. Marque le lead comme converti.",
+)
+async def convert_to_contact(
+    lead_id: int,
+    payload: ConvertToContactIn,
+    db: DBSession,
+    _: CurrentUser,
+) -> ConvertToContactOut:
+    from app.models.contact_request import (
+        ContactRequest,
+        ContactRequestStatus,
+        ProjectType,
+    )
+
+    lead = (
+        await db.execute(
+            select(ProspectionLead).where(ProspectionLead.id == lead_id)
+        )
+    ).scalar_one_or_none()
+    if lead is None:
+        raise HTTPException(404, "Prospect introuvable")
+    if lead.converted_to_contact_request_id:
+        raise HTTPException(
+            409,
+            "Ce lead a déjà été converti vers le CRM "
+            f"(ContactRequest #{lead.converted_to_contact_request_id}).",
+        )
+
+    # Le ContactRequest exige email + name ; on tolère un fallback
+    # en placeholder à corriger côté CRM si pas d'info propriétaire.
+    email = (
+        (payload.override_email or "").strip()
+        or (lead.owner_email or "").strip()
+        or "a-completer@horizon-prospection.local"
+    )
+    phone = (
+        (payload.override_phone or "").strip()
+        or (lead.owner_phone or "").strip()
+        or None
+    )
+    name = (lead.owner_name or "").strip() or lead.name
+
+    full_address = ", ".join(
+        x for x in (lead.address, lead.city, lead.postal_code) if x
+    ) or None
+
+    auto_message_parts: List[str] = [
+        f"Lead Prospection #{lead.id} — {lead.name}.",
+    ]
+    if lead.nb_logements:
+        auto_message_parts.append(f"{lead.nb_logements} logements")
+    if lead.annee_construction:
+        auto_message_parts.append(
+            f"construit en {lead.annee_construction}"
+        )
+    if lead.matricule:
+        auto_message_parts.append(f"matricule {lead.matricule}")
+    if lead.notes:
+        auto_message_parts.append(f"\nNotes terrain : {lead.notes}")
+    auto_message = " · ".join(
+        p for p in auto_message_parts if not p.startswith("\n")
+    )
+    if any(p.startswith("\n") for p in auto_message_parts):
+        auto_message += next(
+            p for p in auto_message_parts if p.startswith("\n")
+        )
+
+    message = (
+        (payload.message or "").strip() or auto_message
+    )
+
+    project_type = (
+        payload.project_type
+        or ProjectType.MULTILOGEMENT.value
+    )
+
+    cr = ContactRequest(
+        name=name,
+        email=email,
+        phone=phone,
+        address=full_address,
+        project_type=project_type,
+        message=message,
+        locale="fr",
+        source=f"prospection-lead-{lead.id}",
+        gdpr_consent=True,  # conversion interne, le consent a déjà
+        # été obtenu lors de la capture initiale
+        marketing_consent=False,
+        status=ContactRequestStatus.NEW.value,
+    )
+    db.add(cr)
+    await db.flush()
+
+    lead.converted_to_contact_request_id = cr.id
+    lead.status = "converti"
+    apply_score(lead)
+    await db.flush()
+    await db.refresh(lead)
+
+    photos_count = await _photos_count_for(db, lead_id)
+    return ConvertToContactOut(
+        contact_request_id=cr.id,
+        lead=_serialize(lead, photos_count),
+    )
 
 
 # ------------------------------ Photos ------------------------------

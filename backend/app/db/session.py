@@ -195,6 +195,13 @@ async def init_db() -> None:
             ("achats", "supplier_invoice_number", "VARCHAR(64)"),
             ("achats", "invoice_date", "DATE"),
             ("achats", "paid_at", "TIMESTAMP WITH TIME ZONE"),
+            # Prospection : scoring auto + tags.
+            (
+                "prospection_leads",
+                "score",
+                "INTEGER NOT NULL DEFAULT 0",
+            ),
+            ("prospection_leads", "tags", "TEXT"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
