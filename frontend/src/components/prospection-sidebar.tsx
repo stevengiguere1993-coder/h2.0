@@ -12,6 +12,7 @@ import {
   MapPin,
   Settings,
   Smartphone,
+  Sun,
   UserCircle,
   X
 } from "lucide-react";
@@ -28,6 +29,12 @@ type NavItem = {
 };
 
 const PROSPECTION_NAV: NavItem[] = [
+  {
+    href: "/prospection/aujourdhui",
+    label: "Aujourd'hui",
+    icon: Sun,
+    minRole: "manager"
+  },
   { href: "/prospection", label: "Carte", icon: Map, minRole: "manager" },
   {
     href: "/prospection/leads",
