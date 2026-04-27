@@ -27,6 +27,7 @@ import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { useProspectionLayout } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
+import { AnalysesSection } from "./_analyses-section";
 
 type Lead = {
   id: number;
@@ -1309,6 +1310,8 @@ export default function ProspectionDetailPage() {
               />
 
               <FinanceSection leadId={id} lead={lead} onSaved={load} />
+
+              <AnalysesSection leadId={id} />
 
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
                 <div className="flex items-center justify-between">
