@@ -44,6 +44,8 @@ type CrmDashboard = {
   upcoming_count: number;
   leads_per_week: { week: string; count: number }[];
   per_prospector: ProspectorStats[];
+  sla_breach_count?: number;
+  sla_threshold_hours?: number;
 };
 
 type UserRead = {
@@ -242,6 +244,26 @@ export default function CrmDashboardPage() {
                 }
               />
             </div>
+
+            {/* SLA breach banner */}
+            {stats.sla_breach_count != null &&
+            stats.sla_breach_count > 0 ? (
+              <div className="mt-4 flex items-center gap-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-3">
+                <AlertCircle className="h-5 w-5 shrink-0 text-rose-300" />
+                <div className="flex-1">
+                  <p className="text-sm font-bold text-rose-200">
+                    SLA dépassé : {stats.sla_breach_count} lead
+                    {stats.sla_breach_count > 1 ? "s" : ""} non
+                    contacté{stats.sla_breach_count > 1 ? "s" : ""}{" "}
+                    après {stats.sla_threshold_hours || 4} h
+                  </p>
+                  <p className="mt-0.5 text-xs text-rose-200/70">
+                    Action requise : assigne et appelle ces prospects
+                    avant qu&apos;ils refroidissent.
+                  </p>
+                </div>
+              </div>
+            ) : null}
 
             {/* Pipeline + leads/sem */}
             <div className="mt-6 grid gap-6 lg:grid-cols-2">

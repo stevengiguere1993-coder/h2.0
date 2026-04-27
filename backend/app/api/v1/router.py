@@ -45,6 +45,7 @@ from app.api.v1.endpoints import (
     public_soumission,
     punch_ops,
     achat_qbo,
+    email_templates,
     prospection,
     prospection_lists,
     purchase_order_actions,
@@ -158,5 +159,6 @@ api_router.include_router(purchase_order_items.router)
 # pour que /prospection/lists/* soit matché avant /prospection/{lead_id}.
 api_router.include_router(prospection_lists.router)
 api_router.include_router(prospection.router)
+api_router.include_router(email_templates.router)
 api_router.include_router(admin_data.router)
 api_router.include_router(help.router)

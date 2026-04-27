@@ -402,6 +402,10 @@ class CrmDashboardOut(BaseModel):
     upcoming_count: int
     leads_per_week: List[dict]
     per_prospector: List[ProspectorStats]
+    # SLA = nombre de leads dont le 1er contact n'a pas été fait
+    # dans les `sla_first_contact_hours` heures.
+    sla_breach_count: int = 0
+    sla_threshold_hours: int = 4
 
 
 @router.get(
@@ -565,6 +569,24 @@ async def crm_dashboard(
         for k, v in sorted(week_counts.items())
     ][-26:]
 
+    # SLA : combien de leads ont passé sla_hours sans aucun contact
+    # manuel (call/email/sms/visite) ?
+    from app.core.config import settings as _sla_settings
+    sla_hours = max(1, int(getattr(_sla_settings, "sla_first_contact_hours", 4)))
+    sla_cutoff = now - timedelta(hours=sla_hours)
+    contacted_lead_ids: set[int] = set()
+    for f in fu_rows:
+        if f.kind in ("call", "email", "sms", "visite"):
+            contacted_lead_ids.add(f.subject_id)
+    sla_breach_count = sum(
+        1
+        for r in cr_rows
+        if r.created_at
+        and r.created_at < sla_cutoff
+        and r.id not in contacted_lead_ids
+        and r.status in ("new", "contacted", "qualified")
+    )
+
     return CrmDashboardOut(
         period_days=period_days,
         total_leads=total_leads,
@@ -576,4 +598,238 @@ async def crm_dashboard(
         upcoming_count=upcoming_count,
         leads_per_week=leads_per_week,
         per_prospector=per_prospector,
+        sla_breach_count=sla_breach_count,
+        sla_threshold_hours=sla_hours,
+    )
+
+
+# ------------------------ Daily route ------------------------
+
+
+class DailyRouteIn(BaseModel):
+    """Optimisation de la route du prospecteur pour la journée."""
+
+    start_lat: Optional[float] = None
+    start_lng: Optional[float] = None
+    bucket: str = Field(
+        default="today",
+        pattern="^(overdue|today|tomorrow|all)$",
+    )
+    max_stops: int = Field(default=10, ge=2, le=12)
+
+
+class DailyRouteOut(BaseModel):
+    ordered_lead_ids: List[int]  # ContactRequest IDs
+    skipped_no_address: int
+    total_distance_m: Optional[float]
+    total_duration_s: Optional[float]
+    google_maps_url: Optional[str]
+    notes: List[str]
+
+
+@router.post(
+    "/daily-route",
+    response_model=DailyRouteOut,
+    summary="Optimise l'ordre de visite des leads de ta queue (prospect "
+    "address-géocodé) via OSRM. Ouvre Google Maps avec l'ordre optimal.",
+)
+async def daily_route(
+    payload: DailyRouteIn,
+    db: DBSession,
+    current_user: CurrentUser,
+) -> DailyRouteOut:
+    """Reprend la même queue que /follow-ups/queue mais ne garde que
+    les leads avec une adresse géolocalisable. Géocode chaque adresse
+    via Nominatim (cache local pas implémenté — au pire 1 appel/lead),
+    puis optimise via OSRM."""
+    import httpx
+    from app.integrations.nominatim import reverse_geocode  # noqa: F401
+    from app.models.contact_request import ContactRequest
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow_start = today_start + timedelta(days=1)
+    after_tomorrow = tomorrow_start + timedelta(days=1)
+
+    cr_stmt = select(ContactRequest).where(
+        ContactRequest.assigned_to_user_id == current_user.id,
+        ContactRequest.status.notin_(["lost", "spam", "won"]),
+    )
+    contacts = (await db.execute(cr_stmt)).scalars().all()
+    if not contacts:
+        return DailyRouteOut(
+            ordered_lead_ids=[],
+            skipped_no_address=0,
+            total_distance_m=None,
+            total_duration_s=None,
+            google_maps_url=None,
+            notes=["Aucun lead assigné à toi."],
+        )
+
+    # Charge les FU pour bucketer
+    cr_ids = [c.id for c in contacts]
+    fus = (
+        await db.execute(
+            select(FollowUp).where(
+                FollowUp.subject_type == "prospect",
+                FollowUp.subject_id.in_(cr_ids),
+            )
+            .order_by(FollowUp.performed_at.desc())
+        )
+    ).scalars().all()
+    last_fu: dict[int, FollowUp] = {}
+    for f in fus:
+        if f.subject_id not in last_fu:
+            last_fu[f.subject_id] = f
+
+    # Sélection selon le bucket demandé
+    selected: list = []
+    for c in contacts:
+        f = last_fu.get(c.id)
+        next_at = f.next_action_at if f else None
+        keep = False
+        if payload.bucket == "all":
+            keep = True
+        elif next_at is None:
+            keep = payload.bucket == "today"  # nouveau lead = today
+        elif next_at < today_start:
+            keep = payload.bucket == "overdue"
+        elif next_at < tomorrow_start:
+            keep = payload.bucket == "today"
+        elif next_at < after_tomorrow:
+            keep = payload.bucket == "tomorrow"
+        if keep:
+            selected.append(c)
+
+    # Filtre : doit avoir une adresse
+    skipped = 0
+    addressed: list = []
+    for c in selected:
+        if (c.address or "").strip():
+            addressed.append(c)
+        else:
+            skipped += 1
+
+    # Géocodage des adresses (séquentiel, max 1/sec policy Nominatim)
+    coords: list[tuple[int, float, float]] = []
+    geo_notes: list[str] = []
+    timeout = httpx.Timeout(10.0, connect=5.0)
+    async with httpx.AsyncClient(
+        timeout=timeout, follow_redirects=True
+    ) as http:
+        for c in addressed[: payload.max_stops]:
+            full = ", ".join(
+                x for x in (c.address, "Québec, Canada") if x
+            )
+            try:
+                r = await http.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={
+                        "q": full,
+                        "format": "json",
+                        "limit": "1",
+                    },
+                    headers={
+                        "User-Agent": "h2.0-Horizon/1.0 (contact@immohorizon.com)",
+                    },
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    if data:
+                        coords.append(
+                            (c.id, float(data[0]["lat"]), float(data[0]["lon"]))
+                        )
+                        continue
+            except httpx.HTTPError:
+                pass
+            geo_notes.append(f"Pas géocodable : {c.name}")
+
+    if len(coords) < 2:
+        return DailyRouteOut(
+            ordered_lead_ids=[c[0] for c in coords],
+            skipped_no_address=skipped,
+            total_distance_m=None,
+            total_duration_s=None,
+            google_maps_url=None,
+            notes=[
+                "Au moins 2 leads géocodables sont nécessaires pour "
+                "optimiser une route."
+            ]
+            + geo_notes,
+        )
+
+    # OSRM trip
+    osrm_coords: list[str] = []
+    if payload.start_lat is not None and payload.start_lng is not None:
+        osrm_coords.append(
+            f"{payload.start_lng:.6f},{payload.start_lat:.6f}"
+        )
+    for _, lat, lng in coords:
+        osrm_coords.append(f"{lng:.6f},{lat:.6f}")
+
+    url = (
+        "https://router.project-osrm.org/trip/v1/driving/"
+        + ";".join(osrm_coords)
+        + "?source=first&roundtrip=false&overview=false"
+    )
+    try:
+        async with httpx.AsyncClient(
+            timeout=20.0, follow_redirects=True
+        ) as http:
+            r = await http.get(
+                url, headers={"User-Agent": "h2.0-Horizon/1.0"}
+            )
+            if r.status_code != 200:
+                raise HTTPException(
+                    502, f"OSRM HTTP {r.status_code}"
+                )
+            data = r.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            502, f"OSRM erreur réseau : {exc}"
+        ) from exc
+
+    if data.get("code") != "Ok":
+        raise HTTPException(
+            502, f"OSRM réponse invalide : {data.get('code')}"
+        )
+
+    waypoints = data.get("waypoints", [])
+    has_start = (
+        payload.start_lat is not None and payload.start_lng is not None
+    )
+    waypoint_to_lead = (
+        [None] + [c[0] for c in coords]
+        if has_start
+        else [c[0] for c in coords]
+    )
+    indexed: list[tuple[int, int]] = []
+    for orig_idx, wp in enumerate(waypoints):
+        oi = wp.get("waypoint_index")
+        if oi is None:
+            continue
+        lid = waypoint_to_lead[orig_idx]
+        if lid is not None:
+            indexed.append((oi, lid))
+    indexed.sort()
+    ordered_ids = [lid for _, lid in indexed]
+
+    # URL Google Maps
+    parts: list[str] = []
+    if has_start:
+        parts.append(f"{payload.start_lat:.6f},{payload.start_lng:.6f}")
+    by_id = {cid: (lat, lng) for cid, lat, lng in coords}
+    for cid in ordered_ids:
+        lat, lng = by_id[cid]
+        parts.append(f"{lat:.6f},{lng:.6f}")
+    gm_url = "https://www.google.com/maps/dir/" + "/".join(parts)
+
+    trip = data["trips"][0] if data.get("trips") else {}
+    return DailyRouteOut(
+        ordered_lead_ids=ordered_ids,
+        skipped_no_address=skipped,
+        total_distance_m=float(trip.get("distance", 0)) or None,
+        total_duration_s=float(trip.get("duration", 0)) or None,
+        google_maps_url=gm_url,
+        notes=geo_notes,
     )
