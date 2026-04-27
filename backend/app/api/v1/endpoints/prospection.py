@@ -1565,3 +1565,250 @@ async def delete_transaction(
     )
     if (res.rowcount or 0) == 0:
         raise HTTPException(404, "Transaction introuvable")
+
+
+# ------------------------ Owner aggregation (Option C) ------------------------
+#
+# Donne une vue unifiée de tous les immeubles d'un même propriétaire,
+# sans splitter le modèle. Le propriétaire est identifié soit par
+# son NEQ (corporation), soit par un nom normalisé (particulier).
+# La timeline FollowUp est unifiée à travers tous les leads du proprio.
+
+
+import re as _re_owner
+import unicodedata as _ud_owner
+
+
+def _normalize_owner_name(name: str) -> str:
+    """Forme canonique d'un nom de proprio pour matching et URL.
+
+    « Steven Tremblay » et « tremblay, steven » donnent la même clé.
+    Garde les espaces comme `-` pour rester URL-safe.
+    """
+    if not name:
+        return ""
+    s = "".join(
+        c
+        for c in _ud_owner.normalize("NFKD", name)
+        if not _ud_owner.combining(c)
+    )
+    s = s.lower().strip()
+    s = _re_owner.sub(r"[^a-z0-9 ]+", " ", s)
+    s = _re_owner.sub(r"\s+", " ", s).strip()
+    return s.replace(" ", "-")
+
+
+class OwnerLeadMini(BaseModel):
+    id: int
+    name: str
+    address: Optional[str]
+    city: Optional[str]
+    status: str
+    score: int
+    nb_logements: Optional[int]
+    valeur_fonciere: Optional[float]
+
+
+class OwnerFollowUp(BaseModel):
+    id: int
+    lead_id: int
+    lead_name: str
+    kind: str
+    direction: str
+    outcome: str
+    notes: Optional[str]
+    performed_at: datetime
+    next_action_at: Optional[datetime]
+    next_action_label: Optional[str]
+
+
+class OwnerView(BaseModel):
+    """Vue agrégée d'un propriétaire — sans persisting un OwnerProfile.
+
+    Calculé à la volée depuis les leads matchant le NEQ ou le nom
+    normalisé. Rapide tant que le proprio n'a pas >100 immeubles."""
+
+    key: str  # "neq:1234567890" ou "name:steven-tremblay"
+    key_type: str  # "neq" | "name"
+    owner_name: Optional[str]
+    owner_kind: str
+    owner_phone: Optional[str]
+    owner_email: Optional[str]
+    owner_address: Optional[str]
+    owner_neq: Optional[str]
+    leads_count: int
+    leads: List[OwnerLeadMini]
+    total_logements: Optional[int]
+    total_valeur_fonciere: Optional[float]
+    timeline: List[OwnerFollowUp]
+    next_action_at: Optional[datetime]
+
+
+async def _build_owner_view(
+    db, leads: List[ProspectionLead], key: str, key_type: str
+) -> OwnerView:
+    if not leads:
+        return OwnerView(
+            key=key,
+            key_type=key_type,
+            owner_name=None,
+            owner_kind="inconnu",
+            owner_phone=None,
+            owner_email=None,
+            owner_address=None,
+            owner_neq=None,
+            leads_count=0,
+            leads=[],
+            total_logements=None,
+            total_valeur_fonciere=None,
+            timeline=[],
+            next_action_at=None,
+        )
+
+    # Le owner_* est dupliqué sur chaque lead — on prend le plus récent
+    # comme source de vérité (souvent le mieux renseigné).
+    leads_sorted = sorted(
+        leads,
+        key=lambda l: (l.last_contacted_at or l.created_at),
+        reverse=True,
+    )
+    primary = leads_sorted[0]
+
+    total_log = sum(
+        (l.nb_logements or 0) for l in leads if l.nb_logements
+    ) or None
+    total_val = (
+        sum(float(l.valeur_fonciere) for l in leads if l.valeur_fonciere)
+        or None
+    )
+
+    leads_mini = [
+        OwnerLeadMini(
+            id=l.id,
+            name=l.name,
+            address=l.address,
+            city=l.city,
+            status=l.status,
+            score=l.score or 0,
+            nb_logements=l.nb_logements,
+            valeur_fonciere=(
+                float(l.valeur_fonciere)
+                if l.valeur_fonciere is not None
+                else None
+            ),
+        )
+        for l in leads_sorted
+    ]
+
+    # Timeline : toutes les FollowUp sur ces leads, triées chrono-desc.
+    from app.models.follow_up import FollowUp
+
+    lead_ids = [l.id for l in leads]
+    name_by_lead = {l.id: l.name for l in leads}
+    fu_rows = []
+    if lead_ids:
+        fu_rows = (
+            await db.execute(
+                select(FollowUp)
+                .where(
+                    FollowUp.subject_type == "prospect",
+                    FollowUp.subject_id.in_(lead_ids),
+                )
+                .order_by(FollowUp.performed_at.desc())
+                .limit(500)
+            )
+        ).scalars().all()
+
+    timeline = [
+        OwnerFollowUp(
+            id=f.id,
+            lead_id=f.subject_id,
+            lead_name=name_by_lead.get(f.subject_id, f"Lead #{f.subject_id}"),
+            kind=f.kind,
+            direction=f.direction,
+            outcome=f.outcome,
+            notes=f.notes,
+            performed_at=f.performed_at,
+            next_action_at=f.next_action_at,
+            next_action_label=f.next_action_label,
+        )
+        for f in fu_rows
+    ]
+
+    # Prochaine action prévue (la + proche dans le futur)
+    now = datetime.now(timezone.utc)
+    upcoming = [
+        f.next_action_at for f in fu_rows
+        if f.next_action_at and f.next_action_at >= now
+        and f.outcome not in ("won", "lost", "not_interested")
+    ]
+    next_action = min(upcoming) if upcoming else None
+
+    return OwnerView(
+        key=key,
+        key_type=key_type,
+        owner_name=primary.owner_name,
+        owner_kind=primary.owner_kind,
+        owner_phone=primary.owner_phone,
+        owner_email=primary.owner_email,
+        owner_address=primary.owner_address,
+        owner_neq=primary.owner_neq,
+        leads_count=len(leads),
+        leads=leads_mini,
+        total_logements=total_log,
+        total_valeur_fonciere=total_val,
+        timeline=timeline,
+        next_action_at=next_action,
+    )
+
+
+@router.get(
+    "/owners/by-neq/{neq}",
+    response_model=OwnerView,
+    summary="Vue agrégée d'un propriétaire-corporation : tous ses "
+    "immeubles + timeline cross-property unifiée.",
+)
+async def owner_by_neq(
+    neq: str, db: DBSession, _: CurrentUser
+) -> OwnerView:
+    leads = (
+        await db.execute(
+            select(ProspectionLead).where(
+                ProspectionLead.owner_neq == neq,
+                ProspectionLead.archived.is_(False),
+            )
+        )
+    ).scalars().all()
+    return await _build_owner_view(
+        db, list(leads), key=f"neq:{neq}", key_type="neq"
+    )
+
+
+@router.get(
+    "/owners/by-name/{name_norm}",
+    response_model=OwnerView,
+    summary="Vue agrégée d'un propriétaire-particulier (matching par "
+    "nom normalisé). Le name_norm est le nom passé à _normalize_owner_name.",
+)
+async def owner_by_name(
+    name_norm: str, db: DBSession, _: CurrentUser
+) -> OwnerView:
+    # On charge tous les leads non archivés et on filtre côté Python
+    # parce que la normalisation Postgres serait complexe (ILIKE +
+    # unaccent). À ~1000 leads, c'est instantané.
+    rows = (
+        await db.execute(
+            select(ProspectionLead).where(
+                ProspectionLead.archived.is_(False),
+                ProspectionLead.owner_name.is_not(None),
+            )
+        )
+    ).scalars().all()
+    matching = [
+        l
+        for l in rows
+        if _normalize_owner_name(l.owner_name or "") == name_norm
+    ]
+    return await _build_owner_view(
+        db, matching, key=f"name:{name_norm}", key_type="name"
+    )

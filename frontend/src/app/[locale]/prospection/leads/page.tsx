@@ -38,6 +38,7 @@ type Lead = {
   annee_construction: number | null;
   owner_kind: string;
   owner_name: string | null;
+  owner_neq?: string | null;
   owner_phone?: string | null;
   multi_properties_count?: number;
   estimated_equity_pct?: number | null;
@@ -46,6 +47,35 @@ type Lead = {
   photos_count: number;
   created_at: string;
 };
+
+// Doit matcher _normalize_owner_name() côté backend pour que le lien
+// vers la vue propriétaire fonctionne.
+function normalizeOwnerName(name: string): string {
+  if (!name) return "";
+  return name
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "") // strip accents
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/ /g, "-");
+}
+
+function ownerViewHref(lead: {
+  owner_neq?: string | null;
+  owner_name: string | null;
+}): string | null {
+  if (lead.owner_neq) {
+    return `/prospection/proprio/neq/${encodeURIComponent(lead.owner_neq)}`;
+  }
+  if (lead.owner_name) {
+    const norm = normalizeOwnerName(lead.owner_name);
+    if (norm) return `/prospection/proprio/nom/${encodeURIComponent(norm)}`;
+  }
+  return null;
+}
 
 const STATUS_LABEL: Record<string, string> = {
   a_visiter: "À visiter",
@@ -754,12 +784,28 @@ export default function ProspectionLeadsPage() {
                             </span>
                           )}
                           {(l.multi_properties_count ?? 0) > 0 ? (
-                            <span
-                              className="rounded bg-amber-500/15 px-1 py-0.5 text-[10px] text-amber-300"
-                              title="Possède d'autres immeubles dans la liste"
-                            >
-                              +{l.multi_properties_count} autres
-                            </span>
+                            (() => {
+                              const href = ownerViewHref(l);
+                              const inner = (
+                                <span
+                                  className="rounded bg-amber-500/15 px-1 py-0.5 text-[10px] text-amber-300 hover:bg-amber-500/25"
+                                  title="Voir la fiche propriétaire (tous ses immeubles)"
+                                >
+                                  +{l.multi_properties_count} autres
+                                </span>
+                              );
+                              return href ? (
+                                <Link
+                                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                  href={href as any}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  {inner}
+                                </Link>
+                              ) : (
+                                inner
+                              );
+                            })()
                           ) : null}
                         </div>
                       </td>
