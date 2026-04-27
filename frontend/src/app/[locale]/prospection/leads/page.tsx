@@ -274,6 +274,28 @@ export default function ProspectionLeadsPage() {
   const [sortAsc, setSortAsc] = useState(false);
 
   const [saveOpen, setSaveOpen] = useState(false);
+  // Vue : tableau (par défaut) ou kanban. Persisté en localStorage.
+  const [view, setView] = useState<"table" | "kanban">("table");
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(
+        "horizon.prospection.leadsView"
+      );
+      if (stored === "kanban" || stored === "table") setView(stored);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        "horizon.prospection.leadsView",
+        view
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [view]);
 
   useEffect(() => {
     let cancelled = false;
@@ -451,6 +473,31 @@ export default function ProspectionLeadsPage() {
         onOpenSidebar={onOpenSidebar}
         rightSlot={
           <div className="flex flex-wrap items-center gap-2">
+            {/* Toggle vue Tableau / Kanban */}
+            <div className="inline-flex overflow-hidden rounded-md border border-brand-700 text-xs">
+              <button
+                type="button"
+                onClick={() => setView("table")}
+                className={`px-2.5 py-1.5 ${
+                  view === "table"
+                    ? "bg-emerald-500/15 text-emerald-300"
+                    : "bg-brand-900 text-white/60 hover:text-white"
+                }`}
+              >
+                ≡ Tableau
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("kanban")}
+                className={`px-2.5 py-1.5 ${
+                  view === "kanban"
+                    ? "bg-emerald-500/15 text-emerald-300"
+                    : "bg-brand-900 text-white/60 hover:text-white"
+                }`}
+              >
+                ▥ Kanban
+              </button>
+            </div>
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/prospection/lists" as any}
@@ -635,6 +682,29 @@ export default function ProspectionLeadsPage() {
                 Aucun lead ne correspond aux filtres.
               </p>
             </div>
+          ) : view === "kanban" ? (
+            <KanbanBoard
+              leads={sorted}
+              onChangeStatus={async (leadId, newStatus) => {
+                // Optimistic update + persist
+                setLeads((prev) =>
+                  prev.map((l) =>
+                    l.id === leadId ? { ...l, status: newStatus } : l
+                  )
+                );
+                try {
+                  await authedFetch(
+                    `/api/v1/prospection/${leadId}`,
+                    {
+                      method: "PATCH",
+                      body: JSON.stringify({ status: newStatus })
+                    }
+                  );
+                } catch {
+                  /* revert au prochain reload */
+                }
+              }}
+            />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -1066,6 +1136,152 @@ function SaveAsListModal({
             Créer la liste
           </button>
         </footer>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Kanban view des leads : 12 colonnes (une par statut buy-flow),
+ * cards drag-and-droppables. HTML5 drag API native — aucune
+ * dépendance externe. Le drop déclenche un PATCH du status.
+ */
+function KanbanBoard({
+  leads,
+  onChangeStatus
+}: {
+  leads: Lead[];
+  onChangeStatus: (leadId: number, newStatus: string) => void;
+}) {
+  const [dragId, setDragId] = useState<number | null>(null);
+  const [hoverCol, setHoverCol] = useState<string | null>(null);
+
+  const COLUMNS: { key: string; label: string }[] = [
+    { key: "a_visiter", label: "Repéré" },
+    { key: "visite", label: "Visité" },
+    { key: "a_contacter", label: "À contacter" },
+    { key: "contacte", label: "Contacté" },
+    { key: "soumissionne", label: "Offre soumise" },
+    { key: "offre_acceptee", label: "Offre acceptée" },
+    { key: "en_inspection", label: "Inspection" },
+    { key: "en_nego", label: "Négociation" },
+    { key: "chez_notaire", label: "Notaire" },
+    { key: "en_cession", label: "Cession" },
+    { key: "converti", label: "Acheté/Cédé" },
+    { key: "perdu", label: "Perdu" }
+  ];
+
+  const byStatus: Record<string, Lead[]> = {};
+  for (const c of COLUMNS) byStatus[c.key] = [];
+  for (const l of leads) {
+    const k = byStatus[l.status] ? l.status : "a_visiter";
+    byStatus[k].push(l);
+  }
+
+  function fmtMoneyShort(n: number | null): string {
+    if (n == null) return "—";
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M$`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k$`;
+    return `${Math.round(n)}$`;
+  }
+
+  return (
+    <div className="overflow-x-auto p-3">
+      <div className="flex gap-3" style={{ minWidth: "max-content" }}>
+        {COLUMNS.map((col) => {
+          const items = byStatus[col.key] || [];
+          const isHover = hoverCol === col.key;
+          return (
+            <div
+              key={col.key}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setHoverCol(col.key);
+              }}
+              onDragLeave={() => setHoverCol(null)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setHoverCol(null);
+                if (dragId != null) {
+                  onChangeStatus(dragId, col.key);
+                  setDragId(null);
+                }
+              }}
+              className={`flex w-72 shrink-0 flex-col rounded-xl border bg-brand-900 transition ${
+                isHover
+                  ? "border-emerald-500/60 bg-emerald-500/5"
+                  : "border-brand-800"
+              }`}
+            >
+              <header className="sticky top-0 z-10 flex items-center justify-between rounded-t-xl border-b border-brand-800 bg-brand-900 px-3 py-2 text-xs font-semibold uppercase tracking-wider">
+                <span className="text-white/80">{col.label}</span>
+                <span className="rounded-full bg-brand-800 px-1.5 py-0.5 text-[10px] tabular-nums text-white/60">
+                  {items.length}
+                </span>
+              </header>
+              <div className="flex-1 space-y-2 p-2">
+                {items.length === 0 ? (
+                  <p className="px-2 py-4 text-center text-[10px] text-white/30">
+                    —
+                  </p>
+                ) : (
+                  items.map((l) => (
+                    <div
+                      key={l.id}
+                      draggable
+                      onDragStart={() => setDragId(l.id)}
+                      onDragEnd={() => setDragId(null)}
+                      className={`cursor-grab rounded-md border border-brand-800 bg-brand-950 p-2 text-xs transition active:cursor-grabbing ${
+                        dragId === l.id ? "opacity-50" : ""
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-1">
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={`/prospection/${l.id}` as any}
+                          className="min-w-0 flex-1 truncate font-medium text-white hover:text-emerald-300"
+                        >
+                          {l.name}
+                        </Link>
+                        <span
+                          className={`shrink-0 rounded text-[10px] font-bold tabular-nums ${scoreBadgeClass(
+                            l.score
+                          )} px-1`}
+                        >
+                          {l.score}
+                        </span>
+                      </div>
+                      {l.address ? (
+                        <p className="mt-0.5 truncate text-[10px] text-white/50">
+                          {l.address}
+                        </p>
+                      ) : null}
+                      <div className="mt-1 flex items-center justify-between text-[10px] text-white/60">
+                        <span>
+                          {l.nb_logements != null
+                            ? `${l.nb_logements} log.`
+                            : "—"}
+                        </span>
+                        <span className="tabular-nums">
+                          {fmtMoneyShort(l.valeur_fonciere)}
+                        </span>
+                      </div>
+                      {l.owner_phone ? (
+                        <a
+                          href={`tel:${l.owner_phone}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="mt-1 block truncate text-[10px] text-emerald-400 hover:text-emerald-300"
+                        >
+                          📞 {l.owner_phone}
+                        </a>
+                      ) : null}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
