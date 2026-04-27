@@ -81,9 +81,13 @@ async def _run() -> None:
             except Exception as exc:
                 log.warning("notif overdue %s failed: %s", f.id, exc)
 
-        # 2) Lead créé > 24 h sans aucun follow-up de type call/email/visite
-        # logué (auto-scheduled ne compte pas) → notif rouge aux managers+
-        cutoff = now - timedelta(hours=24)
+        # 2) SLA : lead créé depuis +X h (settings.sla_first_contact_hours,
+        # défaut 4 h) sans aucun follow-up de type call/email/visite
+        # logué (auto-scheduled ne compte pas) → notif rouge aux
+        # managers+ ET au prospecteur assigné si présent.
+        from app.core.config import settings as _sla_settings
+        sla_hours = max(1, int(getattr(_sla_settings, "sla_first_contact_hours", 4)))
+        cutoff = now - timedelta(hours=sla_hours)
         prospects = (
             await db.execute(
                 select(ContactRequest)

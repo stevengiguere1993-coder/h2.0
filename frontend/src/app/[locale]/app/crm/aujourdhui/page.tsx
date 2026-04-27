@@ -10,6 +10,7 @@ import {
   Filter,
   Loader2,
   Mail,
+  MapPin,
   MessageSquare,
   Phone,
   Plus,
@@ -102,6 +103,67 @@ export default function CrmAujourdhuiPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [mineOnly, setMineOnly] = useState(true);
+  const [routePlanning, setRoutePlanning] = useState(false);
+
+  async function planRoute() {
+    if (routePlanning) return;
+    setRoutePlanning(true);
+    try {
+      // Capture la position GPS si possible
+      let coords: { lat: number; lng: number } | null = null;
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.geolocation
+      ) {
+        coords = await new Promise((resolve) => {
+          navigator.geolocation.getCurrentPosition(
+            (pos) =>
+              resolve({
+                lat: pos.coords.latitude,
+                lng: pos.coords.longitude
+              }),
+            () => resolve(null),
+            { enableHighAccuracy: true, timeout: 5000 }
+          );
+        });
+      }
+      const res = await authedFetch(
+        "/api/v1/follow-ups/daily-route",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            bucket: "today",
+            max_stops: 10,
+            start_lat: coords?.lat,
+            start_lng: coords?.lng
+          })
+        }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as {
+        google_maps_url: string | null;
+        ordered_lead_ids: number[];
+        skipped_no_address: number;
+        notes: string[];
+      };
+      if (data.google_maps_url) {
+        window.open(
+          data.google_maps_url,
+          "_blank",
+          "noopener,noreferrer"
+        );
+      } else {
+        alert(
+          "Pas assez de leads géocodables aujourd'hui pour optimiser une route.\n\n" +
+            (data.notes?.join("\n") || "")
+        );
+      }
+    } catch (e) {
+      alert(`Erreur : ${(e as Error).message}`);
+    } finally {
+      setRoutePlanning(false);
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -135,6 +197,20 @@ export default function CrmAujourdhuiPage() {
         onOpenSidebar={onOpenSidebar}
         rightSlot={
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={planRoute}
+              disabled={routePlanning}
+              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+              title="Optimise l'ordre de visite via OSRM"
+            >
+              {routePlanning ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <MapPin className="h-3.5 w-3.5" />
+              )}
+              Route du jour
+            </button>
             <button
               type="button"
               onClick={() => setMineOnly((v) => !v)}
@@ -313,6 +389,7 @@ function QueueRow({
 }) {
   const [busyOutcome, setBusyOutcome] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [justCalled, setJustCalled] = useState(false);
 
   async function logOutcome(outcome: string) {
     if (busyOutcome) return;
@@ -357,6 +434,7 @@ function QueueRow({
             {item.contact_phone ? (
               <a
                 href={`tel:${item.contact_phone}`}
+                onClick={() => setJustCalled(true)}
                 className="inline-flex items-center gap-1 hover:text-emerald-300"
               >
                 <Phone className="h-3 w-3" />
@@ -392,6 +470,13 @@ function QueueRow({
           </div>
         </div>
       </div>
+
+      {/* Hint après un click-to-call */}
+      {justCalled ? (
+        <p className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">
+          📞 Comment s&apos;est passé l&apos;appel ?
+        </p>
+      ) : null}
 
       {/* Quick outcome buttons */}
       <div className="mt-3 flex flex-wrap gap-1.5">

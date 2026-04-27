@@ -88,6 +88,12 @@ class Settings(BaseSettings):
     anthropic_api_key: Optional[str] = None
     claude_model: str = "claude-sonnet-4-5"
 
+    # SLA : un nouveau prospect doit être contacté dans les X heures
+    # qui suivent sa création, sinon une notif rouge fan-out aux
+    # managers+ et le lead apparaît marqué « SLA dépassé » dans la
+    # queue. Override via env SLA_FIRST_CONTACT_HOURS.
+    sla_first_contact_hours: int = 4
+
     # Monday integration (migration + live bridge while the portal is built)
     monday_api_token: Optional[str] = None
     # Default board for incoming contact submissions.

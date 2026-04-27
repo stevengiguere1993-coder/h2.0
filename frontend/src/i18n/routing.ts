@@ -156,6 +156,10 @@ export const routing = defineRouting({
       fr: "/app/parametres",
       en: "/app/parametres"
     },
+    "/app/templates-courriels": {
+      fr: "/app/templates-courriels",
+      en: "/app/templates-courriels"
+    },
     "/prospection/[id]": {
       fr: "/prospection/[id]",
       en: "/prospection/[id]"
