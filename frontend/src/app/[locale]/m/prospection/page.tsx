@@ -54,6 +54,17 @@ export default function MobileProspectionPage() {
   const [geoError, setGeoError] = useState<string | null>(null);
   const [geoLoading, setGeoLoading] = useState(false);
   const [photo, setPhoto] = useState<File | null>(null);
+  const [address, setAddress] = useState("");
+  const [addressSuggestions, setAddressSuggestions] = useState<
+    {
+      label: string;
+      address: string;
+      city: string | null;
+      postal_code: string | null;
+      lat: number;
+      lng: number;
+    }[]
+  >([]);
   const [name, setName] = useState("");
   const [kind, setKind] = useState(
     initialPrefsRef.current.defaultKind
@@ -120,6 +131,8 @@ export default function MobileProspectionPage() {
     setError(null);
     setPhoto(null);
     setName("");
+    setAddress("");
+    setAddressSuggestions([]);
     // Re-lit les préfs au cas où l'user vient de les modifier dans
     // /prospection/parametres entre deux captures.
     setKind(loadPrefs().defaultKind);
@@ -131,17 +144,43 @@ export default function MobileProspectionPage() {
     captureGeo();
   }
 
+  // Quand le GPS est capturé, fetch les adresses voisines pour
+  // proposer un choix au prospecteur.
+  useEffect(() => {
+    if (!geo) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/prospection/nearby-addresses?lat=${geo.lat}&lng=${geo.lng}&radius_m=40`
+        );
+        if (!r.ok) return;
+        const data = (await r.json()) as typeof addressSuggestions;
+        if (!cancelled) setAddressSuggestions(data || []);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [geo]);
+
   async function submit() {
     if (submitting) return;
-    if (name.trim().length < 1) {
-      setError("Donne-lui un nom (ex. « 4-plex Saint-Laurent »).");
+    if (!geo && address.trim().length < 3) {
+      setError(
+        "Capture le GPS ou tape une adresse pour identifier cet immeuble."
+      );
       return;
     }
     setSubmitting(true);
     setError(null);
     try {
       const fd = new FormData();
-      fd.append("name", name.trim());
+      // Le backend auto-génère le nom depuis l'adresse si non fourni.
+      if (name.trim()) fd.append("name", name.trim());
+      if (address.trim()) fd.append("address", address.trim());
       fd.append("kind", kind);
       // Priorité par défaut depuis les préférences user (1-5).
       fd.append(
@@ -246,7 +285,7 @@ export default function MobileProspectionPage() {
         }}
       >
         <MapPin className="h-5 w-5" />
-        Repérer ce chantier
+        Ajouter cet immeuble
       </button>
 
       {/* Modal de capture */}
@@ -351,20 +390,49 @@ export default function MobileProspectionPage() {
               )}
             </div>
 
-            {/* Nom */}
+            {/* Adresse — info principale (suggestions GPS) */}
             <div>
-              <label htmlFor="pname" className="label">
-                Nom du lead
+              <label htmlFor="paddr" className="label">
+                Adresse de l&apos;immeuble
               </label>
               <input
-                id="pname"
+                id="paddr"
                 type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Ex. 4-plex 2148 St-Laurent"
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                placeholder="Ex. 4520 Saint-Laurent, Montréal"
                 className="input"
                 autoFocus
               />
+              {addressSuggestions.length > 0 && !address ? (
+                <div className="mt-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-2">
+                  <p className="text-[10px] uppercase tracking-wider text-emerald-300">
+                    Adresses voisines (tape sur la bonne)
+                  </p>
+                  <ul className="mt-1.5 space-y-1">
+                    {addressSuggestions.map((s, i) => (
+                      <li key={`${s.label}-${i}`}>
+                        <button
+                          type="button"
+                          onClick={() => setAddress(s.address)}
+                          className="w-full rounded-md border border-brand-700 bg-brand-950 px-2.5 py-1.5 text-left text-xs text-white/80 hover:border-emerald-500/60 hover:bg-brand-900"
+                        >
+                          {s.label}
+                          {s.city ? (
+                            <span className="text-white/40">
+                              {" "}
+                              · {s.city}
+                            </span>
+                          ) : null}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              <p className="mt-1 text-[10px] text-white/40">
+                Le nom du lead sera auto-généré depuis l&apos;adresse.
+              </p>
             </div>
 
             {/* Type */}

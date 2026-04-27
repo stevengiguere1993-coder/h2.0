@@ -110,13 +110,24 @@ type Photo = {
 };
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
-  { value: "a_visiter", label: "À visiter" },
-  { value: "visite", label: "Visité" },
+  { value: "a_visiter", label: "Repéré" },
+  { value: "visite", label: "Visité (drive-by)" },
   { value: "a_contacter", label: "À contacter" },
   { value: "contacte", label: "Contacté" },
-  { value: "soumissionne", label: "Soumissionné" },
-  { value: "converti", label: "Converti" },
-  { value: "perdu", label: "Perdu" }
+  { value: "soumissionne", label: "Offre soumise" },
+  { value: "offre_acceptee", label: "Offre acceptée" },
+  { value: "en_inspection", label: "Inspection" },
+  { value: "en_nego", label: "Négociation" },
+  { value: "chez_notaire", label: "Chez le notaire" },
+  { value: "en_cession", label: "Cession en cours (flip)" },
+  { value: "converti", label: "Acheté / Cédé ✓" },
+  { value: "perdu", label: "Perdu / refus" }
+];
+
+const DEAL_STRATEGY_OPTIONS = [
+  { value: "undecided", label: "À décider" },
+  { value: "keep", label: "🏠 Acheter (keep)" },
+  { value: "flip", label: "💰 Flip (céder)" }
 ];
 
 const KIND_OPTIONS = [
@@ -368,7 +379,7 @@ export default function ProspectionDetailPage() {
     setOwnerName(c.nom || "");
     setOwnerNeq(c.neq);
     if (c.adresse) {
-      // Pas d'effet de bord sur l'adresse du chantier — on note le
+      // Pas d'effet de bord sur l'adresse de l'immeuble — on note le
       // siège dans une note pour mémoire.
       setEnrichNotes((prev) => [
         ...prev,
