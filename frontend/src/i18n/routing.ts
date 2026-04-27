@@ -186,6 +186,10 @@ export const routing = defineRouting({
       fr: "/prospection/leads",
       en: "/prospection/leads"
     },
+    "/prospection/immeubles-mtl": {
+      fr: "/prospection/immeubles-mtl",
+      en: "/prospection/immeubles-mtl"
+    },
     "/prospection/lists": {
       fr: "/prospection/lists",
       en: "/prospection/lists"
