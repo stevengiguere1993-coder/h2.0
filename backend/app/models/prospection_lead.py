@@ -248,3 +248,10 @@ class ProspectionLead(Base, TimestampUpdateMixin):
     archived: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false", index=True
     )
+
+    # Identifiant Monday — set quand le lead est importé depuis le
+    # board CRM 7714284220. Permet l'import idempotent : ré-import
+    # = UPDATE sans doublons.
+    monday_item_id: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True, index=True
+    )
