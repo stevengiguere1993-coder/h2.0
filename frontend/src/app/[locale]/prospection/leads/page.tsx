@@ -231,16 +231,41 @@ export default function ProspectionLeadsPage() {
     async function load() {
       setLoading(true);
       setError(null);
+      // Garde-fou : si l'API met plus de 30 s à répondre (cold start
+      // Render, problème réseau, schema désynchronisé), on coupe et on
+      // affiche un message clair plutôt qu'un spinner infini.
+      const controller = new AbortController();
+      const killer = window.setTimeout(() => controller.abort(), 30_000);
       try {
         const res = await authedFetch(
-          "/api/v1/prospection?limit=1000&archived=false"
+          "/api/v1/prospection?limit=1000&archived=false",
+          { signal: controller.signal }
         );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          throw new Error(
+            `HTTP ${res.status}${
+              res.status === 401
+                ? " — session expirée, reconnecte-toi"
+                : res.status >= 500
+                  ? " — erreur serveur"
+                  : ""
+            }`
+          );
+        }
         const data = (await res.json()) as Lead[];
         if (!cancelled) setLeads(data);
       } catch (e) {
-        if (!cancelled) setError((e as Error).message);
+        if (cancelled) return;
+        const err = e as Error;
+        if (err.name === "AbortError") {
+          setError(
+            "Le serveur n'a pas répondu en 30 s. Réessaie ou recharge la page."
+          );
+        } else {
+          setError(err.message);
+        }
       } finally {
+        window.clearTimeout(killer);
         if (!cancelled) setLoading(false);
       }
     }
