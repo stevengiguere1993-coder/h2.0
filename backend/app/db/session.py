@@ -206,6 +206,18 @@ async def init_db() -> None:
             ("req_companies", "telephone", "VARCHAR(32)"),
             # CRM : assignation d'un lead à un prospecteur.
             ("contact_requests", "assigned_to_user_id", "INTEGER"),
+            # Prospection — données financières et fiscales.
+            ("prospection_leads", "purchase_price", "NUMERIC(14, 2)"),
+            ("prospection_leads", "purchase_date", "DATE"),
+            ("prospection_leads", "mortgage_balance", "NUMERIC(14, 2)"),
+            (
+                "prospection_leads",
+                "tax_delinquent",
+                "BOOLEAN NOT NULL DEFAULT FALSE",
+            ),
+            ("prospection_leads", "tax_year_paid", "INTEGER"),
+            ("prospection_leads", "tax_amount", "NUMERIC(10, 2)"),
+            ("prospection_leads", "mailing_address", "VARCHAR(500)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
