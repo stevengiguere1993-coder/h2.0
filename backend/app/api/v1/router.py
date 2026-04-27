@@ -46,6 +46,7 @@ from app.api.v1.endpoints import (
     punch_ops,
     achat_qbo,
     prospection,
+    prospection_lists,
     purchase_order_actions,
     purchase_order_items,
     client_qbo,
@@ -153,6 +154,9 @@ api_router.include_router(achat_receipt.router)
 api_router.include_router(achats_router)
 api_router.include_router(purchase_orders_router)
 api_router.include_router(purchase_order_items.router)
+# prospection_lists DOIT être registered AVANT prospection.router
+# pour que /prospection/lists/* soit matché avant /prospection/{lead_id}.
+api_router.include_router(prospection_lists.router)
 api_router.include_router(prospection.router)
 api_router.include_router(admin_data.router)
 api_router.include_router(help.router)

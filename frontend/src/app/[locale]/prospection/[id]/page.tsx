@@ -55,6 +55,27 @@ type Lead = {
   converted_to_contact_request_id: number | null;
   archived: boolean;
   created_at: string;
+  // Phase 3 — données financières et fiscales
+  purchase_price: number | null;
+  purchase_date: string | null;
+  mortgage_balance: number | null;
+  tax_delinquent: boolean;
+  tax_year_paid: number | null;
+  tax_amount: number | null;
+  mailing_address: string | null;
+  estimated_equity: number | null;
+  estimated_equity_pct: number | null;
+};
+
+type Transaction = {
+  id: number;
+  lead_id: number;
+  transaction_date: string;
+  amount: number | null;
+  kind: string;
+  source: string | null;
+  notes: string | null;
+  created_at: string;
 };
 
 const TAG_LABEL: Record<string, string> = {
@@ -1256,6 +1277,8 @@ export default function ProspectionDetailPage() {
                 ) : null}
               </section>
 
+              <FinanceSection leadId={id} lead={lead} onSaved={load} />
+
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
                 <div className="flex items-center justify-between">
                   <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
@@ -1513,5 +1536,394 @@ function VoiceNotesButton({
         {listening ? "Arrêter" : "Dicter"}
       </button>
     </div>
+  );
+}
+
+/**
+ * Section Finance + Transactions sur la fiche lead (Phase 3).
+ *
+ * Permet la saisie manuelle des données financières (prix d'achat,
+ * date, solde hypothécaire, taxes) et l'historique des transactions
+ * connues. L'equity est calculée serveur-side et reflétée dans le
+ * read en lecture.
+ */
+function FinanceSection({
+  leadId,
+  lead,
+  onSaved
+}: {
+  leadId: number;
+  lead: Lead;
+  onSaved: () => void;
+}) {
+  const [purchasePrice, setPurchasePrice] = useState(
+    lead.purchase_price != null ? String(lead.purchase_price) : ""
+  );
+  const [purchaseDate, setPurchaseDate] = useState(
+    lead.purchase_date || ""
+  );
+  const [mortgage, setMortgage] = useState(
+    lead.mortgage_balance != null
+      ? String(lead.mortgage_balance)
+      : ""
+  );
+  const [taxDelinquent, setTaxDelinquent] = useState(
+    lead.tax_delinquent
+  );
+  const [taxYearPaid, setTaxYearPaid] = useState(
+    lead.tax_year_paid != null ? String(lead.tax_year_paid) : ""
+  );
+  const [taxAmount, setTaxAmount] = useState(
+    lead.tax_amount != null ? String(lead.tax_amount) : ""
+  );
+  const [mailingAddress, setMailingAddress] = useState(
+    lead.mailing_address || ""
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Transactions
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [txLoading, setTxLoading] = useState(true);
+  const [txDate, setTxDate] = useState("");
+  const [txAmount, setTxAmount] = useState("");
+  const [txKind, setTxKind] = useState("vente");
+  const [txSource, setTxSource] = useState("");
+  const [txNotes, setTxNotes] = useState("");
+  const [txAdding, setTxAdding] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setTxLoading(true);
+      try {
+        const r = await authedFetch(
+          `/api/v1/prospection/${leadId}/transactions`
+        );
+        if (!r.ok) return;
+        const data = (await r.json()) as Transaction[];
+        if (!cancelled) setTransactions(data);
+      } finally {
+        if (!cancelled) setTxLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [leadId]);
+
+  async function saveFinance() {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const payload: Record<string, unknown> = {
+        purchase_price: purchasePrice ? Number(purchasePrice) : null,
+        purchase_date: purchaseDate || null,
+        mortgage_balance: mortgage ? Number(mortgage) : null,
+        tax_delinquent: taxDelinquent,
+        tax_year_paid: taxYearPaid ? Number(taxYearPaid) : null,
+        tax_amount: taxAmount ? Number(taxAmount) : null,
+        mailing_address: mailingAddress.trim() || null
+      };
+      const res = await authedFetch(
+        `/api/v1/prospection/${leadId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(payload)
+        }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      onSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function addTransaction() {
+    if (!txDate || txAdding) return;
+    setTxAdding(true);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/${leadId}/transactions`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            transaction_date: txDate,
+            amount: txAmount ? Number(txAmount) : null,
+            kind: txKind,
+            source: txSource.trim() || null,
+            notes: txNotes.trim() || null
+          })
+        }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const newTx = (await res.json()) as Transaction;
+      setTransactions((prev) => [newTx, ...prev]);
+      setTxDate("");
+      setTxAmount("");
+      setTxKind("vente");
+      setTxSource("");
+      setTxNotes("");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setTxAdding(false);
+    }
+  }
+
+  async function deleteTransaction(id: number) {
+    const res = await authedFetch(
+      `/api/v1/prospection/transactions/${id}`,
+      { method: "DELETE" }
+    );
+    if (res.ok || res.status === 204) {
+      setTransactions((prev) => prev.filter((t) => t.id !== id));
+    }
+  }
+
+  function fmtMoney(n: number | null): string {
+    if (n == null) return "—";
+    return new Intl.NumberFormat("fr-CA", {
+      style: "currency",
+      currency: "CAD",
+      maximumFractionDigits: 0
+    }).format(n);
+  }
+
+  return (
+    <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+      <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+        Finance & taxes
+      </h2>
+      <p className="mt-1 text-[11px] text-white/50">
+        Saisie manuelle. Sources fiables : registre des droits réels
+        (JLR), bouche-à-oreille, ou document fourni par le proprio.
+      </p>
+
+      {/* Equity calculée */}
+      {lead.estimated_equity != null ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-2">
+            <p className="text-[10px] uppercase tracking-wider text-emerald-300">
+              Equity estimée
+            </p>
+            <p className="text-base font-bold tabular-nums text-emerald-200">
+              {fmtMoney(lead.estimated_equity)}
+            </p>
+          </div>
+          {lead.estimated_equity_pct != null ? (
+            <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-2">
+              <p className="text-[10px] uppercase tracking-wider text-emerald-300">
+                % equity
+              </p>
+              <p className="text-base font-bold tabular-nums text-emerald-200">
+                {lead.estimated_equity_pct.toFixed(1)} %
+              </p>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="label">Prix d&apos;achat (CAD)</label>
+          <input
+            type="number"
+            min="0"
+            step="100"
+            value={purchasePrice}
+            onChange={(e) => setPurchasePrice(e.target.value)}
+            className="input"
+          />
+        </div>
+        <div>
+          <label className="label">Date d&apos;achat</label>
+          <input
+            type="date"
+            value={purchaseDate}
+            onChange={(e) => setPurchaseDate(e.target.value)}
+            className="input"
+          />
+        </div>
+        <div>
+          <label className="label">Solde hypothécaire (CAD)</label>
+          <input
+            type="number"
+            min="0"
+            step="100"
+            value={mortgage}
+            onChange={(e) => setMortgage(e.target.value)}
+            className="input"
+          />
+        </div>
+        <div>
+          <label className="label">Adresse postale du proprio</label>
+          <input
+            type="text"
+            value={mailingAddress}
+            onChange={(e) => setMailingAddress(e.target.value)}
+            placeholder="Si différente de la propriété (Absentee)"
+            className="input"
+          />
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
+        <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-amber-200">
+          <input
+            type="checkbox"
+            checked={taxDelinquent}
+            onChange={(e) => setTaxDelinquent(e.target.checked)}
+            className="h-4 w-4"
+          />
+          ⚠️ Taxes en souffrance / délinquant
+        </label>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div>
+            <label className="label">Année dernière payée</label>
+            <input
+              type="number"
+              min="1900"
+              max="2100"
+              value={taxYearPaid}
+              onChange={(e) => setTaxYearPaid(e.target.value)}
+              className="input"
+            />
+          </div>
+          <div>
+            <label className="label">Montant dû ($)</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={taxAmount}
+              onChange={(e) => setTaxAmount(e.target.value)}
+              className="input"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 flex items-center justify-end gap-2">
+        {error ? (
+          <p className="flex-1 text-xs text-rose-300">{error}</p>
+        ) : null}
+        <button
+          type="button"
+          onClick={saveFinance}
+          disabled={saving}
+          className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+        >
+          {saving ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Save className="h-3.5 w-3.5" />
+          )}
+          Enregistrer
+        </button>
+      </div>
+
+      {/* Transactions historiques */}
+      <div className="mt-6 border-t border-brand-800 pt-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-white/60">
+          Historique des transactions
+        </h3>
+
+        {/* Form ajout */}
+        <div className="mt-3 grid gap-2 rounded-md border border-brand-700 bg-brand-950/40 p-3 sm:grid-cols-5">
+          <input
+            type="date"
+            value={txDate}
+            onChange={(e) => setTxDate(e.target.value)}
+            className="input text-xs"
+            placeholder="Date"
+          />
+          <input
+            type="number"
+            min="0"
+            value={txAmount}
+            onChange={(e) => setTxAmount(e.target.value)}
+            className="input text-xs"
+            placeholder="Montant"
+          />
+          <select
+            value={txKind}
+            onChange={(e) => setTxKind(e.target.value)}
+            className="input text-xs"
+          >
+            <option value="vente">Vente</option>
+            <option value="succession">Succession</option>
+            <option value="donation">Donation</option>
+            <option value="autre">Autre</option>
+          </select>
+          <input
+            type="text"
+            value={txSource}
+            onChange={(e) => setTxSource(e.target.value)}
+            className="input text-xs"
+            placeholder="Source (JLR, bouche-à-oreille…)"
+          />
+          <button
+            type="button"
+            onClick={addTransaction}
+            disabled={!txDate || txAdding}
+            className="inline-flex items-center justify-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+          >
+            {txAdding ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <>+</>
+            )}
+            Ajouter
+          </button>
+        </div>
+
+        {txLoading ? (
+          <div className="flex justify-center py-3">
+            <Loader2 className="h-4 w-4 animate-spin text-white/40" />
+          </div>
+        ) : transactions.length === 0 ? (
+          <p className="mt-3 text-[11px] text-white/40">
+            Aucune transaction enregistrée.
+          </p>
+        ) : (
+          <ul className="mt-3 space-y-1.5">
+            {transactions.map((t) => (
+              <li
+                key={t.id}
+                className="flex items-center gap-3 rounded-md border border-brand-800 bg-brand-950/40 px-3 py-2 text-xs"
+              >
+                <span className="w-24 shrink-0 tabular-nums text-white/70">
+                  {new Date(t.transaction_date).toLocaleDateString(
+                    "fr-CA"
+                  )}
+                </span>
+                <span className="w-24 shrink-0 text-right tabular-nums font-bold text-emerald-300">
+                  {fmtMoney(t.amount)}
+                </span>
+                <span className="rounded bg-brand-800 px-1.5 py-0.5 text-[10px] uppercase text-white/60">
+                  {t.kind}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-white/50">
+                  {t.source ? `${t.source}` : ""}
+                  {t.notes ? ` · ${t.notes}` : ""}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => deleteTransaction(t.id)}
+                  className="rounded-md p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+                  aria-label="Supprimer"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }
