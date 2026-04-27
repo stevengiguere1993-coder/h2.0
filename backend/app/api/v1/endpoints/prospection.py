@@ -155,30 +155,112 @@ async def _photos_count_for(db, lead_id: int) -> int:
     return len(res.all())
 
 
+def _safe_attr(obj, name, default=None):
+    """getattr() qui tolère une colonne qui n'existe pas encore dans
+    la DB (cas de la 1ère requête après deploy, avant que la migration
+    additive ait tourné). Retourne `default` si SQLAlchemy lève."""
+    try:
+        return getattr(obj, name, default)
+    except Exception:
+        return default
+
+
 def _serialize(
     lead: ProspectionLead,
     photos_count: int,
     multi_properties_count: int = 0,
 ) -> LeadRead:
-    obj = LeadRead.model_validate(lead)
-    obj.photos_count = photos_count
-    # `tags` est stocké en JSON-string dans la DB ; on le désérialise
-    # ici pour le retourner comme list[str] au client.
-    obj.tags = parse_tags(lead.tags)
+    # Construction explicite du dict — résiste à des colonnes
+    # nouvellement ajoutées qui n'existent pas encore en prod (le
+    # backend tourne avec le code récent mais la migration additive
+    # n'a peut-être pas encore exécuté).
+    data = {
+        "id": _safe_attr(lead, "id"),
+        "created_by_user_id": _safe_attr(lead, "created_by_user_id"),
+        "created_at": _safe_attr(lead, "created_at"),
+        "name": _safe_attr(lead, "name") or "",
+        "kind": _safe_attr(lead, "kind") or "multilogement",
+        "address": _safe_attr(lead, "address"),
+        "city": _safe_attr(lead, "city"),
+        "postal_code": _safe_attr(lead, "postal_code"),
+        "lat": _safe_attr(lead, "lat"),
+        "lng": _safe_attr(lead, "lng"),
+        "notes": _safe_attr(lead, "notes"),
+        "status": _safe_attr(lead, "status") or "a_visiter",
+        "priority": _safe_attr(lead, "priority", 3),
+        "matricule": _safe_attr(lead, "matricule"),
+        "nb_logements": _safe_attr(lead, "nb_logements"),
+        "annee_construction": _safe_attr(lead, "annee_construction"),
+        "valeur_fonciere": (
+            float(_safe_attr(lead, "valeur_fonciere"))
+            if _safe_attr(lead, "valeur_fonciere") is not None
+            else None
+        ),
+        "superficie_terrain": (
+            float(_safe_attr(lead, "superficie_terrain"))
+            if _safe_attr(lead, "superficie_terrain") is not None
+            else None
+        ),
+        "owner_kind": _safe_attr(lead, "owner_kind") or "inconnu",
+        "owner_name": _safe_attr(lead, "owner_name"),
+        "owner_address": _safe_attr(lead, "owner_address"),
+        "owner_email": _safe_attr(lead, "owner_email"),
+        "owner_phone": _safe_attr(lead, "owner_phone"),
+        "owner_neq": _safe_attr(lead, "owner_neq"),
+        "last_contacted_at": _safe_attr(lead, "last_contacted_at"),
+        "contact_attempts_count": _safe_attr(
+            lead, "contact_attempts_count", 0
+        ),
+        "assigned_to_user_id": _safe_attr(lead, "assigned_to_user_id"),
+        "converted_to_contact_request_id": _safe_attr(
+            lead, "converted_to_contact_request_id"
+        ),
+        "converted_to_project_id": _safe_attr(
+            lead, "converted_to_project_id"
+        ),
+        "archived": bool(_safe_attr(lead, "archived", False)),
+        "score": _safe_attr(lead, "score", 0) or 0,
+        "tags": parse_tags(_safe_attr(lead, "tags")),
+        "photos_count": photos_count,
+        # Champs Phase 3 — peuvent ne pas exister si la migration
+        # additive n'a pas encore tourné en prod.
+        "purchase_price": (
+            float(_safe_attr(lead, "purchase_price"))
+            if _safe_attr(lead, "purchase_price") is not None
+            else None
+        ),
+        "purchase_date": _safe_attr(lead, "purchase_date"),
+        "mortgage_balance": (
+            float(_safe_attr(lead, "mortgage_balance"))
+            if _safe_attr(lead, "mortgage_balance") is not None
+            else None
+        ),
+        "tax_delinquent": bool(
+            _safe_attr(lead, "tax_delinquent", False) or False
+        ),
+        "tax_year_paid": _safe_attr(lead, "tax_year_paid"),
+        "tax_amount": (
+            float(_safe_attr(lead, "tax_amount"))
+            if _safe_attr(lead, "tax_amount") is not None
+            else None
+        ),
+        "mailing_address": _safe_attr(lead, "mailing_address"),
+        "estimated_equity": None,
+        "estimated_equity_pct": None,
+        "multi_properties_count": multi_properties_count,
+    }
 
-    # Equity computée : valeur foncière - solde hypothécaire si les
-    # deux sont renseignés.
-    if lead.valeur_fonciere and lead.mortgage_balance is not None:
-        valeur = float(lead.valeur_fonciere)
-        mortgage = float(lead.mortgage_balance)
-        obj.estimated_equity = valeur - mortgage
+    # Equity computée
+    if data["valeur_fonciere"] and data["mortgage_balance"] is not None:
+        valeur = data["valeur_fonciere"]
+        mortgage = data["mortgage_balance"]
+        data["estimated_equity"] = valeur - mortgage
         if valeur > 0:
-            obj.estimated_equity_pct = round(
+            data["estimated_equity_pct"] = round(
                 (valeur - mortgage) / valeur * 100, 1
             )
 
-    obj.multi_properties_count = multi_properties_count
-    return obj
+    return LeadRead.model_validate(data)
 
 
 # ------------------------------ Endpoints ------------------------------
