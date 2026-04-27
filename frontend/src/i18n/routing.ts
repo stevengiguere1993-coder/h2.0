@@ -190,6 +190,10 @@ export const routing = defineRouting({
       fr: "/prospection/lists/[id]",
       en: "/prospection/lists/[id]"
     },
+    "/prospection/proprio/[type]/[key]": {
+      fr: "/prospection/proprio/[type]/[key]",
+      en: "/prospection/proprio/[type]/[key]"
+    },
     "/prospection/dashboard": {
       fr: "/prospection/dashboard",
       en: "/prospection/dashboard"
