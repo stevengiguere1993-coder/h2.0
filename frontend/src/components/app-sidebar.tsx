@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import {
+  BarChart3,
   Briefcase,
   Calendar,
   ClipboardCheck,
@@ -16,6 +17,7 @@ import {
   Palmtree,
   Settings,
   ShoppingCart,
+  Sun,
   Truck,
   UserCircle,
   Users,
@@ -37,7 +39,9 @@ type NavItem = {
 
 const CONSTRUCTION_NAV: NavItem[] = [
   { href: "/app", label: "Accueil", icon: Home, minRole: "employee" },
+  { href: "/app/crm/aujourdhui", label: "Aujourd'hui (CRM)", icon: Sun, minRole: "manager" },
   { href: "/app/crm", label: "CRM / Prospects", icon: Users, minRole: "manager" },
+  { href: "/app/crm/dashboard", label: "Dashboard CRM", icon: BarChart3, minRole: "manager" },
   { href: "/app/clients", label: "Clients", icon: Contact, minRole: "manager" },
   { href: "/app/soumissions", label: "Soumissions", icon: FileText, minRole: "manager" },
   { href: "/app/projets", label: "Projets", icon: Briefcase, minRole: "employee" },

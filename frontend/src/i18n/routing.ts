@@ -72,6 +72,14 @@ export const routing = defineRouting({
       fr: "/app/crm",
       en: "/app/crm"
     },
+    "/app/crm/aujourdhui": {
+      fr: "/app/crm/aujourdhui",
+      en: "/app/crm/aujourdhui"
+    },
+    "/app/crm/dashboard": {
+      fr: "/app/crm/dashboard",
+      en: "/app/crm/dashboard"
+    },
     "/app/clients": {
       fr: "/app/clients",
       en: "/app/clients"
@@ -183,6 +191,7 @@ export const routing = defineRouting({
       en: "/prospection/parametres"
     },
     "/m/agenda": { fr: "/m/agenda", en: "/m/agenda" },
+    "/m/crm": { fr: "/m/crm", en: "/m/crm" },
     "/m/prospection": { fr: "/m/prospection", en: "/m/prospection" },
     "/m/punch": { fr: "/m/punch", en: "/m/punch" },
     "/m/ops": { fr: "/m/ops", en: "/m/ops" },

@@ -211,3 +211,369 @@ async def delete_follow_up(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Suivi introuvable.")
     await db.delete(fu)
     await db.flush()
+
+
+# ------------------------ Prospector queue ------------------------
+
+
+class QueueItem(BaseModel):
+    """Élément de la queue d'un prospecteur — un lead à rappeler/visiter
+    avec sa prochaine action prévue, sa fenêtre (en retard / today /
+    tomorrow / later) et un snapshot du contact (nom + tél + adresse)
+    pour ne pas avoir à fetcher le contact séparément."""
+
+    contact_request_id: int
+    contact_name: str
+    contact_phone: Optional[str]
+    contact_email: Optional[str]
+    contact_address: Optional[str]
+    contact_status: str
+    contact_assigned_to_user_id: Optional[int]
+    last_follow_up: Optional[FollowUpRead]
+    next_action_at: Optional[datetime]
+    next_action_label: Optional[str]
+    bucket: str  # overdue | today | tomorrow | later | none
+
+
+class QueueOut(BaseModel):
+    overdue: List[QueueItem]
+    today: List[QueueItem]
+    tomorrow: List[QueueItem]
+    later: List[QueueItem]
+    total: int
+
+
+@router.get(
+    "/queue",
+    response_model=QueueOut,
+    summary="Queue de prospection : leads avec prochaine action "
+    "prévue, groupés par fenêtre temporelle. Tri principal = "
+    "overdue first.",
+)
+async def get_queue(
+    db: DBSession,
+    current_user: CurrentUser,
+    mine: bool = Query(
+        default=False,
+        description="Si true, ne retourne que les leads assignés au "
+        "user courant.",
+    ),
+    days_ahead: int = Query(default=14, ge=1, le=60),
+) -> QueueOut:
+    """Construit la queue d'un prospecteur :
+    1. Charge les contact_requests visibles (assignés au user si mine
+       est true ; sinon tous les actifs).
+    2. Pour chaque lead, récupère le DERNIER follow-up.
+    3. Groupe par fenêtre temporelle selon next_action_at.
+
+    Hyper performant : 2 queries SQL au total — pas de N+1.
+    """
+    from sqlalchemy import and_
+    from app.models.contact_request import ContactRequest
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow_start = today_start + timedelta(days=1)
+    after_tomorrow = tomorrow_start + timedelta(days=1)
+    horizon = today_start + timedelta(days=days_ahead)
+
+    # 1. Contact requests visibles
+    cr_stmt = select(ContactRequest).where(
+        ContactRequest.status.notin_(["lost", "spam", "won"])
+    )
+    if mine:
+        cr_stmt = cr_stmt.where(
+            ContactRequest.assigned_to_user_id == current_user.id
+        )
+    cr_stmt = cr_stmt.order_by(ContactRequest.created_at.desc()).limit(500)
+    contacts = (await db.execute(cr_stmt)).scalars().all()
+    if not contacts:
+        return QueueOut(
+            overdue=[], today=[], tomorrow=[], later=[], total=0
+        )
+
+    cr_ids = [c.id for c in contacts]
+
+    # 2. Dernier follow-up par contact. On charge tous les FU des
+    #    prospects en une query, puis on garde le plus récent par
+    #    subject_id côté Python — simple et rapide pour <500 leads.
+    fu_stmt = (
+        select(FollowUp)
+        .where(
+            and_(
+                FollowUp.subject_type == "prospect",
+                FollowUp.subject_id.in_(cr_ids),
+            )
+        )
+        .order_by(FollowUp.performed_at.desc())
+    )
+    all_fus = (await db.execute(fu_stmt)).scalars().all()
+    last_fu_by_contact: dict[int, FollowUp] = {}
+    for fu in all_fus:
+        # La query est triée desc, donc le premier rencontré pour un
+        # subject_id donné est le plus récent.
+        if fu.subject_id not in last_fu_by_contact:
+            last_fu_by_contact[fu.subject_id] = fu
+
+    # 3. Grouping
+    overdue: List[QueueItem] = []
+    today: List[QueueItem] = []
+    tomorrow: List[QueueItem] = []
+    later: List[QueueItem] = []
+
+    for c in contacts:
+        last_fu = last_fu_by_contact.get(c.id)
+        next_at = last_fu.next_action_at if last_fu else None
+        next_label = last_fu.next_action_label if last_fu else None
+        bucket = "none"
+        if next_at:
+            if next_at < today_start:
+                bucket = "overdue"
+            elif next_at < tomorrow_start:
+                bucket = "today"
+            elif next_at < after_tomorrow:
+                bucket = "tomorrow"
+            elif next_at < horizon:
+                bucket = "later"
+            else:
+                bucket = "none"  # trop loin → ignore
+        item = QueueItem(
+            contact_request_id=c.id,
+            contact_name=c.name,
+            contact_phone=c.phone,
+            contact_email=c.email,
+            contact_address=c.address,
+            contact_status=c.status,
+            contact_assigned_to_user_id=c.assigned_to_user_id,
+            last_follow_up=(
+                FollowUpRead.model_validate(last_fu) if last_fu else None
+            ),
+            next_action_at=next_at,
+            next_action_label=next_label,
+            bucket=bucket,
+        )
+        if bucket == "overdue":
+            overdue.append(item)
+        elif bucket == "today":
+            today.append(item)
+        elif bucket == "tomorrow":
+            tomorrow.append(item)
+        elif bucket == "later":
+            later.append(item)
+
+    overdue.sort(key=lambda x: x.next_action_at or now)
+    today.sort(key=lambda x: x.next_action_at or now)
+    tomorrow.sort(key=lambda x: x.next_action_at or now)
+    later.sort(key=lambda x: x.next_action_at or now)
+
+    return QueueOut(
+        overdue=overdue,
+        today=today,
+        tomorrow=tomorrow,
+        later=later,
+        total=len(overdue) + len(today) + len(tomorrow) + len(later),
+    )
+
+
+# ------------------------ CRM dashboard stats ------------------------
+
+
+class ProspectorStats(BaseModel):
+    user_id: int
+    total_calls: int
+    total_emails: int
+    total_visits: int
+    reached: int
+    interested: int
+    won: int
+    lost: int
+    avg_response_rate: float  # reached / outbound calls
+    conversion_rate: float    # won / (won + lost)
+
+
+class CrmDashboardOut(BaseModel):
+    period_days: int
+    total_leads: int
+    new_leads: int
+    by_status: dict
+    avg_time_to_first_contact_hours: Optional[float]
+    follow_ups_count: int
+    overdue_count: int
+    upcoming_count: int
+    leads_per_week: List[dict]
+    per_prospector: List[ProspectorStats]
+
+
+@router.get(
+    "/dashboard/crm",
+    response_model=CrmDashboardOut,
+    summary="Statistiques agrégées du CRM : volume, conversion, "
+    "performance par prospecteur. Manager+ uniquement.",
+)
+async def crm_dashboard(
+    db: DBSession,
+    _: RequireManager,
+    period_days: int = Query(default=90, ge=7, le=365),
+) -> CrmDashboardOut:
+    from sqlalchemy import and_
+    from app.models.contact_request import ContactRequest
+
+    now = datetime.now(timezone.utc)
+    period_start = now - timedelta(days=period_days)
+
+    # Tous les leads dans la période + leur status
+    cr_rows = (
+        await db.execute(
+            select(ContactRequest).where(
+                ContactRequest.created_at >= period_start
+            )
+        )
+    ).scalars().all()
+
+    total_leads = len(cr_rows)
+    by_status: dict = {}
+    week_counts: dict = {}
+    cr_ids: list[int] = []
+    for r in cr_rows:
+        by_status[r.status] = by_status.get(r.status, 0) + 1
+        cr_ids.append(r.id)
+        if r.created_at:
+            iso_year, iso_week, _ = r.created_at.isocalendar()
+            wk = f"{iso_year}-W{iso_week:02d}"
+            week_counts[wk] = week_counts.get(wk, 0) + 1
+    new_leads = sum(
+        1 for r in cr_rows if r.status == "new"
+    )
+
+    # Tous les follow-ups de ces leads
+    fu_rows = []
+    if cr_ids:
+        fu_rows = (
+            await db.execute(
+                select(FollowUp).where(
+                    and_(
+                        FollowUp.subject_type == "prospect",
+                        FollowUp.subject_id.in_(cr_ids),
+                    )
+                )
+            )
+        ).scalars().all()
+
+    follow_ups_count = len(fu_rows)
+    overdue_count = sum(
+        1
+        for f in fu_rows
+        if f.next_action_at
+        and f.next_action_at < now
+        and f.outcome not in ("won", "lost", "not_interested")
+    )
+    upcoming_count = sum(
+        1
+        for f in fu_rows
+        if f.next_action_at
+        and f.next_action_at >= now
+        and f.next_action_at <= now + timedelta(days=14)
+        and f.outcome not in ("won", "lost", "not_interested")
+    )
+
+    # Time to first contact : pour chaque lead, premier follow-up
+    # outbound. On agrège la moyenne.
+    first_outbound_by_lead: dict[int, datetime] = {}
+    for f in fu_rows:
+        if f.direction != "outbound":
+            continue
+        prev = first_outbound_by_lead.get(f.subject_id)
+        if prev is None or f.performed_at < prev:
+            first_outbound_by_lead[f.subject_id] = f.performed_at
+    cr_by_id = {r.id: r for r in cr_rows}
+    deltas: list[float] = []
+    for lead_id, first_at in first_outbound_by_lead.items():
+        c = cr_by_id.get(lead_id)
+        if c is None or c.created_at is None:
+            continue
+        delta_h = (first_at - c.created_at).total_seconds() / 3600.0
+        if delta_h >= 0:
+            deltas.append(delta_h)
+    avg_time_to_first = (
+        round(sum(deltas) / len(deltas), 2) if deltas else None
+    )
+
+    # Per-prospector stats : agrégat par performed_by_user_id
+    per_user: dict[int, dict] = {}
+    for f in fu_rows:
+        uid = f.performed_by_user_id
+        if uid is None:
+            continue
+        u = per_user.setdefault(
+            uid,
+            {
+                "calls": 0,
+                "emails": 0,
+                "visits": 0,
+                "outbound": 0,
+                "reached": 0,
+                "interested": 0,
+                "won": 0,
+                "lost": 0,
+            },
+        )
+        if f.kind == "call":
+            u["calls"] += 1
+        elif f.kind == "email":
+            u["emails"] += 1
+        elif f.kind == "visite":
+            u["visits"] += 1
+        if f.direction == "outbound":
+            u["outbound"] += 1
+        if f.outcome == "reached":
+            u["reached"] += 1
+        elif f.outcome == "interested":
+            u["interested"] += 1
+        elif f.outcome == "won":
+            u["won"] += 1
+        elif f.outcome == "lost":
+            u["lost"] += 1
+
+    per_prospector: List[ProspectorStats] = []
+    for uid, st in per_user.items():
+        avg_resp = (
+            st["reached"] / st["outbound"] if st["outbound"] else 0.0
+        )
+        finals = st["won"] + st["lost"]
+        conv = st["won"] / finals if finals else 0.0
+        per_prospector.append(
+            ProspectorStats(
+                user_id=uid,
+                total_calls=st["calls"],
+                total_emails=st["emails"],
+                total_visits=st["visits"],
+                reached=st["reached"],
+                interested=st["interested"],
+                won=st["won"],
+                lost=st["lost"],
+                avg_response_rate=round(avg_resp, 3),
+                conversion_rate=round(conv, 3),
+            )
+        )
+    # Tri : meilleur conv rate puis volume
+    per_prospector.sort(
+        key=lambda p: (p.conversion_rate, p.total_calls), reverse=True
+    )
+
+    leads_per_week = [
+        {"week": k, "count": v}
+        for k, v in sorted(week_counts.items())
+    ][-26:]
+
+    return CrmDashboardOut(
+        period_days=period_days,
+        total_leads=total_leads,
+        new_leads=new_leads,
+        by_status=by_status,
+        avg_time_to_first_contact_hours=avg_time_to_first,
+        follow_ups_count=follow_ups_count,
+        overdue_count=overdue_count,
+        upcoming_count=upcoming_count,
+        leads_per_week=leads_per_week,
+        per_prospector=per_prospector,
+    )

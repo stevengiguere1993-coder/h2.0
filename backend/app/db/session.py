@@ -204,6 +204,8 @@ async def init_db() -> None:
             ("prospection_leads", "tags", "TEXT"),
             # REQ : téléphone du siège social (du CSV REQ).
             ("req_companies", "telephone", "VARCHAR(32)"),
+            # CRM : assignation d'un lead à un prospecteur.
+            ("contact_requests", "assigned_to_user_id", "INTEGER"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

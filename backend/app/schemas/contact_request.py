@@ -40,6 +40,7 @@ class ContactRequestUpdate(BaseModel):
     email: Optional[str] = Field(default=None, max_length=320)
     phone: Optional[str] = Field(default=None, max_length=50)
     address: Optional[str] = Field(default=None, max_length=500)
+    assigned_to_user_id: Optional[int] = None
 
 
 class ContactRequestRead(BaseModel):
@@ -60,6 +61,7 @@ class ContactRequestRead(BaseModel):
     status: str
     kanban_column: Optional[str] = None
     internal_notes: Optional[str]
+    assigned_to_user_id: Optional[int] = None
     gdpr_consent: bool
     marketing_consent: bool
     created_at: datetime
