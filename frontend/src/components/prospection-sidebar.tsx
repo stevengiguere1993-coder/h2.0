@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { usePathname } from "next/navigation";
 import {
+  Database,
   Home,
   LogOut,
   Map,
@@ -30,6 +31,12 @@ const PROSPECTION_NAV: NavItem[] = [
     label: "Liste des leads",
     icon: MapPin,
     minRole: "manager"
+  },
+  {
+    href: "/prospection/sources",
+    label: "Sources de données",
+    icon: Database,
+    minRole: "owner"
   },
   // Phase 3+ : campagnes, paramètres
   // { href: "/prospection/campagnes", label: "Campagnes", icon: Mail },
