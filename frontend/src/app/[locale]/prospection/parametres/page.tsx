@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { ConnexionsSection } from "@/components/connexions-section";
 import { Link } from "@/i18n/navigation";
 import { authedFetch, hasMinRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
@@ -318,6 +319,9 @@ export default function ProspectionSettingsPage() {
             ))}
           </ul>
         </section>
+
+        {/* === Connexions Prospection === */}
+        <ConnexionsSection scope="prospection" />
 
         {/* === Outils admin === */}
         {isAdmin ? <AdminToolsSection /> : null}

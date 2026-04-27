@@ -33,8 +33,11 @@ type QboStatus = {
 
 type ConnectionStatus = "connected" | "disconnected" | "automatic" | "manual" | "loading";
 
+type ConnectionScope = "construction" | "prospection";
+
 type ConnectionDef = {
   id: string;
+  scope: ConnectionScope;
   group: "compta" | "prospection" | "communication" | "geo";
   icon: React.ComponentType<{ className?: string }>;
   name: string;
@@ -47,14 +50,16 @@ type ConnectionDef = {
 
 const GROUP_LABELS: Record<ConnectionDef["group"], string> = {
   compta: "Comptabilité",
-  prospection: "Prospection — sources de données",
+  prospection: "Sources de données",
   communication: "Communication & contact",
   geo: "Géolocalisation & cartographie"
 };
 
 const CONNECTIONS: ConnectionDef[] = [
+  // ─── CONSTRUCTION ───
   {
     id: "qbo",
+    scope: "construction",
     group: "compta",
     icon: DollarSign,
     name: "QuickBooks Online",
@@ -64,15 +69,38 @@ const CONNECTIONS: ConnectionDef[] = [
   },
   {
     id: "monday",
+    scope: "construction",
     group: "compta",
     icon: FileSpreadsheet,
-    name: "Monday.com",
+    name: "Monday.com (Construction)",
     description:
       "Import unique (clients, devis, projets, soumissions). Effectué.",
     external: false
   },
   {
+    id: "calendar_ics",
+    scope: "construction",
+    group: "communication",
+    icon: Calendar,
+    name: "Calendrier externe (Google/Outlook/Apple/Proton)",
+    description:
+      "Import iCal des plages occupées en mode anonyme — évite le double-booking.",
+    href: "/app/parametres"
+  },
+  // ─── PROSPECTION ───
+  {
+    id: "monday_prospection",
+    scope: "prospection",
+    group: "compta",
+    icon: FileSpreadsheet,
+    name: "Monday.com — CRM Prospection",
+    description:
+      "Import du board 7714284220. Lance le script depuis Render Shell.",
+    external: false
+  },
+  {
     id: "mtl_roles",
+    scope: "prospection",
     group: "prospection",
     icon: Map,
     name: "Rôle d'évaluation Montréal",
@@ -82,6 +110,7 @@ const CONNECTIONS: ConnectionDef[] = [
   },
   {
     id: "req",
+    scope: "prospection",
     group: "prospection",
     icon: Building2,
     name: "Registraire des entreprises (REQ)",
@@ -91,6 +120,7 @@ const CONNECTIONS: ConnectionDef[] = [
   },
   {
     id: "cmhc",
+    scope: "prospection",
     group: "prospection",
     icon: DollarSign,
     name: "Loyers SCHL / CMHC",
@@ -100,6 +130,7 @@ const CONNECTIONS: ConnectionDef[] = [
   },
   {
     id: "lespac_kangalou",
+    scope: "prospection",
     group: "communication",
     icon: Phone,
     name: "LesPAC + Kangalou (téléphones)",
@@ -109,6 +140,7 @@ const CONNECTIONS: ConnectionDef[] = [
   },
   {
     id: "canada411",
+    scope: "prospection",
     group: "communication",
     icon: Search,
     name: "Canada411",
@@ -118,16 +150,8 @@ const CONNECTIONS: ConnectionDef[] = [
     external: true
   },
   {
-    id: "calendar_ics",
-    group: "communication",
-    icon: Calendar,
-    name: "Calendrier externe (Google/Outlook/Apple/Proton)",
-    description:
-      "Import iCal des plages occupées en mode anonyme — évite le double-booking.",
-    href: "/app/parametres"
-  },
-  {
     id: "nominatim",
+    scope: "prospection",
     group: "geo",
     icon: Globe,
     name: "Nominatim (OpenStreetMap)",
@@ -137,6 +161,7 @@ const CONNECTIONS: ConnectionDef[] = [
   },
   {
     id: "osrm",
+    scope: "prospection",
     group: "geo",
     icon: Map,
     name: "OSRM (optimisation d'itinéraire)",
@@ -146,6 +171,7 @@ const CONNECTIONS: ConnectionDef[] = [
   },
   {
     id: "leaflet_osm",
+    scope: "prospection",
     group: "geo",
     icon: Map,
     name: "Leaflet + OpenStreetMap (tuiles)",
@@ -192,11 +218,19 @@ function StatusPill({ status }: { status: ConnectionStatus }) {
   );
 }
 
-export function ConnexionsSection() {
+export function ConnexionsSection({
+  scope = "construction"
+}: {
+  scope?: ConnectionScope;
+}) {
   const [qbo, setQbo] = useState<QboStatus | null>(null);
   const [loadingQbo, setLoadingQbo] = useState(true);
 
   useEffect(() => {
+    if (scope !== "construction") {
+      setLoadingQbo(false);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -213,7 +247,7 @@ export function ConnexionsSection() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [scope]);
 
   function statusFor(id: string): ConnectionStatus {
     if (id === "qbo") {
@@ -223,12 +257,14 @@ export function ConnexionsSection() {
     if (id === "mtl_roles" || id === "req" || id === "cmhc") return "manual";
     if (id === "calendar_ics") return "manual"; // Per-user, faut connecter
     if (id === "monday") return "connected"; // One-shot done
+    if (id === "monday_prospection") return "manual"; // À lancer
     // Le reste est automatique — pas de config user
     return "automatic";
   }
 
   const grouped: Record<string, ConnectionDef[]> = {};
   for (const c of CONNECTIONS) {
+    if (c.scope !== scope) continue;
     grouped[c.group] = grouped[c.group] || [];
     grouped[c.group].push(c);
   }
