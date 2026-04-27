@@ -53,10 +53,20 @@ class ContactRequestRepository:
         skip: int = 0,
         limit: int = 100,
         status: Optional[str] = None,
+        assigned_to_user_id: Optional[int] = None,
+        unassigned: bool = False,
     ) -> Sequence[ContactRequest]:
         query = select(ContactRequest).order_by(ContactRequest.created_at.desc())
         if status:
             query = query.where(ContactRequest.status == status)
+        if assigned_to_user_id is not None:
+            query = query.where(
+                ContactRequest.assigned_to_user_id == assigned_to_user_id
+            )
+        elif unassigned:
+            query = query.where(
+                ContactRequest.assigned_to_user_id.is_(None)
+            )
         query = query.offset(skip).limit(limit)
         result = await self.db.execute(query)
         return result.scalars().all()

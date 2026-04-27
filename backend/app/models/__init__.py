@@ -27,6 +27,8 @@ from app.models.help_request import HelpRequest
 from app.models.leave_request import LeaveRequest, LeaveStatus  # noqa: F401
 from app.models.measurement import MeasurementSnapshot
 from app.models.measurement_photo import MeasurementPhoto
+from app.models.market_rent import MarketRent
+from app.models.montreal_property_unit import MontrealPropertyUnit
 from app.models.notification import Notification
 from app.models.numbering_counter import NumberingCounter
 from app.models.payment import Payment
@@ -42,10 +44,18 @@ from app.models.project_assignees import (
 from app.models.project_photo import ProjectPhoto
 from app.models.project_task import ProjectTask
 from app.models.prospection_lead import ProspectionLead
+from app.models.prospection_lead_list import (
+    ProspectionLeadList,
+    ProspectionLeadListMember,
+)
 from app.models.prospection_lead_photo import ProspectionLeadPhoto
+from app.models.prospection_lead_transaction import (
+    ProspectionLeadTransaction,
+)
 from app.models.punch import Punch
 from app.models.qbo_account_map import QboAccountMap
 from app.models.qbo_token import QboToken
+from app.models.req_company import ReqCompany
 from app.models.sales_task import SalesTask, sales_task_assignees  # noqa: F401
 from app.models.seo_article import SeoArticle
 from app.models.service_template import ServiceTemplate, ServiceTemplateItem
@@ -73,8 +83,10 @@ __all__ = [
     "Fournisseur",
     "HelpRequest",
     "LeaveRequest",
+    "MarketRent",
     "MeasurementSnapshot",
     "MeasurementPhoto",
+    "MontrealPropertyUnit",
     "Notification",
     "NumberingCounter",
     "Payment",
@@ -85,13 +97,17 @@ __all__ = [
     "ProjectPhoto",
     "ProjectTask",
     "ProspectionLead",
+    "ProspectionLeadList",
+    "ProspectionLeadListMember",
     "ProspectionLeadPhoto",
+    "ProspectionLeadTransaction",
     "ProjectTaskAssignee",
     "PurchaseOrder",
     "PurchaseOrderItem",
     "Punch",
     "QboAccountMap",
     "QboToken",
+    "ReqCompany",
     "SalesTask",
     "SeoArticle",
     "ServiceTemplate",

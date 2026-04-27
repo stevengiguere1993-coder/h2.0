@@ -191,12 +191,26 @@ async def list_contact_requests(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=1000),
     status_filter: Optional[ContactRequestStatus] = Query(default=None, alias="status"),
+    mine: bool = Query(
+        default=False,
+        description="Si true, ne retourne que les leads assignés au user "
+        "courant (raccourci pour assigned_to_user_id=<me>).",
+    ),
+    assigned_to_user_id: Optional[int] = Query(default=None),
+    unassigned: bool = Query(default=False),
 ) -> List[ContactRequestRead]:
     service = ContactRequestService(db)
+    target_uid = (
+        current_user.id
+        if mine
+        else assigned_to_user_id
+    )
     records = await service.list(
         skip=skip,
         limit=limit,
         status=status_filter.value if status_filter else None,
+        assigned_to_user_id=target_uid,
+        unassigned=unassigned and target_uid is None,
     )
     return [ContactRequestRead.model_validate(r) for r in records]
 

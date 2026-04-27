@@ -8,7 +8,7 @@ the public website. It replaces the Monday.com "Demande de contact" board.
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Boolean, String, Text
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -80,6 +80,15 @@ class ContactRequest(Base, TimestampUpdateMixin):
         String(64), nullable=True, index=True
     )
     internal_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Assignation à un prospecteur/commercial. SET NULL si l'utilisateur
+    # est désactivé pour qu'on n'orpheline pas le lead. Index pour les
+    # queries « mes leads ».
+    assigned_to_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     def __repr__(self) -> str:
         return f"<ContactRequest(id={self.id}, email='{self.email}', status='{self.status}')>"

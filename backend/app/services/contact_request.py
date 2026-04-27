@@ -38,8 +38,16 @@ class ContactRequestService:
         skip: int = 0,
         limit: int = 100,
         status: Optional[str] = None,
+        assigned_to_user_id: Optional[int] = None,
+        unassigned: bool = False,
     ) -> Sequence[ContactRequest]:
-        return await self.repo.list(skip=skip, limit=limit, status=status)
+        return await self.repo.list(
+            skip=skip,
+            limit=limit,
+            status=status,
+            assigned_to_user_id=assigned_to_user_id,
+            unassigned=unassigned,
+        )
 
     async def get(self, request_id: int) -> Optional[ContactRequest]:
         return await self.repo.get_by_id(request_id)

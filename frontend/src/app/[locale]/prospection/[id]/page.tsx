@@ -1,13 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   ArrowLeft,
+  ArrowRightCircle,
+  Building2,
   Camera,
+  DollarSign,
+  ExternalLink,
   Loader2,
   MapPin,
+  Mic,
+  MicOff,
+  Phone,
   Save,
+  Search,
+  ShieldCheck,
   Trash2,
   X
 } from "lucide-react";
@@ -41,9 +50,35 @@ type Lead = {
   owner_email: string | null;
   owner_phone: string | null;
   owner_neq: string | null;
+  score: number;
+  tags: string[];
+  converted_to_contact_request_id: number | null;
   archived: boolean;
   created_at: string;
 };
+
+const TAG_LABEL: Record<string, string> = {
+  "sweet-spot": "Sweet spot 6-12",
+  "petit-multi": "Petit multi",
+  "moyen-multi": "Moyen multi",
+  "gros-multi": "Gros multi",
+  "tres-vieux": "60 ans+",
+  vieux: "40 ans+",
+  mature: "25 ans+",
+  neuf: "Récent",
+  corp: "Corporation",
+  "neq-connu": "NEQ connu",
+  "contact-direct": "Contact direct",
+  "proprio-inconnu": "Proprio ?",
+  "priorite-haute": "Prio haute"
+};
+
+function scoreBadgeClass(s: number): string {
+  if (s >= 70) return "bg-emerald-500/30 text-emerald-200";
+  if (s >= 50) return "bg-amber-500/25 text-amber-200";
+  if (s >= 30) return "bg-blue-500/25 text-blue-200";
+  return "bg-brand-800 text-white/50";
+}
 
 type Photo = {
   id: number;
@@ -82,12 +117,25 @@ export default function ProspectionDetailPage() {
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
 
+  type ReqCandidate = {
+    neq: string;
+    nom: string | null;
+    statut: string | null;
+    forme_juridique: string | null;
+    adresse: string | null;
+    ville: string | null;
+    code_postal: string | null;
+  };
+
   const [lead, setLead] = useState<Lead | null>(null);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const [enriching, setEnriching] = useState(false);
+  const [enrichNotes, setEnrichNotes] = useState<string[]>([]);
+  const [reqCandidates, setReqCandidates] = useState<ReqCandidate[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   // Champs éditables
@@ -250,6 +298,64 @@ export default function ProspectionDetailPage() {
     }
   }
 
+  async function enrichOwner() {
+    if (enriching) return;
+    setEnriching(true);
+    setError(null);
+    setEnrichNotes([]);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/${id}/enrich-owner`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as {
+        lead: Lead;
+        applied: Record<string, unknown>;
+        req_candidates: ReqCandidate[];
+        notes: string[];
+      };
+      // Met à jour les champs locaux avec ce qui a été appliqué
+      const l = data.lead;
+      setMatricule(l.matricule || "");
+      setNbLogements(
+        l.nb_logements != null ? String(l.nb_logements) : ""
+      );
+      setAnnee(
+        l.annee_construction != null
+          ? String(l.annee_construction)
+          : ""
+      );
+      setValeur(
+        l.valeur_fonciere != null ? String(l.valeur_fonciere) : ""
+      );
+      setLead(l);
+      setEnrichNotes(data.notes || []);
+      setReqCandidates(data.req_candidates || []);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setEnriching(false);
+    }
+  }
+
+  function applyReqCandidate(c: ReqCandidate) {
+    setOwnerKind("corporation");
+    setOwnerName(c.nom || "");
+    setOwnerNeq(c.neq);
+    if (c.adresse) {
+      // Pas d'effet de bord sur l'adresse du chantier — on note le
+      // siège dans une note pour mémoire.
+      setEnrichNotes((prev) => [
+        ...prev,
+        `Siège REQ : ${c.adresse}${c.ville ? ", " + c.ville : ""}`
+      ]);
+    }
+  }
+
   async function uploadPhoto(file: File) {
     const fd = new FormData();
     fd.append("photo", file);
@@ -320,6 +426,124 @@ export default function ProspectionDetailPage() {
     }
   }
 
+  const [converting, setConverting] = useState(false);
+
+  // Rental estimate (SCHL)
+  type RentalEstimate = {
+    cma: string | null;
+    zone: string | null;
+    year: number | null;
+    vacancy_rate: number | null;
+    brackets: {
+      qc_label: string;
+      bedrooms: number;
+      avg_rent: number | null;
+      is_estimate: boolean;
+    }[];
+    estimated_monthly_income: number | null;
+    estimated_annual_income: number | null;
+    grm: number | null;
+    grm_rating: string | null;
+    notes: string[];
+  };
+  const [rental, setRental] = useState<RentalEstimate | null>(null);
+  const [rentalBusy, setRentalBusy] = useState(false);
+  const [rentalError, setRentalError] = useState<string | null>(null);
+
+  async function loadRentalEstimate() {
+    if (rentalBusy) return;
+    setRentalBusy(true);
+    setRentalError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/${id}/rental-estimate`
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setRental((await res.json()) as RentalEstimate);
+    } catch (e) {
+      setRentalError((e as Error).message);
+    } finally {
+      setRentalBusy(false);
+    }
+  }
+
+  // Phone search (LesPAC + Kangalou)
+  type PhoneFound = {
+    phone: string;
+    source: string;
+    url: string | null;
+    snippet: string | null;
+    dncl_check_url: string;
+  };
+  const [phones, setPhones] = useState<PhoneFound[] | null>(null);
+  const [phoneNotes, setPhoneNotes] = useState<string[]>([]);
+  const [phoneBusy, setPhoneBusy] = useState(false);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+
+  async function findPhone() {
+    if (phoneBusy) return;
+    setPhoneBusy(true);
+    setPhoneError(null);
+    setPhones(null);
+    setPhoneNotes([]);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/${id}/find-phone`,
+        { method: "POST" }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as {
+        results: PhoneFound[];
+        notes: string[];
+      };
+      setPhones(data.results);
+      setPhoneNotes(data.notes || []);
+    } catch (e) {
+      setPhoneError((e as Error).message);
+    } finally {
+      setPhoneBusy(false);
+    }
+  }
+
+  async function convertToContact() {
+    if (!lead) return;
+    if (lead.converted_to_contact_request_id) {
+      window.location.href = `/app/crm/${lead.converted_to_contact_request_id}`;
+      return;
+    }
+    if (
+      !(await confirm({
+        title: "Convertir ce lead en client ?",
+        description:
+          "Crée une demande de contact dans le CRM Construction avec l'adresse et le propriétaire pré-remplis. Le lead passe en statut « Converti »."
+      }))
+    )
+      return;
+    setConverting(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/${id}/convert-to-contact`,
+        {
+          method: "POST",
+          body: JSON.stringify({})
+        }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as {
+        contact_request_id: number;
+      };
+      window.location.href = `/app/crm/${data.contact_request_id}`;
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setConverting(false);
+    }
+  }
+
   return (
     <>
       <AppTopbar
@@ -349,6 +573,53 @@ export default function ProspectionDetailPage() {
           <div className="mt-6 grid gap-6 lg:grid-cols-3">
             {/* Colonne principale */}
             <div className="space-y-6 lg:col-span-2">
+              <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <span
+                      className={`flex h-12 w-14 items-center justify-center rounded-xl text-2xl font-bold tabular-nums ${scoreBadgeClass(
+                        lead.score
+                      )}`}
+                    >
+                      {lead.score}
+                    </span>
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wider text-white/50">
+                        Score Horizon
+                      </p>
+                      <p className="text-xs text-white/60">
+                        {lead.score >= 70
+                          ? "Lead à fort potentiel"
+                          : lead.score >= 50
+                            ? "Lead intéressant"
+                            : lead.score >= 30
+                              ? "Lead à creuser"
+                              : "Lead à compléter"}
+                      </p>
+                    </div>
+                  </div>
+                  {lead.tags.length > 0 ? (
+                    <div className="flex flex-wrap justify-end gap-1.5">
+                      {lead.tags.map((t) => (
+                        <span
+                          key={t}
+                          className="rounded-full bg-brand-800 px-2 py-0.5 text-[11px] text-white/70"
+                        >
+                          {TAG_LABEL[t] || t}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+                {lead.converted_to_contact_request_id ? (
+                  <p className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+                    ✓ Lead converti en ContactRequest #
+                    {lead.converted_to_contact_request_id} dans le CRM
+                    Construction.
+                  </p>
+                ) : null}
+              </section>
+
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                   Identité du lead
@@ -490,13 +761,75 @@ export default function ProspectionDetailPage() {
               </section>
 
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-                  Données du rôle d&apos;évaluation
-                </h2>
-                <p className="mt-1 text-[11px] text-white/50">
-                  À remplir manuellement pour l&apos;instant. L&apos;auto-fill
-                  via le rôle municipal arrive en Phase 2.
-                </p>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                      Données du rôle d&apos;évaluation
+                    </h2>
+                    <p className="mt-1 text-[11px] text-white/50">
+                      Auto-fill via le rôle de la Ville de Montréal
+                      (matricule, nb logements, année, superficies).
+                      Cherche aussi les corporations REQ à cette adresse.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={enrichOwner}
+                    disabled={enriching || !address.trim()}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                  >
+                    {enriching ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Search className="h-3.5 w-3.5" />
+                    )}
+                    Trouver le propriétaire
+                  </button>
+                </div>
+                {enrichNotes.length > 0 ? (
+                  <ul className="mt-3 space-y-1 rounded-md border border-brand-700 bg-brand-950/40 p-2 text-[11px] text-white/60">
+                    {enrichNotes.map((n, i) => (
+                      <li key={i}>· {n}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {reqCandidates.length > 0 ? (
+                  <div className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-300">
+                      <Building2 className="mr-1 inline h-3 w-3" />
+                      {reqCandidates.length} corporation
+                      {reqCandidates.length > 1 ? "s" : ""} REQ à cette
+                      adresse
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-white/50">
+                      Cliquez sur une corporation pour l&apos;assigner
+                      comme propriétaire du lead.
+                    </p>
+                    <ul className="mt-2 space-y-1">
+                      {reqCandidates.map((c) => (
+                        <li key={c.neq}>
+                          <button
+                            type="button"
+                            onClick={() => applyReqCandidate(c)}
+                            className="w-full rounded-md border border-brand-700 bg-brand-900/60 px-2.5 py-1.5 text-left text-[12px] text-white/80 hover:bg-brand-800 hover:text-white"
+                          >
+                            <span className="font-medium text-emerald-300">
+                              {c.nom || "(nom manquant)"}
+                            </span>{" "}
+                            <span className="text-white/40">
+                              · NEQ {c.neq}
+                            </span>
+                            {c.statut ? (
+                              <span className="ml-2 rounded-full bg-brand-800 px-1.5 py-0.5 text-[10px] text-white/60">
+                                {c.statut}
+                              </span>
+                            ) : null}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <div>
                     <label className="label">Matricule</label>
@@ -661,15 +994,281 @@ export default function ProspectionDetailPage() {
                       >
                         🔗 REQ recherche libre
                       </a>
+                      {ownerName.trim() ? (
+                        <a
+                          href={`https://www.canada411.ca/search/?stype=re&what=${encodeURIComponent(
+                            ownerName.trim()
+                          )}${
+                            city.trim()
+                              ? `&where=${encodeURIComponent(
+                                  city.trim() + " QC"
+                                )}`
+                              : ""
+                          }`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 rounded-md border border-brand-700 bg-brand-900 px-2.5 py-1.5 text-[11px] text-white/70 hover:bg-brand-800 hover:text-white"
+                          title="Annuaire public Canada411"
+                        >
+                          📞 Canada411
+                        </a>
+                      ) : null}
                     </div>
                   </div>
                 </div>
               </section>
 
+              {/* === Téléphone du propriétaire === */}
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-                  Notes terrain
-                </h2>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                      Téléphone du propriétaire
+                    </h2>
+                    <p className="mt-1 text-[11px] text-white/50">
+                      Recherche dans les annonces publiques (LesPAC +
+                      Kangalou). Numéros NON stockés en base — chaque
+                      recherche est faite en live.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={findPhone}
+                    disabled={phoneBusy || (!address.trim() && !ownerName.trim())}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                  >
+                    {phoneBusy ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Phone className="h-3.5 w-3.5" />
+                    )}
+                    Trouver le téléphone
+                  </button>
+                </div>
+                {phoneError ? (
+                  <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                    {phoneError}
+                  </p>
+                ) : null}
+                {phones && phones.length > 0 ? (
+                  <ul className="mt-3 space-y-2">
+                    {phones.map((p, i) => (
+                      <li
+                        key={`${p.phone}-${i}`}
+                        className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <a
+                            href={`tel:${p.phone.replace(/-/g, "")}`}
+                            className="font-mono text-base font-bold text-emerald-300 hover:text-emerald-200"
+                          >
+                            {p.phone}
+                          </a>
+                          <span className="rounded-full bg-brand-800 px-2 py-0.5 text-[10px] uppercase text-white/60">
+                            {p.source}
+                          </span>
+                        </div>
+                        {p.snippet ? (
+                          <p className="mt-1 text-[11px] italic text-white/50">
+                            « {p.snippet} »
+                          </p>
+                        ) : null}
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <a
+                            href={p.dncl_check_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20"
+                            title="Liste nationale des numéros exclus du télémarketing — obligation CRTC"
+                          >
+                            <ShieldCheck className="h-3 w-3" />
+                            Vérifier DNCL
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => setOwnerPhone(p.phone)}
+                            className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20"
+                          >
+                            Utiliser ce numéro
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {phoneNotes.length > 0 ? (
+                  <ul className="mt-2 space-y-1 text-[11px] text-white/50">
+                    {phoneNotes.map((n, i) => (
+                      <li key={i}>· {n}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </section>
+
+              {/* === Revenus locatifs estimés (SCHL) === */}
+              <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                      Revenus locatifs estimés
+                    </h2>
+                    <p className="mt-1 text-[11px] text-white/50">
+                      Loyers moyens SCHL pour cette zone, par grandeur
+                      d&apos;appartement. Permet d&apos;estimer le
+                      revenu annuel et le GRM (valeur / revenu) — la
+                      métrique-clé multi-logements.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={loadRentalEstimate}
+                    disabled={rentalBusy}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                  >
+                    {rentalBusy ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <DollarSign className="h-3.5 w-3.5" />
+                    )}
+                    Estimer
+                  </button>
+                </div>
+                {rentalError ? (
+                  <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                    {rentalError}
+                  </p>
+                ) : null}
+                {rental ? (
+                  <div className="mt-3 space-y-3">
+                    {rental.cma ? (
+                      <p className="text-[11px] text-white/60">
+                        Source : SCHL ·{" "}
+                        <span className="text-emerald-300">
+                          {rental.zone || rental.cma}
+                        </span>
+                        {rental.year ? ` · ${rental.year}` : ""}
+                        {rental.vacancy_rate != null
+                          ? ` · vacance ${rental.vacancy_rate}%`
+                          : ""}
+                      </p>
+                    ) : null}
+                    {rental.brackets.length > 0 ? (
+                      <div className="overflow-hidden rounded-md border border-brand-700">
+                        <table className="w-full text-xs">
+                          <thead className="bg-brand-950/60 text-left text-[10px] uppercase tracking-wider text-white/50">
+                            <tr>
+                              <th className="px-2 py-1.5">Taille</th>
+                              <th className="px-2 py-1.5 text-right">
+                                Loyer moyen
+                              </th>
+                              <th className="px-2 py-1.5"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-brand-800">
+                            {rental.brackets.map((b) => (
+                              <tr key={b.qc_label}>
+                                <td className="px-2 py-1.5 font-medium text-white/80">
+                                  {b.qc_label}
+                                </td>
+                                <td className="px-2 py-1.5 text-right tabular-nums text-white/80">
+                                  {b.avg_rent != null
+                                    ? `${b.avg_rent.toFixed(0)} $`
+                                    : "—"}
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  {b.is_estimate ? (
+                                    <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] text-amber-300">
+                                      estimé sur 3+ BR
+                                    </span>
+                                  ) : null}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : null}
+                    {rental.estimated_annual_income ? (
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        <div className="rounded-md border border-brand-700 bg-brand-950/40 p-2">
+                          <p className="text-[10px] uppercase tracking-wider text-white/50">
+                            Revenu mensuel
+                          </p>
+                          <p className="text-sm font-bold tabular-nums text-emerald-300">
+                            {rental.estimated_monthly_income?.toLocaleString(
+                              "fr-CA",
+                              {
+                                style: "currency",
+                                currency: "CAD",
+                                maximumFractionDigits: 0
+                              }
+                            )}
+                          </p>
+                        </div>
+                        <div className="rounded-md border border-brand-700 bg-brand-950/40 p-2">
+                          <p className="text-[10px] uppercase tracking-wider text-white/50">
+                            Revenu annuel
+                          </p>
+                          <p className="text-sm font-bold tabular-nums text-emerald-300">
+                            {rental.estimated_annual_income.toLocaleString(
+                              "fr-CA",
+                              {
+                                style: "currency",
+                                currency: "CAD",
+                                maximumFractionDigits: 0
+                              }
+                            )}
+                          </p>
+                        </div>
+                        {rental.grm != null ? (
+                          <div className="rounded-md border border-brand-700 bg-brand-950/40 p-2">
+                            <p className="text-[10px] uppercase tracking-wider text-white/50">
+                              GRM (valeur ÷ revenu)
+                            </p>
+                            <p
+                              className={`text-sm font-bold tabular-nums ${
+                                rental.grm_rating === "excellent"
+                                  ? "text-emerald-300"
+                                  : rental.grm_rating === "bon"
+                                    ? "text-blue-300"
+                                    : rental.grm_rating === "moyen"
+                                      ? "text-amber-300"
+                                      : "text-rose-300"
+                              }`}
+                            >
+                              {rental.grm.toFixed(1)}
+                              <span className="ml-1 text-[10px] font-normal uppercase">
+                                {rental.grm_rating}
+                              </span>
+                            </p>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {rental.notes.length > 0 ? (
+                      <ul className="space-y-1 text-[11px] text-white/50">
+                        {rental.notes.map((n, i) => (
+                          <li key={i}>· {n}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
+              </section>
+
+              <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Notes terrain
+                  </h2>
+                  <VoiceNotesButton
+                    onAppend={(t) =>
+                      setNotes((prev) =>
+                        prev ? `${prev.trim()}\n${t}` : t
+                      )
+                    }
+                  />
+                </div>
                 <textarea
                   rows={5}
                   value={notes}
@@ -694,19 +1293,36 @@ export default function ProspectionDetailPage() {
                   <Trash2 className="h-3.5 w-3.5" />
                   Supprimer
                 </button>
-                <button
-                  type="button"
-                  onClick={save}
-                  disabled={saving}
-                  className="btn-accent text-sm"
-                >
-                  {saving ? (
-                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Save className="mr-1.5 h-4 w-4" />
-                  )}
-                  Enregistrer
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={convertToContact}
+                    disabled={converting}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                  >
+                    {converting ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <ArrowRightCircle className="h-3.5 w-3.5" />
+                    )}
+                    {lead.converted_to_contact_request_id
+                      ? "Voir dans le CRM"
+                      : "Convertir en client"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={save}
+                    disabled={saving}
+                    className="btn-accent text-sm"
+                  >
+                    {saving ? (
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Save className="mr-1.5 h-4 w-4" />
+                    )}
+                    Enregistrer
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -774,5 +1390,128 @@ export default function ProspectionDetailPage() {
         )}
       </div>
     </>
+  );
+}
+
+/**
+ * Bouton micro qui transcrit la voix en texte FR-CA via la Web Speech
+ * API du navigateur (gratuit, pas d'API tierce). Compatible Chrome,
+ * Edge, Safari (avec préfixe webkit) ; pas dispo dans Firefox.
+ *
+ * Le texte transcrit est appendé via `onAppend` quand l'utilisateur
+ * stoppe l'enregistrement. Erreurs network/permission sont traitées
+ * silencieusement (le bouton revient à l'état idle).
+ */
+function VoiceNotesButton({
+  onAppend
+}: {
+  onAppend: (transcript: string) => void;
+}) {
+  const [supported, setSupported] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [interim, setInterim] = useState("");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recRef = useRef<any>(null);
+  const finalsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const Klass = w.SpeechRecognition || w.webkitSpeechRecognition;
+    setSupported(!!Klass);
+  }, []);
+
+  function start() {
+    if (typeof window === "undefined") return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const Klass = w.SpeechRecognition || w.webkitSpeechRecognition;
+    if (!Klass) return;
+    const r = new Klass();
+    r.lang = "fr-CA";
+    r.continuous = true;
+    r.interimResults = true;
+    finalsRef.current = [];
+    setInterim("");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    r.onresult = (event: any) => {
+      let interimAcc = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const res = event.results[i];
+        const text = res[0]?.transcript || "";
+        if (res.isFinal) {
+          finalsRef.current.push(text.trim());
+        } else {
+          interimAcc += text;
+        }
+      }
+      setInterim(interimAcc.trim());
+    };
+    r.onerror = () => {
+      stop();
+    };
+    r.onend = () => {
+      const joined = finalsRef.current.join(" ").trim();
+      if (joined) onAppend(joined);
+      finalsRef.current = [];
+      setInterim("");
+      setListening(false);
+      recRef.current = null;
+    };
+    recRef.current = r;
+    setListening(true);
+    try {
+      r.start();
+    } catch {
+      stop();
+    }
+  }
+
+  function stop() {
+    const r = recRef.current;
+    if (r) {
+      try {
+        r.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+    setListening(false);
+  }
+
+  if (!supported) {
+    return (
+      <span className="text-[10px] text-white/30">
+        Voix non supportée
+      </span>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      {listening && interim ? (
+        <span className="hidden max-w-[180px] truncate text-[10px] italic text-white/40 sm:inline">
+          « {interim} »
+        </span>
+      ) : null}
+      <button
+        type="button"
+        onClick={listening ? stop : start}
+        className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition ${
+          listening
+            ? "animate-pulse border-rose-500/60 bg-rose-500/15 text-rose-200"
+            : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
+        }`}
+        aria-label={listening ? "Arrêter la dictée" : "Dicter une note"}
+      >
+        {listening ? (
+          <MicOff className="h-3 w-3" />
+        ) : (
+          <Mic className="h-3 w-3" />
+        )}
+        {listening ? "Arrêter" : "Dicter"}
+      </button>
+    </div>
   );
 }

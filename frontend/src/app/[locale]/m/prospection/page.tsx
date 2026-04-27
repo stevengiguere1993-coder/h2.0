@@ -13,6 +13,7 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { loadPrefs } from "@/lib/prospection-prefs";
 
 type Geo = {
   lat: number;
@@ -40,13 +41,23 @@ const KIND_OPTIONS: { value: string; label: string }[] = [
 ];
 
 export default function MobileProspectionPage() {
+  // Lit une seule fois les préférences user pour pré-remplir le
+  // formulaire (type par défaut). Les autres champs sont reset à
+  // chaque ouverture du modal.
+  const initialPrefsRef = useRef(
+    typeof window !== "undefined"
+      ? loadPrefs()
+      : { defaultKind: "multilogement", defaultPriority: 3 }
+  );
   const [open, setOpen] = useState(false);
   const [geo, setGeo] = useState<Geo | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
   const [geoLoading, setGeoLoading] = useState(false);
   const [photo, setPhoto] = useState<File | null>(null);
   const [name, setName] = useState("");
-  const [kind, setKind] = useState("multilogement");
+  const [kind, setKind] = useState(
+    initialPrefsRef.current.defaultKind
+  );
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,7 +120,9 @@ export default function MobileProspectionPage() {
     setError(null);
     setPhoto(null);
     setName("");
-    setKind("multilogement");
+    // Re-lit les préfs au cas où l'user vient de les modifier dans
+    // /prospection/parametres entre deux captures.
+    setKind(loadPrefs().defaultKind);
     setNotes("");
     setGeo(null);
     setGeoError(null);
@@ -130,6 +143,11 @@ export default function MobileProspectionPage() {
       const fd = new FormData();
       fd.append("name", name.trim());
       fd.append("kind", kind);
+      // Priorité par défaut depuis les préférences user (1-5).
+      fd.append(
+        "priority",
+        String(loadPrefs().defaultPriority)
+      );
       if (geo) {
         fd.append("lat", String(geo.lat));
         fd.append("lng", String(geo.lng));

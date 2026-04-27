@@ -43,6 +43,7 @@ type Prospect = {
   source: string | null;
   status: string;
   internal_notes: string | null;
+  assigned_to_user_id: number | null;
   gdpr_consent: boolean;
   marketing_consent: boolean;
   created_at: string;
@@ -102,6 +103,43 @@ export default function ProspectDetailPage() {
   const [notes, setNotes] = useState("");
   const [savingNotes, setSavingNotes] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [users, setUsers] = useState<
+    { id: number; email: string; first_name?: string | null; last_name?: string | null }[]
+  >([]);
+
+  useEffect(() => {
+    // Charge la liste des managers/admins pour le menu d'assignation.
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authedFetch("/api/v1/users");
+        if (!r.ok) return;
+        const data = (await r.json()) as typeof users;
+        if (!cancelled) setUsers(data);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function updateAssignee(userId: number | null) {
+    if (!p) return;
+    const prev = p.assigned_to_user_id ?? null;
+    setP({ ...p, assigned_to_user_id: userId });
+    try {
+      const res = await authedFetch(`/api/v1/contact/${p.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ assigned_to_user_id: userId })
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      // Revert
+      setP({ ...p, assigned_to_user_id: prev });
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -231,6 +269,27 @@ export default function ProspectDetailPage() {
                     {Object.entries(STATUS_LABELS).map(([k, v]) => (
                       <option key={k} value={k}>
                         {v}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Assigné à</label>
+                  <select
+                    value={p.assigned_to_user_id ?? ""}
+                    onChange={(e) =>
+                      updateAssignee(
+                        e.target.value ? Number(e.target.value) : null
+                      )
+                    }
+                    className="input w-56"
+                  >
+                    <option value="">— Non assigné —</option>
+                    {users.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.first_name || u.last_name
+                          ? `${u.first_name || ""} ${u.last_name || ""}`.trim()
+                          : u.email}
                       </option>
                     ))}
                   </select>

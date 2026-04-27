@@ -9,12 +9,13 @@ Cible Horizon : multi-logements 4-20 portes, terrains à
 développer/redévelopper, semi-commercial. Zone : Montréal + Rive-Sud.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Optional
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -98,6 +99,15 @@ class ProspectionLead(Base, TimestampUpdateMixin):
         Integer, nullable=False, default=3, server_default="3"
     )  # 1-5 étoiles
 
+    # Scoring & tags automatiques (recalculés serveur-side à chaque
+    # modification du lead). `score` 0-100 pondère les critères Horizon
+    # (multi-logements 4-20 portes, vieux bâtiments, corp., etc.).
+    # `tags` est un JSON-encoded array de strings.
+    score: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", index=True
+    )
+    tags: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # Données du rôle d'évaluation (Phase 2 — fillées par lookup auto)
     matricule: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, index=True
@@ -111,6 +121,39 @@ class ProspectionLead(Base, TimestampUpdateMixin):
     )
     superficie_terrain: Mapped[Optional[float]] = mapped_column(
         Numeric(12, 2), nullable=True  # en m²
+    )
+
+    # Données financières pour calcul de l'equity. À remplir
+    # manuellement (sources fiables : JLR payant, ou rumeur de quartier).
+    purchase_price: Mapped[Optional[float]] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
+    purchase_date: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )
+    mortgage_balance: Mapped[Optional[float]] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
+
+    # Drapeaux fiscaux (saisis manuellement par le prospecteur quand
+    # il voit un avis de vente pour taxes affiché à la propriété, ou
+    # qu'il l'apprend du proprio).
+    tax_delinquent: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="false"
+    )
+    tax_year_paid: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    tax_amount: Mapped[Optional[float]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
+
+    # Adresse postale du proprio si différente de la propriété
+    # (Absentee Owner pattern). owner_address existe déjà mais
+    # on garde les deux : owner_address pour l'adresse complète,
+    # mailing_address pour distinguer un proprio « hors site ».
+    mailing_address: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True
     )
 
     # Propriétaire (Phase 2 — résolu via REQ ou rôle)

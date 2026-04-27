@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { ConnexionsSection } from "@/components/connexions-section";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { authedFetch, hasMinRole } from "@/lib/auth";
@@ -168,6 +169,11 @@ export default function ParametresPage() {
             <ChevronRight className="h-4 w-4 text-white/40" />
           </Link>
         ) : null}
+
+        {/* Vue centralisée de toutes les sources externes (QBO,
+            Monday, rôles d'évaluation, REQ, SCHL, calendrier, etc.)
+            avec leur statut et un raccourci pour les configurer. */}
+        {hasMinRole(me, "manager") ? <ConnexionsSection /> : null}
 
         {hasMinRole(me, "admin") ? <QuickBooksSection /> : null}
         {hasMinRole(me, "admin") ? <NumberingSection /> : null}

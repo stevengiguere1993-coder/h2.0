@@ -3,10 +3,13 @@
 import { useState } from "react";
 import { usePathname } from "next/navigation";
 import {
+  BarChart3,
+  Database,
   Home,
   LogOut,
   Map,
   MapPin,
+  Settings,
   Smartphone,
   UserCircle,
   X
@@ -31,7 +34,25 @@ const PROSPECTION_NAV: NavItem[] = [
     icon: MapPin,
     minRole: "manager"
   },
-  // Phase 3+ : campagnes, paramètres
+  {
+    href: "/prospection/dashboard",
+    label: "Dashboard",
+    icon: BarChart3,
+    minRole: "manager"
+  },
+  {
+    href: "/prospection/parametres",
+    label: "Paramètres",
+    icon: Settings,
+    minRole: "manager"
+  },
+  {
+    href: "/prospection/sources",
+    label: "Sources de données",
+    icon: Database,
+    minRole: "owner"
+  },
+  // Phase 3+ : campagnes
   // { href: "/prospection/campagnes", label: "Campagnes", icon: Mail },
 ];
 

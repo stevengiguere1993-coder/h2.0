@@ -195,6 +195,29 @@ async def init_db() -> None:
             ("achats", "supplier_invoice_number", "VARCHAR(64)"),
             ("achats", "invoice_date", "DATE"),
             ("achats", "paid_at", "TIMESTAMP WITH TIME ZONE"),
+            # Prospection : scoring auto + tags.
+            (
+                "prospection_leads",
+                "score",
+                "INTEGER NOT NULL DEFAULT 0",
+            ),
+            ("prospection_leads", "tags", "TEXT"),
+            # REQ : téléphone du siège social (du CSV REQ).
+            ("req_companies", "telephone", "VARCHAR(32)"),
+            # CRM : assignation d'un lead à un prospecteur.
+            ("contact_requests", "assigned_to_user_id", "INTEGER"),
+            # Prospection — données financières et fiscales.
+            ("prospection_leads", "purchase_price", "NUMERIC(14, 2)"),
+            ("prospection_leads", "purchase_date", "DATE"),
+            ("prospection_leads", "mortgage_balance", "NUMERIC(14, 2)"),
+            (
+                "prospection_leads",
+                "tax_delinquent",
+                "BOOLEAN NOT NULL DEFAULT FALSE",
+            ),
+            ("prospection_leads", "tax_year_paid", "INTEGER"),
+            ("prospection_leads", "tax_amount", "NUMERIC(10, 2)"),
+            ("prospection_leads", "mailing_address", "VARCHAR(500)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
