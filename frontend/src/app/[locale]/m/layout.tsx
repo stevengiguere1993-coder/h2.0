@@ -66,11 +66,19 @@ export default function MobileLayout({
     );
   }
 
+  // La nav bottom n'a pas sa place dans le portail Prospection
+  // (qui est totalement séparé du portail Construction). Les
+  // chemins /m/prospection* doivent rester focalisés.
+  const inProspection = pathname.includes("/m/prospection");
+
   return (
     <ConfirmProvider>
     <main className="flex min-h-screen flex-col bg-brand-950 text-white">
-      <div className="flex-1 pb-20">{children}</div>
+      <div className={inProspection ? "flex-1" : "flex-1 pb-20"}>
+        {children}
+      </div>
 
+      {inProspection ? null : (
       <nav
         className="fixed bottom-0 left-0 right-0 z-40 border-t border-brand-800 bg-brand-950/95 backdrop-blur"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
@@ -101,6 +109,7 @@ export default function MobileLayout({
           })}
         </ul>
       </nav>
+      )}
 
       {/* Bouton flottant Aide — placé au-dessus de la nav bottom (≈60px
           + safe-area-inset-bottom). calc() pour suivre le padding iOS. */}

@@ -110,13 +110,24 @@ type Photo = {
 };
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
-  { value: "a_visiter", label: "À visiter" },
-  { value: "visite", label: "Visité" },
+  { value: "a_visiter", label: "Repéré" },
+  { value: "visite", label: "Visité (drive-by)" },
   { value: "a_contacter", label: "À contacter" },
   { value: "contacte", label: "Contacté" },
-  { value: "soumissionne", label: "Soumissionné" },
-  { value: "converti", label: "Converti" },
-  { value: "perdu", label: "Perdu" }
+  { value: "soumissionne", label: "Offre soumise" },
+  { value: "offre_acceptee", label: "Offre acceptée" },
+  { value: "en_inspection", label: "Inspection" },
+  { value: "en_nego", label: "Négociation" },
+  { value: "chez_notaire", label: "Chez le notaire" },
+  { value: "en_cession", label: "Cession en cours (flip)" },
+  { value: "converti", label: "Acheté / Cédé ✓" },
+  { value: "perdu", label: "Perdu / refus" }
+];
+
+const DEAL_STRATEGY_OPTIONS = [
+  { value: "undecided", label: "À décider" },
+  { value: "keep", label: "🏠 Acheter (keep)" },
+  { value: "flip", label: "💰 Flip (céder)" }
 ];
 
 const KIND_OPTIONS = [
@@ -368,7 +379,7 @@ export default function ProspectionDetailPage() {
     setOwnerName(c.nom || "");
     setOwnerNeq(c.neq);
     if (c.adresse) {
-      // Pas d'effet de bord sur l'adresse du chantier — on note le
+      // Pas d'effet de bord sur l'adresse de l'immeuble — on note le
       // siège dans une note pour mémoire.
       setEnrichNotes((prev) => [
         ...prev,
@@ -1277,6 +1288,12 @@ export default function ProspectionDetailPage() {
                 ) : null}
               </section>
 
+              <BuyFlowSection
+                leadId={id}
+                lead={lead}
+                onSaved={load}
+              />
+
               <FinanceSection leadId={id} lead={lead} onSaved={load} />
 
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
@@ -1923,6 +1940,319 @@ function FinanceSection({
             ))}
           </ul>
         )}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * BuyFlowSection : stratégie deal + montants offre/cession +
+ * actions buy-flow (relance 6 mois, import PDF JLR).
+ */
+function BuyFlowSection({
+  leadId,
+  lead,
+  onSaved
+}: {
+  leadId: number;
+  lead: Lead & {
+    deal_strategy?: string;
+    offer_amount?: number | null;
+    assignment_price?: number | null;
+    estimated_flip_profit?: number | null;
+  };
+  onSaved: () => void;
+}) {
+  const confirm = useConfirm();
+  const [strategy, setStrategy] = useState(
+    lead.deal_strategy || "undecided"
+  );
+  const [offerAmount, setOfferAmount] = useState(
+    lead.offer_amount != null ? String(lead.offer_amount) : ""
+  );
+  const [assignmentPrice, setAssignmentPrice] = useState(
+    lead.assignment_price != null
+      ? String(lead.assignment_price)
+      : ""
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Relance 6 mois
+  const [relancing, setRelancing] = useState(false);
+
+  // JLR PDF upload
+  const [jlrFile, setJlrFile] = useState<File | null>(null);
+  const [jlrUploading, setJlrUploading] = useState(false);
+  const [jlrResult, setJlrResult] = useState<{
+    transactions_inserted: number;
+    transactions_found: number;
+    suggested_mortgage_balance: number | null;
+    suggested_owner_name: string | null;
+    notes: string[];
+  } | null>(null);
+
+  async function saveBuyFlow() {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const payload: Record<string, unknown> = {
+        deal_strategy: strategy,
+        offer_amount: offerAmount ? Number(offerAmount) : null,
+        assignment_price: assignmentPrice
+          ? Number(assignmentPrice)
+          : null
+      };
+      const res = await authedFetch(
+        `/api/v1/prospection/${leadId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(payload)
+        }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      onSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function relance6m() {
+    if (relancing) return;
+    if (
+      !(await confirm({
+        title: "Marquer comme refusé et relancer dans 6 mois ?",
+        description:
+          "Le lead passe en statut « Perdu / refus » et un suivi auto sera programmé dans 180 jours pour qu'il réapparaisse dans ta queue."
+      }))
+    )
+      return;
+    setRelancing(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/${leadId}/relance-6m`,
+        {
+          method: "POST",
+          body: JSON.stringify({})
+        }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      onSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRelancing(false);
+    }
+  }
+
+  async function uploadJlr() {
+    if (jlrUploading || !jlrFile) return;
+    setJlrUploading(true);
+    setError(null);
+    setJlrResult(null);
+    try {
+      const fd = new FormData();
+      fd.append("pdf", jlrFile);
+      const res = await authedFetch(
+        `/api/v1/prospection/${leadId}/import-jlr-pdf`,
+        { method: "POST", body: fd }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      setJlrResult(await res.json());
+      setJlrFile(null);
+      onSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setJlrUploading(false);
+    }
+  }
+
+  function fmtMoney(n: number | null | undefined): string {
+    if (n == null) return "—";
+    return new Intl.NumberFormat("fr-CA", {
+      style: "currency",
+      currency: "CAD",
+      maximumFractionDigits: 0
+    }).format(n);
+  }
+
+  return (
+    <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+      <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+        Stratégie & deal
+      </h2>
+      <p className="mt-1 text-[11px] text-white/50">
+        Acheter pour ton portefeuille (keep) ou flip (cession de la
+        promesse d&apos;achat à un autre investisseur).
+      </p>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <div>
+          <label className="label">Stratégie</label>
+          <select
+            value={strategy}
+            onChange={(e) => setStrategy(e.target.value)}
+            className="input"
+          >
+            <option value="undecided">À décider</option>
+            <option value="keep">🏠 Acheter (keep)</option>
+            <option value="flip">💰 Flip (céder)</option>
+          </select>
+        </div>
+        <div>
+          <label className="label">Offre soumise (CAD)</label>
+          <input
+            type="number"
+            min="0"
+            step="100"
+            value={offerAmount}
+            onChange={(e) => setOfferAmount(e.target.value)}
+            placeholder="Montant de la promesse"
+            className="input"
+          />
+        </div>
+        {strategy === "flip" ? (
+          <div>
+            <label className="label">Prix de cession (CAD)</label>
+            <input
+              type="number"
+              min="0"
+              step="100"
+              value={assignmentPrice}
+              onChange={(e) => setAssignmentPrice(e.target.value)}
+              placeholder="Payé par l'investisseur final"
+              className="input"
+            />
+          </div>
+        ) : null}
+      </div>
+
+      {/* Profit flip estimé */}
+      {strategy === "flip" &&
+      lead.estimated_flip_profit != null ? (
+        <div className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-2">
+          <p className="text-[10px] uppercase tracking-wider text-emerald-300">
+            Profit flip estimé
+          </p>
+          <p className="text-base font-bold tabular-nums text-emerald-200">
+            {fmtMoney(lead.estimated_flip_profit)}
+          </p>
+        </div>
+      ) : null}
+
+      {/* Save + Relance 6m */}
+      <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+        {error ? (
+          <p className="flex-1 text-xs text-rose-300">{error}</p>
+        ) : null}
+        <button
+          type="button"
+          onClick={relance6m}
+          disabled={relancing}
+          className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
+          title="Marque le lead comme refusé et programme une relance auto dans 6 mois"
+        >
+          {relancing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <span>⏰</span>
+          )}
+          Refusé — relance 6 mois
+        </button>
+        <button
+          type="button"
+          onClick={saveBuyFlow}
+          disabled={saving}
+          className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+        >
+          {saving ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Save className="h-3.5 w-3.5" />
+          )}
+          Enregistrer
+        </button>
+      </div>
+
+      {/* JLR PDF importer */}
+      <div className="mt-6 border-t border-brand-800 pt-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-white/60">
+          Import fiche JLR (PDF)
+        </h3>
+        <p className="mt-1 text-[11px] text-white/50">
+          Upload un PDF JLR (rapport sur droit immobilier) — on
+          extrait automatiquement les transactions historiques et on
+          suggère l&apos;hypothèque + le propriétaire actuel.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input
+            type="file"
+            accept=".pdf,application/pdf"
+            disabled={jlrUploading}
+            onChange={(e) =>
+              setJlrFile(e.target.files?.[0] || null)
+            }
+            className="block flex-1 cursor-pointer rounded-md border border-brand-700 bg-brand-950 px-3 py-2 text-xs text-white/80 file:mr-3 file:rounded file:border-0 file:bg-emerald-500/15 file:px-3 file:py-1.5 file:text-emerald-300 hover:file:bg-emerald-500/25"
+          />
+          <button
+            type="button"
+            onClick={uploadJlr}
+            disabled={!jlrFile || jlrUploading}
+            className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+          >
+            {jlrUploading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <span>📄</span>
+            )}
+            Analyser le PDF
+          </button>
+        </div>
+        {jlrResult ? (
+          <div className="mt-3 space-y-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3">
+            <p className="text-xs font-semibold text-emerald-300">
+              ✓ Analyse complétée
+            </p>
+            <p className="text-[11px] text-white/70">
+              {jlrResult.transactions_inserted} transactions insérées
+              ({jlrResult.transactions_found} candidates trouvées).
+            </p>
+            {jlrResult.suggested_mortgage_balance ? (
+              <p className="text-[11px] text-white/70">
+                💰 Hypothèque suggérée :{" "}
+                <span className="font-bold text-emerald-300">
+                  {fmtMoney(jlrResult.suggested_mortgage_balance)}
+                </span>
+                {" — "}à copier manuellement dans la section Finance.
+              </p>
+            ) : null}
+            {jlrResult.suggested_owner_name ? (
+              <p className="text-[11px] text-white/70">
+                👤 Propriétaire suggéré :{" "}
+                <span className="font-bold text-emerald-300">
+                  {jlrResult.suggested_owner_name}
+                </span>
+                {" — "}à copier manuellement dans la section
+                Propriétaire.
+              </p>
+            ) : null}
+            {jlrResult.notes.length > 0 ? (
+              <ul className="mt-1 space-y-0.5 text-[10px] text-white/40">
+                {jlrResult.notes.map((n, i) => (
+                  <li key={i}>· {n}</li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </section>
   );

@@ -78,13 +78,18 @@ function ownerViewHref(lead: {
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  a_visiter: "À visiter",
-  visite: "Visité",
+  a_visiter: "Repéré",
+  visite: "Visité (drive-by)",
   a_contacter: "À contacter",
   contacte: "Contacté",
-  soumissionne: "Soumissionné",
-  converti: "Converti",
-  perdu: "Perdu"
+  soumissionne: "Offre soumise",
+  offre_acceptee: "Offre acceptée",
+  en_inspection: "Inspection",
+  en_nego: "Négociation",
+  chez_notaire: "Chez le notaire",
+  en_cession: "Cession en cours",
+  converti: "Acheté / Cédé ✓",
+  perdu: "Perdu / refus"
 };
 
 const STATUS_COLOR: Record<string, string> = {
@@ -93,6 +98,11 @@ const STATUS_COLOR: Record<string, string> = {
   a_contacter: "bg-amber-500/20 text-amber-300",
   contacte: "bg-violet-500/20 text-violet-300",
   soumissionne: "bg-pink-500/20 text-pink-300",
+  offre_acceptee: "bg-fuchsia-500/25 text-fuchsia-200",
+  en_inspection: "bg-cyan-500/20 text-cyan-300",
+  en_nego: "bg-yellow-500/20 text-yellow-300",
+  chez_notaire: "bg-indigo-500/25 text-indigo-200",
+  en_cession: "bg-teal-500/25 text-teal-200",
   converti: "bg-green-500/30 text-green-200",
   perdu: "bg-rose-500/20 text-rose-300"
 };
@@ -476,7 +486,7 @@ export default function ProspectionLeadsPage() {
               className="btn-accent text-sm"
             >
               <Plus className="mr-1.5 h-4 w-4" />
-              Nouveau (mobile)
+              Ajouter
             </Link>
           </div>
         }

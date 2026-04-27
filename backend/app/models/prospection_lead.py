@@ -38,19 +38,44 @@ class ProspectionLeadKind(str, Enum):
 
 
 class ProspectionLeadStatus(str, Enum):
+    """Pipeline buy-flow Horizon — l'immeuble est repéré pour l'acheter
+    (pas pour le rénover comme un client classique). Les statuts
+    suivent les étapes d'acquisition immobilière au Québec.
+
+    Branche après « offre acceptée » :
+    - Acheter (deal_strategy=keep) : inspection → nego → notaire → acheté
+    - Flip (deal_strategy=flip)    : en_cession → cédé (assignation
+      de promesse d'achat à un autre investisseur)
+    """
+
     A_VISITER = "a_visiter"  # repéré, pas encore visité de près
-    VISITE = "visite"  # visite de drive-by faite
-    A_CONTACTER = "a_contacter"  # propriétaire identifié, à contacter
+    VISITE = "visite"  # visite drive-by faite
+    A_CONTACTER = "a_contacter"  # proprio identifié, à contacter
     CONTACTE = "contacte"  # contact initial fait
-    SOUMISSIONNE = "soumissionne"  # soumission envoyée
-    CONVERTI = "converti"  # contrat signé
-    PERDU = "perdu"  # refusé / pas intéressé / mauvais timing
+    SOUMISSIONNE = "soumissionne"  # OFFRE SOUMISE (renamed in UI)
+    OFFRE_ACCEPTEE = "offre_acceptee"  # promesse d'achat acceptée
+    EN_INSPECTION = "en_inspection"  # inspection en cours (path keep)
+    EN_NEGO = "en_nego"  # négociation post-inspection (path keep)
+    CHEZ_NOTAIRE = "chez_notaire"  # chez le notaire (path keep)
+    EN_CESSION = "en_cession"  # cession en cours (path flip)
+    CONVERTI = "converti"  # ACHETÉ par nous ou CÉDÉ via assignation
+    PERDU = "perdu"  # refusé / pas vendable / retiré
 
 
 class ProspectionOwnerKind(str, Enum):
     PARTICULIER = "particulier"
     CORPORATION = "corporation"
     INCONNU = "inconnu"
+
+
+class ProspectionDealStrategy(str, Enum):
+    """Stratégie de sortie du deal : on garde l'immeuble (acquisition
+    pour notre portefeuille) ou on flip (revente de la promesse
+    d'achat à un autre investisseur)."""
+
+    UNDECIDED = "undecided"  # pas encore décidé
+    KEEP = "keep"  # acheter pour nous
+    FLIP = "flip"  # céder à un autre investisseur
 
 
 class ProspectionLead(Base, TimestampUpdateMixin):
@@ -154,6 +179,29 @@ class ProspectionLead(Base, TimestampUpdateMixin):
     # mailing_address pour distinguer un proprio « hors site ».
     mailing_address: Mapped[Optional[str]] = mapped_column(
         String(500), nullable=True
+    )
+
+    # Stratégie de deal : achat pour nous (keep) ou cession à un
+    # autre investisseur (flip / wholesaling). « undecided » par
+    # défaut tant qu'on n'a pas pris la décision.
+    deal_strategy: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=ProspectionDealStrategy.UNDECIDED.value,
+        server_default=ProspectionDealStrategy.UNDECIDED.value,
+        index=True,
+    )
+    # Prix d'achat soumis dans la promesse d'achat (offre faite au
+    # propriétaire actuel). Différent du purchase_price qui est le
+    # prix d'achat HISTORIQUE du proprio actuel.
+    offer_amount: Mapped[Optional[float]] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
+    # Si flip : montant payé par l'investisseur final pour reprendre
+    # notre promesse d'achat (cession). Notre profit = assignment_price
+    # - offer_amount.
+    assignment_price: Mapped[Optional[float]] = mapped_column(
+        Numeric(14, 2), nullable=True
     )
 
     # Propriétaire (Phase 2 — résolu via REQ ou rôle)

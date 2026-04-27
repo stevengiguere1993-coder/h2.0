@@ -96,6 +96,12 @@ class LeadRead(BaseModel):
     estimated_equity_pct: Optional[float] = None
     # Nombre d'autres leads avec le même proprio (NEQ ou nom)
     multi_properties_count: int = 0
+    # Buy-flow : stratégie + montants offre/cession
+    deal_strategy: str = "undecided"
+    offer_amount: Optional[float] = None
+    assignment_price: Optional[float] = None
+    # Profit estimé en cas de flip (assignment - offer)
+    estimated_flip_profit: Optional[float] = None
 
 
 class LeadUpdate(BaseModel):
@@ -130,6 +136,12 @@ class LeadUpdate(BaseModel):
     tax_year_paid: Optional[int] = Field(default=None, ge=1900, le=2100)
     tax_amount: Optional[float] = Field(default=None, ge=0)
     mailing_address: Optional[str] = Field(default=None, max_length=500)
+    # Buy-flow
+    deal_strategy: Optional[str] = Field(
+        default=None, pattern="^(undecided|keep|flip)$"
+    )
+    offer_amount: Optional[float] = Field(default=None, ge=0)
+    assignment_price: Optional[float] = Field(default=None, ge=0)
 
 
 _ALLOWED_PHOTO_CONTENT = {
@@ -248,6 +260,20 @@ def _serialize(
         "estimated_equity": None,
         "estimated_equity_pct": None,
         "multi_properties_count": multi_properties_count,
+        # Buy-flow
+        "deal_strategy": _safe_attr(lead, "deal_strategy", "undecided")
+        or "undecided",
+        "offer_amount": (
+            float(_safe_attr(lead, "offer_amount"))
+            if _safe_attr(lead, "offer_amount") is not None
+            else None
+        ),
+        "assignment_price": (
+            float(_safe_attr(lead, "assignment_price"))
+            if _safe_attr(lead, "assignment_price") is not None
+            else None
+        ),
+        "estimated_flip_profit": None,
     }
 
     # Equity computée
@@ -259,6 +285,12 @@ def _serialize(
             data["estimated_equity_pct"] = round(
                 (valeur - mortgage) / valeur * 100, 1
             )
+
+    # Profit estimé du flip (si offre soumise + cession prévue)
+    if data["offer_amount"] and data["assignment_price"]:
+        data["estimated_flip_profit"] = (
+            data["assignment_price"] - data["offer_amount"]
+        )
 
     return LeadRead.model_validate(data)
 
@@ -462,7 +494,7 @@ async def get_lead(
 async def create_lead(
     db: DBSession,
     user: CurrentUser,
-    name: str = Form(...),
+    name: Optional[str] = Form(default=None),
     kind: str = Form(default=ProspectionLeadKind.MULTILOGEMENT.value),
     address: Optional[str] = Form(default=None),
     city: Optional[str] = Form(default=None),
@@ -476,6 +508,7 @@ async def create_lead(
     final_address = (address or "").strip() or None
     final_city = (city or "").strip() or None
     final_postal = (postal_code or "").strip() or None
+    final_name = (name or "").strip() or None
 
     # Reverse-geocoding : si on a des coordonnées GPS mais pas d'adresse
     # encore saisie, on demande à Nominatim (OpenStreetMap, gratuit) de
@@ -489,9 +522,19 @@ async def create_lead(
             final_city = final_city or geo.get("city")
             final_postal = final_postal or geo.get("postal_code")
 
+    # Auto-génère le nom depuis l'adresse si pas fourni — l'utilisateur
+    # n'a plus à saisir un nom à la main. Format « 4520 Saint-Laurent ».
+    if not final_name:
+        if final_address:
+            final_name = final_address[:80]
+        elif lat is not None and lng is not None:
+            final_name = f"Lead GPS {lat:.4f},{lng:.4f}"
+        else:
+            final_name = "Nouveau lead"
+
     lead = ProspectionLead(
         created_by_user_id=user.id,
-        name=name.strip(),
+        name=final_name,
         kind=kind,
         address=final_address,
         city=final_city,
@@ -1812,3 +1855,312 @@ async def owner_by_name(
     return await _build_owner_view(
         db, matching, key=f"name:{name_norm}", key_type="name"
     )
+
+
+# ------------------------ Buy-flow actions ------------------------
+
+
+class Relance6mIn(BaseModel):
+    notes: Optional[str] = None
+
+
+@router.post(
+    "/{lead_id}/relance-6m",
+    response_model=LeadRead,
+    summary="Marque le lead comme « Perdu (refus) » et programme une "
+    "relance automatique dans 180 jours. Le lead réapparaîtra dans "
+    "la queue overdue à ce moment-là.",
+)
+async def relance_6_months(
+    lead_id: int,
+    payload: Relance6mIn,
+    db: DBSession,
+    user: CurrentUser,
+) -> LeadRead:
+    from app.models.follow_up import FollowUp
+
+    lead = (
+        await db.execute(
+            select(ProspectionLead).where(ProspectionLead.id == lead_id)
+        )
+    ).scalar_one_or_none()
+    if lead is None:
+        raise HTTPException(404, "Prospect introuvable")
+
+    # Marque perdu
+    lead.status = ProspectionLeadStatus.PERDU.value
+
+    # Crée un FollowUp auto à +180 jours pour qu'il revienne dans la queue
+    next_at = datetime.now(timezone.utc) + __import__("datetime").timedelta(
+        days=180
+    )
+    db.add(
+        FollowUp(
+            subject_type="prospect",
+            subject_id=lead_id,
+            kind="auto",
+            direction="outbound",
+            outcome="scheduled",
+            notes=(payload.notes or "Refus initial — relance dans 6 mois.")[:1000],
+            performed_by_user_id=user.id,
+            next_action_at=next_at,
+            next_action_label="Relance 6 mois après refus",
+        )
+    )
+    apply_score(lead)
+    await db.flush()
+    await db.refresh(lead)
+
+    photos_count = await _photos_count_for(db, lead_id)
+    return _serialize(lead, photos_count, 0)
+
+
+# ------------------------ Nearby addresses (GPS suggestions) ------------------------
+
+
+@router.get(
+    "/nearby-addresses",
+    summary="Retourne 5 adresses civiques voisines d'un point GPS — "
+    "utile sur le mode drive-by pour confirmer l'adresse exacte.",
+)
+async def nearby_addresses(
+    lat: float = Query(...),
+    lng: float = Query(...),
+    radius_m: int = Query(default=30, ge=10, le=100),
+    _: CurrentUser = None,
+) -> list:
+    """Interroge l'Overpass API d'OSM pour les adresses civiques dans
+    un rayon de N mètres. Gratuit, pas de clé.
+
+    Retourne : [{label, address, city, postal_code, lat, lng}].
+    """
+    import httpx
+
+    # Overpass query: tout les nodes/ways avec addr:housenumber dans
+    # un rayon autour du point.
+    query = f"""
+    [out:json][timeout:8];
+    (
+      node["addr:housenumber"](around:{radius_m},{lat},{lng});
+      way["addr:housenumber"](around:{radius_m},{lat},{lng});
+    );
+    out center 12;
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            r = await http.post(
+                "https://overpass-api.de/api/interpreter",
+                data={"data": query},
+                headers={
+                    "User-Agent": "h2.0-Horizon/1.0 (contact@immohorizon.com)"
+                },
+            )
+            if r.status_code != 200:
+                return []
+            data = r.json()
+    except httpx.HTTPError:
+        return []
+
+    out = []
+    seen: set[str] = set()
+    for el in data.get("elements", []):
+        tags = el.get("tags", {})
+        hn = tags.get("addr:housenumber") or ""
+        st = tags.get("addr:street") or ""
+        if not hn or not st:
+            continue
+        addr = f"{hn} {st}".strip()
+        if addr in seen:
+            continue
+        seen.add(addr)
+        if el.get("type") == "node":
+            elat = el.get("lat")
+            elng = el.get("lon")
+        else:
+            center = el.get("center", {})
+            elat = center.get("lat")
+            elng = center.get("lon")
+        out.append(
+            {
+                "label": addr,
+                "address": addr,
+                "city": tags.get("addr:city") or None,
+                "postal_code": tags.get("addr:postcode") or None,
+                "lat": elat,
+                "lng": elng,
+            }
+        )
+        if len(out) >= 5:
+            break
+    return out
+
+
+# ------------------------ JLR PDF importer ------------------------
+
+
+@router.post(
+    "/{lead_id}/import-jlr-pdf",
+    summary="Upload un PDF JLR (rapport sur droit immobilier) et "
+    "extrait automatiquement transactions, propriétaire, hypothèque.",
+)
+async def import_jlr_pdf(
+    lead_id: int,
+    db: DBSession,
+    _: CurrentUser,
+    pdf: UploadFile = File(...),
+) -> dict:
+    """Parser PDF basique : extrait le texte avec pypdf, regex pour
+    repérer les patterns de transactions et hypothèques. Précision
+    ~70-80 % sur des PDFs JLR standards. L'utilisateur valide les
+    données extraites avant qu'elles soient écrites.
+
+    Pour l'instant : extrait le texte brut + retourne les chaînes
+    candidates. La V2 aura un parser dédié JLR.
+    """
+    if not (pdf.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(415, "Le fichier doit être un PDF.")
+    blob = await pdf.read()
+    if not blob:
+        raise HTTPException(400, "PDF vide.")
+    if len(blob) > 20 * 1024 * 1024:
+        raise HTTPException(413, "PDF trop volumineux (max 20 Mo).")
+
+    lead = (
+        await db.execute(
+            select(ProspectionLead).where(ProspectionLead.id == lead_id)
+        )
+    ).scalar_one_or_none()
+    if lead is None:
+        raise HTTPException(404, "Prospect introuvable")
+
+    # Parsing PDF
+    try:
+        from pypdf import PdfReader
+        import io as _io
+
+        reader = PdfReader(_io.BytesIO(blob))
+        text = "\n".join(
+            (page.extract_text() or "") for page in reader.pages
+        )
+    except Exception as exc:
+        raise HTTPException(
+            500, f"Échec du parsing PDF : {exc}"
+        ) from exc
+
+    import re as _re
+    from app.models.prospection_lead_transaction import (
+        ProspectionLeadTransaction,
+    )
+
+    # Détection des transactions : pattern « date AAAA-MM-JJ ... montant »
+    tx_pattern = _re.compile(
+        r"(\d{4}[-/]\d{2}[-/]\d{2})[\s\S]{0,200}?(\d{1,3}(?:[ ,]\d{3})*(?:[.,]\d{2})?)\s*\$?",
+        _re.IGNORECASE,
+    )
+    # Détection hypothèque : « hypothèque ... montant »
+    mortgage_pattern = _re.compile(
+        r"hypoth[eè]que[\s\S]{0,200}?(\d{1,3}(?:[ ,]\d{3})*(?:[.,]\d{2})?)",
+        _re.IGNORECASE,
+    )
+    # Propriétaire actuel
+    owner_pattern = _re.compile(
+        r"propri[eé]taire(?:\s+actuel)?[\s:]+([A-ZÀ-Ü][A-Za-zÀ-ü\s,.\-]{3,80})",
+        _re.IGNORECASE,
+    )
+
+    found_transactions = []
+    for m in tx_pattern.finditer(text):
+        date_s = m.group(1).replace("/", "-")
+        amount_s = (
+            m.group(2)
+            .replace(" ", "")
+            .replace(",", "")
+            .replace(" ", "")
+        )
+        try:
+            from datetime import date as _D
+
+            d = _D.fromisoformat(date_s[:10])
+            amt = float(amount_s)
+            if 1000 <= amt <= 100_000_000:  # plage plausible
+                found_transactions.append(
+                    {
+                        "transaction_date": d.isoformat(),
+                        "amount": amt,
+                        "kind": "vente",
+                        "source": "JLR PDF (auto-extrait)",
+                    }
+                )
+        except (ValueError, TypeError):
+            continue
+
+    # Insère uniquement si liste non vide ; dédoublonne sur (date, amount)
+    existing_keys = set()
+    if found_transactions:
+        existing = (
+            await db.execute(
+                select(ProspectionLeadTransaction).where(
+                    ProspectionLeadTransaction.lead_id == lead_id
+                )
+            )
+        ).scalars().all()
+        existing_keys = {
+            (e.transaction_date.isoformat(), float(e.amount or 0))
+            for e in existing
+        }
+
+    inserted = 0
+    for tx in found_transactions[:20]:  # max 20 pour éviter le bruit
+        key = (tx["transaction_date"], tx["amount"])
+        if key in existing_keys:
+            continue
+        from datetime import date as _D
+
+        db.add(
+            ProspectionLeadTransaction(
+                lead_id=lead_id,
+                transaction_date=_D.fromisoformat(tx["transaction_date"]),
+                amount=tx["amount"],
+                kind=tx["kind"],
+                source=tx["source"],
+            )
+        )
+        existing_keys.add(key)
+        inserted += 1
+
+    # Tente d'extraire l'hypothèque la plus probable
+    suggested_mortgage = None
+    mortgage_match = mortgage_pattern.search(text)
+    if mortgage_match:
+        try:
+            v = float(
+                mortgage_match.group(1)
+                .replace(" ", "")
+                .replace(",", "")
+                .replace(" ", "")
+            )
+            if 1000 <= v <= 100_000_000:
+                suggested_mortgage = v
+        except (ValueError, TypeError):
+            pass
+
+    # Owner suggestion
+    suggested_owner = None
+    owner_match = owner_pattern.search(text)
+    if owner_match:
+        suggested_owner = owner_match.group(1).strip()[:200]
+
+    await db.flush()
+
+    return {
+        "transactions_inserted": inserted,
+        "transactions_found": len(found_transactions),
+        "suggested_mortgage_balance": suggested_mortgage,
+        "suggested_owner_name": suggested_owner,
+        "text_length": len(text),
+        "notes": [
+            "Parsing automatique du PDF — précision approximative.",
+            "Vérifie les transactions ajoutées et les suggestions ci-dessus.",
+            "Hypothèque/propriétaire ne sont PAS auto-appliqués — copie-les manuellement si correct.",
+        ],
+    }

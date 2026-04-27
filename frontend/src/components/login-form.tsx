@@ -173,7 +173,7 @@ export function LoginForm() {
                 Prospection
               </span>
               <span className="mt-0.5 block text-xs text-white/60">
-                Repérage de chantiers — drive-by, photos, lookup
+                Repérage d&apos;immeubles — drive-by, photos, lookup
                 propriétaire, campagnes de contact.
               </span>
             </span>

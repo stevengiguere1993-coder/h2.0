@@ -40,23 +40,33 @@ type Lead = {
 };
 
 const STATUS_LABEL: Record<string, string> = {
-  a_visiter: "À visiter",
-  visite: "Visité",
+  a_visiter: "Repéré",
+  visite: "Visité (drive-by)",
   a_contacter: "À contacter",
   contacte: "Contacté",
-  soumissionne: "Soumissionné",
-  converti: "Converti",
-  perdu: "Perdu"
+  soumissionne: "Offre soumise",
+  offre_acceptee: "Offre acceptée",
+  en_inspection: "Inspection",
+  en_nego: "Négociation",
+  chez_notaire: "Chez le notaire",
+  en_cession: "Cession en cours",
+  converti: "Acheté / Cédé ✓",
+  perdu: "Perdu / refus"
 };
 
 const STATUS_COLOR: Record<string, string> = {
-  a_visiter: "#10b981",   // emerald-500
-  visite: "#3b82f6",       // blue-500
-  a_contacter: "#f59e0b",  // amber-500
-  contacte: "#8b5cf6",     // violet-500
-  soumissionne: "#ec4899", // pink-500
-  converti: "#22c55e",     // green-500 (saturé)
-  perdu: "#ef4444"          // red-500
+  a_visiter: "#10b981",   // emerald
+  visite: "#3b82f6",       // blue
+  a_contacter: "#f59e0b",  // amber
+  contacte: "#8b5cf6",     // violet
+  soumissionne: "#ec4899", // pink
+  offre_acceptee: "#d946ef", // fuchsia
+  en_inspection: "#06b6d4",  // cyan
+  en_nego: "#eab308",        // yellow
+  chez_notaire: "#6366f1",   // indigo
+  en_cession: "#14b8a6",     // teal
+  converti: "#22c55e",       // green
+  perdu: "#ef4444"            // red
 };
 
 const KIND_LABEL: Record<string, string> = {
@@ -287,7 +297,7 @@ export default function ProspectionWebPage() {
               className="btn-accent text-sm"
             >
               <Plus className="mr-1.5 h-4 w-4" />
-              Nouveau (mobile)
+              Ajouter
             </Link>
           </div>
         }
