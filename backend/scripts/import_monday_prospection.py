@@ -1,30 +1,29 @@
-"""Import one-shot Monday → Prospection (board 7714284220).
+"""Import Monday → Prospection.
 
-Importe le tableau « CRM Prospection » de Monday dans la table
-`prospection_leads` de h2.0. Chaque item Monday devient un
-ProspectionLead (1 lead = 1 immeuble), avec mapping intelligent
-des colonnes vers nos champs.
+Board principal : 7714284220 (« Prospection Immobilière de DEAL »).
+Les données sont éclatées sur 3 boards liés :
 
-Le script est tolérant : il essaie de matcher les colonnes par
-nom plutôt que par ID hardcodé (puisque les IDs Monday peuvent
-varier). Un mode --inspect imprime la structure du board pour
-permettre un calibrage manuel si le matching auto rate.
+- 7714284220 : pipeline d'opportunités (item.name = adresse courte,
+  étape, score, notes, dates de relance).
+- Board lié via `board_relation_mm14vrps` : Propriétaire d'immeuble
+  (nom, téléphone, courriel).
+- Board lié via `board_relation_mm21e42z` : Info immeuble (adresse
+  complète, nb logements, année, valeur).
 
-Idempotent : la clé d'unicité est `monday_item_id` (string). Un
-re-run = UPDATE des leads existants, INSERT des nouveaux.
+Le script :
+1. Charge tous les items du board principal.
+2. Récupère la liste des board_ids référencés (Info immeuble +
+   Propriétaire).
+3. Charge tous les items de ces boards en bloc.
+4. Pour chaque item principal, joint les infos par item_id.
+5. Crée/met à jour 1 ProspectionLead par item principal, avec
+   monday_item_id pour idempotence.
 
 Usage Render Shell :
-    cd /opt/render/project/src/backend
-    # 1) Inspect : voir la structure du board (colonnes + 1er item)
+    cd ~/project/src/backend
     python -m scripts.import_monday_prospection --inspect
-
-    # 2) Dry-run : voir ce qui serait importé sans rien écrire
     python -m scripts.import_monday_prospection --dry-run
-
-    # 3) Import réel
     python -m scripts.import_monday_prospection
-
-    # 4) Reset + import (efface les leads Monday précédemment importés)
     python -m scripts.import_monday_prospection --reset
 """
 
@@ -38,7 +37,8 @@ import os
 import re
 import sys
 import unicodedata
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from sqlalchemy import delete, select
@@ -62,53 +62,65 @@ BOARD_ID = 7714284220
 MONDAY_API = "https://api.monday.com/v2"
 
 
-# --------------------------- Heuristics ---------------------------
+# --------------------------- Column IDs ---------------------------
+# IDs identifiés par --inspect du 27 avril 2026. Si Monday change un
+# id, mettre à jour ici.
 
-# Mots-clés pour matcher les noms de colonnes Monday → notre champ.
-# Ordre = priorité. Insensible aux accents/casse.
-COL_HINTS: Dict[str, List[str]] = {
-    "address": ["adresse", "address", "rue", "civique"],
-    "city": ["ville", "city", "municipalité", "municipalite"],
-    "postal_code": ["code postal", "postal", "zip"],
-    "nb_logements": [
-        "logement",
-        "log",
-        "porte",
-        "doors",
-        "unités",
-        "unites",
-    ],
-    "annee_construction": [
-        "année",
-        "annee",
-        "year",
-        "construit",
-        "construction",
-    ],
-    "valeur_fonciere": [
-        "valeur fonciere",
-        "valeur foncière",
-        "evaluation",
-        "évaluation",
-        "valuation",
-    ],
-    "matricule": ["matricule"],
-    "owner_name": ["propriétaire", "proprietaire", "owner", "nom proprio"],
-    "owner_phone": [
-        "téléphone",
-        "telephone",
-        "phone",
-        "tel proprio",
-        "cell",
-    ],
-    "owner_email": ["courriel", "email"],
-    "owner_neq": ["neq"],
-    "owner_address": ["adresse proprio", "mailing", "domicile"],
-    "notes": ["notes", "commentaires", "remarques"],
-    "status_text": ["statut", "status", "étape", "etape", "stage"],
-    "kind_text": ["type", "kind", "category", "catégorie"],
-    "priority_text": ["priorité", "priorite", "priority", "étoiles"],
-}
+COL_ETAPE = "dup__of__quit___1"        # Statut buy-flow
+COL_TYPE = "statut_1__1"                # Type lead (Prospection quartier, …)
+COL_QUARTIER = "dropdown_mm14pr0z"      # Quartier (city)
+COL_PROPRIO_REL = "board_relation_mm14vrps"  # → Propriétaire
+COL_IMMEUBLE_REL = "board_relation_mm21e42z"  # → Info immeuble
+COL_SCORE = "numeric_mm131p3j"          # Score opportunité
+COL_NB_APPELS = "numeric_mm13x3wr"      # Nombre appels
+COL_DATE_LAST_CALL = "date_mm13eyfe"
+COL_DATE_LAST_CONTACT = "date_mm13ka1c"
+COL_DATE_RELANCE = "date_mm136e44"
+COL_NOTES = "long_text_mm13c3x7"
+COL_RESULTAT = "color_mm21ag84"
+COL_SOURCE = "color_mm21ftyp"
+
+
+# --------------------------- Status mapping ---------------------------
+
+STATUS_MAP_HINTS: List[Tuple[str, str]] = [
+    # Très spécifique d'abord
+    ("notaire", ProspectionLeadStatus.CHEZ_NOTAIRE.value),
+    ("cession", ProspectionLeadStatus.EN_CESSION.value),
+    ("flip", ProspectionLeadStatus.EN_CESSION.value),
+    ("nego", ProspectionLeadStatus.EN_NEGO.value),
+    ("inspection", ProspectionLeadStatus.EN_INSPECTION.value),
+    ("acceptee", ProspectionLeadStatus.OFFRE_ACCEPTEE.value),
+    ("offre acceptee", ProspectionLeadStatus.OFFRE_ACCEPTEE.value),
+    ("offre acceptée", ProspectionLeadStatus.OFFRE_ACCEPTEE.value),
+    ("offre soumise", ProspectionLeadStatus.SOUMISSIONNE.value),
+    ("offre", ProspectionLeadStatus.SOUMISSIONNE.value),
+    ("promesse", ProspectionLeadStatus.SOUMISSIONNE.value),
+    ("achete", ProspectionLeadStatus.CONVERTI.value),
+    ("acheté", ProspectionLeadStatus.CONVERTI.value),
+    ("cede", ProspectionLeadStatus.CONVERTI.value),
+    ("cédé", ProspectionLeadStatus.CONVERTI.value),
+    ("perdu", ProspectionLeadStatus.PERDU.value),
+    ("refus", ProspectionLeadStatus.PERDU.value),
+    ("pas vendable", ProspectionLeadStatus.PERDU.value),
+    ("pas interesse", ProspectionLeadStatus.PERDU.value),
+    ("pas intéressé", ProspectionLeadStatus.PERDU.value),
+    ("abandonne", ProspectionLeadStatus.PERDU.value),
+    # « à contacter » avant « contacté » (substring)
+    ("a contacter", ProspectionLeadStatus.A_CONTACTER.value),
+    ("à contacter", ProspectionLeadStatus.A_CONTACTER.value),
+    ("rappeler", ProspectionLeadStatus.A_CONTACTER.value),
+    ("a rappeler", ProspectionLeadStatus.A_CONTACTER.value),
+    ("contacte", ProspectionLeadStatus.CONTACTE.value),
+    ("contacté", ProspectionLeadStatus.CONTACTE.value),
+    ("appel fait", ProspectionLeadStatus.CONTACTE.value),
+    ("a travailler", ProspectionLeadStatus.A_VISITER.value),
+    ("à travailler", ProspectionLeadStatus.A_VISITER.value),
+    ("visite", ProspectionLeadStatus.VISITE.value),
+    ("repere", ProspectionLeadStatus.A_VISITER.value),
+    ("repéré", ProspectionLeadStatus.A_VISITER.value),
+    ("nouveau", ProspectionLeadStatus.A_VISITER.value),
+]
 
 
 def _norm(s: str) -> str:
@@ -122,63 +134,6 @@ def _norm(s: str) -> str:
     return s.lower().strip()
 
 
-def map_columns(columns_meta: List[Dict[str, Any]]) -> Dict[str, str]:
-    """Pour chaque champ de notre modèle, trouve la colonne Monday
-    qui matche le mieux. Retourne {our_field: monday_col_id}."""
-    out: Dict[str, str] = {}
-    used_ids: set = set()
-    for our_field, hints in COL_HINTS.items():
-        for hint in hints:
-            for col in columns_meta:
-                cid = col.get("id")
-                title = _norm(col.get("title", ""))
-                if not cid or cid in used_ids or not title:
-                    continue
-                if hint in title:
-                    out[our_field] = cid
-                    used_ids.add(cid)
-                    break
-            if our_field in out:
-                break
-    return out
-
-
-# --------------------------- Status mapping ---------------------------
-
-# Mapping flexible : Monday status text → notre enum de buy-flow.
-STATUS_MAP_HINTS: List[tuple[str, str]] = [
-    # (mot-clé dans le label Monday, notre status)
-    ("notaire", ProspectionLeadStatus.CHEZ_NOTAIRE.value),
-    ("cession", ProspectionLeadStatus.EN_CESSION.value),
-    ("flip", ProspectionLeadStatus.EN_CESSION.value),
-    ("nego", ProspectionLeadStatus.EN_NEGO.value),
-    ("inspection", ProspectionLeadStatus.EN_INSPECTION.value),
-    ("offre acceptee", ProspectionLeadStatus.OFFRE_ACCEPTEE.value),
-    ("offre acceptée", ProspectionLeadStatus.OFFRE_ACCEPTEE.value),
-    ("acceptee", ProspectionLeadStatus.OFFRE_ACCEPTEE.value),
-    ("offre soumise", ProspectionLeadStatus.SOUMISSIONNE.value),
-    ("offre", ProspectionLeadStatus.SOUMISSIONNE.value),
-    ("soumis", ProspectionLeadStatus.SOUMISSIONNE.value),
-    # « à contacter » DOIT venir avant « contacte » sinon match foireux
-    # (substring « contacte » est dans « à contacter »).
-    ("a contacter", ProspectionLeadStatus.A_CONTACTER.value),
-    ("à contacter", ProspectionLeadStatus.A_CONTACTER.value),
-    ("rappeler", ProspectionLeadStatus.A_CONTACTER.value),
-    ("contacte", ProspectionLeadStatus.CONTACTE.value),
-    ("contacté", ProspectionLeadStatus.CONTACTE.value),
-    ("achete", ProspectionLeadStatus.CONVERTI.value),
-    ("acheté", ProspectionLeadStatus.CONVERTI.value),
-    ("cede", ProspectionLeadStatus.CONVERTI.value),
-    ("cédé", ProspectionLeadStatus.CONVERTI.value),
-    ("perdu", ProspectionLeadStatus.PERDU.value),
-    ("refus", ProspectionLeadStatus.PERDU.value),
-    ("pas vendable", ProspectionLeadStatus.PERDU.value),
-    ("visite", ProspectionLeadStatus.VISITE.value),
-    ("repere", ProspectionLeadStatus.A_VISITER.value),
-    ("repéré", ProspectionLeadStatus.A_VISITER.value),
-]
-
-
 def map_status(text: Optional[str]) -> str:
     if not text:
         return ProspectionLeadStatus.A_VISITER.value
@@ -187,26 +142,6 @@ def map_status(text: Optional[str]) -> str:
         if hint in n:
             return status
     return ProspectionLeadStatus.A_VISITER.value
-
-
-KIND_MAP_HINTS: List[tuple[str, str]] = [
-    ("multi", ProspectionLeadKind.MULTILOGEMENT.value),
-    ("logement", ProspectionLeadKind.MULTILOGEMENT.value),
-    ("plex", ProspectionLeadKind.MULTILOGEMENT.value),
-    ("terrain", ProspectionLeadKind.TERRAIN.value),
-    ("commercial", ProspectionLeadKind.SEMI_COMMERCIAL.value),
-    ("semi", ProspectionLeadKind.SEMI_COMMERCIAL.value),
-]
-
-
-def map_kind(text: Optional[str]) -> str:
-    if not text:
-        return ProspectionLeadKind.MULTILOGEMENT.value
-    n = _norm(text)
-    for hint, kind in KIND_MAP_HINTS:
-        if hint in n:
-            return kind
-    return ProspectionLeadKind.AUTRE.value
 
 
 # --------------------------- Monday API ---------------------------
@@ -247,6 +182,7 @@ async def fetch_board_meta(board_id: int, token: str) -> Dict[str, Any]:
 async def fetch_all_items(
     board_id: int, token: str
 ) -> List[Dict[str, Any]]:
+    """Pagine 100 items à la fois."""
     out: List[Dict[str, Any]] = []
     cursor: Optional[str] = None
     while True:
@@ -256,7 +192,7 @@ async def fetch_all_items(
             f"{cursor_arg}) {{ cursor items {{ id name "
             "column_values { id text value type "
             "... on BoardRelationValue { linked_item_ids } "
-            "} updates(limit: 50) { id body created_at } } } } }"
+            "} } } } }"
         )
         data = await monday_query(query, token)
         page = data["boards"][0]["items_page"]
@@ -264,21 +200,52 @@ async def fetch_all_items(
         cursor = page.get("cursor")
         if not cursor:
             break
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.3)
+    return out
+
+
+async def fetch_items_by_ids(
+    item_ids: List[str], token: str
+) -> Dict[str, Dict[str, Any]]:
+    """Charge des items spécifiques (pour suivre les board_relation)."""
+    if not item_ids:
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    # API Monday : items(ids: [...]) accepte 100 max par requête
+    for i in range(0, len(item_ids), 100):
+        batch = item_ids[i : i + 100]
+        ids_str = ",".join(str(b) for b in batch)
+        query = (
+            f"query {{ items(ids: [{ids_str}]) {{ id name "
+            "column_values { id text value type "
+            "... on BoardRelationValue { linked_item_ids } "
+            "} } }"
+        )
+        data = await monday_query(query, token)
+        for it in data.get("items", []):
+            out[str(it["id"])] = it
+        await asyncio.sleep(0.3)
     return out
 
 
 # --------------------------- Value extraction ---------------------------
 
 
-def get_text(item: Dict[str, Any], col_id: Optional[str]) -> Optional[str]:
-    if not col_id:
-        return None
+def get_text(item: Dict[str, Any], col_id: str) -> Optional[str]:
     for cv in item.get("column_values", []):
         if cv.get("id") == col_id:
             t = cv.get("text")
             return t.strip() if t else None
     return None
+
+
+def get_linked_ids(item: Dict[str, Any], col_id: str) -> List[str]:
+    for cv in item.get("column_values", []):
+        if cv.get("id") == col_id:
+            ids = cv.get("linked_item_ids")
+            if ids:
+                return [str(i) for i in ids]
+    return []
 
 
 def parse_int(s: Optional[str]) -> Optional[int]:
@@ -298,43 +265,126 @@ def parse_float(s: Optional[str]) -> Optional[float]:
         return None
 
 
-def parse_priority(s: Optional[str]) -> int:
-    """Convert priority text (étoiles, urgent, etc.) → 1-5 int."""
+def parse_date(s: Optional[str]) -> Optional[datetime]:
     if not s:
+        return None
+    # Monday format: "2026-04-15" ou "2026-04-15 14:30:00"
+    s = s.strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def parse_priority_from_score(score: Optional[float]) -> int:
+    """Score d'opportunité Monday → priorité 1-5. Heuristique : score
+    haut = priorité haute."""
+    if score is None:
         return 3
-    n = _norm(s)
-    if "5" in n or "tres haute" in n or "très haute" in n or "urgent" in n:
+    if score >= 80:
         return 5
-    if "4" in n or "haute" in n:
+    if score >= 60:
         return 4
-    if "2" in n or "basse" in n:
+    if score >= 40:
+        return 3
+    if score >= 20:
         return 2
-    if "1" in n or "tres basse" in n or "très basse" in n:
-        return 1
-    return 3
+    return 1
 
 
-# --------------------------- Build ---------------------------
+# --------------------------- Build payload ---------------------------
+
+
+def extract_address_from_name(name: str) -> Tuple[str, Optional[str]]:
+    """L'item name est typiquement « 3976 st-laurent » ou
+    « 3976 Saint-Laurent, Montréal ». On retourne (address, city)."""
+    if not name:
+        return ("", None)
+    name = name.strip()
+    parts = [p.strip() for p in name.split(",")]
+    if len(parts) >= 2:
+        return (parts[0], parts[1])
+    return (name, None)
 
 
 def build_lead_payload(
-    item: Dict[str, Any], col_map: Dict[str, str]
+    item: Dict[str, Any],
+    proprio: Optional[Dict[str, Any]],
+    immeuble: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Construit un dict de payload ProspectionLead à partir d'un
-    item Monday + le mapping de colonnes détecté."""
-    nb_log = parse_int(get_text(item, col_map.get("nb_logements")))
-    annee = parse_int(get_text(item, col_map.get("annee_construction")))
-    valeur = parse_float(get_text(item, col_map.get("valeur_fonciere")))
+    """Construit un dict prêt à insérer dans ProspectionLead."""
 
-    address = get_text(item, col_map.get("address"))
-    name = item.get("name") or address or "Lead Monday"
-    owner_name = get_text(item, col_map.get("owner_name"))
-    owner_phone = get_text(item, col_map.get("owner_phone"))
-    owner_email = get_text(item, col_map.get("owner_email"))
-    owner_neq = get_text(item, col_map.get("owner_neq"))
-    owner_address = get_text(item, col_map.get("owner_address"))
+    # Adresse + ville : priorité au board Info immeuble si dispo,
+    # sinon on parse l'item name du board principal.
+    address: Optional[str] = None
+    city: Optional[str] = None
+    nb_log: Optional[int] = None
+    annee: Optional[int] = None
+    valeur: Optional[float] = None
+    matricule: Optional[str] = None
+    postal: Optional[str] = None
 
-    # Owner kind : si NEQ → corp, sinon si nom → particulier
+    if immeuble is not None:
+        # On essaie heuristiquement plusieurs intitulés courants.
+        for cv in immeuble.get("column_values", []):
+            t = (cv.get("text") or "").strip()
+            if not t:
+                continue
+            cid_t = _norm(cv.get("id", ""))
+            # On ne connaît pas les ids du board Info immeuble — on
+            # devine via le titre normalisé. Le cv a juste un id, pas
+            # de titre. On utilise le nom de l'item lié comme fallback.
+        # Item name = souvent l'adresse complète du board immeuble
+        addr_full = (immeuble.get("name") or "").strip()
+        if addr_full:
+            address, maybe_city = extract_address_from_name(addr_full)
+            city = city or maybe_city
+
+    # Fallback : parse item name du board principal
+    if not address:
+        a, c = extract_address_from_name(item.get("name") or "")
+        address = a or None
+        city = city or c
+
+    # Quartier (board principal) → city si pas déjà set
+    quartier = get_text(item, COL_QUARTIER)
+    if quartier and not city:
+        city = quartier
+
+    # Owner depuis le board Propriétaire lié
+    owner_name: Optional[str] = None
+    owner_phone: Optional[str] = None
+    owner_email: Optional[str] = None
+    owner_neq: Optional[str] = None
+    if proprio is not None:
+        owner_name = (proprio.get("name") or "").strip() or None
+        # Heuristique : extraire phone/email/neq des column_values
+        for cv in proprio.get("column_values", []):
+            t = (cv.get("text") or "").strip()
+            if not t:
+                continue
+            # Détecte par contenu : tel = 10 chiffres, email = @,
+            # NEQ = 10 chiffres tous numériques
+            digits_only = re.sub(r"\D", "", t)
+            if "@" in t and "." in t and not owner_email:
+                owner_email = t
+            elif (
+                len(digits_only) == 10
+                and digits_only == t.replace("-", "").replace(" ", "")
+                .replace("(", "").replace(")", "").replace(".", "")
+                and not owner_neq
+            ):
+                # 10 chiffres seulement → soit téléphone, soit NEQ
+                # Heuristique : si commence par 1 ou 9 → NEQ Québec
+                if digits_only[0] in ("1", "9") and not owner_neq:
+                    owner_neq = digits_only
+                elif not owner_phone:
+                    owner_phone = t
+            elif len(digits_only) >= 7 and not owner_phone:
+                owner_phone = t
+
     if owner_neq:
         owner_kind = ProspectionOwnerKind.CORPORATION.value
     elif owner_name:
@@ -342,18 +392,42 @@ def build_lead_payload(
     else:
         owner_kind = ProspectionOwnerKind.INCONNU.value
 
+    # Score Monday → notre score (cap 100)
+    score_raw = parse_float(get_text(item, COL_SCORE))
+    score = (
+        max(0, min(100, int(score_raw))) if score_raw is not None else 0
+    )
+
+    # Date last contact
+    last_contact = parse_date(get_text(item, COL_DATE_LAST_CONTACT))
+    if last_contact is None:
+        last_contact = parse_date(get_text(item, COL_DATE_LAST_CALL))
+
+    # Notes : combine notes + résultat appel + source
+    parts: List[str] = []
+    notes = get_text(item, COL_NOTES)
+    if notes:
+        parts.append(notes)
+    resultat = get_text(item, COL_RESULTAT)
+    if resultat:
+        parts.append(f"Dernier résultat appel : {resultat}")
+    source = get_text(item, COL_SOURCE)
+    if source:
+        parts.append(f"Source : {source}")
+    notes_combined = "\n".join(parts) if parts else None
+
+    name = item.get("name") or address or "Lead Monday"
+
     return {
         "name": name[:255],
-        "kind": map_kind(get_text(item, col_map.get("kind_text"))),
+        "kind": ProspectionLeadKind.MULTILOGEMENT.value,  # défaut
         "address": address,
-        "city": get_text(item, col_map.get("city")),
-        "postal_code": get_text(item, col_map.get("postal_code")),
-        "notes": get_text(item, col_map.get("notes")),
-        "status": map_status(get_text(item, col_map.get("status_text"))),
-        "priority": parse_priority(
-            get_text(item, col_map.get("priority_text"))
-        ),
-        "matricule": get_text(item, col_map.get("matricule")),
+        "city": city,
+        "postal_code": postal,
+        "notes": notes_combined,
+        "status": map_status(get_text(item, COL_ETAPE)),
+        "priority": parse_priority_from_score(score_raw),
+        "matricule": matricule,
         "nb_logements": nb_log,
         "annee_construction": annee,
         "valeur_fonciere": valeur,
@@ -362,7 +436,13 @@ def build_lead_payload(
         "owner_phone": owner_phone,
         "owner_email": owner_email,
         "owner_neq": owner_neq,
-        "owner_address": owner_address,
+        "owner_address": None,
+        "score": score,
+        "contact_attempts_count": parse_int(
+            get_text(item, COL_NB_APPELS)
+        )
+        or 0,
+        "last_contacted_at": last_contact,
         "monday_item_id": str(item["id"]),
     }
 
@@ -371,26 +451,37 @@ def build_lead_payload(
 
 
 async def cmd_inspect(token: str) -> int:
-    """Imprime la structure du board + 1er item pour aider le mapping."""
     meta = await fetch_board_meta(BOARD_ID, token)
     print(f"\n=== Board : {meta.get('name')} (id={meta.get('id')}) ===\n")
     print("Colonnes :")
     for col in meta.get("columns", []):
         print(
-            f"  [{col.get('id'):20}] {col.get('type'):20} {col.get('title')}"
+            f"  [{col.get('id'):25}] {col.get('type'):20} {col.get('title')}"
         )
     print()
     items = await fetch_all_items(BOARD_ID, token)
     print(f"Total items : {len(items)}")
     if items:
         first = items[0]
-        print(f"\nExemple — Item « {first.get('name')} » (id={first['id']}) :")
+        print(
+            f"\nExemple — Item « {first.get('name')} » "
+            f"(id={first['id']}) :"
+        )
         for cv in first.get("column_values", []):
             text = cv.get("text") or ""
             text = (text[:60] + "…") if len(text) > 60 else text
-            print(
-                f"  [{cv.get('id'):20}] = {repr(text)}"
-            )
+            print(f"  [{cv.get('id'):25}] = {repr(text)}")
+
+        # Liste les statuts uniques sur tout le board (utile pour
+        # vérifier le mapping de map_status())
+        statuts = set()
+        for it in items:
+            s = get_text(it, COL_ETAPE)
+            if s:
+                statuts.add(s)
+        print(f"\nÉtapes uniques observées sur les {len(items)} items :")
+        for s in sorted(statuts):
+            print(f"  · {s!r:40} → {map_status(s)}")
     print()
     return 0
 
@@ -398,26 +489,45 @@ async def cmd_inspect(token: str) -> int:
 async def cmd_import(
     token: str, dry_run: bool, reset: bool
 ) -> int:
-    meta = await fetch_board_meta(BOARD_ID, token)
-    log.info("Board : %s (id=%s)", meta.get("name"), meta.get("id"))
-    col_map = map_columns(meta.get("columns", []))
-    log.info("Mapping détecté :")
-    for k, v in col_map.items():
-        log.info("  %s → %s", k, v)
-    missing = [k for k in COL_HINTS if k not in col_map]
-    if missing:
-        log.warning("Colonnes non matchées (à ignorer) : %s", missing)
-
+    log.info("Chargement des items du board principal…")
     items = await fetch_all_items(BOARD_ID, token)
-    log.info("Items à importer : %d", len(items))
+    log.info("  → %d items à importer", len(items))
 
-    payloads = [build_lead_payload(it, col_map) for it in items]
+    # Récupère les item_ids liés (proprio + immeuble) sur l'ensemble
+    proprio_ids: List[str] = []
+    immeuble_ids: List[str] = []
+    for it in items:
+        proprio_ids.extend(get_linked_ids(it, COL_PROPRIO_REL))
+        immeuble_ids.extend(get_linked_ids(it, COL_IMMEUBLE_REL))
+    proprio_ids = list(set(proprio_ids))
+    immeuble_ids = list(set(immeuble_ids))
+    log.info(
+        "  → %d propriétaires liés, %d immeubles liés",
+        len(proprio_ids),
+        len(immeuble_ids),
+    )
+
+    log.info("Chargement des proprios + immeubles liés…")
+    proprios = await fetch_items_by_ids(proprio_ids, token)
+    immeubles = await fetch_items_by_ids(immeuble_ids, token)
+
+    payloads: List[Dict[str, Any]] = []
+    for it in items:
+        prop_id = (get_linked_ids(it, COL_PROPRIO_REL) or [None])[0]
+        imm_id = (get_linked_ids(it, COL_IMMEUBLE_REL) or [None])[0]
+        proprio = proprios.get(prop_id) if prop_id else None
+        immeuble = immeubles.get(imm_id) if imm_id else None
+        payloads.append(build_lead_payload(it, proprio, immeuble))
 
     if dry_run:
-        log.info("=== DRY-RUN — aperçu des 3 premiers payloads ===")
-        for p in payloads[:3]:
-            log.info(json.dumps(p, indent=2, ensure_ascii=False))
-        log.info("Total : %d payloads. Aucune écriture DB.", len(payloads))
+        log.info("=== DRY-RUN — aperçu des 5 premiers payloads ===")
+        for p in payloads[:5]:
+            log.info(
+                json.dumps(p, indent=2, ensure_ascii=False, default=str)
+            )
+        log.info(
+            "Total : %d payloads. Aucune écriture DB.", len(payloads)
+        )
         return 0
 
     async with AsyncSessionLocal() as db:
@@ -430,7 +540,6 @@ async def cmd_import(
             )
             await db.commit()
 
-        # Map des leads existants par monday_item_id
         existing_rows = (
             await db.execute(
                 select(ProspectionLead).where(
@@ -489,8 +598,7 @@ async def main() -> int:
     )
     if not token:
         log.error(
-            "MONDAY_API_TOKEN non défini en env. "
-            "Set la variable et relance."
+            "MONDAY_API_TOKEN non défini. Set la variable et relance."
         )
         return 1
 

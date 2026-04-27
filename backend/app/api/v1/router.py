@@ -46,6 +46,7 @@ from app.api.v1.endpoints import (
     punch_ops,
     achat_qbo,
     email_templates,
+    mtl_properties,
     prospection,
     prospection_lists,
     purchase_order_actions,
@@ -157,7 +158,10 @@ api_router.include_router(purchase_orders_router)
 api_router.include_router(purchase_order_items.router)
 # prospection_lists DOIT être registered AVANT prospection.router
 # pour que /prospection/lists/* soit matché avant /prospection/{lead_id}.
+# Idem pour mtl_properties qui a /prospection/mtl-properties/* —
+# match littéral avant /prospection/{lead_id}.
 api_router.include_router(prospection_lists.router)
+api_router.include_router(mtl_properties.router)
 api_router.include_router(prospection.router)
 api_router.include_router(email_templates.router)
 api_router.include_router(admin_data.router)

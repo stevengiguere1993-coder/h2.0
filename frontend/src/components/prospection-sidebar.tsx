@@ -4,6 +4,7 @@ import { useState } from "react";
 import { usePathname } from "next/navigation";
 import {
   BarChart3,
+  Building2,
   Database,
   Home,
   Layers,
@@ -40,6 +41,12 @@ const PROSPECTION_NAV: NavItem[] = [
     href: "/prospection/leads",
     label: "Liste des leads",
     icon: MapPin,
+    minRole: "manager"
+  },
+  {
+    href: "/prospection/immeubles-mtl",
+    label: "Immeubles MTL (rôle)",
+    icon: Building2,
     minRole: "manager"
   },
   {

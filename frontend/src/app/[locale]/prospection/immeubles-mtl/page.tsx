@@ -1,0 +1,674 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Building2,
+  CheckCircle2,
+  Loader2,
+  MapPin,
+  Plus,
+  Search,
+  Users,
+  X
+} from "lucide-react";
+
+import { AppTopbar } from "@/components/app-topbar";
+import { authedFetch } from "@/lib/auth";
+import { useProspectionLayout } from "../layout";
+
+type Property = {
+  matricule: string;
+  civique_debut: string | null;
+  nom_rue: string | null;
+  suite_debut: string | null;
+  municipalite: string | null;
+  nombre_logement: number | null;
+  annee_construction: number | null;
+  libelle_utilisation: string | null;
+  superficie_terrain: number | null;
+  superficie_batiment: number | null;
+  full_address: string | null;
+  already_lead: boolean;
+};
+
+type OwnerCandidate = {
+  neq: string;
+  nom: string | null;
+  statut: string | null;
+  forme_juridique: string | null;
+  adresse: string | null;
+  ville: string | null;
+  code_postal: string | null;
+  telephone: string | null;
+};
+
+type ListResponse = {
+  total: number;
+  properties: Property[];
+};
+
+const SIZE_PRESETS = [
+  { label: "Tous", min: undefined as number | undefined, max: undefined as number | undefined },
+  { label: "4-10", min: 4, max: 10 },
+  { label: "11-20", min: 11, max: 20 },
+  { label: "20+", min: 20, max: undefined },
+  { label: "50+", min: 50, max: undefined },
+  { label: "100+", min: 100, max: undefined }
+];
+
+export default function ImmeublesMtlPage() {
+  const { onOpenSidebar } = useProspectionLayout();
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Filtres
+  const [presetIdx, setPresetIdx] = useState(3); // 20+ par défaut
+  const [minLogements, setMinLogements] = useState<string>("20");
+  const [maxLogements, setMaxLogements] = useState<string>("");
+  const [minAnnee, setMinAnnee] = useState<string>("");
+  const [maxAnnee, setMaxAnnee] = useState<string>("");
+  const [rueSearch, setRueSearch] = useState<string>("");
+  const [sortBy, setSortBy] = useState("nombre_logement_desc");
+  const [offset, setOffset] = useState(0);
+  const limit = 100;
+
+  // Owner candidates modal
+  const [ownerModalFor, setOwnerModalFor] = useState<Property | null>(
+    null
+  );
+
+  function applyPreset(i: number) {
+    setPresetIdx(i);
+    const p = SIZE_PRESETS[i];
+    setMinLogements(p.min != null ? String(p.min) : "");
+    setMaxLogements(p.max != null ? String(p.max) : "");
+    setOffset(0);
+  }
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (minLogements) params.set("min_logements", minLogements);
+      if (maxLogements) params.set("max_logements", maxLogements);
+      if (minAnnee) params.set("min_annee", minAnnee);
+      if (maxAnnee) params.set("max_annee", maxAnnee);
+      if (rueSearch.trim())
+        params.set("nom_rue_contains", rueSearch.trim());
+      params.set("sort_by", sortBy);
+      params.set("limit", String(limit));
+      params.set("offset", String(offset));
+
+      const res = await authedFetch(
+        `/api/v1/prospection/mtl-properties?${params}`
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as ListResponse;
+      setProperties(data.properties);
+      setTotal(data.total);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    minLogements,
+    maxLogements,
+    minAnnee,
+    maxAnnee,
+    rueSearch,
+    sortBy,
+    offset
+  ]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const filteredCount = properties.length;
+  const totalPages = Math.ceil(total / limit);
+  const currentPage = Math.floor(offset / limit) + 1;
+
+  function fmtArea(n: number | null): string {
+    if (n == null) return "—";
+    return `${Math.round(n).toLocaleString("fr-CA")} m²`;
+  }
+
+  return (
+    <>
+      <AppTopbar
+        breadcrumbs={[
+          { label: "Prospection", href: "/prospection" },
+          { label: "Immeubles MTL" }
+        ]}
+        onOpenSidebar={onOpenSidebar}
+      />
+
+      <div className="p-4 lg:p-6">
+        <header className="flex items-center gap-3">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+            <Building2 className="h-5 w-5" />
+          </span>
+          <div>
+            <h1 className="text-2xl font-bold text-white">
+              Immeubles — Rôle d&apos;évaluation Montréal
+            </h1>
+            <p className="text-sm text-white/60">
+              Filtre les ~500 000 unités d&apos;évaluation pour
+              identifier des cibles d&apos;acquisition. Pour chaque
+              immeuble, identifie le proprio (REQ) et convertis en
+              lead en 1 clic.
+            </p>
+          </div>
+        </header>
+
+        {/* Filtres */}
+        <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-4">
+          {/* Presets nb logements */}
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] uppercase tracking-wider text-white/50">
+              Préréglage taille :
+            </span>
+            {SIZE_PRESETS.map((p, i) => (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => applyPreset(i)}
+                className={`rounded-full px-3 py-1 text-xs ${
+                  presetIdx === i
+                    ? "bg-emerald-500/20 text-emerald-300"
+                    : "bg-brand-800 text-white/60 hover:text-white"
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <label className="label">Min logements</label>
+              <input
+                type="number"
+                min="0"
+                value={minLogements}
+                onChange={(e) => {
+                  setMinLogements(e.target.value);
+                  setOffset(0);
+                }}
+                className="input text-sm"
+              />
+            </div>
+            <div>
+              <label className="label">Max logements</label>
+              <input
+                type="number"
+                min="0"
+                value={maxLogements}
+                onChange={(e) => {
+                  setMaxLogements(e.target.value);
+                  setOffset(0);
+                }}
+                className="input text-sm"
+              />
+            </div>
+            <div>
+              <label className="label">Année min</label>
+              <input
+                type="number"
+                min="1700"
+                max="2100"
+                value={minAnnee}
+                onChange={(e) => {
+                  setMinAnnee(e.target.value);
+                  setOffset(0);
+                }}
+                className="input text-sm"
+              />
+            </div>
+            <div>
+              <label className="label">Année max</label>
+              <input
+                type="number"
+                min="1700"
+                max="2100"
+                value={maxAnnee}
+                onChange={(e) => {
+                  setMaxAnnee(e.target.value);
+                  setOffset(0);
+                }}
+                className="input text-sm"
+              />
+            </div>
+            <div className="lg:col-span-3">
+              <label className="label">Nom de rue contient</label>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+                <input
+                  type="search"
+                  value={rueSearch}
+                  onChange={(e) => {
+                    setRueSearch(e.target.value);
+                    setOffset(0);
+                  }}
+                  placeholder="Ex: Saint-Laurent, Sherbrooke, …"
+                  className="input pl-8 text-sm"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="label">Trier par</label>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="input text-sm"
+              >
+                <option value="nombre_logement_desc">
+                  # logements ↓
+                </option>
+                <option value="nombre_logement_asc">
+                  # logements ↑
+                </option>
+                <option value="annee_construction_asc">
+                  Année construction ↑ (plus ancien d&apos;abord)
+                </option>
+                <option value="annee_construction_desc">
+                  Année construction ↓
+                </option>
+                <option value="superficie_terrain_desc">
+                  Superficie terrain ↓
+                </option>
+                <option value="matricule_asc">Matricule</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        {/* Stats + pagination */}
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-white/60">
+            {loading ? (
+              <Loader2 className="inline h-3 w-3 animate-spin" />
+            ) : (
+              <>
+                <span className="font-bold text-emerald-300">
+                  {total.toLocaleString("fr-CA")}
+                </span>{" "}
+                propriété{total > 1 ? "s" : ""} matchent les filtres ·
+                affichage {offset + 1}-{offset + filteredCount}
+              </>
+            )}
+          </p>
+          {totalPages > 1 ? (
+            <div className="flex items-center gap-2 text-xs">
+              <button
+                type="button"
+                disabled={offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - limit))}
+                className="rounded border border-brand-700 bg-brand-900 px-2 py-1 text-white/70 disabled:opacity-30"
+              >
+                ← Précédent
+              </button>
+              <span className="text-white/50">
+                Page {currentPage} / {totalPages}
+              </span>
+              <button
+                type="button"
+                disabled={offset + limit >= total}
+                onClick={() => setOffset(offset + limit)}
+                className="rounded border border-brand-700 bg-brand-900 px-2 py-1 text-white/70 disabled:opacity-30"
+              >
+                Suivant →
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        {error ? (
+          <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+            {error}
+            {error.includes("500") || error.includes("serveur") ? (
+              <span className="mt-1 block text-xs text-rose-200">
+                Le rôle Montréal n&apos;est peut-être pas encore importé
+                en DB. Lance{" "}
+                <code className="rounded bg-rose-500/20 px-1">
+                  python -m scripts.import_montreal_roles
+                </code>{" "}
+                depuis le Render Shell.
+              </span>
+            ) : null}
+          </p>
+        ) : null}
+
+        {/* Tableau */}
+        <div className="mt-4 overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
+          {loading && properties.length === 0 ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-emerald-500" />
+            </div>
+          ) : properties.length === 0 ? (
+            <div className="p-12 text-center">
+              <Building2 className="mx-auto h-8 w-8 text-white/20" />
+              <p className="mt-3 text-sm text-white/50">
+                Aucune propriété ne correspond aux filtres.
+              </p>
+              <p className="mt-1 text-[11px] text-white/40">
+                Si la table est vide, il faut d&apos;abord importer le
+                rôle Montréal (voir Sources de données).
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-brand-950/60 text-left text-[11px] uppercase tracking-wider text-white/50">
+                  <tr>
+                    <th className="px-3 py-2.5">Adresse</th>
+                    <th className="px-3 py-2.5 text-right">
+                      # logements
+                    </th>
+                    <th className="px-3 py-2.5 text-right">Année</th>
+                    <th className="px-3 py-2.5 text-right">Terrain</th>
+                    <th className="px-3 py-2.5">Utilisation</th>
+                    <th className="px-3 py-2.5">Matricule</th>
+                    <th className="px-3 py-2.5">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-brand-800">
+                  {properties.map((p) => (
+                    <tr
+                      key={p.matricule}
+                      className="transition hover:bg-brand-800/40"
+                    >
+                      <td className="px-3 py-2.5 text-white/80">
+                        {p.full_address || "—"}
+                        {p.municipalite ? (
+                          <div className="text-[10px] text-white/40">
+                            {p.municipalite}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums font-bold text-emerald-300">
+                        {p.nombre_logement ?? "—"}
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-white/70">
+                        {p.annee_construction ?? "—"}
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-white/70">
+                        {fmtArea(p.superficie_terrain)}
+                      </td>
+                      <td className="px-3 py-2.5 text-[11px] text-white/60">
+                        {p.libelle_utilisation || "—"}
+                      </td>
+                      <td className="px-3 py-2.5 font-mono text-[10px] text-white/40">
+                        {p.matricule}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <div className="flex flex-wrap gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setOwnerModalFor(p)}
+                            className="inline-flex items-center gap-1 rounded-md border border-blue-500/40 bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20"
+                          >
+                            <Users className="h-3 w-3" />
+                            Proprio
+                          </button>
+                          {p.already_lead ? (
+                            <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300">
+                              <CheckCircle2 className="h-3 w-3" />
+                              Lead
+                            </span>
+                          ) : (
+                            <ConvertButton property={p} />
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {ownerModalFor ? (
+        <OwnerCandidatesModal
+          property={ownerModalFor}
+          onClose={() => setOwnerModalFor(null)}
+          onConverted={() => {
+            setOwnerModalFor(null);
+            void load();
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function ConvertButton({ property }: { property: Property }) {
+  const [busy, setBusy] = useState(false);
+  async function convert() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/mtl-properties/${encodeURIComponent(
+          property.matricule
+        )}/convert-to-lead`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        alert(t.slice(0, 200) || `HTTP ${res.status}`);
+        return;
+      }
+      const data = (await res.json()) as { lead_id: number };
+      window.location.href = `/prospection/${data.lead_id}`;
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={convert}
+      disabled={busy}
+      className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+    >
+      {busy ? (
+        <Loader2 className="h-3 w-3 animate-spin" />
+      ) : (
+        <Plus className="h-3 w-3" />
+      )}
+      Ajouter
+    </button>
+  );
+}
+
+function OwnerCandidatesModal({
+  property,
+  onClose,
+  onConverted
+}: {
+  property: Property;
+  onClose: () => void;
+  onConverted: () => void;
+}) {
+  const [candidates, setCandidates] = useState<OwnerCandidate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [converting, setConverting] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/prospection/mtl-properties/${encodeURIComponent(
+            property.matricule
+          )}/owner-candidates`
+        );
+        if (!r.ok) throw new Error();
+        const data = (await r.json()) as OwnerCandidate[];
+        if (!cancelled) setCandidates(data);
+      } catch {
+        if (!cancelled) setCandidates([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [property.matricule]);
+
+  async function convertWithOwner(neq: string | null) {
+    setConverting(neq || "no-neq");
+    try {
+      const params = new URLSearchParams();
+      if (neq) params.set("owner_neq", neq);
+      const res = await authedFetch(
+        `/api/v1/prospection/mtl-properties/${encodeURIComponent(
+          property.matricule
+        )}/convert-to-lead?${params}`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        alert(t.slice(0, 200));
+        return;
+      }
+      const data = (await res.json()) as { lead_id: number };
+      onConverted();
+      window.location.href = `/prospection/${data.lead_id}`;
+    } finally {
+      setConverting(null);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/70 p-4"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-brand-800 bg-brand-950">
+        <header className="flex items-start justify-between gap-3 border-b border-brand-800 p-4">
+          <div className="min-w-0">
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-white">
+              <Users className="h-4 w-4 text-emerald-400" />
+              Propriétaires candidats
+            </h2>
+            <p className="mt-1 text-xs text-white/60">
+              <MapPin className="mr-1 inline h-3 w-3" />
+              {property.full_address}
+              {property.municipalite ? ` · ${property.municipalite}` : ""}
+            </p>
+            <p className="mt-0.5 font-mono text-[10px] text-white/40">
+              Matricule {property.matricule}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-1 text-white/40 hover:bg-brand-900 hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          {loading ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="h-5 w-5 animate-spin text-emerald-500" />
+            </div>
+          ) : candidates.length === 0 ? (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-200">
+              Aucune corporation REQ avec adresse postale matchant cette
+              propriété.
+              <br />
+              <span className="text-amber-200/60">
+                Soit le proprio est un particulier (pas dans le REQ),
+                soit la corporation a une adresse différente. Tu peux
+                quand même créer le lead et le compléter manuellement.
+              </span>
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {candidates.map((c) => (
+                <li
+                  key={c.neq}
+                  className="rounded-md border border-brand-800 bg-brand-900 p-3"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-white">
+                        {c.nom || "(sans nom)"}
+                      </p>
+                      <p className="mt-0.5 font-mono text-[10px] text-white/40">
+                        NEQ {c.neq}
+                      </p>
+                      <p className="mt-1 text-[11px] text-white/60">
+                        {c.adresse}
+                        {c.ville ? `, ${c.ville}` : ""}
+                        {c.code_postal ? ` ${c.code_postal}` : ""}
+                      </p>
+                      {c.telephone ? (
+                        <p className="mt-0.5 text-[11px] text-emerald-300">
+                          📞 {c.telephone}
+                        </p>
+                      ) : null}
+                      {c.statut ? (
+                        <span className="mt-1 inline-block rounded-full bg-brand-800 px-1.5 py-0.5 text-[10px] text-white/60">
+                          {c.statut}
+                        </span>
+                      ) : null}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => convertWithOwner(c.neq)}
+                      disabled={converting !== null}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                    >
+                      {converting === c.neq ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Plus className="h-3 w-3" />
+                      )}
+                      Lead avec ce proprio
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <footer className="flex items-center justify-between gap-2 border-t border-brand-800 p-3">
+          <p className="text-[10px] text-white/40">
+            Le matching se fait par adresse postale du siège REQ.
+            Précision ~70-80 %.
+          </p>
+          <button
+            type="button"
+            onClick={() => convertWithOwner(null)}
+            disabled={converting !== null || property.already_lead}
+            className="inline-flex items-center gap-1 rounded-md border border-brand-700 bg-brand-900 px-2.5 py-1.5 text-[11px] text-white/70 hover:text-white disabled:opacity-50"
+          >
+            {converting === "no-neq" ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Plus className="h-3 w-3" />
+            )}
+            Créer lead sans proprio
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
