@@ -9,6 +9,7 @@ import {
   LogOut,
   Map,
   MapPin,
+  Settings,
   Smartphone,
   UserCircle,
   X
@@ -40,12 +41,18 @@ const PROSPECTION_NAV: NavItem[] = [
     minRole: "manager"
   },
   {
+    href: "/prospection/parametres",
+    label: "Paramètres",
+    icon: Settings,
+    minRole: "manager"
+  },
+  {
     href: "/prospection/sources",
     label: "Sources de données",
     icon: Database,
     minRole: "owner"
   },
-  // Phase 3+ : campagnes, paramètres
+  // Phase 3+ : campagnes
   // { href: "/prospection/campagnes", label: "Campagnes", icon: Mail },
 ];
 

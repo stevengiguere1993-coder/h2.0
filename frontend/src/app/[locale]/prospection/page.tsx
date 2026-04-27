@@ -15,6 +15,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { loadPrefs } from "@/lib/prospection-prefs";
 import { useProspectionLayout } from "./layout";
 import "leaflet/dist/leaflet.css";
 
@@ -65,9 +66,9 @@ const KIND_LABEL: Record<string, string> = {
   autre: "Autre"
 };
 
-// Centre par défaut : Montréal centre-ville
-const DEFAULT_CENTER: [number, number] = [45.5017, -73.5673];
-const DEFAULT_ZOOM = 11;
+// Centre/zoom par défaut : pris dans les préférences user
+// (loadPrefs() au montage). Si rien en localStorage, fallback
+// Montréal centre-ville (cf. lib/prospection-prefs.ts).
 
 export default function ProspectionWebPage() {
   const { onOpenSidebar } = useProspectionLayout();
@@ -98,9 +99,12 @@ export default function ProspectionWebPage() {
       const L = (await import("leaflet")).default;
       if (!mounted || !mapContainerRef.current || mapInstanceRef.current)
         return;
+      // Lit les préférences user (zone par défaut + zoom). Fallback
+      // sur DEFAULT_CENTER/ZOOM si rien en localStorage.
+      const prefs = loadPrefs();
       const map = L.map(mapContainerRef.current, {
-        center: DEFAULT_CENTER,
-        zoom: DEFAULT_ZOOM,
+        center: [prefs.mapCenterLat, prefs.mapCenterLng],
+        zoom: prefs.mapZoom,
         scrollWheelZoom: true
       });
       L.tileLayer(
