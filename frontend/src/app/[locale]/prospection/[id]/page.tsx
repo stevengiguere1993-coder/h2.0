@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   ArrowLeft,
@@ -9,6 +9,8 @@ import {
   Camera,
   Loader2,
   MapPin,
+  Mic,
+  MicOff,
   Save,
   Search,
   Trash2,
@@ -917,9 +919,18 @@ export default function ProspectionDetailPage() {
               </section>
 
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-                  Notes terrain
-                </h2>
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Notes terrain
+                  </h2>
+                  <VoiceNotesButton
+                    onAppend={(t) =>
+                      setNotes((prev) =>
+                        prev ? `${prev.trim()}\n${t}` : t
+                      )
+                    }
+                  />
+                </div>
                 <textarea
                   rows={5}
                   value={notes}
@@ -1041,5 +1052,128 @@ export default function ProspectionDetailPage() {
         )}
       </div>
     </>
+  );
+}
+
+/**
+ * Bouton micro qui transcrit la voix en texte FR-CA via la Web Speech
+ * API du navigateur (gratuit, pas d'API tierce). Compatible Chrome,
+ * Edge, Safari (avec préfixe webkit) ; pas dispo dans Firefox.
+ *
+ * Le texte transcrit est appendé via `onAppend` quand l'utilisateur
+ * stoppe l'enregistrement. Erreurs network/permission sont traitées
+ * silencieusement (le bouton revient à l'état idle).
+ */
+function VoiceNotesButton({
+  onAppend
+}: {
+  onAppend: (transcript: string) => void;
+}) {
+  const [supported, setSupported] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [interim, setInterim] = useState("");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recRef = useRef<any>(null);
+  const finalsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const Klass = w.SpeechRecognition || w.webkitSpeechRecognition;
+    setSupported(!!Klass);
+  }, []);
+
+  function start() {
+    if (typeof window === "undefined") return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const Klass = w.SpeechRecognition || w.webkitSpeechRecognition;
+    if (!Klass) return;
+    const r = new Klass();
+    r.lang = "fr-CA";
+    r.continuous = true;
+    r.interimResults = true;
+    finalsRef.current = [];
+    setInterim("");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    r.onresult = (event: any) => {
+      let interimAcc = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const res = event.results[i];
+        const text = res[0]?.transcript || "";
+        if (res.isFinal) {
+          finalsRef.current.push(text.trim());
+        } else {
+          interimAcc += text;
+        }
+      }
+      setInterim(interimAcc.trim());
+    };
+    r.onerror = () => {
+      stop();
+    };
+    r.onend = () => {
+      const joined = finalsRef.current.join(" ").trim();
+      if (joined) onAppend(joined);
+      finalsRef.current = [];
+      setInterim("");
+      setListening(false);
+      recRef.current = null;
+    };
+    recRef.current = r;
+    setListening(true);
+    try {
+      r.start();
+    } catch {
+      stop();
+    }
+  }
+
+  function stop() {
+    const r = recRef.current;
+    if (r) {
+      try {
+        r.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+    setListening(false);
+  }
+
+  if (!supported) {
+    return (
+      <span className="text-[10px] text-white/30">
+        Voix non supportée
+      </span>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      {listening && interim ? (
+        <span className="hidden max-w-[180px] truncate text-[10px] italic text-white/40 sm:inline">
+          « {interim} »
+        </span>
+      ) : null}
+      <button
+        type="button"
+        onClick={listening ? stop : start}
+        className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition ${
+          listening
+            ? "animate-pulse border-rose-500/60 bg-rose-500/15 text-rose-200"
+            : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
+        }`}
+        aria-label={listening ? "Arrêter la dictée" : "Dicter une note"}
+      >
+        {listening ? (
+          <MicOff className="h-3 w-3" />
+        ) : (
+          <Mic className="h-3 w-3" />
+        )}
+        {listening ? "Arrêter" : "Dicter"}
+      </button>
+    </div>
   );
 }

@@ -180,6 +180,118 @@ async def list_leads(
     return [_serialize(r, counts.get(r.id, 0)) for r in rows]
 
 
+class DashboardStats(BaseModel):
+    """KPIs et séries temporelles agrégés pour la page dashboard
+    Prospection. Tout vient d'une seule passe sur les leads non
+    archivés — pas de query supplémentaire."""
+
+    total_leads: int
+    by_status: dict
+    by_kind: dict
+    avg_score: float
+    high_score_count: int  # score >= 70
+    converted_count: int
+    conversion_rate: float  # converted / (converted + perdu + actif)
+    leads_per_week: list[dict]  # [{"week": "2026-W17", "count": 5}, ...]
+    score_distribution: list[dict]  # [{"bucket": "70-100", "count": 8}, ...]
+    top_cities: list[dict]  # [{"city": "Montréal", "count": 42}, ...]
+
+
+@router.get(
+    "/dashboard/stats",
+    response_model=DashboardStats,
+    summary="KPIs agrégés du module Prospection (compteurs, "
+    "distributions, séries temporelles).",
+)
+async def dashboard_stats(
+    db: DBSession, _: CurrentUser
+) -> DashboardStats:
+    rows = (
+        await db.execute(
+            select(ProspectionLead).where(
+                ProspectionLead.archived.is_(False)
+            )
+        )
+    ).scalars().all()
+
+    total = len(rows)
+    by_status: dict = {}
+    by_kind: dict = {}
+    score_sum = 0
+    high_score = 0
+    converted = 0
+    perdu = 0
+    week_counts: dict = {}
+    city_counts: dict = {}
+    score_buckets = {
+        "0-29": 0,
+        "30-49": 0,
+        "50-69": 0,
+        "70-100": 0,
+    }
+
+    for r in rows:
+        by_status[r.status] = by_status.get(r.status, 0) + 1
+        by_kind[r.kind] = by_kind.get(r.kind, 0) + 1
+        s = r.score or 0
+        score_sum += s
+        if s >= 70:
+            high_score += 1
+            score_buckets["70-100"] += 1
+        elif s >= 50:
+            score_buckets["50-69"] += 1
+        elif s >= 30:
+            score_buckets["30-49"] += 1
+        else:
+            score_buckets["0-29"] += 1
+        if r.status == "converti":
+            converted += 1
+        if r.status == "perdu":
+            perdu += 1
+        if r.created_at:
+            iso_year, iso_week, _ = r.created_at.isocalendar()
+            wk = f"{iso_year}-W{iso_week:02d}"
+            week_counts[wk] = week_counts.get(wk, 0) + 1
+        if r.city:
+            city_counts[r.city] = city_counts.get(r.city, 0) + 1
+
+    avg_score = (score_sum / total) if total else 0.0
+    # Conversion rate = convertis / leads ayant atteint un état final
+    # (converti ou perdu) — sinon dilution par les leads encore en
+    # cours qui n'ont jamais eu la chance d'être convertis.
+    final_count = converted + perdu
+    conversion_rate = (converted / final_count) if final_count else 0.0
+
+    # Séries triées
+    leads_per_week = [
+        {"week": k, "count": v}
+        for k, v in sorted(week_counts.items())
+    ][-26:]  # 6 derniers mois max
+
+    score_distribution = [
+        {"bucket": k, "count": v} for k, v in score_buckets.items()
+    ]
+
+    top_cities = sorted(
+        ({"city": c, "count": n} for c, n in city_counts.items()),
+        key=lambda x: x["count"],
+        reverse=True,
+    )[:8]
+
+    return DashboardStats(
+        total_leads=total,
+        by_status=by_status,
+        by_kind=by_kind,
+        avg_score=round(avg_score, 1),
+        high_score_count=high_score,
+        converted_count=converted,
+        conversion_rate=round(conversion_rate, 3),
+        leads_per_week=leads_per_week,
+        score_distribution=score_distribution,
+        top_cities=top_cities,
+    )
+
+
 @router.get("/{lead_id}", response_model=LeadRead)
 async def get_lead(
     lead_id: int, db: DBSession, _: CurrentUser

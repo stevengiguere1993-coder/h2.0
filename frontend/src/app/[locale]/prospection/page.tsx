@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Flame,
   Loader2,
   MapPin,
   Navigation,
@@ -78,6 +79,7 @@ export default function ProspectionWebPage() {
   const [kindFilter, setKindFilter] = useState<string>("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [routeOpen, setRouteOpen] = useState(false);
+  const [heatmapOn, setHeatmapOn] = useState(false);
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   // Le ref est volontairement typed `any` parce que `leaflet` est
@@ -86,6 +88,8 @@ export default function ProspectionWebPage() {
   const mapInstanceRef = useRef<any>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const markersLayerRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const heatLayerRef = useRef<any>(null);
 
   // Chargement de Leaflet côté client
   useEffect(() => {
@@ -194,6 +198,50 @@ export default function ProspectionWebPage() {
     })();
   }, [filtered, selectedId]);
 
+  // Heatmap : (re)dessine la couche de chaleur quand on toggle ou que
+  // la liste filtrée change. Pondération = score / 100, donc les leads
+  // forts dominent visuellement.
+  useEffect(() => {
+    (async () => {
+      const map = mapInstanceRef.current;
+      if (!map) return;
+      // leaflet.heat s'auto-enregistre sur L global
+      const L = (await import("leaflet")).default;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await import("leaflet.heat" as any);
+      if (heatLayerRef.current) {
+        map.removeLayer(heatLayerRef.current);
+        heatLayerRef.current = null;
+      }
+      if (!heatmapOn) return;
+      const points: [number, number, number][] = [];
+      for (const l of filtered) {
+        if (l.lat == null || l.lng == null) continue;
+        // Intensité = max(0.15, score/100) pour que les leads à 0
+        // restent visibles mais discrets.
+        const intensity = Math.max(0.15, (l.score || 0) / 100);
+        points.push([l.lat, l.lng, intensity]);
+      }
+      if (points.length === 0) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const heat = (L as any).heatLayer(points, {
+        radius: 28,
+        blur: 22,
+        maxZoom: 15,
+        max: 1.0,
+        gradient: {
+          0.2: "#1e3a8a", // bleu foncé (faible)
+          0.4: "#3b82f6", // bleu
+          0.55: "#10b981", // emerald
+          0.7: "#f59e0b", // amber
+          0.85: "#ef4444" // rouge (très fort)
+        }
+      });
+      heat.addTo(map);
+      heatLayerRef.current = heat;
+    })();
+  }, [filtered, heatmapOn]);
+
   const selected = useMemo(
     () => filtered.find((l) => l.id === selectedId) || null,
     [filtered, selectedId]
@@ -208,6 +256,19 @@ export default function ProspectionWebPage() {
         onOpenSidebar={onOpenSidebar}
         rightSlot={
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setHeatmapOn((v) => !v)}
+              className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition ${
+                heatmapOn
+                  ? "border-amber-500/50 bg-amber-500/15 text-amber-300"
+                  : "border-brand-700 bg-brand-900 text-white/60 hover:text-white"
+              }`}
+              title="Heatmap pondérée par score"
+            >
+              <Flame className="h-3.5 w-3.5" />
+              Heatmap
+            </button>
             <button
               type="button"
               onClick={() => setRouteOpen(true)}

@@ -170,6 +170,10 @@ export const routing = defineRouting({
       fr: "/prospection/leads",
       en: "/prospection/leads"
     },
+    "/prospection/dashboard": {
+      fr: "/prospection/dashboard",
+      en: "/prospection/dashboard"
+    },
     "/prospection/sources": {
       fr: "/prospection/sources",
       en: "/prospection/sources"

@@ -5,6 +5,7 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
+  Download,
   Loader2,
   MapPin,
   Plus,
@@ -129,6 +130,75 @@ function fmtDate(iso: string): string {
     day: "2-digit",
     month: "short"
   });
+}
+
+function csvEscape(v: unknown): string {
+  if (v == null) return "";
+  const s = String(v);
+  // RFC 4180 — quote if comma/quote/newline.
+  if (/[",\n\r]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+function downloadCsv(rows: Lead[]) {
+  const headers = [
+    "id",
+    "name",
+    "kind",
+    "status",
+    "score",
+    "tags",
+    "address",
+    "city",
+    "postal_code",
+    "nb_logements",
+    "annee_construction",
+    "valeur_fonciere",
+    "owner_kind",
+    "owner_name",
+    "priority",
+    "created_at"
+  ];
+  const lines: string[] = [headers.join(",")];
+  for (const l of rows) {
+    lines.push(
+      [
+        l.id,
+        l.name,
+        l.kind,
+        l.status,
+        l.score,
+        (l.tags || []).join("|"),
+        l.address,
+        l.city,
+        l.postal_code,
+        l.nb_logements,
+        l.annee_construction,
+        l.valeur_fonciere,
+        l.owner_kind,
+        l.owner_name,
+        l.priority,
+        l.created_at
+      ]
+        .map(csvEscape)
+        .join(",")
+    );
+  }
+  // BOM pour qu'Excel ouvre proprement les accents.
+  const blob = new Blob(["﻿" + lines.join("\r\n")], {
+    type: "text/csv;charset=utf-8"
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const stamp = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `prospection-leads-${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function compare(a: unknown, b: unknown): number {
@@ -306,14 +376,26 @@ export default function ProspectionLeadsPage() {
         ]}
         onOpenSidebar={onOpenSidebar}
         rightSlot={
-          <Link
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/m/prospection" as any}
-            className="btn-accent text-sm"
-          >
-            <Plus className="mr-1.5 h-4 w-4" />
-            Nouveau (mobile)
-          </Link>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => downloadCsv(sorted)}
+              disabled={sorted.length === 0}
+              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-40"
+              title="Exporter la liste filtrée en CSV"
+            >
+              <Download className="h-3.5 w-3.5" />
+              CSV
+            </button>
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/m/prospection" as any}
+              className="btn-accent text-sm"
+            >
+              <Plus className="mr-1.5 h-4 w-4" />
+              Nouveau (mobile)
+            </Link>
+          </div>
         }
       />
 
