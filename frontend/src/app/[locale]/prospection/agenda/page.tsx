@@ -71,9 +71,33 @@ function startOfWeek(d: Date): Date {
   return out;
 }
 
+function startOfMonth(d: Date): Date {
+  const out = new Date(d.getFullYear(), d.getMonth(), 1);
+  out.setHours(0, 0, 0, 0);
+  return out;
+}
+
+function endOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 1);
+}
+
+function startOfYear(d: Date): Date {
+  return new Date(d.getFullYear(), 0, 1);
+}
+
+function endOfYear(d: Date): Date {
+  return new Date(d.getFullYear() + 1, 0, 1);
+}
+
 function addDays(d: Date, n: number): Date {
   const out = new Date(d);
   out.setDate(out.getDate() + n);
+  return out;
+}
+
+function addMonths(d: Date, n: number): Date {
+  const out = new Date(d);
+  out.setMonth(out.getMonth() + n);
   return out;
 }
 
@@ -88,10 +112,20 @@ function fmtDateLong(d: Date): string {
   return `${d.getDate()} ${MONTHS_FR[d.getMonth()].toLowerCase()} ${d.getFullYear()}`;
 }
 
+type ViewMode = "day" | "week" | "month" | "year";
+
+const VIEW_LABELS: Record<ViewMode, string> = {
+  day: "Jour",
+  week: "Semaine",
+  month: "Mois",
+  year: "Année"
+};
+
 export default function ProspectionAgendaPage() {
   const { onOpenSidebar } = useProspectionLayout();
   const { user: me } = useCurrentUser();
   const [refDate, setRefDate] = useState<Date>(() => new Date());
+  const [view, setView] = useState<ViewMode>("week");
   const [events, setEvents] = useState<UnifiedEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -104,19 +138,32 @@ export default function ProspectionAgendaPage() {
   const [viewUserId, setViewUserId] = useState<number | null>(null);
   const isAdmin = !!me?.is_admin;
 
-  const weekStart = useMemo(() => startOfWeek(refDate), [refDate]);
-  const days = useMemo(
-    () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
-    [weekStart]
-  );
+  // Plage temporelle selon la vue. La requête API charge tous les
+  // events qui chevauchent cette plage.
+  const range = useMemo(() => {
+    if (view === "day") {
+      const start = new Date(refDate);
+      start.setHours(0, 0, 0, 0);
+      return { start, end: addDays(start, 1) };
+    }
+    if (view === "week") {
+      const start = startOfWeek(refDate);
+      return { start, end: addDays(start, 7) };
+    }
+    if (view === "month") {
+      return { start: startOfMonth(refDate), end: endOfMonth(refDate) };
+    }
+    // year
+    return { start: startOfYear(refDate), end: endOfYear(refDate) };
+  }, [refDate, view]);
 
   const load = useCallback(async () => {
     if (!me) return;
     setLoading(true);
     setError(null);
     try {
-      const from = weekStart.toISOString();
-      const to = addDays(weekStart, 7).toISOString();
+      const from = range.start.toISOString();
+      const to = range.end.toISOString();
       const targetId = viewUserId ?? me.id;
       const url =
         `/api/v1/agenda/unified?scope=prospection` +
@@ -130,7 +177,7 @@ export default function ProspectionAgendaPage() {
     } finally {
       setLoading(false);
     }
-  }, [me, weekStart, viewUserId]);
+  }, [me, range, viewUserId]);
 
   useEffect(() => {
     void load();
@@ -156,16 +203,6 @@ export default function ProspectionAgendaPage() {
       }
     })();
   }, [isAdmin]);
-
-  function eventsForDay(day: Date): UnifiedEvent[] {
-    const dayKey = day.toDateString();
-    return events
-      .filter((e) => new Date(e.start_at).toDateString() === dayKey)
-      .sort(
-        (a, b) =>
-          new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
-      );
-  }
 
   return (
     <>
@@ -194,11 +231,26 @@ export default function ProspectionAgendaPage() {
           </h1>
 
           <div className="ml-auto flex items-center gap-2">
+            {(["day", "week", "month", "year"] as ViewMode[]).map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setView(v)}
+                className={`rounded-md border px-2 py-1 text-xs ${
+                  view === v
+                    ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-200"
+                    : "border-brand-800 text-white/70 hover:bg-brand-900"
+                }`}
+              >
+                {VIEW_LABELS[v]}
+              </button>
+            ))}
+            <span className="mx-1 h-5 w-px bg-brand-800" />
             <button
               type="button"
-              onClick={() => setRefDate(addDays(refDate, -7))}
+              onClick={() => setRefDate(navigatePrev(refDate, view))}
               className="rounded-md border border-brand-800 p-1.5 text-white/70 hover:bg-brand-900"
-              aria-label="Semaine précédente"
+              aria-label="Précédent"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
@@ -211,9 +263,9 @@ export default function ProspectionAgendaPage() {
             </button>
             <button
               type="button"
-              onClick={() => setRefDate(addDays(refDate, 7))}
+              onClick={() => setRefDate(navigateNext(refDate, view))}
               className="rounded-md border border-brand-800 p-1.5 text-white/70 hover:bg-brand-900"
-              aria-label="Semaine suivante"
+              aria-label="Suivant"
             >
               <ChevronRight className="h-4 w-4" />
             </button>
@@ -222,8 +274,7 @@ export default function ProspectionAgendaPage() {
 
         <div className="mb-3 flex flex-wrap items-center gap-3">
           <p className="text-sm text-white/70">
-            Semaine du {fmtDateLong(weekStart)} —{" "}
-            {fmtDateLong(addDays(weekStart, 6))}
+            {rangeLabel(refDate, view)}
           </p>
           {isAdmin && users.length > 0 ? (
             <select
@@ -248,8 +299,8 @@ export default function ProspectionAgendaPage() {
         </div>
 
         <div className="mb-3 flex flex-wrap gap-3 text-xs text-white/50">
-          <Legend tone="prospection" label="RDV Prospection (clair)" />
-          <Legend tone="opaque" label="Construction / autre (opaque)" />
+          <Legend tone="prospection" label="RDV Prospection (vert)" />
+          <Legend tone="opaque" label="Indisponible (autre volet, en rouge)" />
         </div>
 
         {loading ? (
@@ -260,20 +311,42 @@ export default function ProspectionAgendaPage() {
           <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-300">
             {error}
           </p>
+        ) : view === "day" ? (
+          <DayView
+            day={refDate}
+            events={events}
+            onEmptySlot={() => setShowCreate(refDate)}
+            onEventClick={(ev) =>
+              ev.is_opaque ? null : setEditing(ev)
+            }
+          />
+        ) : view === "week" ? (
+          <WeekView
+            refDate={refDate}
+            events={events}
+            onEmptySlot={(d) => setShowCreate(d)}
+            onEventClick={(ev) =>
+              ev.is_opaque ? null : setEditing(ev)
+            }
+          />
+        ) : view === "month" ? (
+          <MonthView
+            refDate={refDate}
+            events={events}
+            onDayClick={(d) => setShowCreate(d)}
+            onEventClick={(ev) =>
+              ev.is_opaque ? null : setEditing(ev)
+            }
+          />
         ) : (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-7">
-            {days.map((d, i) => (
-              <DayColumn
-                key={d.toISOString()}
-                day={d}
-                events={eventsForDay(d)}
-                onEmptySlot={() => setShowCreate(d)}
-                onEventClick={(ev) =>
-                  ev.is_opaque ? null : setEditing(ev)
-                }
-              />
-            ))}
-          </div>
+          <YearView
+            refDate={refDate}
+            events={events}
+            onMonthClick={(d) => {
+              setRefDate(d);
+              setView("month");
+            }}
+          />
         )}
       </div>
 
@@ -315,11 +388,312 @@ function Legend({
         className={`h-3 w-3 rounded ${
           tone === "prospection"
             ? "bg-emerald-500/70"
-            : "border border-white/30 bg-brand-800/80"
+            : "bg-rose-500/70"
         }`}
       />
       {label}
     </span>
+  );
+}
+
+// -------------------- Navigation helpers --------------------
+
+function navigatePrev(d: Date, view: ViewMode): Date {
+  if (view === "day") return addDays(d, -1);
+  if (view === "week") return addDays(d, -7);
+  if (view === "month") return addMonths(d, -1);
+  return addMonths(d, -12);
+}
+
+function navigateNext(d: Date, view: ViewMode): Date {
+  if (view === "day") return addDays(d, 1);
+  if (view === "week") return addDays(d, 7);
+  if (view === "month") return addMonths(d, 1);
+  return addMonths(d, 12);
+}
+
+function rangeLabel(d: Date, view: ViewMode): string {
+  if (view === "day") {
+    return `${DAYS_FR[d.getDay()]} ${fmtDateLong(d)}`;
+  }
+  if (view === "week") {
+    const start = startOfWeek(d);
+    return `Semaine du ${fmtDateLong(start)} — ${fmtDateLong(addDays(start, 6))}`;
+  }
+  if (view === "month") {
+    return `${MONTHS_FR[d.getMonth()]} ${d.getFullYear()}`;
+  }
+  return `Année ${d.getFullYear()}`;
+}
+
+function eventsOn(events: UnifiedEvent[], day: Date): UnifiedEvent[] {
+  const k = day.toDateString();
+  return events
+    .filter((e) => new Date(e.start_at).toDateString() === k)
+    .sort(
+      (a, b) =>
+        new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
+    );
+}
+
+// -------------------- DayView (list with hours) --------------------
+
+function DayView({
+  day,
+  events,
+  onEmptySlot,
+  onEventClick
+}: {
+  day: Date;
+  events: UnifiedEvent[];
+  onEmptySlot: () => void;
+  onEventClick: (ev: UnifiedEvent) => void;
+}) {
+  const dayEvents = eventsOn(events, day);
+  const isToday = new Date().toDateString() === day.toDateString();
+
+  return (
+    <div
+      className={`mx-auto max-w-2xl rounded-xl border p-4 ${
+        isToday
+          ? "border-emerald-500/50 bg-emerald-500/5"
+          : "border-brand-800 bg-brand-900/40"
+      }`}
+    >
+      <header className="mb-4 flex items-baseline justify-between">
+        <h2 className="text-lg font-bold text-white">
+          {DAYS_FR[day.getDay()]} {day.getDate()}{" "}
+          {MONTHS_FR[day.getMonth()].toLowerCase()}
+        </h2>
+        <button
+          type="button"
+          onClick={onEmptySlot}
+          className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-500/20"
+        >
+          <Plus className="h-3 w-3" /> RDV
+        </button>
+      </header>
+
+      {dayEvents.length === 0 ? (
+        <p className="py-8 text-center text-sm text-white/40">
+          Aucun événement ce jour-là.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {dayEvents.map((ev) => (
+            <li key={ev.id}>
+              <EventCard ev={ev} onClick={() => onEventClick(ev)} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// -------------------- WeekView (7-column grid) --------------------
+
+function WeekView({
+  refDate,
+  events,
+  onEmptySlot,
+  onEventClick
+}: {
+  refDate: Date;
+  events: UnifiedEvent[];
+  onEmptySlot: (d: Date) => void;
+  onEventClick: (ev: UnifiedEvent) => void;
+}) {
+  const start = startOfWeek(refDate);
+  const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
+  return (
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-7">
+      {days.map((d) => (
+        <DayColumn
+          key={d.toISOString()}
+          day={d}
+          events={eventsOn(events, d)}
+          onEmptySlot={() => onEmptySlot(d)}
+          onEventClick={onEventClick}
+        />
+      ))}
+    </div>
+  );
+}
+
+// -------------------- MonthView (classic grid) --------------------
+
+function MonthView({
+  refDate,
+  events,
+  onDayClick,
+  onEventClick
+}: {
+  refDate: Date;
+  events: UnifiedEvent[];
+  onDayClick: (d: Date) => void;
+  onEventClick: (ev: UnifiedEvent) => void;
+}) {
+  // Grille 6×7 (42 cases) commençant au dimanche de la 1ère semaine
+  // qui contient le 1er du mois.
+  const monthStart = startOfMonth(refDate);
+  const gridStart = startOfWeek(monthStart);
+  const cells = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-brand-800">
+      <div className="grid grid-cols-7 border-b border-brand-800 bg-brand-900/60 text-center text-[10px] font-semibold uppercase tracking-wider text-white/50">
+        {DAYS_FR.map((d) => (
+          <div key={d} className="py-2">
+            {d}
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-7">
+        {cells.map((d, i) => {
+          const inMonth = d.getMonth() === refDate.getMonth();
+          const isToday = new Date().toDateString() === d.toDateString();
+          const dayEvents = eventsOn(events, d);
+          return (
+            <button
+              key={i}
+              type="button"
+              onClick={() => onDayClick(d)}
+              className={`group min-h-[88px] border-b border-r border-brand-800 p-1 text-left transition hover:bg-brand-900/60 ${
+                inMonth ? "bg-brand-950" : "bg-brand-900/20"
+              } ${isToday ? "ring-1 ring-inset ring-emerald-500/60" : ""}`}
+            >
+              <div
+                className={`mb-1 text-xs font-semibold tabular-nums ${
+                  isToday
+                    ? "text-emerald-300"
+                    : inMonth
+                      ? "text-white/80"
+                      : "text-white/30"
+                }`}
+              >
+                {d.getDate()}
+              </div>
+              <div className="space-y-0.5">
+                {dayEvents.slice(0, 3).map((ev) => (
+                  <button
+                    key={ev.id}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onEventClick(ev);
+                    }}
+                    className={`block w-full truncate rounded px-1 py-0.5 text-left text-[10px] ${
+                      ev.is_opaque
+                        ? "bg-rose-500/20 text-rose-300"
+                        : "bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
+                    }`}
+                  >
+                    {fmtTime(ev.start_at)} {ev.title}
+                  </button>
+                ))}
+                {dayEvents.length > 3 ? (
+                  <p className="text-[10px] text-white/40">
+                    +{dayEvents.length - 3}
+                  </p>
+                ) : null}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// -------------------- YearView (12 mini-month panels) --------------------
+
+function YearView({
+  refDate,
+  events,
+  onMonthClick
+}: {
+  refDate: Date;
+  events: UnifiedEvent[];
+  onMonthClick: (monthDate: Date) => void;
+}) {
+  const year = refDate.getFullYear();
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      {Array.from({ length: 12 }, (_, m) => (
+        <MiniMonth
+          key={m}
+          monthDate={new Date(year, m, 1)}
+          events={events}
+          onClick={() => onMonthClick(new Date(year, m, 1))}
+        />
+      ))}
+    </div>
+  );
+}
+
+function MiniMonth({
+  monthDate,
+  events,
+  onClick
+}: {
+  monthDate: Date;
+  events: UnifiedEvent[];
+  onClick: () => void;
+}) {
+  const monthStart = startOfMonth(monthDate);
+  const gridStart = startOfWeek(monthStart);
+  const cells = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-xl border border-brand-800 bg-brand-900/40 p-3 text-left transition hover:border-emerald-500/50"
+    >
+      <h3 className="mb-2 text-sm font-semibold text-white">
+        {MONTHS_FR[monthDate.getMonth()]}
+      </h3>
+      <div className="grid grid-cols-7 gap-0.5 text-[9px] text-white/40">
+        {DAYS_FR.map((d) => (
+          <div key={d} className="text-center">
+            {d[0]}
+          </div>
+        ))}
+      </div>
+      <div className="mt-1 grid grid-cols-7 gap-0.5">
+        {cells.map((d, i) => {
+          const inMonth = d.getMonth() === monthDate.getMonth();
+          const dayEvents = eventsOn(events, d);
+          const hasProsp = dayEvents.some((e) => !e.is_opaque);
+          const hasOpaque = dayEvents.some((e) => e.is_opaque);
+          const isToday = new Date().toDateString() === d.toDateString();
+          return (
+            <div
+              key={i}
+              className={`relative h-5 rounded text-center text-[9px] tabular-nums leading-5 ${
+                isToday
+                  ? "bg-emerald-500 font-bold text-brand-950"
+                  : inMonth
+                    ? "text-white/70"
+                    : "text-white/20"
+              }`}
+            >
+              {d.getDate()}
+              {(hasProsp || hasOpaque) && !isToday ? (
+                <span className="absolute bottom-0 left-1/2 flex -translate-x-1/2 gap-0.5">
+                  {hasProsp ? (
+                    <span className="h-1 w-1 rounded-full bg-emerald-400" />
+                  ) : null}
+                  {hasOpaque ? (
+                    <span className="h-1 w-1 rounded-full bg-rose-400" />
+                  ) : null}
+                </span>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </button>
   );
 }
 
@@ -389,14 +763,14 @@ function EventCard({
   if (ev.is_opaque) {
     return (
       <div
-        className="cursor-default rounded-md border border-white/10 bg-brand-800/60 px-2 py-1.5 text-[11px] text-white/40"
+        className="cursor-default rounded-md border border-rose-500/40 bg-rose-500/15 px-2 py-1.5 text-[11px] text-rose-200"
         title="Plage occupée par un autre volet — détails masqués"
       >
         <div className="flex items-center gap-1.5">
           <Lock className="h-3 w-3" />
           <span className="font-medium">Indisponible</span>
         </div>
-        <p className="mt-0.5 tabular-nums">
+        <p className="mt-0.5 tabular-nums text-rose-300/80">
           {fmtTime(ev.start_at)}
           {ev.end_at ? ` – ${fmtTime(ev.end_at)}` : ""}
         </p>
