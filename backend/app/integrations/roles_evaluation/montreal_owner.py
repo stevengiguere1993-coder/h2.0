@@ -156,6 +156,10 @@ async def _try_new_portal(
         f"{NEW_PORTAL_PUBLIC}/recherche?matricule={matricule}",
         f"{NEW_PORTAL_PUBLIC}/details/{matricule}",
         f"{NEW_PORTAL_PUBLIC}/resultat?matricule={matricule}",
+        # URL exacte du portail montreal.ca pour la fiche détaillée
+        f"{NEW_PORTAL_PUBLIC}/matricule/liste/resultat?matricule={matricule}",
+        f"{NEW_PORTAL_PUBLIC}/matricule/liste/resultat?matricule={matricule_no_dash}",
+        f"{NEW_PORTAL_PUBLIC}/matricule/liste?matricule={matricule}",
     ]
     for url in deep_link_candidates:
         try:
@@ -175,20 +179,19 @@ async def _try_new_portal(
         except httpx.HTTPError:
             continue
 
-    # Variante #2 : flow multi-step avec décomposition matricule
+    # Variante #2 : flow multi-step complet (4 étapes en réalité)
     if not parts:
         return None
     try:
-        # Étape 1 : page d'accueil pour cookies de session
+        # Étape 1 : GET la page d'accueil pour cookies de session
         await client.get(NEW_PORTAL_PUBLIC)
-        # Étape 2 : POST option matricule (plusieurs noms de champ
-        # essayés pour couvrir les variantes de framework)
+        # Étape 2 : POST option=matricule (page choix → page form)
         for option_name in ("optionRecherche", "option", "type"):
             await client.post(
                 NEW_PORTAL_PUBLIC,
                 data={option_name: "matricule"},
             )
-        # Étape 3 : POST des 6 sous-champs + résultat
+        # Étape 3 : POST des 6 sous-champs (form Recherche → liste)
         form_data = {
             "division": parts["division"],
             "secteur": parts["secteur"],
@@ -196,7 +199,6 @@ async def _try_new_portal(
             "cav": parts["cav"],
             "batiment": parts["batiment"],
             "local": parts["local"],
-            # Variantes de noms de champ
             "Division": parts["division"],
             "Secteur": parts["secteur"],
             "Emplacement": parts["emplacement"],
@@ -206,28 +208,78 @@ async def _try_new_portal(
             "matricule": matricule,
             "rechercher": "Rechercher",
         }
+        list_response_text: Optional[str] = None
         for endpoint in (
-            NEW_PORTAL_PUBLIC,
-            f"{NEW_PORTAL_PUBLIC}/recherche",
+            f"{NEW_PORTAL_PUBLIC}/matricule/liste",
             f"{NEW_PORTAL_PUBLIC}/recherche/matricule",
-            f"{NEW_PORTAL_PUBLIC}/resultat",
+            f"{NEW_PORTAL_PUBLIC}/recherche",
+            NEW_PORTAL_PUBLIC,
         ):
             try:
                 r2 = await client.post(endpoint, data=form_data)
                 if r2.status_code != 200 or len(r2.text) < 1000:
                     continue
+                # Si on tombe direct sur une page Propriétaire, c'est
+                # gagné (cas où le portail saute la liste pour 1 seul
+                # résultat).
                 if "Propriétaire" in r2.text:
                     owners = _parse_owners(r2.text)
                     if owners:
                         log.info(
-                            "EvalWeb : succès flow multi-step "
-                            "(%s, %d owners)",
+                            "EvalWeb : succès direct étape 3 (%s, %d owners)",
                             endpoint,
                             len(owners),
                         )
                         return owners
+                # Sinon, c'est probablement la page « Liste des
+                # matricules » → on doit cliquer sur le matricule
+                # qui matche pour aller au Résultat détaillé.
+                if (
+                    "Liste des matricules" in r2.text
+                    or "Sélectionnez un numéro" in r2.text
+                ):
+                    list_response_text = r2.text
+                    break
             except httpx.HTTPError:
                 continue
+
+        # Étape 4 : si on a la liste, trouve le lien du matricule
+        # qui correspond et le suit pour le Résultat détaillé.
+        if list_response_text:
+            soup = BeautifulSoup(list_response_text, "html.parser")
+            target = matricule  # clé de match
+            target_clean = target.replace("-", "")
+            chosen_url: Optional[str] = None
+            # On cherche tous les <a> qui contiennent ce matricule
+            for a in soup.find_all("a", href=True):
+                href = a.get("href", "")
+                text = a.get_text(" ", strip=True)
+                blob = f"{href} {text}"
+                if (
+                    target in blob
+                    or target_clean in blob.replace("-", "")
+                ):
+                    chosen_url = (
+                        href
+                        if href.startswith("http")
+                        else f"https://montreal.ca{href}"
+                    )
+                    break
+            if chosen_url:
+                try:
+                    r3 = await client.get(chosen_url)
+                    if r3.status_code == 200 and "Propriétaire" in r3.text:
+                        owners = _parse_owners(r3.text)
+                        if owners:
+                            log.info(
+                                "EvalWeb : succès étape 4 — Résultat détaillé "
+                                "(%s, %d owners)",
+                                chosen_url,
+                                len(owners),
+                            )
+                            return owners
+                except httpx.HTTPError:
+                    pass
     except httpx.HTTPError:
         pass
 
