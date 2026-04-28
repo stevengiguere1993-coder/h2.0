@@ -413,6 +413,100 @@ async def import_cmhc_csv(
     return {"source": "cmhc", **result}
 
 
+# === Scraping annonces de location (Kijiji) ===
+#
+# État en mémoire similaire à MTL/REQ. Scraping lancé en background
+# pour éviter le timeout HTTP, polling pour le suivi.
+
+_rental_state: dict = {
+    "status": "idle",
+    "started_at": None,
+    "finished_at": None,
+    "listings_seen": None,
+    "listings_new": None,
+    "listings_updated": None,
+    "error": None,
+    "source": None,
+}
+
+
+async def _kijiji_scrape_worker(
+    cities: Optional[list], max_pages: int, max_listings: int
+) -> None:
+    global _rental_state
+    _rental_state["status"] = "running"
+    _rental_state["started_at"] = datetime.now(timezone.utc).isoformat()
+    _rental_state["finished_at"] = None
+    _rental_state["error"] = None
+    _rental_state["source"] = "kijiji"
+    try:
+        from app.integrations.rental.kijiji import scrape_kijiji
+
+        async with AsyncSessionLocal() as session:
+            result = await scrape_kijiji(
+                session,
+                cities=cities,
+                max_pages_per_city=max_pages,
+                max_listings_per_run=max_listings,
+            )
+            await session.commit()
+        _rental_state["status"] = "done"
+        _rental_state["listings_seen"] = result.get("listings_seen", 0)
+        _rental_state["listings_new"] = result.get("listings_new", 0)
+        _rental_state["listings_updated"] = result.get(
+            "listings_updated", 0
+        )
+    except Exception as exc:
+        log.exception("kijiji scrape failed: %s", exc)
+        _rental_state["status"] = "error"
+        _rental_state["error"] = str(exc)[:500]
+    finally:
+        _rental_state["finished_at"] = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+
+@router.post(
+    "/rental/scrape-kijiji",
+    summary="Lance en arrière-plan un scrape Kijiji des annonces de "
+    "location (par ville). Idempotent : déduplication par source_url.",
+)
+async def scrape_kijiji_endpoint(
+    _: RequireOwner,
+    cities: Optional[list[str]] = None,
+    max_pages_per_city: int = 1,
+    max_listings_per_run: int = 50,
+) -> dict:
+    if _rental_state["status"] == "running":
+        raise HTTPException(
+            409,
+            "Un scrape est déjà en cours. Attends qu'il termine ou "
+            "consulte /rental/scrape-status.",
+        )
+    _rental_state["_task"] = asyncio.create_task(
+        _kijiji_scrape_worker(
+            cities, max_pages_per_city, max_listings_per_run
+        )
+    )
+    return {
+        "status": "started",
+        "message": (
+            "Scrape Kijiji lancé en arrière-plan. ~5-10 min selon "
+            "le nombre de villes/pages. Poll /rental/scrape-status."
+        ),
+    }
+
+
+@router.get(
+    "/rental/scrape-status",
+    summary="État du dernier scrape de location en cours ou terminé.",
+)
+async def rental_scrape_status(_: RequireOwner) -> dict:
+    return {
+        k: v for k, v in _rental_state.items() if not k.startswith("_")
+    }
+
+
 @router.post(
     "/init-db",
     summary="Force-run init_db() (migrations additives + create_all). "

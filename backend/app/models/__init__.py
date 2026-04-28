@@ -57,6 +57,7 @@ from app.models.prospection_lead_transaction import (
 from app.models.punch import Punch
 from app.models.qbo_account_map import QboAccountMap
 from app.models.qbo_token import QboToken
+from app.models.rental_listing import RentalListing
 from app.models.req_company import ReqCompany
 from app.models.sales_task import SalesTask, sales_task_assignees  # noqa: F401
 from app.models.seo_article import SeoArticle
@@ -111,6 +112,7 @@ __all__ = [
     "Punch",
     "QboAccountMap",
     "QboToken",
+    "RentalListing",
     "ReqCompany",
     "SalesTask",
     "SeoArticle",
