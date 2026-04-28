@@ -9,6 +9,9 @@ dashboard, pas en automatique au démarrage.
 
 import asyncio
 import logging
+import os
+import tempfile
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -38,6 +41,18 @@ _mtl_state: dict = {
     "finished_at": None,
     "rows_upserted": None,
     "error": None,
+}
+
+
+# Même pattern pour l'import REQ. Géré séparément du MTL pour qu'on
+# puisse lancer les deux en parallèle si nécessaire.
+_req_state: dict = {
+    "status": "idle",
+    "started_at": None,
+    "finished_at": None,
+    "rows_upserted": None,
+    "error": None,
+    "filename": None,
 }
 
 
@@ -114,33 +129,121 @@ async def mtl_import_status(_: RequireOwner) -> dict:
 
 @router.post(
     "/req/import",
-    summary="Ingère un ZIP REQ uploadé manuellement (entreprise.csv "
-    "+ adresse.csv optionnel)",
+    summary="Lance en arrière-plan l'ingestion d'un ZIP REQ uploadé "
+    "manuellement (entreprise.csv + adresse.csv optionnel)",
 )
 async def import_req_zip(
-    db: DBSession,
     _: RequireOwner,
     zip_file: UploadFile = File(...),
     max_rows: Optional[int] = Form(default=None),
 ) -> dict:
     """L'utilisateur télécharge le ZIP depuis donneesquebec.ca dans
     son navigateur (Cloudflare bloque le téléchargement direct côté
-    serveur), puis l'envoie ici. ~1 M corporations.
+    serveur), puis l'envoie ici. ~1 M corporations, ZIP ~225 Mo.
+
+    Pour éviter le timeout HTTP de 100s sur Render Free :
+    - Upload streamé sur disque par chunks de 1 Mo (RAM bornée)
+    - Ingestion en arrière-plan (asyncio.create_task)
+    - Le client poll /req/import-status pour voir l'avancement
     """
+    if _req_state["status"] == "running":
+        raise HTTPException(
+            409,
+            "Un import REQ est déjà en cours. Attends qu'il termine "
+            "ou consulte /req/import-status.",
+        )
     if not (zip_file.filename or "").lower().endswith(".zip"):
         raise HTTPException(415, "Le fichier doit être un ZIP.")
-    blob = await zip_file.read()
-    if not blob:
-        raise HTTPException(400, "Fichier vide.")
+
+    # Stream l'upload vers /tmp par chunks pour éviter de matérialiser
+    # les 225 Mo en RAM. FastAPI buffer déjà sur disque pour les gros
+    # uploads mais on prend pas de risque.
+    temp_path = os.path.join(
+        tempfile.gettempdir(), f"req-upload-{uuid.uuid4().hex}.zip"
+    )
+    bytes_written = 0
     try:
-        result = await ingest_req_zip(db, blob, max_rows=max_rows)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        with open(temp_path, "wb") as out:
+            while True:
+                chunk = await zip_file.read(1024 * 1024)  # 1 Mo
+                if not chunk:
+                    break
+                out.write(chunk)
+                bytes_written += len(chunk)
     except Exception as exc:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
         raise HTTPException(
-            500, f"Échec ingestion ZIP REQ : {exc}"
+            500, f"Erreur de réception du ZIP : {exc}"
         ) from exc
-    return {"source": "req", **result}
+
+    if bytes_written == 0:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise HTTPException(400, "Fichier vide.")
+
+    # Fire-and-forget : ingestion en background.
+    _req_state["filename"] = zip_file.filename
+    _req_state["_task"] = asyncio.create_task(
+        _req_import_worker(temp_path, max_rows)
+    )
+    return {
+        "status": "started",
+        "size_mb": round(bytes_written / 1024 / 1024, 1),
+        "message": (
+            "ZIP reçu, ingestion lancée en arrière-plan. Recharge la "
+            "page dans 2-5 minutes ou consulte /req/import-status."
+        ),
+    }
+
+
+async def _req_import_worker(
+    temp_path: str, max_rows: Optional[int]
+) -> None:
+    """Tourne en background : ouvre sa propre session DB, ingère le
+    ZIP depuis /tmp, puis nettoie le fichier temporaire."""
+    global _req_state
+    _req_state["status"] = "running"
+    _req_state["started_at"] = datetime.now(timezone.utc).isoformat()
+    _req_state["finished_at"] = None
+    _req_state["rows_upserted"] = None
+    _req_state["error"] = None
+    try:
+        with open(temp_path, "rb") as fh:
+            blob = fh.read()
+        async with AsyncSessionLocal() as session:
+            result = await ingest_req_zip(
+                session, blob, max_rows=max_rows
+            )
+            await session.commit()
+        _req_state["status"] = "done"
+        _req_state["rows_upserted"] = int(
+            result.get("rows_upserted") or 0
+        )
+    except Exception as exc:
+        log.exception("REQ import failed: %s", exc)
+        _req_state["status"] = "error"
+        _req_state["error"] = str(exc)[:500]
+    finally:
+        _req_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+
+
+@router.get(
+    "/req/import-status",
+    summary="État de l'import REQ en cours ou récemment terminé",
+)
+async def req_import_status(_: RequireOwner) -> dict:
+    return {
+        k: v for k, v in _req_state.items() if not k.startswith("_")
+    }
 
 
 @router.post(
