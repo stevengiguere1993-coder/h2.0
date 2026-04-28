@@ -406,6 +406,7 @@ async def owner_evalweb(
     # Cache.
     p.owners_json = json.dumps(owners, ensure_ascii=False)
     p.owners_fetched_at = datetime.now(timezone.utc)
+    await _propagate_owners_to_lead(db, matricule, owners)
     await db.flush()
 
     return EvalWebResponse(
@@ -414,6 +415,43 @@ async def owner_evalweb(
         fetched_at=p.owners_fetched_at.isoformat(),
         cached=False,
     )
+
+
+async def _propagate_owners_to_lead(
+    db, matricule: str, owners: list[dict]
+) -> None:
+    """Si un lead actif existe déjà pour ce matricule, met à jour ses
+    champs owner_* depuis les données EvalWeb. Idempotent — on
+    n'écrase que si le lead n'a pas déjà des infos plus précises
+    (NEQ corporation, par ex.)."""
+    if not owners:
+        return
+    lead = (
+        await db.execute(
+            select(ProspectionLead).where(
+                ProspectionLead.matricule == matricule,
+                ProspectionLead.archived.is_(False),
+            )
+        )
+    ).scalar_one_or_none()
+    if lead is None:
+        return
+
+    # On n'écrase pas si le lead a déjà un NEQ (corp identifiée via REQ).
+    if lead.owner_neq:
+        return
+
+    names = [o.get("name", "").strip() for o in owners if o.get("name")]
+    if names:
+        lead.owner_name = (" / ".join(names))[:255]
+    first_addr = owners[0].get("postal_address")
+    if first_addr and not lead.owner_address:
+        lead.owner_address = first_addr[:500]
+    statuts = [(o.get("statut") or "").lower() for o in owners]
+    if any("morale" in s for s in statuts):
+        lead.owner_kind = ProspectionOwnerKind.CORPORATION.value
+    elif any("physique" in s for s in statuts):
+        lead.owner_kind = ProspectionOwnerKind.PARTICULIER.value
 
 
 @router.post(
@@ -462,6 +500,7 @@ async def owner_evalweb_manual(
 
     p.owners_json = json.dumps(owners, ensure_ascii=False)
     p.owners_fetched_at = datetime.now(timezone.utc)
+    await _propagate_owners_to_lead(db, matricule, owners)
     await db.flush()
 
     return EvalWebResponse(
@@ -515,7 +554,11 @@ async def convert_to_lead(
     address = _full_addr(p) or None
     name = address or f"Matricule {matricule}"
 
-    # Si owner_neq fourni, fetch les infos REQ
+    # Priorité owner :
+    # 1. NEQ REQ fourni → corporation enrichie depuis req_companies
+    # 2. Sinon, si owners_json EvalWeb existe → personne physique
+    #    (concatène les noms multiples si plusieurs propriétaires)
+    # 3. Sinon, INCONNU
     owner_kind = ProspectionOwnerKind.INCONNU.value
     owner_name = None
     owner_phone = None
@@ -531,6 +574,33 @@ async def convert_to_lead(
             owner_name = corp.nom
             owner_phone = corp.telephone
             owner_address = corp.adresse
+    elif p.owners_json:
+        try:
+            import json as _json
+
+            cached = _json.loads(p.owners_json) or []
+            if cached:
+                # Si plusieurs proprios, on concatène les noms
+                # ("Geremia, Roberto / Biggs, Doug").
+                names = [
+                    o.get("name", "").strip()
+                    for o in cached
+                    if o.get("name")
+                ]
+                owner_name = " / ".join(names) if names else None
+                # On prend l'adresse postale du premier propriétaire.
+                owner_address = cached[0].get("postal_address")
+                # Statut : si tous sont « Personne physique » → particulier,
+                # si l'un est « Personne morale » → corporation.
+                statuts = [
+                    (o.get("statut") or "").lower() for o in cached
+                ]
+                if any("morale" in s for s in statuts):
+                    owner_kind = ProspectionOwnerKind.CORPORATION.value
+                elif any("physique" in s for s in statuts):
+                    owner_kind = ProspectionOwnerKind.PARTICULIER.value
+        except Exception:
+            pass
 
     lead = ProspectionLead(
         created_by_user_id=user.id,

@@ -1161,7 +1161,9 @@ function OwnerCandidatesModal({
             ) : (
               <Plus className="h-3 w-3" />
             )}
-            Créer lead sans proprio
+            {evalData && evalData.owners.length > 0
+              ? "Créer lead avec proprio EvalWeb"
+              : "Créer lead sans proprio"}
           </button>
         </footer>
       </div>
