@@ -18,6 +18,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { authedFetch, hasMinRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { useProspectionLayout } from "../../layout";
+import { ParametresTabs } from "../_tabs";
 
 type ImportResult = {
   source: string;
@@ -213,6 +214,7 @@ export default function ProspectionSourcesPage() {
         ]}
         onOpenSidebar={onOpenSidebar}
       />
+      <ParametresTabs />
 
       <div className="mx-auto max-w-3xl p-4 lg:p-6">
         <header className="flex items-center gap-3">

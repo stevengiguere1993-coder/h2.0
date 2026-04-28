@@ -3,6 +3,7 @@
 import { AppTopbar } from "@/components/app-topbar";
 import { ConnexionsSection } from "@/components/connexions-section";
 import { useProspectionLayout } from "../../layout";
+import { ParametresTabs } from "../_tabs";
 
 export default function ProspectionConnexionsPage() {
   const { onOpenSidebar } = useProspectionLayout();
@@ -16,6 +17,7 @@ export default function ProspectionConnexionsPage() {
         ]}
         onOpenSidebar={onOpenSidebar}
       />
+      <ParametresTabs />
 
       <div className="mx-auto max-w-3xl p-4 lg:p-6">
         <h1 className="text-2xl font-bold text-white">Connexions</h1>

@@ -184,7 +184,7 @@ export default function NouvelleAnalysePage() {
       />
 
       <div className="px-4 py-6 lg:px-6">
-        <Stepper step={step} />
+        <Stepper step={step} onStepClick={(s) => setStep(s)} />
 
         <div className="mt-6 max-w-3xl">
           {step === 1 && (
@@ -236,35 +236,46 @@ export default function NouvelleAnalysePage() {
   );
 }
 
-function Stepper({ step }: { step: number }) {
+function Stepper({
+  step,
+  onStepClick
+}: {
+  step: number;
+  onStepClick: (s: number) => void;
+}) {
   return (
     <ol className="flex flex-wrap gap-2">
       {STEPS.map((s) => {
         const active = s.id === step;
         const done = s.id < step;
         return (
-          <li
-            key={s.id}
-            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs ${
-              active
-                ? "border-emerald-500 bg-emerald-500/10 text-emerald-200"
-                : done
-                ? "border-emerald-700/50 bg-brand-900 text-emerald-300/80"
-                : "border-brand-800 bg-brand-900/40 text-white/40"
-            }`}
-          >
-            <span
-              className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold ${
+          <li key={s.id}>
+            <button
+              type="button"
+              onClick={() => onStepClick(s.id)}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition hover:border-emerald-500 hover:text-emerald-200 ${
                 active
-                  ? "bg-emerald-500 text-brand-950"
+                  ? "border-emerald-500 bg-emerald-500/10 text-emerald-200"
                   : done
-                  ? "bg-emerald-700/40 text-emerald-200"
-                  : "bg-brand-800 text-white/50"
+                    ? "border-emerald-700/50 bg-brand-900 text-emerald-300/80"
+                    : "border-brand-800 bg-brand-900/40 text-white/40"
               }`}
             >
-              {done ? <Check className="h-3.5 w-3.5" /> : s.id}
-            </span>
-            <span className="hidden font-medium md:inline">{s.title}</span>
+              <span
+                className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold ${
+                  active
+                    ? "bg-emerald-500 text-brand-950"
+                    : done
+                      ? "bg-emerald-700/40 text-emerald-200"
+                      : "bg-brand-800 text-white/50"
+                }`}
+              >
+                {done ? <Check className="h-3.5 w-3.5" /> : s.id}
+              </span>
+              <span className="hidden font-medium md:inline">
+                {s.title}
+              </span>
+            </button>
           </li>
         );
       })}
@@ -289,6 +300,11 @@ function NumberField({
   step?: number;
   hint?: string;
 }) {
+  // Affiche "" quand la valeur est 0 pour ne pas que le « 0 » colle
+  // devant ce que l'utilisateur tape. À la perte de focus, on remet
+  // 0 (ou la valeur saisie). Bonus : select-all au focus pour
+  // remplacer rapidement la valeur existante.
+  const display = value === 0 ? "" : String(value);
   return (
     <label className="block">
       <span className="block text-xs font-semibold uppercase tracking-wider text-white/50">
@@ -297,9 +313,19 @@ function NumberField({
       <div className="mt-1 flex items-center gap-2">
         <input
           type="number"
-          value={Number.isFinite(value) ? value : 0}
+          value={display}
           step={step}
-          onChange={(e) => onChange(Number(e.target.value) || 0)}
+          placeholder="0"
+          onFocus={(e) => e.currentTarget.select()}
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (raw === "") {
+              onChange(0);
+            } else {
+              const n = Number(raw);
+              onChange(Number.isFinite(n) ? n : 0);
+            }
+          }}
           className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
         />
         {suffix ? (

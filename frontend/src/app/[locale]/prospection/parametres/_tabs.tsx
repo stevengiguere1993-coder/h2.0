@@ -51,19 +51,21 @@ const TABS: Tab[] = [
   }
 ];
 
-export default function ProspectionParametresLayout({
-  children
-}: {
-  children: React.ReactNode;
-}) {
+/**
+ * Barre d'onglets horizontale pour les pages /prospection/parametres/*.
+ * Insérée manuellement dans chaque page après <AppTopbar /> pour
+ * garantir l'ordre DOM correct (sinon le sticky top-0 de AppTopbar
+ * masque cette nav).
+ */
+export function ParametresTabs() {
   const pathname = usePathname();
   const { user } = useCurrentUser();
 
-  const visible = TABS.filter((t) => hasMinRole(user, t.minRole || "manager"));
+  const visible = TABS.filter((t) =>
+    hasMinRole(user, t.minRole || "manager")
+  );
 
   function isActive(href: string): boolean {
-    // Le tab Préférences est l'index — actif uniquement si pathname
-    // termine par /parametres (pas un sous-chemin).
     const trimmed = pathname.replace(/^\/(en|fr)/, "");
     if (href === "/prospection/parametres") {
       return trimmed === "/prospection/parametres";
@@ -71,30 +73,29 @@ export default function ProspectionParametresLayout({
     return trimmed.startsWith(href);
   }
 
+  if (visible.length === 0) return null;
+
   return (
-    <div>
-      <nav className="sticky top-16 z-20 -mx-4 mb-2 flex gap-1 overflow-x-auto border-b border-brand-800 bg-brand-950/95 px-4 py-2 backdrop-blur lg:-mx-6 lg:px-6">
-        {visible.map((t) => {
-          const Icon = t.icon;
-          const active = isActive(t.href);
-          return (
-            <Link
-              key={t.href}
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              href={t.href as any}
-              className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition ${
-                active
-                  ? "bg-emerald-500/15 text-emerald-300"
-                  : "text-white/60 hover:bg-brand-900 hover:text-white"
-              }`}
-            >
-              <Icon className="h-4 w-4" />
-              {t.label}
-            </Link>
-          );
-        })}
-      </nav>
-      {children}
-    </div>
+    <nav className="flex gap-1 overflow-x-auto border-b border-brand-800 bg-brand-950 px-4 py-2 lg:px-6">
+      {visible.map((t) => {
+        const Icon = t.icon;
+        const active = isActive(t.href);
+        return (
+          <Link
+            key={t.href}
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={t.href as any}
+            className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition ${
+              active
+                ? "bg-emerald-500/15 text-emerald-300"
+                : "text-white/60 hover:bg-brand-900 hover:text-white"
+            }`}
+          >
+            <Icon className="h-4 w-4" />
+            {t.label}
+          </Link>
+        );
+      })}
+    </nav>
   );
 }

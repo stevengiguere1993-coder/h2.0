@@ -13,6 +13,7 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { authedFetch, hasMinRole, type UserRole } from "@/lib/auth";
+import { ParametresTabs } from "../_tabs";
 import { useConfirm } from "@/components/confirm-dialog";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { useProspectionLayout } from "../../layout";
@@ -129,6 +130,7 @@ export default function ProspectionUsersPage() {
           ]}
           onOpenSidebar={onOpenSidebar}
         />
+        <ParametresTabs />
         <div className="p-6 text-sm text-rose-300">
           Cette section est réservée aux propriétaires.
         </div>
@@ -155,6 +157,7 @@ export default function ProspectionUsersPage() {
           </button>
         }
       />
+      <ParametresTabs />
 
       <div className="px-4 py-6 lg:px-6">
         <h1 className="flex items-center gap-2 text-xl font-bold text-white">

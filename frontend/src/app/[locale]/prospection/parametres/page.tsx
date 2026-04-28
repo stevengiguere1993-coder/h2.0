@@ -20,6 +20,7 @@ import {
   type ProspectionPrefs
 } from "@/lib/prospection-prefs";
 import { useProspectionLayout } from "../layout";
+import { ParametresTabs } from "./_tabs";
 
 const KIND_OPTIONS = [
   { value: "multilogement", label: "Multi-logement" },
@@ -121,6 +122,7 @@ export default function ProspectionPreferencesPage() {
         ]}
         onOpenSidebar={onOpenSidebar}
       />
+      <ParametresTabs />
 
       <div className="mx-auto max-w-3xl p-4 lg:p-6">
         <h1 className="text-2xl font-bold text-white">Préférences</h1>
