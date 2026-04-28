@@ -114,6 +114,12 @@ async def list_properties(
     min_superficie_terrain: Optional[float] = Query(default=None, ge=0),
     municipalite: Optional[str] = Query(default=None),
     nom_rue_contains: Optional[str] = Query(default=None),
+    codes_utilisation: Optional[List[str]] = Query(
+        default=None,
+        description="Liste de codes d'utilisation à inclure. "
+        "Ex: ?codes_utilisation=1000&codes_utilisation=1099 pour "
+        "logements unifamiliaux + multi.",
+    ),
     sort_by: str = Query(
         default="nombre_logement_desc",
         pattern="^(nombre_logement_desc|nombre_logement_asc|"
@@ -126,38 +132,47 @@ async def list_properties(
     """Filtre + paginate. Ne retourne JAMAIS plus de 1000 lignes
     par requête (sinon le navigateur crash sur 500k objets)."""
 
-    stmt = select(MontrealPropertyUnit)
+    # On bâtit la liste des conditions une seule fois pour les
+    # appliquer à la requête principale ET au count.
+    filters = []
     if min_logements is not None:
-        stmt = stmt.where(
-            MontrealPropertyUnit.nombre_logement >= min_logements
-        )
+        filters.append(MontrealPropertyUnit.nombre_logement >= min_logements)
     if max_logements is not None:
-        stmt = stmt.where(
-            MontrealPropertyUnit.nombre_logement <= max_logements
-        )
+        filters.append(MontrealPropertyUnit.nombre_logement <= max_logements)
     if min_annee is not None:
-        stmt = stmt.where(
+        filters.append(
             MontrealPropertyUnit.annee_construction >= min_annee
         )
     if max_annee is not None:
-        stmt = stmt.where(
+        filters.append(
             MontrealPropertyUnit.annee_construction <= max_annee
         )
     if min_superficie_terrain is not None:
-        stmt = stmt.where(
-            MontrealPropertyUnit.superficie_terrain
-            >= min_superficie_terrain
+        filters.append(
+            MontrealPropertyUnit.superficie_terrain >= min_superficie_terrain
         )
     if municipalite:
-        stmt = stmt.where(
+        filters.append(
             MontrealPropertyUnit.municipalite == municipalite.strip()
         )
     if nom_rue_contains:
-        stmt = stmt.where(
+        filters.append(
             MontrealPropertyUnit.nom_rue.ilike(
                 f"%{nom_rue_contains.strip()}%"
             )
         )
+    if codes_utilisation:
+        # Filtre IN (codes) — accepte plusieurs codes pour cocher
+        # plusieurs types simultanément.
+        cleaned = [c.strip() for c in codes_utilisation if c.strip()]
+        if cleaned:
+            filters.append(
+                MontrealPropertyUnit.code_utilisation.in_(cleaned)
+            )
+
+    stmt = select(MontrealPropertyUnit)
+    for f in filters:
+        stmt = stmt.where(f)
 
     # Tri
     order_map = {
@@ -172,39 +187,10 @@ async def list_properties(
 
     rows = (await db.execute(stmt)).scalars().all()
 
-    # Total count (séparé, pour paginer)
+    # Total count avec les mêmes filtres (séparé, pour paginer)
     count_stmt = select(func.count()).select_from(MontrealPropertyUnit)
-    if min_logements is not None:
-        count_stmt = count_stmt.where(
-            MontrealPropertyUnit.nombre_logement >= min_logements
-        )
-    if max_logements is not None:
-        count_stmt = count_stmt.where(
-            MontrealPropertyUnit.nombre_logement <= max_logements
-        )
-    if min_annee is not None:
-        count_stmt = count_stmt.where(
-            MontrealPropertyUnit.annee_construction >= min_annee
-        )
-    if max_annee is not None:
-        count_stmt = count_stmt.where(
-            MontrealPropertyUnit.annee_construction <= max_annee
-        )
-    if min_superficie_terrain is not None:
-        count_stmt = count_stmt.where(
-            MontrealPropertyUnit.superficie_terrain
-            >= min_superficie_terrain
-        )
-    if municipalite:
-        count_stmt = count_stmt.where(
-            MontrealPropertyUnit.municipalite == municipalite.strip()
-        )
-    if nom_rue_contains:
-        count_stmt = count_stmt.where(
-            MontrealPropertyUnit.nom_rue.ilike(
-                f"%{nom_rue_contains.strip()}%"
-            )
-        )
+    for f in filters:
+        count_stmt = count_stmt.where(f)
     total = int((await db.execute(count_stmt)).scalar() or 0)
 
     # Quels matricules sont déjà dans nos leads ? Une seule query.
@@ -232,6 +218,58 @@ async def list_properties(
             d.superficie_batiment = float(d.superficie_batiment)
         out.append(d)
     return ListResponse(total=total, properties=out)
+
+
+class UtilisationType(BaseModel):
+    code: str
+    libelle: Optional[str]
+    count: int
+
+
+@router.get(
+    "/utilisation-types",
+    response_model=List[UtilisationType],
+    summary="Liste les codes d'utilisation distincts présents dans la "
+    "table avec le nombre d'immeubles pour chacun. Sert à peupler le "
+    "filtre cochable côté frontend.",
+)
+async def utilisation_types(
+    db: DBSession,
+    _: CurrentUser,
+    min_logements: Optional[int] = Query(default=None, ge=0),
+) -> List[UtilisationType]:
+    """Le `min_logements` optionnel permet de ne retourner que les
+    types présents dans le périmètre courant (ex: si on filtre déjà
+    20+ logements, on ne montre que les types pertinents).
+
+    Trié par count desc — les types les plus courants en premier.
+    """
+    stmt = (
+        select(
+            MontrealPropertyUnit.code_utilisation,
+            MontrealPropertyUnit.libelle_utilisation,
+            func.count().label("count"),
+        )
+        .where(MontrealPropertyUnit.code_utilisation.is_not(None))
+        .group_by(
+            MontrealPropertyUnit.code_utilisation,
+            MontrealPropertyUnit.libelle_utilisation,
+        )
+        .order_by(func.count().desc())
+    )
+    if min_logements is not None:
+        stmt = stmt.where(
+            MontrealPropertyUnit.nombre_logement >= min_logements
+        )
+    rows = (await db.execute(stmt)).all()
+    return [
+        UtilisationType(
+            code=str(code),
+            libelle=libelle,
+            count=int(count or 0),
+        )
+        for code, libelle, count in rows
+    ]
 
 
 @router.get(

@@ -27,11 +27,18 @@ type Property = {
   municipalite: string | null;
   nombre_logement: number | null;
   annee_construction: number | null;
+  code_utilisation: string | null;
   libelle_utilisation: string | null;
   superficie_terrain: number | null;
   superficie_batiment: number | null;
   full_address: string | null;
   already_lead: boolean;
+};
+
+type UtilisationType = {
+  code: string;
+  libelle: string | null;
+  count: number;
 };
 
 type OwnerCandidate = {
@@ -77,6 +84,14 @@ export default function ImmeublesMtlPage() {
   const [offset, setOffset] = useState(0);
   const limit = 100;
 
+  // Filtre utilisation : liste des codes disponibles (chargée 1×) +
+  // ensemble des codes cochés pour la requête.
+  const [utilTypes, setUtilTypes] = useState<UtilisationType[]>([]);
+  const [selectedCodes, setSelectedCodes] = useState<Set<string>>(
+    new Set()
+  );
+  const [showUtilFilter, setShowUtilFilter] = useState(false);
+
   // Owner candidates modal
   const [ownerModalFor, setOwnerModalFor] = useState<Property | null>(
     null
@@ -104,6 +119,11 @@ export default function ImmeublesMtlPage() {
       if (maxAnnee) params.set("max_annee", maxAnnee);
       if (rueSearch.trim())
         params.set("nom_rue_contains", rueSearch.trim());
+      // codes_utilisation : multi-valeur, FastAPI accepte
+      // ?codes_utilisation=A&codes_utilisation=B
+      for (const code of selectedCodes) {
+        params.append("codes_utilisation", code);
+      }
       params.set("sort_by", sortBy);
       params.set("limit", String(limit));
       params.set("offset", String(offset));
@@ -129,9 +149,29 @@ export default function ImmeublesMtlPage() {
     minAnnee,
     maxAnnee,
     rueSearch,
+    selectedCodes,
     sortBy,
     offset
   ]);
+
+  // Charge la liste des types d'utilisation au montage. Utilise
+  // min_logements pour ne montrer que les types pertinents au
+  // périmètre actuel.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const params = new URLSearchParams();
+        if (minLogements) params.set("min_logements", minLogements);
+        const r = await authedFetch(
+          `/api/v1/prospection/mtl-properties/utilisation-types?${params}`
+        );
+        if (!r.ok) return;
+        setUtilTypes((await r.json()) as UtilisationType[]);
+      } catch {
+        /* ignore */
+      }
+    })();
+  }, [minLogements]);
 
   useEffect(() => {
     void load();
@@ -293,6 +333,92 @@ export default function ImmeublesMtlPage() {
                 <option value="matricule_asc">Matricule</option>
               </select>
             </div>
+          </div>
+
+          {/* Filtre Type d'utilisation (collapse + checkboxes) */}
+          <div className="mt-3 border-t border-brand-800 pt-3">
+            <button
+              type="button"
+              onClick={() => setShowUtilFilter((v) => !v)}
+              className="flex w-full items-center justify-between text-sm text-white/80 hover:text-emerald-300"
+            >
+              <span className="font-medium">
+                Type d&apos;utilisation
+                {selectedCodes.size > 0 ? (
+                  <span className="ml-2 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-300">
+                    {selectedCodes.size} cochés
+                  </span>
+                ) : (
+                  <span className="ml-2 text-xs text-white/40">
+                    (tous)
+                  </span>
+                )}
+              </span>
+              <span className="text-xs text-white/50">
+                {showUtilFilter ? "Replier ▲" : "Déplier ▼"}
+              </span>
+            </button>
+
+            {showUtilFilter ? (
+              <div className="mt-3 space-y-2">
+                {selectedCodes.size > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedCodes(new Set());
+                      setOffset(0);
+                    }}
+                    className="text-[11px] text-rose-300 hover:text-rose-200"
+                  >
+                    × Effacer la sélection ({selectedCodes.size})
+                  </button>
+                ) : null}
+                <div className="grid max-h-72 grid-cols-1 gap-1.5 overflow-y-auto rounded-md border border-brand-800 bg-brand-950 p-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {utilTypes.length === 0 ? (
+                    <p className="col-span-full text-xs text-white/40">
+                      Aucun type chargé. Vérifie que les données MTL
+                      sont importées.
+                    </p>
+                  ) : (
+                    utilTypes.map((t) => {
+                      const checked = selectedCodes.has(t.code);
+                      return (
+                        <label
+                          key={t.code}
+                          className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-[11px] transition ${
+                            checked
+                              ? "bg-emerald-500/15 text-emerald-200"
+                              : "text-white/70 hover:bg-brand-900"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              const next = new Set(selectedCodes);
+                              if (e.target.checked) next.add(t.code);
+                              else next.delete(t.code);
+                              setSelectedCodes(next);
+                              setOffset(0);
+                            }}
+                            className="h-3.5 w-3.5 rounded border-brand-700 bg-brand-900 text-emerald-500 focus:ring-emerald-500"
+                          />
+                          <span className="flex-1 truncate">
+                            <span className="font-mono text-[10px] text-white/40">
+                              {t.code}
+                            </span>{" "}
+                            {t.libelle || "(sans libellé)"}
+                          </span>
+                          <span className="shrink-0 text-[10px] text-white/40">
+                            {t.count.toLocaleString("fr-CA")}
+                          </span>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            ) : null}
           </div>
         </section>
 
