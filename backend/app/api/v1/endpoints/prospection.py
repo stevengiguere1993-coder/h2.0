@@ -1805,6 +1805,64 @@ async def _build_owner_view(
     )
 
 
+class Canada411Result(BaseModel):
+    name: str
+    address: Optional[str] = None
+    phone: str
+    source: str = "canada411"
+    source_url: str
+
+
+@router.get(
+    "/{lead_id}/canada411-lookup",
+    response_model=List[Canada411Result],
+    summary="Cherche le téléphone du propriétaire dans Canada411 par "
+    "nom + ville (extraits du lead). Pas de cache : le scraping est "
+    "rapide (~1s) et les résultats peuvent évoluer.",
+)
+async def canada411_lookup(
+    lead_id: int,
+    db: DBSession,
+    _: CurrentUser,
+) -> List[Canada411Result]:
+    from app.integrations.canada411 import lookup_by_name
+
+    lead = await db.get(ProspectionLead, lead_id)
+    if lead is None:
+        raise HTTPException(404, "Lead introuvable.")
+    if not lead.owner_name:
+        raise HTTPException(
+            400,
+            "Le lead n'a pas de nom de propriétaire. Documente le "
+            "proprio d'abord (via REQ ou EvalWeb).",
+        )
+    # Si le proprio est une corporation (NEQ), on n'utilise pas
+    # Canada411 (les corps n'y figurent pas) — REQ donne déjà le tel.
+    results = await lookup_by_name(
+        lead.owner_name,
+        city=lead.city or "Montreal",
+    )
+    return [Canada411Result(**r) for r in results]
+
+
+@router.post(
+    "/{lead_id}/apply-phone",
+    summary="Sauve un téléphone trouvé (Canada411 ou autre) sur le lead.",
+)
+async def apply_phone(
+    lead_id: int,
+    db: DBSession,
+    _: CurrentUser,
+    phone: str = Query(..., min_length=8, max_length=32),
+) -> dict:
+    lead = await db.get(ProspectionLead, lead_id)
+    if lead is None:
+        raise HTTPException(404, "Lead introuvable.")
+    lead.owner_phone = phone.strip()[:50]
+    await db.flush()
+    return {"ok": True, "phone": lead.owner_phone}
+
+
 @router.get(
     "/owners/by-neq/{neq}",
     response_model=OwnerView,

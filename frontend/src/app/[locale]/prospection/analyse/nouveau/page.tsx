@@ -63,6 +63,17 @@ export default function NouvelleAnalysePage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Indicateurs de prefill auto (affichés en haut des champs concernés)
+  const [prefillInfo, setPrefillInfo] = useState<{
+    rate?: { value: number; date: string; source: string };
+    rentMedian?: {
+      value: number;
+      bedrooms: number;
+      sample: number;
+      area: string;
+    };
+  }>({});
+
   // Pré-remplit depuis le lead si lead_id passé
   useEffect(() => {
     if (!leadId) return;
@@ -79,11 +90,111 @@ export default function NouvelleAnalysePage() {
           prixAchat: lead.purchase_price ?? prev.prixAchat,
           nombreLogements: lead.nb_logements ?? prev.nombreLogements
         }));
+
+        // Auto-prefill loyer médian depuis comparables.
+        // Si le lead a un code postal ou un quartier connu, on
+        // requête /rental-comparables/summary.
+        const params = new URLSearchParams();
+        if (lead.postal_code) {
+          params.set("postal_code", lead.postal_code);
+        } else if (lead.address) {
+          // Fallback : extraire le nom de rue (heuristique simple)
+          const m = String(lead.address).match(
+            /^\d+\s+(.+?)(?:,|$)/
+          );
+          if (m) params.set("nom_rue", m[1].trim());
+        }
+        if (params.toString()) {
+          const compRes = await authedFetch(
+            `/api/v1/prospection/rental-comparables/summary?${params}`
+          );
+          if (compRes.ok) {
+            const data = await compRes.json();
+            // On prend la médiane standard du bracket le plus
+            // courant comme estimation par défaut.
+            const buckets = data.by_bedrooms || [];
+            // Choix : bracket avec le plus de comparables.
+            let best: typeof buckets[0] | null = null;
+            for (const b of buckets) {
+              const cnt = b.standard?.count || 0;
+              if (!best || cnt > (best.standard?.count || 0)) {
+                best = b;
+              }
+            }
+            if (
+              best &&
+              best.standard?.median &&
+              best.standard.count >= 3
+            ) {
+              setInputs((prev) => ({
+                ...prev,
+                nouveauLoyerMoyen:
+                  prev.nouveauLoyerMoyen > 0
+                    ? prev.nouveauLoyerMoyen
+                    : best!.standard.median,
+              }));
+              setPrefillInfo((p) => ({
+                ...p,
+                rentMedian: {
+                  value: best!.standard.median,
+                  bedrooms: best!.bedrooms,
+                  sample: best!.standard.count,
+                  area:
+                    data.quartier ||
+                    (data.fsa ? `zone ${data.fsa}` : "à proximité"),
+                },
+              }));
+            }
+          }
+        }
       } catch {
         /* ignore */
       }
     })();
   }, [leadId]);
+
+  // Auto-prefill du taux d'intérêt achat depuis Banque du Canada.
+  // 1× au chargement initial (que le user vienne d'un lead ou non).
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await authedFetch(
+          "/api/v1/prospection/rental-comparables/market-rates"
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        const posted = data.fixed_5y_posted;
+        if (posted && posted.value) {
+          // Le taux affiché des grandes banques inclut une marge de
+          // ~1.5-2% au-dessus du taux négocié réel. Pour notre
+          // calcul on retire ~1.7% (négociation typique en 2026).
+          const negotiated = Math.max(
+            0,
+            posted.value - 0.017
+          );
+          setInputs((prev) => ({
+            ...prev,
+            tauxInteretAchat:
+              prev.tauxInteretAchat &&
+              prev.tauxInteretAchat !== INPUTS_DEFAULTS.tauxInteretAchat
+                ? prev.tauxInteretAchat
+                : Number(negotiated.toFixed(4)),
+          }));
+          setPrefillInfo((p) => ({
+            ...p,
+            rate: {
+              value: negotiated,
+              date: posted.date,
+              source: posted.source,
+            },
+          }));
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const results = useMemo(() => {
     if (step !== 5) return null;
@@ -199,8 +310,20 @@ export default function NouvelleAnalysePage() {
             />
           )}
           {step === 2 && <Step2 inputs={inputs} setField={setField} />}
-          {step === 3 && <Step3 inputs={inputs} setField={setField} />}
-          {step === 4 && <Step4 inputs={inputs} setField={setField} />}
+          {step === 3 && (
+            <Step3
+              inputs={inputs}
+              setField={setField}
+              rentHint={prefillInfo.rentMedian}
+            />
+          )}
+          {step === 4 && (
+            <Step4
+              inputs={inputs}
+              setField={setField}
+              rateHint={prefillInfo.rate}
+            />
+          )}
           {step === 5 && (
             <Step5
               inputs={inputs}
@@ -513,10 +636,17 @@ function Step2({
 
 function Step3({
   inputs,
-  setField
+  setField,
+  rentHint
 }: {
   inputs: AnalyseInputs;
   setField: <K extends keyof AnalyseInputs>(key: K, v: AnalyseInputs[K]) => void;
+  rentHint?: {
+    value: number;
+    bedrooms: number;
+    sample: number;
+    area: string;
+  };
 }) {
   return (
     <section className="space-y-4">
@@ -533,6 +663,13 @@ function Step3({
         onChange={(v) => setField("nouveauLoyerMoyen", v)}
         suffix="$/mois"
       />
+      {rentHint ? (
+        <p className="-mt-2 text-[11px] text-emerald-300/80">
+          ✨ Médiane comparables : {rentHint.value.toFixed(0)} $ pour
+          un {rentHint.bedrooms === 0 ? "studio" : `${rentHint.bedrooms + 2}½ (${rentHint.bedrooms} ch.)`}{" "}
+          {rentHint.area} (n={rentHint.sample}). Ajuste si besoin.
+        </p>
+      ) : null}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <NumberField
           label="Logements ajoutés"
@@ -575,10 +712,12 @@ function Step3({
 
 function Step4({
   inputs,
-  setField
+  setField,
+  rateHint
 }: {
   inputs: AnalyseInputs;
   setField: <K extends keyof AnalyseInputs>(key: K, v: AnalyseInputs[K]) => void;
+  rateHint?: { value: number; date: string; source: string };
 }) {
   function setFrais<K extends keyof AnalyseInputs["fraisDemarrage"]>(
     key: K,
@@ -599,13 +738,21 @@ function Step4({
           step={0.001}
           suffix="ex 0.04"
         />
-        <NumberField
-          label="Taux intérêt achat"
-          value={inputs.tauxInteretAchat}
-          onChange={(v) => setField("tauxInteretAchat", v)}
-          step={0.0025}
-          suffix="ex 0.04"
-        />
+        <div>
+          <NumberField
+            label="Taux intérêt achat"
+            value={inputs.tauxInteretAchat}
+            onChange={(v) => setField("tauxInteretAchat", v)}
+            step={0.0025}
+            suffix="ex 0.04"
+          />
+          {rateHint ? (
+            <p className="mt-1 text-[11px] text-emerald-300/80">
+              ✨ {(rateHint.value * 100).toFixed(2)} % (taux négocié
+              estimé) — {rateHint.source}, {rateHint.date}
+            </p>
+          ) : null}
+        </div>
         <NumberField
           label="Taux intérêt refi"
           value={inputs.tauxInteretRefi}

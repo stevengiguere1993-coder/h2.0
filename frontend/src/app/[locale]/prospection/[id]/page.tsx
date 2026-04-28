@@ -28,6 +28,7 @@ import { authedFetch } from "@/lib/auth";
 import { useProspectionLayout } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
 import { AnalysesSection } from "./_analyses-section";
+import { ComparablesSection } from "./_comparables-section";
 
 type Lead = {
   id: number;
@@ -968,6 +969,12 @@ export default function ProspectionDetailPage() {
                         onChange={(e) => setOwnerPhone(e.target.value)}
                         className="input"
                       />
+                      {ownerName && !ownerPhone ? (
+                        <Canada411LookupButton
+                          leadId={id}
+                          onPhoneFound={(p) => setOwnerPhone(p)}
+                        />
+                      ) : null}
                     </div>
                   </div>
                   {ownerKind === "corporation" ? (
@@ -1310,6 +1317,11 @@ export default function ProspectionDetailPage() {
               />
 
               <FinanceSection leadId={id} lead={lead} onSaved={load} />
+
+              <ComparablesSection
+                postalCode={lead.postal_code}
+                address={lead.address}
+              />
 
               <AnalysesSection leadId={id} />
 
@@ -2272,5 +2284,100 @@ function BuyFlowSection({
         ) : null}
       </div>
     </section>
+  );
+}
+
+function Canada411LookupButton({
+  leadId,
+  onPhoneFound,
+}: {
+  leadId: number | string;
+  onPhoneFound: (phone: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState<Array<{
+    name: string;
+    address: string | null;
+    phone: string;
+    source_url: string;
+  }> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function lookup() {
+    setBusy(true);
+    setError(null);
+    setResults(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/${leadId}/canada411-lookup`
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      setResults(await res.json());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erreur");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyPhone(phone: string) {
+    const res = await authedFetch(
+      `/api/v1/prospection/${leadId}/apply-phone?phone=${encodeURIComponent(
+        phone
+      )}`,
+      { method: "POST" }
+    );
+    if (res.ok) {
+      onPhoneFound(phone);
+      setResults(null);
+    }
+  }
+
+  return (
+    <div className="mt-1.5">
+      <button
+        type="button"
+        onClick={lookup}
+        disabled={busy}
+        className="inline-flex items-center gap-1 rounded border border-blue-500/40 bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20 disabled:opacity-50"
+      >
+        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Phone className="h-3 w-3" />}
+        Chercher sur Canada411
+      </button>
+      {error ? (
+        <p className="mt-1 text-[10px] text-rose-300">{error}</p>
+      ) : null}
+      {results !== null ? (
+        results.length === 0 ? (
+          <p className="mt-1 text-[10px] text-white/40">
+            Aucun résultat sur Canada411 pour ce nom + cette ville.
+          </p>
+        ) : (
+          <ul className="mt-1 space-y-1">
+            {results.map((r, i) => (
+              <li
+                key={i}
+                className="rounded border border-brand-800 bg-brand-950 p-1.5 text-[10px]"
+              >
+                <p className="font-medium text-white">{r.name}</p>
+                {r.address ? (
+                  <p className="text-white/50">{r.address}</p>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => applyPhone(r.phone)}
+                  className="mt-0.5 rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] text-emerald-300 hover:bg-emerald-500/30"
+                >
+                  Utiliser : {r.phone}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )
+      ) : null}
+    </div>
   );
 }
