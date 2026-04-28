@@ -34,6 +34,15 @@ log = logging.getLogger(__name__)
 EVALWEB_BASE = "https://servicesenligne2.ville.montreal.qc.ca/sel/evalweb"
 EVALWEB_SEARCH_URL = f"{EVALWEB_BASE}/index"
 
+# Nouveau portail montreal.ca (mis en place 2024-2025). Direct deep
+# link par matricule, sans JSF — beaucoup plus fiable que le legacy.
+NEW_PORTAL_URL = (
+    "https://montreal.ca/role-evaluation-fonciere/recherche"
+)
+NEW_PORTAL_DETAIL = (
+    "https://montreal.ca/role-evaluation-fonciere/{matricule}"
+)
+
 # UA navigateur — certains WAF de la Ville bloquent les UA Python.
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -57,9 +66,12 @@ async def scrape_owners(matricule: str) -> List[dict]:
     """Récupère les propriétaires d'une unité d'évaluation par
     matricule (ex: « 0135-23-0549-2-000-0000 »).
 
-    Retourne une liste de dicts (peut être vide si pas de
-    propriétaire trouvé — rare). Lève `EvalWebError` si le scraping
-    échoue (site down, format changé, captcha, etc.).
+    Stratégie multi-niveaux (du plus moderne au plus legacy) :
+    1. Nouveau portail montreal.ca (deep link direct par matricule)
+    2. Legacy EvalWeb JSF (viewState + POST)
+    3. Si tout échoue → EvalWebError avec message clair
+
+    Lève `EvalWebError` si rien ne marche.
     """
     matricule_clean = matricule.strip()
     if not _is_valid_matricule(matricule_clean):
@@ -71,57 +83,116 @@ async def scrape_owners(matricule: str) -> List[dict]:
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "fr-CA,fr;q=0.9,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate",
     }
 
-    async with httpx.AsyncClient(
-        headers=headers,
-        timeout=TIMEOUT,
-        follow_redirects=True,
-        # Garde les cookies de session JSF.
-        cookies=httpx.Cookies(),
-    ) as client:
+    # Tentative #1 : nouveau portail montreal.ca avec deep link
+    try:
+        async with httpx.AsyncClient(
+            headers=headers,
+            timeout=TIMEOUT,
+            follow_redirects=True,
+        ) as client:
+            owners = await _try_new_portal(client, matricule_clean)
+            if owners:
+                return owners
+    except Exception as exc:
+        log.debug("New portal failed: %s", exc)
+
+    # Tentative #2 : legacy EvalWeb JSF
+    try:
+        async with httpx.AsyncClient(
+            headers=headers,
+            timeout=TIMEOUT,
+            follow_redirects=True,
+            cookies=httpx.Cookies(),
+        ) as client:
+            owners = await _try_legacy_jsf(client, matricule_clean)
+            if owners:
+                return owners
+    except Exception as exc:
+        log.debug("Legacy JSF failed: %s", exc)
+
+    # Tout a échoué
+    raise EvalWebError(
+        "Impossible de récupérer les propriétaires automatiquement "
+        "— le site de la Ville a probablement changé de structure. "
+        "Utilise le mode manuel : ouvre EvalWeb dans ton navigateur, "
+        "copie la section Propriétaire et colle-la."
+    )
+
+
+async def _try_new_portal(
+    client: httpx.AsyncClient, matricule: str
+) -> Optional[List[dict]]:
+    """Tente le portail moderne montreal.ca/role-evaluation-fonciere.
+
+    Format URL deep link :
+    https://montreal.ca/role-evaluation-fonciere/<matricule>
+
+    Le matricule doit être passé sans tirets dans certaines variantes.
+    On essaie les 2 formats.
+    """
+    matricule_no_dash = matricule.replace("-", "")
+    candidates = [
+        NEW_PORTAL_DETAIL.format(matricule=matricule),
+        NEW_PORTAL_DETAIL.format(matricule=matricule_no_dash),
+        f"{NEW_PORTAL_URL}?matricule={matricule}",
+        f"{NEW_PORTAL_URL}?matricule={matricule_no_dash}",
+    ]
+    for url in candidates:
         try:
-            # Étape 1 : GET la page de recherche pour récupérer le
-            # viewState JSF (jeton CSRF).
-            resp = await client.get(EVALWEB_SEARCH_URL)
-            resp.raise_for_status()
-            view_state = _extract_view_state(resp.text)
-            if not view_state:
-                raise EvalWebError(
-                    "Page EvalWeb chargée mais viewState introuvable "
-                    "(structure HTML modifiée ?)."
+            r = await client.get(url)
+            if r.status_code != 200:
+                continue
+            body = r.text
+            if len(body) < 1000:
+                continue
+            # Si la page contient « Propriétaire » + au moins un
+            # « Nom » avec un nom en majuscules, on tente le parsing.
+            if "Propriétaire" not in body and "Nom" not in body:
+                continue
+            owners = _parse_owners(body)
+            if owners:
+                log.info(
+                    "EvalWeb : succès via nouveau portail (%d owners)",
+                    len(owners),
                 )
+                return owners
+        except httpx.HTTPError:
+            continue
+    return None
 
-            # Étape 2 : POST le matricule. La forme exacte des champs
-            # dépend de la version JSF — on tente le pattern le plus
-            # courant. Si EvalWeb passe à une nouvelle structure,
-            # ajuster ici.
-            search_data = {
-                "javax.faces.ViewState": view_state,
-                "form:matricule": matricule_clean,
-                "form:rechercher": "Rechercher",
-            }
-            resp = await client.post(
-                EVALWEB_SEARCH_URL, data=search_data
-            )
-            resp.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise EvalWebError(
-                f"Erreur réseau EvalWeb : {exc}"
-            ) from exc
 
+async def _try_legacy_jsf(
+    client: httpx.AsyncClient, matricule: str
+) -> Optional[List[dict]]:
+    """Legacy : JSF avec viewState. Plus fragile, gardé en fallback."""
+    try:
+        resp = await client.get(EVALWEB_SEARCH_URL)
+        resp.raise_for_status()
+        view_state = _extract_view_state(resp.text)
+        if not view_state:
+            return None
+        search_data = {
+            "javax.faces.ViewState": view_state,
+            "form:matricule": matricule,
+            "form:rechercher": "Rechercher",
+        }
+        resp = await client.post(
+            EVALWEB_SEARCH_URL, data=search_data
+        )
+        resp.raise_for_status()
         owners = _parse_owners(resp.text)
-        if not owners:
-            # Soit le matricule n'existe pas, soit la structure HTML
-            # a changé. On laisse l'utilisateur faire le lookup manuel.
-            raise EvalWebError(
-                "Aucun propriétaire trouvé. Le matricule peut être "
-                "invalide, ou la structure de la page EvalWeb a changé. "
-                "Lookup manuel : "
-                f"{EVALWEB_SEARCH_URL}?matricule={matricule_clean}"
+        if owners:
+            log.info(
+                "EvalWeb : succès via legacy JSF (%d owners)",
+                len(owners),
             )
-
-        return owners
+            return owners
+    except httpx.HTTPError:
+        pass
+    return None
 
 
 _MATRICULE_RE = re.compile(r"^\d{4}-\d{2}-\d{4}-\d-\d{3}-\d{4}$")
