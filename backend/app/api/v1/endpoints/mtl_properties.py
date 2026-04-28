@@ -285,6 +285,95 @@ async def owner_candidates(
     return [OwnerCandidate.model_validate(r) for r in rows]
 
 
+class EvalWebOwnerOut(BaseModel):
+    name: str
+    statut: Optional[str] = None
+    postal_address: Optional[str] = None
+    inscription_date: Optional[str] = None
+    conditions: Optional[str] = None
+
+
+class EvalWebResponse(BaseModel):
+    matricule: str
+    owners: List[EvalWebOwnerOut]
+    fetched_at: Optional[str] = None
+    cached: bool = False
+
+
+@router.get(
+    "/{matricule}/owner-evalweb",
+    response_model=EvalWebResponse,
+    summary="Récupère les propriétaires depuis EvalWeb (rôle MTL). "
+    "Cache le résultat sur la propriété.",
+)
+async def owner_evalweb(
+    matricule: str,
+    db: DBSession,
+    _: CurrentUser,
+    refresh: bool = False,
+) -> EvalWebResponse:
+    """Scrape la page EvalWeb pour cette propriété — donne les
+    propriétaires (personnes physiques + corps) tels qu'inscrits au
+    rôle. ~3-5 secondes par appel.
+
+    Mis en cache dans `mtl_property_units.owners_json`. Pour
+    rafraîchir, passer `?refresh=true`.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from app.integrations.roles_evaluation.montreal_owner import (
+        EvalWebError,
+        scrape_owners,
+    )
+
+    p = (
+        await db.execute(
+            select(MontrealPropertyUnit).where(
+                MontrealPropertyUnit.matricule == matricule
+            )
+        )
+    ).scalar_one_or_none()
+    if p is None:
+        raise HTTPException(404, "Propriété introuvable")
+
+    # Cache hit : retourne directement sauf si refresh demandé.
+    if not refresh and p.owners_json:
+        try:
+            cached_owners = json.loads(p.owners_json)
+            return EvalWebResponse(
+                matricule=matricule,
+                owners=[EvalWebOwnerOut(**o) for o in cached_owners],
+                fetched_at=(
+                    p.owners_fetched_at.isoformat()
+                    if p.owners_fetched_at
+                    else None
+                ),
+                cached=True,
+            )
+        except Exception:
+            # Cache corrompu → on re-scrape.
+            pass
+
+    # Scrape EvalWeb.
+    try:
+        owners = await scrape_owners(matricule)
+    except EvalWebError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    # Cache.
+    p.owners_json = json.dumps(owners, ensure_ascii=False)
+    p.owners_fetched_at = datetime.now(timezone.utc)
+    await db.flush()
+
+    return EvalWebResponse(
+        matricule=matricule,
+        owners=[EvalWebOwnerOut(**o) for o in owners],
+        fetched_at=p.owners_fetched_at.isoformat(),
+        cached=False,
+    )
+
+
 @router.post(
     "/{matricule}/convert-to-lead",
     summary="Crée un ProspectionLead à partir d'une propriété MTL.",

@@ -9,13 +9,17 @@ on retrouve instantanément le matricule, le nombre de logements, l'année
 de construction et les superficies — sans dépendance réseau et sans
 limitation de taux.
 
-⚠ Pas d'info propriétaire dans ce dataset (vie privée). Pour le
-propriétaire on passe par les corporations REQ (table req_companies).
+⚠ Pas d'info propriétaire dans le CSV bulk (privacy). Pour le
+propriétaire on combine deux sources :
+1. REQ (req_companies) — corporations québécoises
+2. EvalWeb (scraping on-demand, mis en cache dans `owners_json`) —
+   personnes physiques + corporations, exact pour cette propriété
 """
 
+from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Index, Integer, Numeric, String
+from sqlalchemy import DateTime, Index, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -70,6 +74,14 @@ class MontrealPropertyUnit(Base):
     # adresse saisie côté frontend.
     search_key: Mapped[Optional[str]] = mapped_column(
         String(320), nullable=True, index=True
+    )
+
+    # Propriétaires scrapés depuis EvalWeb (à la demande). JSON-encoded
+    # liste de dicts { name, statut, postal_address, inscription_date,
+    # conditions }. NULL = pas encore récupéré pour cette propriété.
+    owners_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    owners_fetched_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     __table_args__ = (

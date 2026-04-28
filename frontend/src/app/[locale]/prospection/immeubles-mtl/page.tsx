@@ -4,9 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Building2,
   CheckCircle2,
+  ExternalLink,
+  Eye,
   Loader2,
   MapPin,
   Plus,
+  RefreshCw,
   Search,
   Users,
   X
@@ -76,6 +79,9 @@ export default function ImmeublesMtlPage() {
 
   // Owner candidates modal
   const [ownerModalFor, setOwnerModalFor] = useState<Property | null>(
+    null
+  );
+  const [streetViewFor, setStreetViewFor] = useState<Property | null>(
     null
   );
 
@@ -386,7 +392,14 @@ export default function ImmeublesMtlPage() {
                       className="transition hover:bg-brand-800/40"
                     >
                       <td className="px-3 py-2.5 text-white/80">
-                        {p.full_address || "—"}
+                        <button
+                          type="button"
+                          onClick={() => setStreetViewFor(p)}
+                          className="text-left hover:text-emerald-300 hover:underline"
+                          title="Ouvrir Street View"
+                        >
+                          {p.full_address || "—"}
+                        </button>
                         {p.municipalite ? (
                           <div className="text-[10px] text-white/40">
                             {p.municipalite}
@@ -410,6 +423,15 @@ export default function ImmeublesMtlPage() {
                       </td>
                       <td className="px-3 py-2.5">
                         <div className="flex flex-wrap gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setStreetViewFor(p)}
+                            className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20"
+                            title="Street View"
+                          >
+                            <Eye className="h-3 w-3" />
+                            Voir
+                          </button>
                           <button
                             type="button"
                             onClick={() => setOwnerModalFor(p)}
@@ -447,7 +469,110 @@ export default function ImmeublesMtlPage() {
           }}
         />
       ) : null}
+
+      {streetViewFor ? (
+        <StreetViewModal
+          property={streetViewFor}
+          onClose={() => setStreetViewFor(null)}
+        />
+      ) : null}
     </>
+  );
+}
+
+function StreetViewModal({
+  property,
+  onClose
+}: {
+  property: Property;
+  onClose: () => void;
+}) {
+  const fullAddr = property.full_address || "";
+  // svembed = iframe Google Maps lite, pas besoin de clé API.
+  // L'address suffit comme paramètre de recherche.
+  const svSrc = `https://maps.google.com/maps?q=${encodeURIComponent(
+    fullAddr + ", Montréal, QC"
+  )}&layer=c&output=svembed`;
+  const satSrc = `https://maps.google.com/maps?q=${encodeURIComponent(
+    fullAddr + ", Montréal, QC"
+  )}&t=k&z=19&output=embed`;
+  const gmapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+    fullAddr + ", Montréal, QC"
+  )}`;
+
+  return (
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-4xl overflow-hidden rounded-2xl border border-brand-800 bg-brand-950"
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-brand-800 bg-brand-900/50 px-5 py-3">
+          <div>
+            <h2 className="flex items-center gap-2 text-base font-bold text-white">
+              <Eye className="h-5 w-5 text-amber-400" />
+              {fullAddr}
+            </h2>
+            <p className="mt-0.5 text-[11px] text-white/50">
+              Matricule {property.matricule} ·{" "}
+              {property.nombre_logement ?? "?"} logements
+              {property.annee_construction
+                ? ` · ${property.annee_construction}`
+                : ""}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-1 text-white/40 hover:bg-brand-800 hover:text-white"
+            aria-label="Fermer"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="grid gap-2 p-3 sm:grid-cols-2">
+          <div className="overflow-hidden rounded-lg border border-brand-800 bg-black">
+            <p className="border-b border-brand-800 bg-brand-900/40 px-3 py-1.5 text-[11px] uppercase tracking-wider text-amber-300">
+              Street View
+            </p>
+            <iframe
+              src={svSrc}
+              className="h-72 w-full"
+              loading="lazy"
+              referrerPolicy="no-referrer-when-downgrade"
+              title="Street View"
+            />
+          </div>
+          <div className="overflow-hidden rounded-lg border border-brand-800 bg-black">
+            <p className="border-b border-brand-800 bg-brand-900/40 px-3 py-1.5 text-[11px] uppercase tracking-wider text-emerald-300">
+              Vue satellite
+            </p>
+            <iframe
+              src={satSrc}
+              className="h-72 w-full"
+              loading="lazy"
+              referrerPolicy="no-referrer-when-downgrade"
+              title="Satellite"
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-brand-800 bg-brand-900/30 px-5 py-3">
+          <a
+            href={gmapsUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 px-3 py-1.5 text-xs text-white/80 hover:bg-brand-800"
+          >
+            <ExternalLink className="h-3 w-3" />
+            Ouvrir dans Google Maps
+          </a>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -491,6 +616,21 @@ function ConvertButton({ property }: { property: Property }) {
   );
 }
 
+type EvalWebOwner = {
+  name: string;
+  statut: string | null;
+  postal_address: string | null;
+  inscription_date: string | null;
+  conditions: string | null;
+};
+
+type EvalWebResponse = {
+  matricule: string;
+  owners: EvalWebOwner[];
+  fetched_at: string | null;
+  cached: boolean;
+};
+
 function OwnerCandidatesModal({
   property,
   onClose,
@@ -503,6 +643,32 @@ function OwnerCandidatesModal({
   const [candidates, setCandidates] = useState<OwnerCandidate[]>([]);
   const [loading, setLoading] = useState(true);
   const [converting, setConverting] = useState<string | null>(null);
+
+  // EvalWeb (rôle) — fetch on demand
+  const [evalLoading, setEvalLoading] = useState(false);
+  const [evalData, setEvalData] = useState<EvalWebResponse | null>(null);
+  const [evalError, setEvalError] = useState<string | null>(null);
+
+  async function fetchEvalWeb(refresh = false) {
+    setEvalLoading(true);
+    setEvalError(null);
+    try {
+      const url =
+        `/api/v1/prospection/mtl-properties/${encodeURIComponent(
+          property.matricule
+        )}/owner-evalweb` + (refresh ? "?refresh=true" : "");
+      const r = await authedFetch(url);
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${r.status}`);
+      }
+      setEvalData((await r.json()) as EvalWebResponse);
+    } catch (e) {
+      setEvalError(e instanceof Error ? e.message : "Erreur");
+    } finally {
+      setEvalLoading(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -583,6 +749,102 @@ function OwnerCandidatesModal({
         </header>
 
         <div className="flex-1 overflow-y-auto p-4">
+          {/* EvalWeb (rôle d'évaluation MTL) — source primaire. */}
+          <section className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-emerald-300">
+                Propriétaires au rôle (EvalWeb)
+              </h3>
+              <button
+                type="button"
+                onClick={() => fetchEvalWeb(!!evalData)}
+                disabled={evalLoading}
+                className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+              >
+                {evalLoading ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : evalData ? (
+                  <RefreshCw className="h-3 w-3" />
+                ) : (
+                  <Search className="h-3 w-3" />
+                )}
+                {evalLoading
+                  ? "Récupération…"
+                  : evalData
+                    ? "Rafraîchir"
+                    : "Récupérer du rôle"}
+              </button>
+            </div>
+
+            {!evalData && !evalLoading && !evalError ? (
+              <p className="text-[11px] text-white/50">
+                Clique pour récupérer les propriétaires inscrits au
+                rôle d&apos;évaluation (personnes physiques + corps).
+                ~3-5 secondes. Résultat mis en cache.
+              </p>
+            ) : null}
+
+            {evalError ? (
+              <p className="rounded border border-rose-500/40 bg-rose-500/10 p-2 text-[11px] text-rose-300">
+                {evalError}
+              </p>
+            ) : null}
+
+            {evalData ? (
+              evalData.owners.length === 0 ? (
+                <p className="text-[11px] text-white/50">
+                  Aucun propriétaire trouvé pour ce matricule.
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {evalData.owners.map((o, i) => (
+                    <li
+                      key={i}
+                      className="rounded-md border border-brand-800 bg-brand-900 p-2.5"
+                    >
+                      <p className="text-sm font-semibold text-white">
+                        {o.name}
+                      </p>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-white/50">
+                        {o.statut ? <span>{o.statut}</span> : null}
+                        {o.conditions ? (
+                          <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-amber-300">
+                            {o.conditions}
+                          </span>
+                        ) : null}
+                      </div>
+                      {o.postal_address ? (
+                        <p className="mt-1 text-[11px] text-white/70">
+                          <MapPin className="mr-1 inline h-3 w-3" />
+                          {o.postal_address}
+                        </p>
+                      ) : null}
+                      {o.inscription_date ? (
+                        <p className="mt-0.5 text-[10px] text-white/40">
+                          Inscrit au rôle : {o.inscription_date}
+                        </p>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              )
+            ) : null}
+
+            {evalData?.fetched_at ? (
+              <p className="mt-2 text-[10px] text-white/30">
+                Récupéré le{" "}
+                {new Date(evalData.fetched_at).toLocaleDateString(
+                  "fr-CA"
+                )}
+                {evalData.cached ? " (cache)" : ""}
+              </p>
+            ) : null}
+          </section>
+
+          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-blue-300">
+            Corporations REQ candidates
+          </h3>
+
           {loading ? (
             <div className="flex justify-center py-8">
               <Loader2 className="h-5 w-5 animate-spin text-emerald-500" />
@@ -593,9 +855,9 @@ function OwnerCandidatesModal({
               propriété.
               <br />
               <span className="text-amber-200/60">
-                Soit le proprio est un particulier (pas dans le REQ),
-                soit la corporation a une adresse différente. Tu peux
-                quand même créer le lead et le compléter manuellement.
+                Soit le proprio est un particulier (pas dans le REQ —
+                voir la section EvalWeb ci-dessus), soit la corporation
+                a une adresse différente.
               </span>
             </div>
           ) : (

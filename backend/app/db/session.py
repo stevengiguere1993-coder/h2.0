@@ -238,6 +238,10 @@ async def init_db() -> None:
             ),
             ("agenda_events", "lead_id", "INTEGER"),
             ("agenda_events", "assignee_user_id", "INTEGER"),
+            # EvalWeb : propriétaires scrapés à la demande, cachés
+            # par matricule pour éviter les re-scrapes.
+            ("mtl_property_units", "owners_json", "TEXT"),
+            ("mtl_property_units", "owners_fetched_at", "TIMESTAMP WITH TIME ZONE"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
