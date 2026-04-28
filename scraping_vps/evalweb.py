@@ -140,38 +140,67 @@ async def scrape_owners_via_browser(
 
 
 async def _click_par_matricule(page: Page) -> None:
-    """Clique le radio button « Par matricule »."""
-    # Stratégie 1 : par texte (plus robuste avec React)
+    """Sélectionne le radio « Par matricule ».
+
+    Sur cette React SPA, cliquer sur le label ne suffit pas — il
+    faut faire un .check() sur l'input radio pour que React
+    enregistre le change. On essaie plusieurs stratégies.
+    """
+    # Stratégie 1 : trouve la label puis check via l'attribut `for`.
     try:
-        await page.get_by_text("Par matricule", exact=True).first.click(
-            timeout=5_000
-        )
-        log.info("  → 'Par matricule' cliqué via get_by_text")
-        return
-    except Exception:
-        pass
-    # Stratégie 2 : label-text
+        label = page.locator("label:has-text('Par matricule')").first
+        for_attr = await label.get_attribute("for")
+        if for_attr:
+            radio = page.locator(f"#{for_attr}")
+            await radio.check(force=True, timeout=5_000)
+            checked = await radio.is_checked()
+            if checked:
+                log.info(
+                    "  → 'Par matricule' coché via #%s",
+                    for_attr,
+                )
+                return
+    except Exception as exc:
+        log.debug("  label[for] → %s", exc)
+
+    # Stratégie 2 : page.get_by_label() + .check()
     try:
-        await page.get_by_label("Par matricule").first.click(
-            timeout=5_000
+        await page.get_by_label("Par matricule").first.check(
+            force=True, timeout=5_000
         )
-        log.info("  → 'Par matricule' cliqué via get_by_label")
+        log.info("  → 'Par matricule' coché via get_by_label")
         return
-    except Exception:
-        pass
-    # Stratégie 3 : sélecteurs CSS
+    except Exception as exc:
+        log.debug("  get_by_label → %s", exc)
+
+    # Stratégie 3 : input radio par value
     for selector in (
         "input[type='radio'][value='matricule']",
-        "label:has-text('Par matricule')",
-        "[role='radio']:has-text('matricule')",
-        "text=/Par matricule/i",
+        "input[type='radio'][value='Par matricule']",
+        "input[type='radio'][name*='option']",
     ):
         try:
-            await page.locator(selector).first.click(timeout=3_000)
-            log.info("  → 'Par matricule' cliqué via %s", selector)
-            return
+            radio = page.locator(selector).first
+            await radio.check(force=True, timeout=3_000)
+            if await radio.is_checked():
+                log.info(
+                    "  → 'Par matricule' coché via %s", selector
+                )
+                return
         except Exception:
             continue
+
+    # Stratégie 4 : click direct sur la label (peut suffire dans
+    # certains cas où le radio n'a pas d'id)
+    try:
+        await page.locator(
+            "label:has-text('Par matricule')"
+        ).first.click(timeout=3_000)
+        log.info("  → 'Par matricule' cliqué via label")
+        return
+    except Exception:
+        pass
+
     raise RuntimeError("Bouton « Par matricule » introuvable")
 
 
