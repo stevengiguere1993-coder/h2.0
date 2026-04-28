@@ -174,43 +174,38 @@ _OWNER_LABELS = (
 )
 
 
-def _parse_owners(html: str) -> List[dict]:
-    """Extrait la section « Propriétaire » de la page EvalWeb.
+def parse_owners_from_text(text: str) -> List[dict]:
+    """Extrait la liste des propriétaires depuis un texte plat
+    contenant la section « Propriétaire » d'EvalWeb.
 
-    Approche : on cherche tous les blocs commençant par un label
-    « Nom » et on récupère les champs suivants jusqu'au prochain
-    « Nom » (séparateur de propriétaire). Robuste aux variations
-    de mise en page (table vs div) parce qu'on travaille sur le
-    texte plat de la section.
+    Sert pour le fallback « collage manuel » : l'utilisateur copie
+    la section depuis le site de la Ville et la colle dans le modal.
+    Tolère les espaces multiples, tabulations, retours de ligne
+    variés.
     """
-    soup = BeautifulSoup(html, "html.parser")
+    return _parse_owners_text(text)
 
-    # On limite la recherche à la section qui contient le mot
-    # « Propriétaire » (sous-titre H2/H3 typique sur EvalWeb).
-    # Si on ne le trouve pas, on tombe sur la page complète (best-effort).
-    section_text = soup.get_text("\n", strip=True)
-    idx = section_text.lower().find("propriétaire")
-    if idx > 0:
-        section_text = section_text[idx:]
+
+def _parse_owners_text(section_text: str) -> List[dict]:
+    """Parse la section propriétaire depuis du texte brut.
+
+    Approche : on tokenize en lignes label/value alternant. Un label
+    suivi d'une ligne devient une paire. Les blocs qui commencent
+    par « Nom » ouvrent un nouveau propriétaire.
+    """
     # On coupe au prochain gros titre (« Caractéristiques »,
-    # « Évaluation », « Imposition ») pour ne pas inclure la suite.
+    # « Évaluation »…) pour ne pas inclure la suite.
     for stop in (
         "Caractéristiques",
         "Évaluation",
         "Valeurs au rôle",
         "Imposition",
+        "Identification",
     ):
         cut = section_text.find(stop)
         if cut > 0:
             section_text = section_text[:cut]
 
-    # Liste des labels qu'on reconnaît (à plat).
-    all_labels: List[str] = []
-    for _key, syns in _OWNER_LABELS:
-        all_labels.extend(syns)
-
-    # Tokenize en lignes label/value alternant. Un label suivi d'une
-    # ligne devient une paire.
     lines = [
         line.strip().rstrip(":").strip()
         for line in section_text.split("\n")
@@ -223,17 +218,13 @@ def _parse_owners(html: str) -> List[dict]:
     i = 0
     while i < len(lines):
         line = lines[i]
-        # Détection d'un label (insensible à la casse).
         match_key: Optional[str] = None
         for key, syns in _OWNER_LABELS:
             if any(line.lower() == s.lower() for s in syns):
                 match_key = key
                 break
         if match_key:
-            # La valeur est sur la ligne suivante.
             val = lines[i + 1] if i + 1 < len(lines) else ""
-            # Si match_key == "name" et qu'on avait déjà un nom, on
-            # ferme l'owner précédent.
             if match_key == "name" and "name" in current:
                 owners.append(current)
                 current = {}
@@ -245,5 +236,23 @@ def _parse_owners(html: str) -> List[dict]:
     if current.get("name"):
         owners.append(current)
 
-    # Nettoyage final : on garde uniquement les owners avec un nom.
     return [o for o in owners if o.get("name")]
+
+
+def _parse_owners(html: str) -> List[dict]:
+    """Extrait la section « Propriétaire » d'une page HTML EvalWeb.
+
+    Convertit en texte plat via BeautifulSoup puis délègue au parser
+    de texte. Cherche d'abord la section « Propriétaire » dans la
+    page, sinon utilise toute la page (best-effort).
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    # On limite à la section qui contient le mot « Propriétaire ».
+    # Si on ne le trouve pas, on tombe sur la page complète.
+    section_text = soup.get_text("\n", strip=True)
+    idx = section_text.lower().find("propriétaire")
+    if idx > 0:
+        section_text = section_text[idx:]
+
+    return _parse_owners_text(section_text)

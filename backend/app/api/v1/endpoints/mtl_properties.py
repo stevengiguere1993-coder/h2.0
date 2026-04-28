@@ -338,6 +338,10 @@ class EvalWebResponse(BaseModel):
     cached: bool = False
 
 
+class EvalWebManualPaste(BaseModel):
+    text: str = Field(min_length=10, max_length=20000)
+
+
 @router.get(
     "/{matricule}/owner-evalweb",
     response_model=EvalWebResponse,
@@ -400,6 +404,62 @@ async def owner_evalweb(
         raise HTTPException(502, str(exc)) from exc
 
     # Cache.
+    p.owners_json = json.dumps(owners, ensure_ascii=False)
+    p.owners_fetched_at = datetime.now(timezone.utc)
+    await db.flush()
+
+    return EvalWebResponse(
+        matricule=matricule,
+        owners=[EvalWebOwnerOut(**o) for o in owners],
+        fetched_at=p.owners_fetched_at.isoformat(),
+        cached=False,
+    )
+
+
+@router.post(
+    "/{matricule}/owner-evalweb-manual",
+    response_model=EvalWebResponse,
+    summary="Parse + cache la section Propriétaire collée manuellement "
+    "depuis EvalWeb. Fallback quand le scraping auto ne marche pas.",
+)
+async def owner_evalweb_manual(
+    matricule: str,
+    body: EvalWebManualPaste,
+    db: DBSession,
+    _: CurrentUser,
+) -> EvalWebResponse:
+    """L'utilisateur ouvre la page EvalWeb dans son navigateur, copie
+    la section « Propriétaire » (texte plat) et la colle dans la
+    modal. On parse + on cache comme l'endpoint auto.
+
+    Indépendant de la structure HTML d'EvalWeb — résiste aux
+    changements du site de la Ville.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from app.integrations.roles_evaluation.montreal_owner import (
+        parse_owners_from_text,
+    )
+
+    p = (
+        await db.execute(
+            select(MontrealPropertyUnit).where(
+                MontrealPropertyUnit.matricule == matricule
+            )
+        )
+    ).scalar_one_or_none()
+    if p is None:
+        raise HTTPException(404, "Propriété introuvable")
+
+    owners = parse_owners_from_text(body.text)
+    if not owners:
+        raise HTTPException(
+            400,
+            "Aucun propriétaire détecté dans le texte. Vérifie que tu "
+            "as collé la section commençant par « Nom ».",
+        )
+
     p.owners_json = json.dumps(owners, ensure_ascii=False)
     p.owners_fetched_at = datetime.now(timezone.utc)
     await db.flush()

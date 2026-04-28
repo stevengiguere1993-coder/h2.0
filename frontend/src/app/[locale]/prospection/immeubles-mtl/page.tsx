@@ -774,6 +774,38 @@ function OwnerCandidatesModal({
   const [evalLoading, setEvalLoading] = useState(false);
   const [evalData, setEvalData] = useState<EvalWebResponse | null>(null);
   const [evalError, setEvalError] = useState<string | null>(null);
+  // Fallback collage manuel
+  const [showPaste, setShowPaste] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  const [pasteSubmitting, setPasteSubmitting] = useState(false);
+
+  async function submitPaste() {
+    if (!pasteText.trim()) return;
+    setPasteSubmitting(true);
+    setEvalError(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/prospection/mtl-properties/${encodeURIComponent(
+          property.matricule
+        )}/owner-evalweb-manual`,
+        {
+          method: "POST",
+          body: JSON.stringify({ text: pasteText })
+        }
+      );
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${r.status}`);
+      }
+      setEvalData((await r.json()) as EvalWebResponse);
+      setShowPaste(false);
+      setPasteText("");
+    } catch (e) {
+      setEvalError(e instanceof Error ? e.message : "Erreur");
+    } finally {
+      setPasteSubmitting(false);
+    }
+  }
 
   async function fetchEvalWeb(refresh = false) {
     setEvalLoading(true);
@@ -911,9 +943,85 @@ function OwnerCandidatesModal({
             ) : null}
 
             {evalError ? (
-              <p className="rounded border border-rose-500/40 bg-rose-500/10 p-2 text-[11px] text-rose-300">
-                {evalError}
-              </p>
+              <div className="rounded border border-rose-500/40 bg-rose-500/10 p-2 text-[11px] text-rose-300">
+                <p>{evalError}</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPaste(true);
+                    setEvalError(null);
+                  }}
+                  className="mt-2 inline-flex items-center gap-1 rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20"
+                >
+                  Saisir manuellement →
+                </button>
+              </div>
+            ) : null}
+
+            {/* Fallback : collage manuel depuis EvalWeb */}
+            {!evalData && (showPaste || evalError) ? (
+              <div className="mt-2 rounded border border-emerald-700/40 bg-brand-900 p-2.5">
+                <p className="text-[11px] font-semibold text-emerald-200">
+                  Collage manuel depuis EvalWeb
+                </p>
+                <ol className="mt-1.5 list-decimal space-y-0.5 pl-4 text-[10px] text-white/60">
+                  <li>
+                    Ouvre EvalWeb pour cette propriété :{" "}
+                    <a
+                      href="https://servicesenligne2.ville.montreal.qc.ca/sel/evalweb/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-emerald-300 underline hover:text-emerald-200"
+                    >
+                      ouvrir le site
+                    </a>{" "}
+                    et cherche le matricule{" "}
+                    <code className="text-white/80">
+                      {property.matricule}
+                    </code>
+                  </li>
+                  <li>
+                    Sélectionne tout le bloc « Propriétaire » (du label
+                    « Nom » jusqu&apos;avant « Caractéristiques ») et
+                    fais Ctrl+C
+                  </li>
+                  <li>Colle ci-dessous puis valide</li>
+                </ol>
+                <textarea
+                  value={pasteText}
+                  onChange={(e) => setPasteText(e.target.value)}
+                  rows={6}
+                  placeholder={
+                    "Nom\nGEREMIA, ROBERTO (Emphytéote)\nStatut aux fins d'imposition scolaire\nPersonne physique\nAdresse postale\n450 CH DU GOLF, VERDUN QUEBEC, H3E 1A8\n…"
+                  }
+                  className="mt-2 w-full rounded border border-brand-800 bg-brand-950 p-2 font-mono text-[10px] text-white"
+                />
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={submitPaste}
+                    disabled={
+                      pasteSubmitting || !pasteText.trim()
+                    }
+                    className="inline-flex items-center gap-1 rounded-md bg-emerald-500 px-3 py-1.5 text-[11px] font-semibold text-brand-950 hover:bg-emerald-400 disabled:opacity-50"
+                  >
+                    {pasteSubmitting ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : null}
+                    Parser et sauvegarder
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowPaste(false);
+                      setPasteText("");
+                    }}
+                    className="text-[11px] text-white/50 hover:text-white"
+                  >
+                    Annuler
+                  </button>
+                </div>
+              </div>
             ) : null}
 
             {evalData ? (
