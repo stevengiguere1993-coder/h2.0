@@ -14,10 +14,12 @@ import {
   Save,
   Search,
   Star,
+  Trash2,
   X
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { useConfirm } from "@/components/confirm-dialog";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { useProspectionLayout } from "../layout";
@@ -927,6 +929,17 @@ export default function ProspectionLeadsPage() {
                       <td className="px-3 py-2.5 text-right text-[11px] text-white/40">
                         {fmtDate(l.created_at)}
                       </td>
+                      <td className="px-3 py-2.5 text-right">
+                        <DeleteLeadButton
+                          leadId={l.id}
+                          leadName={l.name}
+                          onDeleted={() => {
+                            setLeads((prev) =>
+                              prev.filter((x) => x.id !== l.id)
+                            );
+                          }}
+                        />
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1284,5 +1297,58 @@ function KanbanBoard({
         })}
       </div>
     </div>
+  );
+}
+
+function DeleteLeadButton({
+  leadId,
+  leadName,
+  onDeleted
+}: {
+  leadId: number;
+  leadName: string;
+  onDeleted: () => void;
+}) {
+  const confirm = useConfirm();
+  const [busy, setBusy] = useState(false);
+
+  async function handleClick(e: React.MouseEvent) {
+    e.stopPropagation();
+    const ok = await confirm({
+      title: `Supprimer « ${leadName} » ?`,
+      description:
+        "Le lead sera supprimé définitivement. Cette action est " +
+        "irréversible.",
+      confirmLabel: "Supprimer",
+      destructive: true
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/${leadId}`,
+        { method: "DELETE" }
+      );
+      if (res.ok) onDeleted();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={busy}
+      className="rounded-md p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300 disabled:opacity-30"
+      aria-label="Supprimer"
+      title="Supprimer ce lead"
+    >
+      {busy ? (
+        <Loader2 className="h-4 w-4 animate-spin" />
+      ) : (
+        <Trash2 className="h-4 w-4" />
+      )}
+    </button>
   );
 }

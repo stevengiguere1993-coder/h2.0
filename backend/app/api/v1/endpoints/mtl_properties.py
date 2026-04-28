@@ -56,6 +56,8 @@ class MtlPropertyRead(BaseModel):
     full_address: Optional[str] = None
     already_lead: bool = False  # True si un ProspectionLead a déjà
                                   # ce matricule
+    has_owner_data: bool = False  # True si on a déjà des proprios
+                                    # parsés depuis EvalWeb
 
 
 class OwnerCandidate(BaseModel):
@@ -212,6 +214,7 @@ async def list_properties(
         d = MtlPropertyRead.model_validate(r)
         d.full_address = _full_addr(r) or None
         d.already_lead = r.matricule in already_set
+        d.has_owner_data = bool(r.owners_json)
         if d.superficie_terrain is not None:
             d.superficie_terrain = float(d.superficie_terrain)
         if d.superficie_batiment is not None:
@@ -353,6 +356,7 @@ async def owner_evalweb(
     db: DBSession,
     _: CurrentUser,
     refresh: bool = False,
+    cache_only: bool = False,
 ) -> EvalWebResponse:
     """Scrape la page EvalWeb pour cette propriété — donne les
     propriétaires (personnes physiques + corps) tels qu'inscrits au
@@ -396,6 +400,18 @@ async def owner_evalweb(
         except Exception:
             # Cache corrompu → on re-scrape.
             pass
+
+    # cache_only : si pas de cache, on retourne une réponse vide
+    # plutôt que de déclencher un scrape coûteux. Utilisé par la
+    # modal pour pré-charger les données existantes sans déclencher
+    # de fetch automatique.
+    if cache_only:
+        return EvalWebResponse(
+            matricule=matricule,
+            owners=[],
+            fetched_at=None,
+            cached=False,
+        )
 
     # Scrape EvalWeb.
     try:

@@ -33,6 +33,7 @@ type Property = {
   superficie_batiment: number | null;
   full_address: string | null;
   already_lead: boolean;
+  has_owner_data: boolean;
 };
 
 type UtilisationType = {
@@ -561,9 +562,22 @@ export default function ImmeublesMtlPage() {
                           <button
                             type="button"
                             onClick={() => setOwnerModalFor(p)}
-                            className="inline-flex items-center gap-1 rounded-md border border-blue-500/40 bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20"
+                            className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] ${
+                              p.has_owner_data
+                                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
+                                : "border-blue-500/40 bg-blue-500/10 text-blue-300 hover:bg-blue-500/20"
+                            }`}
+                            title={
+                              p.has_owner_data
+                                ? "Propriétaires déjà documentés — clic pour voir"
+                                : "Documenter les propriétaires"
+                            }
                           >
-                            <Users className="h-3 w-3" />
+                            {p.has_owner_data ? (
+                              <CheckCircle2 className="h-3 w-3" />
+                            ) : (
+                              <Users className="h-3 w-3" />
+                            )}
                             Proprio
                           </button>
                           {p.already_lead ? (
@@ -846,10 +860,32 @@ function OwnerCandidatesModal({
         if (!cancelled) setLoading(false);
       }
     })();
+
+    // Si on a déjà des données EvalWeb cachées pour cette propriété,
+    // on les charge automatiquement (cache_only=true → pas de scrape).
+    if (property.has_owner_data) {
+      void (async () => {
+        try {
+          const r = await authedFetch(
+            `/api/v1/prospection/mtl-properties/${encodeURIComponent(
+              property.matricule
+            )}/owner-evalweb?cache_only=true`
+          );
+          if (!r.ok) return;
+          const data = (await r.json()) as EvalWebResponse;
+          if (!cancelled && data.owners.length > 0) {
+            setEvalData(data);
+          }
+        } catch {
+          /* ignore */
+        }
+      })();
+    }
+
     return () => {
       cancelled = true;
     };
-  }, [property.matricule]);
+  }, [property.matricule, property.has_owner_data]);
 
   async function convertWithOwner(neq: string | null) {
     setConverting(neq || "no-neq");
