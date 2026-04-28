@@ -8,6 +8,7 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     admin_data,
+    agenda_unified,
     appointments,
     audit,
     auth,
@@ -48,6 +49,8 @@ from app.api.v1.endpoints import (
     email_templates,
     mtl_properties,
     prospection,
+    prospection_analyse_extract,
+    prospection_analyses,
     prospection_lists,
     purchase_order_actions,
     purchase_order_items,
@@ -130,6 +133,9 @@ api_router.include_router(soumission_send.router)
 api_router.include_router(soumission_status.router)
 api_router.include_router(soumission_to_client.router)
 api_router.include_router(soumission_to_project.router)
+# /agenda/unified DOIT être avant agenda_router (CRUD générique avec
+# /agenda/{item_id}) pour que le path littéral matche en premier.
+api_router.include_router(agenda_unified.router)
 api_router.include_router(agenda_router)
 api_router.include_router(bon_items.router)
 api_router.include_router(bon_send.router)
@@ -158,10 +164,15 @@ api_router.include_router(purchase_orders_router)
 api_router.include_router(purchase_order_items.router)
 # prospection_lists DOIT être registered AVANT prospection.router
 # pour que /prospection/lists/* soit matché avant /prospection/{lead_id}.
-# Idem pour mtl_properties qui a /prospection/mtl-properties/* —
-# match littéral avant /prospection/{lead_id}.
+# Idem pour mtl_properties qui a /prospection/mtl-properties/* et
+# prospection_analyses qui a /prospection/analyses/* — match littéral
+# avant /prospection/{lead_id}.
 api_router.include_router(prospection_lists.router)
 api_router.include_router(mtl_properties.router)
+# /prospection/analyses/extract DOIT être avant prospection_analyses
+# pour que le path littéral matche avant /prospection/analyses/{id}.
+api_router.include_router(prospection_analyse_extract.router)
+api_router.include_router(prospection_analyses.router)
 api_router.include_router(prospection.router)
 api_router.include_router(email_templates.router)
 api_router.include_router(admin_data.router)

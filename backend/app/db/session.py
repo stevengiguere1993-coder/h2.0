@@ -226,6 +226,22 @@ async def init_db() -> None:
             ("prospection_leads", "offer_amount", "NUMERIC(14, 2)"),
             ("prospection_leads", "assignment_price", "NUMERIC(14, 2)"),
             ("prospection_leads", "monday_item_id", "VARCHAR(32)"),
+            # Multi-volet : un user peut avoir accès à construction,
+            # prospection ou les deux. NULL = backward compat (tous).
+            ("users", "volets_json", "TEXT"),
+            # Agenda partagé entre volets : scope distingue les events
+            # construction (par défaut) des events prospection.
+            (
+                "agenda_events",
+                "scope",
+                "VARCHAR(16) NOT NULL DEFAULT 'construction'",
+            ),
+            ("agenda_events", "lead_id", "INTEGER"),
+            ("agenda_events", "assignee_user_id", "INTEGER"),
+            # EvalWeb : propriétaires scrapés à la demande, cachés
+            # par matricule pour éviter les re-scrapes.
+            ("mtl_property_units", "owners_json", "TEXT"),
+            ("mtl_property_units", "owners_fetched_at", "TIMESTAMP WITH TIME ZONE"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

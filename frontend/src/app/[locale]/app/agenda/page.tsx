@@ -29,7 +29,31 @@ type AgendaEvent = {
   assignee_id: number | null;
   event_type: string;
   created_at: string;
+  // Volet auquel appartient l'event. Construction par défaut (legacy).
+  // Si "prospection" : event masqué en bloc opaque « Indisponible » ici.
+  scope?: "construction" | "prospection";
+  lead_id?: number | null;
+  assignee_user_id?: number | null;
 };
+
+/**
+ * Masque un event Prospection en bloc opaque pour la vue Construction.
+ * Préserve les timestamps + assignations pour qu'il s'affiche au bon
+ * endroit, mais efface tous les détails (titre, description, lieu,
+ * lien projet/lead).
+ */
+function maskProspectionEvent(e: AgendaEvent): AgendaEvent {
+  if (e.scope !== "prospection") return e;
+  return {
+    ...e,
+    title: "Indisponible",
+    description: null,
+    location: null,
+    project_id: null,
+    lead_id: null,
+    event_type: "busy"
+  };
+}
 
 type Project = {
   id: number;
@@ -59,6 +83,7 @@ const TYPE_LABELS: Record<string, string> = {
   reunion: "Réunion",
   livraison: "Livraison",
   conge: "Congé / vacances",
+  busy: "Indisponible",
   autre: "Autre"
 };
 
@@ -68,6 +93,9 @@ const TYPE_CLASS: Record<string, string> = {
   visite: "bg-blue-500/20 text-blue-300 border-blue-500/40",
   reunion: "bg-violet-500/20 text-violet-300 border-violet-500/40",
   livraison: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",
+  // Bloc opaque (event Prospection masqué). Gris neutre + curseur
+  // par défaut (pas cliquable, géré dans onEventClick).
+  busy: "bg-brand-800/70 text-white/40 border-white/15 cursor-default",
   autre: "bg-white/10 text-white/70 border-white/20"
 };
 
@@ -213,7 +241,11 @@ export default function AgendaPage() {
           authedFetch("/api/v1/phases")
         ]);
         if (!evRes.ok) throw new Error(`http_${evRes.status}`);
-        const evs = (await evRes.json()) as AgendaEvent[];
+        const rawEvs = (await evRes.json()) as AgendaEvent[];
+        // Masque les events Prospection en blocs opaques (privacy
+        // inter-volet : la Construction voit qu'il y a un blocage de
+        // calendrier mais sans détails).
+        const evs = rawEvs.map(maskProspectionEvent);
         const prs = prRes.ok ? ((await prRes.json()) as Project[]) : [];
         const emps = empRes.ok ? ((await empRes.json()) as Employe[]) : [];
         const phs = phRes.ok ? ((await phRes.json()) as Phase[]) : [];
@@ -368,11 +400,15 @@ export default function AgendaPage() {
   }, [filteredEvents]);
 
   function upsertEvent(saved: AgendaEvent) {
+    // Si l'event sauvegardé est un Prospection event (ce qui ne devrait
+    // pas arriver depuis la modal Construction, mais sécurité), on le
+    // masque avant de le rebrancher dans la liste.
+    const masked = maskProspectionEvent(saved);
     setEvents((xs) => {
-      const idx = xs.findIndex((x) => x.id === saved.id);
-      if (idx === -1) return [...xs, saved];
+      const idx = xs.findIndex((x) => x.id === masked.id);
+      if (idx === -1) return [...xs, masked];
       const next = xs.slice();
-      next[idx] = saved;
+      next[idx] = masked;
       return next;
     });
   }
@@ -550,7 +586,9 @@ export default function AgendaPage() {
             days={view === "day" ? 1 : 7}
             events={filteredEvents}
             onSlotClick={(d) => setModal({ date: d })}
-            onEventClick={(e) => setModal(e)}
+            onEventClick={(e) =>
+              e.event_type === "busy" ? null : setModal(e)
+            }
           />
         ) : view === "month" ? (
           <MonthView
@@ -561,12 +599,16 @@ export default function AgendaPage() {
             projectsByDay={projectsByDay}
             projectHasTeam={projectHasTeam}
             onDayClick={(d) => setModal({ date: d })}
-            onEventClick={(e) => setModal(e)}
+            onEventClick={(e) =>
+              e.event_type === "busy" ? null : setModal(e)
+            }
           />
         ) : view === "list" ? (
           <ListView
             events={filteredEvents}
-            onEventClick={(e) => setModal(e)}
+            onEventClick={(e) =>
+              e.event_type === "busy" ? null : setModal(e)
+            }
           />
         ) : (
           <TimelineView
@@ -577,7 +619,9 @@ export default function AgendaPage() {
             phases={phases}
             projects={projects}
             employes={employes}
-            onEventClick={(e) => setModal(e)}
+            onEventClick={(e) =>
+              e.event_type === "busy" ? null : setModal(e)
+            }
           />
         )}
       </div>

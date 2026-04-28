@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Building2,
@@ -17,7 +17,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { authedFetch, hasMinRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
-import { useProspectionLayout } from "../layout";
+import { useProspectionLayout } from "../../layout";
 
 type ImportResult = {
   source: string;
@@ -25,19 +25,28 @@ type ImportResult = {
   rows_upserted: number;
 };
 
+type MtlStatus = {
+  status: "idle" | "running" | "done" | "error";
+  started_at: string | null;
+  finished_at: string | null;
+  rows_upserted: number | null;
+  error: string | null;
+};
+
 export default function ProspectionSourcesPage() {
   const { onOpenSidebar } = useProspectionLayout();
   const { user } = useCurrentUser();
   const isOwner = hasMinRole(user, "owner");
 
-  const [mtlBusy, setMtlBusy] = useState(false);
-  const [mtlResult, setMtlResult] = useState<ImportResult | null>(null);
+  const [mtlStatus, setMtlStatus] = useState<MtlStatus | null>(null);
   const [mtlError, setMtlError] = useState<string | null>(null);
+  const mtlPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [reqFile, setReqFile] = useState<File | null>(null);
-  const [reqBusy, setReqBusy] = useState(false);
-  const [reqResult, setReqResult] = useState<ImportResult | null>(null);
+  const [reqUploading, setReqUploading] = useState(false);
+  const [reqStatus, setReqStatus] = useState<MtlStatus | null>(null);
   const [reqError, setReqError] = useState<string | null>(null);
+  const reqPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [cmhcFile, setCmhcFile] = useState<File | null>(null);
   const [cmhcBusy, setCmhcBusy] = useState(false);
@@ -69,11 +78,59 @@ export default function ProspectionSourcesPage() {
     }
   }
 
+  // Polling de l'état de l'import MTL (long, 3-5 min). On poll toutes
+  // les 5s tant que status=running.
+  async function refreshMtlStatus() {
+    try {
+      const res = await authedFetch(
+        "/api/v1/admin/data/mtl-roles/import-status"
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as MtlStatus;
+      setMtlStatus(data);
+      // Stoppe le poll quand l'import est terminé.
+      if (
+        data.status !== "running" &&
+        mtlPollRef.current !== null
+      ) {
+        clearInterval(mtlPollRef.current);
+        mtlPollRef.current = null;
+      }
+    } catch {
+      /* silencieux — Render Free dort parfois quelques secondes */
+    }
+  }
+
+  // Au montage : charge l'état une fois pour MTL + REQ (utile si un
+  // import a été lancé puis on a rechargé la page) et lance le poll
+  // sur les deux. Le refresh stoppe son propre intervalle quand
+  // status != running.
+  useEffect(() => {
+    if (!isOwner) return;
+    void refreshMtlStatus();
+    void refreshReqStatus();
+    if (mtlPollRef.current === null) {
+      mtlPollRef.current = setInterval(refreshMtlStatus, 5000);
+    }
+    if (reqPollRef.current === null) {
+      reqPollRef.current = setInterval(refreshReqStatus, 5000);
+    }
+    return () => {
+      if (mtlPollRef.current !== null) {
+        clearInterval(mtlPollRef.current);
+        mtlPollRef.current = null;
+      }
+      if (reqPollRef.current !== null) {
+        clearInterval(reqPollRef.current);
+        reqPollRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOwner]);
+
   async function importMontreal() {
-    if (mtlBusy) return;
-    setMtlBusy(true);
+    if (mtlStatus?.status === "running") return;
     setMtlError(null);
-    setMtlResult(null);
     try {
       const res = await authedFetch(
         "/api/v1/admin/data/mtl-roles/import",
@@ -83,19 +140,45 @@ export default function ProspectionSourcesPage() {
         const t = await res.text();
         throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
       }
-      setMtlResult((await res.json()) as ImportResult);
+      // L'endpoint retourne { status: "started" }. On lance le poll.
+      await refreshMtlStatus();
+      if (mtlPollRef.current === null) {
+        mtlPollRef.current = setInterval(refreshMtlStatus, 5000);
+      }
     } catch (e) {
       setMtlError((e as Error).message);
-    } finally {
-      setMtlBusy(false);
+    }
+  }
+
+  async function refreshReqStatus() {
+    try {
+      const res = await authedFetch(
+        "/api/v1/admin/data/req/import-status"
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as MtlStatus;
+      setReqStatus(data);
+      if (
+        data.status !== "running" &&
+        reqPollRef.current !== null
+      ) {
+        clearInterval(reqPollRef.current);
+        reqPollRef.current = null;
+      }
+    } catch {
+      /* ignore */
     }
   }
 
   async function importReq() {
-    if (reqBusy || !reqFile) return;
-    setReqBusy(true);
+    if (
+      reqUploading ||
+      reqStatus?.status === "running" ||
+      !reqFile
+    )
+      return;
+    setReqUploading(true);
     setReqError(null);
-    setReqResult(null);
     try {
       const fd = new FormData();
       fd.append("zip_file", reqFile);
@@ -107,12 +190,16 @@ export default function ProspectionSourcesPage() {
         const t = await res.text();
         throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
       }
-      setReqResult((await res.json()) as ImportResult);
+      // L'endpoint retourne { status: "started", size_mb }. Lance le poll.
       setReqFile(null);
+      await refreshReqStatus();
+      if (reqPollRef.current === null) {
+        reqPollRef.current = setInterval(refreshReqStatus, 5000);
+      }
     } catch (e) {
       setReqError((e as Error).message);
     } finally {
-      setReqBusy(false);
+      setReqUploading(false);
     }
   }
 
@@ -121,6 +208,7 @@ export default function ProspectionSourcesPage() {
       <AppTopbar
         breadcrumbs={[
           { label: "Prospection", href: "/prospection" },
+          { label: "Paramètres", href: "/prospection/parametres" },
           { label: "Sources de données" }
         ]}
         onOpenSidebar={onOpenSidebar}
@@ -186,31 +274,48 @@ export default function ProspectionSourcesPage() {
             publie le nouveau rôle.
           </p>
 
-          <div className="mt-4 flex items-center justify-between">
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
             <button
               type="button"
               onClick={importMontreal}
-              disabled={!isOwner || mtlBusy}
+              disabled={!isOwner || mtlStatus?.status === "running"}
               className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {mtlBusy ? (
+              {mtlStatus?.status === "running" ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <Download className="h-4 w-4" />
               )}
-              {mtlBusy
+              {mtlStatus?.status === "running"
                 ? "Import en cours…"
                 : "Importer le rôle Montréal"}
             </button>
 
-            {mtlResult ? (
+            {mtlStatus?.status === "done" &&
+            mtlStatus.rows_upserted !== null ? (
               <p className="flex items-center gap-1.5 text-xs text-emerald-300">
                 <CheckCircle2 className="h-3.5 w-3.5" />
-                {mtlResult.rows_upserted.toLocaleString("fr-CA")} unités
+                {mtlStatus.rows_upserted.toLocaleString("fr-CA")} unités
                 ingérées
               </p>
             ) : null}
           </div>
+
+          {mtlStatus?.status === "running" ? (
+            <p className="mt-3 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+              <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />
+              Téléchargement + ingestion en arrière-plan (3-5 min). Tu
+              peux fermer cet onglet, l&apos;import continue côté
+              serveur. État rafraîchi automatiquement toutes les 5 s.
+            </p>
+          ) : null}
+
+          {mtlStatus?.status === "error" && mtlStatus.error ? (
+            <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+              Échec : {mtlStatus.error}
+            </p>
+          ) : null}
 
           {mtlError ? (
             <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
@@ -275,13 +380,68 @@ export default function ProspectionSourcesPage() {
             </li>
           </ol>
 
+          <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-[11px] text-amber-200/90">
+            <strong className="text-amber-200">
+              ⚠ Le ZIP fait ~225 Mo, plus gros que la limite du proxy
+              Render Free (~100 Mo).
+            </strong>
+            {" "}L&apos;upload via le formulaire ci-dessous échoue
+            avec « Internal Server Error » avant même d&apos;atteindre
+            FastAPI. Solution : utilise le Render Shell.
+
+            <details className="mt-2">
+              <summary className="cursor-pointer text-amber-200 hover:text-amber-100">
+                Voir la procédure Render Shell
+              </summary>
+              <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-amber-200/80">
+                <li>
+                  Sur{" "}
+                  <a
+                    href="https://transfer.sh"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-emerald-300 hover:text-emerald-200"
+                  >
+                    transfer.sh
+                  </a>{" "}
+                  (gratuit, lien valide 14 jours), upload ton{" "}
+                  <code>JeuDonnees.zip</code> :
+                  <pre className="mt-1 overflow-x-auto rounded bg-black/40 p-2 font-mono text-[10px] text-emerald-300">
+                    {`curl --upload-file JeuDonnees.zip https://transfer.sh/`}
+                  </pre>
+                  Tu reçois une URL en retour.
+                </li>
+                <li>
+                  Dans Render Dashboard → ton service backend → onglet{" "}
+                  <strong>Shell</strong>, lance :
+                  <pre className="mt-1 overflow-x-auto rounded bg-black/40 p-2 font-mono text-[10px] text-emerald-300">
+                    {`cd ~/project/src/backend
+python -m scripts.import_req_zip --url "https://transfer.sh/.../JeuDonnees.zip"`}
+                  </pre>
+                </li>
+                <li>
+                  L&apos;ingestion prend 2-5 min. Pas de timeout HTTP
+                  car c&apos;est un script local.
+                </li>
+              </ol>
+            </details>
+          </div>
+
           <div className="mt-4 space-y-3">
+            <p className="text-[11px] text-white/40">
+              Tu peux quand même essayer l&apos;upload web (au cas où
+              le proxy ne bloque plus) :
+            </p>
             <label className="block">
               <span className="label">Fichier ZIP REQ</span>
               <input
                 type="file"
                 accept=".zip,application/zip"
-                disabled={!isOwner || reqBusy}
+                disabled={
+                  !isOwner ||
+                  reqUploading ||
+                  reqStatus?.status === "running"
+                }
                 onChange={(e) =>
                   setReqFile(e.target.files?.[0] || null)
                 }
@@ -289,29 +449,55 @@ export default function ProspectionSourcesPage() {
               />
             </label>
 
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <button
                 type="button"
                 onClick={importReq}
-                disabled={!isOwner || !reqFile || reqBusy}
+                disabled={
+                  !isOwner ||
+                  !reqFile ||
+                  reqUploading ||
+                  reqStatus?.status === "running"
+                }
                 className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {reqBusy ? (
+                {reqUploading || reqStatus?.status === "running" ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <Upload className="h-4 w-4" />
                 )}
-                {reqBusy ? "Ingestion en cours…" : "Importer le ZIP"}
+                {reqUploading
+                  ? "Upload en cours…"
+                  : reqStatus?.status === "running"
+                    ? "Ingestion en cours…"
+                    : "Importer le ZIP"}
               </button>
 
-              {reqResult ? (
+              {reqStatus?.status === "done" &&
+              reqStatus.rows_upserted !== null ? (
                 <p className="flex items-center gap-1.5 text-xs text-emerald-300">
                   <CheckCircle2 className="h-3.5 w-3.5" />
-                  {reqResult.rows_upserted.toLocaleString("fr-CA")}{" "}
+                  {reqStatus.rows_upserted.toLocaleString("fr-CA")}{" "}
                   corporations ingérées
                 </p>
               ) : null}
             </div>
+
+            {reqStatus?.status === "running" ? (
+              <p className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+                <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />
+                Upload reçu (~225 Mo). Ingestion ~1M corporations en
+                cours en arrière-plan (2-5 min). Tu peux fermer cet
+                onglet, l&apos;import continue côté serveur.
+              </p>
+            ) : null}
+
+            {reqStatus?.status === "error" && reqStatus.error ? (
+              <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+                Échec : {reqStatus.error}
+              </p>
+            ) : null}
 
             {reqError ? (
               <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">

@@ -5,7 +5,8 @@ import { usePathname } from "next/navigation";
 import {
   BarChart3,
   Building2,
-  Database,
+  Calculator,
+  Calendar,
   Home,
   Layers,
   LogOut,
@@ -36,6 +37,12 @@ const PROSPECTION_NAV: NavItem[] = [
     icon: Sun,
     minRole: "manager"
   },
+  {
+    href: "/prospection/agenda",
+    label: "Agenda",
+    icon: Calendar,
+    minRole: "manager"
+  },
   { href: "/prospection", label: "Carte", icon: Map, minRole: "manager" },
   {
     href: "/prospection/leads",
@@ -56,6 +63,12 @@ const PROSPECTION_NAV: NavItem[] = [
     minRole: "manager"
   },
   {
+    href: "/prospection/analyse",
+    label: "Analyses financières",
+    icon: Calculator,
+    minRole: "manager"
+  },
+  {
     href: "/prospection/dashboard",
     label: "Dashboard",
     icon: BarChart3,
@@ -66,12 +79,6 @@ const PROSPECTION_NAV: NavItem[] = [
     label: "Paramètres",
     icon: Settings,
     minRole: "manager"
-  },
-  {
-    href: "/prospection/sources",
-    label: "Sources de données",
-    icon: Database,
-    minRole: "owner"
   },
   // Phase 3+ : campagnes
   // { href: "/prospection/campagnes", label: "Campagnes", icon: Mail },

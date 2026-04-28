@@ -29,6 +29,10 @@ anthropic>=0.40.0,<1.0.0
 # HTTP (Monday migration, QBO, Microsoft Graph)
 httpx>=0.27.0,<1.0.0
 
+# HTML parsing — scraping EvalWeb (rôle d'évaluation MTL) pour
+# récupérer les propriétaires à la demande.
+beautifulsoup4>=4.12,<5
+
 # PDF generation (soumissions sent to clients). Pure Python, no system deps.
 reportlab>=4.0.0,<5.0.0
 
