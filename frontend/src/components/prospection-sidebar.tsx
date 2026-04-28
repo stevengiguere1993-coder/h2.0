@@ -30,49 +30,52 @@ type NavItem = {
   minRole?: UserRole;
 };
 
+// Tous les volets opérationnels sont accessibles aux employés
+// (un prospecteur a besoin de la carte, des leads, de l'agenda…).
+// Seul Paramètres reste réservé aux managers+.
 const PROSPECTION_NAV: NavItem[] = [
   {
     href: "/prospection/aujourdhui",
     label: "Aujourd'hui",
     icon: Sun,
-    minRole: "manager"
+    minRole: "employee"
   },
   {
     href: "/prospection/agenda",
     label: "Agenda",
     icon: Calendar,
-    minRole: "manager"
+    minRole: "employee"
   },
-  { href: "/prospection", label: "Carte", icon: Map, minRole: "manager" },
+  { href: "/prospection", label: "Carte", icon: Map, minRole: "employee" },
   {
     href: "/prospection/leads",
     label: "Liste des leads",
     icon: MapPin,
-    minRole: "manager"
+    minRole: "employee"
   },
   {
     href: "/prospection/immeubles-mtl",
     label: "Immeubles MTL (rôle)",
     icon: Building2,
-    minRole: "manager"
+    minRole: "employee"
   },
   {
     href: "/prospection/lists",
     label: "Listes (segments)",
     icon: Layers,
-    minRole: "manager"
+    minRole: "employee"
   },
   {
     href: "/prospection/analyse",
     label: "Analyses financières",
     icon: Calculator,
-    minRole: "manager"
+    minRole: "employee"
   },
   {
     href: "/prospection/dashboard",
     label: "Dashboard",
     icon: BarChart3,
-    minRole: "manager"
+    minRole: "employee"
   },
   {
     href: "/prospection/parametres",
