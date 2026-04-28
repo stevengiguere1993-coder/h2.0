@@ -110,6 +110,24 @@ async def main() -> int:
             except Exception as exc:
                 log.exception("Centris %s failed: %s", cat, exc)
 
+        # 3.5 Triage auto Centris → leads si rentable
+        try:
+            from app.services.centris_triage import (
+                triage_recent_listings,
+            )
+
+            triage = await triage_recent_listings(db, since_hours=24)
+            log.info(
+                "Centris triage : created=%s matched=%s "
+                "not_profitable=%s skipped=%s",
+                triage.get("created"),
+                triage.get("matched_existing"),
+                triage.get("not_profitable"),
+                triage.get("skipped"),
+            )
+        except Exception as exc:
+            log.exception("Centris triage failed: %s", exc)
+
         # 4. Cleanup : annonces > 30 jours
         try:
             cutoff = datetime.now(timezone.utc) - timedelta(days=30)

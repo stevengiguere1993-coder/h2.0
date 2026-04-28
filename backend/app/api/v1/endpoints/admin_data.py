@@ -697,6 +697,22 @@ async def _centris_scrape_worker(category: str, max_pages: int) -> None:
         )
         _centris_state["new"] = total_new
         _centris_state["updated"] = total_updated
+
+        # Triage auto pour les annonces fraîchement ingérées
+        if total_new > 0:
+            from app.services.centris_triage import (
+                triage_recent_listings,
+            )
+
+            try:
+                async with AsyncSessionLocal() as session:
+                    await triage_recent_listings(
+                        session, since_hours=2
+                    )
+            except Exception as exc:
+                log.exception(
+                    "Triage post-scrape failed: %s", exc
+                )
     except Exception as exc:
         log.exception("Centris scrape failed: %s", exc)
         _centris_state["status"] = "error"
@@ -743,7 +759,8 @@ class CentrisManualPaste(BaseModel):
     "/centris/manual-paste",
     summary="Fallback : l'utilisateur copie le HTML d'une page Centris "
     "(ouvert dans son navigateur où il est passé Cloudflare) et le "
-    "colle ici. On parse comme si c'était venu du scrape direct.",
+    "colle ici. On parse comme si c'était venu du scrape direct + "
+    "triage auto qui crée des leads pour les annonces rentables.",
 )
 async def centris_manual_paste(
     body: CentrisManualPaste,
@@ -754,6 +771,7 @@ async def centris_manual_paste(
         parse_listings_html,
         upsert_listings,
     )
+    from app.services.centris_triage import triage_recent_listings
 
     listings = parse_listings_html(body.html)
     if not listings:
@@ -764,7 +782,33 @@ async def centris_manual_paste(
             "(view-source ou clic droit → Voir le code source).",
         )
     result = await upsert_listings(db, listings, body.category)
-    return {"parsed": len(listings), **result}
+    await db.commit()
+
+    # Triage auto : pour chaque annonce qui vient d'être ajoutée,
+    # on tente de calculer la rentabilité et créer un lead si
+    # APH50 ou SCHL gain ≥ 0.
+    triage = await triage_recent_listings(db, since_hours=2)
+    return {
+        "parsed": len(listings),
+        **result,
+        "triage": triage,
+    }
+
+
+@router.post(
+    "/centris/triage-recent",
+    summary="Lance le triage auto sur les annonces Centris des N "
+    "dernières heures. Crée des leads pour celles dont APH50 ou "
+    "SCHL gain ≥ 0 (MDF récupérable via refi).",
+)
+async def centris_triage_recent(
+    db: DBSession,
+    _: RequireOwner,
+    since_hours: int = 48,
+) -> dict:
+    from app.services.centris_triage import triage_recent_listings
+
+    return await triage_recent_listings(db, since_hours=since_hours)
 
 
 @router.post(
