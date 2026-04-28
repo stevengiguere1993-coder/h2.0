@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 
 from app.api.deps import DBSession, RequireOwner
 from app.db.session import AsyncSessionLocal
@@ -633,6 +634,137 @@ async def rental_scrape_status(_: RequireOwner) -> dict:
     return {
         k: v for k, v in _rental_state.items() if not k.startswith("_")
     }
+
+
+_centris_state: dict = {
+    "status": "idle",
+    "started_at": None,
+    "finished_at": None,
+    "new": None,
+    "updated": None,
+    "blocked": False,
+    "error": None,
+}
+
+
+async def _centris_scrape_worker(category: str, max_pages: int) -> None:
+    global _centris_state
+    _centris_state["status"] = "running"
+    _centris_state["started_at"] = datetime.now(timezone.utc).isoformat()
+    _centris_state["finished_at"] = None
+    _centris_state["error"] = None
+    _centris_state["blocked"] = False
+    total_new = 0
+    total_updated = 0
+    try:
+        from app.integrations.centris.scraper import (
+            CentrisBlocked,
+            SEARCH_URLS,
+            parse_listings_html,
+            try_fetch_search,
+            upsert_listings,
+        )
+
+        if category not in SEARCH_URLS:
+            raise ValueError(f"Catégorie inconnue : {category}")
+
+        async with AsyncSessionLocal() as session:
+            for page in range(1, max_pages + 1):
+                try:
+                    html = await try_fetch_search(
+                        SEARCH_URLS[category], page=page
+                    )
+                except CentrisBlocked as exc:
+                    _centris_state["blocked"] = True
+                    _centris_state["error"] = str(exc)
+                    break
+                listings = parse_listings_html(html)
+                if not listings:
+                    log.warning(
+                        "Centris : page %d vide (parsing failed?)",
+                        page,
+                    )
+                    break
+                r = await upsert_listings(session, listings, category)
+                total_new += r["new"]
+                total_updated += r["updated"]
+                await session.commit()
+
+        _centris_state["status"] = (
+            "blocked"
+            if _centris_state["blocked"]
+            else "done"
+        )
+        _centris_state["new"] = total_new
+        _centris_state["updated"] = total_updated
+    except Exception as exc:
+        log.exception("Centris scrape failed: %s", exc)
+        _centris_state["status"] = "error"
+        _centris_state["error"] = str(exc)[:500]
+    finally:
+        _centris_state["finished_at"] = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+
+@router.post(
+    "/centris/scrape",
+    summary="Lance un scrape Centris (multi-logements à vendre) en "
+    "background. Si bloqué par Cloudflare, le status retourne "
+    "'blocked' et il faut basculer sur le mode manuel paste.",
+)
+async def scrape_centris(
+    _: RequireOwner,
+    category: str = "multiplex_2_5",
+    max_pages: int = 2,
+) -> dict:
+    if _centris_state["status"] == "running":
+        raise HTTPException(409, "Un scrape Centris est déjà en cours.")
+    _centris_state["_task"] = asyncio.create_task(
+        _centris_scrape_worker(category, max_pages)
+    )
+    return {"status": "started", "category": category}
+
+
+@router.get("/centris/scrape-status")
+async def centris_scrape_status(_: RequireOwner) -> dict:
+    return {k: v for k, v in _centris_state.items() if not k.startswith("_")}
+
+
+class CentrisManualPaste(BaseModel):
+    html: str = Field(min_length=100, max_length=2_000_000)
+    category: str = Field(
+        default="multiplex_2_5",
+        pattern="^(multiplex_2_5|immeuble_residentiel_6_plus)$",
+    )
+
+
+@router.post(
+    "/centris/manual-paste",
+    summary="Fallback : l'utilisateur copie le HTML d'une page Centris "
+    "(ouvert dans son navigateur où il est passé Cloudflare) et le "
+    "colle ici. On parse comme si c'était venu du scrape direct.",
+)
+async def centris_manual_paste(
+    body: CentrisManualPaste,
+    db: DBSession,
+    _: RequireOwner,
+) -> dict:
+    from app.integrations.centris.scraper import (
+        parse_listings_html,
+        upsert_listings,
+    )
+
+    listings = parse_listings_html(body.html)
+    if not listings:
+        raise HTTPException(
+            400,
+            "Aucune annonce détectée dans le HTML collé. Vérifie "
+            "que tu as bien copié une page de résultats Centris "
+            "(view-source ou clic droit → Voir le code source).",
+        )
+    result = await upsert_listings(db, listings, body.category)
+    return {"parsed": len(listings), **result}
 
 
 @router.post(

@@ -69,6 +69,26 @@ export default function ProspectionSourcesPage() {
     null
   );
 
+  // Centris (multi-logements à vendre)
+  type CentrisStatus = {
+    status: "idle" | "running" | "done" | "error" | "blocked";
+    started_at: string | null;
+    finished_at: string | null;
+    new: number | null;
+    updated: number | null;
+    blocked: boolean;
+    error: string | null;
+  };
+  const [centrisStatus, setCentrisStatus] = useState<CentrisStatus | null>(
+    null
+  );
+  const [centrisError, setCentrisError] = useState<string | null>(null);
+  const [showCentrisPaste, setShowCentrisPaste] = useState(false);
+  const [centrisPasteHtml, setCentrisPasteHtml] = useState("");
+  const centrisPollRef = useRef<ReturnType<typeof setInterval> | null>(
+    null
+  );
+
   const [cmhcFile, setCmhcFile] = useState<File | null>(null);
   const [cmhcBusy, setCmhcBusy] = useState(false);
   const [cmhcResult, setCmhcResult] = useState<ImportResult | null>(null);
@@ -167,6 +187,80 @@ export default function ProspectionSourcesPage() {
     }
   }
 
+  async function refreshCentrisStatus() {
+    try {
+      const res = await authedFetch(
+        "/api/v1/admin/data/centris/scrape-status"
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as CentrisStatus;
+      setCentrisStatus(data);
+      if (
+        data.status !== "running" &&
+        centrisPollRef.current !== null
+      ) {
+        clearInterval(centrisPollRef.current);
+        centrisPollRef.current = null;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function scrapeCentris() {
+    if (centrisStatus?.status === "running") return;
+    setCentrisError(null);
+    try {
+      const res = await authedFetch(
+        "/api/v1/admin/data/centris/scrape?category=multiplex_2_5&max_pages=2",
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      await refreshCentrisStatus();
+      if (centrisPollRef.current === null) {
+        centrisPollRef.current = setInterval(refreshCentrisStatus, 5000);
+      }
+    } catch (e) {
+      setCentrisError((e as Error).message);
+    }
+  }
+
+  async function submitCentrisPaste() {
+    if (!centrisPasteHtml.trim()) return;
+    setCentrisError(null);
+    try {
+      const res = await authedFetch(
+        "/api/v1/admin/data/centris/manual-paste",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            html: centrisPasteHtml,
+            category: "multiplex_2_5"
+          })
+        }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as {
+        parsed: number;
+        new: number;
+        updated: number;
+      };
+      alert(
+        `${data.parsed} annonces parsées · ${data.new} nouvelles · ${data.updated} mises à jour`
+      );
+      setShowCentrisPaste(false);
+      setCentrisPasteHtml("");
+    } catch (e) {
+      setCentrisError((e as Error).message);
+    }
+  }
+
   async function cleanupRentals() {
     try {
       const res = await authedFetch(
@@ -186,6 +280,7 @@ export default function ProspectionSourcesPage() {
     void refreshMtlStatus();
     void refreshReqStatus();
     void refreshRentalStatus();
+    void refreshCentrisStatus();
     if (mtlPollRef.current === null) {
       mtlPollRef.current = setInterval(refreshMtlStatus, 5000);
     }
@@ -195,7 +290,14 @@ export default function ProspectionSourcesPage() {
     if (rentalPollRef.current === null) {
       rentalPollRef.current = setInterval(refreshRentalStatus, 5000);
     }
+    if (centrisPollRef.current === null) {
+      centrisPollRef.current = setInterval(refreshCentrisStatus, 5000);
+    }
     return () => {
+      if (centrisPollRef.current !== null) {
+        clearInterval(centrisPollRef.current);
+        centrisPollRef.current = null;
+      }
       if (rentalPollRef.current !== null) {
         clearInterval(rentalPollRef.current);
         rentalPollRef.current = null;
@@ -805,6 +907,134 @@ export default function ProspectionSourcesPage() {
           {rentalError ? (
             <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
               {rentalError}
+            </p>
+          ) : null}
+        </section>
+
+        {/* === Centris (multi-logements à vendre) === */}
+        <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+          <header className="flex items-start gap-3">
+            <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-amber-500/15 text-amber-400">
+              <Building2 className="h-5 w-5" />
+            </span>
+            <div>
+              <h2 className="text-base font-bold text-white">
+                Centris — Multi-logements à vendre
+              </h2>
+              <p className="mt-0.5 text-xs text-white/60">
+                Détecte les nouvelles ventes du jour. Centris a un
+                anti-bot agressif : si le scrape direct est bloqué
+                (status &laquo; blocked &raquo;), bascule sur le mode
+                manuel paste (copie le HTML d&apos;une page Centris
+                ouverte dans ton navigateur).
+              </p>
+            </div>
+          </header>
+
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={scrapeCentris}
+              disabled={!isOwner || centrisStatus?.status === "running"}
+              className="inline-flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm font-medium text-amber-300 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {centrisStatus?.status === "running" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Building2 className="h-4 w-4" />
+              )}
+              {centrisStatus?.status === "running"
+                ? "Scrape en cours…"
+                : "Scrape Centris (auto)"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowCentrisPaste((v) => !v)}
+              className="text-[11px] text-amber-300 hover:text-amber-200"
+            >
+              {showCentrisPaste ? "Annuler" : "Mode paste manuel →"}
+            </button>
+
+            {centrisStatus?.status === "done" &&
+            centrisStatus.new !== null ? (
+              <p className="flex items-center gap-1.5 text-xs text-emerald-300">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                {centrisStatus.new} nouvelles ·{" "}
+                {centrisStatus.updated} ré-vues
+              </p>
+            ) : null}
+          </div>
+
+          {centrisStatus?.status === "blocked" ? (
+            <p className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+              <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+              Cloudflare a bloqué le scrape direct. Passe au mode
+              paste manuel (clique « Mode paste manuel »).
+            </p>
+          ) : null}
+
+          {centrisStatus?.status === "error" && centrisStatus.error ? (
+            <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+              {centrisStatus.error}
+            </p>
+          ) : null}
+
+          {showCentrisPaste ? (
+            <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+              <p className="text-[11px] font-semibold text-amber-200">
+                Mode paste manuel
+              </p>
+              <ol className="mt-1.5 list-decimal space-y-0.5 pl-5 text-[10px] text-amber-200/80">
+                <li>
+                  Ouvre{" "}
+                  <a
+                    href="https://www.centris.ca/fr/multiplex~immeuble-residentiel-a-vendre"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-amber-300 underline"
+                  >
+                    Centris multiplex à vendre
+                  </a>{" "}
+                  dans ton navigateur
+                </li>
+                <li>
+                  Filtre par région si désiré, attends que la page
+                  charge complètement
+                </li>
+                <li>
+                  Clic droit n&apos;importe où → « Voir le code
+                  source de la page » (Ctrl+U)
+                </li>
+                <li>
+                  Sélectionne tout (Ctrl+A) puis copie (Ctrl+C)
+                </li>
+                <li>Colle ci-dessous</li>
+              </ol>
+              <textarea
+                value={centrisPasteHtml}
+                onChange={(e) => setCentrisPasteHtml(e.target.value)}
+                rows={6}
+                placeholder="<html>…</html>"
+                className="mt-2 w-full rounded border border-brand-800 bg-brand-950 p-2 font-mono text-[10px] text-white"
+              />
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={submitCentrisPaste}
+                  disabled={!centrisPasteHtml.trim()}
+                  className="inline-flex items-center gap-1 rounded-md bg-amber-500 px-3 py-1.5 text-[11px] font-semibold text-brand-950 hover:bg-amber-400 disabled:opacity-50"
+                >
+                  Parser et sauvegarder
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {centrisError ? (
+            <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              {centrisError}
             </p>
           ) : null}
         </section>

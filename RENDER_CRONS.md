@@ -21,7 +21,7 @@ Dashboard Render.
 
 | Nom | Schedule (UTC) | Heure locale (EDT) | Command | Pourquoi |
 |---|---|---|---|---|
-| `rental-scrape-daily` | `0 6 * * *` | 02h00 | `cd ~/project/src/backend && python -m scripts.rental_scrape_daily` | Comparables loyers Kijiji + LesPAC, cleanup > 30j |
+| `rental-scrape-daily` | `0 6 * * *` | 02h00 | `cd ~/project/src/backend && python -m scripts.rental_scrape_daily` | Comparables loyers Kijiji + LesPAC + tentative Centris (à vendre), cleanup > 30j |
 | `req-data-freshness` | `0 8 1 * *` | 04h00 le 1er du mois | (manuel) | Rappel mensuel de réimporter le ZIP REQ |
 | `mtl-roles-yearly` | `0 8 15 1 *` | 04h00 le 15 janvier | `cd ~/project/src/backend && python -m scripts.import_montreal_roles` | Le rôle MTL est publié vers le 15 janvier |
 

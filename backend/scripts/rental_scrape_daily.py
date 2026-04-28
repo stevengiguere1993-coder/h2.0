@@ -30,6 +30,13 @@ from sqlalchemy import delete
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.db.session import AsyncSessionLocal  # noqa: E402
+from app.integrations.centris.scraper import (  # noqa: E402
+    CentrisBlocked,
+    SEARCH_URLS,
+    parse_listings_html,
+    try_fetch_search,
+    upsert_listings,
+)
 from app.integrations.rental.kijiji import scrape_kijiji  # noqa: E402
 from app.integrations.rental.lespac import scrape_lespac  # noqa: E402
 from app.models.rental_listing import RentalListing  # noqa: E402
@@ -77,7 +84,33 @@ async def main() -> int:
         except Exception as exc:
             log.exception("LesPAC failed: %s", exc)
 
-        # 3. Cleanup : annonces > 30 jours
+        # 3. Centris (multi-logements à vendre)
+        for cat in ("multiplex_2_5", "immeuble_residentiel_6_plus"):
+            try:
+                html = await try_fetch_search(SEARCH_URLS[cat], page=1)
+                listings = parse_listings_html(html)
+                if listings:
+                    r = await upsert_listings(db, listings, cat)
+                    await db.commit()
+                    log.info(
+                        "Centris %s : new=%s updated=%s",
+                        cat,
+                        r["new"],
+                        r["updated"],
+                    )
+                else:
+                    log.info("Centris %s : 0 listings parsed", cat)
+            except CentrisBlocked as exc:
+                log.warning(
+                    "Centris %s bloqué par Cloudflare : %s — paste "
+                    "manuel requis",
+                    cat,
+                    exc,
+                )
+            except Exception as exc:
+                log.exception("Centris %s failed: %s", cat, exc)
+
+        # 4. Cleanup : annonces > 30 jours
         try:
             cutoff = datetime.now(timezone.utc) - timedelta(days=30)
             res = await db.execute(

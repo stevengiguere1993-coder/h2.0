@@ -15,6 +15,7 @@ from app.models.calendar_sync import (
     ExternalBusyBlock,
     UserCalendarFeed,
 )
+from app.models.centris_listing import CentrisListing
 from app.models.client import Client
 from app.models.contact_request import ContactRequest
 from app.models.contact_request_photo import ContactRequestPhoto
@@ -76,6 +77,7 @@ __all__ = [
     "AvailabilitySlot",
     "ExternalBusyBlock",
     "UserCalendarFeed",
+    "CentrisListing",
     "Client",
     "ContactRequest",
     "ContactRequestPhoto",
