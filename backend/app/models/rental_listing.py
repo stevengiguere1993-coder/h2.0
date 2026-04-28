@@ -87,7 +87,19 @@ class RentalListing(Base):
         Integer, nullable=True
     )
 
-    # Inclusions (JSON-encoded array de strings)
+    # Quartier extrait du texte de l'annonce (forme canonique).
+    # Ex: « Plateau Mont-Royal », « Hochelaga-Maisonneuve », « Verdun ».
+    quartier: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+
+    # True si l'annonce mentionne « rénové », « refait à neuf »,
+    # « modernisé », « neuf », etc.
+    is_renovated: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="false"
+    )
+
+    # Inclusions (JSON-encoded array de tags normalisés).
     # ex: ["chauffage", "electricite", "internet", "stationnement"]
     inclusions_json: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True

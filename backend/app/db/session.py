@@ -242,6 +242,13 @@ async def init_db() -> None:
             # par matricule pour éviter les re-scrapes.
             ("mtl_property_units", "owners_json", "TEXT"),
             ("mtl_property_units", "owners_fetched_at", "TIMESTAMP WITH TIME ZONE"),
+            # Comparables loyers : enrichissements parser
+            ("rental_listings", "quartier", "VARCHAR(64)"),
+            (
+                "rental_listings",
+                "is_renovated",
+                "BOOLEAN NOT NULL DEFAULT FALSE",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

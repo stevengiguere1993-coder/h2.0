@@ -164,3 +164,187 @@ def extract_address(text: str) -> Optional[dict]:
     if not rue or len(rue) < 3:
         return None
     return {"civique": civique, "nom_rue": rue}
+
+
+# ============== INCLUSIONS ==============
+# Mapping mot-clé → tag normalisé. Regex matche les variantes
+# courantes (FR + EN + abrégé).
+_INCLUSIONS = (
+    ("chauffage", re.compile(
+        r"chauff(?:age|é|er|ée)|chauf\.?\s*incl|heat(?:ing)?\s+incl|"
+        r"heating\s+included",
+        re.IGNORECASE,
+    )),
+    ("electricite", re.compile(
+        r"électricité|electricite|hydro|electricity|elect\.?\s*incl",
+        re.IGNORECASE,
+    )),
+    ("eau_chaude", re.compile(
+        r"eau\s*chaude|hot\s*water",
+        re.IGNORECASE,
+    )),
+    ("internet", re.compile(
+        r"internet(?:\s+(?:incl|inclus))?|wifi|wi-?fi",
+        re.IGNORECASE,
+    )),
+    ("cable", re.compile(
+        r"câble(?:\s+TV)?|cable\s*TV?|tv\s*cable",
+        re.IGNORECASE,
+    )),
+    ("stationnement", re.compile(
+        r"stationnement|parking",
+        re.IGNORECASE,
+    )),
+    ("electromenagers", re.compile(
+        r"électroménagers?|appareils?\s+ménagers?|"
+        r"appliances?(?:\s+included)?|fridge.*stove|frigo.*cuisinière",
+        re.IGNORECASE,
+    )),
+    ("climatiseur", re.compile(
+        r"climatiseur|climatisation|air\s*climatisé|"
+        r"a\.?c\.?(?!\w)|air\s*conditioning",
+        re.IGNORECASE,
+    )),
+    ("laveuse_secheuse", re.compile(
+        r"laveuse|sécheuse|laundry|washer|dryer",
+        re.IGNORECASE,
+    )),
+    ("ascenseur", re.compile(
+        r"ascenseur|elevator",
+        re.IGNORECASE,
+    )),
+    ("meuble", re.compile(
+        r"meublé|furnished",
+        re.IGNORECASE,
+    )),
+)
+
+
+def extract_inclusions(text: str) -> list[str]:
+    """Détecte les inclusions/équipements mentionnés dans l'annonce.
+
+    Retourne une liste de tags normalisés (ex: ['chauffage',
+    'electricite', 'stationnement']). Trié alphabétiquement.
+    """
+    if not text:
+        return []
+    found: set[str] = set()
+    for tag, pattern in _INCLUSIONS:
+        if pattern.search(text):
+            found.add(tag)
+    return sorted(found)
+
+
+# ============== ÉTAT (rénové / neuf / standard) ==============
+_RENOVATED_RE = re.compile(
+    r"""\b(?:
+        rénové|renove|renovated?|renov\.?|
+        neuf|nouveau|brand[\s-]?new|
+        refait\s+(?:à|a)\s+neuf|
+        complèt(?:ement|ement)\s+rénové|
+        modernisé|moderne|moderniz(?:ed|er)
+    )\b""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def is_renovated(text: str) -> bool:
+    """Détecte si l'annonce mentionne un état rénové/neuf.
+
+    Mots-clés : rénové, refait à neuf, neuf, modernisé, etc.
+    Heuristique simple — un faux positif possible si « pas rénové »
+    apparaît, mais c'est rare dans les annonces.
+    """
+    if not text:
+        return False
+    return bool(_RENOVATED_RE.search(text))
+
+
+# ============== QUARTIER (Montréal et grands centres) ==============
+# Liste non-exhaustive des quartiers les plus communs des grands
+# centres québécois. On cherche dans le texte (case-insensitive)
+# le 1er match.
+_QUARTIERS = (
+    # Île de Montréal
+    "Plateau Mont-Royal", "Plateau-Mont-Royal", "Plateau",
+    "Mile End", "Mile-End",
+    "Outremont",
+    "Westmount",
+    "Notre-Dame-de-Grâce", "NDG",
+    "Côte-des-Neiges", "Cote-des-Neiges", "CDN",
+    "Hochelaga-Maisonneuve", "Hochelaga", "HoMa",
+    "Rosemont", "Rosemont-La-Petite-Patrie", "Petite-Patrie",
+    "Villeray", "Villeray-Saint-Michel-Parc-Extension",
+    "Ahuntsic", "Ahuntsic-Cartierville",
+    "Saint-Henri", "St-Henri",
+    "Saint-Léonard", "St-Léonard", "St-Leonard",
+    "Verdun", "Île-des-Sœurs",
+    "LaSalle", "Lachine",
+    "Pointe-aux-Trembles", "PAT",
+    "Mercier", "Anjou",
+    "Vieux-Montréal", "Vieux Montréal",
+    "Centre-Ville", "Centre-ville", "Downtown",
+    "Saint-Michel", "Saint Michel",
+    "Le Sud-Ouest", "Sud-Ouest", "Petite-Bourgogne", "Pointe-Saint-Charles",
+    "Griffintown",
+    # Hors île
+    "Laval", "Chomedey", "Sainte-Dorothée", "Pont-Viau", "Auteuil",
+    "Longueuil", "Brossard", "Saint-Lambert", "Saint-Hubert",
+    "Boucherville", "Saint-Bruno",
+    "Terrebonne", "Mascouche", "Repentigny",
+    "Blainville", "Sainte-Thérèse", "Boisbriand",
+    "Saint-Eustache", "Deux-Montagnes",
+)
+
+
+def extract_quartier(text: str) -> Optional[str]:
+    """Trouve un quartier connu mentionné dans l'annonce.
+
+    Retourne la forme canonique normalisée (ex: « Plateau »
+    pour toutes les variantes Plateau / Plateau Mont-Royal /
+    Plateau-Mont-Royal).
+    """
+    if not text:
+        return None
+    # Normalisation des variantes vers une forme canonique.
+    canonical = {
+        "plateau-mont-royal": "Plateau Mont-Royal",
+        "plateau mont-royal": "Plateau Mont-Royal",
+        "plateau": "Plateau Mont-Royal",
+        "mile-end": "Mile End",
+        "mile end": "Mile End",
+        "ndg": "Notre-Dame-de-Grâce",
+        "notre-dame-de-grâce": "Notre-Dame-de-Grâce",
+        "cdn": "Côte-des-Neiges",
+        "cote-des-neiges": "Côte-des-Neiges",
+        "côte-des-neiges": "Côte-des-Neiges",
+        "homa": "Hochelaga-Maisonneuve",
+        "hochelaga": "Hochelaga-Maisonneuve",
+        "hochelaga-maisonneuve": "Hochelaga-Maisonneuve",
+        "petite-patrie": "Rosemont",
+        "rosemont-la-petite-patrie": "Rosemont",
+        "st-henri": "Saint-Henri",
+        "saint-henri": "Saint-Henri",
+        "st-léonard": "Saint-Léonard",
+        "st-leonard": "Saint-Léonard",
+        "saint-léonard": "Saint-Léonard",
+        "pat": "Pointe-aux-Trembles",
+        "pointe-aux-trembles": "Pointe-aux-Trembles",
+        "vieux montréal": "Vieux-Montréal",
+        "vieux-montréal": "Vieux-Montréal",
+        "centre-ville": "Centre-Ville",
+        "downtown": "Centre-Ville",
+        "sud-ouest": "Le Sud-Ouest",
+        "le sud-ouest": "Le Sud-Ouest",
+        "petite-bourgogne": "Le Sud-Ouest",
+        "pointe-saint-charles": "Le Sud-Ouest",
+        "griffintown": "Griffintown",
+    }
+
+    text_low = text.lower()
+    # On cherche d'abord les noms LONGS pour éviter qu'un nom court
+    # ne shadow un nom long. Trié par longueur descendante.
+    for q in sorted(_QUARTIERS, key=len, reverse=True):
+        if q.lower() in text_low:
+            return canonical.get(q.lower(), q)
+    return None

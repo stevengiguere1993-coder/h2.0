@@ -35,8 +35,11 @@ from app.models.rental_listing import RentalListing
 from .parsing import (
     extract_address,
     extract_bedrooms,
+    extract_inclusions,
     extract_phones,
     extract_price,
+    extract_quartier,
+    is_renovated,
 )
 
 log = logging.getLogger(__name__)
@@ -148,6 +151,9 @@ async def fetch_listing_detail(
     bedrooms = extract_bedrooms(text)
     price = extract_price(text)
     address = extract_address(text)
+    quartier = extract_quartier(text)
+    inclusions = extract_inclusions(text)
+    renovated = is_renovated(text)
 
     # Code postal canadien dans le texte
     cp_match = re.search(r"\b([HJK]\d[A-Z]\s*\d[A-Z]\d)\b", text)
@@ -164,9 +170,12 @@ async def fetch_listing_detail(
         "civique": address.get("civique") if address else None,
         "nom_rue": address.get("nom_rue") if address else None,
         "postal_code": postal,
+        "quartier": quartier,
         "price": price,
         "bedrooms": bedrooms,
         "phone": phones[0] if phones else None,
+        "inclusions": inclusions,
+        "is_renovated": renovated,
     }
 
 
@@ -224,6 +233,8 @@ async def scrape_kijiji(
                 if detail is None:
                     continue
 
+                import json as _json
+
                 row = RentalListing(
                     source_url=detail["source_url"],
                     source=detail["source"],
@@ -231,9 +242,14 @@ async def scrape_kijiji(
                     civique=detail.get("civique"),
                     nom_rue=detail.get("nom_rue"),
                     postal_code=detail.get("postal_code"),
+                    quartier=detail.get("quartier"),
                     price=detail.get("price"),
                     bedrooms=detail.get("bedrooms"),
                     phone=detail.get("phone"),
+                    is_renovated=bool(detail.get("is_renovated")),
+                    inclusions_json=_json.dumps(
+                        detail.get("inclusions") or []
+                    ),
                     last_seen_at=datetime.now(timezone.utc),
                 )
                 db.add(row)
