@@ -69,16 +69,51 @@ _GDRIVE_PAGE_RE = re.compile(
 )
 
 
+async def _gofile_current_wt(client: httpx.AsyncClient) -> str:
+    """Le paramètre `wt` de l'API gofile change régulièrement et est
+    embarqué dans leur JavaScript public. On le scrape pour rester
+    à jour automatiquement."""
+    # Le bundle JS contient quelque chose comme `wt: "4fd6sg89d7s6"`.
+    # On essaie plusieurs URLs possibles (gofile a réorganisé son
+    # bundle plusieurs fois). Si tout échoue, fallback sur la dernière
+    # valeur connue.
+    candidates = [
+        "https://gofile.io/dist/js/alljs.js",
+        "https://gofile.io/dist/js/global.js",
+        "https://gofile.io/dist/js/main.js",
+    ]
+    for url in candidates:
+        try:
+            r = await client.get(url)
+            if r.status_code != 200:
+                continue
+            m = re.search(
+                r"""wt\s*[:=]\s*["']([A-Za-z0-9]+)["']""", r.text
+            )
+            if m:
+                wt = m.group(1)
+                log.info("  → wt scrappé depuis %s : %s", url, wt[:6] + "…")
+                return wt
+        except httpx.HTTPError:
+            continue
+    log.warning(
+        "  → impossible de scraper le wt depuis le JS gofile, "
+        "fallback sur la dernière valeur connue"
+    )
+    return "4fd6sg89d7s6"
+
+
 async def _resolve_gofile(
     client: httpx.AsyncClient, content_id: str
 ) -> tuple[str, dict]:
     """Résout une URL gofile.io/d/<id> en URL de téléchargement direct.
 
     L'API publique de gofile demande :
-    1. POST /accounts pour avoir un guestToken
-    2. GET /contents/<id> avec Bearer token
-    Le résultat contient les enfants (fichiers) avec leur `link` direct.
-    On prend le premier (= le ZIP).
+    1. POST /accounts pour un guestToken
+    2. Récupérer le `wt` courant depuis leur bundle JS (rotate
+       régulièrement, d'où `_gofile_current_wt`).
+    3. GET /contents/<id>?wt=<scraped> avec Bearer token
+    Le résultat contient les enfants (fichiers) avec leur `link`.
 
     Retourne (direct_url, cookies_à_envoyer).
     """
@@ -87,12 +122,20 @@ async def _resolve_gofile(
     r.raise_for_status()
     token = r.json()["data"]["token"]
 
+    wt = await _gofile_current_wt(client)
+
     headers = {"Authorization": f"Bearer {token}"}
     r = await client.get(
         f"https://api.gofile.io/contents/{content_id}",
         headers=headers,
-        params={"wt": "4fd6sg89d7s6", "cache": "true"},
+        params={"wt": wt, "cache": "true"},
     )
+    if r.status_code == 401:
+        raise RuntimeError(
+            "gofile.io : 401 Unauthorized — leur API a probablement "
+            "changé. Re-upload le fichier sur transfer.sh ou un autre "
+            "service qui donne une URL directe."
+        )
     r.raise_for_status()
     data = r.json().get("data") or {}
     children = data.get("children") or {}
