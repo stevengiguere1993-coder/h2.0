@@ -45,6 +45,10 @@ export default function ProspectionSourcesPage() {
 
   const [reqFile, setReqFile] = useState<File | null>(null);
   const [reqUploading, setReqUploading] = useState(false);
+  const [reqUploadProgress, setReqUploadProgress] = useState<{
+    sent: number;
+    total: number;
+  } | null>(null);
   const [reqStatus, setReqStatus] = useState<MtlStatus | null>(null);
   const [reqError, setReqError] = useState<string | null>(null);
   const reqPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -180,18 +184,59 @@ export default function ProspectionSourcesPage() {
       return;
     setReqUploading(true);
     setReqError(null);
+    setReqUploadProgress({ sent: 0, total: 1 });
     try {
-      const fd = new FormData();
-      fd.append("zip_file", reqFile);
-      const res = await authedFetch("/api/v1/admin/data/req/import", {
-        method: "POST",
-        body: fd
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      // Upload chunked : on découpe le fichier en morceaux de 10 Mo
+      // pour passer sous la limite ~100 Mo du proxy Render. Chaque
+      // chunk POSTé séparément, le serveur réassemble à la fin.
+      const CHUNK_SIZE = 10 * 1024 * 1024;
+      const totalChunks = Math.ceil(reqFile.size / CHUNK_SIZE);
+      const uploadId =
+        Date.now().toString(36) +
+        "-" +
+        Math.random().toString(36).slice(2, 10);
+
+      setReqUploadProgress({ sent: 0, total: totalChunks });
+
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, reqFile.size);
+        const blob = reqFile.slice(start, end);
+
+        const fd = new FormData();
+        fd.append("upload_id", uploadId);
+        fd.append("chunk_idx", String(i));
+        fd.append("total_chunks", String(totalChunks));
+        fd.append("chunk", blob, `chunk-${i}`);
+
+        const res = await authedFetch(
+          "/api/v1/admin/data/req/upload-chunk",
+          { method: "POST", body: fd }
+        );
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(
+            `Chunk ${i + 1}/${totalChunks} : ${
+              t.slice(0, 200) || res.status
+            }`
+          );
+        }
+        setReqUploadProgress({ sent: i + 1, total: totalChunks });
       }
-      // L'endpoint retourne { status: "started", size_mb }. Lance le poll.
+
+      // Tous les chunks reçus → finalize : réassemble + lance ingestion.
+      const fdFinal = new FormData();
+      fdFinal.append("upload_id", uploadId);
+      fdFinal.append("total_chunks", String(totalChunks));
+      fdFinal.append("filename", reqFile.name);
+      const finRes = await authedFetch(
+        "/api/v1/admin/data/req/upload-finalize",
+        { method: "POST", body: fdFinal }
+      );
+      if (!finRes.ok) {
+        const t = await finRes.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${finRes.status}`);
+      }
       setReqFile(null);
       await refreshReqStatus();
       if (reqPollRef.current === null) {
@@ -201,6 +246,7 @@ export default function ProspectionSourcesPage() {
       setReqError((e as Error).message);
     } finally {
       setReqUploading(false);
+      setReqUploadProgress(null);
     }
   }
 
@@ -382,58 +428,18 @@ export default function ProspectionSourcesPage() {
             </li>
           </ol>
 
-          <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-[11px] text-amber-200/90">
-            <strong className="text-amber-200">
-              ⚠ Le ZIP fait ~225 Mo, plus gros que la limite du proxy
-              Render Free (~100 Mo).
+          <div className="mt-3 rounded-md border border-emerald-500/40 bg-emerald-500/5 p-3 text-[11px] text-emerald-200/90">
+            <strong className="text-emerald-200">
+              ✓ Upload chunked supporté.
             </strong>
-            {" "}L&apos;upload via le formulaire ci-dessous échoue
-            avec « Internal Server Error » avant même d&apos;atteindre
-            FastAPI. Solution : utilise le Render Shell.
-
-            <details className="mt-2">
-              <summary className="cursor-pointer text-amber-200 hover:text-amber-100">
-                Voir la procédure Render Shell
-              </summary>
-              <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-amber-200/80">
-                <li>
-                  Sur{" "}
-                  <a
-                    href="https://transfer.sh"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-emerald-300 hover:text-emerald-200"
-                  >
-                    transfer.sh
-                  </a>{" "}
-                  (gratuit, lien valide 14 jours), upload ton{" "}
-                  <code>JeuDonnees.zip</code> :
-                  <pre className="mt-1 overflow-x-auto rounded bg-black/40 p-2 font-mono text-[10px] text-emerald-300">
-                    {`curl --upload-file JeuDonnees.zip https://transfer.sh/`}
-                  </pre>
-                  Tu reçois une URL en retour.
-                </li>
-                <li>
-                  Dans Render Dashboard → ton service backend → onglet{" "}
-                  <strong>Shell</strong>, lance :
-                  <pre className="mt-1 overflow-x-auto rounded bg-black/40 p-2 font-mono text-[10px] text-emerald-300">
-                    {`cd ~/project/src/backend
-python -m scripts.import_req_zip --url "https://transfer.sh/.../JeuDonnees.zip"`}
-                  </pre>
-                </li>
-                <li>
-                  L&apos;ingestion prend 2-5 min. Pas de timeout HTTP
-                  car c&apos;est un script local.
-                </li>
-              </ol>
-            </details>
+            {" "}Le ZIP de ~225 Mo est découpé en morceaux de 10 Mo
+            côté navigateur, chaque morceau passe sous la limite du
+            proxy Render. Le serveur réassemble + lance l&apos;ingestion
+            automatiquement. Aucun service tiers, tout reste sur ton
+            infra.
           </div>
 
           <div className="mt-4 space-y-3">
-            <p className="text-[11px] text-white/40">
-              Tu peux quand même essayer l&apos;upload web (au cas où
-              le proxy ne bloque plus) :
-            </p>
             <label className="block">
               <span className="label">Fichier ZIP REQ</span>
               <input
@@ -469,7 +475,9 @@ python -m scripts.import_req_zip --url "https://transfer.sh/.../JeuDonnees.zip"`
                   <Upload className="h-4 w-4" />
                 )}
                 {reqUploading
-                  ? "Upload en cours…"
+                  ? reqUploadProgress
+                    ? `Upload ${reqUploadProgress.sent}/${reqUploadProgress.total} chunks…`
+                    : "Upload en cours…"
                   : reqStatus?.status === "running"
                     ? "Ingestion en cours…"
                     : "Importer le ZIP"}
@@ -485,12 +493,34 @@ python -m scripts.import_req_zip --url "https://transfer.sh/.../JeuDonnees.zip"`
               ) : null}
             </div>
 
+            {reqUploading && reqUploadProgress ? (
+              <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 p-3">
+                <p className="text-xs text-emerald-200">
+                  Upload chunked en cours :{" "}
+                  {reqUploadProgress.sent} / {reqUploadProgress.total}{" "}
+                  chunks de 10 Mo
+                </p>
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-brand-800">
+                  <div
+                    className="h-full bg-emerald-500 transition-all"
+                    style={{
+                      width: `${
+                        (reqUploadProgress.sent /
+                          reqUploadProgress.total) *
+                        100
+                      }%`
+                    }}
+                  />
+                </div>
+              </div>
+            ) : null}
+
             {reqStatus?.status === "running" ? (
               <p className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
                 <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />
-                Upload reçu (~225 Mo). Ingestion ~1M corporations en
-                cours en arrière-plan (2-5 min). Tu peux fermer cet
-                onglet, l&apos;import continue côté serveur.
+                Upload reçu, ingestion ~1M corporations en cours en
+                arrière-plan (2-5 min). Tu peux fermer cet onglet,
+                l&apos;import continue côté serveur.
               </p>
             ) : null}
 

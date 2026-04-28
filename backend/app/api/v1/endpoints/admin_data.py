@@ -246,6 +246,139 @@ async def req_import_status(_: RequireOwner) -> dict:
     }
 
 
+# === Chunked upload (bypasse la limite ~100 Mo du proxy Render) ===
+#
+# Le navigateur découpe le ZIP en chunks de 10 Mo via Blob.slice() et
+# POST chaque chunk à /upload-chunk. Quand tous les chunks sont reçus,
+# le client appelle /upload-finalize qui réassemble + kick off
+# l'ingestion en background.
+
+_REQ_UPLOADS_DIR = os.path.join(tempfile.gettempdir(), "req-chunked-uploads")
+
+
+@router.post(
+    "/req/upload-chunk",
+    summary="Reçoit un chunk d'un upload chunked. Écrit sur disque sans "
+    "tout charger en RAM.",
+)
+async def req_upload_chunk(
+    _: RequireOwner,
+    upload_id: str = Form(...),
+    chunk_idx: int = Form(...),
+    total_chunks: int = Form(...),
+    chunk: UploadFile = File(...),
+) -> dict:
+    if not upload_id or not all(c.isalnum() or c == "-" for c in upload_id):
+        raise HTTPException(
+            400, "upload_id invalide (alphanum + tirets seulement)."
+        )
+    if chunk_idx < 0 or chunk_idx >= total_chunks:
+        raise HTTPException(
+            400, f"chunk_idx hors borne (0..{total_chunks - 1})."
+        )
+
+    upload_dir = os.path.join(_REQ_UPLOADS_DIR, upload_id)
+    os.makedirs(upload_dir, exist_ok=True)
+    chunk_path = os.path.join(upload_dir, f"chunk-{chunk_idx:06d}")
+
+    bytes_written = 0
+    try:
+        with open(chunk_path, "wb") as out:
+            while True:
+                buf = await chunk.read(1024 * 1024)
+                if not buf:
+                    break
+                out.write(buf)
+                bytes_written += len(buf)
+    except Exception as exc:
+        try:
+            os.unlink(chunk_path)
+        except OSError:
+            pass
+        raise HTTPException(
+            500, f"Erreur écriture chunk : {exc}"
+        ) from exc
+
+    return {
+        "upload_id": upload_id,
+        "chunk_idx": chunk_idx,
+        "size": bytes_written,
+        "received_chunks": len(os.listdir(upload_dir)),
+        "total_chunks": total_chunks,
+    }
+
+
+@router.post(
+    "/req/upload-finalize",
+    summary="Réassemble les chunks reçus et lance l'ingestion REQ en "
+    "background.",
+)
+async def req_upload_finalize(
+    _: RequireOwner,
+    upload_id: str = Form(...),
+    total_chunks: int = Form(...),
+    filename: Optional[str] = Form(default=None),
+) -> dict:
+    if _req_state["status"] == "running":
+        raise HTTPException(
+            409,
+            "Un import REQ est déjà en cours. Attends qu'il termine.",
+        )
+    upload_dir = os.path.join(_REQ_UPLOADS_DIR, upload_id)
+    if not os.path.isdir(upload_dir):
+        raise HTTPException(404, "upload_id inconnu.")
+
+    received = sorted(os.listdir(upload_dir))
+    if len(received) != total_chunks:
+        raise HTTPException(
+            400,
+            f"Chunks manquants : reçu {len(received)} / {total_chunks}.",
+        )
+
+    # Réassemble dans un seul fichier .zip dans /tmp.
+    final_path = os.path.join(
+        tempfile.gettempdir(), f"req-{upload_id}.zip"
+    )
+    total_size = 0
+    try:
+        with open(final_path, "wb") as out:
+            for name in received:
+                with open(
+                    os.path.join(upload_dir, name), "rb"
+                ) as src:
+                    while True:
+                        buf = src.read(1024 * 1024)
+                        if not buf:
+                            break
+                        out.write(buf)
+                        total_size += len(buf)
+    except Exception as exc:
+        raise HTTPException(
+            500, f"Erreur réassemblage : {exc}"
+        ) from exc
+    finally:
+        # Nettoyage des chunks individuels — on a tout dans final_path.
+        try:
+            for name in received:
+                os.unlink(os.path.join(upload_dir, name))
+            os.rmdir(upload_dir)
+        except OSError:
+            pass
+
+    _req_state["filename"] = filename or f"chunked-upload-{upload_id}.zip"
+    _req_state["_task"] = asyncio.create_task(
+        _req_import_worker(final_path, None)
+    )
+    return {
+        "status": "started",
+        "size_mb": round(total_size / 1024 / 1024, 1),
+        "message": (
+            "Réassemblage terminé, ingestion lancée en arrière-plan. "
+            "Poll /req/import-status pour le suivi."
+        ),
+    }
+
+
 @router.post(
     "/cmhc/import",
     summary="Ingère un CSV SCHL/CMHC (loyers moyens par zone et "
