@@ -134,41 +134,131 @@ async def _try_new_portal(
 ) -> Optional[List[dict]]:
     """Tente le portail moderne montreal.ca/role-evaluation-fonciere.
 
-    Format URL deep link :
-    https://montreal.ca/role-evaluation-fonciere/<matricule>
+    Le portail nécessite un flow stateful en 3 étapes :
+    1. GET /role-evaluation-fonciere → page choix (4 options)
+    2. POST option=matricule + Suivant → page form 6 champs
+    3. POST des 6 sous-champs (Division/Secteur/Emplacement/Cav/
+       Bâtiment/Local) + Rechercher → page résultat
 
-    Le matricule doit être passé sans tirets dans certaines variantes.
-    On essaie les 2 formats.
+    Sans Playwright, on tente plusieurs patterns POST courants. Si
+    rien ne marche, on lève vers le fallback paste manuel.
     """
     matricule_no_dash = matricule.replace("-", "")
-    candidates = [
+    parts = _decompose_matricule(matricule)
+
+    # Variante #1 : deep links éventuels (au cas où)
+    deep_link_candidates = [
         NEW_PORTAL_DETAIL.format(matricule=matricule),
         NEW_PORTAL_DETAIL.format(matricule=matricule_no_dash),
         f"{NEW_PORTAL_URL}?matricule={matricule}",
         f"{NEW_PORTAL_URL}?matricule={matricule_no_dash}",
+        f"{NEW_PORTAL_PUBLIC}?matricule={matricule}",
+        f"{NEW_PORTAL_PUBLIC}/recherche?matricule={matricule}",
+        f"{NEW_PORTAL_PUBLIC}/details/{matricule}",
+        f"{NEW_PORTAL_PUBLIC}/resultat?matricule={matricule}",
     ]
-    for url in candidates:
+    for url in deep_link_candidates:
         try:
             r = await client.get(url)
-            if r.status_code != 200:
+            if r.status_code != 200 or len(r.text) < 1000:
                 continue
-            body = r.text
-            if len(body) < 1000:
+            if "Propriétaire" not in r.text:
                 continue
-            # Si la page contient « Propriétaire » + au moins un
-            # « Nom » avec un nom en majuscules, on tente le parsing.
-            if "Propriétaire" not in body and "Nom" not in body:
-                continue
-            owners = _parse_owners(body)
+            owners = _parse_owners(r.text)
             if owners:
                 log.info(
-                    "EvalWeb : succès via nouveau portail (%d owners)",
+                    "EvalWeb : succès deep link (%s, %d owners)",
+                    url,
                     len(owners),
                 )
                 return owners
         except httpx.HTTPError:
             continue
+
+    # Variante #2 : flow multi-step avec décomposition matricule
+    if not parts:
+        return None
+    try:
+        # Étape 1 : page d'accueil pour cookies de session
+        await client.get(NEW_PORTAL_PUBLIC)
+        # Étape 2 : POST option matricule (plusieurs noms de champ
+        # essayés pour couvrir les variantes de framework)
+        for option_name in ("optionRecherche", "option", "type"):
+            await client.post(
+                NEW_PORTAL_PUBLIC,
+                data={option_name: "matricule"},
+            )
+        # Étape 3 : POST des 6 sous-champs + résultat
+        form_data = {
+            "division": parts["division"],
+            "secteur": parts["secteur"],
+            "emplacement": parts["emplacement"],
+            "cav": parts["cav"],
+            "batiment": parts["batiment"],
+            "local": parts["local"],
+            # Variantes de noms de champ
+            "Division": parts["division"],
+            "Secteur": parts["secteur"],
+            "Emplacement": parts["emplacement"],
+            "Cav": parts["cav"],
+            "Batiment": parts["batiment"],
+            "Local": parts["local"],
+            "matricule": matricule,
+            "rechercher": "Rechercher",
+        }
+        for endpoint in (
+            NEW_PORTAL_PUBLIC,
+            f"{NEW_PORTAL_PUBLIC}/recherche",
+            f"{NEW_PORTAL_PUBLIC}/recherche/matricule",
+            f"{NEW_PORTAL_PUBLIC}/resultat",
+        ):
+            try:
+                r2 = await client.post(endpoint, data=form_data)
+                if r2.status_code != 200 or len(r2.text) < 1000:
+                    continue
+                if "Propriétaire" in r2.text:
+                    owners = _parse_owners(r2.text)
+                    if owners:
+                        log.info(
+                            "EvalWeb : succès flow multi-step "
+                            "(%s, %d owners)",
+                            endpoint,
+                            len(owners),
+                        )
+                        return owners
+            except httpx.HTTPError:
+                continue
+    except httpx.HTTPError:
+        pass
+
     return None
+
+
+def _decompose_matricule(matricule: str) -> Optional[dict]:
+    """Décompose un matricule type « 0135-23-0549-2-000-0000 » en
+    ses 6 composantes Division/Secteur/Emplacement/Cav/Bâtiment/Local.
+    Format obligatoire imposé par le portail montreal.ca."""
+    parts = matricule.split("-")
+    if len(parts) != 6:
+        return None
+    division, secteur, emplacement, cav, batiment, local = parts
+    if not (
+        len(division) == 4
+        and len(secteur) == 2
+        and len(emplacement) == 4
+        and len(cav) == 1
+        and len(batiment) == 3
+        and len(local) == 4
+    ):
+        return None
+    return {
+        "division": division,
+        "secteur": secteur,
+        "emplacement": emplacement,
+        "cav": cav,
+        "batiment": batiment,
+        "local": local,
+    }
 
 
 async def _try_legacy_jsf(
