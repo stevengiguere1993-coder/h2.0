@@ -6,6 +6,7 @@ import {
   BarChart3,
   Building2,
   Calculator,
+  Calendar,
   Database,
   Home,
   Layers,
@@ -35,6 +36,12 @@ const PROSPECTION_NAV: NavItem[] = [
     href: "/prospection/aujourdhui",
     label: "Aujourd'hui",
     icon: Sun,
+    minRole: "manager"
+  },
+  {
+    href: "/prospection/agenda",
+    label: "Agenda",
+    icon: Calendar,
     minRole: "manager"
   },
   { href: "/prospection", label: "Carte", icon: Map, minRole: "manager" },
