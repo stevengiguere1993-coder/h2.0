@@ -11,6 +11,7 @@ import {
   ExternalLink,
   Loader2,
   MapPin,
+  RefreshCw,
   Upload
 } from "lucide-react";
 
@@ -52,6 +53,21 @@ export default function ProspectionSourcesPage() {
   const [reqStatus, setReqStatus] = useState<MtlStatus | null>(null);
   const [reqError, setReqError] = useState<string | null>(null);
   const reqPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Comparables loyers (Kijiji + LesPAC) — scrape on-demand
+  type RentalStatus = MtlStatus & {
+    listings_seen: number | null;
+    listings_new: number | null;
+    listings_updated: number | null;
+    source: string | null;
+  };
+  const [rentalStatus, setRentalStatus] = useState<RentalStatus | null>(
+    null
+  );
+  const [rentalError, setRentalError] = useState<string | null>(null);
+  const rentalPollRef = useRef<ReturnType<typeof setInterval> | null>(
+    null
+  );
 
   const [cmhcFile, setCmhcFile] = useState<File | null>(null);
   const [cmhcBusy, setCmhcBusy] = useState(false);
@@ -110,17 +126,80 @@ export default function ProspectionSourcesPage() {
   // import a été lancé puis on a rechargé la page) et lance le poll
   // sur les deux. Le refresh stoppe son propre intervalle quand
   // status != running.
+  async function refreshRentalStatus() {
+    try {
+      const res = await authedFetch(
+        "/api/v1/admin/data/rental/scrape-status"
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as RentalStatus;
+      setRentalStatus(data);
+      if (
+        data.status !== "running" &&
+        rentalPollRef.current !== null
+      ) {
+        clearInterval(rentalPollRef.current);
+        rentalPollRef.current = null;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function scrapeRental() {
+    if (rentalStatus?.status === "running") return;
+    setRentalError(null);
+    try {
+      const res = await authedFetch(
+        "/api/v1/admin/data/rental/scrape-all",
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      await refreshRentalStatus();
+      if (rentalPollRef.current === null) {
+        rentalPollRef.current = setInterval(refreshRentalStatus, 5000);
+      }
+    } catch (e) {
+      setRentalError((e as Error).message);
+    }
+  }
+
+  async function cleanupRentals() {
+    try {
+      const res = await authedFetch(
+        "/api/v1/prospection/rental-comparables/cleanup?older_than_days=30",
+        { method: "DELETE" }
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as { deleted: number };
+      alert(`${data.deleted} annonces supprimées (> 30 jours).`);
+    } catch {
+      /* ignore */
+    }
+  }
+
   useEffect(() => {
     if (!isOwner) return;
     void refreshMtlStatus();
     void refreshReqStatus();
+    void refreshRentalStatus();
     if (mtlPollRef.current === null) {
       mtlPollRef.current = setInterval(refreshMtlStatus, 5000);
     }
     if (reqPollRef.current === null) {
       reqPollRef.current = setInterval(refreshReqStatus, 5000);
     }
+    if (rentalPollRef.current === null) {
+      rentalPollRef.current = setInterval(refreshRentalStatus, 5000);
+    }
     return () => {
+      if (rentalPollRef.current !== null) {
+        clearInterval(rentalPollRef.current);
+        rentalPollRef.current = null;
+      }
       if (mtlPollRef.current !== null) {
         clearInterval(mtlPollRef.current);
         mtlPollRef.current = null;
@@ -643,6 +722,91 @@ export default function ProspectionSourcesPage() {
               </p>
             ) : null}
           </div>
+        </section>
+
+        {/* === Comparables loyers (Kijiji + LesPAC) === */}
+        <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+          <header className="flex items-start gap-3">
+            <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+              <RefreshCw className="h-5 w-5" />
+            </span>
+            <div>
+              <h2 className="text-base font-bold text-white">
+                Comparables loyers (Kijiji + LesPAC)
+              </h2>
+              <p className="mt-0.5 text-xs text-white/60">
+                Scrape les annonces de location actives pour bâtir
+                une base de comparables (médiane par chambres + zone)
+                et extraire les téléphones de propriétaires.
+                Rétention 30 jours pour limiter le stockage.
+              </p>
+            </div>
+          </header>
+
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={scrapeRental}
+              disabled={!isOwner || rentalStatus?.status === "running"}
+              className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {rentalStatus?.status === "running" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              {rentalStatus?.status === "running"
+                ? "Scrape en cours…"
+                : "Mise à jour comparables"}
+            </button>
+
+            <button
+              type="button"
+              onClick={cleanupRentals}
+              disabled={!isOwner}
+              className="text-[11px] text-white/40 hover:text-rose-300"
+              title="Supprime les annonces > 30 jours"
+            >
+              Nettoyer (30j+)
+            </button>
+
+            {rentalStatus?.status === "done" &&
+            rentalStatus.listings_new !== null ? (
+              <p className="flex items-center gap-1.5 text-xs text-emerald-300">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                {rentalStatus.listings_new.toLocaleString("fr-CA")}{" "}
+                nouvelles ·{" "}
+                {(rentalStatus.listings_updated || 0).toLocaleString(
+                  "fr-CA"
+                )}{" "}
+                ré-vues
+                {rentalStatus.source
+                  ? ` · ${rentalStatus.source}`
+                  : ""}
+              </p>
+            ) : null}
+          </div>
+
+          {rentalStatus?.status === "running" ? (
+            <p className="mt-3 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+              <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />
+              Scrape Kijiji + LesPAC en arrière-plan (10-20 min). Tu
+              peux fermer cet onglet, ça continue côté serveur.
+            </p>
+          ) : null}
+
+          {rentalStatus?.status === "error" && rentalStatus.error ? (
+            <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+              Échec : {rentalStatus.error}
+            </p>
+          ) : null}
+
+          {rentalError ? (
+            <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              {rentalError}
+            </p>
+          ) : null}
         </section>
 
         <p className="mt-6 text-[11px] text-white/40">

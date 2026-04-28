@@ -497,6 +497,134 @@ async def scrape_kijiji_endpoint(
     }
 
 
+async def _lespac_scrape_worker(
+    cities: Optional[list], max_pages: int, max_listings: int
+) -> None:
+    global _rental_state
+    _rental_state["status"] = "running"
+    _rental_state["started_at"] = datetime.now(timezone.utc).isoformat()
+    _rental_state["finished_at"] = None
+    _rental_state["error"] = None
+    _rental_state["source"] = "lespac"
+    try:
+        from app.integrations.rental.lespac import scrape_lespac
+
+        async with AsyncSessionLocal() as session:
+            result = await scrape_lespac(
+                session,
+                cities=cities,
+                max_pages_per_city=max_pages,
+                max_listings_per_run=max_listings,
+            )
+            await session.commit()
+        _rental_state["status"] = "done"
+        _rental_state["listings_seen"] = result.get("listings_seen", 0)
+        _rental_state["listings_new"] = result.get("listings_new", 0)
+        _rental_state["listings_updated"] = result.get(
+            "listings_updated", 0
+        )
+    except Exception as exc:
+        log.exception("lespac scrape failed: %s", exc)
+        _rental_state["status"] = "error"
+        _rental_state["error"] = str(exc)[:500]
+    finally:
+        _rental_state["finished_at"] = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+
+async def _both_scrape_worker(max_pages: int, max_listings: int) -> None:
+    """Scrape Kijiji puis LesPAC en séquence — 1 seul état partagé."""
+    global _rental_state
+    _rental_state["status"] = "running"
+    _rental_state["started_at"] = datetime.now(timezone.utc).isoformat()
+    _rental_state["finished_at"] = None
+    _rental_state["error"] = None
+    _rental_state["source"] = "kijiji+lespac"
+    seen = new = updated = 0
+    try:
+        from app.integrations.rental.kijiji import scrape_kijiji
+        from app.integrations.rental.lespac import scrape_lespac
+
+        async with AsyncSessionLocal() as session:
+            r1 = await scrape_kijiji(
+                session,
+                max_pages_per_city=max_pages,
+                max_listings_per_run=max_listings,
+            )
+            await session.commit()
+            seen += r1.get("listings_seen", 0)
+            new += r1.get("listings_new", 0)
+            updated += r1.get("listings_updated", 0)
+
+            r2 = await scrape_lespac(
+                session,
+                max_pages_per_city=max_pages,
+                max_listings_per_run=max_listings,
+            )
+            await session.commit()
+            seen += r2.get("listings_seen", 0)
+            new += r2.get("listings_new", 0)
+            updated += r2.get("listings_updated", 0)
+
+        _rental_state["status"] = "done"
+        _rental_state["listings_seen"] = seen
+        _rental_state["listings_new"] = new
+        _rental_state["listings_updated"] = updated
+    except Exception as exc:
+        log.exception("rental scrape (both) failed: %s", exc)
+        _rental_state["status"] = "error"
+        _rental_state["error"] = str(exc)[:500]
+    finally:
+        _rental_state["finished_at"] = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+
+@router.post(
+    "/rental/scrape-lespac",
+    summary="Scrape LesPAC en background (même pattern que Kijiji).",
+)
+async def scrape_lespac_endpoint(
+    _: RequireOwner,
+    cities: Optional[list[str]] = None,
+    max_pages_per_city: int = 1,
+    max_listings_per_run: int = 50,
+) -> dict:
+    if _rental_state["status"] == "running":
+        raise HTTPException(409, "Un scrape est déjà en cours.")
+    _rental_state["_task"] = asyncio.create_task(
+        _lespac_scrape_worker(
+            cities, max_pages_per_city, max_listings_per_run
+        )
+    )
+    return {"status": "started", "message": "Scrape LesPAC lancé."}
+
+
+@router.post(
+    "/rental/scrape-all",
+    summary="Lance Kijiji + LesPAC en séquence en background. "
+    "Bouton « Mise à jour comparables » côté UI.",
+)
+async def scrape_all_endpoint(
+    _: RequireOwner,
+    max_pages_per_city: int = 1,
+    max_listings_per_run: int = 50,
+) -> dict:
+    if _rental_state["status"] == "running":
+        raise HTTPException(409, "Un scrape est déjà en cours.")
+    _rental_state["_task"] = asyncio.create_task(
+        _both_scrape_worker(max_pages_per_city, max_listings_per_run)
+    )
+    return {
+        "status": "started",
+        "message": (
+            "Scrape Kijiji + LesPAC lancé. ~10-20 min total. "
+            "Poll /rental/scrape-status."
+        ),
+    }
+
+
 @router.get(
     "/rental/scrape-status",
     summary="État du dernier scrape de location en cours ou terminé.",
