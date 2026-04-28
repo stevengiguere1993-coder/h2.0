@@ -380,7 +380,58 @@ export default function ProspectionSourcesPage() {
             </li>
           </ol>
 
+          <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-[11px] text-amber-200/90">
+            <strong className="text-amber-200">
+              ⚠ Le ZIP fait ~225 Mo, plus gros que la limite du proxy
+              Render Free (~100 Mo).
+            </strong>
+            {" "}L&apos;upload via le formulaire ci-dessous échoue
+            avec « Internal Server Error » avant même d&apos;atteindre
+            FastAPI. Solution : utilise le Render Shell.
+
+            <details className="mt-2">
+              <summary className="cursor-pointer text-amber-200 hover:text-amber-100">
+                Voir la procédure Render Shell
+              </summary>
+              <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-amber-200/80">
+                <li>
+                  Sur{" "}
+                  <a
+                    href="https://transfer.sh"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-emerald-300 hover:text-emerald-200"
+                  >
+                    transfer.sh
+                  </a>{" "}
+                  (gratuit, lien valide 14 jours), upload ton{" "}
+                  <code>JeuDonnees.zip</code> :
+                  <pre className="mt-1 overflow-x-auto rounded bg-black/40 p-2 font-mono text-[10px] text-emerald-300">
+                    {`curl --upload-file JeuDonnees.zip https://transfer.sh/`}
+                  </pre>
+                  Tu reçois une URL en retour.
+                </li>
+                <li>
+                  Dans Render Dashboard → ton service backend → onglet{" "}
+                  <strong>Shell</strong>, lance :
+                  <pre className="mt-1 overflow-x-auto rounded bg-black/40 p-2 font-mono text-[10px] text-emerald-300">
+                    {`cd ~/project/src/backend
+python -m scripts.import_req_zip --url "https://transfer.sh/.../JeuDonnees.zip"`}
+                  </pre>
+                </li>
+                <li>
+                  L&apos;ingestion prend 2-5 min. Pas de timeout HTTP
+                  car c&apos;est un script local.
+                </li>
+              </ol>
+            </details>
+          </div>
+
           <div className="mt-4 space-y-3">
+            <p className="text-[11px] text-white/40">
+              Tu peux quand même essayer l&apos;upload web (au cas où
+              le proxy ne bloque plus) :
+            </p>
             <label className="block">
               <span className="label">Fichier ZIP REQ</span>
               <input
