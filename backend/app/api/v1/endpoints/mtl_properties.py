@@ -13,10 +13,13 @@ Pour chaque propriété trouvée, on peut :
 
 from __future__ import annotations
 
+import logging
 import unicodedata
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
+
+log = logging.getLogger(__name__)
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, or_, select
 
@@ -423,11 +426,35 @@ async def owner_evalweb(
             cached=False,
         )
 
-    # Scrape EvalWeb.
-    try:
-        owners = await scrape_owners(matricule)
-    except EvalWebError as exc:
-        raise HTTPException(502, str(exc)) from exc
+    # 1) Si le VPS de scraping (Playwright) est configuré, on
+    # l'utilise — beaucoup plus fiable que le scrape httpx direct.
+    # 2) Fallback : scrape direct via httpx (best-effort).
+    from app.integrations import scraping_proxy
+
+    owners: Optional[list] = None
+    if scraping_proxy.vps_available():
+        try:
+            owners = await scraping_proxy.scrape_evalweb_owners(matricule)
+        except Exception as exc:
+            log.warning(
+                "VPS scraping failed for %s: %s — fallback httpx",
+                matricule,
+                exc,
+            )
+            owners = None
+
+    if not owners:
+        try:
+            owners = await scrape_owners(matricule)
+        except EvalWebError as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+    if not owners:
+        raise HTTPException(
+            502,
+            "Aucun propriétaire trouvé. Utilise « Saisir manuellement » "
+            "pour copier la section depuis EvalWeb.",
+        )
 
     # Cache.
     # Enrichissement auto : REQ pour les corps + Canada411 pour le tel.

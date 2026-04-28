@@ -1,0 +1,19 @@
+services:
+  scraper:
+    build: .
+    container_name: horizon-scraper
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"  # accessible seulement via localhost,
+                                # exposé via nginx + SSL
+    environment:
+      SCRAPING_API_KEY: ${SCRAPING_API_KEY:?SCRAPING_API_KEY required}
+    deploy:
+      resources:
+        limits:
+          memory: 3G  # limite RAM (CX22 = 4 Go, on garde 1 Go pour l'OS)
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
