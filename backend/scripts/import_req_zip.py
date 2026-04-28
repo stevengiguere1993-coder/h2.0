@@ -46,6 +46,7 @@ import argparse
 import asyncio
 import logging
 import os
+import re
 import sys
 import time
 
@@ -60,17 +61,103 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("import_req")
 
 
+_GOFILE_PAGE_RE = re.compile(
+    r"^https?://(?:www\.)?gofile\.io/d/([A-Za-z0-9]+)"
+)
+_GDRIVE_PAGE_RE = re.compile(
+    r"^https?://drive\.google\.com/file/d/([A-Za-z0-9_-]+)"
+)
+
+
+async def _resolve_gofile(
+    client: httpx.AsyncClient, content_id: str
+) -> tuple[str, dict]:
+    """Résout une URL gofile.io/d/<id> en URL de téléchargement direct.
+
+    L'API publique de gofile demande :
+    1. POST /accounts pour avoir un guestToken
+    2. GET /contents/<id> avec Bearer token
+    Le résultat contient les enfants (fichiers) avec leur `link` direct.
+    On prend le premier (= le ZIP).
+
+    Retourne (direct_url, cookies_à_envoyer).
+    """
+    log.info("URL gofile.io détectée — résolution via leur API…")
+    r = await client.post("https://api.gofile.io/accounts")
+    r.raise_for_status()
+    token = r.json()["data"]["token"]
+
+    headers = {"Authorization": f"Bearer {token}"}
+    r = await client.get(
+        f"https://api.gofile.io/contents/{content_id}",
+        headers=headers,
+        params={"wt": "4fd6sg89d7s6", "cache": "true"},
+    )
+    r.raise_for_status()
+    data = r.json().get("data") or {}
+    children = data.get("children") or {}
+    if not children:
+        raise RuntimeError(
+            "gofile.io : aucun fichier dans ce dossier "
+            f"(content_id={content_id})"
+        )
+    first = next(iter(children.values()))
+    direct = first.get("link")
+    name = first.get("name", "?")
+    if not direct:
+        raise RuntimeError(
+            "gofile.io : le fichier n'a pas de lien direct "
+            f"(name={name})"
+        )
+    log.info(
+        "  → %s (%s)",
+        name,
+        direct.rsplit("/", 1)[-1] if direct else "?",
+    )
+    return direct, {"accountToken": token}
+
+
+def _resolve_gdrive(file_id: str) -> str:
+    """Construit l'URL de download direct Google Drive. Pour les
+    fichiers >100 Mo Google retourne d'abord une page de confirmation
+    de virus scan ; on contourne via le paramètre ?confirm=t."""
+    return (
+        f"https://drive.google.com/uc?export=download"
+        f"&id={file_id}&confirm=t"
+    )
+
+
 async def _download(url: str) -> bytes:
-    """Télécharge le ZIP depuis l'URL fournie. Affiche la progression
-    par 25 Mo pour qu'on voie que ça avance."""
-    log.info("Téléchargement depuis %s…", url)
+    """Télécharge le ZIP. Gère automatiquement gofile.io et Google
+    Drive — pour les autres URLs, on passe direct.
+
+    Affiche la progression par 25 Mo pour qu'on voie que ça avance.
+    """
     started = time.monotonic()
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(600.0, connect=30.0),
         follow_redirects=True,
     ) as client:
-        async with client.stream("GET", url) as resp:
+        cookies: dict = {}
+        # Résolution selon l'hébergeur
+        m_gf = _GOFILE_PAGE_RE.match(url)
+        m_gd = _GDRIVE_PAGE_RE.match(url)
+        if m_gf:
+            url, cookies = await _resolve_gofile(client, m_gf.group(1))
+        elif m_gd:
+            url = _resolve_gdrive(m_gd.group(1))
+            log.info("URL Google Drive détectée — utilise le download direct.")
+
+        log.info("Téléchargement depuis %s…", url)
+        async with client.stream("GET", url, cookies=cookies) as resp:
             resp.raise_for_status()
+            ctype = (resp.headers.get("content-type") or "").lower()
+            if "html" in ctype:
+                raise RuntimeError(
+                    "Le serveur a renvoyé du HTML, pas un ZIP. "
+                    "L'URL pointe probablement vers une page web "
+                    "plutôt que le fichier direct. Vérifie l'URL."
+                )
             total = int(resp.headers.get("content-length", 0))
             chunks: list[bytes] = []
             received = 0
