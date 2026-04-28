@@ -78,28 +78,41 @@ async def scrape_owners_via_browser(
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
         ),
+        viewport={"width": 1280, "height": 800},
     )
     page = await context.new_page()
-    page.set_default_timeout(15_000)
+    page.set_default_timeout(30_000)
 
     try:
-        # Étape 1 : page d'accueil
-        await page.goto(NEW_PORTAL_PUBLIC, wait_until="domcontentloaded")
+        # Étape 1 : page d'accueil. networkidle attend que toutes
+        # les requêtes finissent (React hydrate, fonts chargent…).
+        log.info("EvalWeb : goto %s", NEW_PORTAL_PUBLIC)
+        await page.goto(
+            NEW_PORTAL_PUBLIC, wait_until="networkidle", timeout=30_000
+        )
+        # Sécurité supplémentaire : laisse 2s à React pour hydrater
+        # les event listeners.
+        await page.wait_for_timeout(2_000)
 
         # Étape 2 : sélectionne « Par matricule » + Suivant
-        # On essaie plusieurs sélecteurs (text + value)
         await _click_par_matricule(page)
+        await page.wait_for_timeout(500)
         await _click_suivant(page)
+        await page.wait_for_load_state("networkidle", timeout=15_000)
+        await page.wait_for_timeout(1_500)
 
         # Étape 3 : remplit les 6 sous-champs + Rechercher
         await _fill_matricule_form(page, parts)
+        await page.wait_for_timeout(500)
         await _click_rechercher(page)
+        await page.wait_for_load_state("networkidle", timeout=15_000)
+        await page.wait_for_timeout(1_500)
 
         # Étape 4 : si on tombe sur la liste, click le bon matricule
         await _click_matricule_in_list(page, matricule)
-
-        # On devrait être sur la fiche détail. Parse.
         await page.wait_for_load_state("networkidle", timeout=10_000)
+        await page.wait_for_timeout(1_000)
+
         html = await page.content()
         owners = parse_owners_from_html(html)
         if owners:
@@ -109,21 +122,53 @@ async def scrape_owners_via_browser(
                 matricule,
             )
             return owners, None
-        # Si rien extrait, retourne le texte brut pour debug
-        return [], html[:5000]
+        # Si rien extrait, retourne le HTML pour debug + sauve un
+        # screenshot dans /tmp pour inspection ultérieure.
+        try:
+            screenshot_path = f"/tmp/evalweb-fail-{matricule}.png"
+            await page.screenshot(path=screenshot_path, full_page=True)
+            log.warning(
+                "EvalWeb : 0 owners trouvés. Screenshot : %s. URL: %s",
+                screenshot_path,
+                page.url,
+            )
+        except Exception:
+            pass
+        return [], html[:8000]
     finally:
         await context.close()
 
 
 async def _click_par_matricule(page: Page) -> None:
     """Clique le radio button « Par matricule »."""
+    # Stratégie 1 : par texte (plus robuste avec React)
+    try:
+        await page.get_by_text("Par matricule", exact=True).first.click(
+            timeout=5_000
+        )
+        log.info("  → 'Par matricule' cliqué via get_by_text")
+        return
+    except Exception:
+        pass
+    # Stratégie 2 : label-text
+    try:
+        await page.get_by_label("Par matricule").first.click(
+            timeout=5_000
+        )
+        log.info("  → 'Par matricule' cliqué via get_by_label")
+        return
+    except Exception:
+        pass
+    # Stratégie 3 : sélecteurs CSS
     for selector in (
         "input[type='radio'][value='matricule']",
         "label:has-text('Par matricule')",
-        "text=Par matricule",
+        "[role='radio']:has-text('matricule')",
+        "text=/Par matricule/i",
     ):
         try:
             await page.locator(selector).first.click(timeout=3_000)
+            log.info("  → 'Par matricule' cliqué via %s", selector)
             return
         except Exception:
             continue
@@ -131,6 +176,14 @@ async def _click_par_matricule(page: Page) -> None:
 
 
 async def _click_suivant(page: Page) -> None:
+    try:
+        await page.get_by_role("button", name="Suivant").first.click(
+            timeout=5_000
+        )
+        log.info("  → 'Suivant' cliqué via get_by_role")
+        return
+    except Exception:
+        pass
     for selector in (
         "button:has-text('Suivant')",
         "input[type='submit'][value='Suivant']",
@@ -138,7 +191,7 @@ async def _click_suivant(page: Page) -> None:
     ):
         try:
             await page.locator(selector).first.click(timeout=3_000)
-            await page.wait_for_load_state("domcontentloaded")
+            log.info("  → 'Suivant' cliqué via %s", selector)
             return
         except Exception:
             continue
@@ -201,6 +254,14 @@ async def _fill_matricule_form(page: Page, parts: dict) -> None:
 
 
 async def _click_rechercher(page: Page) -> None:
+    try:
+        await page.get_by_role(
+            "button", name="Rechercher"
+        ).first.click(timeout=5_000)
+        log.info("  → 'Rechercher' cliqué via get_by_role")
+        return
+    except Exception:
+        pass
     for selector in (
         "button:has-text('Rechercher')",
         "input[type='submit'][value='Rechercher']",
@@ -208,7 +269,7 @@ async def _click_rechercher(page: Page) -> None:
     ):
         try:
             await page.locator(selector).first.click(timeout=3_000)
-            await page.wait_for_load_state("domcontentloaded")
+            log.info("  → 'Rechercher' cliqué via %s", selector)
             return
         except Exception:
             continue
