@@ -636,6 +636,190 @@ async def rental_scrape_status(_: RequireOwner) -> dict:
     }
 
 
+# === Import provincial (Rive-Sud / Rive-Nord / Laval) ===
+#
+# Le rôle d'évaluation provincial est ~3-5 GB compressé. Comme le
+# REQ ZIP, on utilise l'upload chunked du browser pour bypasser la
+# limite proxy. L'ingestion filtre par région (liste de villes).
+
+_provincial_state: dict = {
+    "status": "idle",
+    "started_at": None,
+    "finished_at": None,
+    "rows_processed": None,
+    "rows_upserted": None,
+    "region": None,
+    "error": None,
+}
+
+_PROVINCIAL_UPLOADS_DIR = os.path.join(
+    tempfile.gettempdir(), "provincial-uploads"
+)
+
+
+@router.post(
+    "/provincial/upload-chunk",
+    summary="Reçoit un chunk d'upload du CSV provincial.",
+)
+async def provincial_upload_chunk(
+    _: RequireOwner,
+    upload_id: str = Form(...),
+    chunk_idx: int = Form(...),
+    total_chunks: int = Form(...),
+    chunk: UploadFile = File(...),
+) -> dict:
+    if not upload_id or not all(c.isalnum() or c == "-" for c in upload_id):
+        raise HTTPException(400, "upload_id invalide.")
+    if chunk_idx < 0 or chunk_idx >= total_chunks:
+        raise HTTPException(400, "chunk_idx hors borne.")
+
+    upload_dir = os.path.join(_PROVINCIAL_UPLOADS_DIR, upload_id)
+    os.makedirs(upload_dir, exist_ok=True)
+    chunk_path = os.path.join(upload_dir, f"chunk-{chunk_idx:06d}")
+
+    bytes_written = 0
+    try:
+        with open(chunk_path, "wb") as out:
+            while True:
+                buf = await chunk.read(1024 * 1024)
+                if not buf:
+                    break
+                out.write(buf)
+                bytes_written += len(buf)
+    except Exception as exc:
+        try:
+            os.unlink(chunk_path)
+        except OSError:
+            pass
+        raise HTTPException(
+            500, f"Erreur écriture chunk : {exc}"
+        ) from exc
+
+    return {
+        "upload_id": upload_id,
+        "chunk_idx": chunk_idx,
+        "size": bytes_written,
+        "received_chunks": len(os.listdir(upload_dir)),
+        "total_chunks": total_chunks,
+    }
+
+
+async def _provincial_ingest_worker(
+    final_path: str, region: str, max_rows: Optional[int]
+) -> None:
+    global _provincial_state
+    _provincial_state["status"] = "running"
+    _provincial_state["started_at"] = datetime.now(
+        timezone.utc
+    ).isoformat()
+    _provincial_state["finished_at"] = None
+    _provincial_state["error"] = None
+    _provincial_state["region"] = region
+    try:
+        from app.integrations.roles_evaluation.quebec_regional import (
+            ingest_provincial_csv,
+        )
+
+        async with AsyncSessionLocal() as session:
+            result = await ingest_provincial_csv(
+                session,
+                final_path,
+                region=region,
+                max_rows=max_rows,
+            )
+            await session.commit()
+        _provincial_state["status"] = "done"
+        _provincial_state["rows_processed"] = int(
+            result.get("rows_processed") or 0
+        )
+        _provincial_state["rows_upserted"] = int(
+            result.get("rows_upserted") or 0
+        )
+    except Exception as exc:
+        log.exception("provincial ingest failed: %s", exc)
+        _provincial_state["status"] = "error"
+        _provincial_state["error"] = str(exc)[:500]
+    finally:
+        _provincial_state["finished_at"] = datetime.now(
+            timezone.utc
+        ).isoformat()
+        try:
+            os.unlink(final_path)
+        except OSError:
+            pass
+
+
+@router.post(
+    "/provincial/upload-finalize",
+    summary="Réassemble les chunks reçus et lance l'ingest filtré "
+    "par région (rive-sud, laval, rive-nord).",
+)
+async def provincial_upload_finalize(
+    _: RequireOwner,
+    upload_id: str = Form(...),
+    total_chunks: int = Form(...),
+    region: str = Form(..., pattern="^(rive-sud|laval|rive-nord)$"),
+    max_rows: Optional[int] = Form(default=None),
+) -> dict:
+    if _provincial_state["status"] == "running":
+        raise HTTPException(
+            409, "Un import provincial est déjà en cours."
+        )
+    upload_dir = os.path.join(_PROVINCIAL_UPLOADS_DIR, upload_id)
+    if not os.path.isdir(upload_dir):
+        raise HTTPException(404, "upload_id inconnu.")
+
+    received = sorted(os.listdir(upload_dir))
+    if len(received) != total_chunks:
+        raise HTTPException(
+            400,
+            f"Chunks manquants : reçu {len(received)} / {total_chunks}.",
+        )
+
+    final_path = os.path.join(
+        tempfile.gettempdir(), f"provincial-{upload_id}.csv"
+    )
+    total_size = 0
+    try:
+        with open(final_path, "wb") as out:
+            for name in received:
+                with open(
+                    os.path.join(upload_dir, name), "rb"
+                ) as src:
+                    while True:
+                        buf = src.read(1024 * 1024)
+                        if not buf:
+                            break
+                        out.write(buf)
+                        total_size += len(buf)
+    finally:
+        try:
+            for name in received:
+                os.unlink(os.path.join(upload_dir, name))
+            os.rmdir(upload_dir)
+        except OSError:
+            pass
+
+    _provincial_state["_task"] = asyncio.create_task(
+        _provincial_ingest_worker(final_path, region, max_rows)
+    )
+    return {
+        "status": "started",
+        "size_mb": round(total_size / 1024 / 1024, 1),
+        "region": region,
+    }
+
+
+@router.get(
+    "/provincial/import-status",
+    summary="État de l'import provincial en cours ou terminé.",
+)
+async def provincial_import_status(_: RequireOwner) -> dict:
+    return {
+        k: v for k, v in _provincial_state.items() if not k.startswith("_")
+    }
+
+
 _centris_state: dict = {
     "status": "idle",
     "started_at": None,
