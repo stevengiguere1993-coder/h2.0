@@ -56,8 +56,10 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 )
 
-# Timeout réseau : EvalWeb est parfois lent (legacy JSF).
-TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+# Timeout réseau : on veut fail-fast pour éviter de tenir le proxy
+# Render trop longtemps (limite 100s, plus le user attend, plus le
+# UX se dégrade). 5s par requête, max 4-5 essais → ~20s total.
+TIMEOUT = httpx.Timeout(5.0, connect=3.0)
 
 
 class EvalWebOwner(dict):
@@ -120,12 +122,17 @@ async def scrape_owners(matricule: str) -> List[dict]:
     except Exception as exc:
         log.debug("Legacy JSF failed: %s", exc)
 
-    # Tout a échoué
+    # Tout a échoué — le portail montreal.ca a un flow stateful 4
+    # étapes avec CSRF tokens probablement, qu'on ne peut pas
+    # reproduire fiablement sans navigateur headless (Playwright).
+    # Le user passe au paste manuel — 30s + auto-enrichissement
+    # REQ + Canada411 = aussi efficace en pratique.
     raise EvalWebError(
-        "Impossible de récupérer les propriétaires automatiquement "
-        "— le site de la Ville a probablement changé de structure. "
-        "Utilise le mode manuel : ouvre EvalWeb dans ton navigateur, "
-        "copie la section Propriétaire et colle-la."
+        "Le scraper auto n'arrive pas à passer le flow stateful du "
+        "portail montreal.ca. Utilise « Saisir manuellement → » : "
+        "ouvre EvalWeb, fais la recherche par matricule, copie la "
+        "section Propriétaire et colle ici. Le système enrichit "
+        "ensuite automatiquement avec REQ + Canada411."
     )
 
 
@@ -146,20 +153,13 @@ async def _try_new_portal(
     matricule_no_dash = matricule.replace("-", "")
     parts = _decompose_matricule(matricule)
 
-    # Variante #1 : deep links éventuels (au cas où)
+    # Variante #1 : deep links éventuels (au cas où). On limite à
+    # 4 candidats pour rester rapide (5s × 4 = 20s max).
     deep_link_candidates = [
-        NEW_PORTAL_DETAIL.format(matricule=matricule),
-        NEW_PORTAL_DETAIL.format(matricule=matricule_no_dash),
-        f"{NEW_PORTAL_URL}?matricule={matricule}",
-        f"{NEW_PORTAL_URL}?matricule={matricule_no_dash}",
-        f"{NEW_PORTAL_PUBLIC}?matricule={matricule}",
-        f"{NEW_PORTAL_PUBLIC}/recherche?matricule={matricule}",
-        f"{NEW_PORTAL_PUBLIC}/details/{matricule}",
-        f"{NEW_PORTAL_PUBLIC}/resultat?matricule={matricule}",
-        # URL exacte du portail montreal.ca pour la fiche détaillée
         f"{NEW_PORTAL_PUBLIC}/matricule/liste/resultat?matricule={matricule}",
-        f"{NEW_PORTAL_PUBLIC}/matricule/liste/resultat?matricule={matricule_no_dash}",
-        f"{NEW_PORTAL_PUBLIC}/matricule/liste?matricule={matricule}",
+        NEW_PORTAL_DETAIL.format(matricule=matricule),
+        f"{NEW_PORTAL_URL}?matricule={matricule}",
+        f"{NEW_PORTAL_PUBLIC}?matricule={matricule}",
     ]
     for url in deep_link_candidates:
         try:
