@@ -83,6 +83,18 @@ async def scrape_owners_via_browser(
     page = await context.new_page()
     page.set_default_timeout(30_000)
 
+    async def _snap(label: str) -> None:
+        try:
+            path = f"/tmp/evalweb-step-{matricule}-{label}.png"
+            await page.screenshot(path=path, full_page=True)
+            html_len = len(await page.content())
+            log.info(
+                "STEP[%s] url=%s html_len=%d screenshot=%s",
+                label, page.url, html_len, path,
+            )
+        except Exception as exc:
+            log.warning("STEP[%s] snap fail: %s", label, exc)
+
     try:
         # Étape 1 : page d'accueil. networkidle attend que toutes
         # les requêtes finissent (React hydrate, fonts chargent…).
@@ -93,25 +105,31 @@ async def scrape_owners_via_browser(
         # Sécurité supplémentaire : laisse 2s à React pour hydrater
         # les event listeners.
         await page.wait_for_timeout(2_000)
+        await _snap("01-home")
 
         # Étape 2 : sélectionne « Par matricule » + Suivant
         await _click_par_matricule(page)
         await page.wait_for_timeout(500)
+        await _snap("02-radio-checked")
         await _click_suivant(page)
         await page.wait_for_load_state("networkidle", timeout=15_000)
         await page.wait_for_timeout(1_500)
+        await _snap("03-after-suivant")
 
         # Étape 3 : remplit les 6 sous-champs + Rechercher
         await _fill_matricule_form(page, parts)
         await page.wait_for_timeout(500)
+        await _snap("04-form-filled")
         await _click_rechercher(page)
         await page.wait_for_load_state("networkidle", timeout=15_000)
         await page.wait_for_timeout(1_500)
+        await _snap("05-after-rechercher")
 
         # Étape 4 : si on tombe sur la liste, click le bon matricule
         await _click_matricule_in_list(page, matricule)
         await page.wait_for_load_state("networkidle", timeout=10_000)
         await page.wait_for_timeout(1_000)
+        await _snap("06-final")
 
         html = await page.content()
         owners = parse_owners_from_html(html)
