@@ -16,6 +16,6 @@ USER pwuser
 # Port exposé
 EXPOSE 8000
 
-# Démarrage. workers=2 sur CPX21 (4 GB) — permet 2 scrapes en
-# parallèle. Si tu downsize à CPX11 (2 GB), passe à workers=1.
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# Démarrage. workers=1 pour CPX11 (2 GB) — Chromium prend déjà 500-700
+# MB. Si tu upgrades à CPX21+ (4 GB), passe à workers=2.
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

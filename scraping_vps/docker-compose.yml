@@ -11,7 +11,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 3G  # CPX21 (4 GB) — laisse 1 GB à l'OS.
+          memory: 1.5G  # CPX11 (2 GB) — laisse 500 MB à l'OS.
+                        # Si tu upgrades à CPX21+ (4 GB), passe à 3G.
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:8000/health"]
       interval: 30s
