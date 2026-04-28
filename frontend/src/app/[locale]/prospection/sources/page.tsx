@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Building2,
@@ -25,14 +25,22 @@ type ImportResult = {
   rows_upserted: number;
 };
 
+type MtlStatus = {
+  status: "idle" | "running" | "done" | "error";
+  started_at: string | null;
+  finished_at: string | null;
+  rows_upserted: number | null;
+  error: string | null;
+};
+
 export default function ProspectionSourcesPage() {
   const { onOpenSidebar } = useProspectionLayout();
   const { user } = useCurrentUser();
   const isOwner = hasMinRole(user, "owner");
 
-  const [mtlBusy, setMtlBusy] = useState(false);
-  const [mtlResult, setMtlResult] = useState<ImportResult | null>(null);
+  const [mtlStatus, setMtlStatus] = useState<MtlStatus | null>(null);
   const [mtlError, setMtlError] = useState<string | null>(null);
+  const mtlPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [reqFile, setReqFile] = useState<File | null>(null);
   const [reqBusy, setReqBusy] = useState(false);
@@ -69,11 +77,54 @@ export default function ProspectionSourcesPage() {
     }
   }
 
+  // Polling de l'état de l'import MTL (long, 3-5 min). On poll toutes
+  // les 5s tant que status=running.
+  async function refreshMtlStatus() {
+    try {
+      const res = await authedFetch(
+        "/api/v1/admin/data/mtl-roles/import-status"
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as MtlStatus;
+      setMtlStatus(data);
+      // Stoppe le poll quand l'import est terminé.
+      if (
+        data.status !== "running" &&
+        mtlPollRef.current !== null
+      ) {
+        clearInterval(mtlPollRef.current);
+        mtlPollRef.current = null;
+      }
+    } catch {
+      /* silencieux — Render Free dort parfois quelques secondes */
+    }
+  }
+
+  // Au montage : charge l'état une fois (utile si un import a été
+  // lancé puis on a rechargé la page) et lance le poll si en cours.
+  useEffect(() => {
+    if (!isOwner) return;
+    void refreshMtlStatus().then(() => {
+      // setMtlStatus a été mis à jour de façon async; on relit l'état
+      // depuis le state via un setTimeout — mais c'est plus simple de
+      // démarrer le poll inconditionnellement et de le stopper si
+      // status != running.
+      if (mtlPollRef.current === null) {
+        mtlPollRef.current = setInterval(refreshMtlStatus, 5000);
+      }
+    });
+    return () => {
+      if (mtlPollRef.current !== null) {
+        clearInterval(mtlPollRef.current);
+        mtlPollRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOwner]);
+
   async function importMontreal() {
-    if (mtlBusy) return;
-    setMtlBusy(true);
+    if (mtlStatus?.status === "running") return;
     setMtlError(null);
-    setMtlResult(null);
     try {
       const res = await authedFetch(
         "/api/v1/admin/data/mtl-roles/import",
@@ -83,11 +134,13 @@ export default function ProspectionSourcesPage() {
         const t = await res.text();
         throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
       }
-      setMtlResult((await res.json()) as ImportResult);
+      // L'endpoint retourne { status: "started" }. On lance le poll.
+      await refreshMtlStatus();
+      if (mtlPollRef.current === null) {
+        mtlPollRef.current = setInterval(refreshMtlStatus, 5000);
+      }
     } catch (e) {
       setMtlError((e as Error).message);
-    } finally {
-      setMtlBusy(false);
     }
   }
 
@@ -186,31 +239,48 @@ export default function ProspectionSourcesPage() {
             publie le nouveau rôle.
           </p>
 
-          <div className="mt-4 flex items-center justify-between">
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
             <button
               type="button"
               onClick={importMontreal}
-              disabled={!isOwner || mtlBusy}
+              disabled={!isOwner || mtlStatus?.status === "running"}
               className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {mtlBusy ? (
+              {mtlStatus?.status === "running" ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <Download className="h-4 w-4" />
               )}
-              {mtlBusy
+              {mtlStatus?.status === "running"
                 ? "Import en cours…"
                 : "Importer le rôle Montréal"}
             </button>
 
-            {mtlResult ? (
+            {mtlStatus?.status === "done" &&
+            mtlStatus.rows_upserted !== null ? (
               <p className="flex items-center gap-1.5 text-xs text-emerald-300">
                 <CheckCircle2 className="h-3.5 w-3.5" />
-                {mtlResult.rows_upserted.toLocaleString("fr-CA")} unités
+                {mtlStatus.rows_upserted.toLocaleString("fr-CA")} unités
                 ingérées
               </p>
             ) : null}
           </div>
+
+          {mtlStatus?.status === "running" ? (
+            <p className="mt-3 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+              <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />
+              Téléchargement + ingestion en arrière-plan (3-5 min). Tu
+              peux fermer cet onglet, l&apos;import continue côté
+              serveur. État rafraîchi automatiquement toutes les 5 s.
+            </p>
+          ) : null}
+
+          {mtlStatus?.status === "error" && mtlStatus.error ? (
+            <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+              Échec : {mtlStatus.error}
+            </p>
+          ) : null}
 
           {mtlError ? (
             <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">

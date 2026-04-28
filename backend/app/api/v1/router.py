@@ -8,6 +8,7 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     admin_data,
+    agenda_unified,
     appointments,
     audit,
     auth,
@@ -132,6 +133,9 @@ api_router.include_router(soumission_send.router)
 api_router.include_router(soumission_status.router)
 api_router.include_router(soumission_to_client.router)
 api_router.include_router(soumission_to_project.router)
+# /agenda/unified DOIT être avant agenda_router (CRUD générique avec
+# /agenda/{item_id}) pour que le path littéral matche en premier.
+api_router.include_router(agenda_unified.router)
 api_router.include_router(agenda_router)
 api_router.include_router(bon_items.router)
 api_router.include_router(bon_send.router)

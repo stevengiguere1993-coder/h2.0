@@ -229,6 +229,15 @@ async def init_db() -> None:
             # Multi-volet : un user peut avoir accès à construction,
             # prospection ou les deux. NULL = backward compat (tous).
             ("users", "volets_json", "TEXT"),
+            # Agenda partagé entre volets : scope distingue les events
+            # construction (par défaut) des events prospection.
+            (
+                "agenda_events",
+                "scope",
+                "VARCHAR(16) NOT NULL DEFAULT 'construction'",
+            ),
+            ("agenda_events", "lead_id", "INTEGER"),
+            ("agenda_events", "assignee_user_id", "INTEGER"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
