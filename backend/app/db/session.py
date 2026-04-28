@@ -269,6 +269,8 @@ async def init_db() -> None:
                 "invitation_confirmed_at",
                 "TIMESTAMP WITH TIME ZONE",
             ),
+            # Région pour distinguer MTL / Laval / Rive-Sud / Rive-Nord
+            ("mtl_property_units", "region", "VARCHAR(16)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

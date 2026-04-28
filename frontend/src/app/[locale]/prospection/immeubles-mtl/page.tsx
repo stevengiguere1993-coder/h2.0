@@ -762,6 +762,16 @@ type EvalWebOwner = {
   postal_address: string | null;
   inscription_date: string | null;
   conditions: string | null;
+  // Champs ajoutés par l'enrichissement auto (REQ + Canada411)
+  phone: string | null;
+  phone_source: string | null;
+  req_neq: string | null;
+  req_status: string | null;
+  req_forme_juridique: string | null;
+  req_address: string | null;
+  req_ville: string | null;
+  req_code_postal: string | null;
+  c411_address: string | null;
 };
 
 type EvalWebResponse = {
@@ -1077,6 +1087,11 @@ function OwnerCandidatesModal({
                       </p>
                       <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-white/50">
                         {o.statut ? <span>{o.statut}</span> : null}
+                        {o.req_neq ? (
+                          <span className="rounded-full bg-blue-500/15 px-1.5 py-0.5 text-blue-300">
+                            REQ : {o.req_neq}
+                          </span>
+                        ) : null}
                         {o.conditions ? (
                           <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-amber-300">
                             {o.conditions}
@@ -1087,6 +1102,36 @@ function OwnerCandidatesModal({
                         <p className="mt-1 text-[11px] text-white/70">
                           <MapPin className="mr-1 inline h-3 w-3" />
                           {o.postal_address}
+                        </p>
+                      ) : null}
+                      {/* Téléphone trouvé (REQ ou Canada411) */}
+                      {o.phone ? (
+                        <p className="mt-1 text-[11px] text-emerald-300">
+                          📞{" "}
+                          <a
+                            href={`tel:${o.phone}`}
+                            className="hover:text-emerald-200"
+                          >
+                            {o.phone}
+                          </a>
+                          <span className="ml-1 text-[10px] text-white/40">
+                            ({o.phone_source === "req"
+                              ? "REQ"
+                              : o.phone_source === "canada411"
+                                ? "Canada411"
+                                : ""}
+                            )
+                          </span>
+                        </p>
+                      ) : null}
+                      {/* Adresse REQ (siège social corp) */}
+                      {o.req_address ? (
+                        <p className="mt-0.5 text-[10px] text-blue-300/70">
+                          Siège REQ : {o.req_address}
+                          {o.req_ville ? `, ${o.req_ville}` : ""}
+                          {o.req_code_postal
+                            ? ` ${o.req_code_postal}`
+                            : ""}
                         </p>
                       ) : null}
                       {o.inscription_date ? (

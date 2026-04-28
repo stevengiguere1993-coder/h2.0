@@ -84,6 +84,13 @@ class MontrealPropertyUnit(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # Région : « mtl-island », « laval », « rive-sud », « rive-nord ».
+    # Permet de filtrer dans les listes + de gérer les imports
+    # provinciaux (rôles autres que la Ville de Montréal).
+    region: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True, index=True
+    )
+
     __table_args__ = (
         Index("ix_mtl_units_nom_rue", "nom_rue"),
     )

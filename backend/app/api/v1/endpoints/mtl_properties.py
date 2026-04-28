@@ -332,6 +332,16 @@ class EvalWebOwnerOut(BaseModel):
     postal_address: Optional[str] = None
     inscription_date: Optional[str] = None
     conditions: Optional[str] = None
+    # Champs ajoutés par l'enrichissement auto
+    phone: Optional[str] = None
+    phone_source: Optional[str] = None  # "req" | "canada411"
+    req_neq: Optional[str] = None
+    req_status: Optional[str] = None
+    req_forme_juridique: Optional[str] = None
+    req_address: Optional[str] = None
+    req_ville: Optional[str] = None
+    req_code_postal: Optional[str] = None
+    c411_address: Optional[str] = None
 
 
 class EvalWebResponse(BaseModel):
@@ -420,14 +430,19 @@ async def owner_evalweb(
         raise HTTPException(502, str(exc)) from exc
 
     # Cache.
-    p.owners_json = json.dumps(owners, ensure_ascii=False)
+    # Enrichissement auto : REQ pour les corps + Canada411 pour le tel.
+    from app.services.owner_enrichment import enrich_owners as _enrich
+
+    enriched = await _enrich(db, owners)
+
+    p.owners_json = json.dumps(enriched, ensure_ascii=False)
     p.owners_fetched_at = datetime.now(timezone.utc)
-    await _propagate_owners_to_lead(db, matricule, owners)
+    await _propagate_owners_to_lead(db, matricule, enriched)
     await db.flush()
 
     return EvalWebResponse(
         matricule=matricule,
-        owners=[EvalWebOwnerOut(**o) for o in owners],
+        owners=[EvalWebOwnerOut(**o) for o in enriched],
         fetched_at=p.owners_fetched_at.isoformat(),
         cached=False,
     )
@@ -468,6 +483,19 @@ async def _propagate_owners_to_lead(
         lead.owner_kind = ProspectionOwnerKind.CORPORATION.value
     elif any("physique" in s for s in statuts):
         lead.owner_kind = ProspectionOwnerKind.PARTICULIER.value
+
+    # Téléphone enrichi (REQ ou Canada411) → on le pousse au lead
+    # SAUF si le lead a déjà un téléphone (saisi manuellement).
+    for o in owners:
+        if o.get("phone") and not lead.owner_phone:
+            lead.owner_phone = str(o["phone"])[:50]
+            break
+
+    # NEQ enrichi → on le pousse au lead si on l'a trouvé via REQ
+    for o in owners:
+        if o.get("req_neq") and not lead.owner_neq:
+            lead.owner_neq = str(o["req_neq"])[:32]
+            break
 
 
 @router.post(
@@ -514,14 +542,19 @@ async def owner_evalweb_manual(
             "as collé la section commençant par « Nom ».",
         )
 
-    p.owners_json = json.dumps(owners, ensure_ascii=False)
+    # Enrichissement auto : REQ + Canada411 pour chaque owner.
+    from app.services.owner_enrichment import enrich_owners as _enrich
+
+    enriched = await _enrich(db, owners)
+
+    p.owners_json = json.dumps(enriched, ensure_ascii=False)
     p.owners_fetched_at = datetime.now(timezone.utc)
-    await _propagate_owners_to_lead(db, matricule, owners)
+    await _propagate_owners_to_lead(db, matricule, enriched)
     await db.flush()
 
     return EvalWebResponse(
         matricule=matricule,
-        owners=[EvalWebOwnerOut(**o) for o in owners],
+        owners=[EvalWebOwnerOut(**o) for o in enriched],
         fetched_at=p.owners_fetched_at.isoformat(),
         cached=False,
     )
