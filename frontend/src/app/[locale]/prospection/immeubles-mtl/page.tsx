@@ -1014,7 +1014,7 @@ function OwnerCandidatesModal({
                   <li>
                     Ouvre EvalWeb pour cette propriété :{" "}
                     <a
-                      href="https://servicesenligne2.ville.montreal.qc.ca/sel/evalweb/"
+                      href="https://montreal.ca/role-evaluation-fonciere"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-emerald-300 underline hover:text-emerald-200"

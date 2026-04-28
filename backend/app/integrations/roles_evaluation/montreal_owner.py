@@ -34,6 +34,11 @@ log = logging.getLogger(__name__)
 EVALWEB_BASE = "https://servicesenligne2.ville.montreal.qc.ca/sel/evalweb"
 EVALWEB_SEARCH_URL = f"{EVALWEB_BASE}/index"
 
+# ⚠ Le legacy EvalWeb (servicesenligne2) est officiellement
+# déprécié — la Ville le redirige vers une page d'erreur 404 maintenant.
+# On le garde comme fallback ultime au cas où ça revienne, mais
+# le scraper compte essentiellement sur le nouveau portail montreal.ca.
+
 # Nouveau portail montreal.ca (mis en place 2024-2025). Direct deep
 # link par matricule, sans JSF — beaucoup plus fiable que le legacy.
 NEW_PORTAL_URL = (
@@ -42,6 +47,8 @@ NEW_PORTAL_URL = (
 NEW_PORTAL_DETAIL = (
     "https://montreal.ca/role-evaluation-fonciere/{matricule}"
 )
+# Lien grand public à montrer dans l'UI quand le scraper auto échoue.
+NEW_PORTAL_PUBLIC = "https://montreal.ca/role-evaluation-fonciere"
 
 # UA navigateur — certains WAF de la Ville bloquent les UA Python.
 USER_AGENT = (
