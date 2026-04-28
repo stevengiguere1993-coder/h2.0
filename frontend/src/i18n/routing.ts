@@ -206,13 +206,25 @@ export const routing = defineRouting({
       fr: "/prospection/dashboard",
       en: "/prospection/dashboard"
     },
-    "/prospection/sources": {
-      fr: "/prospection/sources",
-      en: "/prospection/sources"
-    },
     "/prospection/parametres": {
       fr: "/prospection/parametres",
       en: "/prospection/parametres"
+    },
+    "/prospection/parametres/connexions": {
+      fr: "/prospection/parametres/connexions",
+      en: "/prospection/parametres/connexions"
+    },
+    "/prospection/parametres/utilisateurs": {
+      fr: "/prospection/parametres/utilisateurs",
+      en: "/prospection/parametres/utilisateurs"
+    },
+    "/prospection/parametres/sources": {
+      fr: "/prospection/parametres/sources",
+      en: "/prospection/parametres/sources"
+    },
+    "/prospection/parametres/outils": {
+      fr: "/prospection/parametres/outils",
+      en: "/prospection/parametres/outils"
     },
     "/m/agenda": { fr: "/m/agenda", en: "/m/agenda" },
     "/m/crm": { fr: "/m/crm", en: "/m/crm" },

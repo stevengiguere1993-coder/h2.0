@@ -2,24 +2,15 @@
 
 import { useEffect, useState } from "react";
 import {
-  AlertCircle,
   CheckCircle2,
-  Database,
   Info,
-  Loader2,
   Map,
-  RefreshCw,
   RotateCcw,
   Save,
-  Sparkles,
-  Users
+  Sparkles
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
-import { ConnexionsSection } from "@/components/connexions-section";
-import { Link } from "@/i18n/navigation";
-import { authedFetch, hasMinRole } from "@/lib/auth";
-import { useCurrentUser } from "@/hooks/use-current-user";
 import {
   DEFAULT_PREFS,
   loadPrefs,
@@ -41,45 +32,49 @@ const SCORE_RULES: { label: string; pts: string; explain: string }[] = [
   {
     label: "Sweet spot 6-12 logements",
     pts: "+30",
-    explain: "Le créneau idéal Horizon — assez gros pour un contrat juteux, gérable côté logistique."
+    explain:
+      "Le créneau idéal Horizon — assez gros pour un contrat juteux, gérable côté logistique."
   },
   {
     label: "Multi 13-20 portes",
     pts: "+24",
-    explain: "Encore très intéressant, légèrement plus gros mais reste dans la cible."
+    explain:
+      "Encore très intéressant, légèrement plus gros mais reste dans la cible."
   },
   {
     label: "Petit multi 4-5 portes",
     pts: "+22",
-    explain: "Acceptable, surtout si valeur foncière élevée ou bâtiment ancien."
+    explain:
+      "Acceptable, surtout si valeur foncière élevée ou bâtiment ancien."
   },
   {
     label: "60 ans+ (très vieux)",
     pts: "+18",
-    explain: "Forte probabilité de besoin en rénovation majeure (toit, plomberie, électricité)."
+    explain:
+      "Forte probabilité de besoin en rénovation majeure (toit, plomberie, électricité)."
   },
   {
     label: "Corporation avec NEQ connu",
     pts: "+22",
-    explain: "Décision d'investissement, budget alloué, prise de décision plus rapide."
+    explain:
+      "Décision d'investissement, budget alloué, prise de décision plus rapide."
   },
   {
     label: "Priorité haute (4-5 étoiles)",
     pts: "+4",
-    explain: "Drapeau manuel posé par l'utilisateur quand il sent un coup à jouer."
+    explain:
+      "Drapeau manuel posé par l'utilisateur quand il sent un coup à jouer."
   },
   {
     label: "Complétude des données",
     pts: "jusqu'à +8",
-    explain: "Plus le lead est renseigné (adresse, notes, matricule, valeur), plus il est actionnable."
+    explain:
+      "Plus le lead est renseigné (adresse, notes, matricule, valeur), plus il est actionnable."
   }
 ];
 
-export default function ProspectionSettingsPage() {
+export default function ProspectionPreferencesPage() {
   const { onOpenSidebar } = useProspectionLayout();
-  const { user } = useCurrentUser();
-  const isOwner = hasMinRole(user, "owner");
-  const isAdmin = hasMinRole(user, "admin");
 
   const [prefs, setPrefs] = useState<ProspectionPrefs>(DEFAULT_PREFS);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -128,12 +123,10 @@ export default function ProspectionSettingsPage() {
       />
 
       <div className="mx-auto max-w-3xl p-4 lg:p-6">
-        <h1 className="text-2xl font-bold text-white">
-          Paramètres Prospection
-        </h1>
+        <h1 className="text-2xl font-bold text-white">Préférences</h1>
         <p className="mt-1 text-sm text-white/60">
-          Personnalise la zone de prospection par défaut, comprends
-          comment le score est calculé, et accède aux outils admin.
+          Personnalise la zone de prospection par défaut et comprends
+          comment le score est calculé.
         </p>
 
         {savedAt ? (
@@ -320,137 +313,7 @@ export default function ProspectionSettingsPage() {
             ))}
           </ul>
         </section>
-
-        {/* === Connexions Prospection === */}
-        <ConnexionsSection scope="prospection" />
-
-        {/* === Outils admin === */}
-        {isAdmin ? <AdminToolsSection /> : null}
-
-        {/* === Utilisateurs & volets === */}
-        {isOwner ? (
-          <Link
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/prospection/parametres/utilisateurs" as any}
-            className="mt-6 flex items-center gap-3 rounded-2xl border border-brand-800 bg-brand-900 p-5 transition hover:border-emerald-500/50"
-          >
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
-              <Users className="h-5 w-5" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <h2 className="text-base font-bold text-white">
-                Utilisateurs &amp; volets →
-              </h2>
-              <p className="mt-0.5 text-xs text-white/60">
-                Crée des comptes (prospecteurs, gestionnaires) et choisis
-                les volets accessibles : Construction, Prospection ou
-                les deux.
-              </p>
-            </div>
-          </Link>
-        ) : null}
-
-        {/* === Lien vers Sources de données === */}
-        {isOwner ? (
-          <Link
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/prospection/sources" as any}
-            className="mt-6 flex items-center gap-3 rounded-2xl border border-brand-800 bg-brand-900 p-5 transition hover:border-emerald-500/50"
-          >
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
-              <Database className="h-5 w-5" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <h2 className="text-base font-bold text-white">
-                Sources de données →
-              </h2>
-              <p className="mt-0.5 text-xs text-white/60">
-                Imports manuels du rôle d&apos;évaluation Montréal et
-                du Registraire des entreprises (REQ).
-              </p>
-            </div>
-          </Link>
-        ) : null}
       </div>
     </>
-  );
-}
-
-function AdminToolsSection() {
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  async function recompute() {
-    if (busy) return;
-    setBusy(true);
-    setResult(null);
-    setError(null);
-    try {
-      const res = await authedFetch(
-        "/api/v1/prospection/recompute-scores",
-        { method: "POST" }
-      );
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
-      }
-      const data = (await res.json()) as { recomputed: number };
-      setResult(
-        `${data.recomputed.toLocaleString("fr-CA")} leads recalculés.`
-      );
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
-      <header className="flex items-center gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/15 text-amber-400">
-          <RefreshCw className="h-5 w-5" />
-        </span>
-        <div>
-          <h2 className="text-base font-bold text-white">
-            Outils administratifs
-          </h2>
-          <p className="mt-0.5 text-xs text-white/60">
-            Actions rares à utiliser après une mise à jour de la
-            logique de scoring ou pour backfiller d&apos;anciens leads.
-          </p>
-        </div>
-      </header>
-
-      <div className="mt-4">
-        <button
-          type="button"
-          onClick={recompute}
-          disabled={busy}
-          className="inline-flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm font-medium text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
-        >
-          {busy ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="h-4 w-4" />
-          )}
-          Recalculer tous les scores
-        </button>
-
-        {result ? (
-          <p className="mt-3 flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            {result}
-          </p>
-        ) : null}
-        {error ? (
-          <p className="mt-3 flex items-center gap-1.5 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-            <AlertCircle className="h-3.5 w-3.5" />
-            {error}
-          </p>
-        ) : null}
-      </div>
-    </section>
   );
 }

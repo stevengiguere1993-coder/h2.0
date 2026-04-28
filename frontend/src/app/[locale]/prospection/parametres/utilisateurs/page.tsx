@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Check,
-  ChevronLeft,
   Loader2,
   Plus,
   ShieldCheck,
@@ -13,7 +12,6 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
-import { Link } from "@/i18n/navigation";
 import { authedFetch, hasMinRole, type UserRole } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { useCurrentUser } from "@/hooks/use-current-user";
@@ -159,15 +157,7 @@ export default function ProspectionUsersPage() {
       />
 
       <div className="px-4 py-6 lg:px-6">
-        <Link
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={"/prospection/parametres" as any}
-          className="inline-flex items-center text-sm text-white/60 hover:text-emerald-300"
-        >
-          <ChevronLeft className="mr-1 h-4 w-4" /> Paramètres
-        </Link>
-
-        <h1 className="mt-4 flex items-center gap-2 text-xl font-bold text-white">
+        <h1 className="flex items-center gap-2 text-xl font-bold text-white">
           <Users className="h-5 w-5 text-emerald-400" />
           Utilisateurs &amp; volets
         </h1>

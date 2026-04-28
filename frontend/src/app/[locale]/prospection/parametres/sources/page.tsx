@@ -17,7 +17,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { authedFetch, hasMinRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
-import { useProspectionLayout } from "../layout";
+import { useProspectionLayout } from "../../layout";
 
 type ImportResult = {
   source: string;
@@ -174,6 +174,7 @@ export default function ProspectionSourcesPage() {
       <AppTopbar
         breadcrumbs={[
           { label: "Prospection", href: "/prospection" },
+          { label: "Paramètres", href: "/prospection/parametres" },
           { label: "Sources de données" }
         ]}
         onOpenSidebar={onOpenSidebar}

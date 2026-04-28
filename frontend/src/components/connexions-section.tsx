@@ -106,7 +106,7 @@ const CONNECTIONS: ConnectionDef[] = [
     name: "Rôle d'évaluation Montréal",
     description:
       "Lookup adresse → matricule, nb logements, année, superficies. ~500k unités.",
-    href: "/prospection/sources"
+    href: "/prospection/parametres/sources"
   },
   {
     id: "req",
@@ -116,7 +116,7 @@ const CONNECTIONS: ConnectionDef[] = [
     name: "Registraire des entreprises (REQ)",
     description:
       "Lookup propriétaire-corporation par adresse + téléphone du siège. ~1M corporations.",
-    href: "/prospection/sources"
+    href: "/prospection/parametres/sources"
   },
   {
     id: "cmhc",
@@ -126,7 +126,7 @@ const CONNECTIONS: ConnectionDef[] = [
     name: "Loyers SCHL / CMHC",
     description:
       "Loyers moyens par zone et par grandeur d'appartement. Sert au calcul du GRM.",
-    href: "/prospection/sources"
+    href: "/prospection/parametres/sources"
   },
   {
     id: "lespac_kangalou",

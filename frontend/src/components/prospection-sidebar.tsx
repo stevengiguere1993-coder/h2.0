@@ -7,7 +7,6 @@ import {
   Building2,
   Calculator,
   Calendar,
-  Database,
   Home,
   Layers,
   LogOut,
@@ -80,12 +79,6 @@ const PROSPECTION_NAV: NavItem[] = [
     label: "Paramètres",
     icon: Settings,
     minRole: "manager"
-  },
-  {
-    href: "/prospection/sources",
-    label: "Sources de données",
-    icon: Database,
-    minRole: "owner"
   },
   // Phase 3+ : campagnes
   // { href: "/prospection/campagnes", label: "Campagnes", icon: Mail },
