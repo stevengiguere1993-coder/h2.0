@@ -855,8 +855,28 @@ function EventModal({
   const [leadId, setLeadId] = useState<number | "">(
     existing?.lead_id ?? ""
   );
+  const [users, setUsers] = useState<
+    Array<UserMini & { volets: string[]; can_assign_others?: boolean }>
+  >([]);
+  const [assigneeUserId, setAssigneeUserId] = useState<number | "">(
+    existing?.assignee_user_id ?? me?.id ?? ""
+  );
+  const [sendEmailInvite, setSendEmailInvite] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Permission d'assigner d'autres : manager+ OU can_assign_others.
+  const canAssignOthers =
+    !!me &&
+    (me.role === "owner" ||
+      me.role === "admin" ||
+      me.role === "manager" ||
+      // can_assign_others : on devrait l'avoir depuis le useCurrentUser
+      // mais ce hook expose pas le champ — fallback sur la liste users
+      // pour vérifier
+      users.some(
+        (u) => u.id === me.id && u.can_assign_others === true
+      ));
 
   // Charge la liste des leads pour le picker
   useEffect(() => {
@@ -866,6 +886,27 @@ function EventModal({
         if (!res.ok) return;
         const data = (await res.json()) as LeadMini[];
         setLeads(data);
+      } catch {
+        /* ignore */
+      }
+    })();
+    // Charge la liste des users pour le picker d'assigné
+    void (async () => {
+      try {
+        const res = await authedFetch("/api/v1/users");
+        if (!res.ok) return;
+        const data = (await res.json()) as Array<
+          UserMini & {
+            volets: string[];
+            can_assign_others?: boolean;
+            is_active?: boolean;
+          }
+        >;
+        const prosp = data.filter(
+          (u) =>
+            u.is_active !== false && u.volets.includes("prospection")
+        );
+        setUsers(prosp);
       } catch {
         /* ignore */
       }
@@ -881,6 +922,39 @@ function EventModal({
     setSubmitting(true);
     setError(null);
     try {
+      const targetUserId =
+        assigneeUserId === "" ? me?.id : Number(assigneeUserId);
+      const isAssigningOther =
+        !isEdit && targetUserId && targetUserId !== me?.id;
+
+      // Quand on assigne à quelqu'un d'autre on utilise l'endpoint
+      // dédié /agenda/invite qui crée + notifie + envoie l'email.
+      if (isAssigningOther) {
+        const res = await authedFetch("/api/v1/agenda/invite", {
+          method: "POST",
+          body: JSON.stringify({
+            title: title.trim(),
+            location: location.trim() || null,
+            description: description.trim() || null,
+            start_at: new Date(startAt).toISOString(),
+            end_at: endAt ? new Date(endAt).toISOString() : null,
+            scope: "prospection",
+            event_type: eventType,
+            lead_id: leadId === "" ? null : Number(leadId),
+            assignee_user_id: targetUserId,
+            send_email_invite: sendEmailInvite
+          })
+        });
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(
+            t.slice(0, 240) || `HTTP ${res.status}`
+          );
+        }
+        onSaved();
+        return;
+      }
+
       const payload = {
         title: title.trim(),
         location: location.trim() || null,
@@ -892,9 +966,7 @@ function EventModal({
         lead_id: leadId === "" ? null : Number(leadId),
         // L'event est assigné au user qui le crée (côté Prospection
         // les prospecteurs n'ont pas forcément de ligne Employe).
-        // Côté Construction on continue d'utiliser assignee_id (Employe).
-        assignee_user_id:
-          existing?.assignee_user_id ?? me?.id ?? null
+        assignee_user_id: targetUserId ?? null
       };
       const url = isEdit
         ? `/api/v1/agenda/${existing!.id}`
@@ -995,6 +1067,50 @@ function EventModal({
               className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white"
             />
           </Field>
+
+          {!isEdit && canAssignOthers && users.length > 0 ? (
+            <Field label="Assigner à">
+              <select
+                value={assigneeUserId}
+                onChange={(e) =>
+                  setAssigneeUserId(
+                    e.target.value === "" ? "" : Number(e.target.value)
+                  )
+                }
+                className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white"
+              >
+                {me ? (
+                  <option value={me.id}>
+                    Moi ({me.email})
+                  </option>
+                ) : null}
+                {users
+                  .filter((u) => u.id !== me?.id)
+                  .map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.full_name || u.email}
+                    </option>
+                  ))}
+              </select>
+            </Field>
+          ) : null}
+
+          {!isEdit &&
+          assigneeUserId !== "" &&
+          assigneeUserId !== me?.id ? (
+            <label className="flex items-center gap-2 text-xs text-white/80">
+              <input
+                type="checkbox"
+                checked={sendEmailInvite}
+                onChange={(e) =>
+                  setSendEmailInvite(e.target.checked)
+                }
+                className="h-4 w-4 rounded border-brand-700 bg-brand-900 text-emerald-500 focus:ring-emerald-500"
+              />
+              Envoyer un courriel d&apos;invitation avec lien de
+              confirmation
+            </label>
+          ) : null}
 
           <Field label="Lead lié (optionnel)">
             <select

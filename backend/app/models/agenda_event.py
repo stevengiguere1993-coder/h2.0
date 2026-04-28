@@ -82,3 +82,11 @@ class AgendaEvent(Base, TimestampUpdateMixin):
     confirmation_sent_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Email d'invitation envoyé à l'assigné (avec lien de confirmation).
+    invitation_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Quand l'assigné a confirmé l'invitation via le lien email.
+    invitation_confirmed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

@@ -298,6 +298,21 @@ async def list_listings(
     ]
 
 
+@router.get(
+    "/market-rates",
+    summary="Taux d'intérêt courants (Banque du Canada). Pour "
+    "auto-remplir le calculateur d'analyse.",
+)
+async def market_rates(_: CurrentUser) -> dict:
+    """Retourne les taux affichés 5 ans des grandes banques + le
+    rendement des obligations 5 ans (proxy taux fixe sans escompte).
+    Utilisé par le wizard d'analyse pour pré-remplir le taux
+    d'intérêt achat à la valeur du jour."""
+    from app.integrations.bank_of_canada import get_current_rates
+
+    return await get_current_rates()
+
+
 @router.delete(
     "/cleanup",
     summary="Supprime les annonces > N jours pour limiter le stockage.",

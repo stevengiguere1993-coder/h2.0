@@ -108,6 +108,24 @@ class User(Base, TimestampMixin):
         Text, nullable=True
     )
 
+    # Permission spéciale : peut assigner des RDV agenda à d'autres
+    # utilisateurs même sans être manager+. Géré au cas-par-cas par
+    # l'owner (ex : Zachary, employé prospecteur qui doit pouvoir
+    # planifier des RDV pour son boss).
+    can_assign_others: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+
+    # Token opaque pour l'auto-confirmation des RDV agenda par email.
+    # L'invité reçoit un lien /agenda/confirm/{event_id}?token=XXX qui
+    # valide sans login. Régénérable par l'utilisateur.
+    agenda_invite_token: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+
     def has_min_role(self, role: str) -> bool:
         return ROLE_RANK.get(self.role, 0) >= ROLE_RANK.get(role, 99)
 

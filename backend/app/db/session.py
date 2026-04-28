@@ -249,6 +249,26 @@ async def init_db() -> None:
                 "is_renovated",
                 "BOOLEAN NOT NULL DEFAULT FALSE",
             ),
+            # Agenda : permission spéciale d'assigner des RDV à d'autres
+            # users (cas Zachary) + token pour le lien d'auto-confirmation
+            # email.
+            (
+                "users",
+                "can_assign_others",
+                "BOOLEAN NOT NULL DEFAULT FALSE",
+            ),
+            ("users", "agenda_invite_token", "VARCHAR(64)"),
+            # AgendaEvent : champs pour l'invitation email + confirmation
+            (
+                "agenda_events",
+                "invitation_sent_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
+            (
+                "agenda_events",
+                "invitation_confirmed_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

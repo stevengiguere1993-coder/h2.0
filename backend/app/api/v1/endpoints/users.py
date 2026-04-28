@@ -55,6 +55,7 @@ class UserRead(BaseModel):
     full_name: Optional[str] = None
     # Volets accessibles (construction / prospection).
     volets: List[str] = Field(default_factory=lambda: list(DEFAULT_VOLETS))
+    can_assign_others: bool = False
 
 
 async def _user_full_names(db, users: List[User]) -> dict[int, str]:
@@ -88,6 +89,7 @@ def _user_read(u: User, full_name: Optional[str]) -> UserRead:
         created_at=u.created_at,
         full_name=full_name,
         volets=u.volets,
+        can_assign_others=bool(getattr(u, "can_assign_others", False)),
     )
 
 
@@ -280,6 +282,31 @@ async def update_volets(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
     cleaned = _validate_volets(data.volets)
     u.volets_json = json.dumps(cleaned)
+    await db.flush()
+    await db.refresh(u)
+    return _user_read(u, None)
+
+
+class CanAssignUpdate(BaseModel):
+    can_assign_others: bool
+
+
+@router.patch("/{user_id}/can-assign-others", response_model=UserRead)
+async def update_can_assign_others(
+    user_id: int,
+    data: CanAssignUpdate,
+    db: DBSession,
+    _: RequireOwner,
+) -> UserRead:
+    """Toggle la permission spéciale d'assigner des RDV agenda à
+    d'autres utilisateurs (cas : un employé prospecteur qui a besoin
+    de planifier des RDV pour son boss). Owner uniquement."""
+    u = (
+        await db.execute(select(User).where(User.id == user_id))
+    ).scalar_one_or_none()
+    if u is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    u.can_assign_others = bool(data.can_assign_others)
     await db.flush()
     await db.refresh(u)
     return _user_read(u, None)

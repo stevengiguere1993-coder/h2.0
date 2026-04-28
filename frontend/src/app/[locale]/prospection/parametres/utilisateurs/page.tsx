@@ -28,6 +28,7 @@ type User = {
   role: UserRole;
   full_name: string | null;
   volets: Volet[];
+  can_assign_others: boolean;
   created_at: string;
 };
 
@@ -102,6 +103,20 @@ export default function ProspectionUsersPage() {
       method: "PATCH",
       body: JSON.stringify({ volets: next })
     });
+    if (res.ok) {
+      const updated = (await res.json()) as User;
+      setUsers((prev) => prev.map((x) => (x.id === u.id ? updated : x)));
+    }
+  }
+
+  async function toggleCanAssign(u: User, enabled: boolean) {
+    const res = await authedFetch(
+      `/api/v1/users/${u.id}/can-assign-others`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ can_assign_others: enabled })
+      }
+    );
     if (res.ok) {
       const updated = (await res.json()) as User;
       setUsers((prev) => prev.map((x) => (x.id === u.id ? updated : x)));
@@ -187,6 +202,7 @@ export default function ProspectionUsersPage() {
               meId={me?.id ?? null}
               isAdmin={isAdmin}
               onToggleVolet={toggleVolet}
+              onToggleCanAssign={toggleCanAssign}
               onChangeRole={changeRole}
             />
 
@@ -196,6 +212,7 @@ export default function ProspectionUsersPage() {
               meId={me?.id ?? null}
               isAdmin={isAdmin}
               onToggleVolet={toggleVolet}
+              onToggleCanAssign={toggleCanAssign}
               onChangeRole={changeRole}
               hint="Ces utilisateurs n'ont pas accès au volet Prospection. Coche la case pour leur donner l'accès."
             />
@@ -222,6 +239,7 @@ function UsersTable({
   meId,
   isAdmin,
   onToggleVolet,
+  onToggleCanAssign,
   onChangeRole,
   hint
 }: {
@@ -230,6 +248,7 @@ function UsersTable({
   meId: number | null;
   isAdmin: boolean;
   onToggleVolet: (u: User, v: Volet, enabled: boolean) => void;
+  onToggleCanAssign: (u: User, enabled: boolean) => void;
   onChangeRole: (u: User, role: UserRole) => void;
   hint?: string;
 }) {
@@ -254,6 +273,12 @@ function UsersTable({
             <th className="px-4 py-2">Nom / Courriel</th>
             <th className="px-4 py-2">Rôle</th>
             <th className="px-4 py-2">Volets</th>
+            <th
+              className="px-4 py-2"
+              title="Permission spéciale d'assigner des RDV agenda à d'autres utilisateurs sans être manager+"
+            >
+              Assigner RDV
+            </th>
             <th className="px-4 py-2">État</th>
           </tr>
         </thead>
@@ -309,6 +334,23 @@ function UsersTable({
                     </label>
                   ))}
                 </div>
+              </td>
+              <td className="px-4 py-2.5">
+                <label
+                  className="flex items-center gap-1.5 text-xs text-white/80"
+                  title="Permet à cet utilisateur d'assigner des RDV agenda à d'autres, même sans rôle manager"
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!u.can_assign_others}
+                    onChange={(e) =>
+                      onToggleCanAssign(u, e.target.checked)
+                    }
+                    disabled={!isAdmin || u.id === meId}
+                    className="h-3.5 w-3.5 rounded border-brand-700 bg-brand-900 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  Activé
+                </label>
               </td>
               <td className="px-4 py-2.5">
                 {u.is_active ? (
