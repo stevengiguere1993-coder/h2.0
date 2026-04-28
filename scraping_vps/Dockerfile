@@ -16,7 +16,6 @@ USER pwuser
 # Port exposé
 EXPOSE 8000
 
-# Démarrage. workers=1 pour limiter l'empreinte RAM (Chromium est
-# déjà gros). Sur CPX11 (2 GB) c'est nécessaire ; sur CPX21+ (4 GB)
-# on peut passer à workers=2 sans risque.
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# Démarrage. workers=2 sur CPX21 (4 GB) — permet 2 scrapes en
+# parallèle. Si tu downsize à CPX11 (2 GB), passe à workers=1.
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
