@@ -11,7 +11,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 3G  # limite RAM (CX22 = 4 Go, on garde 1 Go pour l'OS)
+          memory: 1.5G  # adapté à CPX11 (2 GB) — laisse 500 MB à l'OS.
+                        # Sur CPX21+ (4 GB) tu peux monter à 3G.
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:8000/health"]
       interval: 30s
