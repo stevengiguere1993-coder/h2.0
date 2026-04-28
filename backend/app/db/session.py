@@ -226,6 +226,9 @@ async def init_db() -> None:
             ("prospection_leads", "offer_amount", "NUMERIC(14, 2)"),
             ("prospection_leads", "assignment_price", "NUMERIC(14, 2)"),
             ("prospection_leads", "monday_item_id", "VARCHAR(32)"),
+            # Multi-volet : un user peut avoir accès à construction,
+            # prospection ou les deux. NULL = backward compat (tous).
+            ("users", "volets_json", "TEXT"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

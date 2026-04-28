@@ -11,7 +11,8 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
-  Sparkles
+  Sparkles,
+  Users
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
@@ -325,6 +326,29 @@ export default function ProspectionSettingsPage() {
 
         {/* === Outils admin === */}
         {isAdmin ? <AdminToolsSection /> : null}
+
+        {/* === Utilisateurs & volets === */}
+        {isOwner ? (
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/prospection/parametres/utilisateurs" as any}
+            className="mt-6 flex items-center gap-3 rounded-2xl border border-brand-800 bg-brand-900 p-5 transition hover:border-emerald-500/50"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+              <Users className="h-5 w-5" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-base font-bold text-white">
+                Utilisateurs &amp; volets →
+              </h2>
+              <p className="mt-0.5 text-xs text-white/60">
+                Crée des comptes (prospecteurs, gestionnaires) et choisis
+                les volets accessibles : Construction, Prospection ou
+                les deux.
+              </p>
+            </div>
+          </Link>
+        ) : null}
 
         {/* === Lien vers Sources de données === */}
         {isOwner ? (

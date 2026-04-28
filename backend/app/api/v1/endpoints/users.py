@@ -1,23 +1,24 @@
 """User management — owner-only.
 
     GET    /api/v1/users                   — list all users
+    POST   /api/v1/users                   — create a user (admin/owner)
     PATCH  /api/v1/users/{id}/role         — change role
+    PATCH  /api/v1/users/{id}/volets       — change accessible volets
     POST   /api/v1/users/{id}/deactivate   — disable account
     POST   /api/v1/users/{id}/activate     — re-enable account
     GET    /api/v1/users/{id}/projects     — project members for this user
     PUT    /api/v1/users/{id}/projects     — set assigned projects (bulk)
-
-Creating new users via email + password is handled by /auth/register for
-now; this module is only concerned with role + permission management.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import delete, func, insert, select
 
 from app.api.deps import DBSession, RequireAdminRole, RequireOwner
@@ -25,7 +26,16 @@ from app.core.security import get_password_hash
 from app.models.employe import Employe
 from app.models.project import Project
 from app.models.project_member import ProjectMember
-from app.models.user import User, UserRole
+from app.models.user import (
+    DEFAULT_VOLETS,
+    User,
+    UserRole,
+    VALID_VOLETS,
+)
+
+log = logging.getLogger(__name__)
+
+TEMPORARY_PASSWORD = "Horizon"
 
 
 router = APIRouter(prefix="/users", tags=["users-admin"])
@@ -43,6 +53,8 @@ class UserRead(BaseModel):
     # Sert à afficher « Olivier Therrien » plutôt que l'adresse email
     # partout dans l'UI (équipe projet, sélecteurs, etc.).
     full_name: Optional[str] = None
+    # Volets accessibles (construction / prospection).
+    volets: List[str] = Field(default_factory=lambda: list(DEFAULT_VOLETS))
 
 
 async def _user_full_names(db, users: List[User]) -> dict[int, str]:
@@ -75,11 +87,60 @@ def _user_read(u: User, full_name: Optional[str]) -> UserRead:
         role=u.role,
         created_at=u.created_at,
         full_name=full_name,
+        volets=u.volets,
     )
+
+
+def _validate_volets(volets: List[str]) -> List[str]:
+    """Normalise + valide la liste de volets. Retire les doublons et
+    les valeurs inconnues. Doit contenir au moins un volet."""
+    cleaned = sorted({v for v in volets if v in VALID_VOLETS})
+    if not cleaned:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Au moins un volet requis parmi {list(VALID_VOLETS)}.",
+        )
+    return cleaned
 
 
 class RoleUpdate(BaseModel):
     role: str = Field(..., pattern="^(owner|admin|manager|employee)$")
+
+
+class VoletsUpdate(BaseModel):
+    volets: List[str] = Field(
+        ...,
+        description="Liste des volets accessibles : construction, prospection",
+    )
+
+
+class UserCreate(BaseModel):
+    """Création directe d'un compte (sans création d'Employe associé).
+    Utilisé pour ajouter un prospecteur, un manager qui n'est pas un
+    travailleur de chantier, etc.
+
+    Le mot de passe temporaire « Horizon » est appliqué + courriel
+    d'accueil envoyé. L'utilisateur sera forcé de changer son mdp à
+    sa première connexion.
+    """
+
+    email: EmailStr
+    full_name: Optional[str] = Field(default=None, max_length=255)
+    role: str = Field(
+        default=UserRole.EMPLOYEE.value,
+        pattern="^(owner|admin|manager|employee)$",
+    )
+    volets: List[str] = Field(
+        default_factory=lambda: list(DEFAULT_VOLETS),
+        description="Volets accessibles (construction / prospection).",
+    )
+
+
+class UserCreatedRead(UserRead):
+    """Réponse à POST /users : inclut le diagnostic d'envoi du mail."""
+
+    welcome_email_sent: bool = False
+    welcome_email_error: Optional[str] = None
 
 
 class ProjectAssignments(BaseModel):
@@ -101,6 +162,82 @@ async def list_users(db: DBSession, _: RequireOwner) -> List[UserRead]:
     ).scalars().all()
     names = await _user_full_names(db, list(rows))
     return [_user_read(r, names.get(r.id)) for r in rows]
+
+
+@router.post(
+    "",
+    response_model=UserCreatedRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crée un compte utilisateur (mot de passe temporaire « Horizon »)",
+)
+async def create_user(
+    data: UserCreate, db: DBSession, admin: RequireAdminRole
+) -> UserCreatedRead:
+    email_norm = data.email.lower().strip()
+    existing = (
+        await db.execute(select(User).where(User.email == email_norm))
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Un compte existe déjà pour ce courriel.",
+        )
+
+    volets = _validate_volets(data.volets)
+
+    u = User(
+        email=email_norm,
+        hashed_password=get_password_hash(TEMPORARY_PASSWORD),
+        is_active=True,
+        is_admin=data.role in (UserRole.OWNER.value, UserRole.ADMIN.value),
+        role=data.role,
+        must_change_password=True,
+        volets_json=json.dumps(volets),
+    )
+    db.add(u)
+    await db.flush()
+
+    # Crée aussi un Employe « miroir » si le full_name est fourni —
+    # permet de réutiliser le UserRead.full_name sans logique parallèle.
+    if data.full_name:
+        emp = Employe(email=email_norm, full_name=data.full_name)
+        db.add(emp)
+        await db.flush()
+
+    welcome_email_sent = False
+    welcome_email_error: Optional[str] = None
+    try:
+        from app.services.welcome_email import send_welcome_email
+
+        welcome_email_sent = await send_welcome_email(
+            to_email=email_norm,
+            temporary_password=TEMPORARY_PASSWORD,
+            full_name=data.full_name,
+            role=data.role,
+            created_by=admin.email,
+        )
+        if not welcome_email_sent:
+            welcome_email_error = (
+                "Mailer non disponible (Azure Graph non configuré "
+                "ou courriel invalide)."
+            )
+    except Exception as exc:
+        log.exception("welcome email failed: %s", exc)
+        welcome_email_error = f"Erreur mailer : {exc}"
+
+    out = UserCreatedRead(
+        id=u.id,
+        email=u.email,
+        is_active=u.is_active,
+        is_admin=u.is_admin,
+        role=u.role,
+        created_at=u.created_at,
+        full_name=data.full_name,
+        volets=u.volets,
+        welcome_email_sent=welcome_email_sent,
+        welcome_email_error=welcome_email_error,
+    )
+    return out
 
 
 @router.patch("/{user_id}/role", response_model=UserRead)
@@ -126,7 +263,26 @@ async def update_role(
     u.is_admin = data.role in (UserRole.OWNER.value, UserRole.ADMIN.value)
     await db.flush()
     await db.refresh(u)
-    return UserRead.model_validate(u)
+    return _user_read(u, None)
+
+
+@router.patch("/{user_id}/volets", response_model=UserRead)
+async def update_volets(
+    user_id: int,
+    data: VoletsUpdate,
+    db: DBSession,
+    _: RequireAdminRole,
+) -> UserRead:
+    u = (
+        await db.execute(select(User).where(User.id == user_id))
+    ).scalar_one_or_none()
+    if u is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    cleaned = _validate_volets(data.volets)
+    u.volets_json = json.dumps(cleaned)
+    await db.flush()
+    await db.refresh(u)
+    return _user_read(u, None)
 
 
 @router.post("/{user_id}/deactivate", response_model=UserRead)
