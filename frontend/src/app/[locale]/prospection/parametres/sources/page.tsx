@@ -44,6 +44,20 @@ export default function ProspectionSourcesPage() {
   const [mtlError, setMtlError] = useState<string | null>(null);
   const mtlPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  type BackfillResult = {
+    total_leads: number;
+    already_filled: number;
+    matched: number;
+    ambiguous: number;
+    no_match: number;
+    sample_unmatched: string[];
+  };
+  const [backfillBusy, setBackfillBusy] = useState(false);
+  const [backfillResult, setBackfillResult] = useState<BackfillResult | null>(
+    null
+  );
+  const [backfillError, setBackfillError] = useState<string | null>(null);
+
   const [reqFile, setReqFile] = useState<File | null>(null);
   const [reqUploading, setReqUploading] = useState(false);
   const [reqUploadProgress, setReqUploadProgress] = useState<{
@@ -314,6 +328,29 @@ export default function ProspectionSourcesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOwner]);
 
+  async function backfillLeadsFromMtl() {
+    if (backfillBusy) return;
+    setBackfillBusy(true);
+    setBackfillResult(null);
+    setBackfillError(null);
+    try {
+      const res = await authedFetch(
+        "/api/v1/prospection/mtl-properties/backfill-leads",
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as BackfillResult;
+      setBackfillResult(data);
+    } catch (e) {
+      setBackfillError((e as Error).message);
+    } finally {
+      setBackfillBusy(false);
+    }
+  }
+
   async function importMontreal() {
     if (mtlStatus?.status === "running") return;
     setMtlError(null);
@@ -551,6 +588,62 @@ export default function ProspectionSourcesPage() {
               {mtlError}
             </p>
           ) : null}
+
+          {/* Backfill leads existants depuis le rôle MTL */}
+          <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+            <h3 className="text-sm font-semibold text-amber-200">
+              Compléter les leads existants
+            </h3>
+            <p className="mt-1 text-[11px] text-white/60">
+              Pour chaque lead avec une adresse texte, cherche le matricule
+              correspondant dans le rôle MTL et remplit ville, nb logements,
+              année et superficie. N&apos;écrase rien de déjà saisi.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={backfillLeadsFromMtl}
+                disabled={backfillBusy}
+                className="inline-flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
+              >
+                {backfillBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                {backfillBusy
+                  ? "Backfill en cours…"
+                  : "Backfill leads depuis le rôle MTL"}
+              </button>
+              {backfillResult ? (
+                <p className="text-[11px] text-white/70">
+                  {backfillResult.matched} matchés · {backfillResult.already_filled}{" "}
+                  déjà OK · {backfillResult.ambiguous} ambigus ·{" "}
+                  {backfillResult.no_match} sans match (sur{" "}
+                  {backfillResult.total_leads})
+                </p>
+              ) : null}
+            </div>
+            {backfillError ? (
+              <p className="mt-2 rounded border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300">
+                {backfillError}
+              </p>
+            ) : null}
+            {backfillResult && backfillResult.sample_unmatched.length > 0 ? (
+              <details className="mt-2 text-[11px] text-white/50">
+                <summary className="cursor-pointer hover:text-white/70">
+                  Voir 20 adresses non matchées
+                </summary>
+                <ul className="mt-1 space-y-0.5 pl-4">
+                  {backfillResult.sample_unmatched.map((a, i) => (
+                    <li key={i} className="font-mono text-[10px]">
+                      {a}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+          </div>
         </section>
 
         {/* === Registraire des entreprises (REQ) === */}
