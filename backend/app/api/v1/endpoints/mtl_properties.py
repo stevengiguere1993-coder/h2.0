@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, or_, select
 
-from app.api.deps import CurrentUser, DBSession
+from app.api.deps import CurrentAdmin, CurrentUser, DBSession
 from app.models.montreal_property_unit import MontrealPropertyUnit
 from app.models.prospection_lead import (
     ProspectionLead,
@@ -827,3 +827,122 @@ async def convert_to_lead(
         "matricule": matricule,
         "name": lead.name,
     }
+
+
+# --------------------------- Backfill admin ---------------------------
+
+
+class BackfillResponse(BaseModel):
+    total_leads: int
+    already_filled: int
+    matched: int
+    ambiguous: int
+    no_match: int
+    sample_unmatched: List[str] = []
+
+
+def _parse_address_for_search(addr: str) -> tuple[Optional[str], List[str]]:
+    """Extrait le 1er token numérique (civique) + tokens texte (rue)."""
+    tokens = [t for t in (addr or "").split() if t]
+    civic = next((t for t in tokens if t[:1].isdigit()), None)
+    street = [t for t in tokens if t != civic and len(t) >= 2]
+    return civic, street
+
+
+@router.post(
+    "/backfill-leads",
+    response_model=BackfillResponse,
+    summary="Backfill matricule + ville + adresse normalisée pour les "
+    "leads existants depuis le rôle d'évaluation Montréal.",
+)
+async def backfill_leads_from_mtl(
+    db: DBSession,
+    _: CurrentAdmin,
+    limit: int = Query(default=2000, ge=1, le=10000),
+) -> BackfillResponse:
+    """Pour chaque ProspectionLead avec une adresse texte, tente de
+    matcher dans MontrealPropertyUnit et remplit matricule, city,
+    superficie, nb_logements, annee si manquants. N'écrase pas les
+    valeurs déjà set par l'utilisateur."""
+    leads = (
+        await db.execute(
+            select(ProspectionLead)
+            .where(ProspectionLead.archived.is_(False))
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    total = len(leads)
+    already = 0
+    matched = 0
+    ambiguous = 0
+    no_match = 0
+    unmatched_sample: List[str] = []
+
+    for lead in leads:
+        # Si déjà bien rempli (matricule + city), on saute
+        if lead.matricule and lead.city:
+            already += 1
+            continue
+        if not lead.address or not lead.address.strip():
+            no_match += 1
+            continue
+
+        civic, street_toks = _parse_address_for_search(lead.address)
+        filters = []
+        if civic:
+            filters.append(MontrealPropertyUnit.civique_debut.ilike(f"{civic}%"))
+        if street_toks:
+            for st in street_toks:
+                filters.append(MontrealPropertyUnit.nom_rue.ilike(f"%{st}%"))
+        if not filters:
+            no_match += 1
+            if len(unmatched_sample) < 20:
+                unmatched_sample.append(lead.address[:80])
+            continue
+
+        # Cherche jusqu'à 5 matches pour détecter ambiguïté
+        rows = (
+            await db.execute(
+                select(MontrealPropertyUnit).where(*filters).limit(5)
+            )
+        ).scalars().all()
+
+        if len(rows) == 0:
+            no_match += 1
+            if len(unmatched_sample) < 20:
+                unmatched_sample.append(lead.address[:80])
+            continue
+        if len(rows) > 1:
+            ambiguous += 1
+            continue
+
+        p = rows[0]
+        # Met à jour seulement les champs manquants
+        if not lead.matricule:
+            lead.matricule = p.matricule
+        if not lead.city and p.municipalite:
+            lead.city = p.municipalite
+        if lead.nb_logements is None and p.nombre_logement is not None:
+            lead.nb_logements = p.nombre_logement
+        if lead.annee_construction is None and p.annee_construction is not None:
+            lead.annee_construction = p.annee_construction
+        if lead.superficie_terrain is None and p.superficie_terrain is not None:
+            lead.superficie_terrain = float(p.superficie_terrain)
+        # Normalise l'adresse au format MTL (civique + nom_rue)
+        normalized = " ".join(
+            x for x in [(p.civique_debut or "").strip(), (p.nom_rue or "").strip()] if x
+        )
+        if normalized:
+            lead.address = normalized
+        matched += 1
+
+    await db.flush()
+    return BackfillResponse(
+        total_leads=total,
+        already_filled=already,
+        matched=matched,
+        ambiguous=ambiguous,
+        no_match=no_match,
+        sample_unmatched=unmatched_sample,
+    )
