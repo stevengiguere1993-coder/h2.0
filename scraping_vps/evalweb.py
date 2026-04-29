@@ -266,41 +266,71 @@ async def _fill_matricule_form(page: Page, parts: dict) -> None:
         "batiment": "Bâtiment",
         "local": "Local",
     }
+    # D'abord, dump tous les inputs visibles pour debug
+    try:
+        inputs_info = await page.evaluate("""
+            () => Array.from(document.querySelectorAll('input')).map(i => ({
+                name: i.name, id: i.id, type: i.type,
+                placeholder: i.placeholder,
+                ariaLabel: i.getAttribute('aria-label'),
+                maxLength: i.maxLength,
+                visible: i.offsetParent !== null,
+            }))
+        """)
+        log.info("FORM INPUTS: %s", inputs_info)
+    except Exception as exc:
+        log.warning("Dump inputs failed: %s", exc)
+
     for key, value in mapping.items():
-        filled = False
+        filled_via = None
         for selector in (
             f"input[name='{key}']",
             f"input[name='{key.capitalize()}']",
             f"input[id='{key}']",
             f"input[aria-label*='{labels_fr[key]}' i]",
+            f"input[placeholder*='{labels_fr[key]}' i]",
         ):
             try:
                 loc = page.locator(selector).first
-                await loc.fill(value, timeout=2_000)
-                filled = True
-                break
+                await loc.fill(value, timeout=1_500)
+                # Vérifie la valeur insérée
+                actual = await loc.input_value()
+                if actual == value:
+                    filled_via = selector
+                    break
             except Exception:
                 continue
-        if not filled:
-            # Fallback : trouve le label puis l'input qui suit
+        if not filled_via:
             try:
-                label = page.locator(
-                    f"text={labels_fr[key]}"
-                ).first
-                # Le input est typiquement le 1er input frère
-                await label.locator(
-                    "xpath=following::input[1]"
-                ).fill(value, timeout=2_000)
-                filled = True
+                label = page.locator(f"text={labels_fr[key]}").first
+                input_loc = label.locator("xpath=following::input[1]")
+                await input_loc.fill(value, timeout=1_500)
+                actual = await input_loc.input_value()
+                if actual == value:
+                    filled_via = f"label-following::input[1] ({labels_fr[key]})"
             except Exception:
                 pass
-        if not filled:
-            raise RuntimeError(
-                f"Champ {labels_fr[key]} introuvable"
-            )
+        if filled_via:
+            log.info("  ✓ %s='%s' via %s", key, value, filled_via)
+        else:
+            log.warning("  ✗ %s='%s' INTROUVABLE", key, value)
 
 
 async def _click_rechercher(page: Page) -> None:
+    # Dump tous les boutons visibles pour debug
+    try:
+        buttons_info = await page.evaluate("""
+            () => Array.from(document.querySelectorAll('button')).map(b => ({
+                text: b.innerText.trim().slice(0, 50),
+                type: b.type, disabled: b.disabled,
+                ariaLabel: b.getAttribute('aria-label'),
+                visible: b.offsetParent !== null,
+            })).filter(b => b.visible)
+        """)
+        log.info("BUTTONS: %s", buttons_info)
+    except Exception as exc:
+        log.warning("Dump buttons failed: %s", exc)
+
     try:
         await page.get_by_role(
             "button", name="Rechercher"
