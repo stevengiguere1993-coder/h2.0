@@ -80,6 +80,20 @@
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
+  // Tape la valeur caractère par caractère pour humaniser la frappe
+  // (vs setReactInputValue qui set d'un coup). Plus humain pour
+  // reCAPTCHA + ressemble à un user qui lit son matricule sur papier.
+  async function typeCharByChar(input, value) {
+    input.focus();
+    setReactInputValue(input, "");
+    let current = "";
+    for (const char of value) {
+      current += char;
+      setReactInputValue(input, current);
+      await delay(humanish(90, 180));
+    }
+  }
+
   async function autopilotStep1HomeAndOptions(matricule) {
     // Page d'accueil : sélectionner « Par matricule » + cliquer Suivant
     log("Autopilot étape 1 : sélection 'Par matricule'");
@@ -138,9 +152,9 @@
         log(`Input [name=${name}] introuvable`);
         return false;
       }
-      input.focus();
-      setReactInputValue(input, value);
-      await delay(humanish(150, 350));
+      // Frappe caractère par caractère (plus humain)
+      await typeCharByChar(input, value);
+      await delay(humanish(250, 500));
     }
     await delay(humanish(800, 1500));
 
@@ -158,21 +172,53 @@
   }
 
   async function autopilotStep3ClickResult(matricule) {
-    // Page liste : clique le lien qui contient le matricule
+    // Page liste : trouve le matricule dans la liste, walk up pour
+    // trouver un ancêtre cliquable (a/button/role=link/button), et
+    // clique. Si aucun ancêtre cliquable, click direct (event bubbling
+    // peut suffire pour les SPA qui mettent onClick sur des div).
     log("Autopilot étape 3 : recherche du résultat dans la liste");
-    const candidates = Array.from(
-      document.querySelectorAll("a, button, [role='link']")
-    );
-    const target = candidates.find(el =>
-      (el.textContent || "").includes(matricule)
-    );
-    if (target) {
-      log("Click résultat:", matricule);
-      target.click();
-      return true;
+
+    // Cherche l'élément feuille (sans enfants) qui contient le matricule
+    const allElements = document.querySelectorAll("*");
+    let textNode = null;
+    for (const el of allElements) {
+      if (el.children.length === 0 && (el.textContent || "").includes(matricule)) {
+        textNode = el;
+        break;
+      }
     }
-    log("Lien matricule dans la liste introuvable");
-    return false;
+    if (!textNode) {
+      log("Matricule introuvable dans le texte de la page");
+      return false;
+    }
+    log("Texte matricule trouvé dans:", textNode.tagName, textNode.className);
+
+    // Walk up le DOM pour trouver un ancêtre cliquable
+    let clickable = textNode;
+    let depth = 0;
+    while (clickable && clickable !== document.body && depth < 10) {
+      const tag = clickable.tagName.toLowerCase();
+      const role = clickable.getAttribute("role");
+      const cursor = window.getComputedStyle(clickable).cursor;
+      if (
+        tag === "a" ||
+        tag === "button" ||
+        role === "link" ||
+        role === "button" ||
+        cursor === "pointer"
+      ) {
+        log("Click ancêtre cliquable:", tag, "role=", role, "cursor=", cursor);
+        clickable.click();
+        return true;
+      }
+      clickable = clickable.parentElement;
+      depth++;
+    }
+
+    // Aucun ancêtre cliquable trouvé — fallback click sur l'élément texte
+    log("Aucun ancêtre cliquable, fallback click direct");
+    textNode.click();
+    return true;
   }
 
   async function tryAutopilot() {
