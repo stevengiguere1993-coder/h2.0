@@ -749,6 +749,22 @@ async def _provincial_ingest_worker(
             pass
 
 
+@router.get(
+    "/provincial/import-status",
+    summary="État de l'import provincial en cours / dernier terminé.",
+)
+async def provincial_import_status(_: RequireOwner) -> dict:
+    return {
+        "status": _provincial_state.get("status", "idle"),
+        "started_at": _provincial_state.get("started_at"),
+        "finished_at": _provincial_state.get("finished_at"),
+        "rows_processed": _provincial_state.get("rows_processed"),
+        "rows_upserted": _provincial_state.get("rows_upserted"),
+        "region": _provincial_state.get("region"),
+        "error": _provincial_state.get("error"),
+    }
+
+
 @router.post(
     "/provincial/upload-finalize",
     summary="Réassemble les chunks reçus et lance l'ingest filtré "
