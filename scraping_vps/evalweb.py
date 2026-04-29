@@ -100,6 +100,15 @@ async def scrape_owners_via_browser(
     else:
         log.warning("playwright-stealth non installé")
 
+    # Capture les console errors pour voir si reCAPTCHA plante
+    def _on_console(msg) -> None:
+        if msg.type in ("error", "warning"):
+            text = msg.text[:300]
+            if "recaptcha" in text.lower() or "captcha" in text.lower():
+                log.warning("CONSOLE[%s] %s", msg.type, text)
+
+    page.on("console", _on_console)
+
     # Capture toutes les requêtes pour debug — on filtre celles qui
     # touchent montreal.ca / api.montreal.ca pour voir où le form est posté.
     def _on_request(req) -> None:
@@ -163,8 +172,15 @@ async def scrape_owners_via_browser(
 
         # Étape 3 : remplit les 6 sous-champs + Rechercher
         await _fill_matricule_form(page, parts)
-        # Donne 1.5s à React pour propager l'état + générer le token
-        await page.wait_for_timeout(1_500)
+        # Laisse 4s à reCAPTCHA v3 pour observer le comportement et
+        # générer un token avec un score acceptable. Bouge la souris
+        # pendant ce temps pour augmenter le score.
+        await page.mouse.move(400, 300)
+        await page.wait_for_timeout(800)
+        await page.mouse.move(600, 450)
+        await page.wait_for_timeout(800)
+        await page.mouse.move(700, 500)
+        await page.wait_for_timeout(2_400)
         await _snap("04-form-filled")
         # Avant de cliquer, vérifie que TOUS les inputs ont la bonne
         # valeur (Radix UI peut avoir une valeur stale).
@@ -180,7 +196,17 @@ async def scrape_owners_via_browser(
             log.info("PRE-SUBMIT VALUES: %s", current_values)
         except Exception as exc:
             log.warning("Dump values failed: %s", exc)
-        await _click_rechercher(page)
+        # Au lieu de cliquer le bouton, presse Enter dans le dernier
+        # champ — déclenche le React onSubmit naturellement, pareil
+        # qu'un user qui tape sa valeur puis Enter.
+        try:
+            local_input = page.locator("input[name='local']").first
+            await local_input.focus()
+            await local_input.press("Enter")
+            log.info("  → Enter pressé sur input[name='local']")
+        except Exception as exc:
+            log.warning("Enter failed (%s), fallback click bouton", exc)
+            await _click_rechercher(page)
         # Au lieu de networkidle (qui peut retourner trop vite),
         # attend que l'URL change OU 8s
         try:
