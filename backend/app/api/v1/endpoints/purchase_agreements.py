@@ -30,6 +30,7 @@ from app.models.purchase_agreement import (
     PurchaseAgreement,
     PurchaseAgreementStatus,
 )
+from app.models.purchase_agreement_template import PurchaseAgreementTemplate
 from app.services.purchase_agreement_pdf import render_purchase_agreement_pdf
 from app.services.purchase_agreement_send import (
     PurchaseAgreementSendError,
@@ -219,21 +220,45 @@ async def create_purchase_agreement(
         )
     ).scalar_one_or_none() or 0
 
+    # Charge le template singleton de defaults (s'il existe)
+    tpl = (
+        await db.execute(select(PurchaseAgreementTemplate).limit(1))
+    ).scalar_one_or_none()
+
     pa = PurchaseAgreement(
         reference=_next_reference(last_id),
         lead_id=lead.id,
         created_by_user_id=user.id,
         status=PurchaseAgreementStatus.DRAFT.value,
+        # Pré-remplissage depuis le lead (priorité 1)
         property_address=lead.address,
         seller_1_name=lead.owner_name,
         seller_1_address=lead.owner_address or lead.mailing_address,
         seller_1_phone_day=lead.owner_phone,
         seller_1_email=lead.owner_email,
-        buyer_1_name=user.email,
-        buyer_1_email=user.email,
-        financing_kind="hypothecaire",
-        inspection_enabled=True,
-        inspection_days=10,
+        # Acheteur — depuis template si défini, sinon utilisateur courant
+        buyer_1_name=(tpl.default_buyer_1_name if tpl and tpl.default_buyer_1_name
+                      else user.email),
+        buyer_1_address=tpl.default_buyer_1_address if tpl else None,
+        buyer_1_email=(tpl.default_buyer_1_email if tpl and tpl.default_buyer_1_email
+                       else user.email),
+        buyer_1_phone_day=tpl.default_buyer_1_phone_day if tpl else None,
+        # Defaults financement / conditions / clauses
+        financing_kind=tpl.financing_kind if tpl else "hypothecaire",
+        financing_min_pct=tpl.financing_min_pct if tpl else None,
+        financing_max_rate=tpl.financing_max_rate if tpl else None,
+        financing_amortization_years=(
+            tpl.financing_amortization_years if tpl else None
+        ),
+        financing_min_term_years=tpl.financing_min_term_years if tpl else None,
+        inspection_enabled=tpl.inspection_enabled if tpl else True,
+        inspection_days=tpl.inspection_days if tpl else 10,
+        visit_units_enabled=tpl.visit_units_enabled if tpl else False,
+        water_septic_enabled=tpl.water_septic_enabled if tpl else False,
+        baux_text=tpl.baux_text if tpl else None,
+        inclusions_text=tpl.inclusions_text if tpl else None,
+        exclusions_text=tpl.exclusions_text if tpl else None,
+        other_conditions_text=tpl.other_conditions_text if tpl else None,
     )
     _apply_partial(pa, payload)
     db.add(pa)

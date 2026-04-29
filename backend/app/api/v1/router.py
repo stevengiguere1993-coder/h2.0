@@ -47,6 +47,7 @@ from app.api.v1.endpoints import (
     public_purchase_agreement,
     public_soumission,
     purchase_agreement_milestones,
+    purchase_agreement_template,
     purchase_agreements,
     punch_ops,
     achat_qbo,
@@ -188,6 +189,7 @@ api_router.include_router(prospection_analyses.router)
 # matchent avant /prospection/{lead_id}.
 api_router.include_router(purchase_agreements.router)
 api_router.include_router(purchase_agreement_milestones.router)
+api_router.include_router(purchase_agreement_template.router)
 api_router.include_router(prospection.router)
 api_router.include_router(email_templates.router)
 api_router.include_router(admin_data.router)
