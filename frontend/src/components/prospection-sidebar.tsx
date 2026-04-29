@@ -56,7 +56,7 @@ const PROSPECTION_NAV: NavItem[] = [
   },
   {
     href: "/prospection/kanban",
-    label: "Kanban (pipeline)",
+    label: "Suivi de leads",
     icon: Trello,
     minRole: "employee"
   },

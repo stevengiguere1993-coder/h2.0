@@ -121,7 +121,7 @@ export default function ProspectionKanbanPage() {
       <AppTopbar
         breadcrumbs={[
           { label: "Prospection", href: "/prospection" },
-          { label: "Kanban" }
+          { label: "Suivi de leads" }
         ]}
         onOpenSidebar={onOpenSidebar}
       />
@@ -131,7 +131,7 @@ export default function ProspectionKanbanPage() {
           <div className="flex items-center gap-2">
             <Trello className="h-5 w-5 text-emerald-400" />
             <h1 className="text-xl font-bold text-white">
-              Kanban — Pipeline de leads
+              Suivi de leads
             </h1>
             {!loading ? (
               <span className="text-sm text-white/50">
