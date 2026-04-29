@@ -9,6 +9,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Trash2,
   X
 } from "lucide-react";
 
@@ -385,7 +386,12 @@ export default function ProspectionWebPage() {
             ) : (
               <ul className="divide-y divide-brand-800">
                 {filtered.map((l) => (
-                  <li key={l.id}>
+                  <li
+                    key={l.id}
+                    className={`group relative transition hover:bg-brand-900 ${
+                      selectedId === l.id ? "bg-brand-900" : ""
+                    }`}
+                  >
                     <button
                       type="button"
                       onClick={() => {
@@ -397,11 +403,7 @@ export default function ProspectionWebPage() {
                           );
                         }
                       }}
-                      className={`block w-full px-3 py-2.5 text-left transition hover:bg-brand-900 ${
-                        selectedId === l.id
-                          ? "bg-brand-900"
-                          : ""
-                      }`}
+                      className="block w-full px-3 py-2.5 pr-9 text-left"
                     >
                       <div className="flex items-start gap-2">
                         <span
@@ -412,9 +414,25 @@ export default function ProspectionWebPage() {
                           }}
                         />
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-semibold text-white">
-                            {l.name}
-                          </p>
+                          <div className="flex items-center gap-1.5">
+                            <p className="truncate text-sm font-semibold text-white">
+                              {l.name}
+                            </p>
+                            {typeof l.score === "number" && l.score > 0 ? (
+                              <span
+                                className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-bold tabular-nums ${
+                                  l.score >= 70
+                                    ? "bg-emerald-500/20 text-emerald-300"
+                                    : l.score >= 40
+                                      ? "bg-amber-500/20 text-amber-300"
+                                      : "bg-white/10 text-white/50"
+                                }`}
+                                title={`Score : ${l.score}/100`}
+                              >
+                                {l.score}
+                              </span>
+                            ) : null}
+                          </div>
                           <p className="mt-0.5 truncate text-[11px] text-white/50">
                             {KIND_LABEL[l.kind] || l.kind} ·{" "}
                             {STATUS_LABEL[l.status] || l.status}
@@ -426,6 +444,38 @@ export default function ProspectionWebPage() {
                           ) : null}
                         </div>
                       </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        const ok = window.confirm(
+                          `Archiver « ${l.name} » ?\n\n` +
+                          `Le lead sera caché de la liste mais conservé en base ` +
+                          `(restaurable via /prospection/parametres).`
+                        );
+                        if (!ok) return;
+                        try {
+                          const r = await authedFetch(
+                            `/api/v1/prospection/${l.id}`,
+                            { method: "DELETE" }
+                          );
+                          if (r.ok || r.status === 204) {
+                            void load();
+                            if (selectedId === l.id) setSelectedId(null);
+                          } else {
+                            const t = await r.text();
+                            alert(t.slice(0, 200) || `HTTP ${r.status}`);
+                          }
+                        } catch (exc) {
+                          alert(`Erreur : ${(exc as Error).message}`);
+                        }
+                      }}
+                      className="absolute right-2 top-2.5 rounded-md p-1.5 text-white/30 opacity-0 transition hover:bg-rose-500/20 hover:text-rose-300 group-hover:opacity-100 focus:opacity-100"
+                      title="Archiver ce lead"
+                      aria-label="Archiver"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   </li>
                 ))}

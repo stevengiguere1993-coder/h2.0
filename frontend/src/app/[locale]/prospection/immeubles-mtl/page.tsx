@@ -1023,16 +1023,25 @@ function OwnerCandidatesModal({
                 <button
                   type="button"
                   onClick={() => {
-                    // Ouvre montreal.ca avec le matricule en URL param.
-                    // L'extension navigateur Horizon détecte ce param et
-                    // pilote automatiquement le flow 4 étapes jusqu'à la
-                    // fiche détaillée, puis scrape et POST vers h2.0.
-                    // La modale ouverte se remplit toute seule (3s polling).
-                    const url = `https://montreal.ca/role-evaluation-fonciere?h2matricule=${encodeURIComponent(property.matricule)}`;
-                    window.open(url, "_blank", "noopener");
+                    // Demande à l'extension d'ouvrir montreal.ca dans
+                    // un onglet en arrière-plan (focus reste ici), de
+                    // piloter le flow 4 étapes, scraper, puis fermer
+                    // l'onglet. Si l'extension n'est pas installée, on
+                    // fallback sur window.open visible.
+                    const matricule = property.matricule;
+                    const hasExtension = (window as unknown as { __h2_extension?: string }).__h2_extension;
+                    if (hasExtension) {
+                      window.postMessage(
+                        { type: "h2_open_evalweb", matricule },
+                        "*"
+                      );
+                    } else {
+                      const url = `https://montreal.ca/role-evaluation-fonciere?h2matricule=${encodeURIComponent(matricule)}`;
+                      window.open(url, "_blank", "noopener");
+                    }
                   }}
                   className="inline-flex items-center gap-1 rounded-md border border-emerald-400 bg-emerald-500/20 px-2 py-1 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-500/30"
-                  title="Ouvre montreal.ca dans un nouvel onglet et l'extension fait tout automatiquement"
+                  title="L'extension Horizon ouvre montreal.ca en arrière-plan, scrape, et envoie les données ici"
                 >
                   <Search className="h-3 w-3" />
                   Récupérer (auto)

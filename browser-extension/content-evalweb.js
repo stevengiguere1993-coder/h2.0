@@ -16,6 +16,9 @@
 
   // Évite de scraper plusieurs fois la même page
   let lastSent = null;
+  // True si l'autopilot a été activé pour cette navigation (donc
+  // on doit fermer l'onglet à la fin).
+  let autopilotWasActive = false;
 
   // ============== AUTOPILOT ==============
 
@@ -269,6 +272,7 @@
   async function tryAutopilot() {
     const matricule = getTargetMatricule();
     if (!matricule) return;
+    autopilotWasActive = true;
     const url = window.location.pathname;
     log("Autopilot actif pour", matricule, "sur", url);
 
@@ -447,11 +451,26 @@
         payload,
       });
       log("Backend response :", response);
+      const success = response && response.ok;
       showToast(
-        response && response.ok
+        success
           ? `✅ ${payload.owners.length} proprio(s) envoyé(s) à h2.0`
           : `⚠️ Échec envoi : ${response && response.error || "erreur"}`
       );
+      // Si on est arrivé ici via l'autopilot (sessionStorage matricule
+      // cible était présent au démarrage de cette page), ferme l'onglet
+      // après 2.5s — l'utilisateur a vu le toast, plus besoin de
+      // l'onglet montreal.ca.
+      // Si l'autopilot était actif (= h2.0 a ouvert cette page en
+      // background pour scraper automatiquement), ferme l'onglet
+      // après 2.5s. Si l'user a navigué manuellement (sans
+      // ?h2matricule=), on garde l'onglet ouvert.
+      if (success && autopilotWasActive) {
+        setTimeout(() => {
+          log("Fermeture auto de l'onglet (autopilot terminé)");
+          chrome.runtime.sendMessage({ type: "CLOSE_THIS_TAB" });
+        }, 2500);
+      }
     } catch (exc) {
       log("Erreur sendMessage :", exc);
       showToast("⚠️ Extension : erreur communication");

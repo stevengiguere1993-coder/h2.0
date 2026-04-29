@@ -1,15 +1,18 @@
 {
   "manifest_version": 3,
   "name": "Horizon h2.0 Helper",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Auto-scrape rôle d'évaluation Montréal et Centris pour Horizon h2.0",
-  "permissions": ["storage", "activeTab"],
+  "permissions": ["storage", "activeTab", "tabs"],
   "host_permissions": [
     "https://montreal.ca/*",
     "https://www.centris.ca/*",
     "http://localhost/*",
     "https://*.onrender.com/*",
-    "https://*.horizonimmo.ca/*"
+    "https://*.horizonimmo.ca/*",
+    "https://immohorizon.com/*",
+    "https://*.immohorizon.com/*",
+    "https://immohorizon.ca/*"
   ],
   "content_scripts": [
     {
@@ -26,6 +29,18 @@
         "https://www.centris.ca/en/*"
       ],
       "js": ["content-centris.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://localhost/*",
+        "http://localhost:*/*",
+        "https://*.onrender.com/*",
+        "https://immohorizon.com/*",
+        "https://*.immohorizon.com/*",
+        "https://immohorizon.ca/*"
+      ],
+      "js": ["content-h20.js"],
       "run_at": "document_idle"
     }
   ],

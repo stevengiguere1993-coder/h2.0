@@ -767,8 +767,19 @@ async def enrich_owner(
     "/{lead_id}", status_code=status.HTTP_204_NO_CONTENT
 )
 async def delete_lead(
-    lead_id: int, db: DBSession, _: CurrentUser
+    lead_id: int,
+    db: DBSession,
+    _: CurrentUser,
+    hard: bool = False,
 ) -> None:
+    """Supprime un lead. Par défaut, soft-delete (set archived=true)
+    pour pouvoir restaurer plus tard. Avec ?hard=true, hard-delete
+    (DROP de la ligne) — réservé aux admins via /restore.
+
+    Le soft-delete est plus sûr : si l'utilisateur clique trop vite
+    sur la corbeille, on peut récupérer. Et les associations
+    (FollowUp, etc.) restent intactes.
+    """
     lead = (
         await db.execute(
             select(ProspectionLead).where(ProspectionLead.id == lead_id)
@@ -776,7 +787,10 @@ async def delete_lead(
     ).scalar_one_or_none()
     if lead is None:
         raise HTTPException(404, "Prospect introuvable")
-    await db.delete(lead)
+    if hard:
+        await db.delete(lead)
+    else:
+        lead.archived = True
     await db.flush()
 
 

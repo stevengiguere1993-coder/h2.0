@@ -69,6 +69,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(sendResponse);
     return true;
   }
+  if (message.type === "OPEN_EVALWEB_BACKGROUND") {
+    // Ouvre montreal.ca dans un onglet en arrière-plan (active=false
+    // → le focus reste sur l'onglet h2.0). L'extension va piloter le
+    // flow là-dedans, scraper, et fermer l'onglet à la fin.
+    const url = `https://montreal.ca/role-evaluation-fonciere?h2matricule=${encodeURIComponent(message.matricule)}`;
+    chrome.tabs.create({ url, active: false }, (tab) => {
+      log("Onglet EvalWeb créé en background (id=" + tab.id + ")");
+      sendResponse({ ok: true, tabId: tab.id });
+    });
+    return true;
+  }
+  if (message.type === "CLOSE_THIS_TAB") {
+    // Le content script demande à fermer son propre onglet (après
+    // POST réussi). On utilise sender.tab.id qui est l'onglet d'où
+    // vient le message.
+    if (sender.tab && sender.tab.id) {
+      log("Fermeture onglet " + sender.tab.id);
+      chrome.tabs.remove(sender.tab.id, () => {
+        sendResponse({ ok: true });
+      });
+      return true;
+    }
+    sendResponse({ ok: false, error: "no tab id" });
+    return false;
+  }
 });
 
 log("Service worker démarré");
