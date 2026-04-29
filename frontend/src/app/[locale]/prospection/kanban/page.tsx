@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, RefreshCw, Trash2, Trello } from "lucide-react";
+import { Loader2, Plus, RefreshCw, Trash2, Trello, X } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
@@ -56,6 +56,7 @@ export default function ProspectionKanbanPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [draggedId, setDraggedId] = useState<number | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -161,20 +162,40 @@ export default function ProspectionKanbanPage() {
               </span>
             ) : null}
           </div>
-          <button
-            type="button"
-            onClick={() => void load()}
-            disabled={loading}
-            className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
-          >
-            {loading ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="h-3.5 w-3.5" />
-            )}
-            Rafraîchir
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowAddModal(true)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-400 bg-emerald-500/20 px-3 py-1.5 text-sm font-semibold text-emerald-200 hover:bg-emerald-500/30"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Ajouter lead
+            </button>
+            <button
+              type="button"
+              onClick={() => void load()}
+              disabled={loading}
+              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+            >
+              {loading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              Rafraîchir
+            </button>
+          </div>
         </header>
+
+        {showAddModal ? (
+          <AddLeadModal
+            onClose={() => setShowAddModal(false)}
+            onCreated={() => {
+              setShowAddModal(false);
+              void load();
+            }}
+          />
+        ) : null}
 
         {error ? (
           <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
@@ -285,5 +306,223 @@ export default function ProspectionKanbanPage() {
         </div>
       </div>
     </>
+  );
+}
+
+function AddLeadModal({
+  onClose,
+  onCreated
+}: {
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [kind, setKind] = useState("multilogement");
+  const [status, setStatus] = useState("a_visiter");
+  const [address, setAddress] = useState("");
+  const [city, setCity] = useState("");
+  const [postalCode, setPostalCode] = useState("");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() && !address.trim()) {
+      setError("Renseigne au minimum un nom ou une adresse");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      // POST /api/v1/prospection accepte multipart/form-data
+      const fd = new FormData();
+      if (name.trim()) fd.append("name", name.trim());
+      fd.append("kind", kind);
+      if (address.trim()) fd.append("address", address.trim());
+      if (city.trim()) fd.append("city", city.trim());
+      if (postalCode.trim()) fd.append("postal_code", postalCode.trim());
+      if (notes.trim()) fd.append("notes", notes.trim());
+
+      const r = await authedFetch("/api/v1/prospection", {
+        method: "POST",
+        body: fd
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      const lead = (await r.json()) as { id: number };
+
+      // Si le statut choisi est différent de a_visiter (défaut),
+      // PATCH pour le mettre à jour.
+      if (status !== "a_visiter") {
+        const patchRes = await authedFetch(
+          `/api/v1/prospection/${lead.id}`,
+          {
+            method: "PATCH",
+            body: JSON.stringify({ status })
+          }
+        );
+        if (!patchRes.ok) {
+          // Pas critique — le lead est créé
+          console.warn("Status update failed", await patchRes.text());
+        }
+      }
+      onCreated();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/70 p-4"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-brand-800 bg-brand-950">
+        <header className="flex items-center justify-between border-b border-brand-800 p-4">
+          <h2 className="flex items-center gap-2 text-base font-semibold text-white">
+            <Plus className="h-4 w-4 text-emerald-400" />
+            Nouveau lead
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-1 text-white/40 hover:bg-brand-900 hover:text-white"
+            aria-label="Fermer"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <form
+          onSubmit={submit}
+          className="flex-1 space-y-3 overflow-y-auto p-4"
+        >
+          <label className="block text-xs">
+            <span className="block text-white/60">
+              Nom du lead{" "}
+              <span className="text-white/30">(ou utilise l&apos;adresse)</span>
+            </span>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Ex: 220 rue Bergevin"
+              className="input mt-0.5"
+              autoFocus
+            />
+          </label>
+
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block text-xs">
+              <span className="block text-white/60">Type</span>
+              <select
+                value={kind}
+                onChange={(e) => setKind(e.target.value)}
+                className="input mt-0.5"
+              >
+                <option value="multilogement">Multi-logement</option>
+                <option value="terrain">Terrain</option>
+                <option value="semi_commercial">Semi-commercial</option>
+                <option value="autre">Autre</option>
+              </select>
+            </label>
+            <label className="block text-xs">
+              <span className="block text-white/60">Statut initial</span>
+              <select
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+                className="input mt-0.5"
+              >
+                {COLUMNS.map((c) => (
+                  <option key={c.key} value={c.key}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <label className="block text-xs">
+            <span className="block text-white/60">Adresse</span>
+            <input
+              type="text"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="220 rue Bergevin"
+              className="input mt-0.5"
+            />
+          </label>
+
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block text-xs">
+              <span className="block text-white/60">Ville</span>
+              <input
+                type="text"
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                placeholder="Laval"
+                className="input mt-0.5"
+              />
+            </label>
+            <label className="block text-xs">
+              <span className="block text-white/60">Code postal</span>
+              <input
+                type="text"
+                value={postalCode}
+                onChange={(e) => setPostalCode(e.target.value)}
+                placeholder="H7N 1A1"
+                className="input mt-0.5"
+              />
+            </label>
+          </div>
+
+          <label className="block text-xs">
+            <span className="block text-white/60">Notes (optionnel)</span>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              placeholder="Source, remarques, contexte..."
+              className="input mt-0.5 font-sans"
+            />
+          </label>
+
+          {error ? (
+            <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              {error}
+            </p>
+          ) : null}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="rounded-lg border border-brand-700 bg-brand-900 px-3 py-1.5 text-sm text-white/70 hover:bg-brand-800 disabled:opacity-50"
+            >
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-emerald-950 hover:bg-emerald-400 disabled:opacity-50"
+            >
+              {saving ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Plus className="h-3.5 w-3.5" />
+              )}
+              Créer le lead
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
