@@ -87,13 +87,26 @@ async def scrape_owners_via_browser(
     # touchent montreal.ca / api.montreal.ca pour voir où le form est posté.
     def _on_request(req) -> None:
         url = req.url
-        if "montreal.ca" in url and req.method != "GET":
-            log.info("REQ[%s] %s", req.method, url)
+        if (
+            "montreal.ca" in url
+            and "google" not in url
+            and req.method != "GET"
+        ):
+            body = req.post_data or ""
+            log.info("REQ[%s] %s body=%s", req.method, url, body[:500])
 
     def _on_response(resp) -> None:
         url = resp.url
-        if "montreal.ca" in url and resp.request.method != "GET":
-            log.info("RESP[%s %d] %s", resp.request.method, resp.status, url)
+        if (
+            "montreal.ca" in url
+            and "google" not in url
+            and resp.request.method != "GET"
+        ):
+            location = resp.headers.get("location", "")
+            log.info(
+                "RESP[%s %d] %s location=%s",
+                resp.request.method, resp.status, url, location,
+            )
 
     page.on("request", _on_request)
     page.on("response", _on_response)
@@ -133,8 +146,23 @@ async def scrape_owners_via_browser(
 
         # Étape 3 : remplit les 6 sous-champs + Rechercher
         await _fill_matricule_form(page, parts)
-        await page.wait_for_timeout(500)
+        # Donne 1.5s à React pour propager l'état + générer le token
+        await page.wait_for_timeout(1_500)
         await _snap("04-form-filled")
+        # Avant de cliquer, vérifie que TOUS les inputs ont la bonne
+        # valeur (Radix UI peut avoir une valeur stale).
+        try:
+            current_values = await page.evaluate("""
+                () => {
+                    const inputs = document.querySelectorAll('input[name]');
+                    const out = {};
+                    inputs.forEach(i => out[i.name] = i.value);
+                    return out;
+                }
+            """)
+            log.info("PRE-SUBMIT VALUES: %s", current_values)
+        except Exception as exc:
+            log.warning("Dump values failed: %s", exc)
         await _click_rechercher(page)
         # Au lieu de networkidle (qui peut retourner trop vite),
         # attend que l'URL change OU 8s
