@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, RefreshCw, Trello } from "lucide-react";
+import { Loader2, RefreshCw, Trash2, Trello } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
@@ -116,6 +116,28 @@ export default function ProspectionKanbanPage() {
     }
   }
 
+  async function archiveLead(lead: Lead) {
+    const ok = window.confirm(
+      `Archiver « ${lead.name} » ?\n\n` +
+      `Le lead sera caché du Suivi mais conservé en base.`
+    );
+    if (!ok) return;
+    try {
+      const r = await authedFetch(`/api/v1/prospection/${lead.id}`, {
+        method: "DELETE"
+      });
+      if (!r.ok && r.status !== 204) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      // Retire le lead localement
+      setLeads((prev) => prev.filter((l) => l.id !== lead.id));
+    } catch (e) {
+      alert(`Erreur : ${(e as Error).message}`);
+      void load();
+    }
+  }
+
   return (
     <>
       <AppTopbar
@@ -203,12 +225,12 @@ export default function ProspectionKanbanPage() {
                       draggable
                       onDragStart={() => setDraggedId(l.id)}
                       onDragEnd={() => setDraggedId(null)}
-                      className="cursor-move"
+                      className="group relative cursor-move"
                     >
                       <Link
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         href={`/prospection/${l.id}` as any}
-                        className="block rounded-md border border-brand-800 bg-brand-950/80 p-2.5 text-left transition hover:border-emerald-500/40 hover:bg-brand-950"
+                        className="block rounded-md border border-brand-800 bg-brand-950/80 p-2.5 pr-8 text-left transition hover:border-emerald-500/40 hover:bg-brand-950"
                       >
                         <div className="flex items-start justify-between gap-2">
                           <p className="line-clamp-2 text-sm font-medium text-white">
@@ -241,6 +263,19 @@ export default function ProspectionKanbanPage() {
                           </p>
                         ) : null}
                       </Link>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          void archiveLead(l);
+                        }}
+                        className="absolute right-1.5 top-1.5 rounded p-1 text-white/30 opacity-0 transition hover:bg-rose-500/20 hover:text-rose-300 group-hover:opacity-100 focus:opacity-100"
+                        title="Archiver ce lead"
+                        aria-label="Archiver"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
                     </li>
                   ))}
                 </ul>
