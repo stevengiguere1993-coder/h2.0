@@ -153,15 +153,25 @@
     if (existing) existing.remove();
     const toast = document.createElement("div");
     toast.id = "h20-toast";
-    toast.textContent = message;
     toast.style.cssText = `
       position: fixed; top: 20px; right: 20px; z-index: 99999;
-      background: #2c5530; color: white; padding: 12px 20px;
+      background: #2c5530; color: white; padding: 16px 20px;
       border-radius: 8px; font-family: sans-serif; font-size: 14px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.3); max-width: 320px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4); max-width: 360px;
+      cursor: pointer; line-height: 1.4;
+      border: 2px solid #1a3a1d;
     `;
+    const msgDiv = document.createElement("div");
+    msgDiv.textContent = message;
+    msgDiv.style.fontWeight = "600";
+    const hint = document.createElement("div");
+    hint.textContent = "(clic pour fermer)";
+    hint.style.cssText = "font-size:11px;opacity:.7;margin-top:6px;";
+    toast.appendChild(msgDiv);
+    toast.appendChild(hint);
+    toast.addEventListener("click", () => toast.remove());
     document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 5000);
+    setTimeout(() => toast.remove(), 30000);
   }
 
   function tryScrape() {
