@@ -989,43 +989,56 @@ function OwnerCandidatesModal({
               <h3 className="text-[11px] font-semibold uppercase tracking-wider text-emerald-300">
                 Propriétaires au rôle (EvalWeb)
               </h3>
-              <button
-                type="button"
-                onClick={() => fetchEvalWeb(!!evalData)}
-                disabled={evalLoading}
-                className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
-              >
-                {evalLoading ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : evalData ? (
-                  <RefreshCw className="h-3 w-3" />
-                ) : (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Ouvre montreal.ca avec le matricule en URL param.
+                    // L'extension navigateur Horizon détecte ce param et
+                    // pilote automatiquement le flow 4 étapes jusqu'à la
+                    // fiche détaillée, puis scrape et POST vers h2.0.
+                    // La modale ouverte se remplit toute seule (3s polling).
+                    const url = `https://montreal.ca/role-evaluation-fonciere?h2matricule=${encodeURIComponent(property.matricule)}`;
+                    window.open(url, "_blank", "noopener");
+                  }}
+                  className="inline-flex items-center gap-1 rounded-md border border-emerald-400 bg-emerald-500/20 px-2 py-1 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-500/30"
+                  title="Ouvre montreal.ca dans un nouvel onglet et l'extension fait tout automatiquement"
+                >
                   <Search className="h-3 w-3" />
-                )}
-                {evalLoading
-                  ? "Récupération…"
-                  : evalData
-                    ? "Rafraîchir"
-                    : "Récupérer du rôle"}
-              </button>
+                  Récupérer (auto)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fetchEvalWeb(!!evalData)}
+                  disabled={evalLoading}
+                  className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                  title="Tente le scraper VPS (peut être bloqué par reCAPTCHA)"
+                >
+                  {evalLoading ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : evalData ? (
+                    <RefreshCw className="h-3 w-3" />
+                  ) : (
+                    <Search className="h-3 w-3" />
+                  )}
+                  {evalLoading
+                    ? "…"
+                    : evalData
+                      ? "Rafraîchir"
+                      : "VPS"}
+                </button>
+              </div>
             </div>
 
             {!evalData && !evalLoading && !evalError ? (
               <div className="space-y-2">
                 <p className="text-[11px] text-white/50">
-                  Clique pour récupérer les propriétaires inscrits au
-                  rôle d&apos;évaluation. <strong>Si tu as l&apos;extension
-                  Horizon installée</strong>, ouvre la fiche{" "}
-                  <a
-                    href={`https://montreal.ca/role-evaluation-fonciere`}
-                    target="_blank"
-                    rel="noopener"
-                    className="text-emerald-300 underline hover:text-emerald-200"
-                  >
-                    montreal.ca
-                  </a>{" "}
-                  pour ce matricule — les données arriveront ici
-                  automatiquement (cette modale se rafraîchit toutes les 3s).
+                  Clique <strong>« Récupérer (auto) »</strong> :
+                  l&apos;extension Horizon ouvre montreal.ca dans un nouvel
+                  onglet, navigue automatiquement jusqu&apos;à la fiche du
+                  matricule, scrape les propriétaires et les renvoie ici
+                  (~10-15 secondes). Cette modale se met à jour
+                  automatiquement.
                 </p>
                 <p className="text-[10px] text-white/40">
                   Pas l&apos;extension ? Va dans{" "}
@@ -1035,7 +1048,7 @@ function OwnerCandidatesModal({
                   >
                     Paramètres → Outils
                   </a>{" "}
-                  pour la télécharger.
+                  pour la télécharger (1 fois, ~2 min).
                 </p>
               </div>
             ) : null}

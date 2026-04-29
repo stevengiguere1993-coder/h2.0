@@ -1,6 +1,13 @@
 // Content script qui tourne sur montreal.ca/role-evaluation-fonciere/*
-// Détecte la page « Résultat détaillé » (étape 4 du flow) et extrait
-// les owners de la section « 2. Propriétaire ».
+//
+// Deux modes :
+// 1. SCRAPE : sur la fiche détaillée (étape 4), extrait les owners
+//    et POST à h2.0
+// 2. AUTOPILOT : si l'URL contient ?h2matricule=XXXX-XX-XXXX-...,
+//    le matricule est mémorisé en sessionStorage, et l'extension
+//    fait automatiquement les clics + remplissages pour parcourir
+//    le flow 4 étapes jusqu'à la fiche détaillée. Le scrape se
+//    déclenche ensuite automatiquement (mode 1).
 
 (function () {
   "use strict";
@@ -9,6 +16,192 @@
 
   // Évite de scraper plusieurs fois la même page
   let lastSent = null;
+
+  // ============== AUTOPILOT ==============
+
+  const STORAGE_KEY = "h2_target_matricule";
+
+  function readUrlMatricule() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const m = params.get("h2matricule");
+      if (m && /^\d{4}-\d{2}-\d{4}-\d-\d{3}-\d{4}$/.test(m)) return m;
+    } catch (_) {}
+    return null;
+  }
+
+  function getTargetMatricule() {
+    // Si l'URL contient un nouveau matricule, on l'enregistre.
+    const fromUrl = readUrlMatricule();
+    if (fromUrl) {
+      sessionStorage.setItem(STORAGE_KEY, fromUrl);
+      return fromUrl;
+    }
+    return sessionStorage.getItem(STORAGE_KEY);
+  }
+
+  function clearTarget() {
+    sessionStorage.removeItem(STORAGE_KEY);
+  }
+
+  function decomposeMatricule(matricule) {
+    const parts = matricule.split("-");
+    if (parts.length !== 6) return null;
+    const [division, sector, location, cav, building, local] = parts;
+    if (
+      division.length !== 4 ||
+      sector.length !== 2 ||
+      location.length !== 4 ||
+      cav.length !== 1 ||
+      building.length !== 3 ||
+      local.length !== 4
+    ) {
+      return null;
+    }
+    return { division, sector, location, cav, building, local };
+  }
+
+  function delay(ms) {
+    return new Promise(r => setTimeout(r, ms));
+  }
+
+  function humanish(low, high) {
+    return low + Math.random() * (high - low);
+  }
+
+  // Set la valeur d'un input React-controlled : il faut utiliser
+  // le setter natif puis dispatch un event pour que React enregistre.
+  function setReactInputValue(input, value) {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, "value"
+    ).set;
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  async function autopilotStep1HomeAndOptions(matricule) {
+    // Page d'accueil : sélectionner « Par matricule » + cliquer Suivant
+    log("Autopilot étape 1 : sélection 'Par matricule'");
+    // Cherche label « Par matricule » → trouve le radio associé via for=
+    const labels = Array.from(document.querySelectorAll("label"));
+    const targetLabel = labels.find(l =>
+      l.textContent.trim().toLowerCase().includes("par matricule")
+    );
+    if (!targetLabel) {
+      log("Label 'Par matricule' introuvable — peut-être déjà passé");
+      return false;
+    }
+    const forAttr = targetLabel.getAttribute("for");
+    if (forAttr) {
+      const radio = document.getElementById(forAttr);
+      if (radio) radio.click();
+    } else {
+      targetLabel.click();
+    }
+    await delay(humanish(500, 900));
+
+    // Cherche le bouton Suivant
+    const buttons = Array.from(document.querySelectorAll("button"));
+    const suivant = buttons.find(b =>
+      (b.textContent || "").trim().toLowerCase() === "suivant"
+    );
+    if (suivant) {
+      log("Click Suivant");
+      suivant.click();
+      return true;
+    }
+    log("Bouton Suivant introuvable");
+    return false;
+  }
+
+  async function autopilotStep2FillForm(matricule) {
+    // Page form 6 sous-champs
+    const parts = decomposeMatricule(matricule);
+    if (!parts) {
+      log("Matricule invalide:", matricule);
+      return false;
+    }
+    log("Autopilot étape 2 : remplissage form pour", matricule);
+
+    const fields = [
+      ["division", parts.division],
+      ["sector", parts.sector],
+      ["location", parts.location],
+      ["cav", parts.cav],
+      ["building", parts.building],
+      ["local", parts.local],
+    ];
+    for (const [name, value] of fields) {
+      const input = document.querySelector(`input[name="${name}"]`);
+      if (!input) {
+        log(`Input [name=${name}] introuvable`);
+        return false;
+      }
+      input.focus();
+      setReactInputValue(input, value);
+      await delay(humanish(150, 350));
+    }
+    await delay(humanish(800, 1500));
+
+    const buttons = Array.from(document.querySelectorAll("button"));
+    const rechercher = buttons.find(b =>
+      (b.textContent || "").trim().toLowerCase() === "rechercher"
+    );
+    if (rechercher) {
+      log("Click Rechercher");
+      rechercher.click();
+      return true;
+    }
+    log("Bouton Rechercher introuvable");
+    return false;
+  }
+
+  async function autopilotStep3ClickResult(matricule) {
+    // Page liste : clique le lien qui contient le matricule
+    log("Autopilot étape 3 : recherche du résultat dans la liste");
+    const candidates = Array.from(
+      document.querySelectorAll("a, button, [role='link']")
+    );
+    const target = candidates.find(el =>
+      (el.textContent || "").includes(matricule)
+    );
+    if (target) {
+      log("Click résultat:", matricule);
+      target.click();
+      return true;
+    }
+    log("Lien matricule dans la liste introuvable");
+    return false;
+  }
+
+  async function tryAutopilot() {
+    const matricule = getTargetMatricule();
+    if (!matricule) return;
+    const url = window.location.pathname;
+    log("Autopilot actif pour", matricule, "sur", url);
+
+    // Détermine l'étape selon l'URL
+    if (url.endsWith("/role-evaluation-fonciere") ||
+        url.endsWith("/role-evaluation-fonciere/")) {
+      // Étape 1 : page d'accueil
+      await delay(humanish(800, 1500));
+      await autopilotStep1HomeAndOptions(matricule);
+    } else if (url.includes("/role-evaluation-fonciere/matricule") &&
+               !url.includes("/liste") && !url.includes("/resultat")) {
+      // Étape 2 : page form
+      await delay(humanish(800, 1500));
+      await autopilotStep2FillForm(matricule);
+    } else if (url.includes("/matricule/liste")) {
+      // Étape 3 : page liste
+      await delay(humanish(1000, 1800));
+      await autopilotStep3ClickResult(matricule);
+    } else if (url.includes("/resultat") || url.includes("/detail")) {
+      // Étape 4 : fiche détaillée — laisse le scraper faire son boulot.
+      // On clear le target (autopilot terminé)
+      clearTarget();
+    }
+  }
 
   function isResultDetailPage() {
     // Sur la fiche détaillée, on a « 1. Identification de l'unité »
@@ -225,7 +418,10 @@
   }
 
   // Tente le scrape une fois la page rendue (Next.js + React SPA)
-  setTimeout(tryScrape, 1500);
+  setTimeout(() => {
+    tryAutopilot();
+    tryScrape();
+  }, 1500);
 
   // Re-tente si l'URL change (navigation SPA sans full reload)
   let lastUrl = window.location.href;
@@ -233,7 +429,10 @@
     if (window.location.href !== lastUrl) {
       lastUrl = window.location.href;
       lastSent = null;
-      setTimeout(tryScrape, 1500);
+      setTimeout(() => {
+        tryAutopilot();
+        tryScrape();
+      }, 1500);
     }
   }, 1000);
 })();
