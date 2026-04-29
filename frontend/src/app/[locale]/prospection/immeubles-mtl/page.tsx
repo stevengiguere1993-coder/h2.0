@@ -34,6 +34,7 @@ type Property = {
   full_address: string | null;
   already_lead: boolean;
   has_owner_data: boolean;
+  owner_names: string[] | null;
 };
 
 type UtilisationType = {
@@ -508,6 +509,7 @@ export default function ImmeublesMtlPage() {
                     <th className="px-3 py-2.5 text-right">Année</th>
                     <th className="px-3 py-2.5 text-right">Terrain</th>
                     <th className="px-3 py-2.5">Utilisation</th>
+                    <th className="px-3 py-2.5">Propriétaire</th>
                     <th className="px-3 py-2.5">Matricule</th>
                     <th className="px-3 py-2.5">Actions</th>
                   </tr>
@@ -544,6 +546,34 @@ export default function ImmeublesMtlPage() {
                       </td>
                       <td className="px-3 py-2.5 text-[11px] text-white/60">
                         {p.libelle_utilisation || "—"}
+                      </td>
+                      <td className="px-3 py-2.5 max-w-[180px]">
+                        {p.owner_names && p.owner_names.length > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => setOwnerModalFor(p)}
+                            className="text-left text-[11px] text-emerald-300 hover:text-emerald-200 hover:underline"
+                            title="Voir les détails du propriétaire"
+                          >
+                            {p.owner_names.length === 1 ? (
+                              <span className="line-clamp-2">
+                                {p.owner_names[0]}
+                              </span>
+                            ) : (
+                              <span>
+                                <span className="line-clamp-1">
+                                  {p.owner_names[0]}
+                                </span>
+                                <span className="text-[10px] text-white/40">
+                                  +{p.owner_names.length - 1} autre
+                                  {p.owner_names.length > 2 ? "s" : ""}
+                                </span>
+                              </span>
+                            )}
+                          </button>
+                        ) : (
+                          <span className="text-[11px] text-white/30">—</span>
+                        )}
                       </td>
                       <td className="px-3 py-2.5 font-mono text-[10px] text-white/40">
                         {p.matricule}

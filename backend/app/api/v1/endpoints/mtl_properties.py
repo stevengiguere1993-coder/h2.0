@@ -13,6 +13,7 @@ Pour chaque propriété trouvée, on peut :
 
 from __future__ import annotations
 
+import json
 import logging
 import unicodedata
 from typing import List, Optional
@@ -61,6 +62,8 @@ class MtlPropertyRead(BaseModel):
                                   # ce matricule
     has_owner_data: bool = False  # True si on a déjà des proprios
                                     # parsés depuis EvalWeb
+    owner_names: Optional[List[str]] = None  # Liste des noms (compact
+                                              # pour affichage liste)
 
 
 class OwnerCandidate(BaseModel):
@@ -218,6 +221,18 @@ async def list_properties(
         d.full_address = _full_addr(r) or None
         d.already_lead = r.matricule in already_set
         d.has_owner_data = bool(r.owners_json)
+        # Extrait les noms des owners depuis owners_json (best-effort)
+        if r.owners_json:
+            try:
+                owners_data = json.loads(r.owners_json)
+                names = [
+                    o.get("name", "").strip()
+                    for o in owners_data
+                    if o.get("name")
+                ]
+                d.owner_names = names if names else None
+            except Exception:
+                d.owner_names = None
         if d.superficie_terrain is not None:
             d.superficie_terrain = float(d.superficie_terrain)
         if d.superficie_batiment is not None:
