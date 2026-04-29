@@ -22,6 +22,11 @@ from typing import List, Optional, Tuple
 
 from playwright.async_api import Browser, Page
 
+try:
+    from playwright_stealth import stealth_async
+except ImportError:
+    stealth_async = None
+
 log = logging.getLogger(__name__)
 
 NEW_PORTAL_PUBLIC = "https://montreal.ca/role-evaluation-fonciere"
@@ -82,6 +87,18 @@ async def scrape_owners_via_browser(
     )
     page = await context.new_page()
     page.set_default_timeout(30_000)
+
+    # Masque les ~30 propriétés JS qui trahissent un Chromium headless
+    # (navigator.webdriver, missing plugins, etc.) → améliore le score
+    # reCAPTCHA v3 utilisé par montreal.ca pour bloquer les bots.
+    if stealth_async is not None:
+        try:
+            await stealth_async(page)
+            log.info("playwright-stealth appliqué")
+        except Exception as exc:
+            log.warning("stealth_async failed: %s", exc)
+    else:
+        log.warning("playwright-stealth non installé")
 
     # Capture toutes les requêtes pour debug — on filtre celles qui
     # touchent montreal.ca / api.montreal.ca pour voir où le form est posté.
