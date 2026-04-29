@@ -17,17 +17,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Code
 COPY . /app
 
-# Non-root user pour la sécurité (Playwright a besoin d'un user
-# avec un home dir pour Chromium)
+# Non-root user pour la sécurité
 USER pwuser
 
-# Port exposé
+# Display virtuel pour Chrome headed
+ENV DISPLAY=:99
+
 EXPOSE 8000
 
-# Démarrage avec xvfb-run qui crée un display virtuel et lance
-# uvicorn dedans. Chrome se lance en mode headed (sans GUI réelle
-# mais sans flag --headless) → reCAPTCHA score beaucoup mieux.
-# workers=1 pour CPX11 (2 GB) — Chromium prend 500-700 MB.
-CMD ["xvfb-run", "-a", "--server-args=-screen 0 1280x800x24", \
-     "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", \
-     "--workers", "1"]
+# Lance Xvfb en background puis uvicorn. exec uvicorn permet la
+# propagation des signaux (SIGTERM, etc) directement à uvicorn.
+# >/dev/null pour que les logs Xvfb ne polluent pas docker logs.
+CMD ["bash", "-c", "Xvfb :99 -screen 0 1280x800x24 -ac >/dev/null 2>&1 & sleep 1 && exec uvicorn app:app --host 0.0.0.0 --port 8000 --workers 1"]
