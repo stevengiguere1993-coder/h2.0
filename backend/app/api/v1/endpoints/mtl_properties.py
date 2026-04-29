@@ -38,6 +38,16 @@ from app.services.prospection_scoring import apply_score
 router = APIRouter(prefix="/prospection/mtl-properties", tags=["mtl-properties"])
 
 
+class AddressSuggestion(BaseModel):
+    """Suggestion compacte pour autocomplete d'adresse."""
+
+    matricule: str
+    civique: Optional[str]
+    nom_rue: Optional[str]
+    municipalite: Optional[str]
+    label: str  # ex. "261 mont-royal — Montréal"
+
+
 # --------------------------- Schemas ---------------------------
 
 
@@ -245,6 +255,68 @@ class UtilisationType(BaseModel):
     code: str
     libelle: Optional[str]
     count: int
+
+
+@router.get(
+    "/address-search",
+    response_model=List[AddressSuggestion],
+    summary="Autocomplete d'adresse depuis le rôle d'évaluation Montréal.",
+)
+async def address_search(
+    db: DBSession,
+    _: CurrentUser,
+    q: str = Query(..., min_length=2, max_length=100),
+    limit: int = Query(default=15, ge=1, le=50),
+) -> List[AddressSuggestion]:
+    """Recherche d'adresses par sous-chaîne. Match sur civique + nom_rue
+    concaténés (ex. « 261 mont »). Utilisé par le combobox de la fiche
+    lead pour proposer des adresses existantes au lieu de saisie libre."""
+    cleaned = q.strip()
+    if not cleaned:
+        return []
+
+    # On cherche les tokens séparément : un nombre = civique, le reste = rue
+    tokens = [t for t in cleaned.split() if t]
+    civic_token = next((t for t in tokens if t[:1].isdigit()), None)
+    street_tokens = [t for t in tokens if t != civic_token]
+
+    filters = []
+    if civic_token:
+        filters.append(MontrealPropertyUnit.civique_debut.ilike(f"{civic_token}%"))
+    if street_tokens:
+        for st in street_tokens:
+            filters.append(MontrealPropertyUnit.nom_rue.ilike(f"%{st}%"))
+    if not filters:
+        return []
+
+    stmt = (
+        select(MontrealPropertyUnit)
+        .where(*filters)
+        .order_by(
+            MontrealPropertyUnit.nom_rue.asc(),
+            MontrealPropertyUnit.civique_debut.asc(),
+        )
+        .limit(limit)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+
+    out: List[AddressSuggestion] = []
+    for r in rows:
+        civic = (r.civique_debut or "").strip()
+        rue = (r.nom_rue or "").strip()
+        ville = (r.municipalite or "Montréal").strip()
+        full = " ".join(x for x in [civic, rue] if x)
+        label = f"{full} — {ville}" if full else ville
+        out.append(
+            AddressSuggestion(
+                matricule=r.matricule,
+                civique=civic or None,
+                nom_rue=rue or None,
+                municipalite=ville,
+                label=label,
+            )
+        )
+    return out
 
 
 @router.get(
