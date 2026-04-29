@@ -44,6 +44,42 @@ export default function ProspectionSourcesPage() {
   const [mtlError, setMtlError] = useState<string | null>(null);
   const mtlPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  type BackfillResult = {
+    total_leads: number;
+    already_filled: number;
+    matched: number;
+    ambiguous: number;
+    no_match: number;
+    sample_unmatched: string[];
+  };
+  const [backfillBusy, setBackfillBusy] = useState(false);
+  const [backfillResult, setBackfillResult] = useState<BackfillResult | null>(
+    null
+  );
+  const [backfillError, setBackfillError] = useState<string | null>(null);
+
+  // Import provincial (Rive-Sud / Laval / Rive-Nord)
+  type ProvStatus = {
+    status: "idle" | "running" | "done" | "error";
+    started_at: string | null;
+    finished_at: string | null;
+    rows_processed: number | null;
+    rows_upserted: number | null;
+    region: string | null;
+    error: string | null;
+  };
+  const [provFile, setProvFile] = useState<File | null>(null);
+  const [provRegion, setProvRegion] =
+    useState<"rive-sud" | "laval" | "rive-nord">("rive-sud");
+  const [provUploading, setProvUploading] = useState(false);
+  const [provUploadProgress, setProvUploadProgress] = useState<{
+    sent: number;
+    total: number;
+  } | null>(null);
+  const [provStatus, setProvStatus] = useState<ProvStatus | null>(null);
+  const [provError, setProvError] = useState<string | null>(null);
+  const provPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const [reqFile, setReqFile] = useState<File | null>(null);
   const [reqUploading, setReqUploading] = useState(false);
   const [reqUploadProgress, setReqUploadProgress] = useState<{
@@ -281,6 +317,7 @@ export default function ProspectionSourcesPage() {
     void refreshReqStatus();
     void refreshRentalStatus();
     void refreshCentrisStatus();
+    void refreshProvStatus();
     if (mtlPollRef.current === null) {
       mtlPollRef.current = setInterval(refreshMtlStatus, 5000);
     }
@@ -313,6 +350,109 @@ export default function ProspectionSourcesPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOwner]);
+
+  async function refreshProvStatus() {
+    try {
+      const res = await authedFetch(
+        "/api/v1/admin/data/provincial/import-status"
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as ProvStatus;
+      setProvStatus(data);
+      if (data.status !== "running" && provPollRef.current !== null) {
+        clearInterval(provPollRef.current);
+        provPollRef.current = null;
+      }
+    } catch {
+      /* silent */
+    }
+  }
+
+  async function importProvincial() {
+    if (provUploading || provStatus?.status === "running" || !provFile) return;
+    setProvUploading(true);
+    setProvError(null);
+    setProvUploadProgress({ sent: 0, total: 1 });
+    try {
+      const CHUNK_SIZE = 10 * 1024 * 1024;
+      const totalChunks = Math.ceil(provFile.size / CHUNK_SIZE);
+      const uploadId =
+        Date.now().toString(36) +
+        "-" +
+        Math.random().toString(36).slice(2, 10);
+      setProvUploadProgress({ sent: 0, total: totalChunks });
+
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, provFile.size);
+        const blob = provFile.slice(start, end);
+        const fd = new FormData();
+        fd.append("upload_id", uploadId);
+        fd.append("chunk_idx", String(i));
+        fd.append("total_chunks", String(totalChunks));
+        fd.append("chunk", blob, `chunk-${i}`);
+        const res = await authedFetch(
+          "/api/v1/admin/data/provincial/upload-chunk",
+          { method: "POST", body: fd }
+        );
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(
+            `Chunk ${i + 1}/${totalChunks} : ${
+              t.slice(0, 200) || res.status
+            }`
+          );
+        }
+        setProvUploadProgress({ sent: i + 1, total: totalChunks });
+      }
+
+      const fdFinal = new FormData();
+      fdFinal.append("upload_id", uploadId);
+      fdFinal.append("total_chunks", String(totalChunks));
+      fdFinal.append("region", provRegion);
+      const finRes = await authedFetch(
+        "/api/v1/admin/data/provincial/upload-finalize",
+        { method: "POST", body: fdFinal }
+      );
+      if (!finRes.ok) {
+        const t = await finRes.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${finRes.status}`);
+      }
+      setProvFile(null);
+      await refreshProvStatus();
+      if (provPollRef.current === null) {
+        provPollRef.current = setInterval(refreshProvStatus, 5000);
+      }
+    } catch (e) {
+      setProvError((e as Error).message);
+    } finally {
+      setProvUploading(false);
+      setProvUploadProgress(null);
+    }
+  }
+
+  async function backfillLeadsFromMtl() {
+    if (backfillBusy) return;
+    setBackfillBusy(true);
+    setBackfillResult(null);
+    setBackfillError(null);
+    try {
+      const res = await authedFetch(
+        "/api/v1/prospection/mtl-properties/backfill-leads",
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as BackfillResult;
+      setBackfillResult(data);
+    } catch (e) {
+      setBackfillError((e as Error).message);
+    } finally {
+      setBackfillBusy(false);
+    }
+  }
 
   async function importMontreal() {
     if (mtlStatus?.status === "running") return;
@@ -549,6 +689,166 @@ export default function ProspectionSourcesPage() {
           {mtlError ? (
             <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
               {mtlError}
+            </p>
+          ) : null}
+
+          {/* Backfill leads existants depuis le rôle MTL */}
+          <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+            <h3 className="text-sm font-semibold text-amber-200">
+              Compléter les leads existants
+            </h3>
+            <p className="mt-1 text-[11px] text-white/60">
+              Pour chaque lead avec une adresse texte, cherche le matricule
+              correspondant dans le rôle MTL et remplit ville, nb logements,
+              année et superficie. N&apos;écrase rien de déjà saisi.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={backfillLeadsFromMtl}
+                disabled={backfillBusy}
+                className="inline-flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
+              >
+                {backfillBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                {backfillBusy
+                  ? "Backfill en cours…"
+                  : "Backfill leads depuis le rôle MTL"}
+              </button>
+              {backfillResult ? (
+                <p className="text-[11px] text-white/70">
+                  {backfillResult.matched} matchés · {backfillResult.already_filled}{" "}
+                  déjà OK · {backfillResult.ambiguous} ambigus ·{" "}
+                  {backfillResult.no_match} sans match (sur{" "}
+                  {backfillResult.total_leads})
+                </p>
+              ) : null}
+            </div>
+            {backfillError ? (
+              <p className="mt-2 rounded border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300">
+                {backfillError}
+              </p>
+            ) : null}
+            {backfillResult && backfillResult.sample_unmatched.length > 0 ? (
+              <details className="mt-2 text-[11px] text-white/50">
+                <summary className="cursor-pointer hover:text-white/70">
+                  Voir 20 adresses non matchées
+                </summary>
+                <ul className="mt-1 space-y-0.5 pl-4">
+                  {backfillResult.sample_unmatched.map((a, i) => (
+                    <li key={i} className="font-mono text-[10px]">
+                      {a}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+          </div>
+        </section>
+
+        {/* === Rôles d'évaluation hors-Montréal === */}
+        <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+          <header className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-blue-500/15 text-blue-400">
+                <MapPin className="h-5 w-5" />
+              </span>
+              <div>
+                <h2 className="text-base font-bold text-white">
+                  Rôles d&apos;évaluation hors-Montréal
+                </h2>
+                <p className="mt-0.5 text-xs text-white/60">
+                  Rive-Sud, Laval, Rive-Nord. Upload du CSV provincial,
+                  filtré par région à l&apos;ingestion. Stocké dans la
+                  même table que MTL avec un champ « region ».
+                </p>
+              </div>
+            </div>
+          </header>
+
+          <p className="mt-3 rounded-md border border-brand-700 bg-brand-950/40 p-3 text-[11px] text-white/60">
+            Le fichier source est l&apos;export provincial du rôle (CSV
+            ~3-5 GB). Sélectionne le fichier puis la région : seules les
+            unités correspondantes seront ingérées. Upload chunked
+            (10 Mo/morceau) pour passer le proxy Render.
+          </p>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-[auto_1fr_auto]">
+            <select
+              value={provRegion}
+              onChange={(e) =>
+                setProvRegion(
+                  e.target.value as "rive-sud" | "laval" | "rive-nord"
+                )
+              }
+              disabled={provUploading || provStatus?.status === "running"}
+              className="rounded-lg border border-brand-700 bg-brand-950 px-3 py-2 text-sm text-white"
+            >
+              <option value="rive-sud">Rive-Sud</option>
+              <option value="laval">Laval</option>
+              <option value="rive-nord">Rive-Nord</option>
+            </select>
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(e) => setProvFile(e.target.files?.[0] || null)}
+              disabled={provUploading || provStatus?.status === "running"}
+              className="rounded-lg border border-brand-700 bg-brand-950 px-3 py-2 text-sm text-white file:mr-3 file:rounded file:border-0 file:bg-blue-500/20 file:px-3 file:py-1 file:text-xs file:text-blue-300"
+            />
+            <button
+              type="button"
+              onClick={importProvincial}
+              disabled={
+                !isOwner ||
+                provUploading ||
+                provStatus?.status === "running" ||
+                !provFile
+              }
+              className="inline-flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-300 transition hover:bg-blue-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {provUploading || provStatus?.status === "running" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Upload className="h-4 w-4" />
+              )}
+              {provUploading
+                ? `Upload ${provUploadProgress?.sent ?? 0}/${
+                    provUploadProgress?.total ?? "?"
+                  }`
+                : provStatus?.status === "running"
+                  ? "Ingestion en cours…"
+                  : "Importer"}
+            </button>
+          </div>
+
+          {provStatus?.status === "running" ? (
+            <p className="mt-3 rounded-md border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-xs text-blue-200">
+              <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />
+              Ingestion {provStatus.region || ""} en arrière-plan
+              (3-5 min). Tu peux fermer l&apos;onglet, l&apos;import
+              continue côté serveur.
+            </p>
+          ) : null}
+          {provStatus?.status === "done" &&
+          provStatus.rows_upserted !== null ? (
+            <p className="mt-3 flex items-center gap-1.5 text-xs text-emerald-300">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              {provStatus.rows_upserted.toLocaleString("fr-CA")} unités
+              ingérées ({provStatus.region}).
+            </p>
+          ) : null}
+          {provStatus?.status === "error" && provStatus.error ? (
+            <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+              Échec : {provStatus.error}
+            </p>
+          ) : null}
+          {provError ? (
+            <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              {provError}
             </p>
           ) : null}
         </section>
