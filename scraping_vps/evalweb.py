@@ -83,6 +83,21 @@ async def scrape_owners_via_browser(
     page = await context.new_page()
     page.set_default_timeout(30_000)
 
+    # Capture toutes les requêtes pour debug — on filtre celles qui
+    # touchent montreal.ca / api.montreal.ca pour voir où le form est posté.
+    def _on_request(req) -> None:
+        url = req.url
+        if "montreal.ca" in url and req.method != "GET":
+            log.info("REQ[%s] %s", req.method, url)
+
+    def _on_response(resp) -> None:
+        url = resp.url
+        if "montreal.ca" in url and resp.request.method != "GET":
+            log.info("RESP[%s %d] %s", resp.request.method, resp.status, url)
+
+    page.on("request", _on_request)
+    page.on("response", _on_response)
+
     async def _snap(label: str) -> None:
         try:
             path = f"/tmp/evalweb-step-{matricule}-{label}.png"
@@ -121,7 +136,17 @@ async def scrape_owners_via_browser(
         await page.wait_for_timeout(500)
         await _snap("04-form-filled")
         await _click_rechercher(page)
-        await page.wait_for_load_state("networkidle", timeout=15_000)
+        # Au lieu de networkidle (qui peut retourner trop vite),
+        # attend que l'URL change OU 8s
+        try:
+            await page.wait_for_url(
+                lambda u: u != "https://montreal.ca/role-evaluation-fonciere/matricule",
+                timeout=8_000,
+            )
+            log.info("URL changed after Rechercher → %s", page.url)
+        except Exception:
+            log.warning("URL inchangée après Rechercher (%s)", page.url)
+        await page.wait_for_load_state("networkidle", timeout=10_000)
         await page.wait_for_timeout(1_500)
         await _snap("05-after-rechercher")
 
@@ -250,20 +275,22 @@ async def _fill_matricule_form(page: Page, parts: dict) -> None:
 
     Les noms exacts des champs varient — on essaie label + name.
     """
+    # Les name HTML sont en anglais sur cette SPA Next.js,
+    # mais on garde le label FR pour fallback xpath.
     mapping = {
         "division": parts["division"],
-        "secteur": parts["secteur"],
-        "emplacement": parts["emplacement"],
+        "sector": parts["secteur"],
+        "location": parts["emplacement"],
         "cav": parts["cav"],
-        "batiment": parts["batiment"],
+        "building": parts["batiment"],
         "local": parts["local"],
     }
     labels_fr = {
         "division": "Division",
-        "secteur": "Secteur",
-        "emplacement": "Emplacement",
+        "sector": "Secteur",
+        "location": "Emplacement",
         "cav": "Cav",
-        "batiment": "Bâtiment",
+        "building": "Bâtiment",
         "local": "Local",
     }
     # D'abord, dump tous les inputs visibles pour debug
@@ -282,38 +309,26 @@ async def _fill_matricule_form(page: Page, parts: dict) -> None:
         log.warning("Dump inputs failed: %s", exc)
 
     for key, value in mapping.items():
-        filled_via = None
-        for selector in (
-            f"input[name='{key}']",
-            f"input[name='{key.capitalize()}']",
-            f"input[id='{key}']",
-            f"input[aria-label*='{labels_fr[key]}' i]",
-            f"input[placeholder*='{labels_fr[key]}' i]",
-        ):
-            try:
-                loc = page.locator(selector).first
-                await loc.fill(value, timeout=1_500)
-                # Vérifie la valeur insérée
-                actual = await loc.input_value()
-                if actual == value:
-                    filled_via = selector
-                    break
-            except Exception:
-                continue
-        if not filled_via:
-            try:
-                label = page.locator(f"text={labels_fr[key]}").first
-                input_loc = label.locator("xpath=following::input[1]")
-                await input_loc.fill(value, timeout=1_500)
-                actual = await input_loc.input_value()
-                if actual == value:
-                    filled_via = f"label-following::input[1] ({labels_fr[key]})"
-            except Exception:
-                pass
-        if filled_via:
-            log.info("  ✓ %s='%s' via %s", key, value, filled_via)
-        else:
-            log.warning("  ✗ %s='%s' INTROUVABLE", key, value)
+        selector = f"input[name='{key}']"
+        try:
+            loc = page.locator(selector).first
+            # Click pour focus, type pour simuler un vrai input
+            # (évite les problèmes de validation Radix UI), puis Tab
+            # pour blur et déclencher la validation React.
+            await loc.click(timeout=2_000)
+            await loc.fill("", timeout=1_000)
+            await loc.type(value, delay=20, timeout=2_000)
+            await loc.press("Tab")
+            actual = await loc.input_value()
+            if actual == value:
+                log.info("  ✓ %s='%s'", key, value)
+            else:
+                log.warning(
+                    "  ✗ %s='%s' (input_value='%s')",
+                    key, value, actual,
+                )
+        except Exception as exc:
+            log.warning("  ✗ %s='%s' (%s)", key, value, exc)
 
 
 async def _click_rechercher(page: Page) -> None:
