@@ -16,6 +16,7 @@ from app.api.v1.endpoints import (
     calendar,
     clients,
     employes,
+    extension,
     follow_ups,
     contact,
     dashboard,
@@ -110,6 +111,7 @@ api_router.include_router(purchase_order_actions.router)
 api_router.include_router(cron_runner.router)
 api_router.include_router(numbering.router)
 api_router.include_router(qbo_account_map.router)
+api_router.include_router(extension.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(calendar.router)
 api_router.include_router(appointments.router)

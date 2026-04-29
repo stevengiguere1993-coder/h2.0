@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Horizon h2.0 Helper",
+  "version": "1.0.0",
+  "description": "Auto-scrape rôle d'évaluation Montréal et Centris pour Horizon h2.0",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": [
+    "https://montreal.ca/*",
+    "https://www.centris.ca/*",
+    "http://localhost/*",
+    "https://*.onrender.com/*",
+    "https://*.horizonimmo.ca/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://montreal.ca/role-evaluation-fonciere*",
+        "https://montreal.ca/info-recherche/role-evaluation-fonciere*"
+      ],
+      "js": ["content-evalweb.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.centris.ca/fr/*",
+        "https://www.centris.ca/en/*"
+      ],
+      "js": ["content-centris.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Horizon h2.0 Helper"
+  }
+}

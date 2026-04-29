@@ -70,7 +70,14 @@ def create_application() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
-        allow_origin_regex=r"^https://[a-z0-9-]+\.onrender\.com$|^http://localhost(:\d+)?$",
+        # Le regex couvre les preview Render, localhost et l'origin
+        # `chrome-extension://...` utilisé par l'extension navigateur
+        # Horizon h2.0 (qui POST sur /api/v1/extension/*).
+        allow_origin_regex=(
+            r"^https://[a-z0-9-]+\.onrender\.com$|"
+            r"^http://localhost(:\d+)?$|"
+            r"^chrome-extension://[a-z]+$"
+        ),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
