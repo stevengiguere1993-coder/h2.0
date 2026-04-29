@@ -28,6 +28,7 @@ import { authedFetch } from "@/lib/auth";
 import { useProspectionLayout } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
 import { ActivityTimeline } from "./_activity-timeline";
+import { AddressAutocomplete } from "./_address-autocomplete";
 import { AnalysesSection } from "./_analyses-section";
 import { ComparablesSection } from "./_comparables-section";
 import { PurchaseAgreementSection } from "./_purchase-agreement-section";
@@ -755,12 +756,14 @@ export default function ProspectionDetailPage() {
                     <label htmlFor="laddr" className="label">
                       Adresse civique
                     </label>
-                    <input
-                      id="laddr"
-                      type="text"
+                    <AddressAutocomplete
+                      inputId="laddr"
                       value={address}
-                      onChange={(e) => setAddress(e.target.value)}
-                      className="input"
+                      onChange={setAddress}
+                      onPick={(s) => {
+                        setAddress(s.address);
+                        setCity(s.city);
+                      }}
                     />
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
