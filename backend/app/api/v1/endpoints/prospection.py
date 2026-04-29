@@ -789,14 +789,17 @@ async def import_monday(
     import os
     from scripts.import_monday_prospection import cmd_import
 
-    token = os.environ.get("MONDAY_API_TOKEN") or os.environ.get(
-        "monday_api_token"
+    token = (
+        os.environ.get("MONDAY_API_TOKEN")
+        or os.environ.get("monday_api_token")
+        or os.environ.get("MONDAY_TOKEN")
+        or os.environ.get("monday_token")
     )
     if not token:
         raise HTTPException(
             503,
-            "MONDAY_API_TOKEN non configuré côté serveur. Set la "
-            "variable d'environnement et redémarre le service.",
+            "Aucun token Monday trouvé (MONDAY_API_TOKEN / monday_token). "
+            "Set la variable d'environnement et redémarre le service.",
         )
 
     try:
