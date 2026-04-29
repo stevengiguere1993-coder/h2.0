@@ -118,20 +118,15 @@ export default function ProspectionKanbanPage() {
   }
 
   async function archiveLead(lead: Lead) {
-    const ok = window.confirm(
-      `Archiver « ${lead.name} » ?\n\n` +
-      `Le lead sera caché du Suivi mais conservé en base.`
-    );
-    if (!ok) return;
     try {
-      const r = await authedFetch(`/api/v1/prospection/${lead.id}`, {
-        method: "DELETE"
-      });
+      const r = await authedFetch(
+        `/api/v1/prospection/${lead.id}?hard=true`,
+        { method: "DELETE" }
+      );
       if (!r.ok && r.status !== 204) {
         const t = await r.text();
         throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
       }
-      // Retire le lead localement
       setLeads((prev) => prev.filter((l) => l.id !== lead.id));
     } catch (e) {
       alert(`Erreur : ${(e as Error).message}`);
@@ -292,8 +287,8 @@ export default function ProspectionKanbanPage() {
                           void archiveLead(l);
                         }}
                         className="absolute right-1.5 top-1.5 rounded p-1 text-white/30 opacity-0 transition hover:bg-rose-500/20 hover:text-rose-300 group-hover:opacity-100 focus:opacity-100"
-                        title="Archiver ce lead"
-                        aria-label="Archiver"
+                        title="Supprimer ce lead"
+                        aria-label="Supprimer"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>

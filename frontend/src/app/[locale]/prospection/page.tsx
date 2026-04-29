@@ -449,15 +449,9 @@ export default function ProspectionWebPage() {
                       type="button"
                       onClick={async (e) => {
                         e.stopPropagation();
-                        const ok = window.confirm(
-                          `Archiver « ${l.name} » ?\n\n` +
-                          `Le lead sera caché de la liste mais conservé en base ` +
-                          `(restaurable via /prospection/parametres).`
-                        );
-                        if (!ok) return;
                         try {
                           const r = await authedFetch(
-                            `/api/v1/prospection/${l.id}`,
+                            `/api/v1/prospection/${l.id}?hard=true`,
                             { method: "DELETE" }
                           );
                           if (r.ok || r.status === 204) {
@@ -472,8 +466,8 @@ export default function ProspectionWebPage() {
                         }
                       }}
                       className="absolute right-2 top-2.5 rounded-md p-1.5 text-white/30 opacity-0 transition hover:bg-rose-500/20 hover:text-rose-300 group-hover:opacity-100 focus:opacity-100"
-                      title="Archiver ce lead"
-                      aria-label="Archiver"
+                      title="Supprimer ce lead"
+                      aria-label="Supprimer"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
