@@ -198,7 +198,20 @@ async def scrape_owners_via_browser(
         # puis pause "réflexion" puis clic. Reproduit ce qu'un user
         # fait : visualiser le bouton, hover, cliquer.
         try:
-            btn = page.locator("button[type='submit']").first
+            # Dump tous les buttons + leur texte+type pour debug
+            btns_debug = await page.evaluate("""
+                () => Array.from(document.querySelectorAll('button'))
+                    .filter(b => b.offsetParent !== null)
+                    .map(b => ({
+                        text: (b.innerText || '').trim().slice(0, 30),
+                        type: b.type, disabled: b.disabled,
+                    }))
+            """)
+            log.info("VISIBLE BUTTONS: %s", btns_debug)
+            # Cible explicitement le bouton « Rechercher » par texte
+            # — au cas où « Précédent » serait aussi type=submit et
+            # ramènerait à la page précédente (homepage).
+            btn = page.get_by_role("button", name="Rechercher").last
             box = await btn.bounding_box()
             if box:
                 target_x = box["x"] + box["width"] / 2
@@ -206,7 +219,7 @@ async def scrape_owners_via_browser(
                 await page.mouse.move(target_x, target_y, steps=25)
             await page.wait_for_timeout(_humanish(400, 800))
             await btn.click()
-            log.info("  → 'Rechercher' cliqué (humanisé)")
+            log.info("  → 'Rechercher' cliqué (humanisé, by text)")
         except Exception as exc:
             log.warning("Click humanisé failed (%s), fallback", exc)
             await _click_rechercher(page)
