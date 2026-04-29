@@ -176,7 +176,8 @@ async def receive_evalweb_owners(
     }
     _cache_set(_owners_cache, matricule, cache_payload)
 
-    # Persiste sur la unit MTL si elle existe
+    # Persiste sur la unit MTL si elle existe. La session est commitée
+    # automatiquement par le middleware FastAPI à la fin du request.
     persisted = False
     try:
         result = await db.execute(
@@ -189,7 +190,6 @@ async def receive_evalweb_owners(
             unit.owners_json = json.dumps(enriched, ensure_ascii=False)
             unit.owners_fetched_at = datetime.now(timezone.utc)
             persisted = True
-            # Propage aux leads (best-effort)
             try:
                 from app.api.v1.endpoints.mtl_properties import (
                     _propagate_owners_to_lead,
@@ -200,7 +200,6 @@ async def receive_evalweb_owners(
                     "Propagation aux leads échouée : %s", exc
                 )
             await db.flush()
-            await db.commit()
         else:
             log.info(
                 "Unit MTL pour %s n'existe pas en DB — owners cachés "
@@ -209,7 +208,6 @@ async def receive_evalweb_owners(
             )
     except Exception as exc:
         log.warning("Persistance unit MTL échouée : %s", exc)
-        await db.rollback()
 
     return {
         "ok": True,
@@ -327,7 +325,6 @@ async def receive_centris_listing(
                 payload.mls_id, exc,
             )
 
-        await db.commit()
         persisted = True
         log.info(
             "Centris %s : %s, triage=%s",
@@ -339,7 +336,6 @@ async def receive_centris_listing(
         log.warning(
             "Persistance CentrisListing échouée : %s", exc
         )
-        await db.rollback()
 
     return {
         "ok": True,
