@@ -414,6 +414,37 @@ async def owner_evalweb(
             # Cache corrompu → on re-scrape.
             pass
 
+    # Si pas dans owners_json, vérifie le cache mémoire de l'extension
+    # navigateur. L'extension peut avoir POST récemment des owners
+    # qui n'ont pas pu être persistés (ex. si la propagation aux
+    # leads a eu un soucis). On lit le cache direct, et on persiste
+    # à la volée pour les prochaines requêtes.
+    if not refresh:
+        try:
+            from app.api.v1.endpoints.extension import _cache_get, _owners_cache
+            ext_data = _cache_get(_owners_cache, matricule)
+        except Exception:
+            ext_data = None
+        if ext_data and ext_data.get("owners"):
+            ext_owners = ext_data["owners"]
+            # Persiste à la volée pour les prochaines lectures
+            try:
+                p.owners_json = json.dumps(ext_owners, ensure_ascii=False)
+                p.owners_fetched_at = datetime.now(timezone.utc)
+                await db.flush()
+            except Exception:
+                pass
+            return EvalWebResponse(
+                matricule=matricule,
+                owners=[EvalWebOwnerOut(**o) for o in ext_owners],
+                fetched_at=(
+                    p.owners_fetched_at.isoformat()
+                    if p.owners_fetched_at
+                    else None
+                ),
+                cached=True,
+            )
+
     # cache_only : si pas de cache, on retourne une réponse vide
     # plutôt que de déclencher un scrape coûteux. Utilisé par la
     # modal pour pré-charger les données existantes sans déclencher
