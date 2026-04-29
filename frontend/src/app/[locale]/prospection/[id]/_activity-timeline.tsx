@@ -340,24 +340,31 @@ function LogActionForm({
       <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
         <label className="text-xs">
           <span className="block text-white/60">
-            Prochaine action (optionnel)
+            Rappel auto (date + heure)
           </span>
           <input
-            type="date"
+            type="datetime-local"
             value={nextActionAt}
             onChange={(e) => setNextActionAt(e.target.value)}
             className="input mt-0.5"
           />
         </label>
         <label className="text-xs">
-          <span className="block text-white/60">Label prochaine action</span>
-          <input
-            type="text"
+          <span className="block text-white/60">
+            Type de relance prévue
+          </span>
+          <select
             value={nextActionLabel}
             onChange={(e) => setNextActionLabel(e.target.value)}
-            placeholder="Rappeler la semaine prochaine"
             className="input mt-0.5"
-          />
+          >
+            <option value="">— Choisir —</option>
+            <option value="Rappeler">Appel</option>
+            <option value="Texto">SMS / Texto</option>
+            <option value="Courriel">Courriel</option>
+            <option value="Visite">Visite</option>
+            <option value="Note interne">Note interne</option>
+          </select>
         </label>
       </div>
       {error ? (
