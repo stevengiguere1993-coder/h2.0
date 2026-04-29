@@ -27,6 +27,7 @@ import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { useProspectionLayout } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
+import { ActivityTimeline } from "./_activity-timeline";
 import { AnalysesSection } from "./_analyses-section";
 import { ComparablesSection } from "./_comparables-section";
 
@@ -1317,6 +1318,8 @@ export default function ProspectionDetailPage() {
               />
 
               <FinanceSection leadId={id} lead={lead} onSaved={load} />
+
+              <ActivityTimeline leadId={id} />
 
               <ComparablesSection
                 postalCode={lead.postal_code}

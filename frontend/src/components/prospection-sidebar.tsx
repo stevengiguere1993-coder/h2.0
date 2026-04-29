@@ -15,6 +15,7 @@ import {
   Settings,
   Smartphone,
   Sun,
+  Trello,
   UserCircle,
   X
 } from "lucide-react";
@@ -51,6 +52,12 @@ const PROSPECTION_NAV: NavItem[] = [
     href: "/prospection/leads",
     label: "Liste des leads",
     icon: MapPin,
+    minRole: "employee"
+  },
+  {
+    href: "/prospection/kanban",
+    label: "Kanban (pipeline)",
+    icon: Trello,
     minRole: "employee"
   },
   {
