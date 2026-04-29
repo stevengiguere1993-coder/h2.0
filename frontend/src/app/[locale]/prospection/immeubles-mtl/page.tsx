@@ -897,6 +897,36 @@ function OwnerCandidatesModal({
     };
   }, [property.matricule, property.has_owner_data]);
 
+  // Polling de l'extension navigateur : si l'utilisateur a l'extension
+  // Horizon installée et qu'il navigue sur la fiche montreal.ca de ce
+  // matricule dans un autre onglet, les données arriveront en DB
+  // (owners_json) via POST /api/v1/extension/evalweb-owners. On polle
+  // toutes les 3s tant qu'on n'a pas de données affichées.
+  useEffect(() => {
+    if (evalData && evalData.owners.length > 0) return;
+    let cancelled = false;
+    const intervalId = setInterval(async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/prospection/mtl-properties/${encodeURIComponent(
+            property.matricule
+          )}/owner-evalweb?cache_only=true`
+        );
+        if (!r.ok) return;
+        const data = (await r.json()) as EvalWebResponse;
+        if (!cancelled && data.owners.length > 0) {
+          setEvalData(data);
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [property.matricule, evalData]);
+
   async function convertWithOwner(neq: string | null) {
     setConverting(neq || "no-neq");
     try {
@@ -981,11 +1011,33 @@ function OwnerCandidatesModal({
             </div>
 
             {!evalData && !evalLoading && !evalError ? (
-              <p className="text-[11px] text-white/50">
-                Clique pour récupérer les propriétaires inscrits au
-                rôle d&apos;évaluation (personnes physiques + corps).
-                ~3-5 secondes. Résultat mis en cache.
-              </p>
+              <div className="space-y-2">
+                <p className="text-[11px] text-white/50">
+                  Clique pour récupérer les propriétaires inscrits au
+                  rôle d&apos;évaluation. <strong>Si tu as l&apos;extension
+                  Horizon installée</strong>, ouvre la fiche{" "}
+                  <a
+                    href={`https://montreal.ca/role-evaluation-fonciere`}
+                    target="_blank"
+                    rel="noopener"
+                    className="text-emerald-300 underline hover:text-emerald-200"
+                  >
+                    montreal.ca
+                  </a>{" "}
+                  pour ce matricule — les données arriveront ici
+                  automatiquement (cette modale se rafraîchit toutes les 3s).
+                </p>
+                <p className="text-[10px] text-white/40">
+                  Pas l&apos;extension ? Va dans{" "}
+                  <a
+                    href="/prospection/parametres/outils"
+                    className="underline hover:text-white/60"
+                  >
+                    Paramètres → Outils
+                  </a>{" "}
+                  pour la télécharger.
+                </p>
+              </div>
             ) : null}
 
             {evalError ? (

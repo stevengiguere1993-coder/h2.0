@@ -4,7 +4,9 @@ import { useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
+  Download,
   Loader2,
+  Puzzle,
   RefreshCw
 } from "lucide-react";
 
@@ -45,10 +47,136 @@ export default function ProspectionOutilsPage() {
             Cette section est réservée aux comptes admin / owner.
           </p>
         ) : (
-          <RecomputeScoresSection />
+          <>
+            <BrowserExtensionSection />
+            <RecomputeScoresSection />
+          </>
         )}
       </div>
     </>
+  );
+}
+
+function BrowserExtensionSection() {
+  return (
+    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <header className="flex items-center gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+          <Puzzle className="h-5 w-5" />
+        </span>
+        <div>
+          <h2 className="text-base font-bold text-white">
+            Extension navigateur Horizon
+          </h2>
+          <p className="mt-0.5 text-xs text-white/60">
+            Scrape automatiquement le rôle d&apos;évaluation Mtl et les
+            annonces Centris depuis ton vrai navigateur (contourne les
+            protections anti-bot reCAPTCHA / Cloudflare).
+          </p>
+        </div>
+      </header>
+
+      <div className="mt-4 space-y-3">
+        <a
+          href="https://github.com/stevengiguere1993-coder/h2.0/archive/refs/heads/main.zip"
+          target="_blank"
+          rel="noopener"
+          className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-500/20"
+        >
+          <Download className="h-4 w-4" />
+          Télécharger l&apos;extension (ZIP)
+        </a>
+
+        <details className="rounded-lg border border-brand-800 bg-brand-950 p-3">
+          <summary className="cursor-pointer text-xs font-semibold text-white/80 hover:text-white">
+            Instructions d&apos;installation (~2 min)
+          </summary>
+          <ol className="mt-3 space-y-2 text-[11px] text-white/60 list-decimal list-inside">
+            <li>
+              Décompresse le ZIP. Tu obtiendras un dossier{" "}
+              <code className="rounded bg-brand-800 px-1 text-emerald-300">
+                h2.0-main
+              </code>{" "}
+              — à l&apos;intérieur, le sous-dossier{" "}
+              <code className="rounded bg-brand-800 px-1 text-emerald-300">
+                browser-extension/
+              </code>{" "}
+              est ce qu&apos;on va charger.
+            </li>
+            <li>
+              Ouvre Chrome ou Edge, va sur{" "}
+              <code className="rounded bg-brand-800 px-1">
+                edge://extensions/
+              </code>{" "}
+              ou{" "}
+              <code className="rounded bg-brand-800 px-1">
+                chrome://extensions/
+              </code>
+              .
+            </li>
+            <li>
+              Active <strong>Mode développeur</strong> (toggle en haut/bas).
+            </li>
+            <li>
+              Clique <strong>Charger non empaquetée</strong> et
+              sélectionne le dossier{" "}
+              <code className="rounded bg-brand-800 px-1 text-emerald-300">
+                browser-extension/
+              </code>
+              .
+            </li>
+            <li>
+              Clique l&apos;icône de l&apos;extension dans la barre
+              d&apos;outils.
+              <ul className="mt-1 ml-4 list-disc space-y-1">
+                <li>
+                  <strong>Backend URL</strong> :{" "}
+                  <code className="rounded bg-brand-800 px-1">
+                    https://h2-0.onrender.com
+                  </code>
+                </li>
+                <li>
+                  <strong>API Key</strong> : demande à l&apos;admin
+                  (variable env <code>EXTENSION_API_KEY</code>)
+                </li>
+              </ul>
+            </li>
+            <li>
+              Clique <strong>Tester</strong> → tu dois voir « Connexion OK ».
+            </li>
+            <li>
+              Navigue sur{" "}
+              <a
+                href="https://montreal.ca/role-evaluation-fonciere"
+                target="_blank"
+                rel="noopener"
+                className="text-emerald-300 underline"
+              >
+                montreal.ca
+              </a>{" "}
+              ou{" "}
+              <a
+                href="https://www.centris.ca"
+                target="_blank"
+                rel="noopener"
+                className="text-emerald-300 underline"
+              >
+                centris.ca
+              </a>{" "}
+              — l&apos;extension scrape automatiquement et envoie les
+              données à h2.0.
+            </li>
+          </ol>
+          <p className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/5 p-2 text-[11px] text-amber-200/80">
+            Mises à jour : à chaque nouveau commit, re-télécharge le
+            ZIP, remplace le dossier{" "}
+            <code className="rounded bg-brand-800 px-1">browser-extension/</code>,
+            puis dans la page extensions clique « Recharger » sur
+            Horizon h2.0 Helper.
+          </p>
+        </details>
+      </div>
+    </section>
   );
 }
 
