@@ -86,9 +86,13 @@
     const owners = [];
     const allText = document.body.innerText;
 
-    // Trouve l'index de la section Propriétaire
-    const propIdx = allText.indexOf("2. Propriétaire");
-    if (propIdx < 0) return owners;
+    // Trouve l'index de la section Propriétaire — multi-format
+    let propIdx = allText.indexOf("2. Propriétaire");
+    if (propIdx < 0) propIdx = allText.indexOf("Propriétaire");
+    if (propIdx < 0) {
+      log("Section 'Propriétaire' introuvable dans le texte");
+      return owners;
+    }
 
     // Coupe avant la section suivante (3. Caractéristiques, etc.)
     let endIdx = allText.length;
@@ -98,20 +102,23 @@
       "Valeurs au rôle",
       "Répartition fiscale",
       "Compte de taxes",
+      "4. Valeurs",
     ]) {
-      const idx = allText.indexOf(stop, propIdx);
+      const idx = allText.indexOf(stop, propIdx + 10);
       if (idx > 0 && idx < endIdx) endIdx = idx;
     }
 
     const section = allText.substring(propIdx, endIdx);
+    log("Section Propriétaire (longueur " + section.length + "):", section.substring(0, 500));
+
     const lines = section
       .split("\n")
       .map(l => l.trim())
       .filter(l => l.length > 0);
 
     const labelMap = {
-      Nom: "name",
-      Statut: "statut",
+      "Nom": "name",
+      "Statut": "statut",
       "Statut aux fins d'imposition scolaire": "statut",
       "Adresse postale": "postal_address",
       "Date d'inscription": "inscription_date",
@@ -123,7 +130,7 @@
     let current = {};
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      const stripped = line.replace(/:\s*$/, "");
+      const stripped = line.replace(/:\s*$/, "").trim();
       const key = labelMap[stripped] || labelMap[line];
       if (key) {
         const value = lines[i + 1] || "";
@@ -136,6 +143,7 @@
       }
     }
     if (current.name) owners.push(current);
+    log("Owners extraits:", owners);
     return owners;
   }
 
