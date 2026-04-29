@@ -56,6 +56,11 @@ from app.models.prospection_lead_transaction import (
     ProspectionLeadTransaction,
 )
 from app.models.punch import Punch
+from app.models.purchase_agreement import (
+    PurchaseAgreement,
+    PurchaseAgreementStatus,  # noqa: F401
+)
+from app.models.purchase_agreement_template import PurchaseAgreementTemplate
 from app.models.qbo_account_map import QboAccountMap
 from app.models.qbo_token import QboToken
 from app.models.rental_listing import RentalListing
@@ -108,6 +113,8 @@ __all__ = [
     "ProspectionLeadListMember",
     "ProspectionLeadPhoto",
     "ProspectionLeadTransaction",
+    "PurchaseAgreement",
+    "PurchaseAgreementTemplate",
     "ProjectTaskAssignee",
     "PurchaseOrder",
     "PurchaseOrderItem",

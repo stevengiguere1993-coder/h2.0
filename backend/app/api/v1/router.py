@@ -44,7 +44,11 @@ from app.api.v1.endpoints import (
     project_to_facture,
     projects,
     public_bon,
+    public_purchase_agreement,
     public_soumission,
+    purchase_agreement_milestones,
+    purchase_agreement_template,
+    purchase_agreements,
     punch_ops,
     achat_qbo,
     email_templates,
@@ -103,6 +107,7 @@ api_router.include_router(blog.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(public_soumission.router)
 api_router.include_router(public_bon.router)
+api_router.include_router(public_purchase_agreement.router)
 api_router.include_router(qbo_token.router)
 api_router.include_router(qbo_oauth.router)
 api_router.include_router(client_qbo.router)
@@ -179,6 +184,12 @@ api_router.include_router(mtl_properties.router)
 # pour que le path littéral matche avant /prospection/analyses/{id}.
 api_router.include_router(prospection_analyse_extract.router)
 api_router.include_router(prospection_analyses.router)
+# purchase_agreements + pa-milestones DOIVENT être avant prospection.router
+# pour que /prospection/{lead_id}/purchase-agreements et /prospection/pa-milestones
+# matchent avant /prospection/{lead_id}.
+api_router.include_router(purchase_agreements.router)
+api_router.include_router(purchase_agreement_milestones.router)
+api_router.include_router(purchase_agreement_template.router)
 api_router.include_router(prospection.router)
 api_router.include_router(email_templates.router)
 api_router.include_router(admin_data.router)

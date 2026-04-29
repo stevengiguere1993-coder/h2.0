@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import {
   Cog,
   Database,
+  FileSignature,
   Plug,
   RefreshCw,
   Users
@@ -42,6 +43,12 @@ const TABS: Tab[] = [
     label: "Sources de données",
     icon: Database,
     minRole: "owner"
+  },
+  {
+    href: "/prospection/parametres/promesse-achat",
+    label: "Promesse d'achat",
+    icon: FileSignature,
+    minRole: "manager"
   },
   {
     href: "/prospection/parametres/outils",

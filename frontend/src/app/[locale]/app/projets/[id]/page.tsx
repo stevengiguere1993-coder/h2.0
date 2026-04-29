@@ -879,6 +879,7 @@ function PhotosTab({ projectId }: { projectId: number }) {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [caption, setCaption] = useState("");
 
@@ -904,29 +905,55 @@ function PhotosTab({ projectId }: { projectId: number }) {
     };
   }, [projectId]);
 
-  async function upload(file: File) {
+  async function uploadOne(file: File): Promise<Photo> {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    if (caption.trim()) fd.append("caption", caption.trim());
+    const res = await authedFetch(
+      `/api/v1/projects/${projectId}/photos`,
+      { method: "POST", body: fd }
+    );
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(txt.slice(0, 240) || `http_${res.status}`);
+    }
+    return (await res.json()) as Photo;
+  }
+
+  async function upload(files: File[]) {
+    if (files.length === 0) return;
     setBusy(true);
     setErr(null);
-    try {
-      const fd = new FormData();
-      fd.append("file", file, file.name);
-      if (caption.trim()) fd.append("caption", caption.trim());
-      const res = await authedFetch(
-        `/api/v1/projects/${projectId}/photos`,
-        { method: "POST", body: fd }
-      );
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt.slice(0, 240) || `http_${res.status}`);
-      }
-      const created = (await res.json()) as Photo;
-      setPhotos((xs) => [created, ...xs]);
+    setProgress({ done: 0, total: files.length });
+    const created: Photo[] = [];
+    const failures: string[] = [];
+    let done = 0;
+    await Promise.all(
+      files.map(async (f) => {
+        try {
+          const photo = await uploadOne(f);
+          created.push(photo);
+        } catch (e) {
+          failures.push(`${f.name}: ${(e as Error).message}`);
+        } finally {
+          done += 1;
+          setProgress({ done, total: files.length });
+        }
+      })
+    );
+    if (created.length > 0) {
+      created.sort((a, b) => b.id - a.id);
+      setPhotos((xs) => [...created, ...xs]);
       setCaption("");
-    } catch (e) {
-      setErr(`Upload échoué : ${(e as Error).message}`);
-    } finally {
-      setBusy(false);
     }
+    if (failures.length > 0) {
+      setErr(
+        `${failures.length} échec(s) : ${failures.slice(0, 3).join(" ; ")}` +
+          (failures.length > 3 ? "…" : "")
+      );
+    }
+    setProgress(null);
+    setBusy(false);
   }
 
   async function remove(id: number) {
@@ -965,30 +992,59 @@ function PhotosTab({ projectId }: { projectId: number }) {
           Ajouter une photo
         </h2>
         <p className="mt-1 text-xs text-white/60">
-          Scan avec la caméra (mobile) ou import de fichier. JPG / PNG /
-          WEBP / HEIC / PDF, 15 Mo max.
+          Scan avec la caméra (mobile) ou import de plusieurs fichiers à la
+          fois. JPG / PNG / WEBP / HEIC / PDF, 15 Mo max par fichier.
         </p>
         <div className="mt-4 space-y-3">
           <input
             type="text"
             value={caption}
             onChange={(e) => setCaption(e.target.value)}
-            placeholder="Légende (ex. Avant démolition cuisine)"
+            placeholder="Légende commune (optionnel, appliquée à tous les fichiers)"
             className="input"
           />
-          <input
-            type="file"
-            accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
-            capture="environment"
-            disabled={busy}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) upload(f);
-              e.target.value = "";
-            }}
-            className="block w-full text-sm text-white/70 file:mr-3 file:rounded-md file:border-0 file:bg-accent-500 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-brand-950 hover:file:bg-accent-400"
-          />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-xs uppercase tracking-wider text-white/50">
+                Importer (multi-sélection)
+              </span>
+              <input
+                type="file"
+                multiple
+                accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
+                disabled={busy}
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  e.target.value = "";
+                  if (files.length) upload(files);
+                }}
+                className="block w-full text-sm text-white/70 file:mr-3 file:rounded-md file:border-0 file:bg-accent-500 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-brand-950 hover:file:bg-accent-400"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs uppercase tracking-wider text-white/50">
+                Caméra (mobile)
+              </span>
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                disabled={busy}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = "";
+                  if (f) upload([f]);
+                }}
+                className="block w-full text-sm text-white/70 file:mr-3 file:rounded-md file:border-0 file:bg-accent-500 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-brand-950 hover:file:bg-accent-400"
+              />
+            </label>
+          </div>
         </div>
+        {progress ? (
+          <p className="mt-3 text-sm text-white/70">
+            Upload en cours… {progress.done}/{progress.total}
+          </p>
+        ) : null}
         {err ? (
           <p className="mt-3 text-sm text-rose-300">{err}</p>
         ) : null}

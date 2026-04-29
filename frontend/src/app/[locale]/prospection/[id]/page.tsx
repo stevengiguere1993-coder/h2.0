@@ -30,6 +30,7 @@ import { useConfirm } from "@/components/confirm-dialog";
 import { ActivityTimeline } from "./_activity-timeline";
 import { AnalysesSection } from "./_analyses-section";
 import { ComparablesSection } from "./_comparables-section";
+import { PurchaseAgreementSection } from "./_purchase-agreement-section";
 
 type Lead = {
   id: number;
@@ -1327,6 +1328,8 @@ export default function ProspectionDetailPage() {
               />
 
               <AnalysesSection leadId={id} />
+
+              <PurchaseAgreementSection leadId={id} />
 
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
                 <div className="flex items-center justify-between">
