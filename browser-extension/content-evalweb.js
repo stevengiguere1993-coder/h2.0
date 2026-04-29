@@ -172,42 +172,78 @@
   }
 
   async function autopilotStep3ClickResult(matricule) {
-    // Page liste : trouve le matricule dans la liste, walk up pour
-    // trouver un ancêtre cliquable (a/button/role=link/button), et
-    // clique. Si aucun ancêtre cliquable, click direct (event bubbling
-    // peut suffire pour les SPA qui mettent onClick sur des div).
+    // Page liste : le matricule apparaît 2 fois — une fois en haut
+    // (encart « Numéro de matricule » non-cliquable, juste écho de
+    // ce qu'on a recherché), et une fois dans une CARTE cliquable
+    // qui contient aussi « Adresse municipale » et « Numéro de
+    // compte foncier ». On identifie la carte par cette structure
+    // unique pour ne pas cliquer sur le mauvais.
     log("Autopilot étape 3 : recherche du résultat dans la liste");
 
-    // Cherche l'élément feuille (sans enfants) qui contient le matricule
-    const allElements = document.querySelectorAll("*");
-    let textNode = null;
-    for (const el of allElements) {
-      if (el.children.length === 0 && (el.textContent || "").includes(matricule)) {
-        textNode = el;
-        break;
-      }
-    }
-    if (!textNode) {
-      log("Matricule introuvable dans le texte de la page");
+    // Wait pour que la liste soit rendue (SPA hydratation)
+    await delay(humanish(1500, 2500));
+
+    const cardMarkers = [
+      "Adresse municipale",
+      "Numéro de compte foncier",
+      "compte foncier",
+    ];
+
+    // Trouve les éléments qui contiennent matricule + au moins un
+    // marqueur de carte de résultat
+    const candidates = Array.from(
+      document.querySelectorAll("div, li, article, section, a, button")
+    ).filter(el => {
+      const text = el.textContent || "";
+      if (!text.includes(matricule)) return false;
+      return cardMarkers.some(m => text.includes(m));
+    });
+
+    if (candidates.length === 0) {
+      log("Aucune carte de résultat trouvée pour", matricule);
       return false;
     }
-    log("Texte matricule trouvé dans:", textNode.tagName, textNode.className);
 
-    // Walk up le DOM pour trouver un ancêtre cliquable
-    let clickable = textNode;
+    // Le candidat le plus PROFOND est la carte directe (pas un parent
+    // qui contient toute la liste). On veut la cellule cliquable la
+    // plus spécifique.
+    candidates.sort((a, b) => {
+      const aDepth = (a.outerHTML || "").length;
+      const bDepth = (b.outerHTML || "").length;
+      return aDepth - bDepth; // Plus court = plus spécifique
+    });
+
+    const card = candidates[0];
+    log(
+      "Carte trouvée:", card.tagName, card.className,
+      "innerHTML.length=", card.innerHTML.length,
+    );
+
+    // Essaie de cliquer la carte directement
+    card.click();
+    await delay(500);
+
+    // Si l'URL n'a pas changé, walk up pour trouver un ancêtre cliquable
+    const initialUrl = window.location.href;
+    await delay(800);
+    if (window.location.href !== initialUrl) {
+      log("URL changée après click direct → succès");
+      return true;
+    }
+
+    log("URL inchangée, walk up pour ancêtre cliquable");
+    let clickable = card;
     let depth = 0;
-    while (clickable && clickable !== document.body && depth < 10) {
+    while (clickable && clickable !== document.body && depth < 8) {
       const tag = clickable.tagName.toLowerCase();
       const role = clickable.getAttribute("role");
       const cursor = window.getComputedStyle(clickable).cursor;
       if (
-        tag === "a" ||
-        tag === "button" ||
-        role === "link" ||
-        role === "button" ||
+        tag === "a" || tag === "button" ||
+        role === "link" || role === "button" ||
         cursor === "pointer"
       ) {
-        log("Click ancêtre cliquable:", tag, "role=", role, "cursor=", cursor);
+        log("Click ancêtre:", tag, "role=", role, "cursor=", cursor);
         clickable.click();
         return true;
       }
@@ -215,10 +251,19 @@
       depth++;
     }
 
-    // Aucun ancêtre cliquable trouvé — fallback click sur l'élément texte
-    log("Aucun ancêtre cliquable, fallback click direct");
-    textNode.click();
-    return true;
+    // Dernière tentative : trouve l'icône chevron > à droite et click dessus
+    const chevrons = card.querySelectorAll("svg, [class*='chevron'], [class*='Chevron'], [class*='arrow']");
+    if (chevrons.length > 0) {
+      log("Click sur chevron/arrow icon");
+      const chev = chevrons[chevrons.length - 1]; // Le dernier (à droite)
+      chev.click();
+      // Aussi tenter sur le parent
+      if (chev.parentElement) chev.parentElement.click();
+      return true;
+    }
+
+    log("Échec total clic sur la carte");
+    return false;
   }
 
   async function tryAutopilot() {
