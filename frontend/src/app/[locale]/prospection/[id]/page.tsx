@@ -31,6 +31,7 @@ import { ActivityTimeline } from "./_activity-timeline";
 import { AnalysesSection } from "./_analyses-section";
 import { ComparablesSection } from "./_comparables-section";
 import { PurchaseAgreementSection } from "./_purchase-agreement-section";
+import { UpcomingReminders } from "./_upcoming-reminders";
 
 type Lead = {
   id: number;
@@ -1319,6 +1320,8 @@ export default function ProspectionDetailPage() {
               />
 
               <FinanceSection leadId={id} lead={lead} onSaved={load} />
+
+              <UpcomingReminders leadId={id} />
 
               <ActivityTimeline leadId={id} />
 
