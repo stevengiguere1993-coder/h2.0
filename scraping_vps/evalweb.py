@@ -17,8 +17,15 @@ Flow :
 from __future__ import annotations
 
 import logging
+import random
 import re
 from typing import List, Optional, Tuple
+
+
+def _humanish(low: int, high: int) -> int:
+    """Renvoie un délai aléatoire entre low et high ms — humanise
+    les actions pour ne pas avoir de motif robotique parfait."""
+    return random.randint(low, high)
 
 from playwright.async_api import Browser, Page
 
@@ -88,17 +95,13 @@ async def scrape_owners_via_browser(
     page = await context.new_page()
     page.set_default_timeout(30_000)
 
-    # Masque les ~30 propriétés JS qui trahissent un Chromium headless
-    # (navigator.webdriver, missing plugins, etc.) → améliore le score
-    # reCAPTCHA v3 utilisé par montreal.ca pour bloquer les bots.
-    if stealth_async is not None:
-        try:
-            await stealth_async(page)
-            log.info("playwright-stealth appliqué")
-        except Exception as exc:
-            log.warning("stealth_async failed: %s", exc)
-    else:
-        log.warning("playwright-stealth non installé")
+    # Stealth DÉSACTIVÉ : avec headless=False + Xvfb on n'a plus
+    # besoin (Chrome headed score reCAPTCHA naturellement haut), et
+    # stealth peut au contraire casser grecaptcha.execute() (les
+    # propriétés patchées créent des incohérences détectées par
+    # reCAPTCHA et le token n'est pas généré).
+    # if stealth_async is not None:
+    #     await stealth_async(page)
 
     # Capture les console errors pour voir si reCAPTCHA plante
     def _on_console(msg) -> None:
@@ -171,16 +174,11 @@ async def scrape_owners_via_browser(
         await _snap("03-after-suivant")
 
         # Étape 3 : remplit les 6 sous-champs + Rechercher
+        # Le fill prend déjà ~10s humanisés, donc plus besoin
+        # de mouvements souris artificiels avant submit.
         await _fill_matricule_form(page, parts)
-        # Laisse 4s à reCAPTCHA v3 pour observer le comportement et
-        # générer un token avec un score acceptable. Bouge la souris
-        # pendant ce temps pour augmenter le score.
-        await page.mouse.move(400, 300)
-        await page.wait_for_timeout(800)
-        await page.mouse.move(600, 450)
-        await page.wait_for_timeout(800)
-        await page.mouse.move(700, 500)
-        await page.wait_for_timeout(2_400)
+        # Pause "vérification" comme un user qui relit ses chiffres
+        await page.wait_for_timeout(_humanish(1_200, 2_000))
         await _snap("04-form-filled")
         # Avant de cliquer, vérifie que TOUS les inputs ont la bonne
         # valeur (Radix UI peut avoir une valeur stale).
@@ -196,16 +194,21 @@ async def scrape_owners_via_browser(
             log.info("PRE-SUBMIT VALUES: %s", current_values)
         except Exception as exc:
             log.warning("Dump values failed: %s", exc)
-        # Au lieu de cliquer le bouton, presse Enter dans le dernier
-        # champ — déclenche le React onSubmit naturellement, pareil
-        # qu'un user qui tape sa valeur puis Enter.
+        # Bouge la souris vers le bouton Rechercher (fluide, ~400ms)
+        # puis pause "réflexion" puis clic. Reproduit ce qu'un user
+        # fait : visualiser le bouton, hover, cliquer.
         try:
-            local_input = page.locator("input[name='local']").first
-            await local_input.focus()
-            await local_input.press("Enter")
-            log.info("  → Enter pressé sur input[name='local']")
+            btn = page.locator("button[type='submit']").first
+            box = await btn.bounding_box()
+            if box:
+                target_x = box["x"] + box["width"] / 2
+                target_y = box["y"] + box["height"] / 2
+                await page.mouse.move(target_x, target_y, steps=25)
+            await page.wait_for_timeout(_humanish(400, 800))
+            await btn.click()
+            log.info("  → 'Rechercher' cliqué (humanisé)")
         except Exception as exc:
-            log.warning("Enter failed (%s), fallback click bouton", exc)
+            log.warning("Click humanisé failed (%s), fallback", exc)
             await _click_rechercher(page)
         # Au lieu de networkidle (qui peut retourner trop vite),
         # attend que l'URL change OU 8s
@@ -379,16 +382,34 @@ async def _fill_matricule_form(page: Page, parts: dict) -> None:
     except Exception as exc:
         log.warning("Dump inputs failed: %s", exc)
 
-    for key, value in mapping.items():
+    # Pause initiale "lecture du matricule" — un vrai user prend
+    # 1-2s à regarder son matricule avant de commencer.
+    await page.wait_for_timeout(_humanish(1_200, 1_800))
+
+    for idx, (key, value) in enumerate(mapping.items()):
         selector = f"input[name='{key}']"
         try:
             loc = page.locator(selector).first
-            # Click pour focus, type pour simuler un vrai input
-            # (évite les problèmes de validation Radix UI), puis Tab
-            # pour blur et déclencher la validation React.
+            # Bouge la souris vers le champ avant de cliquer
+            # (humain pas téléporté). steps=15 pour un mouvement
+            # fluide sur ~300ms.
+            box = await loc.bounding_box()
+            if box:
+                target_x = box["x"] + box["width"] / 2
+                target_y = box["y"] + box["height"] / 2
+                await page.mouse.move(target_x, target_y, steps=15)
+            # Clic + petit délai (réflex humain)
             await loc.click(timeout=2_000)
+            await page.wait_for_timeout(_humanish(150, 350))
             await loc.fill("", timeout=1_000)
-            await loc.type(value, delay=20, timeout=2_000)
+            # Frappe à ~150ms par caractère (vitesse user moyen
+            # qui lit son matricule). delay=180 ± variation
+            await loc.type(
+                value,
+                delay=_humanish(140, 220),
+                timeout=5_000,
+            )
+            await page.wait_for_timeout(_humanish(200, 400))
             await loc.press("Tab")
             actual = await loc.input_value()
             if actual == value:
@@ -398,6 +419,8 @@ async def _fill_matricule_form(page: Page, parts: dict) -> None:
                     "  ✗ %s='%s' (input_value='%s')",
                     key, value, actual,
                 )
+            # Pause inter-champs (un user regarde le prochain digit)
+            await page.wait_for_timeout(_humanish(300, 600))
         except Exception as exc:
             log.warning("  ✗ %s='%s' (%s)", key, value, exc)
 

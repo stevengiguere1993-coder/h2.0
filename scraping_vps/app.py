@@ -46,12 +46,16 @@ async def lifespan(app: FastAPI):
     """Démarre Playwright au boot, ferme au shutdown."""
     log.info("Démarrage Playwright…")
     pw = await async_playwright().start()
+    # headless=False + Xvfb : le navigateur tourne réellement en mode
+    # headed dans un display virtuel — score reCAPTCHA v3 beaucoup
+    # plus élevé qu'en headless pur (qui est blacklisté).
     browser = await pw.chromium.launch(
-        headless=True,
+        headless=False,
         args=[
             "--no-sandbox",
             "--disable-dev-shm-usage",
             "--disable-blink-features=AutomationControlled",
+            "--start-maximized",
         ],
     )
     app.state.playwright = pw
