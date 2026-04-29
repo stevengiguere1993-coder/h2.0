@@ -17,6 +17,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { useProspectionLayout } from "../layout";
+import { PAMilestonesWidget } from "./_pa-milestones-widget";
 
 type Lead = {
   id: number;
@@ -229,6 +230,8 @@ export default function ProspectionAujourdhuiPage() {
           </div>
         ) : (
           <div className="mt-6 space-y-6">
+            <PAMilestonesWidget days={7} />
+
             <Bucket
               title="Pipeline actif (post-offre)"
               hint="Inspection, négo, notaire, cession en cours"
