@@ -20,6 +20,7 @@ import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
+import { MultiSelectDropdown } from "@/components/multi-select-dropdown";
 
 type Project = {
   id: number;
@@ -2600,7 +2601,7 @@ function ChantierAgendaTab({
   });
   const [fTime, setFTime] = useState("08:00");
   const [fAllDay, setFAllDay] = useState(false);
-  const [fAssignee, setFAssignee] = useState("");
+  const [fAssigneeIds, setFAssigneeIds] = useState<number[]>([]);
   const [fDescription, setFDescription] = useState("");
 
   const load = useCallback(async () => {
@@ -2633,7 +2634,7 @@ function ChantierAgendaTab({
     setFTitle("");
     setFTime("08:00");
     setFAllDay(false);
-    setFAssignee("");
+    setFAssigneeIds([]);
     setFDescription("");
   }
 
@@ -2654,21 +2655,27 @@ function ChantierAgendaTab({
     setCreating(true);
     setError(null);
     try {
-      const res = await authedFetch(`/api/v1/agenda`, {
-        method: "POST",
-        body: JSON.stringify({
-          title: fTitle.trim(),
-          description: fDescription.trim() || null,
-          start_at: startIso,
-          all_day: fAllDay,
-          project_id: projectId,
-          assignee_id: fAssignee ? Number(fAssignee) : null,
-          event_type: "chantier"
-        })
-      });
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt.slice(0, 200));
+      // Multi-assignees : crée 1 event par personne sélectionnée
+      // (le backend ne supporte qu'un assignee_id par event). Si
+      // aucun assignee → un seul event sans assignee.
+      const targets = fAssigneeIds.length > 0 ? fAssigneeIds : [null];
+      for (const assigneeId of targets) {
+        const res = await authedFetch(`/api/v1/agenda`, {
+          method: "POST",
+          body: JSON.stringify({
+            title: fTitle.trim(),
+            description: fDescription.trim() || null,
+            start_at: startIso,
+            all_day: fAllDay,
+            project_id: projectId,
+            assignee_id: assigneeId,
+            event_type: "chantier"
+          })
+        });
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(txt.slice(0, 200));
+        }
       }
       resetForm();
       setFormOpen(false);
@@ -2789,19 +2796,21 @@ function ChantierAgendaTab({
             </div>
           </div>
           <div>
-            <label className="label">Assigné à</label>
-            <select
-              value={fAssignee}
-              onChange={(e) => setFAssignee(e.target.value)}
-              className="input"
-            >
-              <option value="">— Personne assignée —</option>
-              {employes.map((e) => (
-                <option key={e.id} value={String(e.id)}>
-                  {e.full_name}
-                </option>
-              ))}
-            </select>
+            <label className="label">Assigné(s)</label>
+            <MultiSelectDropdown
+              options={employes.map((e) => ({
+                id: e.id,
+                label: e.full_name,
+              }))}
+              selectedIds={fAssigneeIds}
+              onChange={setFAssigneeIds}
+              placeholder="— Personne(s) assignée(s) —"
+              emptyLabel="Aucun employé disponible"
+            />
+            <p className="mt-1 text-[11px] text-white/40">
+              Si plusieurs personnes sont sélectionnées, un événement sera
+              créé pour chacune (chacune le verra dans son agenda).
+            </p>
           </div>
           <div>
             <label className="label">Notes</label>
