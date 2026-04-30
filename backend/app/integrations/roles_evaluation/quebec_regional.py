@@ -26,6 +26,9 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import os
+import tempfile
+import zipfile
 from typing import Dict, Iterable, List, Optional, Set
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -171,6 +174,51 @@ async def _bulk_upsert(
     return len(batch)
 
 
+async def _ingest_one_csv(
+    db: AsyncSession,
+    csv_path: str,
+    *,
+    region: str,
+    match_set: Set[str],
+    batch_size: int,
+    max_rows: Optional[int],
+    seen_so_far: int,
+    kept_so_far: int,
+) -> tuple[int, int]:
+    """Ingère un seul CSV et retourne (seen_new, kept_new).
+    Stream-parse, RAM bornée."""
+    seen_new = 0
+    kept_new = 0
+    batch: List[Dict] = []
+    with open(csv_path, "r", encoding="utf-8", errors="replace") as fh:
+        reader = csv.DictReader(fh)
+        for raw_row in reader:
+            seen_new += 1
+            if max_rows is not None and (seen_so_far + seen_new) > max_rows:
+                break
+            mun = _normalize_city(raw_row.get("MUNICIPALITE") or "")
+            if match_set and mun not in match_set:
+                continue
+            row = _row_to_dict(raw_row, region)
+            if row is None:
+                continue
+            batch.append(row)
+            kept_new += 1
+            if len(batch) >= batch_size:
+                await _bulk_upsert(db, batch)
+                batch.clear()
+            total = seen_so_far + seen_new
+            if total % 100_000 == 0:
+                log.info(
+                    "  %d lignes parcourues, %d gardées",
+                    total,
+                    kept_so_far + kept_new,
+                )
+    if batch:
+        await _bulk_upsert(db, batch)
+    return seen_new, kept_new
+
+
 async def ingest_provincial_csv(
     db: AsyncSession,
     csv_path: str,
@@ -180,18 +228,20 @@ async def ingest_provincial_csv(
     batch_size: int = 2000,
     max_rows: Optional[int] = None,
 ) -> dict:
-    """Ingère le CSV provincial filtré par région + liste de villes.
+    """Ingère le rôle provincial filtré par région + liste de villes.
+
+    Accepte un CSV brut OU un ZIP qui contient un ou plusieurs CSV
+    (le format publié par Données Québec : Roles_Donnees_Ouvertes_*.zip
+    contient typiquement un fichier par groupe de municipalités).
 
     Args:
-        csv_path : chemin local vers le CSV.
+        csv_path : chemin local vers le CSV ou le ZIP.
         region : « rive-sud », « laval », « rive-nord » ou autre.
         cities : si fourni, on garde uniquement les unités dont
                  MUNICIPALITE matche (insensible accents/casse).
                  Si None, on prend la liste pré-définie de la région.
         batch_size : nb de lignes par bulk insert.
         max_rows : limite pour tests (None = tout).
-
-    Stream-parse le CSV (RAM bornée à ~10 Mo).
     """
     cities_used = (
         list(cities)
@@ -200,47 +250,57 @@ async def ingest_provincial_csv(
     )
     match_set = _build_match_set(cities_used)
     log.info(
-        "Ingest provincial : region=%s, %d villes",
+        "Ingest provincial : region=%s, %d villes, source=%s",
         region,
         len(match_set),
+        os.path.basename(csv_path),
     )
 
     total_seen = 0
     total_kept = 0
-    batch: List[Dict] = []
 
-    with open(csv_path, "r", encoding="utf-8", errors="replace") as fh:
-        reader = csv.DictReader(fh)
-        for raw_row in reader:
-            total_seen += 1
-            if max_rows is not None and total_seen > max_rows:
-                break
-
-            mun = _normalize_city(
-                raw_row.get("MUNICIPALITE") or ""
+    is_zip = zipfile.is_zipfile(csv_path)
+    if is_zip:
+        with tempfile.TemporaryDirectory(
+            prefix="role_unzip_"
+        ) as tmpdir, zipfile.ZipFile(csv_path) as zf:
+            csv_members = [
+                n for n in zf.namelist() if n.lower().endswith(".csv")
+            ]
+            log.info(
+                "ZIP détecté : %d fichier(s) CSV à l'intérieur",
+                len(csv_members),
             )
-            if match_set and mun not in match_set:
-                continue
-
-            row = _row_to_dict(raw_row, region)
-            if row is None:
-                continue
-            batch.append(row)
-            total_kept += 1
-
-            if len(batch) >= batch_size:
-                await _bulk_upsert(db, batch)
-                batch.clear()
-
-            if total_seen % 100_000 == 0:
-                log.info(
-                    "  %d lignes parcourues, %d gardées",
-                    total_seen,
-                    total_kept,
+            for name in csv_members:
+                zf.extract(name, tmpdir)
+                local_path = os.path.join(tmpdir, name)
+                seen_new, kept_new = await _ingest_one_csv(
+                    db,
+                    local_path,
+                    region=region,
+                    match_set=match_set,
+                    batch_size=batch_size,
+                    max_rows=max_rows,
+                    seen_so_far=total_seen,
+                    kept_so_far=total_kept,
                 )
-
-    if batch:
-        await _bulk_upsert(db, batch)
+                total_seen += seen_new
+                total_kept += kept_new
+                if max_rows is not None and total_seen >= max_rows:
+                    break
+    else:
+        seen_new, kept_new = await _ingest_one_csv(
+            db,
+            csv_path,
+            region=region,
+            match_set=match_set,
+            batch_size=batch_size,
+            max_rows=max_rows,
+            seen_so_far=0,
+            kept_so_far=0,
+        )
+        total_seen = seen_new
+        total_kept = kept_new
 
     log.info(
         "Ingest provincial fini : seen=%d kept=%d region=%s",
