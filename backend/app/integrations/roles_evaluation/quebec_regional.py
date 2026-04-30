@@ -331,6 +331,67 @@ async def _bulk_upsert(
     return 0
 
 
+def _mamh_xml_unit_to_row(
+    unit: Dict[str, str],
+    *,
+    code_mun: str,
+    region: str,
+    municipalite_from_filename: Optional[str],
+) -> Optional[Dict]:
+    """Convertit un dict de codes RL (capturés sous une balise <RLUEx>)
+    en row pour `mtl_property_units`. Retourne None si le matricule
+    ne peut pas être construit (unité ignorée).
+
+    Le matricule global = `<code_mamh>-<RL0104A>-<RL0104B>-<RL0104C>`
+    (jusqu'à 6 segments pour les unités de copropriété/condo).
+    Fallback : `<code_mamh>-uev-<RL0103Ax>` si RL0104 absent.
+    """
+    # 1. Matricule — concaténation du code MAMH + segments RL0104A..F
+    segs: List[str] = []
+    for letter in "ABCDEFGH":
+        v = (unit.get(f"RL0104{letter}") or "").strip()
+        if not v:
+            break
+        segs.append(v)
+
+    if segs:
+        matricule = "-".join([code_mun] + segs)
+    else:
+        uev = (unit.get("RL0103AX") or "").strip()
+        if not uev:
+            return None
+        matricule = f"{code_mun}-uev-{uev}"
+
+    # 2. Adresse — RL0101x : Ax civique, Ex type voie, Fx particule,
+    #    Gx nom voie, Hx suite/logement.
+    civique = (unit.get("RL0101AX") or "").strip() or None
+    type_voie = (unit.get("RL0101EX") or "").strip()
+    particule = (unit.get("RL0101FX") or "").strip()
+    nom_voie = (unit.get("RL0101GX") or "").strip()
+    nom_rue_parts = [p for p in (type_voie, particule, nom_voie) if p]
+    nom_rue = " ".join(nom_rue_parts) or None
+    suite = (unit.get("RL0101HX") or "").strip() or None
+
+    return {
+        "matricule": matricule[:32],  # tronque pour respecter String(32)
+        "civique_debut": (civique or None) if civique is None else civique[:16],
+        "civique_fin": None,
+        "nom_rue": nom_rue[:255] if nom_rue else None,
+        "suite_debut": suite[:32] if suite else None,
+        "municipalite": municipalite_from_filename,
+        "nombre_logement": _parse_int(unit.get("RL0311A") or ""),
+        "annee_construction": _parse_int(unit.get("RL0307A") or ""),
+        "code_utilisation": (
+            (unit.get("RL0105A") or "").strip()[:16] or None
+        ),
+        "libelle_utilisation": None,
+        "categorie_uef": (unit.get("RL0307B") or "").strip()[:64] or None,
+        "superficie_terrain": _parse_float(unit.get("RL0301A") or ""),
+        "superficie_batiment": _parse_float(unit.get("RL0308A") or ""),
+        "region": region,
+    }
+
+
 async def _ingest_one_xml(
     db: AsyncSession,
     xml_path: str,
@@ -344,13 +405,33 @@ async def _ingest_one_xml(
 ) -> Tuple[int, int]:
     """Ingère un XML format MAMH (rôle d'évaluation foncière du Québec).
 
-    Le schéma utilise des balises avec codes du Manuel d'évaluation
-    foncière (RL0301A=matricule, RL0506A=usage, etc.). On parcourt en
-    streaming via iterparse() pour gérer les gros fichiers (~100 Mo).
+    Schéma MAMH 2.9 (RL.xsd). Les balises pertinentes pour notre
+    modèle `mtl_property_units` sont :
+      - <RLUEx>                    boundary d'une unité d'évaluation
+      - <RL0101>/<RL0101x>         adresse
+        - <RL0101Ax>               numéro civique
+        - <RL0101Ex>               type de voie (CH, RUE, BD…)
+        - <RL0101Fx>               particule directionnelle (M, N…)
+        - <RL0101Gx>               nom de la voie
+        - <RL0101Hx>               numéro de suite/logement (optionnel)
+      - <RL0103>/<RL0103x>/<RL0103Ax>  numéro UEV unique (id de la rangée)
+      - <RL0104A/B/C[/D/E/F]>      segments du matricule (3 pour simple,
+                                    6 pour condo/co-propriété)
+      - <RL0105A>                  code utilisation (1000=résidentiel,
+                                    9100=vacant, 6000=commercial…)
+      - <RL0301A>                  superficie terrain (m²)
+      - <RL0307A>                  année de construction
+      - <RL0307B>                  type construction (R/E/…)
+      - <RL0308A>                  superficie bâtiment (m²)
+      - <RL0311A>                  nombre de logements
+      - <RL0402A>                  valeur terrain ($)
+      - <RL0403A>                  valeur bâtiment ($)
+      - <RL0404A>                  valeur immeuble ($)
 
-    Le code municipalité MAMH est extrait du nom de fichier
-    (RL{code5}_AAAA.xml ou RLNR{code3}_AAAA.xml) — on remappe vers
-    le nom via la table mam_code_to_name (best-effort).
+    Le code MAMH municipalité (5 chiffres) est extrait du nom de fichier
+    (RL{code5}_AAAA.xml ou RLNR{code3}_AAAA.xml) et sert à la fois au
+    nom de la municipalité (table mam_codes) et au préfixe du matricule
+    pour garantir l'unicité globale entre municipalités.
     """
     import xml.etree.ElementTree as ET
     from app.integrations.roles_evaluation.mamh_codes import (
@@ -358,28 +439,21 @@ async def _ingest_one_xml(
         code_from_filename,
     )
 
-    municipalite_from_filename = code_to_name(
-        code_from_filename(os.path.basename(xml_path))
-    )
+    code_mun = code_from_filename(os.path.basename(xml_path)) or "00000"
+    municipalite_from_filename = code_to_name(code_mun)
 
-    # Tags candidates pour la balise "unité d'évaluation"
-    UNIT_BOUNDARY_TAGS = {
-        "RLUEx", "RLUEv", "RLUEV", "UEV", "UniteEvaluation",
-        "RLUEvale", "RLUE", "Unite",
-    }
+    UNIT_BOUNDARY_TAG = "RLUEx"
 
     seen_new = 0
     kept_new = 0
     batch: List[Dict] = []
 
-    # Stack pour suivre la profondeur. On accumule les RLxxxxA dans
-    # le current_unit dict et on flush au end-tag de boundary.
+    # On accumule les RL** rencontrés sous la balise <RLUEx> dans
+    # current_unit. À la fin du <RLUEx>, on construit la row via
+    # _mamh_xml_unit_to_row() et on l'ajoute au batch.
     current_unit: Dict[str, str] = {}
     current_depth = 0
     boundary_depth: Optional[int] = None
-
-    # Si on n'a pas trouvé de boundary tag, fallback : utiliser tous
-    # les éléments dont les enfants directs contiennent un RL0301A.
 
     try:
         for event, elem in ET.iterparse(xml_path, events=("start", "end")):
@@ -388,20 +462,29 @@ async def _ingest_one_xml(
 
             if event == "start":
                 current_depth += 1
-                if tag in UNIT_BOUNDARY_TAGS and boundary_depth is None:
+                if tag == UNIT_BOUNDARY_TAG and boundary_depth is None:
                     boundary_depth = current_depth
                     current_unit = {}
             elif event == "end":
-                # Si c'est un code RL et on est dans une unité, accumule
+                # Si c'est un code RL et on est dans une unité, accumule.
+                # Note : avec le schéma 2.9, certains codes apparaissent
+                # plusieurs fois dans une même unité (ex. <RL0504x> répété
+                # pour chaque catégorie d'évaluation). On garde la 1ère
+                # occurrence (souvent la plus pertinente — cat « I/T/B »
+                # sur la valeur de l'immeuble).
                 if (
                     boundary_depth is not None
                     and current_depth > boundary_depth
                     and tag.startswith("RL")
                     and elem.text
                 ):
-                    current_unit[tag.upper()] = elem.text.strip()
+                    key = tag.upper()
+                    if key not in current_unit:
+                        text = elem.text.strip()
+                        if text:
+                            current_unit[key] = text
 
-                if tag in UNIT_BOUNDARY_TAGS and current_depth == boundary_depth:
+                if tag == UNIT_BOUNDARY_TAG and current_depth == boundary_depth:
                     # Flush l'unité accumulée
                     seen_new += 1
                     if (
@@ -412,15 +495,15 @@ async def _ingest_one_xml(
                         break
 
                     if current_unit:
-                        # Build le row dict avec _row_to_dict via fmap
-                        # construit depuis les codes RL trouvés
-                        fmap = _build_field_map(list(current_unit.keys()))
-                        row = _row_to_dict(current_unit, region, fmap)
+                        row = _mamh_xml_unit_to_row(
+                            current_unit,
+                            code_mun=code_mun,
+                            region=region,
+                            municipalite_from_filename=(
+                                municipalite_from_filename
+                            ),
+                        )
                         if row is not None:
-                            # Si pas de municipalité dans le XML, prendre
-                            # celle déduite du nom de fichier
-                            if not row.get("municipalite") and municipalite_from_filename:
-                                row["municipalite"] = municipalite_from_filename
                             mun_norm = _normalize_city(row.get("municipalite") or "")
                             if not match_set or mun_norm in match_set:
                                 batch.append(row)
