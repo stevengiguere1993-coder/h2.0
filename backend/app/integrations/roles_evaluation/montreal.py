@@ -20,6 +20,7 @@ recherche manuelle dans l'app evalweb de la Ville (boutons externes).
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import logging
 import re
@@ -213,6 +214,9 @@ def _row_to_dict(row: Dict[str, str]) -> Optional[Dict[str, Any]]:
         "search_key": (
             make_search_key(civic, rue) if civic and rue else None
         ),
+        # Tag explicite « mtl-island » pour distinguer du rôle provincial
+        # (rive-sud/laval/rive-nord) ingéré par un autre flow.
+        "region": "mtl-island",
     }
 
 
@@ -231,8 +235,36 @@ async def _bulk_upsert(
     stmt = stmt.on_conflict_do_update(
         index_elements=["matricule"], set_=update_cols
     )
-    await db.execute(stmt)
-    return len(rows)
+    # Retry sur connection drop (Render free coupe les conn idles
+    # pendant les longs imports). pool_pre_ping reconnecte au prochain
+    # acquire, mais il faut rollback puis ré-essayer.
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            await db.execute(stmt)
+            return len(rows)
+        except Exception as exc:
+            msg = str(exc).lower()
+            transient = (
+                "connection" in msg
+                and ("closed" in msg or "does not exist" in msg)
+            ) or "ssl connection has been closed" in msg
+            if not transient:
+                raise
+            last_err = exc
+            log.warning(
+                "Bulk upsert connection drop (attempt %d/3): %s",
+                attempt + 1,
+                exc,
+            )
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            await asyncio.sleep(2 * (attempt + 1))
+    if last_err:
+        raise last_err
+    return 0
 
 
 async def _download_csv_to_tempfile(url: str) -> str:
@@ -266,7 +298,7 @@ async def ingest_csv(
     db: AsyncSession,
     *,
     url: str = MTL_CSV_URL,
-    batch_size: int = 2000,
+    batch_size: int = 1000,
     max_rows: Optional[int] = None,
     csv_path: Optional[str] = None,
 ) -> Dict[str, int]:

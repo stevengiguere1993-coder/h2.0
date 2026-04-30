@@ -183,7 +183,18 @@ async def list_properties(
             MontrealPropertyUnit.municipalite == municipalite.strip()
         )
     if region:
-        filters.append(MontrealPropertyUnit.region == region)
+        # Pour mtl-island, on accepte aussi region=NULL : c'est le cas
+        # des unités importées avant l'ajout du champ region (rôle
+        # Ville de Montréal pré-multi-régions).
+        if region == "mtl-island":
+            filters.append(
+                or_(
+                    MontrealPropertyUnit.region == region,
+                    MontrealPropertyUnit.region.is_(None),
+                )
+            )
+        else:
+            filters.append(MontrealPropertyUnit.region == region)
     if nom_rue_contains:
         filters.append(
             MontrealPropertyUnit.nom_rue.ilike(
