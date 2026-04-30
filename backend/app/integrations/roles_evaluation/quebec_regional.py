@@ -554,6 +554,7 @@ async def ingest_provincial_csv(
     cities: Optional[Iterable[str]] = None,
     batch_size: int = 2000,
     max_rows: Optional[int] = None,
+    max_km_from_mtl: Optional[float] = 50.0,
 ) -> dict:
     """Ingère le rôle provincial filtré par région + liste de villes.
 
@@ -569,6 +570,12 @@ async def ingest_provincial_csv(
                  Si None, on prend la liste pré-définie de la région.
         batch_size : nb de lignes par bulk insert.
         max_rows : limite pour tests (None = tout).
+        max_km_from_mtl : seuil maximum en km depuis le centre-ville
+                 de Montréal pour conserver une unité. Default 50 km
+                 — restreint le volume au périmètre métropolitain
+                 pour tenir dans Postgres free 1 Go (~500 K-1 M
+                 unités au lieu de ~5 M nationales).
+                 None = pas de filtre distance (tout le QC).
     """
     cities_used = (
         list(cities)
@@ -576,11 +583,50 @@ async def ingest_provincial_csv(
         else list(ALL_REGIONS.get(region, set()))
     )
     match_set = _build_match_set(cities_used)
+
+    # Filtre par distance MTL : on construit un set des noms et codes
+    # MAMH des municipalités à ≤ max_km_from_mtl. Sert au double niveau :
+    # - skip total des fichiers XML dont le code MAMH est hors-périmètre
+    # - filtre ligne par ligne pour CSV via match sur le nom municipalité
+    distance_set: Optional[Set[str]] = None
+    distance_codes: Optional[Set[str]] = None
+    if max_km_from_mtl is not None:
+        from app.integrations.roles_evaluation.quebec_distances import (
+            _DIST_KM_RAW,
+        )
+        from app.integrations.roles_evaluation.mamh_codes import (
+            _CODE_TO_NAME,
+        )
+
+        # Noms normalisés des villes ≤ max_km
+        in_radius_originals = {
+            k for k, dist in _DIST_KM_RAW.items() if dist <= max_km_from_mtl
+        }
+        distance_set = {_normalize_city(k) for k in in_radius_originals}
+
+        # Codes MAMH dont la municipalité est ≤ max_km
+        distance_codes = {
+            code
+            for code, name in _CODE_TO_NAME.items()
+            if _normalize_city(name) in distance_set
+        }
+        log.info(
+            "Filtre distance MTL ≤ %.0f km : %d municipalités, %d codes MAMH",
+            max_km_from_mtl,
+            len(distance_set),
+            len(distance_codes),
+        )
+        # Si pas de cities explicites, on utilise le distance_set comme
+        # filter pour les CSV (filtre ligne par ligne sur la municipalité)
+        if not match_set and distance_set:
+            match_set = set(distance_set)
+
     log.info(
-        "Ingest provincial : region=%s, %d villes, source=%s",
+        "Ingest provincial : region=%s, %d villes filter, source=%s, max_km=%s",
         region,
         len(match_set),
         os.path.basename(csv_path),
+        max_km_from_mtl,
     )
 
     total_seen = 0
@@ -650,8 +696,6 @@ async def ingest_provincial_csv(
             for name in xml_members:
                 if max_rows is not None and total_seen >= max_rows:
                     break
-                zf.extract(name, tmpdir)
-                local_path = os.path.join(tmpdir, name)
                 from app.integrations.roles_evaluation.mamh_codes import (
                     code_from_filename,
                     code_to_name,
@@ -659,10 +703,33 @@ async def ingest_provincial_csv(
                 base = os.path.basename(name)
                 code = code_from_filename(base)
                 mun = code_to_name(code)
-                # NOTE : on n'exclut plus les fichiers MTL (codes 66xxx).
-                # Le ZIP provincial est désormais la source unique. Le
-                # purge des données VdM précédentes se fait via
-                # POST /admin/data/mtl-roles/purge avant l'import.
+
+                # Filtre distance : skip le fichier entier si son code
+                # MAMH n'est pas dans le périmètre. Évite d'extraire
+                # +parser des XML inutiles (gain RAM/CPU/disk).
+                if (
+                    distance_codes is not None
+                    and (not code or code not in distance_codes)
+                ):
+                    diagnostics.append(
+                        {
+                            "file": base,
+                            "encoding": "skipped",
+                            "delimiter": (
+                                f"hors-périmètre (>{max_km_from_mtl} km MTL)"
+                            ),
+                            "headers_seen": [
+                                f"code_mamh={code or '?'}",
+                                f"municipalite={mun or '(non mappée)'}",
+                            ],
+                            "columns_mapped": [],
+                            "has_matricule": False,
+                        }
+                    )
+                    continue
+
+                zf.extract(name, tmpdir)
+                local_path = os.path.join(tmpdir, name)
                 diagnostics.append(
                     {
                         "file": base,
