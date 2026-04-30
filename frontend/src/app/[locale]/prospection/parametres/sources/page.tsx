@@ -69,8 +69,6 @@ export default function ProspectionSourcesPage() {
     error: string | null;
   };
   const [provFile, setProvFile] = useState<File | null>(null);
-  const [provRegion, setProvRegion] =
-    useState<"rive-sud" | "laval" | "rive-nord">("rive-sud");
   const [provUploading, setProvUploading] = useState(false);
   const [provUploadProgress, setProvUploadProgress] = useState<{
     sent: number;
@@ -409,7 +407,9 @@ export default function ProspectionSourcesPage() {
       const fdFinal = new FormData();
       fdFinal.append("upload_id", uploadId);
       fdFinal.append("total_chunks", String(totalChunks));
-      fdFinal.append("region", provRegion);
+      // Pas de filtre municipalité côté ingest : on importe tout le Québec
+      // et on filtrera par distance depuis MTL côté UI Rôles fonciers.
+      fdFinal.append("region", "quebec");
       const finRes = await authedFetch(
         "/api/v1/admin/data/provincial/upload-finalize",
         { method: "POST", body: fdFinal }
@@ -792,21 +792,7 @@ export default function ProspectionSourcesPage() {
             </p>
           </div>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-[auto_1fr_auto]">
-            <select
-              value={provRegion}
-              onChange={(e) =>
-                setProvRegion(
-                  e.target.value as "rive-sud" | "laval" | "rive-nord"
-                )
-              }
-              disabled={provUploading || provStatus?.status === "running"}
-              className="rounded-lg border border-brand-700 bg-brand-950 px-3 py-2 text-sm text-white"
-            >
-              <option value="rive-sud">Rive-Sud</option>
-              <option value="laval">Laval</option>
-              <option value="rive-nord">Rive-Nord</option>
-            </select>
+          <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
             <input
               type="file"
               accept=".csv,.zip,text/csv,application/zip,application/x-zip-compressed"
