@@ -293,6 +293,20 @@ async def init_db() -> None:
         except Exception:
             pass
 
+        # Élargit la colonne region de mtl_property_units si elle est
+        # encore en VARCHAR(8) (legacy). 'mtl-island' fait 10 chars,
+        # 'rive-nord' 9. ALTER COLUMN TYPE est idempotent en Postgres
+        # quand la nouvelle taille est >= ancienne.
+        try:
+            await conn.execute(
+                text(
+                    "ALTER TABLE mtl_property_units "
+                    "ALTER COLUMN region TYPE VARCHAR(32)"
+                )
+            )
+        except Exception:
+            pass
+
         # Relaxations — columns whose nullability changed.
         # ALTER ... DROP NOT NULL is idempotent on PostgreSQL.
         for table, column in (

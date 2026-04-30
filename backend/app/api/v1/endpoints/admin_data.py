@@ -880,6 +880,75 @@ async def _provincial_ingest_worker(
 
 
 @router.post(
+    "/provincial/purge-all",
+    summary="Supprime TOUTES les unités d'évaluation foncière (full reset).",
+)
+async def purge_all_property_units(_: RequireOwner) -> dict:
+    """Vide complètement la table mtl_property_units, peu importe la
+    région. À utiliser après un échec d'ingestion qui a laissé des
+    rangées partielles, ou avant un re-import complet."""
+    import asyncio
+    from sqlalchemy import delete, select, func, text
+    from app.models.montreal_property_unit import MontrealPropertyUnit
+
+    last_err: Optional[Exception] = None
+    for attempt in range(6):
+        try:
+            async with AsyncSessionLocal() as db:
+                count_before = (
+                    await db.execute(
+                        select(func.count()).select_from(MontrealPropertyUnit)
+                    )
+                ).scalar() or 0
+                # TRUNCATE plus rapide qu'un DELETE pour vider une table
+                # en entier, et reset le storage à zéro (vacuum implicite).
+                try:
+                    await db.execute(
+                        text("TRUNCATE TABLE mtl_property_units")
+                    )
+                    await db.commit()
+                except Exception:
+                    # Fallback DELETE si TRUNCATE refusé (permissions)
+                    await db.rollback()
+                    await db.execute(delete(MontrealPropertyUnit))
+                    await db.commit()
+                return {
+                    "deleted": int(count_before),
+                    "message": (
+                        f"{int(count_before):,} unités supprimées "
+                        "(table vidée). Tu peux re-importer."
+                    ).replace(",", " "),
+                }
+        except Exception as exc:
+            msg = str(exc).lower()
+            transient = (
+                "recovery mode" in msg
+                or "not yet accepting" in msg
+                or "consistent recovery" in msg
+                or "starting up" in msg
+                or "shutting down" in msg
+                or ("connection" in msg
+                    and ("closed" in msg or "does not exist" in msg
+                         or "refused" in msg))
+                or "ssl connection has been closed" in msg
+            )
+            if not transient:
+                raise
+            last_err = exc
+            log.warning(
+                "Purge all transient error (attempt %d/6): %s",
+                attempt + 1,
+                exc,
+            )
+            await asyncio.sleep(5 * (attempt + 1))
+    raise HTTPException(
+        503,
+        "Base de données toujours indisponible après 6 tentatives. "
+        f"Détail : {last_err}",
+    )
+
+
+@router.post(
     "/provincial/reset",
     summary="Force le state du worker provincial à idle (déblocage manuel).",
 )
