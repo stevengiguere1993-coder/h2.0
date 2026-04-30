@@ -131,6 +131,12 @@ async def list_properties(
     max_annee: Optional[int] = Query(default=None, le=2100),
     min_superficie_terrain: Optional[float] = Query(default=None, ge=0),
     municipalite: Optional[str] = Query(default=None),
+    region: Optional[str] = Query(
+        default=None,
+        pattern="^(mtl-island|laval|rive-sud|rive-nord)$",
+        description="Filtre par région. mtl-island = île de Montréal "
+        "(MTL + arrondissements), laval, rive-sud, rive-nord.",
+    ),
     nom_rue_contains: Optional[str] = Query(default=None),
     codes_utilisation: Optional[List[str]] = Query(
         default=None,
@@ -173,6 +179,8 @@ async def list_properties(
         filters.append(
             MontrealPropertyUnit.municipalite == municipalite.strip()
         )
+    if region:
+        filters.append(MontrealPropertyUnit.region == region)
     if nom_rue_contains:
         filters.append(
             MontrealPropertyUnit.nom_rue.ilike(
