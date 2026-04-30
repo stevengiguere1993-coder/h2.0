@@ -140,6 +140,12 @@ async def list_properties(
         description="Filtre par région. mtl-island = île de Montréal "
         "(MTL + arrondissements), laval, rive-sud, rive-nord.",
     ),
+    distance_band: Optional[str] = Query(
+        default=None,
+        pattern="^(under_30|30_to_40|40_to_50|over_50)$",
+        description="Filtre par distance depuis le centre-ville MTL : "
+        "under_30 (< 30 km), 30_to_40, 40_to_50, over_50 (> 50 km).",
+    ),
     nom_rue_contains: Optional[str] = Query(default=None),
     codes_utilisation: Optional[List[str]] = Query(
         default=None,
@@ -209,6 +215,53 @@ async def list_properties(
             filters.append(
                 MontrealPropertyUnit.code_utilisation.in_(cleaned)
             )
+
+    # Filtre par distance depuis le centre-ville MTL via la table
+    # quebec_distances. Matching insensible à la casse sur le nom de
+    # municipalité tel que stocké (avec accents préservés du CSV).
+    if distance_band:
+        from app.integrations.roles_evaluation.quebec_distances import (
+            _DIST_KM_RAW,
+        )
+
+        # Bornes de la tranche
+        if distance_band == "under_30":
+            mn, mx = 0.0, 30.0
+        elif distance_band == "30_to_40":
+            mn, mx = 30.0, 40.0
+        elif distance_band == "40_to_50":
+            mn, mx = 40.0, 50.0
+        else:  # over_50
+            mn, mx = None, None
+
+        if distance_band == "over_50":
+            # NOT IN les villes connues à ≤ 50 km. Les inconnues passent
+            # → considérées éloignées par défaut.
+            close_lower = {
+                k.lower()
+                for k, dist in _DIST_KM_RAW.items()
+                if dist <= 50
+            }
+            if close_lower:
+                filters.append(
+                    func.lower(MontrealPropertyUnit.municipalite).notin_(
+                        list(close_lower)
+                    )
+                )
+        else:
+            originals_lower = [
+                k.lower()
+                for k, dist in _DIST_KM_RAW.items()
+                if mn is not None and mx is not None and mn <= dist <= mx
+            ]
+            if originals_lower:
+                filters.append(
+                    func.lower(MontrealPropertyUnit.municipalite).in_(
+                        originals_lower
+                    )
+                )
+            else:
+                filters.append(MontrealPropertyUnit.matricule.is_(None))
 
     stmt = select(MontrealPropertyUnit)
     for f in filters:

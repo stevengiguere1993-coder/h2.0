@@ -84,9 +84,9 @@ export default function ImmeublesMtlPage() {
   const [maxAnnee, setMaxAnnee] = useState<string>("");
   const [rueSearch, setRueSearch] = useState<string>("");
   const [sortBy, setSortBy] = useState("nombre_logement_desc");
-  const [region, setRegion] = useState<
-    "mtl-island" | "laval" | "rive-sud" | "rive-nord"
-  >("mtl-island");
+  const [distanceBand, setDistanceBand] = useState<
+    "" | "under_30" | "30_to_40" | "40_to_50" | "over_50"
+  >("under_30");
   const [offset, setOffset] = useState(0);
   const limit = 100;
 
@@ -131,7 +131,7 @@ export default function ImmeublesMtlPage() {
         params.append("codes_utilisation", code);
       }
       params.set("sort_by", sortBy);
-      params.set("region", region);
+      if (distanceBand) params.set("distance_band", distanceBand);
       params.set("limit", String(limit));
       params.set("offset", String(offset));
 
@@ -158,7 +158,7 @@ export default function ImmeublesMtlPage() {
     rueSearch,
     selectedCodes,
     sortBy,
-    region,
+    distanceBand,
     offset
   ]);
 
@@ -220,23 +220,26 @@ export default function ImmeublesMtlPage() {
             </p>
           </div>
           <select
-            value={region}
+            value={distanceBand}
             onChange={(e) => {
-              setRegion(
+              setDistanceBand(
                 e.target.value as
-                  | "mtl-island"
-                  | "laval"
-                  | "rive-sud"
-                  | "rive-nord"
+                  | ""
+                  | "under_30"
+                  | "30_to_40"
+                  | "40_to_50"
+                  | "over_50"
               );
               setOffset(0);
             }}
             className="rounded-lg border border-brand-700 bg-brand-950 px-3 py-2 text-sm font-medium text-white"
+            title="Filtre par distance depuis le centre-ville de Montréal"
           >
-            <option value="mtl-island">Montréal</option>
-            <option value="laval">Laval</option>
-            <option value="rive-sud">Rive-Sud</option>
-            <option value="rive-nord">Rive-Nord</option>
+            <option value="">Tout le Québec</option>
+            <option value="under_30">≤ 30 km de MTL</option>
+            <option value="30_to_40">30-40 km de MTL</option>
+            <option value="40_to_50">40-50 km de MTL</option>
+            <option value="over_50">&gt; 50 km de MTL</option>
           </select>
         </header>
 
