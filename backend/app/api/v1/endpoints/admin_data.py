@@ -171,6 +171,11 @@ async def purge_mtl_data(_: RequireOwner) -> dict:
                     )
                 )
                 await db.commit()
+                # Reset le state du worker provincial pour que le UI
+                # n'affiche plus la dernière erreur.
+                _provincial_state["status"] = "idle"
+                _provincial_state["error"] = None
+                _provincial_state["diagnostics"] = []
                 return {
                     "deleted": int(count_before),
                     "message": (
@@ -912,6 +917,12 @@ async def purge_all_property_units(_: RequireOwner) -> dict:
                     await db.rollback()
                     await db.execute(delete(MontrealPropertyUnit))
                     await db.commit()
+                # Reset le state du worker provincial : sinon le UI
+                # continue d'afficher la dernière erreur jusqu'au reset
+                # manuel.
+                _provincial_state["status"] = "idle"
+                _provincial_state["error"] = None
+                _provincial_state["diagnostics"] = []
                 return {
                     "deleted": int(count_before),
                     "message": (
@@ -946,8 +957,6 @@ async def purge_all_property_units(_: RequireOwner) -> dict:
         "Base de données toujours indisponible après 6 tentatives. "
         f"Détail : {last_err}",
     )
-
-
 @router.post(
     "/provincial/reset",
     summary="Force le state du worker provincial à idle (déblocage manuel).",
