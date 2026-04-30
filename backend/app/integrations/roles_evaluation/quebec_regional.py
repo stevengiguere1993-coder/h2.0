@@ -283,6 +283,134 @@ async def _bulk_upsert(
     return len(batch)
 
 
+async def _ingest_one_xml(
+    db: AsyncSession,
+    xml_path: str,
+    *,
+    region: str,
+    match_set: Set[str],
+    batch_size: int,
+    max_rows: Optional[int],
+    seen_so_far: int,
+    kept_so_far: int,
+) -> Tuple[int, int]:
+    """Ingère un XML format MAMH (rôle d'évaluation foncière du Québec).
+
+    Le schéma utilise des balises avec codes du Manuel d'évaluation
+    foncière (RL0301A=matricule, RL0506A=usage, etc.). On parcourt en
+    streaming via iterparse() pour gérer les gros fichiers (~100 Mo).
+
+    Le code municipalité MAMH est extrait du nom de fichier
+    (RL{code5}_AAAA.xml ou RLNR{code3}_AAAA.xml) — on remappe vers
+    le nom via la table mam_code_to_name (best-effort).
+    """
+    import xml.etree.ElementTree as ET
+    from app.integrations.roles_evaluation.mamh_codes import (
+        code_to_name,
+        code_from_filename,
+    )
+
+    municipalite_from_filename = code_to_name(
+        code_from_filename(os.path.basename(xml_path))
+    )
+
+    # Tags candidates pour la balise "unité d'évaluation"
+    UNIT_BOUNDARY_TAGS = {
+        "RLUEx", "RLUEv", "RLUEV", "UEV", "UniteEvaluation",
+        "RLUEvale", "RLUE", "Unite",
+    }
+
+    seen_new = 0
+    kept_new = 0
+    batch: List[Dict] = []
+
+    # Stack pour suivre la profondeur. On accumule les RLxxxxA dans
+    # le current_unit dict et on flush au end-tag de boundary.
+    current_unit: Dict[str, str] = {}
+    current_depth = 0
+    boundary_depth: Optional[int] = None
+
+    # Si on n'a pas trouvé de boundary tag, fallback : utiliser tous
+    # les éléments dont les enfants directs contiennent un RL0301A.
+
+    try:
+        for event, elem in ET.iterparse(xml_path, events=("start", "end")):
+            # Strip namespace si présent
+            tag = elem.tag.split("}", 1)[-1] if "}" in elem.tag else elem.tag
+
+            if event == "start":
+                current_depth += 1
+                if tag in UNIT_BOUNDARY_TAGS and boundary_depth is None:
+                    boundary_depth = current_depth
+                    current_unit = {}
+            elif event == "end":
+                # Si c'est un code RL et on est dans une unité, accumule
+                if (
+                    boundary_depth is not None
+                    and current_depth > boundary_depth
+                    and tag.startswith("RL")
+                    and elem.text
+                ):
+                    current_unit[tag.upper()] = elem.text.strip()
+
+                if tag in UNIT_BOUNDARY_TAGS and current_depth == boundary_depth:
+                    # Flush l'unité accumulée
+                    seen_new += 1
+                    if (
+                        max_rows is not None
+                        and (seen_so_far + seen_new) > max_rows
+                    ):
+                        elem.clear()
+                        break
+
+                    if current_unit:
+                        # Build le row dict avec _row_to_dict via fmap
+                        # construit depuis les codes RL trouvés
+                        fmap = _build_field_map(list(current_unit.keys()))
+                        row = _row_to_dict(current_unit, region, fmap)
+                        if row is not None:
+                            # Si pas de municipalité dans le XML, prendre
+                            # celle déduite du nom de fichier
+                            if not row.get("municipalite") and municipalite_from_filename:
+                                row["municipalite"] = municipalite_from_filename
+                            mun_norm = _normalize_city(row.get("municipalite") or "")
+                            if not match_set or mun_norm in match_set:
+                                batch.append(row)
+                                kept_new += 1
+                                if len(batch) >= batch_size:
+                                    await _bulk_upsert(db, batch)
+                                    batch.clear()
+                    current_unit = {}
+                    boundary_depth = None
+                    elem.clear()
+                else:
+                    # Libère la mémoire des éléments terminaux non-boundary
+                    if current_depth > (boundary_depth or 0):
+                        pass  # on garde tant qu'on n'a pas flushé l'unité
+                    else:
+                        elem.clear()
+                current_depth -= 1
+
+                if seen_new % 50_000 == 0 and seen_new > 0:
+                    log.info(
+                        "  XML %s : %d unités parcourues, %d gardées",
+                        os.path.basename(xml_path),
+                        seen_so_far + seen_new,
+                        kept_so_far + kept_new,
+                    )
+    except ET.ParseError as exc:
+        log.warning(
+            "XML parse error in %s: %s — file skipped",
+            os.path.basename(xml_path),
+            exc,
+        )
+        return seen_new, kept_new
+
+    if batch:
+        await _bulk_upsert(db, batch)
+    return seen_new, kept_new
+
+
 async def _ingest_one_csv(
     db: AsyncSession,
     csv_path: str,
@@ -400,22 +528,27 @@ async def ingest_provincial_csv(
             csv_members = [
                 n for n in all_members if n.lower().endswith(".csv")
             ]
+            xml_members = [
+                n for n in all_members if n.lower().endswith(".xml")
+            ]
             log.info(
-                "ZIP détecté : %d entrées (%d CSV). Tous : %s",
+                "ZIP détecté : %d entrées (%d CSV, %d XML). Tous : %s",
                 len(all_members),
                 len(csv_members),
+                len(xml_members),
                 all_members[:10],
             )
-            if not csv_members:
+            if not csv_members and not xml_members:
                 diagnostics.append(
                     {
                         "file": "(zip)",
                         "error": (
-                            f"Aucun .csv dans le ZIP. Entrées : "
+                            f"Aucun .csv ou .xml dans le ZIP. Entrées : "
                             f"{', '.join(all_members[:10])}"
                         ),
                     }
                 )
+            # CSV first (Ville-de-MTL style)
             for name in csv_members:
                 zf.extract(name, tmpdir)
                 local_path = os.path.join(tmpdir, name)
@@ -445,6 +578,44 @@ async def ingest_provincial_csv(
                 total_kept += kept_new
                 if max_rows is not None and total_seen >= max_rows:
                     break
+            # XML (format MAMH RL-codes)
+            for name in xml_members:
+                if max_rows is not None and total_seen >= max_rows:
+                    break
+                zf.extract(name, tmpdir)
+                local_path = os.path.join(tmpdir, name)
+                from app.integrations.roles_evaluation.mamh_codes import (
+                    code_from_filename,
+                    code_to_name,
+                )
+                base = os.path.basename(name)
+                code = code_from_filename(base)
+                mun = code_to_name(code)
+                diagnostics.append(
+                    {
+                        "file": base,
+                        "encoding": "xml",
+                        "delimiter": "(MAMH XML)",
+                        "headers_seen": [
+                            f"code_mamh={code or '?'}",
+                            f"municipalite={mun or '(non mappée)'}",
+                        ],
+                        "columns_mapped": ["xml_mamh"],
+                        "has_matricule": True,
+                    }
+                )
+                seen_new, kept_new = await _ingest_one_xml(
+                    db,
+                    local_path,
+                    region=region,
+                    match_set=match_set,
+                    batch_size=batch_size,
+                    max_rows=max_rows,
+                    seen_so_far=total_seen,
+                    kept_so_far=total_kept,
+                )
+                total_seen += seen_new
+                total_kept += kept_new
     else:
         enc, delim, headers = _detect_encoding_and_delim(csv_path)
         fmap = _build_field_map(headers)
