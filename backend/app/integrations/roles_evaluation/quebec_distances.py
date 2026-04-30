@@ -185,6 +185,38 @@ _DIST_KM_RAW: Dict[str, float] = {
 _DIST_KM: Dict[str, float] = {_norm(k): v for k, v in _DIST_KM_RAW.items()}
 
 
+# Municipalités strictement situées sur l'île de Montréal
+# (1 ville centrale + 14 villes liées). Codes MAMH 66xxx.
+# Forme normalisée (sans accents, lowercase) pour matching robuste
+# avec le champ municipalite stocké tel quel depuis le CSV/XML.
+#
+# Note : les 19 arrondissements de la Ville de Montréal n'apparaissent
+# PAS séparément dans le rôle d'évaluation MAMH — la municipalité y
+# est toujours « Montréal ». Les arrondissements ne servent que côté
+# UI (libellé d'adresse) ou pour les imports « Ville de Montréal »
+# directs (donnees.montreal.ca) qui sont obsolètes.
+MTL_ISLAND_CITIES: set[str] = {
+    _norm(name)
+    for name in (
+        "Montréal",                  # 66023 — incl. tous les arrondissements
+        "Montréal-Est",              # 66032
+        "Westmount",                 # 66058
+        "Côte-Saint-Luc",            # 66062
+        "Hampstead",                 # 66072
+        "Montréal-Ouest",            # 66087
+        "Mont-Royal",                # 66097
+        "Outremont",                 # 66107 (cas legacy, devenu arrond.)
+        "Dorval",                    # 66112
+        "Pointe-Claire",             # 66117
+        "Kirkland",                  # 66127
+        "Beaconsfield",              # 66142
+        "Baie-D'Urfé",               # 66157
+        "Sainte-Anne-de-Bellevue",   # 66162
+        "Senneville",                # 66167
+    )
+}
+
+
 def km_from_mtl(municipalite: Optional[str]) -> Optional[float]:
     """Retourne la distance en km depuis le centre-ville de Montréal,
     ou None si la municipalité est inconnue."""
