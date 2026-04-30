@@ -295,22 +295,29 @@ async def _bulk_upsert(
     import asyncio as _asyncio
 
     last_err: Optional[Exception] = None
-    for attempt in range(3):
+    for attempt in range(6):
         try:
             await db.execute(stmt)
             return len(deduped)
         except Exception as exc:
             msg = str(exc).lower()
             transient = (
-                "connection" in msg
-                and ("closed" in msg or "does not exist" in msg)
-            ) or "ssl connection has been closed" in msg
+                "recovery mode" in msg
+                or "not yet accepting" in msg
+                or "consistent recovery" in msg
+                or "starting up" in msg
+                or "shutting down" in msg
+                or ("connection" in msg
+                    and ("closed" in msg or "does not exist" in msg
+                         or "refused" in msg))
+                or "ssl connection has been closed" in msg
+            )
             if not transient:
                 raise
             last_err = exc
             log.warning(
-                "Provincial bulk upsert connection drop "
-                "(attempt %d/3): %s",
+                "Provincial bulk upsert transient error "
+                "(attempt %d/6): %s",
                 attempt + 1,
                 exc,
             )
@@ -318,7 +325,7 @@ async def _bulk_upsert(
                 await db.rollback()
             except Exception:
                 pass
-            await _asyncio.sleep(2 * (attempt + 1))
+            await _asyncio.sleep(5 * (attempt + 1))
     if last_err:
         raise last_err
     return 0

@@ -784,6 +784,47 @@ async def provincial_upload_chunk(
     }
 
 
+async def _wait_for_postgres_ready(max_wait_s: int = 120) -> None:
+    """Attend que Postgres réponde avant de lancer un long worker.
+    Évite que le worker meure sur la 1ère requête si la DB est en
+    recovery juste après un redéploiement Render."""
+    import asyncio as _asyncio
+    from sqlalchemy import text
+
+    delay = 3
+    elapsed = 0
+    while elapsed < max_wait_s:
+        try:
+            async with AsyncSessionLocal() as s:
+                await s.execute(text("SELECT 1"))
+            return
+        except Exception as exc:
+            msg = str(exc).lower()
+            transient = (
+                "recovery mode" in msg
+                or "not yet accepting" in msg
+                or "consistent recovery" in msg
+                or "starting up" in msg
+                or ("connection" in msg
+                    and ("closed" in msg or "does not exist" in msg
+                         or "refused" in msg))
+            )
+            if not transient:
+                raise
+            log.warning(
+                "Postgres pas prêt (waited %ds, retry dans %ds): %s",
+                elapsed,
+                delay,
+                str(exc)[:200],
+            )
+            await _asyncio.sleep(delay)
+            elapsed += delay
+            delay = min(delay + 2, 15)
+    raise RuntimeError(
+        f"Postgres toujours indisponible après {max_wait_s}s d'attente."
+    )
+
+
 async def _provincial_ingest_worker(
     final_path: str, region: str, max_rows: Optional[int]
 ) -> None:
@@ -796,6 +837,9 @@ async def _provincial_ingest_worker(
     _provincial_state["error"] = None
     _provincial_state["region"] = region
     try:
+        # Attente que Postgres réponde avant de lancer le long worker
+        await _wait_for_postgres_ready()
+
         from app.integrations.roles_evaluation.quebec_regional import (
             ingest_provincial_csv,
         )
