@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   Database,
   DollarSign,
-  Download,
   ExternalLink,
   Loader2,
   MapPin,
@@ -39,10 +38,6 @@ export default function ProspectionSourcesPage() {
   const { onOpenSidebar } = useProspectionLayout();
   const { user } = useCurrentUser();
   const isOwner = hasMinRole(user, "owner");
-
-  const [mtlStatus, setMtlStatus] = useState<MtlStatus | null>(null);
-  const [mtlError, setMtlError] = useState<string | null>(null);
-  const mtlPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   type BackfillResult = {
     total_leads: number;
@@ -166,33 +161,9 @@ export default function ProspectionSourcesPage() {
     }
   }
 
-  // Polling de l'état de l'import MTL (long, 3-5 min). On poll toutes
-  // les 5s tant que status=running.
-  async function refreshMtlStatus() {
-    try {
-      const res = await authedFetch(
-        "/api/v1/admin/data/mtl-roles/import-status"
-      );
-      if (!res.ok) return;
-      const data = (await res.json()) as MtlStatus;
-      setMtlStatus(data);
-      // Stoppe le poll quand l'import est terminé.
-      if (
-        data.status !== "running" &&
-        mtlPollRef.current !== null
-      ) {
-        clearInterval(mtlPollRef.current);
-        mtlPollRef.current = null;
-      }
-    } catch {
-      /* silencieux — Render Free dort parfois quelques secondes */
-    }
-  }
-
-  // Au montage : charge l'état une fois pour MTL + REQ (utile si un
-  // import a été lancé puis on a rechargé la page) et lance le poll
-  // sur les deux. Le refresh stoppe son propre intervalle quand
-  // status != running.
+  // Au montage : charge l'état une fois pour REQ + provincial (utile si
+  // un import a été lancé puis on a rechargé la page) et lance le poll.
+  // Le refresh stoppe son propre intervalle quand status != running.
   async function refreshRentalStatus() {
     try {
       const res = await authedFetch(
@@ -324,14 +295,10 @@ export default function ProspectionSourcesPage() {
 
   useEffect(() => {
     if (!isOwner) return;
-    void refreshMtlStatus();
     void refreshReqStatus();
     void refreshRentalStatus();
     void refreshCentrisStatus();
     void refreshProvStatus();
-    if (mtlPollRef.current === null) {
-      mtlPollRef.current = setInterval(refreshMtlStatus, 5000);
-    }
     if (reqPollRef.current === null) {
       reqPollRef.current = setInterval(refreshReqStatus, 5000);
     }
@@ -349,10 +316,6 @@ export default function ProspectionSourcesPage() {
       if (rentalPollRef.current !== null) {
         clearInterval(rentalPollRef.current);
         rentalPollRef.current = null;
-      }
-      if (mtlPollRef.current !== null) {
-        clearInterval(mtlPollRef.current);
-        mtlPollRef.current = null;
       }
       if (reqPollRef.current !== null) {
         clearInterval(reqPollRef.current);
@@ -464,28 +427,6 @@ export default function ProspectionSourcesPage() {
       setBackfillError((e as Error).message);
     } finally {
       setBackfillBusy(false);
-    }
-  }
-
-  async function importMontreal() {
-    if (mtlStatus?.status === "running") return;
-    setMtlError(null);
-    try {
-      const res = await authedFetch(
-        "/api/v1/admin/data/mtl-roles/import",
-        { method: "POST" }
-      );
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
-      }
-      // L'endpoint retourne { status: "started" }. On lance le poll.
-      await refreshMtlStatus();
-      if (mtlPollRef.current === null) {
-        mtlPollRef.current = setInterval(refreshMtlStatus, 5000);
-      }
-    } catch (e) {
-      setMtlError((e as Error).message);
     }
   }
 
@@ -608,7 +549,7 @@ export default function ProspectionSourcesPage() {
             <p className="text-sm text-white/60">
               Caches locaux qui alimentent le bouton « Trouver le
               propriétaire ». Imports manuels, à rafraîchir une fois
-              par an (Montréal) ou par mois (REQ).
+              par an (rôle d&apos;évaluation) ou par mois (REQ).
             </p>
           </div>
         </header>
@@ -620,7 +561,7 @@ export default function ProspectionSourcesPage() {
           </p>
         ) : null}
 
-        {/* === Rôle Montréal === */}
+        {/* === Rôles d'évaluation foncière (toutes municipalités) === */}
         <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
           <header className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-3">
@@ -629,17 +570,20 @@ export default function ProspectionSourcesPage() {
               </span>
               <div>
                 <h2 className="text-base font-bold text-white">
-                  Rôle d&apos;évaluation — Ville de Montréal
+                  Rôles d&apos;évaluation foncière
                 </h2>
                 <p className="mt-0.5 text-xs text-white/60">
-                  ~500 000 unités d&apos;évaluation. Donne le matricule,
-                  le nombre de logements, l&apos;année de construction
-                  et les superficies pour chaque adresse de l&apos;île.
+                  Catalogue centralisé Données Québec : toutes les
+                  municipalités (Montréal, Laval, Rive-Sud, Rive-Nord,
+                  Couronnes…). Donne pour chaque adresse le matricule,
+                  le nombre de logements, l&apos;année et les superficies.
+                  Filtré à l&apos;ingestion à ≤ 50 km du centre-ville
+                  MTL pour tenir dans Postgres.
                 </p>
               </div>
             </div>
             <a
-              href="https://donnees.montreal.ca/dataset/unites-evaluation-fonciere"
+              href="https://www.donneesquebec.ca/recherche/dataset/roles-d-evaluation-fonciere-du-quebec/resource/32ac5079-ae14-460a-9a2d-b811b0fc56f3"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex flex-shrink-0 items-center gap-1 text-[11px] text-emerald-400 hover:text-emerald-300"
@@ -649,65 +593,68 @@ export default function ProspectionSourcesPage() {
             </a>
           </header>
 
-          <p className="mt-3 rounded-md border border-brand-700 bg-brand-950/40 p-3 text-[11px] text-white/60">
-            Téléchargement direct depuis l&apos;open data de la Ville
-            (~150-200 Mo, 3-5 min). Idempotent : ré-importer ne crée
-            pas de doublons. À refaire chaque année quand la Ville
-            publie le nouveau rôle.
-          </p>
+          <ol className="mt-3 space-y-1.5 rounded-md border border-brand-700 bg-brand-950/40 p-3 text-[11px] text-white/70">
+            <li>
+              <strong className="text-white/90">1.</strong> Va sur{" "}
+              <a
+                href="https://www.donneesquebec.ca/recherche/dataset/roles-d-evaluation-fonciere-du-quebec/resource/32ac5079-ae14-460a-9a2d-b811b0fc56f3"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-emerald-400 hover:text-emerald-300"
+              >
+                donneesquebec.ca
+              </a>{" "}
+              et télécharge le ZIP du rôle d&apos;évaluation
+              (~3-5 Go non-compressé, contient un XML par municipalité).
+            </li>
+            <li>
+              <strong className="text-white/90">2.</strong> Sélectionne
+              le ZIP ci-dessous et lance l&apos;import. Upload chunked
+              (10 Mo/morceau) pour passer le proxy Render.
+            </li>
+            <li>
+              <strong className="text-white/90">3.</strong> Idempotent :
+              ré-importer met à jour les unités existantes (ON CONFLICT
+              matricule → UPDATE). Refaire 1×/an quand le MAMH publie
+              le nouveau rôle.
+            </li>
+          </ol>
 
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
+            <input
+              type="file"
+              accept=".csv,.zip,text/csv,application/zip,application/x-zip-compressed"
+              onChange={(e) => setProvFile(e.target.files?.[0] || null)}
+              disabled={provUploading || provStatus?.status === "running"}
+              className="rounded-lg border border-brand-700 bg-brand-950 px-3 py-2 text-sm text-white file:mr-3 file:rounded file:border-0 file:bg-emerald-500/20 file:px-3 file:py-1 file:text-xs file:text-emerald-300"
+            />
             <button
               type="button"
-              onClick={importMontreal}
-              disabled={!isOwner || mtlStatus?.status === "running"}
+              onClick={importProvincial}
+              disabled={
+                !isOwner ||
+                provUploading ||
+                provStatus?.status === "running" ||
+                !provFile
+              }
               className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {mtlStatus?.status === "running" ? (
+              {provUploading || provStatus?.status === "running" ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <Download className="h-4 w-4" />
+                <Upload className="h-4 w-4" />
               )}
-              {mtlStatus?.status === "running"
-                ? "Import en cours…"
-                : "Importer le rôle Montréal"}
+              {provUploading
+                ? `Upload ${provUploadProgress?.sent ?? 0}/${
+                    provUploadProgress?.total ?? "?"
+                  }`
+                : provStatus?.status === "running"
+                  ? "Ingestion en cours…"
+                  : "Importer le ZIP"}
             </button>
-            <button
-              type="button"
-              onClick={async () => {
-                if (
-                  !window.confirm(
-                    "Supprimer toutes les unités d'évaluation MTL existantes (region='mtl-island' ou NULL) ?\n\n" +
-                      "À utiliser avant un import provincial complet pour éviter les doublons " +
-                      "(formats de matricule différents entre feed VdM et MAMH)."
-                  )
-                )
-                  return;
-                try {
-                  const r = await authedFetch(
-                    "/api/v1/admin/data/mtl-roles/purge",
-                    { method: "POST" }
-                  );
-                  if (!r.ok) {
-                    setMtlError(`HTTP ${r.status}`);
-                    return;
-                  }
-                  const data = (await r.json()) as {
-                    deleted: number;
-                    message: string;
-                  };
-                  alert(data.message);
-                  await refreshMtlStatus();
-                } catch (e) {
-                  setMtlError((e as Error).message);
-                }
-              }}
-              disabled={!isOwner || mtlStatus?.status === "running"}
-              className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-              title="Supprime les données MTL pour repartir depuis le ZIP provincial"
-            >
-              Vider données MTL
-            </button>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-3">
             <button
               type="button"
               onClick={async () => {
@@ -727,7 +674,7 @@ export default function ProspectionSourcesPage() {
                   );
                   if (!r.ok) {
                     const t = await r.text();
-                    setMtlError(t.slice(0, 240) || `HTTP ${r.status}`);
+                    setProvError(t.slice(0, 240) || `HTTP ${r.status}`);
                     return;
                   }
                   const data = (await r.json()) as {
@@ -735,9 +682,9 @@ export default function ProspectionSourcesPage() {
                     message: string;
                   };
                   alert(data.message);
-                  await refreshMtlStatus();
+                  await refreshProvStatus();
                 } catch (e) {
-                  setMtlError((e as Error).message);
+                  setProvError((e as Error).message);
                 }
               }}
               disabled={!isOwner}
@@ -746,175 +693,19 @@ export default function ProspectionSourcesPage() {
             >
               ⚠ Reset complet
             </button>
-
-            {mtlStatus?.status === "done" &&
-            mtlStatus.rows_upserted !== null ? (
+            {provStatus?.status === "done" &&
+            provStatus.rows_upserted !== null ? (
               <p className="flex items-center gap-1.5 text-xs text-emerald-300">
                 <CheckCircle2 className="h-3.5 w-3.5" />
-                {mtlStatus.rows_upserted.toLocaleString("fr-CA")} unités
+                {provStatus.rows_upserted.toLocaleString("fr-CA")} unités
                 ingérées
+                {provStatus.region ? ` (${provStatus.region})` : ""}.
               </p>
             ) : null}
-          </div>
-
-          {mtlStatus?.status === "running" ? (
-            <p className="mt-3 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
-              <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />
-              Téléchargement + ingestion en arrière-plan (3-5 min). Tu
-              peux fermer cet onglet, l&apos;import continue côté
-              serveur. État rafraîchi automatiquement toutes les 5 s.
-            </p>
-          ) : null}
-
-          {mtlStatus?.status === "error" && mtlStatus.error ? (
-            <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-              <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
-              Échec : {mtlStatus.error}
-            </p>
-          ) : null}
-
-          {mtlError ? (
-            <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-              {mtlError}
-            </p>
-          ) : null}
-
-          {/* Backfill leads existants depuis le rôle MTL */}
-          <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
-            <h3 className="text-sm font-semibold text-amber-200">
-              Compléter les leads existants
-            </h3>
-            <p className="mt-1 text-[11px] text-white/60">
-              Pour chaque lead avec une adresse texte, cherche le matricule
-              correspondant dans le rôle MTL et remplit ville, nb logements,
-              année et superficie. N&apos;écrase rien de déjà saisi.
-            </p>
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={backfillLeadsFromMtl}
-                disabled={backfillBusy}
-                className="inline-flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
-              >
-                {backfillBusy ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-3.5 w-3.5" />
-                )}
-                {backfillBusy
-                  ? "Backfill en cours…"
-                  : "Backfill leads depuis le rôle MTL"}
-              </button>
-              {backfillResult ? (
-                <p className="text-[11px] text-white/70">
-                  {backfillResult.matched} matchés · {backfillResult.already_filled}{" "}
-                  déjà OK · {backfillResult.ambiguous} ambigus ·{" "}
-                  {backfillResult.no_match} sans match (sur{" "}
-                  {backfillResult.total_leads})
-                </p>
-              ) : null}
-            </div>
-            {backfillError ? (
-              <p className="mt-2 rounded border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300">
-                {backfillError}
-              </p>
-            ) : null}
-            {backfillResult && backfillResult.sample_unmatched.length > 0 ? (
-              <details className="mt-2 text-[11px] text-white/50">
-                <summary className="cursor-pointer hover:text-white/70">
-                  Voir 20 adresses non matchées
-                </summary>
-                <ul className="mt-1 space-y-0.5 pl-4">
-                  {backfillResult.sample_unmatched.map((a, i) => (
-                    <li key={i} className="font-mono text-[10px]">
-                      {a}
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            ) : null}
-          </div>
-        </section>
-
-        {/* === Rôles d'évaluation hors-Montréal === */}
-        <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
-          <header className="flex items-start justify-between gap-3">
-            <div className="flex items-start gap-3">
-              <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-blue-500/15 text-blue-400">
-                <MapPin className="h-5 w-5" />
-              </span>
-              <div>
-                <h2 className="text-base font-bold text-white">
-                  Rôles d&apos;évaluation hors-Montréal
-                </h2>
-                <p className="mt-0.5 text-xs text-white/60">
-                  Rive-Sud, Laval, Rive-Nord. Upload du CSV provincial,
-                  filtré par région à l&apos;ingestion. Stocké dans la
-                  même table que MTL avec un champ « region ».
-                </p>
-              </div>
-            </div>
-          </header>
-
-          <div className="mt-3 rounded-md border border-brand-700 bg-brand-950/40 p-3 text-[11px] text-white/60">
-            <p>
-              Catalogue centralisé sur Données Québec : toutes les
-              municipalités y publient leur rôle d&apos;évaluation
-              foncière. Accepte un CSV brut ou un ZIP (le format publié
-              par Données Québec — le serveur déplie les CSV
-              automatiquement). Sélectionne le fichier puis la région :
-              seules les unités correspondantes seront ingérées. Upload
-              chunked (10 Mo/morceau) pour passer le proxy Render.
-            </p>
-            <p className="mt-2">
-              <a
-                href="https://www.donneesquebec.ca/recherche/dataset/roles-d-evaluation-fonciere-du-quebec/resource/32ac5079-ae14-460a-9a2d-b811b0fc56f3"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-emerald-400 hover:text-emerald-300"
-              >
-                <ExternalLink className="h-3 w-3" />
-                Télécharger les rôles — Données Québec (toutes municipalités)
-              </a>
-            </p>
-          </div>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
-            <input
-              type="file"
-              accept=".csv,.zip,text/csv,application/zip,application/x-zip-compressed"
-              onChange={(e) => setProvFile(e.target.files?.[0] || null)}
-              disabled={provUploading || provStatus?.status === "running"}
-              className="rounded-lg border border-brand-700 bg-brand-950 px-3 py-2 text-sm text-white file:mr-3 file:rounded file:border-0 file:bg-blue-500/20 file:px-3 file:py-1 file:text-xs file:text-blue-300"
-            />
-            <button
-              type="button"
-              onClick={importProvincial}
-              disabled={
-                !isOwner ||
-                provUploading ||
-                provStatus?.status === "running" ||
-                !provFile
-              }
-              className="inline-flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-300 transition hover:bg-blue-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {provUploading || provStatus?.status === "running" ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Upload className="h-4 w-4" />
-              )}
-              {provUploading
-                ? `Upload ${provUploadProgress?.sent ?? 0}/${
-                    provUploadProgress?.total ?? "?"
-                  }`
-                : provStatus?.status === "running"
-                  ? "Ingestion en cours…"
-                  : "Importer"}
-            </button>
           </div>
 
           {provStatus?.status === "running" ? (
-            <div className="mt-3 rounded-md border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-xs text-blue-200">
+            <div className="mt-3 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
               <p>
                 <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />
                 Ingestion {provStatus.region || ""} en arrière-plan
@@ -922,7 +713,7 @@ export default function ProspectionSourcesPage() {
                 continue côté serveur.
               </p>
               {provStatus.current_file || provStatus.rows_so_far ? (
-                <p className="mt-1 text-[11px] text-blue-200/80">
+                <p className="mt-1 text-[11px] text-emerald-200/80">
                   Fichier en cours : {provStatus.current_file || "—"} ·{" "}
                   {(provStatus.rows_so_far ?? 0).toLocaleString("fr-CA")} lignes
                   parcourues
@@ -962,14 +753,6 @@ export default function ProspectionSourcesPage() {
                 Forcer le reset (déblocage manuel)
               </button>
             </div>
-          ) : null}
-          {provStatus?.status === "done" &&
-          provStatus.rows_upserted !== null ? (
-            <p className="mt-3 flex items-center gap-1.5 text-xs text-emerald-300">
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              {provStatus.rows_upserted.toLocaleString("fr-CA")} unités
-              ingérées ({provStatus.region}).
-            </p>
           ) : null}
           {provStatus?.status === "done" &&
           (provStatus.rows_upserted ?? 0) === 0 &&
@@ -1027,6 +810,63 @@ export default function ProspectionSourcesPage() {
               {provError}
             </p>
           ) : null}
+
+          {/* Backfill leads existants depuis le rôle */}
+          <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+            <h3 className="text-sm font-semibold text-amber-200">
+              Compléter les leads existants
+            </h3>
+            <p className="mt-1 text-[11px] text-white/60">
+              Pour chaque lead avec une adresse texte, cherche le matricule
+              correspondant dans le rôle d&apos;évaluation et remplit ville,
+              nb logements, année et superficie. N&apos;écrase rien de
+              déjà saisi.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={backfillLeadsFromMtl}
+                disabled={backfillBusy}
+                className="inline-flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
+              >
+                {backfillBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                {backfillBusy
+                  ? "Backfill en cours…"
+                  : "Backfill leads depuis le rôle"}
+              </button>
+              {backfillResult ? (
+                <p className="text-[11px] text-white/70">
+                  {backfillResult.matched} matchés · {backfillResult.already_filled}{" "}
+                  déjà OK · {backfillResult.ambiguous} ambigus ·{" "}
+                  {backfillResult.no_match} sans match (sur{" "}
+                  {backfillResult.total_leads})
+                </p>
+              ) : null}
+            </div>
+            {backfillError ? (
+              <p className="mt-2 rounded border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300">
+                {backfillError}
+              </p>
+            ) : null}
+            {backfillResult && backfillResult.sample_unmatched.length > 0 ? (
+              <details className="mt-2 text-[11px] text-white/50">
+                <summary className="cursor-pointer hover:text-white/70">
+                  Voir 20 adresses non matchées
+                </summary>
+                <ul className="mt-1 space-y-0.5 pl-4">
+                  {backfillResult.sample_unmatched.map((a, i) => (
+                    <li key={i} className="font-mono text-[10px]">
+                      {a}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+          </div>
         </section>
 
         {/* === Registraire des entreprises (REQ) === */}
@@ -1516,11 +1356,6 @@ export default function ProspectionSourcesPage() {
         </section>
 
         <MondayImportSection />
-
-        <p className="mt-6 text-[11px] text-white/40">
-          À venir : Longueuil, Brossard, Saint-Lambert (rôles
-          d&apos;évaluation Rive-Sud).
-        </p>
       </div>
     </>
   );
