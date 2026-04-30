@@ -307,6 +307,25 @@ async def init_db() -> None:
         except Exception:
             pass
 
+        # Élargit municipalite et code_utilisation pour accepter les
+        # valeurs du rôle provincial MAMH : nom complet de municipalité
+        # (« Sainte-Anne-des-Plaines » = 23 chars) au lieu du code 8
+        # chars du feed Ville de Montréal, et codes d'utilisation
+        # potentiellement alphanumériques.
+        for column, new_type in (
+            ("municipalite", "VARCHAR(128)"),
+            ("code_utilisation", "VARCHAR(16)"),
+        ):
+            try:
+                await conn.execute(
+                    text(
+                        f"ALTER TABLE mtl_property_units "
+                        f"ALTER COLUMN {column} TYPE {new_type}"
+                    )
+                )
+            except Exception:
+                pass
+
         # Relaxations — columns whose nullability changed.
         # ALTER ... DROP NOT NULL is idempotent on PostgreSQL.
         for table, column in (
