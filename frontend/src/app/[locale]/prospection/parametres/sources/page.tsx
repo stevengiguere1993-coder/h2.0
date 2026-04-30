@@ -77,6 +77,9 @@ export default function ProspectionSourcesPage() {
     region: string | null;
     error: string | null;
     diagnostics?: ProvDiag[];
+    last_progress_at?: string | null;
+    current_file?: string | null;
+    rows_so_far?: number;
   };
   const [provFile, setProvFile] = useState<File | null>(null);
   const [provUploading, setProvUploading] = useState(false);
@@ -880,6 +883,22 @@ export default function ProspectionSourcesPage() {
                 (3-5 min). Tu peux fermer l&apos;onglet, l&apos;import
                 continue côté serveur.
               </p>
+              {provStatus.current_file || provStatus.rows_so_far ? (
+                <p className="mt-1 text-[11px] text-blue-200/80">
+                  Fichier en cours : {provStatus.current_file || "—"} ·{" "}
+                  {(provStatus.rows_so_far ?? 0).toLocaleString("fr-CA")} lignes
+                  parcourues
+                  {provStatus.last_progress_at ? (
+                    <>
+                      {" "}
+                      · dernière activité :{" "}
+                      {new Date(provStatus.last_progress_at).toLocaleTimeString(
+                        "fr-CA"
+                      )}
+                    </>
+                  ) : null}
+                </p>
+              ) : null}
               <button
                 type="button"
                 onClick={async () => {

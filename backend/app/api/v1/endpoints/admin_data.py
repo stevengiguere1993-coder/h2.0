@@ -730,6 +730,9 @@ _provincial_state: dict = {
     "rows_upserted": None,
     "region": None,
     "error": None,
+    "last_progress_at": None,
+    "current_file": None,
+    "rows_so_far": 0,
 }
 
 _PROVINCIAL_UPLOADS_DIR = os.path.join(
@@ -836,6 +839,8 @@ async def _provincial_ingest_worker(
     _provincial_state["finished_at"] = None
     _provincial_state["error"] = None
     _provincial_state["region"] = region
+    from app.integrations.roles_evaluation._progress import reset_progress
+    reset_progress()
     try:
         # Attente que Postgres réponde avant de lancer le long worker
         await _wait_for_postgres_ready()
@@ -893,6 +898,8 @@ async def provincial_reset(_: RequireOwner) -> dict:
     summary="État de l'import provincial en cours / dernier terminé.",
 )
 async def provincial_import_status(_: RequireOwner) -> dict:
+    from app.integrations.roles_evaluation._progress import snapshot
+    progress = snapshot()
     return {
         "status": _provincial_state.get("status", "idle"),
         "started_at": _provincial_state.get("started_at"),
@@ -902,6 +909,9 @@ async def provincial_import_status(_: RequireOwner) -> dict:
         "region": _provincial_state.get("region"),
         "error": _provincial_state.get("error"),
         "diagnostics": _provincial_state.get("diagnostics") or [],
+        "last_progress_at": progress.get("last_progress_at"),
+        "current_file": progress.get("current_file"),
+        "rows_so_far": progress.get("rows_so_far") or 0,
     }
 
 

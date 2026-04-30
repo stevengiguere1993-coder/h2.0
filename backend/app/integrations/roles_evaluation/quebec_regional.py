@@ -439,13 +439,23 @@ async def _ingest_one_xml(
                         elem.clear()
                 current_depth -= 1
 
-                if seen_new % 50_000 == 0 and seen_new > 0:
+                if seen_new % 5_000 == 0 and seen_new > 0:
                     log.info(
                         "  XML %s : %d unités parcourues, %d gardées",
                         os.path.basename(xml_path),
                         seen_so_far + seen_new,
                         kept_so_far + kept_new,
                     )
+                    try:
+                        from app.integrations.roles_evaluation._progress import (
+                            update_progress,
+                        )
+                        update_progress(
+                            current_file=os.path.basename(xml_path),
+                            rows_so_far=seen_so_far + seen_new,
+                        )
+                    except Exception:
+                        pass
     except ET.ParseError as exc:
         log.warning(
             "XML parse error in %s: %s — file skipped",
@@ -515,12 +525,22 @@ async def _ingest_one_csv(
                 await _bulk_upsert(db, batch)
                 batch.clear()
             total = seen_so_far + seen_new
-            if total % 100_000 == 0:
+            if total > 0 and total % 5_000 == 0:
                 log.info(
                     "  %d lignes parcourues, %d gardées",
                     total,
                     kept_so_far + kept_new,
                 )
+                try:
+                    from app.integrations.roles_evaluation._progress import (
+                        update_progress,
+                    )
+                    update_progress(
+                        current_file=os.path.basename(csv_path),
+                        rows_so_far=total,
+                    )
+                except Exception:
+                    pass
     if batch:
         await _bulk_upsert(db, batch)
     return seen_new, kept_new
