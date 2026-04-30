@@ -29,7 +29,120 @@ import logging
 import os
 import tempfile
 import zipfile
-from typing import Dict, Iterable, List, Optional, Set
+from typing import Dict, Iterable, List, Optional, Set, Tuple
+
+
+# Aliases de noms de colonnes — les CSV des rôles QC varient :
+# - MAMH provincial : MATRICULE83, NOM_RUE, MUNICIPALITE...
+# - Certaines villes : MAT_LOG, NOMMUN, MUN, NM_MUN, etc.
+# - Format MAMH RL-codes (Manuel d'évaluation foncière) :
+#   RL0301A=matricule, RL0302A=civique, RL0304A=rue...
+_COL_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "matricule": (
+        "MATRICULE83", "MATRICULE", "MAT_LOG", "NOMAT",
+        "MAT_BATIMENT", "MAT", "ID_UEV", "RL0301A",
+    ),
+    "civique_debut": (
+        "CIVIQUE_DEBUT", "CIV_DEB", "NO_CIV", "NO_CIVIQUE",
+        "RL0302A",
+    ),
+    "civique_fin": (
+        "CIVIQUE_FIN", "CIV_FIN", "RL0303A",
+    ),
+    "nom_rue": (
+        "NOM_RUE", "RUE", "ODONYME", "GENERIQUE", "RL0304A",
+    ),
+    "suite_debut": (
+        "SUITE_DEBUT", "APP_DEB", "SUITE", "APPARTEMENT", "RL0305A",
+    ),
+    "municipalite": (
+        "MUNICIPALITE", "MUN", "NOMMUN", "NOM_MUN", "NM_MUN",
+        "LIB_MUN", "MUN_LIB", "MUNI_NOM", "MUNICIPALITE_LOC",
+        "MUN_NAME",
+    ),
+    "nombre_logement": (
+        "NOMBRE_LOGEMENT", "NB_LOGEMENT", "NB_LOG", "NBLOGEMENT",
+        "RL0501A",
+    ),
+    "annee_construction": (
+        "ANNEE_CONSTRUCTION", "ANNEE_CONST", "ANNEE", "ANNEE_BAT",
+        "RL0402A",
+    ),
+    "code_utilisation": (
+        "CODE_UTILISATION", "USAGE", "CODE_USAGE", "USAGE_CODE",
+        "RL0506A",
+    ),
+    "libelle_utilisation": (
+        "LIBELLE_UTILISATION", "LIB_USAGE", "USAGE_LIB",
+        "DESC_USAGE", "USAGE_DESC",
+    ),
+    "categorie_uef": (
+        "CATEGORIE_UEF", "CAT_UEV", "CATEGORIE",
+    ),
+    "superficie_terrain": (
+        "SUPERFICIE_TERRAIN", "SUP_TERRAIN", "SUPERF_TER",
+        "RL0601A",
+    ),
+    "superficie_batiment": (
+        "SUPERFICIE_BATIMENT", "SUP_BATIMENT", "SUPERF_BAT",
+        "RL0602A",
+    ),
+}
+
+
+def _detect_encoding_and_delim(path: str) -> Tuple[str, str, List[str]]:
+    """Détecte encodage + délimiteur + headers d'un CSV.
+
+    Retourne (encoding, delimiter, headers).
+    Essaie utf-8 → cp1252 → latin-1 (les exports QC sont souvent
+    en cp1252). Délimiteur via comptage sur la 1ère ligne.
+    """
+    sample_text = ""
+    encoding_used = "utf-8"
+    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            with open(path, "r", encoding=enc, newline="") as fh:
+                sample_text = fh.read(8192)
+            encoding_used = enc
+            if sample_text:
+                break
+        except UnicodeDecodeError:
+            continue
+
+    first_line = sample_text.split("\n", 1)[0] if sample_text else ""
+    counts = {
+        ",": first_line.count(","),
+        ";": first_line.count(";"),
+        "\t": first_line.count("\t"),
+        "|": first_line.count("|"),
+    }
+    delim, top_count = max(counts.items(), key=lambda kv: kv[1])
+    if top_count == 0:
+        delim = ","
+
+    headers: List[str] = []
+    if first_line:
+        try:
+            headers = next(
+                csv.reader(io.StringIO(first_line), delimiter=delim)
+            )
+        except StopIteration:
+            headers = []
+    return encoding_used, delim, headers
+
+
+def _build_field_map(headers: List[str]) -> Dict[str, str]:
+    """Pour chaque champ canonique (matricule, municipalite…), trouve
+    le 1er header qui matche un alias. Retourne {canonique: header_réel}.
+    Si aucun alias ne matche, le canonique est absent du dict."""
+    headers_upper = {h.strip().upper(): h for h in headers}
+    out: Dict[str, str] = {}
+    for canonical, aliases in _COL_ALIASES.items():
+        for alias in aliases:
+            if alias in headers_upper:
+                out[canonical] = headers_upper[alias]
+                break
+    return out
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -119,38 +232,34 @@ def _parse_float(v: str) -> Optional[float]:
         return None
 
 
-def _row_to_dict(row: Dict[str, str], region: str) -> Optional[Dict]:
-    """Mêmes colonnes que MTL — on réutilise la structure."""
-    matricule = (row.get("MATRICULE83") or "").strip()
+def _row_to_dict(
+    row: Dict[str, str], region: str, fmap: Dict[str, str]
+) -> Optional[Dict]:
+    """Construit un dict d'unité depuis une ligne CSV en utilisant le
+    field map détecté. Retourne None si la ligne n'a pas de matricule."""
+    def _g(canonical: str) -> str:
+        col = fmap.get(canonical)
+        if not col:
+            return ""
+        return (row.get(col) or "").strip()
+
+    matricule = _g("matricule")
     if not matricule:
         return None
     return {
         "matricule": matricule,
-        "civique_debut": (row.get("CIVIQUE_DEBUT") or "").strip() or None,
-        "civique_fin": (row.get("CIVIQUE_FIN") or "").strip() or None,
-        "nom_rue": (row.get("NOM_RUE") or "").strip() or None,
-        "suite_debut": (row.get("SUITE_DEBUT") or "").strip() or None,
-        "municipalite": (row.get("MUNICIPALITE") or "").strip() or None,
-        "nombre_logement": _parse_int(row.get("NOMBRE_LOGEMENT", "")),
-        "annee_construction": _parse_int(
-            row.get("ANNEE_CONSTRUCTION", "")
-        ),
-        "code_utilisation": (row.get("CODE_UTILISATION") or "").strip()
-        or None,
-        "libelle_utilisation": (
-            row.get("LIBELLE_UTILISATION") or ""
-        ).strip()
-        or None,
-        "categorie_uef": (
-            row.get("CATEGORIE_UEF") or ""
-        ).strip()
-        or None,
-        "superficie_terrain": _parse_float(
-            row.get("SUPERFICIE_TERRAIN", "")
-        ),
-        "superficie_batiment": _parse_float(
-            row.get("SUPERFICIE_BATIMENT", "")
-        ),
+        "civique_debut": _g("civique_debut") or None,
+        "civique_fin": _g("civique_fin") or None,
+        "nom_rue": _g("nom_rue") or None,
+        "suite_debut": _g("suite_debut") or None,
+        "municipalite": _g("municipalite") or None,
+        "nombre_logement": _parse_int(_g("nombre_logement")),
+        "annee_construction": _parse_int(_g("annee_construction")),
+        "code_utilisation": _g("code_utilisation") or None,
+        "libelle_utilisation": _g("libelle_utilisation") or None,
+        "categorie_uef": _g("categorie_uef") or None,
+        "superficie_terrain": _parse_float(_g("superficie_terrain")),
+        "superficie_batiment": _parse_float(_g("superficie_batiment")),
         "region": region,
     }
 
@@ -186,20 +295,42 @@ async def _ingest_one_csv(
     kept_so_far: int,
 ) -> tuple[int, int]:
     """Ingère un seul CSV et retourne (seen_new, kept_new).
-    Stream-parse, RAM bornée."""
+    Stream-parse, RAM bornée. Auto-détecte encodage + délimiteur +
+    aliases de colonnes."""
     seen_new = 0
     kept_new = 0
     batch: List[Dict] = []
-    with open(csv_path, "r", encoding="utf-8", errors="replace") as fh:
-        reader = csv.DictReader(fh)
+
+    encoding, delim, headers = _detect_encoding_and_delim(csv_path)
+    fmap = _build_field_map(headers)
+    log.info(
+        "  CSV %s : encoding=%s, delim=%r, headers=%d, mappés=%s",
+        os.path.basename(csv_path),
+        encoding,
+        delim,
+        len(headers),
+        sorted(fmap.keys()),
+    )
+    if "matricule" not in fmap:
+        log.warning(
+            "    ⚠ Pas de colonne matricule trouvée — fichier ignoré. "
+            "Colonnes vues : %s",
+            headers[:20],
+        )
+        return 0, 0
+
+    municipalite_col = fmap.get("municipalite")
+    with open(csv_path, "r", encoding=encoding, errors="replace", newline="") as fh:
+        reader = csv.DictReader(fh, delimiter=delim)
         for raw_row in reader:
             seen_new += 1
             if max_rows is not None and (seen_so_far + seen_new) > max_rows:
                 break
-            mun = _normalize_city(raw_row.get("MUNICIPALITE") or "")
-            if match_set and mun not in match_set:
-                continue
-            row = _row_to_dict(raw_row, region)
+            if match_set and municipalite_col:
+                mun = _normalize_city(raw_row.get(municipalite_col) or "")
+                if mun not in match_set:
+                    continue
+            row = _row_to_dict(raw_row, region, fmap)
             if row is None:
                 continue
             batch.append(row)
@@ -258,22 +389,48 @@ async def ingest_provincial_csv(
 
     total_seen = 0
     total_kept = 0
+    diagnostics: List[dict] = []
 
     is_zip = zipfile.is_zipfile(csv_path)
     if is_zip:
         with tempfile.TemporaryDirectory(
             prefix="role_unzip_"
         ) as tmpdir, zipfile.ZipFile(csv_path) as zf:
+            all_members = zf.namelist()
             csv_members = [
-                n for n in zf.namelist() if n.lower().endswith(".csv")
+                n for n in all_members if n.lower().endswith(".csv")
             ]
             log.info(
-                "ZIP détecté : %d fichier(s) CSV à l'intérieur",
+                "ZIP détecté : %d entrées (%d CSV). Tous : %s",
+                len(all_members),
                 len(csv_members),
+                all_members[:10],
             )
+            if not csv_members:
+                diagnostics.append(
+                    {
+                        "file": "(zip)",
+                        "error": (
+                            f"Aucun .csv dans le ZIP. Entrées : "
+                            f"{', '.join(all_members[:10])}"
+                        ),
+                    }
+                )
             for name in csv_members:
                 zf.extract(name, tmpdir)
                 local_path = os.path.join(tmpdir, name)
+                enc, delim, headers = _detect_encoding_and_delim(local_path)
+                fmap = _build_field_map(headers)
+                diagnostics.append(
+                    {
+                        "file": os.path.basename(name),
+                        "encoding": enc,
+                        "delimiter": repr(delim),
+                        "headers_seen": headers[:25],
+                        "columns_mapped": sorted(fmap.keys()),
+                        "has_matricule": "matricule" in fmap,
+                    }
+                )
                 seen_new, kept_new = await _ingest_one_csv(
                     db,
                     local_path,
@@ -289,6 +446,18 @@ async def ingest_provincial_csv(
                 if max_rows is not None and total_seen >= max_rows:
                     break
     else:
+        enc, delim, headers = _detect_encoding_and_delim(csv_path)
+        fmap = _build_field_map(headers)
+        diagnostics.append(
+            {
+                "file": os.path.basename(csv_path),
+                "encoding": enc,
+                "delimiter": repr(delim),
+                "headers_seen": headers[:25],
+                "columns_mapped": sorted(fmap.keys()),
+                "has_matricule": "matricule" in fmap,
+            }
+        )
         seen_new, kept_new = await _ingest_one_csv(
             db,
             csv_path,
@@ -312,4 +481,5 @@ async def ingest_provincial_csv(
         "rows_processed": total_seen,
         "rows_upserted": total_kept,
         "region": region,
+        "diagnostics": diagnostics,
     }

@@ -735,6 +735,7 @@ async def _provincial_ingest_worker(
         _provincial_state["rows_upserted"] = int(
             result.get("rows_upserted") or 0
         )
+        _provincial_state["diagnostics"] = result.get("diagnostics") or []
     except Exception as exc:
         log.exception("provincial ingest failed: %s", exc)
         _provincial_state["status"] = "error"
@@ -762,6 +763,7 @@ async def provincial_import_status(_: RequireOwner) -> dict:
         "rows_upserted": _provincial_state.get("rows_upserted"),
         "region": _provincial_state.get("region"),
         "error": _provincial_state.get("error"),
+        "diagnostics": _provincial_state.get("diagnostics") or [],
     }
 
 
