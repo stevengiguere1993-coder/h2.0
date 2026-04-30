@@ -606,6 +606,31 @@ async def ingest_provincial_csv(
                 base = os.path.basename(name)
                 code = code_from_filename(base)
                 mun = code_to_name(code)
+                # Skip les fichiers de l'île de Montréal (codes MAMH 66xxx)
+                # car le format de matricule MAMH (18 chars) diffère du
+                # feed Ville de Montréal (10-12 chars) — sinon on aurait
+                # 2 entrées DB pour la même propriété physique. MTL est
+                # ingéré séparément via /admin/data/mtl-roles/import.
+                if code and code.startswith("66"):
+                    diagnostics.append(
+                        {
+                            "file": base,
+                            "encoding": "skipped",
+                            "delimiter": "(MTL via feed dédié)",
+                            "headers_seen": [
+                                f"code_mamh={code}",
+                                f"municipalite={mun or 'Île de MTL'}",
+                                "skip_reason=use VdM feed for MTL",
+                            ],
+                            "columns_mapped": [],
+                            "has_matricule": False,
+                        }
+                    )
+                    log.info(
+                        "  Skip %s (île de MTL — utiliser le feed VdM dédié)",
+                        base,
+                    )
+                    continue
                 diagnostics.append(
                     {
                         "file": base,
