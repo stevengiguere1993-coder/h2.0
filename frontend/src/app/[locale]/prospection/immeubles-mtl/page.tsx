@@ -83,6 +83,9 @@ export default function ImmeublesMtlPage() {
   const [maxAnnee, setMaxAnnee] = useState<string>("");
   const [rueSearch, setRueSearch] = useState<string>("");
   const [sortBy, setSortBy] = useState("nombre_logement_desc");
+  const [region, setRegion] = useState<
+    "mtl-island" | "laval" | "rive-sud" | "rive-nord"
+  >("mtl-island");
   const [offset, setOffset] = useState(0);
   const limit = 100;
 
@@ -127,6 +130,7 @@ export default function ImmeublesMtlPage() {
         params.append("codes_utilisation", code);
       }
       params.set("sort_by", sortBy);
+      params.set("region", region);
       params.set("limit", String(limit));
       params.set("offset", String(offset));
 
@@ -153,6 +157,7 @@ export default function ImmeublesMtlPage() {
     rueSearch,
     selectedCodes,
     sortBy,
+    region,
     offset
   ]);
 
@@ -193,27 +198,45 @@ export default function ImmeublesMtlPage() {
       <AppTopbar
         breadcrumbs={[
           { label: "Prospection", href: "/prospection" },
-          { label: "Immeubles MTL" }
+          { label: "Rôles fonciers" }
         ]}
         onOpenSidebar={onOpenSidebar}
       />
 
       <div className="p-4 lg:p-6">
-        <header className="flex items-center gap-3">
+        <header className="flex flex-wrap items-center gap-3">
           <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
             <Building2 className="h-5 w-5" />
           </span>
-          <div>
+          <div className="flex-1 min-w-0">
             <h1 className="text-2xl font-bold text-white">
-              Immeubles — Rôle d&apos;évaluation Montréal
+              Rôles fonciers
             </h1>
             <p className="text-sm text-white/60">
-              Filtre les ~500 000 unités d&apos;évaluation pour
-              identifier des cibles d&apos;acquisition. Pour chaque
-              immeuble, identifie le proprio (REQ) et convertis en
-              lead en 1 clic.
+              Filtre les unités d&apos;évaluation pour identifier des
+              cibles d&apos;acquisition. Identifie le proprio (REQ) et
+              convertis en lead en 1 clic.
             </p>
           </div>
+          <select
+            value={region}
+            onChange={(e) => {
+              setRegion(
+                e.target.value as
+                  | "mtl-island"
+                  | "laval"
+                  | "rive-sud"
+                  | "rive-nord"
+              );
+              setOffset(0);
+            }}
+            className="rounded-lg border border-brand-700 bg-brand-950 px-3 py-2 text-sm font-medium text-white"
+          >
+            <option value="mtl-island">Montréal</option>
+            <option value="laval">Laval</option>
+            <option value="rive-sud">Rive-Sud</option>
+            <option value="rive-nord">Rive-Nord</option>
+          </select>
         </header>
 
         {/* Filtres */}
