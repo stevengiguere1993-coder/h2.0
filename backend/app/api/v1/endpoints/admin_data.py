@@ -147,7 +147,7 @@ async def purge_mtl_data(_: RequireOwner) -> dict:
     from app.models.montreal_property_unit import MontrealPropertyUnit
 
     last_err: Optional[Exception] = None
-    for attempt in range(4):
+    for attempt in range(6):
         try:
             async with AsyncSessionLocal() as db:
                 count_before = (
@@ -182,22 +182,29 @@ async def purge_mtl_data(_: RequireOwner) -> dict:
             msg = str(exc).lower()
             transient = (
                 "recovery mode" in msg
-                or "connection" in msg
-                and ("closed" in msg or "does not exist" in msg)
+                or "not yet accepting" in msg
+                or "consistent recovery" in msg
+                or "starting up" in msg
+                or "shutting down" in msg
+                or ("connection" in msg
+                    and ("closed" in msg or "does not exist" in msg
+                         or "refused" in msg))
+                or "ssl connection has been closed" in msg
             )
             if not transient:
                 raise
             last_err = exc
             log.warning(
-                "Purge MTL transient error (attempt %d/4): %s",
+                "Purge MTL transient error (attempt %d/6): %s",
                 attempt + 1,
                 exc,
             )
-            await asyncio.sleep(3 * (attempt + 1))
+            await asyncio.sleep(5 * (attempt + 1))
     raise HTTPException(
         503,
-        "Base de données indisponible (recovery mode). "
-        f"Réessaie dans 30 secondes. Détail : {last_err}",
+        "Base de données toujours indisponible après 6 tentatives. "
+        "Postgres Render fait probablement un long recovery — "
+        f"attends 2-3 minutes et réessaie. Détail : {last_err}",
     )
 
 
