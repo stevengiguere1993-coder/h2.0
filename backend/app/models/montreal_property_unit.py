@@ -42,8 +42,11 @@ class MontrealPropertyUnit(Base):
     suite_debut: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True
     )
+    # VARCHAR(128) pour accepter les noms complets de municipalités du
+    # rôle provincial MAMH (ex. « Sainte-Anne-des-Plaines »), qui
+    # dépassaient l'ancien VARCHAR(8) prévu pour les codes Ville de MTL.
     municipalite: Mapped[Optional[str]] = mapped_column(
-        String(8), nullable=True
+        String(128), nullable=True
     )
 
     nombre_logement: Mapped[Optional[int]] = mapped_column(
@@ -53,7 +56,7 @@ class MontrealPropertyUnit(Base):
         Integer, nullable=True
     )
     code_utilisation: Mapped[Optional[str]] = mapped_column(
-        String(8), nullable=True
+        String(16), nullable=True
     )
     libelle_utilisation: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
