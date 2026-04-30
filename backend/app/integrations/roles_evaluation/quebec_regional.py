@@ -267,10 +267,25 @@ def _row_to_dict(
 async def _bulk_upsert(
     db: AsyncSession, batch: List[Dict]
 ) -> int:
-    """Upsert ON CONFLICT (matricule). Retourne le nb de lignes."""
+    """Upsert ON CONFLICT (matricule). Retourne le nb de lignes.
+
+    Dédoublonne le batch sur `matricule` (last-write-wins) avant l'INSERT
+    pour éviter CardinalityViolationError de Postgres : ON CONFLICT
+    DO UPDATE refuse qu'un même matricule apparaisse 2× dans le même
+    INSERT (ça arrive quand un XML MAMH contient plusieurs UEV avec
+    le même matricule, ou quand une unité chevauche plusieurs fichiers).
+    """
     if not batch:
         return 0
-    stmt = pg_insert(MontrealPropertyUnit).values(batch)
+    by_mat: Dict[str, Dict] = {}
+    for row in batch:
+        mat = row.get("matricule")
+        if mat:
+            by_mat[mat] = row  # last wins
+    deduped = list(by_mat.values())
+    if not deduped:
+        return 0
+    stmt = pg_insert(MontrealPropertyUnit).values(deduped)
     update_cols = {
         c.name: stmt.excluded[c.name]
         for c in MontrealPropertyUnit.__table__.columns
@@ -280,7 +295,7 @@ async def _bulk_upsert(
         index_elements=["matricule"], set_=update_cols
     )
     await db.execute(stmt)
-    return len(batch)
+    return len(deduped)
 
 
 async def _ingest_one_xml(
