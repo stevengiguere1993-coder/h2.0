@@ -62,7 +62,7 @@ const PROSPECTION_NAV: NavItem[] = [
   },
   {
     href: "/prospection/immeubles-mtl",
-    label: "Immeubles MTL (rôle)",
+    label: "Rôles fonciers",
     icon: Building2,
     minRole: "employee"
   },
