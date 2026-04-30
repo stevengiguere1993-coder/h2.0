@@ -771,57 +771,23 @@ export default function ProspectionSourcesPage() {
 
           <div className="mt-3 rounded-md border border-brand-700 bg-brand-950/40 p-3 text-[11px] text-white/60">
             <p>
-              Le rôle d&apos;évaluation est publié par chaque
-              municipalité (ou MRC). Le format CSV varie un peu selon
-              le portail. Sélectionne le fichier puis la région : seules
+              Catalogue centralisé sur Données Québec : toutes les
+              municipalités y publient leur rôle d&apos;évaluation
+              foncière. Sélectionne le fichier puis la région : seules
               les unités correspondantes seront ingérées. Upload chunked
               (10 Mo/morceau) pour passer le proxy Render.
             </p>
             <p className="mt-2">
-              Où télécharger :
+              <a
+                href="https://www.donneesquebec.ca/recherche/dataset/roles-d-evaluation-fonciere-du-quebec/resource/32ac5079-ae14-460a-9a2d-b811b0fc56f3"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-emerald-400 hover:text-emerald-300"
+              >
+                <ExternalLink className="h-3 w-3" />
+                Télécharger les rôles — Données Québec (toutes municipalités)
+              </a>
             </p>
-            <ul className="mt-1 space-y-0.5 pl-4">
-              <li>
-                <a
-                  href="https://www.donneesquebec.ca/recherche/?q=r%C3%B4le+d%27%C3%A9valuation"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-emerald-400 hover:text-emerald-300"
-                >
-                  <ExternalLink className="h-3 w-3" />
-                  Données Québec — recherche « rôle d&apos;évaluation »
-                </a>{" "}
-                <span className="text-white/40">
-                  (catalogue toutes municipalités)
-                </span>
-              </li>
-              <li>
-                <a
-                  href="https://www.donneesquebec.ca/recherche/dataset?organization=ville-de-laval"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-emerald-400 hover:text-emerald-300"
-                >
-                  <ExternalLink className="h-3 w-3" />
-                  Ville de Laval
-                </a>
-              </li>
-              <li>
-                <a
-                  href="https://www.donneesquebec.ca/recherche/dataset?organization=ville-de-longueuil"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-emerald-400 hover:text-emerald-300"
-                >
-                  <ExternalLink className="h-3 w-3" />
-                  Ville de Longueuil (Rive-Sud)
-                </a>
-              </li>
-              <li className="text-white/40">
-                Pour les autres villes (Boucherville, Brossard, Saint-Jérôme,
-                Mirabel…) : chercher leur portail open data ou demander la MRC.
-              </li>
-            </ul>
           </div>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-[auto_1fr_auto]">
