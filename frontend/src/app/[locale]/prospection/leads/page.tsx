@@ -719,13 +719,6 @@ export default function ProspectionLeadsPage() {
                       Score
                       <SortIcon k="score" />
                     </th>
-                    <th
-                      onClick={() => toggleSort("name")}
-                      className="cursor-pointer px-3 py-2.5 hover:text-white"
-                    >
-                      Nom
-                      <SortIcon k="name" />
-                    </th>
                     <th className="px-3 py-2.5">Type</th>
                     <th
                       onClick={() => toggleSort("city")}
@@ -801,14 +794,24 @@ export default function ProspectionLeadsPage() {
                           {l.score}
                         </span>
                       </td>
+                      <td className="px-3 py-2.5 text-white/60">
+                        {KIND_LABEL[l.kind] || l.kind}
+                      </td>
                       <td className="px-3 py-2.5">
                         <Link
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           href={`/prospection/${l.id}` as any}
                           className="font-medium text-white hover:text-emerald-300"
                         >
-                          {l.name}
+                          {l.address || (
+                            <span className="text-white/30">—</span>
+                          )}
                         </Link>
+                        {l.city ? (
+                          <div className="text-[11px] text-white/40">
+                            {l.city}
+                          </div>
+                        ) : null}
                         {l.tags.length > 0 ? (
                           <div className="mt-1 flex flex-wrap gap-1">
                             {l.tags.slice(0, 3).map((t) => (
@@ -821,23 +824,6 @@ export default function ProspectionLeadsPage() {
                             ))}
                           </div>
                         ) : null}
-                      </td>
-                      <td className="px-3 py-2.5 text-white/60">
-                        {KIND_LABEL[l.kind] || l.kind}
-                      </td>
-                      <td className="px-3 py-2.5 text-white/70">
-                        {l.address ? (
-                          <>
-                            <div>{l.address}</div>
-                            {l.city ? (
-                              <div className="text-[11px] text-white/40">
-                                {l.city}
-                              </div>
-                            ) : null}
-                          </>
-                        ) : (
-                          <span className="text-white/30">—</span>
-                        )}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums text-white/80">
                         {l.nb_logements ?? (
