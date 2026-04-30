@@ -270,10 +270,7 @@ async def _bulk_upsert(
     """Upsert ON CONFLICT (matricule). Retourne le nb de lignes.
 
     Dédoublonne le batch sur `matricule` (last-write-wins) avant l'INSERT
-    pour éviter CardinalityViolationError de Postgres : ON CONFLICT
-    DO UPDATE refuse qu'un même matricule apparaisse 2× dans le même
-    INSERT (ça arrive quand un XML MAMH contient plusieurs UEV avec
-    le même matricule, ou quand une unité chevauche plusieurs fichiers).
+    + retry sur drop connexion (Render free coupe les conn idles).
     """
     if not batch:
         return 0
@@ -294,8 +291,37 @@ async def _bulk_upsert(
     stmt = stmt.on_conflict_do_update(
         index_elements=["matricule"], set_=update_cols
     )
-    await db.execute(stmt)
-    return len(deduped)
+
+    import asyncio as _asyncio
+
+    last_err: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            await db.execute(stmt)
+            return len(deduped)
+        except Exception as exc:
+            msg = str(exc).lower()
+            transient = (
+                "connection" in msg
+                and ("closed" in msg or "does not exist" in msg)
+            ) or "ssl connection has been closed" in msg
+            if not transient:
+                raise
+            last_err = exc
+            log.warning(
+                "Provincial bulk upsert connection drop "
+                "(attempt %d/3): %s",
+                attempt + 1,
+                exc,
+            )
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            await _asyncio.sleep(2 * (attempt + 1))
+    if last_err:
+        raise last_err
+    return 0
 
 
 async def _ingest_one_xml(
@@ -606,31 +632,10 @@ async def ingest_provincial_csv(
                 base = os.path.basename(name)
                 code = code_from_filename(base)
                 mun = code_to_name(code)
-                # Skip les fichiers de l'île de Montréal (codes MAMH 66xxx)
-                # car le format de matricule MAMH (18 chars) diffère du
-                # feed Ville de Montréal (10-12 chars) — sinon on aurait
-                # 2 entrées DB pour la même propriété physique. MTL est
-                # ingéré séparément via /admin/data/mtl-roles/import.
-                if code and code.startswith("66"):
-                    diagnostics.append(
-                        {
-                            "file": base,
-                            "encoding": "skipped",
-                            "delimiter": "(MTL via feed dédié)",
-                            "headers_seen": [
-                                f"code_mamh={code}",
-                                f"municipalite={mun or 'Île de MTL'}",
-                                "skip_reason=use VdM feed for MTL",
-                            ],
-                            "columns_mapped": [],
-                            "has_matricule": False,
-                        }
-                    )
-                    log.info(
-                        "  Skip %s (île de MTL — utiliser le feed VdM dédié)",
-                        base,
-                    )
-                    continue
+                # NOTE : on n'exclut plus les fichiers MTL (codes 66xxx).
+                # Le ZIP provincial est désormais la source unique. Le
+                # purge des données VdM précédentes se fait via
+                # POST /admin/data/mtl-roles/purge avant l'import.
                 diagnostics.append(
                     {
                         "file": base,

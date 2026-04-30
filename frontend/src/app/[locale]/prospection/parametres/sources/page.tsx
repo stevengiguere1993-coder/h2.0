@@ -669,6 +669,42 @@ export default function ProspectionSourcesPage() {
                 ? "Import en cours…"
                 : "Importer le rôle Montréal"}
             </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (
+                  !window.confirm(
+                    "Supprimer toutes les unités d'évaluation MTL existantes (region='mtl-island' ou NULL) ?\n\n" +
+                      "À utiliser avant un import provincial complet pour éviter les doublons " +
+                      "(formats de matricule différents entre feed VdM et MAMH)."
+                  )
+                )
+                  return;
+                try {
+                  const r = await authedFetch(
+                    "/api/v1/admin/data/mtl-roles/purge",
+                    { method: "POST" }
+                  );
+                  if (!r.ok) {
+                    setMtlError(`HTTP ${r.status}`);
+                    return;
+                  }
+                  const data = (await r.json()) as {
+                    deleted: number;
+                    message: string;
+                  };
+                  alert(data.message);
+                  await refreshMtlStatus();
+                } catch (e) {
+                  setMtlError((e as Error).message);
+                }
+              }}
+              disabled={!isOwner || mtlStatus?.status === "running"}
+              className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+              title="Supprime les données MTL pour repartir depuis le ZIP provincial"
+            >
+              Vider données MTL
+            </button>
 
             {mtlStatus?.status === "done" &&
             mtlStatus.rows_upserted !== null ? (
