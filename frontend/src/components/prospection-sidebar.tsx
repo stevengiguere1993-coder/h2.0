@@ -50,12 +50,6 @@ const PROSPECTION_NAV: NavItem[] = [
   { href: "/prospection", label: "Carte", icon: Map, minRole: "employee" },
   {
     href: "/prospection/leads",
-    label: "Liste des leads",
-    icon: MapPin,
-    minRole: "employee"
-  },
-  {
-    href: "/prospection/kanban",
     label: "Suivi de leads",
     icon: Trello,
     minRole: "employee"
