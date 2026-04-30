@@ -837,12 +837,38 @@ export default function ProspectionSourcesPage() {
           </div>
 
           {provStatus?.status === "running" ? (
-            <p className="mt-3 rounded-md border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-xs text-blue-200">
-              <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />
-              Ingestion {provStatus.region || ""} en arrière-plan
-              (3-5 min). Tu peux fermer l&apos;onglet, l&apos;import
-              continue côté serveur.
-            </p>
+            <div className="mt-3 rounded-md border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-xs text-blue-200">
+              <p>
+                <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />
+                Ingestion {provStatus.region || ""} en arrière-plan
+                (3-5 min). Tu peux fermer l&apos;onglet, l&apos;import
+                continue côté serveur.
+              </p>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (
+                    !window.confirm(
+                      "Forcer le reset de l'état (ne tue pas le worker, " +
+                        "à utiliser uniquement si bloqué après un redéploiement) ?"
+                    )
+                  )
+                    return;
+                  try {
+                    await authedFetch(
+                      "/api/v1/admin/data/provincial/reset",
+                      { method: "POST" }
+                    );
+                    await refreshProvStatus();
+                  } catch {
+                    /* silent */
+                  }
+                }}
+                className="mt-2 rounded border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[10px] text-rose-200 hover:bg-rose-500/20"
+              >
+                Forcer le reset (déblocage manuel)
+              </button>
+            </div>
           ) : null}
           {provStatus?.status === "done" &&
           provStatus.rows_upserted !== null ? (

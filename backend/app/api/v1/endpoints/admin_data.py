@@ -750,6 +750,20 @@ async def _provincial_ingest_worker(
             pass
 
 
+@router.post(
+    "/provincial/reset",
+    summary="Force le state du worker provincial à idle (déblocage manuel).",
+)
+async def provincial_reset(_: RequireOwner) -> dict:
+    """Reset l'état en mémoire du worker. Utile si un import est resté
+    bloqué sur 'running' après un crash ou un redéploiement. NE TUE PAS
+    le worker en cours s'il existe — celui-ci est tué naturellement par
+    le redémarrage du process Render."""
+    _provincial_state["status"] = "idle"
+    _provincial_state["error"] = None
+    return {"status": "idle", "message": "État réinitialisé."}
+
+
 @router.get(
     "/provincial/import-status",
     summary="État de l'import provincial en cours / dernier terminé.",
