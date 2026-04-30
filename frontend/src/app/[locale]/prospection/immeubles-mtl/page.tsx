@@ -85,7 +85,7 @@ export default function ImmeublesMtlPage() {
   const [rueSearch, setRueSearch] = useState<string>("");
   const [sortBy, setSortBy] = useState("nombre_logement_desc");
   const [distanceBand, setDistanceBand] = useState<
-    "" | "under_30" | "30_to_40" | "40_to_50" | "over_50"
+    "" | "mtl_only" | "under_30" | "30_to_40" | "40_to_50" | "over_50"
   >("under_30");
   const [offset, setOffset] = useState(0);
   const limit = 100;
@@ -225,6 +225,7 @@ export default function ImmeublesMtlPage() {
               setDistanceBand(
                 e.target.value as
                   | ""
+                  | "mtl_only"
                   | "under_30"
                   | "30_to_40"
                   | "40_to_50"
@@ -236,6 +237,7 @@ export default function ImmeublesMtlPage() {
             title="Filtre par distance depuis le centre-ville de Montréal"
           >
             <option value="">Tout le Québec</option>
+            <option value="mtl_only">Île de Montréal uniquement</option>
             <option value="under_30">≤ 30 km de MTL</option>
             <option value="30_to_40">30-40 km de MTL</option>
             <option value="40_to_50">40-50 km de MTL</option>
