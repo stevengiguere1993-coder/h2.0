@@ -252,18 +252,19 @@ async def list_properties(
                     )
                 )
         elif distance_band == "mtl_only":
-            # Île de Montréal stricte : municipalité connue à 0-1 km du
-            # centre OU region taggée 'mtl-island' (rétro-compat).
-            mtl_lower = [
-                k.lower()
-                for k, dist in _DIST_KM_RAW.items()
-                if dist <= 25  # toutes les municipalités sur l'île
-            ]
+            # Île de Montréal stricte : whitelist explicite des 15
+            # municipalités sur l'île (Montréal + 14 villes liées).
+            # NB : un seuil de distance ≤ N km capture aussi Laval,
+            # Longueuil, Brossard, Boucherville, Charlemagne… qui sont
+            # toutes hors-île — d'où la whitelist.
+            from app.integrations.roles_evaluation.quebec_distances import (
+                MTL_ISLAND_CITIES,
+            )
             filters.append(
                 or_(
                     MontrealPropertyUnit.region == "mtl-island",
                     func.lower(MontrealPropertyUnit.municipalite).in_(
-                        mtl_lower
+                        list(MTL_ISLAND_CITIES)
                     ),
                 )
             )
