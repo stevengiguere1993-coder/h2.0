@@ -774,7 +774,10 @@ async def provincial_upload_finalize(
     _: RequireOwner,
     upload_id: str = Form(...),
     total_chunks: int = Form(...),
-    region: str = Form(..., pattern="^(rive-sud|laval|rive-nord)$"),
+    region: str = Form(
+        default="quebec",
+        pattern="^(quebec|rive-sud|laval|rive-nord)$",
+    ),
     max_rows: Optional[int] = Form(default=None),
 ) -> dict:
     if _provincial_state["status"] == "running":
