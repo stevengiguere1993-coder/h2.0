@@ -239,21 +239,28 @@ async def _bulk_upsert(
     # pendant les longs imports). pool_pre_ping reconnecte au prochain
     # acquire, mais il faut rollback puis ré-essayer.
     last_err: Exception | None = None
-    for attempt in range(3):
+    for attempt in range(6):
         try:
             await db.execute(stmt)
             return len(rows)
         except Exception as exc:
             msg = str(exc).lower()
             transient = (
-                "connection" in msg
-                and ("closed" in msg or "does not exist" in msg)
-            ) or "ssl connection has been closed" in msg
+                "recovery mode" in msg
+                or "not yet accepting" in msg
+                or "consistent recovery" in msg
+                or "starting up" in msg
+                or "shutting down" in msg
+                or ("connection" in msg
+                    and ("closed" in msg or "does not exist" in msg
+                         or "refused" in msg))
+                or "ssl connection has been closed" in msg
+            )
             if not transient:
                 raise
             last_err = exc
             log.warning(
-                "Bulk upsert connection drop (attempt %d/3): %s",
+                "Bulk upsert transient error (attempt %d/6): %s",
                 attempt + 1,
                 exc,
             )
@@ -261,7 +268,7 @@ async def _bulk_upsert(
                 await db.rollback()
             except Exception:
                 pass
-            await asyncio.sleep(2 * (attempt + 1))
+            await asyncio.sleep(5 * (attempt + 1))
     if last_err:
         raise last_err
     return 0
