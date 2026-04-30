@@ -59,6 +59,15 @@ export default function ProspectionSourcesPage() {
   const [backfillError, setBackfillError] = useState<string | null>(null);
 
   // Import provincial (Rive-Sud / Laval / Rive-Nord)
+  type ProvDiag = {
+    file: string;
+    encoding?: string;
+    delimiter?: string;
+    headers_seen?: string[];
+    columns_mapped?: string[];
+    has_matricule?: boolean;
+    error?: string;
+  };
   type ProvStatus = {
     status: "idle" | "running" | "done" | "error";
     started_at: string | null;
@@ -67,6 +76,7 @@ export default function ProspectionSourcesPage() {
     rows_upserted: number | null;
     region: string | null;
     error: string | null;
+    diagnostics?: ProvDiag[];
   };
   const [provFile, setProvFile] = useState<File | null>(null);
   const [provUploading, setProvUploading] = useState(false);
@@ -841,6 +851,51 @@ export default function ProspectionSourcesPage() {
               {provStatus.rows_upserted.toLocaleString("fr-CA")} unités
               ingérées ({provStatus.region}).
             </p>
+          ) : null}
+          {provStatus?.status === "done" &&
+          (provStatus.rows_upserted ?? 0) === 0 &&
+          provStatus.diagnostics &&
+          provStatus.diagnostics.length > 0 ? (
+            <details className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-[11px] text-amber-100">
+              <summary className="cursor-pointer font-semibold">
+                ⚠ 0 unités ingérées — voir le diagnostic du fichier
+              </summary>
+              <div className="mt-2 space-y-2">
+                {provStatus.diagnostics.map((d, i) => (
+                  <div
+                    key={i}
+                    className="rounded border border-amber-500/20 bg-amber-500/5 p-2"
+                  >
+                    <div className="font-mono">{d.file}</div>
+                    {d.error ? (
+                      <div className="mt-1 text-rose-300">{d.error}</div>
+                    ) : (
+                      <>
+                        <div className="mt-1 text-amber-200/80">
+                          Encoding : {d.encoding} · Délimiteur :{" "}
+                          {d.delimiter} · Matricule détecté :{" "}
+                          {d.has_matricule ? "✅" : "❌"}
+                        </div>
+                        <div className="mt-1 text-amber-200/80">
+                          Colonnes mappées :{" "}
+                          {d.columns_mapped?.length
+                            ? d.columns_mapped.join(", ")
+                            : "(aucune)"}
+                        </div>
+                        <div className="mt-1 break-all text-amber-200/60">
+                          Headers vus : {d.headers_seen?.join(" | ")}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+                <p className="text-amber-200/60">
+                  Si la colonne matricule n&apos;est pas détectée,
+                  copie-colle les headers ci-dessus dans le chat — j&apos;ajouterai
+                  les aliases manquants.
+                </p>
+              </div>
+            </details>
           ) : null}
           {provStatus?.status === "error" && provStatus.error ? (
             <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
