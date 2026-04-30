@@ -773,9 +773,11 @@ export default function ProspectionSourcesPage() {
             <p>
               Catalogue centralisé sur Données Québec : toutes les
               municipalités y publient leur rôle d&apos;évaluation
-              foncière. Sélectionne le fichier puis la région : seules
-              les unités correspondantes seront ingérées. Upload chunked
-              (10 Mo/morceau) pour passer le proxy Render.
+              foncière. Accepte un CSV brut ou un ZIP (le format publié
+              par Données Québec — le serveur déplie les CSV
+              automatiquement). Sélectionne le fichier puis la région :
+              seules les unités correspondantes seront ingérées. Upload
+              chunked (10 Mo/morceau) pour passer le proxy Render.
             </p>
             <p className="mt-2">
               <a
@@ -807,7 +809,7 @@ export default function ProspectionSourcesPage() {
             </select>
             <input
               type="file"
-              accept=".csv,text/csv"
+              accept=".csv,.zip,text/csv,application/zip,application/x-zip-compressed"
               onChange={(e) => setProvFile(e.target.files?.[0] || null)}
               disabled={provUploading || provStatus?.status === "running"}
               className="rounded-lg border border-brand-700 bg-brand-950 px-3 py-2 text-sm text-white file:mr-3 file:rounded file:border-0 file:bg-blue-500/20 file:px-3 file:py-1 file:text-xs file:text-blue-300"
