@@ -708,6 +708,44 @@ export default function ProspectionSourcesPage() {
             >
               Vider données MTL
             </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (
+                  !window.confirm(
+                    "RESET COMPLET : supprimer TOUTES les unités " +
+                      "d'évaluation foncière (toutes régions confondues) ?\n\n" +
+                      "À utiliser après un échec d'ingestion qui a laissé " +
+                      "des données partielles, ou avant un re-import complet."
+                  )
+                )
+                  return;
+                try {
+                  const r = await authedFetch(
+                    "/api/v1/admin/data/provincial/purge-all",
+                    { method: "POST" }
+                  );
+                  if (!r.ok) {
+                    const t = await r.text();
+                    setMtlError(t.slice(0, 240) || `HTTP ${r.status}`);
+                    return;
+                  }
+                  const data = (await r.json()) as {
+                    deleted: number;
+                    message: string;
+                  };
+                  alert(data.message);
+                  await refreshMtlStatus();
+                } catch (e) {
+                  setMtlError((e as Error).message);
+                }
+              }}
+              disabled={!isOwner}
+              className="inline-flex items-center gap-2 rounded-lg border border-rose-700 bg-rose-700/10 px-3 py-1.5 text-xs font-bold text-rose-200 transition hover:bg-rose-700/20 disabled:cursor-not-allowed disabled:opacity-40"
+              title="Vide TOUTE la table mtl_property_units (full reset)"
+            >
+              ⚠ Reset complet
+            </button>
 
             {mtlStatus?.status === "done" &&
             mtlStatus.rows_upserted !== null ? (
