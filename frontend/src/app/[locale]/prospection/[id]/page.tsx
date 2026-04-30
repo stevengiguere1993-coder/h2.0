@@ -283,8 +283,11 @@ export default function ProspectionDetailPage() {
     setSaving(true);
     setError(null);
     try {
+      // Le « name » du lead est toujours synchronisé avec l'adresse
+      // (l'utilisateur ne saisit plus de nom séparé).
+      const derivedName = address.trim() || "Lead sans adresse";
       const payload = {
-        name: name.trim(),
+        name: derivedName,
         kind,
         status,
         priority,
@@ -676,19 +679,10 @@ export default function ProspectionDetailPage() {
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                   Identité du lead
                 </h2>
+                <p className="mt-1 text-[11px] text-white/40">
+                  Le lead est identifié par son adresse (saisie ci-dessous).
+                </p>
                 <div className="mt-3 space-y-3">
-                  <div>
-                    <label htmlFor="lname" className="label">
-                      Nom
-                    </label>
-                    <input
-                      id="lname"
-                      type="text"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      className="input"
-                    />
-                  </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div>
                       <label htmlFor="lkind" className="label">
