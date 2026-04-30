@@ -15,7 +15,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.session import get_db
 from pydantic import BaseModel, Field
 
 from app.api.deps import DBSession, RequireOwner
@@ -125,6 +128,53 @@ async def import_montreal_roles(
 async def mtl_import_status(_: RequireOwner) -> dict:
     return {
         k: v for k, v in _mtl_state.items() if not k.startswith("_")
+    }
+
+
+@router.post(
+    "/mtl-roles/purge",
+    summary="Supprime toutes les unités d'évaluation MTL "
+    "(region='mtl-island' OU NULL). À utiliser avant un import "
+    "provincial qui inclut MTL pour éviter les doublons (formats "
+    "de matricule différents entre feed VdM et MAMH).",
+)
+async def purge_mtl_data(
+    _: RequireOwner,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from sqlalchemy import delete, or_, select, func
+    from app.models.montreal_property_unit import MontrealPropertyUnit
+
+    # Compte avant
+    count_before = (
+        await db.execute(
+            select(func.count())
+            .select_from(MontrealPropertyUnit)
+            .where(
+                or_(
+                    MontrealPropertyUnit.region == "mtl-island",
+                    MontrealPropertyUnit.region.is_(None),
+                )
+            )
+        )
+    ).scalar() or 0
+
+    # Supprime toutes les unités MTL (legacy + region='mtl-island')
+    await db.execute(
+        delete(MontrealPropertyUnit).where(
+            or_(
+                MontrealPropertyUnit.region == "mtl-island",
+                MontrealPropertyUnit.region.is_(None),
+            )
+        )
+    )
+    await db.commit()
+    return {
+        "deleted": int(count_before),
+        "message": (
+            f"{int(count_before):,} unités MTL supprimées. "
+            "Tu peux maintenant importer le ZIP provincial."
+        ).replace(",", " "),
     }
 
 
