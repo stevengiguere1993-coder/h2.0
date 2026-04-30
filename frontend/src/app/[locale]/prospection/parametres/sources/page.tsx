@@ -769,12 +769,26 @@ export default function ProspectionSourcesPage() {
             </div>
           </header>
 
-          <p className="mt-3 rounded-md border border-brand-700 bg-brand-950/40 p-3 text-[11px] text-white/60">
-            Le fichier source est l&apos;export provincial du rôle (CSV
-            ~3-5 GB). Sélectionne le fichier puis la région : seules les
-            unités correspondantes seront ingérées. Upload chunked
-            (10 Mo/morceau) pour passer le proxy Render.
-          </p>
+          <div className="mt-3 rounded-md border border-brand-700 bg-brand-950/40 p-3 text-[11px] text-white/60">
+            <p>
+              Le fichier source est l&apos;export provincial du rôle
+              (CSV ~3-5 GB). Sélectionne le fichier puis la région :
+              seules les unités correspondantes seront ingérées. Upload
+              chunked (10 Mo/morceau) pour passer le proxy Render.
+            </p>
+            <p className="mt-2">
+              <a
+                href="https://www.donneesquebec.ca/recherche/dataset/role-d-evaluation-fonciere-du-quebec"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-emerald-400 hover:text-emerald-300"
+              >
+                <ExternalLink className="h-3 w-3" />
+                Télécharger les CSV — Données Québec (rôle d&apos;évaluation
+                foncière)
+              </a>
+            </p>
+          </div>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-[auto_1fr_auto]">
             <select

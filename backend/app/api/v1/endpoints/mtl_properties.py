@@ -74,6 +74,9 @@ class MtlPropertyRead(BaseModel):
                                     # parsés depuis EvalWeb
     owner_names: Optional[List[str]] = None  # Liste des noms (compact
                                               # pour affichage liste)
+    owner_inscription_dates: Optional[List[str]] = None  # Dates parallèles
+                                                          # (idx aligné avec
+                                                          # owner_names)
 
 
 class OwnerCandidate(BaseModel):
@@ -131,6 +134,12 @@ async def list_properties(
     max_annee: Optional[int] = Query(default=None, le=2100),
     min_superficie_terrain: Optional[float] = Query(default=None, ge=0),
     municipalite: Optional[str] = Query(default=None),
+    region: Optional[str] = Query(
+        default=None,
+        pattern="^(mtl-island|laval|rive-sud|rive-nord)$",
+        description="Filtre par région. mtl-island = île de Montréal "
+        "(MTL + arrondissements), laval, rive-sud, rive-nord.",
+    ),
     nom_rue_contains: Optional[str] = Query(default=None),
     codes_utilisation: Optional[List[str]] = Query(
         default=None,
@@ -173,6 +182,8 @@ async def list_properties(
         filters.append(
             MontrealPropertyUnit.municipalite == municipalite.strip()
         )
+    if region:
+        filters.append(MontrealPropertyUnit.region == region)
     if nom_rue_contains:
         filters.append(
             MontrealPropertyUnit.nom_rue.ilike(
@@ -231,18 +242,29 @@ async def list_properties(
         d.full_address = _full_addr(r) or None
         d.already_lead = r.matricule in already_set
         d.has_owner_data = bool(r.owners_json)
-        # Extrait les noms des owners depuis owners_json (best-effort)
+        # Extrait les noms + dates d'inscription des owners depuis
+        # owners_json (best-effort). Listes parallèles : idx N du nom
+        # correspond à idx N de la date.
         if r.owners_json:
             try:
                 owners_data = json.loads(r.owners_json)
-                names = [
-                    o.get("name", "").strip()
+                pairs = [
+                    (
+                        (o.get("name") or "").strip(),
+                        (o.get("inscription_date") or "").strip() or None,
+                    )
                     for o in owners_data
                     if o.get("name")
                 ]
-                d.owner_names = names if names else None
+                if pairs:
+                    d.owner_names = [n for n, _ in pairs]
+                    d.owner_inscription_dates = [dt for _, dt in pairs]
+                else:
+                    d.owner_names = None
+                    d.owner_inscription_dates = None
             except Exception:
                 d.owner_names = None
+                d.owner_inscription_dates = None
         if d.superficie_terrain is not None:
             d.superficie_terrain = float(d.superficie_terrain)
         if d.superficie_batiment is not None:
