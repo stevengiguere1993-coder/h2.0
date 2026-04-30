@@ -35,6 +35,7 @@ type Property = {
   already_lead: boolean;
   has_owner_data: boolean;
   owner_names: string[] | null;
+  owner_inscription_dates: string[] | null;
 };
 
 type UtilisationType = {
@@ -526,14 +527,15 @@ export default function ImmeublesMtlPage() {
                 <thead className="bg-brand-950/60 text-left text-[11px] uppercase tracking-wider text-white/50">
                   <tr>
                     <th className="px-3 py-2.5">Adresse</th>
+                    <th className="px-3 py-2.5">Propriétaire</th>
                     <th className="px-3 py-2.5 text-right">
                       # logements
                     </th>
                     <th className="px-3 py-2.5 text-right">Année</th>
                     <th className="px-3 py-2.5 text-right">Terrain</th>
                     <th className="px-3 py-2.5">Utilisation</th>
-                    <th className="px-3 py-2.5">Propriétaire</th>
                     <th className="px-3 py-2.5">Matricule</th>
+                    <th className="px-3 py-2.5 text-right">Date inscription</th>
                     <th className="px-3 py-2.5">Actions</th>
                   </tr>
                 </thead>
@@ -557,18 +559,6 @@ export default function ImmeublesMtlPage() {
                             {p.municipalite}
                           </div>
                         ) : null}
-                      </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums font-bold text-emerald-300">
-                        {p.nombre_logement ?? "—"}
-                      </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-white/70">
-                        {p.annee_construction ?? "—"}
-                      </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-white/70">
-                        {fmtArea(p.superficie_terrain)}
-                      </td>
-                      <td className="px-3 py-2.5 text-[11px] text-white/60">
-                        {p.libelle_utilisation || "—"}
                       </td>
                       <td className="px-3 py-2.5 max-w-[180px]">
                         {p.owner_names && p.owner_names.length > 0 ? (
@@ -598,8 +588,28 @@ export default function ImmeublesMtlPage() {
                           <span className="text-[11px] text-white/30">—</span>
                         )}
                       </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums font-bold text-emerald-300">
+                        {p.nombre_logement ?? "—"}
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-white/70">
+                        {p.annee_construction ?? "—"}
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-white/70">
+                        {fmtArea(p.superficie_terrain)}
+                      </td>
+                      <td className="px-3 py-2.5 text-[11px] text-white/60">
+                        {p.libelle_utilisation || "—"}
+                      </td>
                       <td className="px-3 py-2.5 font-mono text-[10px] text-white/40">
                         {p.matricule}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-[11px] tabular-nums text-white/60">
+                        {p.owner_inscription_dates &&
+                        p.owner_inscription_dates[0] ? (
+                          p.owner_inscription_dates[0]
+                        ) : (
+                          <span className="text-white/30">—</span>
+                        )}
                       </td>
                       <td className="px-3 py-2.5">
                         <div className="flex flex-wrap gap-1">
