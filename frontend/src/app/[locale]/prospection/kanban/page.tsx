@@ -311,7 +311,6 @@ function AddLeadModal({
   onClose: () => void;
   onCreated: () => void;
 }) {
-  const [name, setName] = useState("");
   const [kind, setKind] = useState("multilogement");
   const [status, setStatus] = useState("a_visiter");
   const [address, setAddress] = useState("");
@@ -323,18 +322,20 @@ function AddLeadModal({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim() && !address.trim()) {
-      setError("Renseigne au minimum un nom ou une adresse");
+    if (!address.trim()) {
+      setError("L'adresse est requise — elle identifie le lead.");
       return;
     }
     setSaving(true);
     setError(null);
     try {
       // POST /api/v1/prospection accepte multipart/form-data
+      // Le name du lead est synchronisé sur l'adresse (le user ne le
+      // saisit plus séparément).
       const fd = new FormData();
-      if (name.trim()) fd.append("name", name.trim());
+      fd.append("name", address.trim());
       fd.append("kind", kind);
-      if (address.trim()) fd.append("address", address.trim());
+      fd.append("address", address.trim());
       if (city.trim()) fd.append("city", city.trim());
       if (postalCode.trim()) fd.append("postal_code", postalCode.trim());
       if (notes.trim()) fd.append("notes", notes.trim());
@@ -398,21 +399,6 @@ function AddLeadModal({
           onSubmit={submit}
           className="flex-1 space-y-3 overflow-y-auto p-4"
         >
-          <label className="block text-xs">
-            <span className="block text-white/60">
-              Nom du lead{" "}
-              <span className="text-white/30">(ou utilise l&apos;adresse)</span>
-            </span>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Ex: 220 rue Bergevin"
-              className="input mt-0.5"
-              autoFocus
-            />
-          </label>
-
           <div className="grid grid-cols-2 gap-2">
             <label className="block text-xs">
               <span className="block text-white/60">Type</span>
@@ -451,6 +437,8 @@ function AddLeadModal({
               onChange={(e) => setAddress(e.target.value)}
               placeholder="220 rue Bergevin"
               className="input mt-0.5"
+              autoFocus
+              required
             />
           </label>
 
