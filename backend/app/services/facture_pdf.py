@@ -1,20 +1,35 @@
 """Generate a PDF for a Facture — mirrors soumission_pdf layout with
-the word FACTURE and an optional due date / balance block."""
+the word FACTURE and an optional due date / balance block.
+
+When the facture is linked to a project that comes from an accepted
+soumission, the PDF includes a « Récapitulatif du contrat » block
+showing the soumission total, the cumulative billed-to-date and
+paid-to-date across siblings factures, and the remaining contract
+balance.
+
+When ``include_statement=True`` is passed to :func:`render_facture_pdf`,
+an « État de compte » page (full project ledger) is appended after
+the facture page so the client receives a single PDF.
+"""
 
 from __future__ import annotations
 
 import io
 import logging
 import os
+from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.client import Client
-from app.models.facture import Facture
+from app.models.facture import Facture, FactureStatus
 from app.models.facture_item import FactureItem
+from app.models.payment import Payment
+from app.models.project import Project
+from app.models.soumission import Soumission
 from app.services.soumission_pdf import (
     ACCENT_HEX,
     COMPANY_EMAIL,
@@ -26,6 +41,38 @@ from app.services.soumission_pdf import (
     MUTED_HEX,
     _lazy_reportlab,
 )
+
+
+@dataclass
+class ContractSummary:
+    """Synthèse contrat affichée sur la facture PDF quand celle-ci est
+    rattachée à un projet venant d'une soumission acceptée."""
+
+    soumission_reference: str
+    contract_total: float    # soumission.total (TTC)
+    billed_to_date: float    # somme des factures non-void liées au projet
+    paid_to_date: float      # somme des paiements sur ces factures
+    remaining_balance: float # contract_total - paid_to_date
+
+
+@dataclass
+class StatementLine:
+    kind: str   # "facture" | "payment"
+    when: date
+    label: str
+    amount: float  # facture: total positif; payment: positif (encaissé)
+    detail: Optional[str] = None
+
+
+@dataclass
+class Statement:
+    project_name: Optional[str]
+    soumission_reference: Optional[str]
+    lines: List[StatementLine]
+    contract_total: float
+    billed_to_date: float
+    paid_to_date: float
+    remaining_balance: float
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +122,187 @@ async def _load(db: AsyncSession, facture_id: int):
     return fa, items, client
 
 
+async def _load_contract_summary(
+    db: AsyncSession, fa: Facture
+) -> Optional[ContractSummary]:
+    """Compute le récapitulatif contrat pour `fa` si elle est liée à
+    un projet qui vient d'une soumission acceptée. Retourne None
+    sinon (facture isolée, projet sans soumission, etc.)."""
+    if fa.project_id is None:
+        return None
+    project = (
+        await db.execute(
+            select(Project).where(Project.id == fa.project_id)
+        )
+    ).scalar_one_or_none()
+    if project is None or project.soumission_id is None:
+        return None
+    sm = (
+        await db.execute(
+            select(Soumission).where(Soumission.id == project.soumission_id)
+        )
+    ).scalar_one_or_none()
+    if sm is None or sm.total is None:
+        return None
+
+    # Toutes les factures non-VOID liées au projet (y compris la
+    # facture courante) : on additionne leur total pour avoir
+    # « Total déjà facturé ».
+    sibling_rows = (
+        await db.execute(
+            select(Facture.id, Facture.total).where(
+                Facture.project_id == project.id,
+                Facture.status != FactureStatus.VOID.value,
+            )
+        )
+    ).all()
+    sibling_ids = [r[0] for r in sibling_rows]
+    billed_to_date = round(
+        sum(float(t or 0) for _, t in sibling_rows), 2
+    )
+
+    # Total des paiements sur ces factures.
+    paid_to_date = 0.0
+    if sibling_ids:
+        pay_rows = (
+            await db.execute(
+                select(Payment.amount).where(
+                    Payment.facture_id.in_(sibling_ids)
+                )
+            )
+        ).all()
+        paid_to_date = round(
+            sum(float(a or 0) for (a,) in pay_rows), 2
+        )
+
+    contract_total = round(float(sm.total), 2)
+    remaining = round(contract_total - paid_to_date, 2)
+    return ContractSummary(
+        soumission_reference=sm.reference,
+        contract_total=contract_total,
+        billed_to_date=billed_to_date,
+        paid_to_date=paid_to_date,
+        remaining_balance=remaining,
+    )
+
+
+async def _load_statement(
+    db: AsyncSession, fa: Facture
+) -> Optional[Statement]:
+    """Construit l'état de compte (toutes les factures + paiements
+    pour le projet de `fa`). None si la facture n'est pas liée à un
+    projet."""
+    if fa.project_id is None:
+        return None
+
+    project = (
+        await db.execute(
+            select(Project).where(Project.id == fa.project_id)
+        )
+    ).scalar_one_or_none()
+    if project is None:
+        return None
+
+    sm: Optional[Soumission] = None
+    if project.soumission_id:
+        sm = (
+            await db.execute(
+                select(Soumission).where(
+                    Soumission.id == project.soumission_id
+                )
+            )
+        ).scalar_one_or_none()
+
+    factures = list(
+        (
+            await db.execute(
+                select(Facture)
+                .where(Facture.project_id == project.id)
+                .order_by(Facture.issued_at.asc(), Facture.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    facture_ids = [f.id for f in factures]
+    payments: list[Payment] = []
+    if facture_ids:
+        payments = list(
+            (
+                await db.execute(
+                    select(Payment)
+                    .where(Payment.facture_id.in_(facture_ids))
+                    .order_by(Payment.paid_at.asc(), Payment.id.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    lines: List[StatementLine] = []
+    for f in factures:
+        when = (f.issued_at.date() if f.issued_at else f.created_at.date())
+        label = f"Facture {f.reference}"
+        detail = f.status.upper() if f.status else None
+        lines.append(
+            StatementLine(
+                kind="facture",
+                when=when,
+                label=label,
+                amount=float(f.total or 0),
+                detail=detail,
+            )
+        )
+    for p in payments:
+        # Map facture_id → reference pour un libellé lisible
+        ref = next(
+            (f.reference for f in factures if f.id == p.facture_id),
+            None,
+        )
+        method = (p.method or "").replace("_", " ")
+        detail_parts = [method]
+        if p.reference:
+            detail_parts.append(f"réf. {p.reference}")
+        lines.append(
+            StatementLine(
+                kind="payment",
+                when=p.paid_at,
+                label=(
+                    f"Paiement reçu — Facture {ref}"
+                    if ref
+                    else "Paiement reçu"
+                ),
+                amount=float(p.amount or 0),
+                detail=" · ".join(p for p in detail_parts if p),
+            )
+        )
+    # Tri chronologique global, factures avant paiements le même jour.
+    lines.sort(key=lambda x: (x.when, 0 if x.kind == "facture" else 1))
+
+    contract_total = float(sm.total or 0) if sm else 0.0
+    billed_to_date = round(
+        sum(float(f.total or 0) for f in factures
+            if f.status != FactureStatus.VOID.value),
+        2,
+    )
+    paid_to_date = round(
+        sum(float(p.amount or 0) for p in payments), 2
+    )
+    remaining = round(
+        (contract_total or billed_to_date) - paid_to_date, 2
+    )
+
+    return Statement(
+        project_name=project.name,
+        soumission_reference=sm.reference if sm else None,
+        lines=lines,
+        contract_total=round(contract_total, 2),
+        billed_to_date=billed_to_date,
+        paid_to_date=paid_to_date,
+        remaining_balance=remaining,
+    )
+
+
 def _render_bytes(
     fa: Facture,
     items: list[FactureItem],
@@ -82,6 +310,8 @@ def _render_bytes(
     *,
     tax_gst: Optional[str] = None,
     tax_qst: Optional[str] = None,
+    contract: Optional[ContractSummary] = None,
+    statement: Optional[Statement] = None,
 ) -> bytes:
     rl = _lazy_reportlab()
     colors = rl["colors"]
@@ -263,6 +493,43 @@ def _render_bytes(
     story.append(totals_wrap)
     story.append(Spacer(1, 18))
 
+    # Récapitulatif du contrat — affiché quand la facture est liée à
+    # une soumission acceptée. Permet au client de voir d'un coup
+    # d'œil le total contracté, le déjà facturé/payé et le solde
+    # restant à venir sur le contrat global.
+    if contract is not None:
+        story.append(Paragraph(
+            f"RÉCAPITULATIF DU CONTRAT — Soumission {contract.soumission_reference}",
+            s["accent"],
+        ))
+        recap_rows = [
+            ["Total du contrat", _money(contract.contract_total)],
+            ["Total déjà facturé", _money(contract.billed_to_date)],
+            ["Total déjà payé", _money(contract.paid_to_date)],
+            ["Solde du contrat", _money(contract.remaining_balance)],
+        ]
+        recap_tbl = Table(
+            recap_rows,
+            colWidths=[doc.width * 0.30, doc.width * 0.20],
+        )
+        recap_tbl.setStyle(TableStyle([
+            ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+            ("FONTSIZE", (0, 0), (-1, -1), 9.5),
+            ("TEXTCOLOR", (0, 0), (-1, -2), MUTED),
+            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+            ("TEXTCOLOR", (0, -1), (-1, -1), DARK),
+            ("LINEABOVE", (0, -1), (-1, -1), 0.5, LINE),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        recap_wrap = Table(
+            [["", recap_tbl]],
+            colWidths=[doc.width * 0.50, doc.width * 0.50],
+        )
+        recap_wrap.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+        story.append(recap_wrap)
+        story.append(Spacer(1, 14))
+
     # Note client-facing (facultative) — mention libre à afficher sur
     # la facture (ex. « Merci pour votre confiance », « Paiement net
     # 15 jours », référence interne du client). Ne PAS confondre avec
@@ -296,6 +563,112 @@ def _render_bytes(
         s["small"],
     ))
 
+    # État de compte appendé après la page facture, sur une nouvelle
+    # page. Le client reçoit ainsi un seul PDF avec la facture +
+    # l'historique complet du contrat.
+    if statement is not None and statement.lines:
+        story.append(rl["PageBreak"]())
+        story.append(Paragraph("ÉTAT DE COMPTE", s["h1"]))
+        if statement.project_name:
+            story.append(
+                Paragraph(f"Projet : {statement.project_name}", s["small"])
+            )
+        if statement.soumission_reference:
+            story.append(Paragraph(
+                f"Soumission : {statement.soumission_reference}", s["small"],
+            ))
+        if client is not None:
+            story.append(
+                Paragraph(f"Client : {client.name}", s["small"])
+            )
+        story.append(
+            Paragraph(f"Émis le {_date(datetime.utcnow())}", s["small"])
+        )
+        story.append(Spacer(1, 12))
+
+        st_data = [["Date", "Description", "Détail", "Débit", "Crédit"]]
+        running = 0.0
+        for ln in statement.lines:
+            if ln.kind == "facture":
+                debit = ln.amount
+                credit = 0.0
+                running += debit
+            else:  # payment
+                debit = 0.0
+                credit = ln.amount
+                running -= credit
+            st_data.append([
+                _date(ln.when),
+                Paragraph(ln.label, s["body"]),
+                Paragraph(ln.detail or "", s["small"]),
+                _money(debit) if debit else "",
+                _money(credit) if credit else "",
+            ])
+        st_tbl = Table(
+            st_data,
+            colWidths=[
+                doc.width * 0.13, doc.width * 0.34,
+                doc.width * 0.23, doc.width * 0.15,
+                doc.width * 0.15,
+            ],
+            repeatRows=1,
+        )
+        st_tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), DARK),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, 0), 9),
+            ("ALIGN", (3, 0), (-1, -1), "RIGHT"),
+            ("ALIGN", (0, 0), (0, -1), "LEFT"),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                [colors.white, colors.HexColor("#fafafa")]),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.5, ACCENT),
+            ("FONTSIZE", (0, 1), (-1, -1), 9.0),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(st_tbl)
+        story.append(Spacer(1, 12))
+
+        # Totaux de l'état de compte
+        recap_rows = []
+        if statement.contract_total > 0:
+            recap_rows.append(
+                ["Total du contrat", _money(statement.contract_total)]
+            )
+        recap_rows.extend([
+            ["Total facturé", _money(statement.billed_to_date)],
+            ["Total payé", _money(statement.paid_to_date)],
+            [
+                "Solde à venir",
+                _money(statement.remaining_balance),
+            ],
+        ])
+        recap_tbl = Table(
+            recap_rows,
+            colWidths=[doc.width * 0.30, doc.width * 0.20],
+        )
+        recap_tbl.setStyle(TableStyle([
+            ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+            ("FONTSIZE", (0, 0), (-1, -1), 9.5),
+            ("TEXTCOLOR", (0, 0), (-1, -2), MUTED),
+            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+            ("FONTSIZE", (0, -1), (-1, -1), 11),
+            ("TEXTCOLOR", (0, -1), (-1, -1), DARK),
+            ("LINEABOVE", (0, -1), (-1, -1), 0.75, DARK),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        recap_wrap = Table(
+            [["", recap_tbl]],
+            colWidths=[doc.width * 0.50, doc.width * 0.50],
+        )
+        recap_wrap.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+        story.append(recap_wrap)
+
     doc.build(story)
     return buf.getvalue()
 
@@ -314,11 +687,26 @@ async def _fetch_tax_numbers() -> tuple[Optional[str], Optional[str]]:
 
 
 async def render_facture_pdf(
-    db: AsyncSession, facture_id: int
+    db: AsyncSession,
+    facture_id: int,
+    *,
+    include_statement: bool = False,
 ) -> Optional[tuple[Facture, bytes]]:
+    """Génère le PDF d'une facture. Si ``include_statement=True``,
+    une page « État de compte » récapitulant toutes les factures et
+    paiements du projet est appendée."""
     fa, items, client = await _load(db, facture_id)
     if fa is None:
         return None
     gst, qst = await _fetch_tax_numbers()
-    pdf = _render_bytes(fa, items, client, tax_gst=gst, tax_qst=qst)
+    contract = await _load_contract_summary(db, fa)
+    statement = (
+        await _load_statement(db, fa) if include_statement else None
+    )
+    pdf = _render_bytes(
+        fa, items, client,
+        tax_gst=gst, tax_qst=qst,
+        contract=contract,
+        statement=statement,
+    )
     return fa, pdf

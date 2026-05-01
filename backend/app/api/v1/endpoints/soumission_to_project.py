@@ -10,14 +10,19 @@ When a project is freshly created (not on the idempotent path), a
 Quebec taxes (TPS 5 %, TVQ 9.975 %). The percentage and due date
 can be tuned via the optional request body. Pass ``deposit_percentage
 = 0`` to skip the deposit invoice entirely.
+
+The core logic is exposed via :func:`provision_project_for_soumission`
+so that automatic acceptance flows (status change, public client
+signature) can reuse it without going through this HTTP handler.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.contact_request import ContactRequest
@@ -35,10 +40,14 @@ router = APIRouter(prefix="/soumissions", tags=["soumission-to-project"])
 TPS_RATE = 0.05
 TVQ_RATE = 0.09975
 
+#: Pourcentage par défaut de la facture d'acompte créée à
+#: l'acceptation d'une soumission.
+DEFAULT_DEPOSIT_PERCENTAGE = 25
+
 
 class ConvertToProjectRequest(BaseModel):
     deposit_percentage: int = Field(
-        default=25, ge=0, le=100,
+        default=DEFAULT_DEPOSIT_PERCENTAGE, ge=0, le=100,
         description=(
             "Pourcentage de la soumission à facturer en acompte. "
             "Met à 0 pour ne pas créer de facture d'acompte."
@@ -53,15 +62,7 @@ class ConvertToProjectRequest(BaseModel):
     )
 
 
-def _build_facture_ref() -> str:
-    d = datetime.now(timezone.utc)
-    return (
-        f"FAC-{d.year}{d.month:02d}{d.day:02d}-"
-        f"{d.hour:02d}{d.minute:02d}{d.second:02d}"
-    )
-
-
-async def _soumission_subtotal(db, sm: Soumission) -> float:
+async def _soumission_subtotal(db: AsyncSession, sm: Soumission) -> float:
     """Return the soumission subtotal — prefer the stored value, fall
     back to summing line items when the column is null (older records
     or freshly imported soumissions)."""
@@ -83,34 +84,33 @@ async def _soumission_subtotal(db, sm: Soumission) -> float:
     return round(total, 2)
 
 
-@router.post(
-    "/{soumission_id}/convert-to-project",
-    response_model=ProjectRead,
-    summary="Create or fetch a project from a soumission (auto deposit invoice)",
-)
-async def convert_soumission_to_project(
-    soumission_id: int,
-    db: DBSession,
-    _: CurrentUser,
-    body: Optional[ConvertToProjectRequest] = None,
-) -> ProjectRead:
-    sm = (
-        await db.execute(select(Soumission).where(Soumission.id == soumission_id))
-    ).scalar_one_or_none()
-    if sm is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Soumission not found")
+async def provision_project_for_soumission(
+    db: AsyncSession,
+    sm: Soumission,
+    *,
+    deposit_percentage: int = DEFAULT_DEPOSIT_PERCENTAGE,
+    due_in_days: int = 0,
+) -> Tuple[Project, Optional[Facture]]:
+    """Create the Project (+ optional deposit Facture in DRAFT) for an
+    accepted Soumission. Idempotent : si un projet existe déjà pour
+    cette soumission, on le retourne tel quel sans recréer la facture.
 
-    # Idempotent: if a project already points at this soumission, return it.
+    La facture d'acompte est créée en **DRAFT** : elle apparaît dans
+    /facturation mais n'est PAS envoyée tant que l'utilisateur ne
+    clique pas explicitement sur « Envoyer au client ».
+
+    Le caller doit gérer le `await db.flush()` / `db.commit()` final
+    selon son contexte.
+    """
     existing = (
         await db.execute(
-            select(Project).where(Project.soumission_id == soumission_id)
+            select(Project).where(Project.soumission_id == sm.id)
         )
     ).scalar_one_or_none()
     if existing is not None:
-        return ProjectRead.model_validate(existing)
+        return existing, None
 
-    # Pull contact info (address / name) from the linked prospect.
-    contact: ContactRequest | None = None
+    contact: Optional[ContactRequest] = None
     if sm.contact_request_id:
         contact = (
             await db.execute(
@@ -134,13 +134,11 @@ async def convert_soumission_to_project(
     await db.flush()
     await db.refresh(project)
 
-    # ---------- Acompte automatique ----------
-    cfg = body or ConvertToProjectRequest()
-    pct = cfg.deposit_percentage
-    if pct > 0:
+    facture: Optional[Facture] = None
+    if deposit_percentage > 0:
         sm_subtotal = await _soumission_subtotal(db, sm)
         if sm_subtotal > 0:
-            ratio = pct / 100.0
+            ratio = deposit_percentage / 100.0
             deposit_subtotal = round(sm_subtotal * ratio, 2)
             tps = round(deposit_subtotal * TPS_RATE, 2)
             tvq = round(deposit_subtotal * TVQ_RATE, 2)
@@ -154,7 +152,7 @@ async def convert_soumission_to_project(
                 issued_at=datetime.now(timezone.utc),
                 due_at=(
                     datetime.now(timezone.utc)
-                    + timedelta(days=cfg.due_in_days)
+                    + timedelta(days=due_in_days)
                 ),
                 subtotal=deposit_subtotal,
                 tps=tps,
@@ -162,8 +160,9 @@ async def convert_soumission_to_project(
                 total=grand_total,
                 balance=grand_total,
                 client_note=(
-                    f"Acompte de {pct} % sur la soumission {sm.reference}. "
-                    "Le solde sera facturé selon l'avancement des travaux."
+                    f"Acompte de {deposit_percentage} % sur la soumission "
+                    f"{sm.reference}. Le solde sera facturé selon "
+                    "l'avancement des travaux."
                 ),
             )
             db.add(facture)
@@ -173,7 +172,8 @@ async def convert_soumission_to_project(
                     facture_id=facture.id,
                     position=0,
                     description=(
-                        f"Acompte {pct} % — Soumission {sm.reference}"
+                        f"Acompte {deposit_percentage} % — Soumission "
+                        f"{sm.reference}"
                         + (f" — {sm.title}" if sm.title else "")
                     ),
                     unit="lot",
@@ -184,4 +184,30 @@ async def convert_soumission_to_project(
             )
             await db.flush()
 
+    return project, facture
+
+
+@router.post(
+    "/{soumission_id}/convert-to-project",
+    response_model=ProjectRead,
+    summary="Create or fetch a project from a soumission (auto deposit invoice)",
+)
+async def convert_soumission_to_project(
+    soumission_id: int,
+    db: DBSession,
+    _: CurrentUser,
+    body: Optional[ConvertToProjectRequest] = None,
+) -> ProjectRead:
+    sm = (
+        await db.execute(select(Soumission).where(Soumission.id == soumission_id))
+    ).scalar_one_or_none()
+    if sm is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Soumission not found")
+
+    cfg = body or ConvertToProjectRequest()
+    project, _facture = await provision_project_for_soumission(
+        db, sm,
+        deposit_percentage=cfg.deposit_percentage,
+        due_in_days=cfg.due_in_days,
+    )
     return ProjectRead.model_validate(project)

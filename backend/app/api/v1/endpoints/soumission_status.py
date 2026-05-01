@@ -118,5 +118,26 @@ async def change_soumission_status(
                 sm.client_id = existing_client.id
 
     await db.flush()
+
+    # Auto-création du projet + facture d'acompte DRAFT à
+    # l'acceptation. Idempotent : si déjà créé (ex. via la signature
+    # publique antérieure ou un changement de statut précédent), la
+    # fonction le détecte et ne refait rien. La facture reste en
+    # DRAFT — l'utilisateur clique « Envoyer au client » quand il
+    # est prêt.
+    if data.status == SoumissionStatus.ACCEPTED.value:
+        from app.api.v1.endpoints.soumission_to_project import (
+            provision_project_for_soumission,
+        )
+        try:
+            await provision_project_for_soumission(db, sm)
+            await db.flush()
+        except Exception:  # noqa: BLE001
+            # Best-effort : si la provision échoue (DB transient,
+            # données partielles…), on ne bloque pas le changement
+            # de statut. L'utilisateur pourra relancer manuellement
+            # via /soumissions/{id}/convert-to-project.
+            pass
+
     await db.refresh(sm)
     return SoumissionRead.model_validate(sm)

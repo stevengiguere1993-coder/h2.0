@@ -44,6 +44,14 @@ class FactureSendRequest(BaseModel):
     cc: Optional[List[EmailStr]] = None
     subject: Optional[str] = Field(default=None, max_length=255)
     message: Optional[str] = Field(default=None, max_length=4000)
+    include_statement: bool = Field(
+        default=False,
+        description=(
+            "Si True, joint en plus de la facture une page « État de "
+            "compte » récapitulant toutes les factures et paiements "
+            "du projet."
+        ),
+    )
 
 
 @router.post(
@@ -66,6 +74,7 @@ async def send_facture_endpoint(
             cc=[str(a) for a in (data.cc or [])],
             subject=data.subject,
             message=data.message,
+            include_statement=data.include_statement,
         )
     except FactureSendError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -85,12 +94,22 @@ async def get_facture_pdf(
     facture_id: int,
     db: DBSession,
     _: CurrentUser,
+    include_statement: bool = False,
 ) -> Response:
-    rendered = await render_facture_pdf(db, facture_id)
+    """Avec ``?include_statement=true``, l'état de compte du projet
+    (toutes les factures + paiements) est appendé après la facture
+    dans un PDF unique."""
+    rendered = await render_facture_pdf(
+        db, facture_id, include_statement=include_statement,
+    )
     if rendered is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Facture not found")
     fa, pdf_bytes = rendered
-    filename = f"facture-{fa.reference}.pdf"
+    filename = (
+        f"facture-{fa.reference}-avec-etat.pdf"
+        if include_statement
+        else f"facture-{fa.reference}.pdf"
+    )
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
