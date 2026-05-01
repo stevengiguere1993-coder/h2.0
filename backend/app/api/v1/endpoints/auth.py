@@ -187,6 +187,32 @@ async def mailer_status(
     return out
 
 
+class ThemePreferenceUpdate(BaseModel):
+    """Préférence visuelle du portail interne. 'light' = noir sur blanc,
+    'dark' = blanc sur noir. Aucun effet sur la landing publique."""
+
+    theme: str = Field(..., pattern="^(light|dark)$")
+
+
+@router.patch(
+    "/me/theme",
+    response_model=UserRead,
+    summary="Met à jour la préférence de thème de l'utilisateur courant",
+)
+async def update_my_theme(
+    body: ThemePreferenceUpdate,
+    db: DBSession,
+    current_user: CurrentUser,
+) -> UserRead:
+    u = (
+        await db.execute(select(User).where(User.id == current_user.id))
+    ).scalar_one()
+    u.theme_preference = body.theme
+    await db.flush()
+    await db.refresh(u)
+    return UserRead.model_validate(u)
+
+
 @router.post(
     "/change-password",
     response_model=UserRead,

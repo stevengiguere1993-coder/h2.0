@@ -69,6 +69,9 @@ class UserRead(UserBase):
     role: str = "employee"
     must_change_password: bool = False
     created_at: datetime
+    # Préférence visuelle du portail. 'light' (noir sur blanc, défaut)
+    # ou 'dark' (blanc sur noir). Persistée par utilisateur en DB.
+    theme_preference: str = "light"
 
 
 class UserUpdate(BaseModel):

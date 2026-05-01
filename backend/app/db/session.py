@@ -258,6 +258,14 @@ async def init_db() -> None:
                 "BOOLEAN NOT NULL DEFAULT FALSE",
             ),
             ("users", "agenda_invite_token", "VARCHAR(64)"),
+            # Préférence de thème portail. 'light' (noir sur blanc) =
+            # défaut. 'dark' = blanc sur noir (legacy). N'affecte que
+            # le portail interne — la landing publique reste dark.
+            (
+                "users",
+                "theme_preference",
+                "VARCHAR(8) NOT NULL DEFAULT 'light'",
+            ),
             # AgendaEvent : champs pour l'invitation email + confirmation
             (
                 "agenda_events",

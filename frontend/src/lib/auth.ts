@@ -39,6 +39,7 @@ export type CurrentUser = {
   is_admin: boolean;
   role: UserRole;
   must_change_password?: boolean;
+  theme_preference?: "light" | "dark";
 };
 
 const ROLE_RANK: Record<UserRole, number> = {

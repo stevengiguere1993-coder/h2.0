@@ -126,6 +126,17 @@ class User(Base, TimestampMixin):
         String(64), nullable=True, index=True
     )
 
+    # Préférence de thème pour le portail (volets construction +
+    # prospection + app mobile). 'light' = noir sur blanc (défaut),
+    # 'dark' = blanc sur noir. La page publique (immohorizon.com)
+    # garde toujours son thème dark, peu importe ce champ.
+    theme_preference: Mapped[str] = mapped_column(
+        String(8),
+        nullable=False,
+        default="light",
+        server_default="light",
+    )
+
     def has_min_role(self, role: str) -> bool:
         return ROLE_RANK.get(self.role, 0) >= ROLE_RANK.get(role, 99)
 
