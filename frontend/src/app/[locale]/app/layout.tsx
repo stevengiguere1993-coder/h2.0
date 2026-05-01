@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
+import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -21,33 +22,28 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
   if (!user) return null;
 
-  return (
-    <div className="flex min-h-screen bg-brand-950">
-      <AppSidebar
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-        userEmail={user.email}
-        onSignOut={signOut}
-      />
+  const initialTheme = (user.theme_preference as Theme) || "light";
 
-      {/* AppLayoutContext is not used yet; pages render their own AppTopbar
-          so they can set the breadcrumbs + rightSlot contextually. The
-          onOpenSidebar prop is passed through a simple event for now. */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* Each page renders its own <AppTopbar> via <AppPageShell>;
-            we forward the sidebar toggle through a CSS-only mobile burger
-            by mounting a hidden input that pages listen for. Simpler:
-            pages accept a prop via context. For now the top-bar is in
-            each page; the burger is inside the page topbar and talks to
-            the context below. */}
-        <AppLayoutContextProvider onOpenSidebar={() => setSidebarOpen(true)}>
-          <ConfirmProvider>
-            <main className="flex-1 overflow-x-hidden">{children}</main>
-            <HelpButton />
-          </ConfirmProvider>
-        </AppLayoutContextProvider>
+  return (
+    <ThemeProvider initialTheme={initialTheme}>
+      <div className="flex min-h-screen bg-brand-950">
+        <AppSidebar
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          userEmail={user.email}
+          onSignOut={signOut}
+        />
+
+        <div className="flex min-w-0 flex-1 flex-col">
+          <AppLayoutContextProvider onOpenSidebar={() => setSidebarOpen(true)}>
+            <ConfirmProvider>
+              <main className="flex-1 overflow-x-hidden">{children}</main>
+              <HelpButton />
+            </ConfirmProvider>
+          </AppLayoutContextProvider>
+        </div>
       </div>
-    </div>
+    </ThemeProvider>
   );
 }
 

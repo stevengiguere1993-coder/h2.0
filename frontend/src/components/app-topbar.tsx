@@ -5,6 +5,7 @@ import { Menu, Search } from "lucide-react";
 import { Link } from "@/i18n/navigation";
 import { GlobalSearch } from "@/components/global-search";
 import { NotificationBell } from "@/components/notification-bell";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 type Crumb = { label: string; href?: string };
 
@@ -61,6 +62,7 @@ export function AppTopbar({
         })}
       </nav>
 
+      <ThemeToggle />
       <NotificationBell />
 
       {onSearch ? (

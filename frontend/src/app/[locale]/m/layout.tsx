@@ -13,6 +13,8 @@ import {
 import { Link } from "@/i18n/navigation";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
+import { ThemeProvider, type Theme } from "@/components/theme-provider";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { getToken, getMe, type CurrentUser } from "@/lib/auth";
 
 type Tab = {
@@ -71,9 +73,22 @@ export default function MobileLayout({
   // chemins /m/prospection* doivent rester focalisés.
   const inProspection = pathname.includes("/m/prospection");
 
+  const initialTheme = (me?.theme_preference as Theme) || "light";
+
   return (
+    <ThemeProvider initialTheme={initialTheme}>
     <ConfirmProvider>
     <main className="flex min-h-screen flex-col bg-brand-950 text-white">
+      {/* Bouton thème (haut-droite, en overlay sur le contenu mobile) */}
+      <div
+        className="pointer-events-none fixed right-3 top-3 z-50"
+        style={{ paddingTop: "env(safe-area-inset-top)" }}
+      >
+        <div className="pointer-events-auto">
+          <ThemeToggle />
+        </div>
+      </div>
+
       <div className={inProspection ? "flex-1" : "flex-1 pb-20"}>
         {children}
       </div>
@@ -124,5 +139,6 @@ export default function MobileLayout({
       <span id="hsi-me" data-email={me?.email || ""} className="hidden" />
     </main>
     </ConfirmProvider>
+    </ThemeProvider>
   );
 }

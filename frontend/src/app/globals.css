@@ -97,3 +97,81 @@
     @apply my-10 border-brand-800;
   }
 }
+
+/* =====================================================================
+ * Thème clair du portail interne (volets construction + prospection +
+ * /m). Activé en posant `data-portal-theme="light"` sur <html> via le
+ * ThemeProvider. La landing publique (immohorizon.com) ne mount jamais
+ * le ThemeProvider, donc l'attribut est absent et le thème dark
+ * d'origine s'applique.
+ *
+ * Stratégie : on override les utilitaires Tailwind les plus utilisés
+ * dans le portail (bg-brand-700/800/900/950, text-white avec ses
+ * variantes d'opacité, border-brand-700/800/900). Évite de toucher
+ * 120+ fichiers ; les couleurs accent (emerald, amber, rose) restent
+ * inchangées car ce sont des highlights qui marchent dans les deux
+ * thèmes.
+ * ===================================================================== */
+html[data-portal-theme="light"] {
+  color-scheme: light;
+}
+
+/* Backgrounds — les 4 niveaux du palette inversés sur une échelle claire */
+html[data-portal-theme="light"] .bg-brand-950 { background-color: #ffffff !important; }
+html[data-portal-theme="light"] .bg-brand-900 { background-color: #f8fafc !important; }
+html[data-portal-theme="light"] .bg-brand-800 { background-color: #eef2f6 !important; }
+html[data-portal-theme="light"] .bg-brand-700 { background-color: #e2e8f0 !important; }
+
+/* Variantes d'opacité fréquentes sur bg-brand-9xx (utilisées avec /40, /60, /95) */
+html[data-portal-theme="light"] .bg-brand-950\/40 { background-color: rgb(255 255 255 / 0.6) !important; }
+html[data-portal-theme="light"] .bg-brand-950\/60 { background-color: rgb(255 255 255 / 0.8) !important; }
+html[data-portal-theme="light"] .bg-brand-950\/80 { background-color: rgb(255 255 255 / 0.9) !important; }
+html[data-portal-theme="light"] .bg-brand-950\/95 { background-color: rgb(255 255 255 / 0.95) !important; }
+html[data-portal-theme="light"] .bg-brand-900\/40 { background-color: rgb(248 250 252 / 0.6) !important; }
+html[data-portal-theme="light"] .bg-brand-900\/60 { background-color: rgb(248 250 252 / 0.8) !important; }
+html[data-portal-theme="light"] .bg-brand-900\/80 { background-color: rgb(248 250 252 / 0.9) !important; }
+html[data-portal-theme="light"] .bg-brand-800\/40 { background-color: rgb(238 242 246 / 0.6) !important; }
+html[data-portal-theme="light"] .bg-brand-800\/60 { background-color: rgb(238 242 246 / 0.8) !important; }
+html[data-portal-theme="light"] .bg-brand-800\/80 { background-color: rgb(238 242 246 / 0.9) !important; }
+
+/* Hover variants */
+html[data-portal-theme="light"] .hover\:bg-brand-800:hover { background-color: #eef2f6 !important; }
+html[data-portal-theme="light"] .hover\:bg-brand-900:hover { background-color: #f8fafc !important; }
+html[data-portal-theme="light"] .hover\:bg-brand-800\/40:hover { background-color: rgb(238 242 246 / 0.7) !important; }
+html[data-portal-theme="light"] .hover\:bg-brand-800\/60:hover { background-color: rgb(238 242 246 / 0.8) !important; }
+
+/* body — l'élément <body> a `bg-brand-950` via la base layer */
+html[data-portal-theme="light"] body { background-color: #ffffff; color: #0f172a; }
+
+/* Text — text-white et ses variantes d'opacité passent en quasi-noir */
+html[data-portal-theme="light"] .text-white { color: #0f172a !important; }
+html[data-portal-theme="light"] .text-white\/90 { color: rgb(15 23 42 / 0.95) !important; }
+html[data-portal-theme="light"] .text-white\/80 { color: rgb(15 23 42 / 0.85) !important; }
+html[data-portal-theme="light"] .text-white\/70 { color: rgb(15 23 42 / 0.78) !important; }
+html[data-portal-theme="light"] .text-white\/60 { color: rgb(15 23 42 / 0.65) !important; }
+html[data-portal-theme="light"] .text-white\/50 { color: rgb(15 23 42 / 0.55) !important; }
+html[data-portal-theme="light"] .text-white\/40 { color: rgb(15 23 42 / 0.45) !important; }
+html[data-portal-theme="light"] .text-white\/30 { color: rgb(15 23 42 / 0.35) !important; }
+
+/* Brand text classes (text-brand-100/200/300 utilisés sur les paragraphes) */
+html[data-portal-theme="light"] .text-brand-50,
+html[data-portal-theme="light"] .text-brand-100,
+html[data-portal-theme="light"] .text-brand-200 { color: #334155 !important; }
+html[data-portal-theme="light"] .text-brand-300 { color: #64748b !important; }
+
+/* Hover sur le texte */
+html[data-portal-theme="light"] .hover\:text-white:hover { color: #0f172a !important; }
+
+/* Borders — claires sur fond blanc */
+html[data-portal-theme="light"] .border-brand-700 { border-color: #cbd5e1 !important; }
+html[data-portal-theme="light"] .border-brand-800 { border-color: #e2e8f0 !important; }
+html[data-portal-theme="light"] .border-brand-900 { border-color: #eef2f6 !important; }
+
+/* Divides */
+html[data-portal-theme="light"] .divide-brand-800 > :not([hidden]) ~ :not([hidden]) { border-color: #e2e8f0 !important; }
+html[data-portal-theme="light"] .divide-brand-700 > :not([hidden]) ~ :not([hidden]) { border-color: #cbd5e1 !important; }
+
+/* Placeholders sur les inputs */
+html[data-portal-theme="light"] .placeholder\:text-white\/40::placeholder { color: rgb(15 23 42 / 0.45) !important; }
+html[data-portal-theme="light"] .placeholder\:text-brand-300::placeholder { color: #94a3b8 !important; }
+

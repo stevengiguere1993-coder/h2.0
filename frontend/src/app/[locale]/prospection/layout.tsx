@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
 import { ProspectionSidebar } from "@/components/prospection-sidebar";
+import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
 export default function ProspectionLayout({
@@ -25,26 +26,30 @@ export default function ProspectionLayout({
   }
   if (!user) return null;
 
-  return (
-    <div className="flex min-h-screen bg-brand-950">
-      <ProspectionSidebar
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-        userEmail={user.email}
-        onSignOut={signOut}
-      />
+  const initialTheme = (user.theme_preference as Theme) || "light";
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <ProspectionLayoutContextProvider
-          onOpenSidebar={() => setSidebarOpen(true)}
-        >
-          <ConfirmProvider>
-            <main className="flex-1 overflow-x-hidden">{children}</main>
-            <HelpButton />
-          </ConfirmProvider>
-        </ProspectionLayoutContextProvider>
+  return (
+    <ThemeProvider initialTheme={initialTheme}>
+      <div className="flex min-h-screen bg-brand-950">
+        <ProspectionSidebar
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          userEmail={user.email}
+          onSignOut={signOut}
+        />
+
+        <div className="flex min-w-0 flex-1 flex-col">
+          <ProspectionLayoutContextProvider
+            onOpenSidebar={() => setSidebarOpen(true)}
+          >
+            <ConfirmProvider>
+              <main className="flex-1 overflow-x-hidden">{children}</main>
+              <HelpButton />
+            </ConfirmProvider>
+          </ProspectionLayoutContextProvider>
+        </div>
       </div>
-    </div>
+    </ThemeProvider>
   );
 }
 
