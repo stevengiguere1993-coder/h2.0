@@ -146,6 +146,7 @@ export default function FactureDetailPage() {
   const [qboNotice, setQboNotice] = useState<string | null>(null);
 
   const [sendOpen, setSendOpen] = useState(false);
+  const [includeStatement, setIncludeStatement] = useState(false);
   const [sendBusy, setSendBusy] = useState(false);
   const [sendNotice, setSendNotice] = useState<string | null>(null);
   const [sendTo, setSendTo] = useState("");
@@ -443,9 +444,12 @@ export default function FactureDetailPage() {
     }
   }
 
-  async function previewPdf() {
+  async function previewPdf(withStatement: boolean = false) {
     try {
-      const res = await authedFetch(`/api/v1/factures/${id}/pdf`);
+      const url0 = `/api/v1/factures/${id}/pdf${
+        withStatement ? "?include_statement=true" : ""
+      }`;
+      const res = await authedFetch(url0);
       if (!res.ok) throw new Error(`http_${res.status}`);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -481,7 +485,8 @@ export default function FactureDetailPage() {
           to,
           cc: cc.length > 0 ? cc : null,
           subject: sendSubject || null,
-          message: sendMessage || null
+          message: sendMessage || null,
+          include_statement: includeStatement
         })
       });
       if (!res.ok) {
@@ -617,7 +622,7 @@ export default function FactureDetailPage() {
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
               <button
                 type="button"
-                onClick={previewPdf}
+                onClick={() => previewPdf(false)}
                 className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500"
               >
                 <FileText className="mt-0.5 h-5 w-5 flex-shrink-0 text-accent-500" />
@@ -1234,33 +1239,62 @@ export default function FactureDetailPage() {
                   className="input"
                 />
               </div>
+
+              <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-brand-800 bg-brand-900/40 p-3 hover:border-accent-500/40">
+                <input
+                  type="checkbox"
+                  checked={includeStatement}
+                  onChange={(e) => setIncludeStatement(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span className="text-sm">
+                  <span className="block font-medium text-white">
+                    Inclure l&apos;état de compte
+                  </span>
+                  <span className="mt-0.5 block text-[11px] text-white/60">
+                    Ajoute après la facture une page récapitulant
+                    toutes les factures et paiements du projet (total
+                    contrat, déjà facturé, déjà payé, solde à venir).
+                  </span>
+                </span>
+              </label>
             </div>
 
-            <div className="mt-6 flex items-center justify-end gap-3">
+            <div className="mt-6 flex items-center justify-between gap-3">
               <button
                 type="button"
-                onClick={() => setSendOpen(false)}
+                onClick={() => previewPdf(includeStatement)}
                 disabled={sendBusy}
-                className="btn-secondary text-sm"
+                className="text-xs text-white/60 underline-offset-4 hover:text-accent-500 hover:underline"
               >
-                Annuler
+                Prévisualiser le PDF
               </button>
-              <button
-                type="button"
-                onClick={sendToClient}
-                disabled={sendBusy || !sendTo.trim()}
-                className="btn-accent text-sm disabled:opacity-60"
-              >
-                {sendBusy ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Envoi…
-                  </>
-                ) : (
-                  <>
-                    <Send className="mr-2 h-4 w-4" /> Envoyer
-                  </>
-                )}
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setSendOpen(false)}
+                  disabled={sendBusy}
+                  className="btn-secondary text-sm"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  onClick={sendToClient}
+                  disabled={sendBusy || !sendTo.trim()}
+                  className="btn-accent text-sm disabled:opacity-60"
+                >
+                  {sendBusy ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Envoi…
+                    </>
+                  ) : (
+                    <>
+                      <Send className="mr-2 h-4 w-4" /> Envoyer
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>

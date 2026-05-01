@@ -5,9 +5,10 @@ import { usePathname, useRouter as useNextRouter } from "next/navigation";
 import {
   Briefcase,
   Calendar,
-  CheckSquare,
+  FileText,
   Home,
-  Menu
+  Menu,
+  ShoppingCart
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
@@ -23,11 +24,14 @@ type Tab = {
   icon: React.ComponentType<{ className?: string }>;
 };
 
+// 6 onglets en bas : Accueil, Agenda, Projets, Achats, Facturation,
+// Plus. Tâches a été déplacée dans « Plus » pour libérer la place.
 const TABS: Tab[] = [
   { href: "/m", label: "Accueil", icon: Home },
   { href: "/m/agenda", label: "Agenda", icon: Calendar },
   { href: "/m/projets", label: "Projets", icon: Briefcase },
-  { href: "/m/taches", label: "Tâches", icon: CheckSquare },
+  { href: "/m/achats", label: "Achats", icon: ShoppingCart },
+  { href: "/m/facturation", label: "Facturation", icon: FileText },
   { href: "/m/plus", label: "Plus", icon: Menu }
 ];
 

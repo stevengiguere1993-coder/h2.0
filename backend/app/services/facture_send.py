@@ -72,6 +72,7 @@ async def send_facture(
     cc: Optional[Iterable[str]] = None,
     subject: Optional[str] = None,
     message: Optional[str] = None,
+    include_statement: bool = False,
 ) -> Facture:
     mailer = get_mailer()
     if not mailer.ready:
@@ -79,7 +80,9 @@ async def send_facture(
             "Microsoft Graph mailer is not configured (AZURE_* / MAIL_FROM_EMAIL)."
         )
 
-    rendered = await render_facture_pdf(db, facture_id)
+    rendered = await render_facture_pdf(
+        db, facture_id, include_statement=include_statement,
+    )
     if rendered is None:
         raise FactureSendError(f"Facture {facture_id} introuvable.")
     fa, pdf_bytes = rendered
@@ -91,8 +94,13 @@ async def send_facture(
     cc_list = [a.strip() for a in (cc or []) if a and a.strip()]
     subj = subject or _default_subject(fa)
     body_html = _default_body_html(fa, message)
+    attachment_name = (
+        f"facture-{fa.reference}-avec-etat.pdf"
+        if include_statement
+        else f"facture-{fa.reference}.pdf"
+    )
     attachment = EmailAttachment(
-        name=f"facture-{fa.reference}.pdf",
+        name=attachment_name,
         content_bytes=pdf_bytes,
         content_type="application/pdf",
     )

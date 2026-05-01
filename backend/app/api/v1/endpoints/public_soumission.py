@@ -255,6 +255,22 @@ async def public_accept(
                 sm.client_id = existing.id
 
     await db.flush()
+
+    # Auto-création du projet + facture d'acompte DRAFT dès la
+    # signature en ligne. La facture reste en DRAFT dans /facturation
+    # — l'admin clique « Envoyer au client » plus tard.
+    try:
+        from app.api.v1.endpoints.soumission_to_project import (
+            provision_project_for_soumission,
+        )
+        await provision_project_for_soumission(db, sm)
+        await db.flush()
+    except Exception:  # noqa: BLE001
+        # Best-effort : ne pas bloquer la signature client si la
+        # création du projet échoue. L'admin pourra relancer
+        # manuellement.
+        pass
+
     await db.refresh(sm)
 
     # Notify managers+ that the quote was signed online
