@@ -686,6 +686,177 @@ async def generate_daily_pulse(
     return DailyBriefingOut.from_summary(s)
 
 
+# ── Scoring proactif IA ─────────────────────────────────────────────────
+
+
+class TacheScoreSuggestion(BaseModel):
+    impact: int = Field(..., ge=1, le=10)
+    confidence: int = Field(..., ge=1, le=10)
+    effort: int = Field(..., ge=1, le=10)
+    rationale: str
+    score: float
+    provider: Optional[str] = None
+    model: Optional[str] = None
+
+
+class TacheScoreSuggestRequest(BaseModel):
+    """Variante preview — pour les tâches qui n'existent pas encore.
+    Permet d'appeler l'IA depuis le modal de création avant de saver."""
+
+    entreprise_id: int
+    title: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    departement: Optional[str] = None
+    due_date: Optional[date] = None
+
+
+async def _build_score_suggestion(
+    *,
+    title: str,
+    description: Optional[str],
+    departement: Optional[str],
+    due_date: Optional[date],
+    entreprise_name: Optional[str],
+    entreprise_description: Optional[str],
+) -> TacheScoreSuggestion:
+    import json as _json
+
+    from app.integrations.ai import (
+        AIProviderError,
+        AIProviderUnavailable,
+        complete,
+    )
+
+    parts = []
+    if entreprise_name:
+        parts.append(f"Entreprise : {entreprise_name}")
+    if entreprise_description:
+        parts.append(f"Contexte entreprise : {entreprise_description}")
+    if departement:
+        parts.append(f"Département : {departement}")
+    if due_date:
+        parts.append(f"Échéance prévue : {due_date.isoformat()}")
+    parts.append(f"Titre de la tâche : {title}")
+    if description:
+        parts.append(f"Description : {description}")
+
+    prompt = (
+        "\n".join(parts)
+        + "\n\nÉvalue cette tâche selon le framework ICE puis renvoie "
+        "STRICTEMENT un JSON avec :\n"
+        '  "impact" (entier 1-10) : effet sur revenu / risque / '
+        "conformité (10 = critique pour l'entreprise)\n"
+        '  "confidence" (entier 1-10) : à quel point on est sûr du '
+        "résultat (10 = quasi-garanti)\n"
+        '  "effort" (entier 1-10) : temps/ressources requis (10 = '
+        "très lourd)\n"
+        '  "rationale" (string, 2-3 phrases en français québécois) : '
+        "pourquoi ces scores.\n\n"
+        "Réponds UNIQUEMENT avec le JSON, sans markdown."
+    )
+    system = (
+        "Tu es un consultant stratégique. Tu évalues la priorité des "
+        "tâches d'entreprise de façon factuelle, sans flatterie. "
+        "Conservateur sur la confiance ; rigoureux sur l'effort."
+    )
+
+    try:
+        res = await complete(
+            prompt=prompt, system=system, max_tokens=350, temperature=0.3
+        )
+    except AIProviderUnavailable as exc:
+        raise HTTPException(503, str(exc))
+    except AIProviderError as exc:
+        raise HTTPException(502, str(exc))
+
+    raw = res.text.strip()
+    if raw.startswith("```"):
+        raw = "\n".join(raw.split("\n")[1:])
+        if raw.endswith("```"):
+            raw = raw[:-3]
+    raw = raw.strip()
+
+    try:
+        parsed = _json.loads(raw)
+        impact = max(1, min(10, int(parsed["impact"])))
+        confidence = max(1, min(10, int(parsed["confidence"])))
+        effort = max(1, min(10, int(parsed["effort"])))
+        rationale = str(parsed.get("rationale") or "").strip()[:1000]
+    except Exception as exc:
+        raise HTTPException(
+            502,
+            f"Réponse IA non parsable : {exc}. Brut : {res.text[:200]}",
+        )
+
+    score = round((impact * confidence) / max(effort, 1), 2)
+    return TacheScoreSuggestion(
+        impact=impact,
+        confidence=confidence,
+        effort=effort,
+        rationale=rationale,
+        score=score,
+        provider=res.provider,
+        model=res.model,
+    )
+
+
+@router.post(
+    "/taches/suggest-score",
+    response_model=TacheScoreSuggestion,
+    summary="Suggère un score ICE depuis un draft de tâche (preview, sans DB)",
+)
+async def suggest_score_preview(
+    body: TacheScoreSuggestRequest,
+    db: DBSession,
+    user: CurrentUser,
+) -> TacheScoreSuggestion:
+    _require_volet(user)
+    ent = (
+        await db.execute(
+            select(Entreprise).where(Entreprise.id == body.entreprise_id)
+        )
+    ).scalar_one_or_none()
+    return await _build_score_suggestion(
+        title=body.title,
+        description=body.description,
+        departement=body.departement,
+        due_date=body.due_date,
+        entreprise_name=ent.name if ent else None,
+        entreprise_description=ent.description if ent else None,
+    )
+
+
+@router.post(
+    "/taches/{tache_id}/suggest-score",
+    response_model=TacheScoreSuggestion,
+    summary="Suggère un score ICE pour une tâche existante (par id)",
+)
+async def suggest_score_by_id(
+    tache_id: int, db: DBSession, user: CurrentUser
+) -> TacheScoreSuggestion:
+    _require_volet(user)
+    t = (
+        await db.execute(
+            select(EntrepriseTache).where(EntrepriseTache.id == tache_id)
+        )
+    ).scalar_one_or_none()
+    if t is None:
+        raise HTTPException(404, "Tâche non trouvée")
+    ent = (
+        await db.execute(
+            select(Entreprise).where(Entreprise.id == t.entreprise_id)
+        )
+    ).scalar_one_or_none()
+    return await _build_score_suggestion(
+        title=t.title,
+        description=t.description,
+        departement=t.departement,
+        due_date=t.due_date,
+        entreprise_name=ent.name if ent else None,
+        entreprise_description=ent.description if ent else None,
+    )
+
+
 # ── Index sémantique (recherche IA) ─────────────────────────────────────
 
 
