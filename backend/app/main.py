@@ -34,6 +34,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:
         logger.warning("init_db failed during startup: %s", exc)
 
+    # Backfill : crée le projet (+ facture d'acompte DRAFT) pour les
+    # soumissions ACCEPTED qui n'en ont pas encore. Rattrape les
+    # acceptations antérieures à l'auto-création (PR #45). Best-effort,
+    # silencieux en cas d'échec — le service tourne quand même.
+    try:
+        from app.api.v1.endpoints.soumission_to_project import (
+            backfill_accepted_soumissions,
+        )
+        from app.db.session import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as session:
+            n = await backfill_accepted_soumissions(session)
+            if n:
+                logger.info(
+                    "Startup backfill: %d project(s) created from "
+                    "previously-accepted soumissions",
+                    n,
+                )
+    except Exception as exc:
+        logger.warning("backfill_accepted_soumissions failed: %s", exc)
+
     yield
     await close_db()
 

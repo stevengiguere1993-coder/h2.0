@@ -187,6 +187,51 @@ async def provision_project_for_soumission(
     return project, facture
 
 
+async def backfill_accepted_soumissions(db: AsyncSession) -> int:
+    """Crée le projet (et la facture d'acompte DRAFT) pour toutes les
+    soumissions déjà acceptées qui n'ont pas encore de projet associé.
+
+    Idempotent : appelable plusieurs fois, ne refait rien sur les
+    soumissions déjà rattachées à un projet.
+
+    Conçu pour être appelé au démarrage de l'app, après init_db, pour
+    rattraper les soumissions acceptées avant l'introduction de
+    l'auto-création (PR #45).
+
+    Retourne le nombre de projets créés.
+    """
+    from app.models.soumission import SoumissionStatus
+
+    # Soumissions ACCEPTED sans Project lié (LEFT JOIN puis filtre).
+    rows = (
+        await db.execute(
+            select(Soumission)
+            .outerjoin(Project, Project.soumission_id == Soumission.id)
+            .where(
+                Soumission.status == SoumissionStatus.ACCEPTED.value,
+                Project.id.is_(None),
+            )
+        )
+    ).scalars().all()
+
+    created = 0
+    for sm in rows:
+        try:
+            project, _facture = await provision_project_for_soumission(db, sm)
+            # provision_project_for_soumission est idempotente — si elle
+            # retourne un projet existant elle ne crée rien et renvoie
+            # facture=None. On compte uniquement les vraies créations.
+            if project is not None and project.soumission_id == sm.id:
+                created += 1
+        except Exception:  # noqa: BLE001
+            # Best-effort : un échec sur une soumission ne bloque pas
+            # le rattrapage des autres.
+            continue
+    if created > 0:
+        await db.commit()
+    return created
+
+
 @router.post(
     "/{soumission_id}/convert-to-project",
     response_model=ProjectRead,
