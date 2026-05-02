@@ -71,6 +71,29 @@ function shiftPeriodEnd(currentEnd: string, days: number): string {
   return `${y}-${mo}-${da}`;
 }
 
+// Construit une liste de fins de période (ISO YYYY-MM-DD) centrée
+// sur `currentEnd`. 4 périodes futures + 13 passées = 18 entrées,
+// du futur vers le passé, pour le menu déroulant de sélection.
+function buildPeriodOptions(currentEnd: string): string[] {
+  const out: string[] = [];
+  for (let i = 4; i >= -13; i--) {
+    out.push(shiftPeriodEnd(currentEnd, i * 14));
+  }
+  return out;
+}
+
+function periodLabel(periodEnd: string): string {
+  // « Paie 19 avr. → 02 mai » à partir de la fin de période ISO
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(periodEnd);
+  if (!m) return periodEnd;
+  const end = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const start = new Date(end);
+  start.setDate(start.getDate() - 13);
+  const fmt = (d: Date) =>
+    d.toLocaleDateString("fr-CA", { day: "2-digit", month: "short" });
+  return `Paie ${fmt(start)} → ${fmt(end)}`;
+}
+
 export default function PaiePage() {
   const { onOpenSidebar } = useAppLayout();
   const [report, setReport] = useState<Report | null>(null);
@@ -149,17 +172,46 @@ export default function PaiePage() {
             </p>
           </div>
           {report ? (
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  setPeriodEnd(shiftPeriodEnd(report.period_end, -14))
-                }
-                className="btn-secondary text-xs"
-                title="Période précédente"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-900 p-1">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPeriodEnd(shiftPeriodEnd(report.period_end, -14))
+                  }
+                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+                  title="Période précédente"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                {/* Menu déroulant : sélection directe d'une période de paie */}
+                <select
+                  value={report.period_end}
+                  onChange={(e) => setPeriodEnd(e.target.value)}
+                  className="min-w-[230px] cursor-pointer rounded-md bg-transparent px-2 text-center text-sm font-semibold text-white hover:bg-brand-800 focus:outline-none"
+                  title="Choisir une période de paie"
+                >
+                  {buildPeriodOptions(report.period_end).map((opt) => (
+                    <option
+                      key={opt}
+                      value={opt}
+                      className="bg-brand-950 text-white"
+                    >
+                      {periodLabel(opt)}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPeriodEnd(shiftPeriodEnd(report.period_end, 14))
+                  }
+                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+                  title="Période suivante"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={() => setPeriodEnd(null)}
@@ -167,16 +219,6 @@ export default function PaiePage() {
                 title="Période courante"
               >
                 Aujourd&apos;hui
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setPeriodEnd(shiftPeriodEnd(report.period_end, 14))
-                }
-                className="btn-secondary text-xs"
-                title="Période suivante"
-              >
-                <ChevronRight className="h-4 w-4" />
               </button>
               <button
                 type="button"
