@@ -276,6 +276,7 @@ export default function SoumissionsPage() {
                         <SoumissionCard
                           key={s.id}
                           soumission={s}
+                          amount={amountFor(s)}
                           dragging={dragging === s.id}
                           onDragStart={() => setDragging(s.id)}
                           onDragEnd={() => {
@@ -299,12 +300,14 @@ export default function SoumissionsPage() {
 
 function SoumissionCard({
   soumission: s,
+  amount,
   dragging,
   onDragStart,
   onDragEnd,
   onDelete
 }: {
   soumission: Soumission;
+  amount: number | null;
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -345,9 +348,7 @@ function SoumissionCard({
         </p>
         <div className="mt-3 flex items-center justify-between">
           <span className="text-sm font-bold text-white">
-            {fmtMoney(
-              Number(s.total) > 0 ? s.total : s.subtotal
-            )}
+            {fmtMoney(amount)}
           </span>
           <span className="text-[10px] text-white/40">
             {new Date(s.created_at).toLocaleDateString("fr-CA", {
