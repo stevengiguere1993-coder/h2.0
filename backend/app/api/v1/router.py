@@ -16,6 +16,7 @@ from app.api.v1.endpoints import (
     calendar,
     clients,
     employes,
+    entreprises,
     extension,
     follow_ups,
     contact,
@@ -196,3 +197,4 @@ api_router.include_router(prospection.router)
 api_router.include_router(email_templates.router)
 api_router.include_router(admin_data.router)
 api_router.include_router(help.router)
+api_router.include_router(entreprises.router)
