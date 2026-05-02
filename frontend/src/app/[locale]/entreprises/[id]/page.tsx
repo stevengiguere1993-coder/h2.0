@@ -281,6 +281,9 @@ export default function EntrepriseDetailPage() {
           </div>
         </header>
 
+        {/* Daily Pulse — briefing IA quotidien */}
+        <DailyPulseCard entrepriseId={ent.id} accent={ent.color_accent} />
+
         {error ? (
           <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {error}
@@ -745,5 +748,203 @@ function NumberPicker({
       />
       <p className="mt-1 text-[10px] text-white/40">{hint}</p>
     </div>
+  );
+}
+
+
+// ─── Daily Pulse — card briefing IA ───────────────────────────────────
+
+type DailyBriefing = {
+  id: number;
+  entreprise_id: number;
+  period_start: string;
+  period_end: string;
+  headline: string;
+  summary_text: string;
+  highlights: string[];
+  model_used: string | null;
+  provider: string | null;
+  created_at: string;
+};
+
+function isToday(iso: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!m) return false;
+  const t = new Date();
+  return (
+    Number(m[1]) === t.getFullYear() &&
+    Number(m[2]) === t.getMonth() + 1 &&
+    Number(m[3]) === t.getDate()
+  );
+}
+
+function DailyPulseCard({
+  entrepriseId,
+  accent
+}: {
+  entrepriseId: number;
+  accent: string;
+}) {
+  const [briefing, setBriefing] = useState<DailyBriefing | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function load() {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/entreprises/${entrepriseId}/daily-pulse`
+      );
+      if (res.ok) {
+        const data = (await res.json()) as DailyBriefing | null;
+        setBriefing(data);
+      }
+    } catch {
+      /* silent */
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function generate(force: boolean) {
+    setGenerating(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/entreprises/${entrepriseId}/daily-pulse${force ? "?force=true" : ""}`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      setBriefing((await res.json()) as DailyBriefing);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entrepriseId]);
+
+  const todayBriefing = briefing && isToday(briefing.period_start);
+  // Accent lime pour le badge IA (cohérent avec spec QG)
+  const lime = "#d4ff3a";
+
+  return (
+    <section
+      className="mt-4 overflow-hidden rounded-2xl border bg-gradient-to-br from-brand-900 to-brand-950 p-5"
+      style={{ borderColor: lime + "44" }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span
+            className="relative flex h-2.5 w-2.5"
+            title="IA active"
+          >
+            <span
+              className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60"
+              style={{ backgroundColor: lime }}
+            />
+            <span
+              className="relative inline-flex h-2.5 w-2.5 rounded-full"
+              style={{ backgroundColor: lime }}
+            />
+          </span>
+          <h2
+            className="text-xs font-bold uppercase tracking-wider"
+            style={{ color: lime }}
+          >
+            ✦ Briefing IA du jour
+          </h2>
+        </div>
+        <div className="flex items-center gap-2">
+          {todayBriefing ? (
+            <button
+              type="button"
+              onClick={() => generate(true)}
+              disabled={generating}
+              className="rounded-md border border-brand-700 bg-brand-900 px-2.5 py-1 text-[10px] font-semibold text-white/60 hover:text-white"
+              title="Regénérer le briefing du jour"
+            >
+              {generating ? "…" : "Regénérer"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => generate(false)}
+              disabled={generating}
+              className="rounded-md px-3 py-1 text-[11px] font-bold transition disabled:opacity-60"
+              style={{
+                backgroundColor: lime,
+                color: "#0a0a0b"
+              }}
+            >
+              {generating ? (
+                <>
+                  <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />
+                  Génération…
+                </>
+              ) : (
+                "Générer maintenant"
+              )}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="mt-3 text-xs text-white/40">Chargement…</p>
+      ) : briefing ? (
+        <div className="mt-3">
+          <h3 className="text-base font-bold text-white">
+            {briefing.headline}
+          </h3>
+          <p className="mt-1 text-[10px] text-white/40">
+            Généré le{" "}
+            {new Date(briefing.created_at).toLocaleString("fr-CA", {
+              dateStyle: "medium",
+              timeStyle: "short"
+            })}
+            {briefing.provider ? ` · ${briefing.provider}` : ""}
+            {briefing.model_used ? ` · ${briefing.model_used}` : ""}
+          </p>
+          <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-white/80">
+            {briefing.summary_text}
+          </p>
+          {briefing.highlights && briefing.highlights.length > 0 ? (
+            <ul className="mt-3 space-y-1">
+              {briefing.highlights.map((h, i) => (
+                <li
+                  key={i}
+                  className="flex items-start gap-2 text-xs text-white/70"
+                >
+                  <span style={{ color: lime }}>•</span>
+                  <span>{h}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : (
+        <p className="mt-3 text-xs text-white/60">
+          Aucun briefing aujourd&apos;hui. Cliquez « Générer maintenant »
+          pour produire un résumé matinal basé sur les tâches et activités
+          en cours.
+        </p>
+      )}
+
+      {error ? (
+        <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300">
+          {error}
+        </p>
+      ) : null}
+    </section>
   );
 }
