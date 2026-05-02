@@ -488,6 +488,7 @@ function TacheModal({
   );
   const [dueDate, setDueDate] = useState(existing?.due_date || "");
   const [recurrence, setRecurrence] = useState(existing?.recurrence || "");
+  const [aiRationale, setAiRationale] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -622,9 +623,29 @@ function TacheModal({
           </div>
 
           <div>
-            <label className="label">
-              Scoring ICE — score automatique
-            </label>
+            <div className="mb-2 flex items-center justify-between">
+              <label className="label mb-0">
+                Scoring ICE — score automatique
+              </label>
+              <AISuggestButton
+                disabled={!title.trim()}
+                onSuggest={async () => {
+                  return await suggestScore({
+                    entreprise_id: entrepriseId,
+                    title: title.trim(),
+                    description: description.trim() || null,
+                    departement: departement.trim() || null,
+                    due_date: dueDate || null
+                  });
+                }}
+                onApply={(s) => {
+                  setImpact(String(s.impact));
+                  setConfidence(String(s.confidence));
+                  setEffort(String(s.effort));
+                  setAiRationale(s.rationale);
+                }}
+              />
+            </div>
             <div className="grid gap-3 sm:grid-cols-3">
               <NumberPicker
                 label="Impact (1-10)"
@@ -645,6 +666,19 @@ function TacheModal({
                 hint="Temps estimé (plus haut = score plus bas)"
               />
             </div>
+            {aiRationale ? (
+              <div
+                className="mt-2 rounded-md p-3 text-[11px]"
+                style={{
+                  backgroundColor: "rgba(212,255,58,0.06)",
+                  border: "1px solid rgba(212,255,58,0.25)",
+                  color: "#d4ff3a"
+                }}
+              >
+                <span className="font-bold">✦ Justification IA : </span>
+                <span className="text-[#f5f5f7]/85">{aiRationale}</span>
+              </div>
+            ) : null}
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -946,5 +980,98 @@ function DailyPulseCard({
         </p>
       ) : null}
     </section>
+  );
+}
+
+
+// ─── ✦ Scoring proactif IA ────────────────────────────────────────────
+
+type ScoreSuggestion = {
+  impact: number;
+  confidence: number;
+  effort: number;
+  rationale: string;
+  score: number;
+  provider: string | null;
+  model: string | null;
+};
+
+async function suggestScore(payload: {
+  entreprise_id: number;
+  title: string;
+  description: string | null;
+  departement: string | null;
+  due_date: string | null;
+}): Promise<ScoreSuggestion> {
+  const res = await authedFetch(
+    "/api/v1/entreprises/taches/suggest-score",
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
+  );
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+  }
+  return (await res.json()) as ScoreSuggestion;
+}
+
+function AISuggestButton({
+  disabled,
+  onSuggest,
+  onApply
+}: {
+  disabled?: boolean;
+  onSuggest: () => Promise<ScoreSuggestion>;
+  onApply: (s: ScoreSuggestion) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const s = await onSuggest();
+      onApply(s);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        type="button"
+        onClick={run}
+        disabled={busy || disabled}
+        title={
+          disabled
+            ? "Saisis d'abord le titre de la tâche"
+            : "L'IA analyse la tâche et propose impact/confiance/effort"
+        }
+        className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-bold transition disabled:cursor-not-allowed disabled:opacity-40"
+        style={{
+          backgroundColor: "rgba(212,255,58,0.12)",
+          border: "1px solid rgba(212,255,58,0.45)",
+          color: "#d4ff3a"
+        }}
+      >
+        {busy ? (
+          <>
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Analyse…
+          </>
+        ) : (
+          <>✦ Suggérer avec l&apos;IA</>
+        )}
+      </button>
+      {err ? (
+        <span className="text-[10px] text-rose-300">{err}</span>
+      ) : null}
+    </div>
   );
 }
