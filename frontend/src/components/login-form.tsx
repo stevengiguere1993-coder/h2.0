@@ -194,7 +194,7 @@ export function LoginForm() {
             type="button"
             onClick={() => {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              router.replace("/app/entreprises" as any);
+              router.replace("/entreprises" as any);
             }}
             className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-violet-400 hover:bg-brand-800"
           >
@@ -219,7 +219,7 @@ export function LoginForm() {
             type="button"
             onClick={() => {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              router.replace("/app/immobilier" as any);
+              router.replace("/immobilier" as any);
             }}
             className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-sky-400 hover:bg-brand-800"
           >
@@ -244,7 +244,7 @@ export function LoginForm() {
             type="button"
             onClick={() => {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              router.replace("/app/investisseur" as any);
+              router.replace("/investisseur" as any);
             }}
             className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-emerald-400 hover:bg-brand-800"
           >

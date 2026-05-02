@@ -1,87 +1,85 @@
 "use client";
 
 import {
-  Building2,
   CheckCircle2,
-  ClipboardList,
+  DollarSign,
   FileText,
-  Home,
+  LineChart,
+  Mail,
   Sparkles,
-  Wrench
+  TrendingUp
 } from "lucide-react";
 
-import { AppTopbar } from "@/components/app-topbar";
-import { useAppLayout } from "../layout";
+import { InvestisseurTopbar } from "./layout";
 
 const ROADMAP = [
   {
     phase: "Phase 1",
-    title: "Modèle Immeubles + Logements + Locataires",
+    title: "Modèle Investisseurs + Investissements",
     desc:
-      "Immeubles avec partenariats (% par entreprise), logements, " +
-      "locataires. Lien vers les rôles d'évaluation déjà importés.",
+      "Investisseurs (accrédités ou non), capital injecté par " +
+      "investissement, % de propriété, distributions reçues.",
     status: "pending",
-    icon: Home
+    icon: DollarSign
   },
   {
     phase: "Phase 2",
-    title: "Baux + renouvellements + paiements",
+    title: "Tableau de bord investisseur",
     desc:
-      "Suivi des baux, alertes 90j avant échéance, comparables loyers " +
-      "(Kijiji/LesPAC), workflow paiement.",
+      "Vue read-only : capital total, valeur live, distributions, " +
+      "IRR, equity multiple, mes immeubles.",
     status: "pending",
-    icon: ClipboardList
+    icon: TrendingUp
   },
   {
     phase: "Phase 3",
-    title: "Hypothèques + valorisation + KPIs",
+    title: "Graphique valeur dans le temps + projection KPI",
     desc:
-      "Suivi prêts, alerte refinancement, valeurs (municipale, " +
-      "marchande, appraisal), GRM, cap rate, DSCR, cash-on-cash.",
+      "Ligne live (snapshots mensuels) + ligne pointillée projetée " +
+      "selon le business plan. Marqueurs d'événements.",
     status: "pending",
-    icon: Building2
+    icon: LineChart
   },
   {
     phase: "Phase 4",
-    title: "Maintenance + fournisseurs",
+    title: "Activité 30 jours + communications",
     desc:
-      "Ordres de travail, fournisseurs, photos avant/après, " +
-      "calendrier des entretiens récurrents.",
+      "Cards d'activité (locataire signé, refinancement, capex), " +
+      "messages owner → investisseurs, Q&A traçable.",
     status: "pending",
-    icon: Wrench
+    icon: Mail
   },
   {
     phase: "Phase 5",
-    title: "Coffre-fort de documents",
+    title: "Documents fiscaux + lettres d'appel",
     desc:
-      "Baux, polices d'assurance, hypothèques, inspections, " +
-      "rapports d'évaluation. Recherche par tag, par immeuble.",
+      "T5/T3 générés en fin d'année, lettres de capital appel pour " +
+      "les nouveaux rounds.",
     status: "pending",
     icon: FileText
   }
 ] as const;
 
-export default function ImmobilierPlaceholder() {
-  const { onOpenSidebar } = useAppLayout();
+export default function InvestisseurPlaceholder() {
   return (
     <>
-      <AppTopbar
-        breadcrumbs={[{ label: "Gestion immobilière" }]}
-        onOpenSidebar={onOpenSidebar}
+      <InvestisseurTopbar
+        breadcrumbs={[{ label: "Investisseurs" }]}
       />
       <div className="p-4 lg:p-6">
         <header className="flex items-start gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500/15 text-sky-300">
-            <Building2 className="h-5 w-5" />
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-300">
+            <TrendingUp className="h-5 w-5" />
           </span>
           <div>
             <h1 className="text-2xl font-bold text-white">
-              Gestion immobilière
+              Investisseurs
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-white/60">
-              Volet en développement. Inspiré de Plexflow + ProprioExpert
-              et des meilleures pratiques des PMS US (AppFolio, Yardi,
-              Buildium), adapté au contexte québécois.
+              Volet en développement. Portail pour les investisseurs :
+              capital injecté, valeur live, projection KPI, activité 30
+              jours. Inspiré de Cash Flow Portal, Juniper Square et
+              AppFolio Investment Manager.
             </p>
           </div>
         </header>
@@ -92,7 +90,7 @@ export default function ImmobilierPlaceholder() {
         </div>
 
         <section className="mt-8">
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-sky-300">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-emerald-300">
             Roadmap
           </h2>
           <ol className="mt-4 space-y-3">
