@@ -11,10 +11,9 @@ import {
   Upload
 } from "lucide-react";
 
-import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
-import { useAppLayout } from "../layout";
+import { EntreprisesTopbar } from "./layout";
 
 type Entreprise = {
   id: number;
@@ -36,7 +35,6 @@ const TYPE_LABELS: Record<string, string> = {
 };
 
 export default function EntreprisesListPage() {
-  const { onOpenSidebar } = useAppLayout();
   const [items, setItems] = useState<Entreprise[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -73,14 +71,13 @@ export default function EntreprisesListPage() {
 
   return (
     <>
-      <AppTopbar
+      <EntreprisesTopbar
         breadcrumbs={[{ label: "Gestion d'entreprises" }]}
-        onOpenSidebar={onOpenSidebar}
         rightSlot={
           <div className="flex items-center gap-2">
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              href={"/app/entreprises/import-monday" as any}
+              href={"/entreprises/import-monday" as any}
               className="btn-secondary text-sm"
               title="Importer les tableaux Monday en entreprises + tâches"
             >
@@ -171,7 +168,7 @@ function EntrepriseGrid({ items }: { items: Entreprise[] }) {
         <Link
           key={e.id}
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={`/app/entreprises/${e.id}` as any}
+          href={`/entreprises/${e.id}` as any}
           className="group relative flex flex-col gap-3 rounded-2xl border border-brand-800 bg-brand-900 p-5 transition hover:-translate-y-0.5 hover:border-violet-500/40 hover:shadow-lg"
         >
           <span

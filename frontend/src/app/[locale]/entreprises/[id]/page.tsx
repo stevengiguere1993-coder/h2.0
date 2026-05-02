@@ -11,10 +11,9 @@ import {
   Trash2
 } from "lucide-react";
 
-import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
-import { useAppLayout } from "../../layout";
+import { EntreprisesTopbar } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
 
 type Entreprise = {
@@ -95,7 +94,6 @@ export default function EntrepriseDetailPage() {
   const params = useParams();
   const idStr = String(params?.id ?? "");
   const id = Number(idStr);
-  const { onOpenSidebar } = useAppLayout();
   const confirm = useConfirm();
 
   const [ent, setEnt] = useState<Entreprise | null>(null);
@@ -207,12 +205,11 @@ export default function EntrepriseDetailPage() {
   if (loading || !ent) {
     return (
       <>
-        <AppTopbar
+        <EntreprisesTopbar
           breadcrumbs={[
-            { label: "Gestion d'entreprises", href: "/app/entreprises" },
+            { label: "Gestion d'entreprises", href: "/entreprises" },
             { label: idStr }
           ]}
-          onOpenSidebar={onOpenSidebar}
         />
         <div className="flex min-h-[60vh] items-center justify-center">
           {error ? (
@@ -229,12 +226,11 @@ export default function EntrepriseDetailPage() {
 
   return (
     <>
-      <AppTopbar
+      <EntreprisesTopbar
         breadcrumbs={[
-          { label: "Gestion d'entreprises", href: "/app/entreprises" },
+          { label: "Gestion d'entreprises", href: "/entreprises" },
           { label: ent.name }
         ]}
-        onOpenSidebar={onOpenSidebar}
         rightSlot={
           <button
             type="button"
@@ -250,7 +246,7 @@ export default function EntrepriseDetailPage() {
       <div className="p-4 lg:p-6">
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={"/app/entreprises" as any}
+          href={"/entreprises" as any}
           className="inline-flex items-center text-xs text-white/60 hover:text-violet-300"
         >
           <ArrowLeft className="mr-1 h-3.5 w-3.5" />

@@ -11,10 +11,9 @@ import {
   Upload
 } from "lucide-react";
 
-import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
-import { useAppLayout } from "../../layout";
+import { EntreprisesTopbar } from "../layout";
 
 type Workspace = { id: string; name: string; kind?: string };
 type Board = {
@@ -33,7 +32,6 @@ type ImportResult = {
 };
 
 export default function ImportMondayPage() {
-  const { onOpenSidebar } = useAppLayout();
   const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
   const [boards, setBoards] = useState<Board[]>([]);
   const [discovering, setDiscovering] = useState(false);
@@ -108,17 +106,16 @@ export default function ImportMondayPage() {
 
   return (
     <>
-      <AppTopbar
+      <EntreprisesTopbar
         breadcrumbs={[
-          { label: "Gestion d'entreprises", href: "/app/entreprises" },
+          { label: "Gestion d'entreprises", href: "/entreprises" },
           { label: "Import Monday" }
         ]}
-        onOpenSidebar={onOpenSidebar}
       />
       <div className="p-4 lg:p-6">
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={"/app/entreprises" as any}
+          href={"/entreprises" as any}
           className="inline-flex items-center text-xs text-white/60 hover:text-violet-300"
         >
           <ArrowLeft className="mr-1 h-3.5 w-3.5" />
@@ -382,7 +379,7 @@ export default function ImportMondayPage() {
               ) : null}
               <Link
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                href={"/app/entreprises" as any}
+                href={"/entreprises" as any}
                 className="mt-3 inline-flex items-center text-xs font-semibold text-emerald-300 hover:text-emerald-200"
               >
                 Voir les entreprises importées →
