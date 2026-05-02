@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   BarChart3,
   Briefcase,
+  Building2,
   Calendar,
   ClipboardCheck,
   Clock,
@@ -18,6 +19,8 @@ import {
   Settings,
   ShoppingCart,
   Sun,
+  Sparkles,
+  TrendingUp,
   Truck,
   UserCircle,
   Users,
@@ -64,6 +67,21 @@ const RESOURCES_NAV: NavItem[] = [
   { href: "/app/parametres", label: "Paramètres", icon: Settings, minRole: "employee" }
 ];
 
+type DevVoletItem = {
+  volet: string;
+  href: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+};
+
+// Volets en développement — visibles uniquement quand le user est
+// dans la whitelist (côté backend, exposé via User.volets dans /me).
+const DEV_VOLETS_NAV: DevVoletItem[] = [
+  { volet: "entreprises", href: "/app/entreprises", label: "Entreprises", icon: Briefcase },
+  { volet: "immobilier", href: "/app/immobilier", label: "Immobilier", icon: Building2 },
+  { volet: "investisseur", href: "/app/investisseur", label: "Investisseurs", icon: TrendingUp }
+];
+
 const ROLE_RANK: Record<UserRole, number> = {
   owner: 4,
   admin: 3,
@@ -101,6 +119,10 @@ export function AppSidebar({
   );
   const visibleResources = RESOURCES_NAV.filter((i) =>
     canSee(role, i.minRole)
+  );
+  const userVolets = (user?.volets as string[] | undefined) || [];
+  const visibleDevVolets = DEV_VOLETS_NAV.filter((v) =>
+    userVolets.includes(v.volet)
   );
 
   useEffect(() => {
@@ -279,6 +301,44 @@ export function AppSidebar({
               })}
             </ul>
           </div>
+
+          {visibleDevVolets.length > 0 ? (
+            <div>
+              <p className="mb-2 flex items-center gap-1.5 px-3 text-xs font-semibold uppercase tracking-wider text-violet-300">
+                <Sparkles className="h-3 w-3" />
+                En développement
+              </p>
+              <ul className="space-y-0.5">
+                {visibleDevVolets.map((item) => {
+                  const active = isActive(item.href);
+                  return (
+                    <li key={item.href}>
+                      {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                      <Link
+                        href={item.href as any}
+                        onClick={onClose}
+                        className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
+                          active
+                            ? "bg-brand-900 text-white"
+                            : "text-white/70 hover:bg-brand-900 hover:text-white"
+                        }`}
+                      >
+                        <item.icon
+                          className={`h-4 w-4 flex-shrink-0 ${
+                            active ? "text-violet-300" : ""
+                          }`}
+                        />
+                        <span className="flex-1">{item.label}</span>
+                        <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider text-amber-300">
+                          Dev
+                        </span>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ) : null}
 
           <div className="mt-6 border-t border-brand-800 pt-3">
             <Link

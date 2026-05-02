@@ -40,6 +40,9 @@ export type CurrentUser = {
   role: UserRole;
   must_change_password?: boolean;
   theme_preference?: "light" | "dark";
+  /** Volets accessibles : construction, prospection, entreprises,
+   *  immobilier, investisseur. Absent = backward compat (tous). */
+  volets?: string[];
 };
 
 const ROLE_RANK: Record<UserRole, number> = {
