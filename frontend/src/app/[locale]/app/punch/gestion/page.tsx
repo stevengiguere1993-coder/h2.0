@@ -207,19 +207,51 @@ export default function PunchGestionPage() {
       );
   }, [punches, period, filterEmploye]);
 
-  // Map jour ISO → total heures, pour la heatmap du calendrier mois.
-  // Respecte le filtre employé courant.
-  const hoursByDay = useMemo(() => {
-    const map = new Map<string, number>();
+  // Pour chaque jour ISO : liste des employés ayant pointé ce jour
+  // (avec leur cumul d'heures et la liste de leurs punches du jour).
+  // Respecte le filtre employé courant. Trié par nom d'employé.
+  const entriesByDay = useMemo(() => {
+    type Entry = {
+      employeId: number;
+      name: string;
+      hours: number;
+      punches: Punch[];
+    };
+    const byDay = new Map<string, Map<number, Entry>>();
     for (const p of punches) {
       if (filterEmploye && String(p.employe_id) !== filterEmploye) continue;
-      if (p.hours == null) continue;
       const d = new Date(p.started_at);
       const key = shortISO(d);
-      map.set(key, (map.get(key) || 0) + Number(p.hours));
+      let dayMap = byDay.get(key);
+      if (!dayMap) {
+        dayMap = new Map();
+        byDay.set(key, dayMap);
+      }
+      let entry = dayMap.get(p.employe_id);
+      if (!entry) {
+        entry = {
+          employeId: p.employe_id,
+          name:
+            empById.get(p.employe_id)?.full_name ||
+            `#${p.employe_id}`,
+          hours: 0,
+          punches: []
+        };
+        dayMap.set(p.employe_id, entry);
+      }
+      entry.hours += p.hours != null ? Number(p.hours) : 0;
+      entry.punches.push(p);
     }
-    return map;
-  }, [punches, filterEmploye]);
+    // Aplatit + trie par nom dans chaque jour
+    const out = new Map<string, Entry[]>();
+    for (const [k, m] of byDay) {
+      const list = Array.from(m.values()).sort((a, b) =>
+        a.name.localeCompare(b.name, "fr")
+      );
+      out.set(k, list);
+    }
+    return out;
+  }, [punches, filterEmploye, empById]);
 
   const totalHours = useMemo(
     () =>
@@ -452,13 +484,14 @@ export default function PunchGestionPage() {
         {viewMode === "month" ? (
           <MonthCalendar
             monthStart={monthStart}
-            hoursByDay={hoursByDay}
+            entriesByDay={entriesByDay}
             selectedDay={selectedDay}
             onSelectDay={(d) =>
               setSelectedDay((cur) =>
                 cur && sameDay(cur, d) ? null : d
               )
             }
+            onSelectPunch={(p) => setModal(p)}
           />
         ) : null}
 
@@ -989,21 +1022,34 @@ function parseLatLng(s: string): { lat: number; lng: number } | null {
 
 
 // ---------------------------------------------------------------------------
-// MonthCalendar — grille 6×7 lun→dim. Chaque case affiche le total
-// d'heures (cumulé par jour, employés filtrés) et est cliquable pour
-// filtrer la liste sur ce jour seulement.
+// MonthCalendar — grille 6×7 lun→dim. Chaque case liste les employés
+// qui ont pointé ce jour-là avec leur cumul d'heures.
+//   - Clic sur le numéro du jour (zone vide ou en-tête de case)
+//     → filtre la liste sur ce jour seulement.
+//   - Clic sur une ligne employé → ouvre le punch (modale d'édition).
+//     Si l'employé a plusieurs punches le même jour, on ouvre le
+//     plus tôt — l'utilisateur peut filtrer pour voir les autres.
 // ---------------------------------------------------------------------------
+
+type CalendarEntry = {
+  employeId: number;
+  name: string;
+  hours: number;
+  punches: Punch[];
+};
 
 function MonthCalendar({
   monthStart,
-  hoursByDay,
+  entriesByDay,
   selectedDay,
-  onSelectDay
+  onSelectDay,
+  onSelectPunch
 }: {
   monthStart: Date;
-  hoursByDay: Map<string, number>;
+  entriesByDay: Map<string, CalendarEntry[]>;
   selectedDay: Date | null;
   onSelectDay: (d: Date) => void;
+  onSelectPunch: (p: Punch) => void;
 }) {
   const calStart = calendarStartOf(monthStart);
   const today = new Date();
@@ -1033,45 +1079,97 @@ function MonthCalendar({
         {cells.map((d) => {
           const inMonth = d.getMonth() === monthStart.getMonth();
           const key = shortISO(d);
-          const hours = hoursByDay.get(key) || 0;
+          const entries = entriesByDay.get(key) || [];
+          const dayTotal = entries.reduce((s, e) => s + e.hours, 0);
           const isToday = sameDay(d, today);
           const isSelected = selectedDay && sameDay(d, selectedDay);
-          const hasHours = hours > 0;
           return (
-            <button
+            <div
               key={key}
-              type="button"
-              onClick={() => onSelectDay(d)}
-              className={`flex aspect-[1.1/1] flex-col items-start justify-between rounded-md border p-2 text-left transition ${
+              className={`flex min-h-[110px] flex-col rounded-md border text-left transition ${
                 isSelected
-                  ? "border-accent-500 bg-accent-500/15"
+                  ? "border-accent-500 bg-accent-500/10"
                   : isToday
                   ? "border-accent-500/40 bg-brand-950"
-                  : "border-brand-800 bg-brand-950/60 hover:border-accent-500/40"
+                  : "border-brand-800 bg-brand-950/60"
               } ${inMonth ? "" : "opacity-30"}`}
             >
-              <span
-                className={`text-xs ${
-                  isToday
-                    ? "font-bold text-accent-300"
-                    : "font-semibold text-white/70"
-                }`}
+              <button
+                type="button"
+                onClick={() => onSelectDay(d)}
+                className="flex items-center justify-between border-b border-brand-800/60 px-2 py-1.5 transition hover:bg-brand-800/40"
+                title="Filtrer la liste sur cette journée"
               >
-                {d.getDate()}
-              </span>
-              {hasHours ? (
-                <span className="self-end text-[11px] font-bold text-emerald-300">
-                  {hours.toFixed(1)} h
+                <span
+                  className={`text-xs ${
+                    isToday
+                      ? "font-bold text-accent-300"
+                      : "font-semibold text-white/70"
+                  }`}
+                >
+                  {d.getDate()}
                 </span>
-              ) : (
-                <span className="self-end text-[11px] text-white/20">—</span>
-              )}
-            </button>
+                {dayTotal > 0 ? (
+                  <span className="text-[10px] font-bold text-emerald-300">
+                    {dayTotal.toFixed(1)} h
+                  </span>
+                ) : null}
+              </button>
+              <div className="flex-1 space-y-0.5 overflow-hidden p-1">
+                {entries.length === 0 ? (
+                  <span className="block px-1 text-[10px] text-white/20">
+                    —
+                  </span>
+                ) : (
+                  entries.slice(0, 4).map((e) => {
+                    const firstPunch = e.punches
+                      .slice()
+                      .sort(
+                        (a, b) =>
+                          new Date(a.started_at).getTime() -
+                          new Date(b.started_at).getTime()
+                      )[0];
+                    return (
+                      <button
+                        key={`${key}-${e.employeId}`}
+                        type="button"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          if (firstPunch) onSelectPunch(firstPunch);
+                        }}
+                        className="flex w-full items-center justify-between gap-1 rounded px-1.5 py-0.5 text-left transition hover:bg-accent-500/15"
+                        title={`Ouvrir le punch de ${e.name}`}
+                      >
+                        <span className="truncate text-[10px] font-medium text-white">
+                          {e.name.split(" ")[0]}
+                        </span>
+                        <span className="flex-shrink-0 text-[10px] font-semibold text-emerald-300">
+                          {e.hours.toFixed(1)} h
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+                {entries.length > 4 ? (
+                  <button
+                    type="button"
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      onSelectDay(d);
+                    }}
+                    className="block w-full px-1.5 py-0.5 text-left text-[10px] text-white/50 hover:text-accent-300"
+                  >
+                    +{entries.length - 4} autres…
+                  </button>
+                ) : null}
+              </div>
+            </div>
           );
         })}
       </div>
       <p className="mt-2 text-[10px] text-white/40">
-        Clique une journée pour filtrer la liste sur ce jour seulement.
+        Clique le numéro de la journée pour filtrer la liste, ou un
+        nom pour ouvrir le punch correspondant.
       </p>
     </div>
   );
