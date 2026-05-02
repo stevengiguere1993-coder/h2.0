@@ -5,7 +5,6 @@ import { usePathname, useRouter as useNextRouter } from "next/navigation";
 import {
   Briefcase,
   Calendar,
-  FileText,
   Home,
   Menu,
   ShoppingCart
@@ -24,14 +23,15 @@ type Tab = {
   icon: React.ComponentType<{ className?: string }>;
 };
 
-// 6 onglets en bas : Accueil, Agenda, Projets, Achats, Facturation,
-// Plus. Tâches a été déplacée dans « Plus » pour libérer la place.
+// 5 onglets en bas : Accueil, Agenda, Projets, Achats, Plus.
+// Tâches déplacée dans « Plus ». Facturation reste accessible
+// uniquement côté bureau (/app/facturation) — la mobile se
+// concentre sur les actions terrain (achats, projets, agenda).
 const TABS: Tab[] = [
   { href: "/m", label: "Accueil", icon: Home },
   { href: "/m/agenda", label: "Agenda", icon: Calendar },
   { href: "/m/projets", label: "Projets", icon: Briefcase },
   { href: "/m/achats", label: "Achats", icon: ShoppingCart },
-  { href: "/m/facturation", label: "Facturation", icon: FileText },
   { href: "/m/plus", label: "Plus", icon: Menu }
 ];
 
