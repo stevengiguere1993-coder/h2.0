@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
+import { KratosLogo } from "@/components/kratos-logo";
 import { ProspectionSidebar } from "@/components/prospection-sidebar";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
@@ -44,6 +45,7 @@ export default function ProspectionLayout({
           >
             <ConfirmProvider>
               <main className="flex-1 overflow-x-hidden">{children}</main>
+              <KratosLogo />
               <HelpButton />
             </ConfirmProvider>
           </ProspectionLayoutContextProvider>

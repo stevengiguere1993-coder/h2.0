@@ -15,6 +15,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
+import { KratosLogo } from "@/components/kratos-logo";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
@@ -167,6 +168,7 @@ export default function InvestisseurLayout({
               <main className="flex-1 overflow-x-hidden">
                 {allowed ? children : <NoAccess />}
               </main>
+              <KratosLogo />
               <HelpButton />
             </ConfirmProvider>
           </ctx.Provider>

@@ -13,6 +13,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
+import { KratosLogo } from "@/components/kratos-logo";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { getToken, getMe, type CurrentUser } from "@/lib/auth";
@@ -83,13 +84,16 @@ export default function MobileLayout({
     <ThemeProvider initialTheme={initialTheme}>
     <ConfirmProvider>
     <main className="flex min-h-screen flex-col bg-brand-950 text-white">
-      {/* Bouton thème (haut-droite, en overlay sur le contenu mobile) */}
+      {/* Logo Kratos + bouton thème (haut-droite, overlay) */}
       <div
-        className="pointer-events-none fixed right-3 top-3 z-50"
+        className="pointer-events-none fixed right-3 top-3 z-50 flex items-center gap-2"
         style={{ paddingTop: "env(safe-area-inset-top)" }}
       >
         <div className="pointer-events-auto">
           <ThemeToggle />
+        </div>
+        <div className="pointer-events-auto">
+          <KratosLogo size={32} floating={false} />
         </div>
       </div>
 
