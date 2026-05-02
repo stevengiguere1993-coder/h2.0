@@ -1,30 +1,60 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  Briefcase,
-  Building2,
-  ExternalLink,
+  AlertTriangle,
+  ChevronRight,
   Loader2,
   Plus,
   Sparkles,
+  TrendingUp,
   Upload
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
-import { EntreprisesTopbar } from "./layout";
+import { QGTopbar, useEntreprisesLayout } from "./layout";
+import { useCurrentUser } from "@/hooks/use-current-user";
 
-type Entreprise = {
-  id: number;
+// ───────────────────────────────────────────────────────────────────────
+// Types
+// ───────────────────────────────────────────────────────────────────────
+
+type StatsOverview = {
+  entreprises_count: number;
+  taches_open: number;
+  taches_in_progress: number;
+  taches_urgent: number;
+  taches_done_30d: number;
+  avg_score_open: number | null;
+};
+
+type EntrepriseHealth = {
+  entreprise_id: number;
   name: string;
-  neq: string | null;
-  type: string;
   color_accent: string;
+  type: string;
   description: string | null;
-  monday_board_id: string | null;
-  monday_board_name: string | null;
-  is_active: boolean;
+  health_score: number;
+  health_label: "good" | "warn" | "risk";
+  taches_open: number;
+  taches_done: number;
+  taches_total: number;
+  taches_overdue: number;
+  taches_urgent: number;
+  last_briefing_headline: string | null;
+};
+
+type DailyBriefing = {
+  id: number;
+  entreprise_id: number;
+  period_start: string;
+  headline: string;
+  summary_text: string;
+  highlights: string[];
+  provider: string | null;
+  model_used: string | null;
+  created_at: string;
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -34,361 +64,628 @@ const TYPE_LABELS: Record<string, string> = {
   autre: "Autre"
 };
 
-export default function EntreprisesListPage() {
-  const [items, setItems] = useState<Entreprise[]>([]);
+const FRENCH_DAYS = [
+  "DIMANCHE", "LUNDI", "MARDI", "MERCREDI",
+  "JEUDI", "VENDREDI", "SAMEDI"
+];
+const FRENCH_MONTHS = [
+  "JANV.", "FÉVR.", "MARS", "AVR.", "MAI", "JUIN",
+  "JUIL.", "AOÛT", "SEPT.", "OCT.", "NOV.", "DÉC."
+];
+
+function formatDateBadge(d: Date): string {
+  return `${FRENCH_DAYS[d.getDay()]} · ${String(d.getDate()).padStart(2, "0")} ${FRENCH_MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+function firstName(email?: string): string {
+  if (!email) return "à toi";
+  const local = email.split("@")[0] || "";
+  if (!local) return "à toi";
+  // Ex. "sgiguere" → "Steven"  (on ne sait pas, on prend la 1ère lettre)
+  // Mieux : extrait le prénom depuis full_name si présent. Ici on
+  // n'a que email donc on prend le local part avec capitale.
+  const cleaned = local.replace(/[._-]+/g, " ").trim();
+  const word = cleaned.split(" ")[0] || cleaned;
+  return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Page
+// ───────────────────────────────────────────────────────────────────────
+
+export default function EntreprisesDashboard() {
+  const { user } = useCurrentUser();
+  const { entreprises: layoutEntreprises } = useEntreprisesLayout();
+  const [stats, setStats] = useState<StatsOverview | null>(null);
+  const [health, setHealth] = useState<EntrepriseHealth[]>([]);
+  const [topBriefing, setTopBriefing] = useState<DailyBriefing | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showCreate, setShowCreate] = useState(false);
-
-  async function load() {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await authedFetch("/api/v1/entreprises");
-      if (!res.ok) {
-        if (res.status === 403) {
-          throw new Error(
-            "Accès refusé — ton compte n'a pas le volet Gestion d'entreprises."
-          );
-        }
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const data = (await res.json()) as Entreprise[];
-      setItems(data);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }
 
   useEffect(() => {
-    void load();
+    let cancelled = false;
+    void (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const [statsRes, healthRes] = await Promise.all([
+          authedFetch("/api/v1/entreprises/stats/overview"),
+          authedFetch("/api/v1/entreprises/health")
+        ]);
+        if (cancelled) return;
+        if (!healthRes.ok) {
+          if (healthRes.status === 403) {
+            throw new Error(
+              "Accès refusé — ton compte n'a pas le volet Gestion d'entreprises."
+            );
+          }
+          throw new Error(`HTTP ${healthRes.status}`);
+        }
+        const h = (await healthRes.json()) as EntrepriseHealth[];
+        const s = statsRes.ok
+          ? ((await statsRes.json()) as StatsOverview)
+          : null;
+        setHealth(h);
+        setStats(s);
+
+        // Premier briefing dispo : on prend l'entreprise avec le
+        // health_score le plus bas (donc la plus à risque) en
+        // priorité ; sinon la première.
+        const sorted = [...h].sort(
+          (a, b) => a.health_score - b.health_score
+        );
+        const target = sorted[0];
+        if (target) {
+          const r = await authedFetch(
+            `/api/v1/entreprises/${target.entreprise_id}/daily-pulse`
+          );
+          if (!cancelled && r.ok) {
+            const data = (await r.json()) as DailyBriefing | null;
+            setTopBriefing(data);
+          }
+        }
+      } catch (err) {
+        if (!cancelled) setError((err as Error).message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const active = items.filter((e) => e.is_active);
-  const inactive = items.filter((e) => !e.is_active);
+  const today = new Date();
+  const greetingName = firstName(user?.email);
+  const totalEntreprises = layoutEntreprises.length || stats?.entreprises_count || 0;
+  const alertsCount = useMemo(() => {
+    return health.reduce(
+      (sum, e) => sum + (e.taches_overdue || 0) + (e.health_label === "risk" ? 1 : 0),
+      0
+    );
+  }, [health]);
+
+  const subtitle = (
+    <>
+      {formatDateBadge(today)}
+      {totalEntreprises > 0 ? (
+        <>{" · "}{totalEntreprises} ENTREPRISE{totalEntreprises > 1 ? "S" : ""}</>
+      ) : null}
+      {alertsCount > 0 ? (
+        <>{" · "}<span className="text-[#ff5566]">{alertsCount} ALERTE{alertsCount > 1 ? "S" : ""} ACTIVE{alertsCount > 1 ? "S" : ""}</span></>
+      ) : null}
+    </>
+  );
 
   return (
     <>
-      <EntreprisesTopbar
-        breadcrumbs={[{ label: "Gestion d'entreprises" }]}
+      <QGTopbar
+        greeting={
+          <>
+            Bonjour,{" "}
+            <span
+              className="italic"
+              style={{
+                color: "#d4ff3a",
+                fontFamily: "var(--font-fraunces, Georgia, serif)"
+              }}
+            >
+              {greetingName}
+            </span>
+          </>
+        }
+        subtitle={subtitle}
         rightSlot={
-          <div className="flex items-center gap-2">
+          <>
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/entreprises/import-monday" as any}
-              className="btn-secondary text-sm"
-              title="Importer les tableaux Monday en entreprises + tâches"
+              className="hidden sm:inline-flex items-center gap-1.5 rounded-md border border-[#25252d] bg-[#15151a] px-3 py-1.5 text-[12px] font-medium text-[#a0a0a8] hover:border-[#35353f] hover:text-[#f5f5f7]"
             >
-              <Upload className="mr-1.5 h-4 w-4" />
+              <Upload className="h-3.5 w-3.5" />
               Import Monday
             </Link>
-            <button
-              type="button"
-              onClick={() => setShowCreate(true)}
-              className="btn-accent text-sm"
-            >
-              <Plus className="mr-1.5 h-4 w-4" />
-              Nouvelle entreprise
-            </button>
-          </div>
+            <CTAButton href="/entreprises/taches" variant="secondary">
+              <Sparkles className="h-3.5 w-3.5" />
+              Briefing complet
+            </CTAButton>
+            <CTAButton href="/entreprises/taches" variant="primary">
+              <Plus className="h-3.5 w-3.5" />
+              Nouvelle tâche
+            </CTAButton>
+          </>
         }
       />
 
-      <div className="p-4 lg:p-6">
-        <header className="flex items-start gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/15 text-violet-300">
-            <Briefcase className="h-5 w-5" />
-          </span>
-          <div>
-            <h1 className="text-2xl font-bold text-white">
-              Gestion d&apos;entreprises
-            </h1>
-            <p className="mt-1 text-sm text-white/60">
-              Vue d&apos;ensemble des entités d&apos;affaire et de leurs
-              tâches.
-            </p>
-          </div>
-        </header>
-
-        <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold text-amber-200">
-          <Sparkles className="h-3 w-3" />
-          En développement — itération continue
-        </div>
-
+      <div className="px-5 py-6 lg:px-8">
         {error ? (
-          <p className="mt-6 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+          <p className="mb-4 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {error}
           </p>
         ) : null}
 
-        {loading ? (
-          <div className="flex min-h-[40vh] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-violet-300" />
-          </div>
-        ) : items.length === 0 ? (
-          <EmptyState onCreate={() => setShowCreate(true)} />
-        ) : (
-          <div className="mt-6 space-y-8">
-            <EntrepriseGrid items={active} />
-            {inactive.length > 0 ? (
-              <details className="text-sm text-white/60">
-                <summary className="cursor-pointer hover:text-white">
-                  {inactive.length} entreprise
-                  {inactive.length > 1 ? "s" : ""} archivée
-                  {inactive.length > 1 ? "s" : ""}
-                </summary>
-                <div className="mt-4 opacity-60">
-                  <EntrepriseGrid items={inactive} />
-                </div>
-              </details>
-            ) : null}
-          </div>
-        )}
-      </div>
+        {/* 4 KPI cards */}
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <KpiCard
+            label="Tâches ouvertes · Global"
+            value={
+              loading
+                ? "…"
+                : (stats?.taches_open ?? 0).toLocaleString("fr-CA")
+            }
+            sub={
+              stats && stats.taches_in_progress > 0
+                ? `${stats.taches_in_progress} en cours`
+                : "—"
+            }
+            tone="info"
+          />
+          <KpiCard
+            label="Urgentes · 7 prochains jours"
+            value={
+              loading
+                ? "…"
+                : (stats?.taches_urgent ?? 0).toLocaleString("fr-CA")
+            }
+            sub={
+              stats && stats.taches_urgent > 0
+                ? "À prioriser cette semaine"
+                : "Aucune urgence"
+            }
+            tone={stats && stats.taches_urgent > 0 ? "warning" : "muted"}
+          />
+          <KpiCard
+            label="Terminées · 30 derniers jours"
+            value={
+              loading
+                ? "…"
+                : (stats?.taches_done_30d ?? 0).toLocaleString("fr-CA")
+            }
+            sub="Productivité"
+            tone="success"
+          />
+          <KpiCard
+            label="Score moyen · Tâches ouvertes"
+            value={
+              loading
+                ? "…"
+                : stats?.avg_score_open != null
+                ? stats.avg_score_open.toFixed(1)
+                : "—"
+            }
+            sub="ICE × urgence"
+            tone="lime"
+          />
+        </section>
 
-      {showCreate ? (
-        <CreateEntrepriseModal
-          onClose={() => setShowCreate(false)}
-          onCreated={() => {
-            setShowCreate(false);
-            void load();
-          }}
-        />
-      ) : null}
+        {/* État des entreprises + Briefing */}
+        <section className="mt-8 grid grid-cols-1 gap-5 xl:grid-cols-[1.6fr_1fr]">
+          <div
+            className="rounded-xl"
+            style={{
+              backgroundColor: "#15151a",
+              border: "1px solid #25252d"
+            }}
+          >
+            <div className="flex items-baseline justify-between px-5 pt-5">
+              <h2
+                className="text-[18px] font-bold text-[#f5f5f7]"
+                style={{
+                  fontFamily: "var(--font-fraunces, Georgia, serif)"
+                }}
+              >
+                État des{" "}
+                <span className="italic" style={{ color: "#d4ff3a" }}>
+                  entreprises
+                </span>
+              </h2>
+              <Link
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={"/entreprises/taches" as any}
+                className="text-[11px] text-[#66666e] hover:text-[#d4ff3a]"
+              >
+                Voir tout →
+              </Link>
+            </div>
+
+            {loading ? (
+              <div className="flex min-h-[200px] items-center justify-center">
+                <Loader2 className="h-5 w-5 animate-spin text-[#d4ff3a]" />
+              </div>
+            ) : health.length === 0 ? (
+              <EmptyEntreprises />
+            ) : (
+              <table className="mt-4 w-full text-[13px]">
+                <thead>
+                  <tr
+                    className="text-[10px] uppercase tracking-wider text-[#66666e]"
+                    style={{ borderBottom: "1px solid #25252d" }}
+                  >
+                    <th className="px-5 py-2.5 text-left font-semibold">
+                      Entreprise · Domaine
+                    </th>
+                    <th className="px-3 py-2.5 text-left font-semibold">
+                      Santé
+                    </th>
+                    <th className="px-3 py-2.5 text-right font-semibold">
+                      Tâches
+                    </th>
+                    <th className="w-8 px-3 py-2.5"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {health.map((e) => (
+                    <EntrepriseRow key={e.entreprise_id} e={e} />
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <BriefingCard briefing={topBriefing} loading={loading} />
+        </section>
+      </div>
     </>
   );
 }
 
-function EntrepriseGrid({ items }: { items: Entreprise[] }) {
-  return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {items.map((e) => (
-        <Link
-          key={e.id}
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={`/entreprises/${e.id}` as any}
-          className="group relative flex flex-col gap-3 rounded-2xl border border-brand-800 bg-brand-900 p-5 transition hover:-translate-y-0.5 hover:border-violet-500/40 hover:shadow-lg"
-        >
-          <span
-            className="h-1 w-12 rounded-full"
-            style={{ backgroundColor: e.color_accent }}
-          />
-          <div className="flex items-start justify-between gap-2">
-            <h3 className="text-base font-bold text-white">{e.name}</h3>
-            <span className="rounded-full border border-brand-700 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-white/60">
-              {TYPE_LABELS[e.type] || e.type}
-            </span>
-          </div>
-          {e.description ? (
-            <p className="line-clamp-2 text-xs text-white/60">
-              {e.description}
-            </p>
-          ) : null}
-          <div className="mt-auto flex items-center gap-2 text-[10px] text-white/40">
-            {e.neq ? <span>NEQ : {e.neq}</span> : null}
-            {e.monday_board_id ? (
-              <span className="inline-flex items-center gap-1 text-violet-300">
-                <ExternalLink className="h-2.5 w-2.5" />
-                Monday
-              </span>
-            ) : null}
-          </div>
-        </Link>
-      ))}
-    </div>
-  );
-}
+// ───────────────────────────────────────────────────────────────────────
+// Sub-components
+// ───────────────────────────────────────────────────────────────────────
 
-function EmptyState({ onCreate }: { onCreate: () => void }) {
-  return (
-    <div className="mx-auto mt-12 max-w-md rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 p-10 text-center">
-      <Building2 className="mx-auto h-10 w-10 text-violet-300" />
-      <h2 className="mt-4 text-lg font-semibold text-white">
-        Aucune entreprise
-      </h2>
-      <p className="mt-2 text-sm text-white/60">
-        Crée une entreprise manuellement ou lance l&apos;import depuis
-        Monday pour démarrer.
-      </p>
-      <button
-        type="button"
-        onClick={onCreate}
-        className="btn-accent mt-6 inline-flex text-sm"
-      >
-        <Plus className="mr-1.5 h-4 w-4" />
-        Nouvelle entreprise
-      </button>
-    </div>
-  );
-}
-
-function CreateEntrepriseModal({
-  onClose,
-  onCreated
+function CTAButton({
+  href,
+  children,
+  variant
 }: {
-  onClose: () => void;
-  onCreated: () => void;
+  href: string;
+  children: React.ReactNode;
+  variant: "primary" | "secondary";
 }) {
-  const [name, setName] = useState("");
-  const [neq, setNeq] = useState("");
-  const [type, setType] = useState("gestion");
-  const [color, setColor] = useState("#7c3aed");
-  const [desc, setDesc] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function save(e: React.FormEvent) {
-    e.preventDefault();
-    if (!name.trim()) {
-      setErr("Le nom est requis.");
-      return;
-    }
-    setBusy(true);
-    setErr(null);
-    try {
-      const res = await authedFetch("/api/v1/entreprises", {
-        method: "POST",
-        body: JSON.stringify({
-          name: name.trim(),
-          neq: neq.trim() || null,
-          type,
-          color_accent: color,
-          description: desc.trim() || null,
-          is_active: true
-        })
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+  const isPrimary = variant === "primary";
+  return (
+    <Link
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      href={href as any}
+      className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-bold transition ${
+        isPrimary
+          ? ""
+          : "border border-[#25252d] bg-[#15151a] text-[#a0a0a8] hover:border-[#35353f] hover:text-[#f5f5f7]"
+      }`}
+      style={
+        isPrimary
+          ? {
+              backgroundColor: "#d4ff3a",
+              color: "#0a0a0b",
+              boxShadow: "0 0 24px -8px rgba(212,255,58,0.5)"
+            }
+          : undefined
       }
-      onCreated();
-    } catch (e) {
-      setErr((e as Error).message);
-      setBusy(false);
-    }
-  }
+    >
+      {children}
+    </Link>
+  );
+}
 
+function KpiCard({
+  label,
+  value,
+  sub,
+  tone
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  tone: "info" | "warning" | "success" | "muted" | "lime";
+}) {
+  const toneColor =
+    tone === "warning"
+      ? "#ffaa33"
+      : tone === "success"
+      ? "#4ade80"
+      : tone === "lime"
+      ? "#d4ff3a"
+      : tone === "info"
+      ? "#60a5fa"
+      : "#66666e";
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-      onClick={() => (!busy ? onClose() : null)}
+      className="rounded-xl px-5 py-5"
+      style={{
+        backgroundColor: "#15151a",
+        border: "1px solid #25252d"
+      }}
     >
-      <form
-        onSubmit={save}
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 p-6 shadow-2xl"
+      <p className="text-[10px] uppercase tracking-[0.16em] text-[#66666e]">
+        {label}
+      </p>
+      <p
+        className="mt-2 text-[28px] font-bold leading-tight text-[#f5f5f7] sm:text-[32px]"
+        style={{
+          fontFamily: "var(--font-fraunces, Georgia, serif)"
+        }}
       >
-        <h3 className="text-lg font-bold text-white">
-          Nouvelle entreprise
-        </h3>
-
-        <div className="mt-5 space-y-4">
-          <div>
-            <label htmlFor="e_name" className="label">
-              Nom <span className="text-rose-400">*</span>
-            </label>
-            <input
-              id="e_name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="input"
-              required
-              maxLength={255}
-            />
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label htmlFor="e_type" className="label">Type</label>
-              <select
-                id="e_type"
-                value={type}
-                onChange={(e) => setType(e.target.value)}
-                className="input"
-              >
-                <option value="gestion">Gestion</option>
-                <option value="construction">Construction</option>
-                <option value="immobilier">Immobilier</option>
-                <option value="autre">Autre</option>
-              </select>
-            </div>
-            <div>
-              <label htmlFor="e_color" className="label">
-                Couleur d&apos;accent
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  id="e_color"
-                  type="color"
-                  value={color}
-                  onChange={(e) => setColor(e.target.value)}
-                  className="h-10 w-16 cursor-pointer rounded border border-brand-700 bg-brand-900"
-                />
-                <input
-                  type="text"
-                  value={color}
-                  onChange={(e) => setColor(e.target.value)}
-                  pattern="^#[0-9a-fA-F]{6}$"
-                  className="input flex-1 font-mono text-sm"
-                />
-              </div>
-            </div>
-          </div>
-          <div>
-            <label htmlFor="e_neq" className="label">NEQ</label>
-            <input
-              id="e_neq"
-              value={neq}
-              onChange={(e) => setNeq(e.target.value)}
-              className="input"
-              maxLength={32}
-              placeholder="Numéro d'entreprise du Québec"
-            />
-          </div>
-          <div>
-            <label htmlFor="e_desc" className="label">Description</label>
-            <textarea
-              id="e_desc"
-              value={desc}
-              onChange={(e) => setDesc(e.target.value)}
-              rows={3}
-              className="input"
-            />
-          </div>
-        </div>
-
-        {err ? (
-          <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-            {err}
-          </p>
-        ) : null}
-
-        <div className="mt-6 flex items-center justify-end gap-3">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="btn-secondary text-sm"
-          >
-            Annuler
-          </button>
-          <button
-            type="submit"
-            disabled={busy}
-            className="btn-accent text-sm disabled:opacity-60"
-          >
-            {busy ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Sauvegarde…
-              </>
-            ) : (
-              "Créer"
-            )}
-          </button>
-        </div>
-      </form>
+        {value}
+      </p>
+      <p
+        className="mt-1.5 inline-flex items-center gap-1 text-[11px]"
+        style={{ color: toneColor }}
+      >
+        ▲ {sub}
+      </p>
     </div>
+  );
+}
+
+function EntrepriseRow({ e }: { e: EntrepriseHealth }) {
+  const initials = e.name
+    .split(" ")
+    .map((w) => w[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+  const barColor =
+    e.health_label === "risk"
+      ? "#ff5566"
+      : e.health_label === "warn"
+      ? "#ffaa33"
+      : "#4ade80";
+  const overdueAlert = e.taches_overdue > 0;
+  return (
+    <tr
+      className="text-[13px] hover:bg-[#18181d]"
+      style={{ borderBottom: "1px solid #1e1e25" }}
+    >
+      <td className="px-5 py-3">
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={`/entreprises/${e.entreprise_id}` as any}
+          className="flex items-center gap-3"
+        >
+          <span
+            className="flex h-8 w-8 items-center justify-center rounded-md text-[10px] font-bold uppercase"
+            style={{
+              backgroundColor: e.color_accent + "26",
+              color: e.color_accent
+            }}
+          >
+            {initials || "—"}
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate font-semibold text-[#f5f5f7]">
+              {e.name}
+            </span>
+            <span className="block truncate text-[10px] uppercase tracking-wider text-[#66666e]">
+              {TYPE_LABELS[e.type] || e.type}
+              {e.description ? ` · ${e.description.slice(0, 40)}` : ""}
+            </span>
+          </span>
+        </Link>
+      </td>
+      <td className="px-3 py-3">
+        <div className="flex items-center gap-3">
+          <div
+            className="h-1 w-20 overflow-hidden rounded-full"
+            style={{ backgroundColor: "#25252d" }}
+          >
+            <div
+              className="h-full rounded-full transition-all"
+              style={{
+                width: `${Math.max(8, e.health_score)}%`,
+                backgroundColor: barColor
+              }}
+            />
+          </div>
+          <span
+            className="text-[12px] font-semibold tabular-nums"
+            style={{
+              color: barColor,
+              fontFamily: "var(--font-mono, ui-monospace), monospace"
+            }}
+          >
+            {e.health_score}
+          </span>
+        </div>
+      </td>
+      <td className="px-3 py-3 text-right">
+        {overdueAlert ? (
+          <span className="inline-flex items-center gap-1 rounded-md border border-[#ff5566]/40 bg-[#ff5566]/10 px-1.5 py-0.5 text-[11px] font-semibold text-[#ff5566]">
+            <AlertTriangle className="h-2.5 w-2.5" />
+            {e.taches_open} <span className="opacity-50">/ {e.taches_total}</span>
+          </span>
+        ) : (
+          <span
+            className="text-[12px] tabular-nums text-[#a0a0a8]"
+            style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}
+          >
+            {e.taches_open}
+            <span className="text-[#66666e]"> / {e.taches_total}</span>
+          </span>
+        )}
+      </td>
+      <td className="px-3 py-3 text-right text-[#35353f]">
+        <ChevronRight className="inline h-4 w-4" />
+      </td>
+    </tr>
+  );
+}
+
+function EmptyEntreprises() {
+  return (
+    <div className="px-6 py-12 text-center">
+      <p className="text-sm text-[#a0a0a8]">
+        Aucune entreprise. Lance l&apos;import depuis Monday ou crée
+        manuellement.
+      </p>
+      <div className="mt-4 inline-flex gap-2">
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={"/entreprises/import-monday" as any}
+          className="rounded-md border border-[#25252d] bg-[#15151a] px-3 py-1.5 text-[12px] text-[#a0a0a8] hover:text-[#f5f5f7]"
+        >
+          <Upload className="mr-1.5 inline h-3 w-3" />
+          Import Monday
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function BriefingCard({
+  briefing,
+  loading
+}: {
+  briefing: DailyBriefing | null;
+  loading: boolean;
+}) {
+  return (
+    <aside
+      className="rounded-xl"
+      style={{
+        backgroundColor: "#15151a",
+        border: "1px solid #25252d"
+      }}
+    >
+      <div className="flex items-baseline justify-between px-5 pt-5">
+        <h2
+          className="text-[18px] font-bold text-[#f5f5f7]"
+          style={{ fontFamily: "var(--font-fraunces, Georgia, serif)" }}
+        >
+          Briefing{" "}
+          <span className="italic" style={{ color: "#d4ff3a" }}>
+            du jour
+          </span>
+        </h2>
+        {briefing ? (
+          <span
+            className="text-[10px] uppercase tracking-wider text-[#66666e]"
+            style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}
+          >
+            {new Date(briefing.created_at).toLocaleTimeString("fr-CA", {
+              hour: "2-digit",
+              minute: "2-digit"
+            })}
+          </span>
+        ) : null}
+      </div>
+
+      <div className="px-5 pb-5 pt-3">
+        <div className="mb-3 flex items-center gap-2 text-[10px] uppercase tracking-wider">
+          <span className="relative flex h-2 w-2">
+            <span
+              className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60"
+              style={{ backgroundColor: "#d4ff3a" }}
+            />
+            <span
+              className="relative inline-flex h-2 w-2 rounded-full"
+              style={{ backgroundColor: "#d4ff3a" }}
+            />
+          </span>
+          <span className="font-bold" style={{ color: "#d4ff3a" }}>
+            Analyse IA
+          </span>
+          {briefing?.provider ? (
+            <>
+              <span className="text-[#35353f]">·</span>
+              <span className="text-[#a0a0a8]">{briefing.provider}</span>
+            </>
+          ) : null}
+        </div>
+
+        {loading ? (
+          <p className="text-[13px] text-[#66666e]">Chargement…</p>
+        ) : !briefing ? (
+          <div className="rounded-md border border-dashed border-[#25252d] p-4 text-center text-[12px] text-[#66666e]">
+            Aucun briefing aujourd&apos;hui. Ouvre une entreprise pour
+            en générer un.
+          </div>
+        ) : (
+          <>
+            <p className="mb-2 text-[14px] font-semibold leading-snug text-[#f5f5f7]">
+              {briefing.headline}
+            </p>
+            <p className="text-[13px] leading-relaxed text-[#a0a0a8]">
+              {briefing.summary_text}
+            </p>
+            {briefing.highlights && briefing.highlights.length > 0 ? (
+              <ul className="mt-4 space-y-2">
+                {briefing.highlights.map((h, i) => (
+                  <HighlightBullet key={i} text={h} index={i} />
+                ))}
+              </ul>
+            ) : null}
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={`/entreprises/${briefing.entreprise_id}` as any}
+              className="mt-4 inline-flex items-center gap-1 text-[11px] font-semibold"
+              style={{ color: "#d4ff3a" }}
+            >
+              Voir l&apos;entreprise →
+            </Link>
+          </>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function HighlightBullet({ text, index }: { text: string; index: number }) {
+  // Cycle 3 tons : risque (rose), opportunité (lime), synergie (info)
+  const tones = [
+    { icon: "⚠", color: "#ff5566", label: "Risque" },
+    { icon: "⚡", color: "#d4ff3a", label: "Opportunité" },
+    { icon: "◎", color: "#60a5fa", label: "Synergie" }
+  ] as const;
+  const tone = tones[index % tones.length];
+  return (
+    <li
+      className="flex items-start gap-2.5 rounded-md p-2.5"
+      style={{
+        backgroundColor: tone.color + "0d",
+        border: `1px solid ${tone.color}26`
+      }}
+    >
+      <span
+        className="mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full text-[10px]"
+        style={{
+          backgroundColor: tone.color + "26",
+          color: tone.color
+        }}
+      >
+        {tone.icon}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-[12px] leading-relaxed text-[#f5f5f7]">
+          {text}
+        </p>
+        <p
+          className="mt-0.5 text-[9px] uppercase tracking-[0.12em] font-bold"
+          style={{ color: tone.color }}
+        >
+          {tone.label}
+        </p>
+      </div>
+    </li>
   );
 }

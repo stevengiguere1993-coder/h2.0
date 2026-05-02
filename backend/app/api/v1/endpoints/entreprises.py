@@ -391,6 +391,209 @@ def _guess_status_from_group(group: Optional[str]) -> str:
     return TacheStatus.BACKLOG.value
 
 
+# ── Stats overview (4 KPIs accueil volet) ───────────────────────────────
+
+
+class StatsOverview(BaseModel):
+    """Stats consolidées affichées sur l'accueil du volet."""
+
+    entreprises_count: int
+    taches_open: int      # toutes statuts != done/cancelled
+    taches_in_progress: int
+    taches_urgent: int    # due_date <= 7j et open
+    taches_done_30d: int  # terminées dans les 30 derniers jours
+    avg_score_open: Optional[float]  # score moyen des tâches ouvertes
+
+
+@router.get(
+    "/stats/overview",
+    response_model=StatsOverview,
+    summary="Stats consolidées du volet (KPI accueil)",
+)
+async def stats_overview(db: DBSession, user: CurrentUser) -> StatsOverview:
+    _require_volet(user)
+    from datetime import timedelta
+    from sqlalchemy import func
+
+    # Compte d'entreprises actives
+    n_ent = (
+        await db.execute(
+            select(func.count())
+            .select_from(Entreprise)
+            .where(Entreprise.is_active.is_(True))
+        )
+    ).scalar() or 0
+
+    # Tâches ouvertes (tous statuts != done)
+    open_taches = (
+        await db.execute(
+            select(EntrepriseTache).where(
+                EntrepriseTache.status != TacheStatus.DONE.value
+            )
+        )
+    ).scalars().all()
+
+    today = date.today()
+    soon = today + timedelta(days=7)
+
+    in_progress = sum(
+        1 for t in open_taches
+        if t.status == TacheStatus.IN_PROGRESS.value
+    )
+    urgent = sum(
+        1 for t in open_taches
+        if t.due_date is not None
+        and t.due_date <= soon
+        and t.status not in (TacheStatus.DONE.value, "cancelled")
+    )
+
+    # Tâches terminées dans les 30 derniers jours
+    cutoff = datetime.combine(
+        today - timedelta(days=30),
+        datetime.min.time(),
+        tzinfo=timezone.utc,
+    )
+    done_30d = (
+        await db.execute(
+            select(func.count())
+            .select_from(EntrepriseTache)
+            .where(
+                EntrepriseTache.status == TacheStatus.DONE.value,
+                EntrepriseTache.completed_at >= cutoff,
+            )
+        )
+    ).scalar() or 0
+
+    # Score moyen des tâches ouvertes scorées (3 champs ICE non-null)
+    scored = []
+    for t in open_taches:
+        s = _compute_score(t)
+        if s is not None:
+            scored.append(s)
+    avg_score = (sum(scored) / len(scored)) if scored else None
+
+    return StatsOverview(
+        entreprises_count=int(n_ent),
+        taches_open=len(open_taches),
+        taches_in_progress=in_progress,
+        taches_urgent=urgent,
+        taches_done_30d=int(done_30d),
+        avg_score_open=round(avg_score, 1) if avg_score is not None else None,
+    )
+
+
+class EntrepriseHealth(BaseModel):
+    entreprise_id: int
+    name: str
+    color_accent: str
+    type: str
+    description: Optional[str] = None
+    health_score: int  # 0-100
+    health_label: str  # 'good' | 'warn' | 'risk'
+    taches_open: int
+    taches_done: int
+    taches_total: int
+    taches_overdue: int
+    taches_urgent: int
+    last_briefing_headline: Optional[str] = None
+
+
+@router.get(
+    "/health",
+    response_model=List[EntrepriseHealth],
+    summary="Santé consolidée par entreprise (tableau « État des entreprises »)",
+)
+async def entreprises_health(
+    db: DBSession, user: CurrentUser
+) -> List[EntrepriseHealth]:
+    _require_volet(user)
+    from app.models.qg_strategic import Summary, SummaryType
+
+    ents = (
+        await db.execute(
+            select(Entreprise)
+            .where(Entreprise.is_active.is_(True))
+            .order_by(Entreprise.name.asc())
+        )
+    ).scalars().all()
+
+    today = date.today()
+    out: List[EntrepriseHealth] = []
+    for e in ents:
+        all_taches = (
+            await db.execute(
+                select(EntrepriseTache).where(
+                    EntrepriseTache.entreprise_id == e.id
+                )
+            )
+        ).scalars().all()
+        total = len(all_taches)
+        done = sum(
+            1 for t in all_taches if t.status == TacheStatus.DONE.value
+        )
+        open_t = total - done
+        overdue = sum(
+            1 for t in all_taches
+            if t.status != TacheStatus.DONE.value
+            and t.due_date is not None
+            and t.due_date < today
+        )
+        urgent = sum(
+            1 for t in all_taches
+            if t.status != TacheStatus.DONE.value
+            and t.due_date is not None
+            and 0 <= (t.due_date - today).days <= 7
+        )
+
+        # Score 0-100 :
+        # - 100 = aucune tâche, ou toutes faites à temps
+        # - pénalités : -8 par overdue, -3 par urgent, plafonné à -60
+        # - bonus si haut taux done/total
+        if total == 0:
+            score = 100
+        else:
+            done_ratio = done / total
+            penalty = min(60, 8 * overdue + 3 * urgent)
+            score = max(20, int(100 * done_ratio + (1 - done_ratio) * 70 - penalty))
+
+        if score >= 80:
+            label = "good"
+        elif score >= 55:
+            label = "warn"
+        else:
+            label = "risk"
+
+        # Dernier briefing pour le tooltip / preview
+        last_brief = (
+            await db.execute(
+                select(Summary)
+                .where(
+                    Summary.entreprise_id == e.id,
+                    Summary.type == SummaryType.DAILY_BRIEFING.value,
+                )
+                .order_by(Summary.period_start.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+        out.append(EntrepriseHealth(
+            entreprise_id=e.id,
+            name=e.name,
+            color_accent=e.color_accent,
+            type=e.type,
+            description=e.description,
+            health_score=int(score),
+            health_label=label,
+            taches_open=int(open_t),
+            taches_done=int(done),
+            taches_total=int(total),
+            taches_overdue=int(overdue),
+            taches_urgent=int(urgent),
+            last_briefing_headline=last_brief.headline if last_brief else None,
+        ))
+    return out
+
+
 # ── Daily Pulse (briefing IA quotidien) ─────────────────────────────────
 
 

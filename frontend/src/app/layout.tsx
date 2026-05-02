@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, Plus_Jakarta_Sans } from "next/font/google";
+import { Fraunces, Inter, JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
 
 import { PwaRegister } from "@/components/pwa-register";
@@ -13,6 +13,22 @@ const inter = Inter({
 const display = Plus_Jakarta_Sans({
   subsets: ["latin"],
   variable: "--font-display",
+  display: "swap"
+});
+
+// Fonts QG (volet Entreprises) — serif italique pour les titres,
+// mono pour les chiffres/timestamps. Optimisé pour le glyphe italic.
+const fraunces = Fraunces({
+  subsets: ["latin"],
+  variable: "--font-fraunces",
+  display: "swap",
+  style: ["normal", "italic"],
+  weight: ["500", "600", "700"]
+});
+
+const mono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
   display: "swap"
 });
 
@@ -48,7 +64,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html className={`${inter.variable} ${display.variable}`}>
+    <html
+      className={`${inter.variable} ${display.variable} ${fraunces.variable} ${mono.variable}`}
+    >
       <body>
         {children}
         <PwaRegister />
