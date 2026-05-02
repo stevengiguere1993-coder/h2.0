@@ -4,6 +4,7 @@ Project endpoints.
 CRUD operations for projects with role-based access control.
 """
 
+from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -72,7 +73,32 @@ async def list_projects(
     )
     if visible is not None:
         projects = [p for p in projects if p.id in visible]
-    return [ProjectRead.model_validate(p) for p in projects]
+
+    # Enrichit chaque projet avec le total de sa soumission liée
+    # (1 seule requête batch) — sert de fallback dans le kanban quand
+    # `budget` est null mais qu'une soumission acceptée a un total.
+    sm_ids = [p.soumission_id for p in projects if p.soumission_id]
+    sm_totals: dict[int, Decimal] = {}
+    if sm_ids:
+        from sqlalchemy import select
+        from app.models.soumission import Soumission
+
+        rows = (
+            await db.execute(
+                select(Soumission.id, Soumission.total).where(
+                    Soumission.id.in_(set(sm_ids))
+                )
+            )
+        ).all()
+        sm_totals = {sid: total for sid, total in rows if total is not None}
+
+    out: List[ProjectRead] = []
+    for p in projects:
+        d = ProjectRead.model_validate(p)
+        if p.soumission_id and p.soumission_id in sm_totals:
+            d.soumission_total = sm_totals[p.soumission_id]
+        out.append(d)
+    return out
 
 
 @router.get(

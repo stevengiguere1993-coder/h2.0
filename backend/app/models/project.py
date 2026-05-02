@@ -20,7 +20,8 @@ if TYPE_CHECKING:
 
 
 class ProjectStatus(str, Enum):
-    PLANNED = "planned"
+    PLANNED = "planned"           # « À planifier » dans l'UI
+    READY_TO_START = "ready_to_start"  # « En attente de début »
     IN_PROGRESS = "in_progress"
     SUSPENDED = "suspended"
     DELIVERED = "delivered"

@@ -57,6 +57,11 @@ class ProjectRead(BaseModel):
     start_date: Optional[date]
     end_date: Optional[date]
     budget: Optional[Decimal]
+    # Total de la soumission liée — utilisé comme fallback côté UI
+    # quand budget est null (cas des projets créés sans budget mais
+    # rattachés à une soumission acceptée). Null si pas de soumission
+    # liée ou si la soumission n'a pas de total.
+    soumission_total: Optional[Decimal] = None
     estimated_hours_override: Optional[Decimal] = None
     created_at: datetime
     updated_at: datetime

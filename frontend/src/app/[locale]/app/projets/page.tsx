@@ -22,6 +22,10 @@ type Project = {
   start_date: string | null;
   end_date: string | null;
   budget: number | string | null;
+  // Fallback côté affichage quand budget est null mais qu'on a une
+  // soumission liée (ex. projet créé via auto-acceptation sans budget
+  // saisi).
+  soumission_total: number | string | null;
   created_at: string;
   updated_at: string;
 };
@@ -29,15 +33,22 @@ type Project = {
 type Column = { id: string; label: string; dot: string };
 
 const COLUMNS: Column[] = [
-  { id: "planned", label: "Prévu", dot: "bg-white/40" },
+  { id: "planned", label: "À planifier", dot: "bg-white/40" },
+  { id: "ready_to_start", label: "En attente de début", dot: "bg-violet-400" },
   { id: "in_progress", label: "En cours", dot: "bg-blue-400" },
   { id: "suspended", label: "Suspendu", dot: "bg-amber-400" },
   { id: "delivered", label: "Livré", dot: "bg-emerald-400" }
 ];
 
-function fmtMoney(n: number | string | null): string {
-  if (n == null || n === "") return "—";
-  const num = typeof n === "string" ? Number(n) : n;
+function fmtMoney(
+  n: number | string | null,
+  fallback: number | string | null = null
+): string {
+  let v = n;
+  if (v == null || v === "" || Number(v) === 0) v = fallback;
+  if (v == null || v === "") return "—";
+  const num = typeof v === "string" ? Number(v) : v;
+  if (!Number.isFinite(num)) return "—";
   return new Intl.NumberFormat("fr-CA", {
     style: "currency",
     currency: "CAD",
@@ -298,7 +309,9 @@ function ProjectCard({
           {fmtDate(p.start_date)}
           {p.end_date ? ` → ${fmtDate(p.end_date)}` : ""}
         </span>
-        <span className="font-semibold text-white">{fmtMoney(p.budget)}</span>
+        <span className="font-semibold text-white">
+          {fmtMoney(p.budget, p.soumission_total)}
+        </span>
       </div>
     </Link>
   );
