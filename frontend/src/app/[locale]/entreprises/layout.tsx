@@ -28,6 +28,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
+import { QGCommandBar } from "@/components/qg-command-bar";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { authedFetch } from "@/lib/auth";
@@ -311,6 +312,7 @@ export default function EntreprisesLayout({
               <main className="flex-1 overflow-x-hidden">
                 {allowed ? children : <NoAccess />}
               </main>
+              {allowed ? <QGCommandBar /> : null}
               <HelpButton />
             </ConfirmProvider>
           </ctx.Provider>

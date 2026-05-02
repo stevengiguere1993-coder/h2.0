@@ -939,6 +939,115 @@ async def search_entreprise(
     return [SearchHitOut(**h.__dict__) for h in hits]
 
 
+class GlobalSearchRequest(BaseModel):
+    query: str = Field(..., min_length=2, max_length=500)
+    limit: int = Field(default=10, ge=1, le=30)
+
+
+class GlobalSearchHitOut(BaseModel):
+    source_type: str
+    source_id: int
+    entreprise_id: Optional[int] = None
+    entreprise_name: Optional[str] = None
+    entreprise_color: Optional[str] = None
+    title: str
+    snippet: str
+    similarity: float
+
+
+@router.post(
+    "/search",
+    response_model=List[GlobalSearchHitOut],
+    summary="Recherche sémantique cross-entreprises (command bar ⌘K)",
+)
+async def search_global(
+    body: GlobalSearchRequest, db: DBSession, user: CurrentUser
+) -> List[GlobalSearchHitOut]:
+    """Sert la barre de commande ⌘K. Cherche dans toutes les
+    entreprises, joint le nom + couleur + titre vrai depuis les
+    tables d'origine pour un affichage propre dans l'overlay."""
+    _require_volet(user)
+    from app.services.qg_embeddings import search_similar
+
+    hits = await search_similar(
+        db,
+        entreprise_id=None,  # global
+        query=body.query,
+        limit=body.limit,
+    )
+    if not hits:
+        return []
+
+    # Précharge les entités d'origine + entreprises pour un affichage
+    # propre (titre court + nom entreprise + couleur).
+    tache_ids = [h.source_id for h in hits if h.source_type == "tache"]
+    summary_ids = [h.source_id for h in hits if h.source_type == "summary"]
+
+    taches_by_id: dict[int, EntrepriseTache] = {}
+    if tache_ids:
+        rows = (
+            await db.execute(
+                select(EntrepriseTache).where(
+                    EntrepriseTache.id.in_(tache_ids)
+                )
+            )
+        ).scalars().all()
+        taches_by_id = {t.id: t for t in rows}
+
+    from app.models.qg_strategic import Summary
+
+    summaries_by_id: dict[int, Summary] = {}
+    if summary_ids:
+        rows = (
+            await db.execute(
+                select(Summary).where(Summary.id.in_(summary_ids))
+            )
+        ).scalars().all()
+        summaries_by_id = {s.id: s for s in rows}
+
+    ent_ids = {
+        t.entreprise_id for t in taches_by_id.values()
+    } | {
+        s.entreprise_id for s in summaries_by_id.values()
+    }
+    ents_by_id: dict[int, Entreprise] = {}
+    if ent_ids:
+        rows = (
+            await db.execute(
+                select(Entreprise).where(Entreprise.id.in_(ent_ids))
+            )
+        ).scalars().all()
+        ents_by_id = {e.id: e for e in rows}
+
+    out: List[GlobalSearchHitOut] = []
+    for h in hits:
+        title = h.content[:120]
+        snippet = h.content[:200]
+        ent_id: Optional[int] = None
+        if h.source_type == "tache" and h.source_id in taches_by_id:
+            t = taches_by_id[h.source_id]
+            title = t.title
+            snippet = t.description or t.title
+            ent_id = t.entreprise_id
+        elif h.source_type == "summary" and h.source_id in summaries_by_id:
+            s = summaries_by_id[h.source_id]
+            title = s.headline
+            snippet = s.summary_text
+            ent_id = s.entreprise_id
+        ent = ents_by_id.get(ent_id) if ent_id else None
+        out.append(GlobalSearchHitOut(
+            source_type=h.source_type,
+            source_id=h.source_id,
+            entreprise_id=ent_id,
+            entreprise_name=ent.name if ent else None,
+            entreprise_color=ent.color_accent if ent else None,
+            title=title,
+            snippet=snippet,
+            similarity=round(h.similarity, 3),
+        ))
+    return out
+
+
 @router.get(
     "/monday-workspaces",
     summary="Liste les workspaces Monday accessibles (debug import)",
