@@ -98,7 +98,42 @@ const MONTH_NAMES = [
   "juillet", "août", "septembre", "octobre", "novembre", "décembre"
 ];
 
-type ViewMode = "week" | "month";
+type ViewMode = "week" | "month" | "payperiod";
+
+// ---------------------------------------------------------------------------
+// Périodes de paie — alignées sur l'ancre côté backend (punch_ops.py).
+// Cycle de 14 jours samedi → vendredi. Ancre : période finissant le
+// vendredi 2026-05-02. Toute autre période = ancre ± N × 14 jours.
+// ---------------------------------------------------------------------------
+const PAYROLL_ANCHOR_END = new Date(2026, 4, 2); // 2 mai 2026 (mois 0-based = avril+1=mai)
+const PAYROLL_PERIOD_DAYS = 14;
+
+function payPeriodForDate(d: Date): { start: Date; end: Date } {
+  const ms = d.getTime() - PAYROLL_ANCHOR_END.getTime();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const deltaDays = Math.round(ms / dayMs);
+  const cycles = Math.round(deltaDays / PAYROLL_PERIOD_DAYS);
+  const end = new Date(PAYROLL_ANCHOR_END);
+  end.setDate(end.getDate() + cycles * PAYROLL_PERIOD_DAYS);
+  end.setHours(23, 59, 59, 999);
+  const start = new Date(end);
+  start.setDate(start.getDate() - (PAYROLL_PERIOD_DAYS - 1));
+  start.setHours(0, 0, 0, 0);
+  return { start, end };
+}
+
+function shiftPayPeriod(end: Date, deltaCycles: number): Date {
+  const next = new Date(end);
+  next.setDate(next.getDate() + deltaCycles * PAYROLL_PERIOD_DAYS);
+  return next;
+}
+
+function fmtFr(d: Date): string {
+  return d.toLocaleDateString("fr-CA", {
+    day: "2-digit",
+    month: "short"
+  });
+}
 
 export default function PunchGestionPage() {
   const confirm = useConfirm();
@@ -107,6 +142,9 @@ export default function PunchGestionPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("week");
   const [weekStart, setWeekStart] = useState(() => weekStartOf(new Date()));
   const [monthStart, setMonthStart] = useState(() => monthStartOf(new Date()));
+  const [payPeriodEnd, setPayPeriodEnd] = useState<Date>(
+    () => payPeriodForDate(new Date()).end
+  );
   // En vue mois : si une journée est cliquée, on filtre la liste sur
   // ce jour seulement. Null = tout le mois affiché.
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
@@ -138,8 +176,39 @@ export default function PunchGestionPage() {
       }
       return { start: monthStart, end: monthEndOf(monthStart) };
     }
+    if (viewMode === "payperiod") {
+      const pp = payPeriodForDate(payPeriodEnd);
+      // end exclusif (jour suivant 00:00) pour le filtre standard
+      const exclusiveEnd = new Date(pp.end);
+      exclusiveEnd.setHours(0, 0, 0, 0);
+      exclusiveEnd.setDate(exclusiveEnd.getDate() + 1);
+      return { start: pp.start, end: exclusiveEnd };
+    }
     return { start: weekStart, end: weekEnd };
-  }, [viewMode, weekStart, weekEnd, monthStart, selectedDay]);
+  }, [viewMode, weekStart, weekEnd, monthStart, selectedDay, payPeriodEnd]);
+
+  // Liste des semaines candidates pour le menu déroulant : 26 derniers
+  // lundis + 4 lundis à venir (couvre 6 mois passés + 1 mois futur).
+  const weekOptions = useMemo<Date[]>(() => {
+    const today = weekStartOf(new Date());
+    const out: Date[] = [];
+    for (let i = -4; i <= 26; i++) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i * 7);
+      out.push(d);
+    }
+    return out; // ordre : du futur vers le passé
+  }, []);
+
+  // Liste des périodes de paie candidates : 13 passées + 4 à venir.
+  const payPeriodOptions = useMemo<Date[]>(() => {
+    const current = payPeriodForDate(new Date()).end;
+    const out: Date[] = [];
+    for (let i = -4; i <= 13; i++) {
+      out.push(shiftPayPeriod(current, -i));
+    }
+    return out;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -340,9 +409,9 @@ export default function PunchGestionPage() {
             ← Vue employé
           </Link>
 
-          {/* Toggle Semaine / Mois */}
+          {/* Toggle Semaine / Mois / Période de paie */}
           <div className="inline-flex items-center rounded-lg border border-brand-800 bg-brand-900 p-1">
-            {(["week", "month"] as const).map((m) => (
+            {(["week", "month", "payperiod"] as const).map((m) => (
               <button
                 key={m}
                 type="button"
@@ -356,7 +425,11 @@ export default function PunchGestionPage() {
                     : "text-white/70 hover:bg-brand-800 hover:text-white"
                 }`}
               >
-                {m === "week" ? "Semaine" : "Mois"}
+                {m === "week"
+                  ? "Semaine"
+                  : m === "month"
+                  ? "Mois"
+                  : "Période de paie"}
               </button>
             ))}
           </div>
@@ -377,10 +450,32 @@ export default function PunchGestionPage() {
                 >
                   <ChevronLeft className="h-4 w-4" />
                 </button>
-                <span className="min-w-[180px] px-2 text-center text-sm font-semibold text-white">
-                  Sem. {shortISO(weekStart)} →{" "}
-                  {shortISO(new Date(weekEnd.getTime() - 1))}
-                </span>
+                {/* Menu déroulant : sélection directe d'une semaine */}
+                <select
+                  value={shortISO(weekStart)}
+                  onChange={(e) => {
+                    const [y, mo, da] = e.target.value
+                      .split("-")
+                      .map(Number);
+                    setWeekStart(new Date(y, mo - 1, da));
+                  }}
+                  className="min-w-[200px] cursor-pointer rounded-md bg-transparent px-2 text-center text-sm font-semibold text-white hover:bg-brand-800 focus:outline-none"
+                  title="Choisir une semaine"
+                >
+                  {weekOptions.map((w) => {
+                    const end = new Date(w);
+                    end.setDate(end.getDate() + 6);
+                    return (
+                      <option
+                        key={shortISO(w)}
+                        value={shortISO(w)}
+                        className="bg-brand-950 text-white"
+                      >
+                        Sem. {shortISO(w)} → {shortISO(end)}
+                      </option>
+                    );
+                  })}
+                </select>
                 <button
                   type="button"
                   onClick={() => {
@@ -402,7 +497,7 @@ export default function PunchGestionPage() {
                 Cette semaine
               </button>
             </>
-          ) : (
+          ) : viewMode === "month" ? (
             <>
               <div className="flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-900 p-1">
                 <button
@@ -457,6 +552,66 @@ export default function PunchGestionPage() {
                 </button>
               ) : null}
             </>
+          ) : (
+            // viewMode === "payperiod"
+            <>
+              <div className="flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-900 p-1">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPayPeriodEnd(shiftPayPeriod(payPeriodEnd, -1))
+                  }
+                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+                  aria-label="Période précédente"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                {/* Menu déroulant : sélection directe d'une période de paie */}
+                <select
+                  value={shortISO(payPeriodEnd)}
+                  onChange={(e) => {
+                    const [y, mo, da] = e.target.value
+                      .split("-")
+                      .map(Number);
+                    setPayPeriodEnd(new Date(y, mo - 1, da));
+                  }}
+                  className="min-w-[230px] cursor-pointer rounded-md bg-transparent px-2 text-center text-sm font-semibold text-white hover:bg-brand-800 focus:outline-none"
+                  title="Choisir une période de paie"
+                >
+                  {payPeriodOptions.map((end) => {
+                    const pp = payPeriodForDate(end);
+                    return (
+                      <option
+                        key={shortISO(pp.end)}
+                        value={shortISO(pp.end)}
+                        className="bg-brand-950 text-white"
+                      >
+                        Paie {fmtFr(pp.start)} → {fmtFr(pp.end)}
+                      </option>
+                    );
+                  })}
+                </select>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPayPeriodEnd(shiftPayPeriod(payPeriodEnd, +1))
+                  }
+                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+                  aria-label="Période suivante"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setPayPeriodEnd(payPeriodForDate(new Date()).end)
+                }
+                className="btn-secondary text-xs"
+              >
+                Période courante
+              </button>
+            </>
           )}
 
           <select
@@ -505,6 +660,8 @@ export default function PunchGestionPage() {
               ? selectedDay
                 ? `Aucun punch le ${shortISO(selectedDay)}.`
                 : "Aucun punch ce mois-ci."
+              : viewMode === "payperiod"
+              ? "Aucun punch pour cette période de paie."
               : "Aucun punch pour cette semaine."}
           </p>
         ) : (
