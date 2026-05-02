@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
+import { KratosLogo } from "@/components/kratos-logo";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
@@ -38,6 +39,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <AppLayoutContextProvider onOpenSidebar={() => setSidebarOpen(true)}>
             <ConfirmProvider>
               <main className="flex-1 overflow-x-hidden">{children}</main>
+              <KratosLogo />
               <HelpButton />
             </ConfirmProvider>
           </AppLayoutContextProvider>

@@ -138,6 +138,43 @@ class QGDailyPulseResult(CronResult):
     errors: int = 0
 
 
+class QGInsightsResult(CronResult):
+    total: int = 0
+    created: int = 0
+    errors: int = 0
+
+
+@router.post("/run/qg-weekly-insights", response_model=QGInsightsResult)
+async def trigger_qg_weekly_insights(
+    x_cron_secret: Optional[str] = Header(default=None),
+    secret: Optional[str] = Query(default=None),
+    force: bool = Query(default=False),
+) -> QGInsightsResult:
+    """Cron hebdo : génère des insights pour toutes les entreprises
+    actives. À planifier 1×/semaine (lundi 8h)."""
+    _check_secret(x_cron_secret, secret)
+    from app.db.session import AsyncSessionLocal
+    from app.services.qg_insights import generate_for_all_active
+
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await generate_for_all_active(db, force=force)
+            await db.commit()
+    except Exception as exc:
+        log.exception("Cron qg_weekly_insights failed: %s", exc)
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Job a échoué : {exc}",
+        )
+    return QGInsightsResult(
+        ok=True,
+        job="qg-weekly-insights",
+        total=result.get("total", 0),
+        created=result.get("created", 0),
+        errors=result.get("errors", 0),
+    )
+
+
 @router.post("/run/qg-daily-pulse", response_model=QGDailyPulseResult)
 async def trigger_qg_daily_pulse(
     x_cron_secret: Optional[str] = Header(default=None),

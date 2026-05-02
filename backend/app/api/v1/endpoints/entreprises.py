@@ -391,6 +391,239 @@ def _guess_status_from_group(group: Optional[str]) -> str:
     return TacheStatus.BACKLOG.value
 
 
+# ── Insights (alertes IA) ───────────────────────────────────────────────
+
+
+class InsightOut(BaseModel):
+    id: int
+    entreprise_id: int
+    type: str
+    status: str
+    title: str
+    body: str
+    confidence: Optional[float] = None
+    suggested_actions: List[str] = Field(default_factory=list)
+    estimated_impact_label: Optional[str] = None
+    estimated_impact_currency: Optional[float] = None
+    created_at: datetime
+
+    @classmethod
+    def from_model(cls, i: "Insight") -> "InsightOut":
+        import json as _json
+        try:
+            actions = _json.loads(i.suggested_actions_json or "[]")
+            if not isinstance(actions, list):
+                actions = []
+        except Exception:
+            actions = []
+        return cls(
+            id=i.id,
+            entreprise_id=i.entreprise_id,
+            type=i.type,
+            status=i.status,
+            title=i.title,
+            body=i.body,
+            confidence=float(i.confidence) if i.confidence is not None else None,
+            suggested_actions=[str(a) for a in actions],
+            estimated_impact_label=i.estimated_impact_label,
+            estimated_impact_currency=(
+                float(i.estimated_impact_currency)
+                if i.estimated_impact_currency is not None
+                else None
+            ),
+            created_at=i.created_at,
+        )
+
+
+@router.get(
+    "/{entreprise_id}/insights",
+    response_model=List[InsightOut],
+    summary="Liste les insights IA d'une entreprise",
+)
+async def list_insights(
+    entreprise_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    open_only: bool = True,
+) -> List[InsightOut]:
+    _require_volet(user)
+    from app.models.qg_strategic import Insight, InsightStatus
+
+    stmt = select(Insight).where(Insight.entreprise_id == entreprise_id)
+    if open_only:
+        stmt = stmt.where(
+            Insight.status.in_([
+                InsightStatus.NEW.value,
+                InsightStatus.ACKNOWLEDGED.value,
+                InsightStatus.IN_ACTION.value,
+            ])
+        )
+    rows = (
+        await db.execute(stmt.order_by(Insight.created_at.desc()).limit(50))
+    ).scalars().all()
+    return [InsightOut.from_model(i) for i in rows]
+
+
+@router.post(
+    "/{entreprise_id}/insights/generate",
+    summary="Génère de nouveaux insights pour une entreprise",
+)
+async def generate_insights(
+    entreprise_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    force: bool = False,
+) -> dict:
+    _require_volet(user)
+    from app.services.qg_insights import generate_for_entreprise
+
+    res = await generate_for_entreprise(db, entreprise_id, force=force)
+    await db.commit()
+    return res
+
+
+class InsightStatusUpdate(BaseModel):
+    status: str = Field(..., pattern="^(new|acknowledged|in_action|dismissed|resolved)$")
+
+
+@router.patch(
+    "/insights/{insight_id}",
+    response_model=InsightOut,
+    summary="Change le statut d'un insight (acknowledge/dismiss/resolve)",
+)
+async def update_insight_status(
+    insight_id: int,
+    body: InsightStatusUpdate,
+    db: DBSession,
+    user: CurrentUser,
+) -> InsightOut:
+    _require_volet(user)
+    from app.models.qg_strategic import Insight, InsightStatus
+
+    i = (
+        await db.execute(select(Insight).where(Insight.id == insight_id))
+    ).scalar_one_or_none()
+    if i is None:
+        raise HTTPException(404, "Insight introuvable")
+    i.status = body.status
+    if body.status == InsightStatus.RESOLVED.value and i.resolved_at is None:
+        i.resolved_at = datetime.now(timezone.utc)
+    if body.status in (
+        InsightStatus.ACKNOWLEDGED.value,
+        InsightStatus.IN_ACTION.value,
+    ) and i.acknowledged_at is None:
+        i.acknowledged_at = datetime.now(timezone.utc)
+        i.acknowledged_by_user_id = user.id
+    await db.flush()
+    await db.refresh(i)
+    return InsightOut.from_model(i)
+
+
+# ── Visions (horizons stratégiques) ─────────────────────────────────────
+
+
+class VisionOut(BaseModel):
+    id: int
+    entreprise_id: int
+    horizon_label: str
+    horizon_start: date
+    horizon_end: date
+    title: str
+    narrative: str
+    objectives: List[str] = Field(default_factory=list)
+    key_actions: List[str] = Field(default_factory=list)
+    generated_by_ai: bool
+    approved_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_model(cls, v: "Vision") -> "VisionOut":
+        import json as _json
+        try:
+            objs = _json.loads(v.objectives_json or "[]")
+            if not isinstance(objs, list):
+                objs = []
+        except Exception:
+            objs = []
+        try:
+            acts = _json.loads(v.key_actions_json or "[]")
+            if not isinstance(acts, list):
+                acts = []
+        except Exception:
+            acts = []
+        return cls(
+            id=v.id,
+            entreprise_id=v.entreprise_id,
+            horizon_label=v.horizon_label,
+            horizon_start=v.horizon_start,
+            horizon_end=v.horizon_end,
+            title=v.title,
+            narrative=v.narrative,
+            objectives=[str(o) for o in objs],
+            key_actions=[str(a) for a in acts],
+            generated_by_ai=v.generated_by_ai,
+            approved_at=v.approved_at,
+            created_at=v.created_at,
+            updated_at=v.updated_at,
+        )
+
+
+@router.get(
+    "/{entreprise_id}/visions",
+    response_model=List[VisionOut],
+    summary="Visions stratégiques d'une entreprise (par horizon)",
+)
+async def list_visions(
+    entreprise_id: int, db: DBSession, user: CurrentUser
+) -> List[VisionOut]:
+    _require_volet(user)
+    from app.models.qg_strategic import Vision
+
+    rows = (
+        await db.execute(
+            select(Vision)
+            .where(Vision.entreprise_id == entreprise_id)
+            .order_by(Vision.horizon_start.desc())
+        )
+    ).scalars().all()
+    return [VisionOut.from_model(v) for v in rows]
+
+
+class VisionGenerateRequest(BaseModel):
+    horizon: str = Field(..., pattern="^(7j|30j|90j|12m)$")
+    force: bool = False
+
+
+@router.post(
+    "/{entreprise_id}/visions/generate",
+    response_model=Optional[VisionOut],
+    summary="Génère une vision stratégique pour un horizon (7j/30j/90j/12m)",
+)
+async def generate_vision_endpoint(
+    entreprise_id: int,
+    body: VisionGenerateRequest,
+    db: DBSession,
+    user: CurrentUser,
+) -> Optional[VisionOut]:
+    _require_volet(user)
+    from app.services.qg_visions import generate_vision
+
+    try:
+        v = await generate_vision(
+            db,
+            entreprise_id,
+            horizon_key=body.horizon,
+            force=body.force,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if v is None:
+        raise HTTPException(503, "IA indisponible ou entreprise introuvable.")
+    await db.commit()
+    return VisionOut.from_model(v)
+
+
 # ── Stats overview (4 KPIs accueil volet) ───────────────────────────────
 
 
