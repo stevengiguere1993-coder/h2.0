@@ -296,7 +296,7 @@ export default function PunchPage() {
                 {me.employe.full_name}
               </p>
               <h1 className="mt-1 text-2xl font-bold text-white">
-                {me.active ? "Punch en cours" : "Prêt à pointer"}
+                {me.active ? "Punch en cours" : "Prêt à poinçonner"}
               </h1>
             </header>
 

@@ -202,7 +202,7 @@ export default function AppHome() {
                 : " "
             }
             icon={TrendingUp}
-            href="/app/projets"
+            href="/app/soumissions"
             tone="emerald"
           />
         </section>
