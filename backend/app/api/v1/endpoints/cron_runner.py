@@ -127,3 +127,45 @@ async def trigger_appointment_reminders(
             f"Job a échoué : {exc}",
         )
     return CronResult(ok=True, job="appointment-reminders")
+
+
+class QGDailyPulseResult(CronResult):
+    """Détail des entreprises traitées par le cron Daily Pulse."""
+
+    total: int = 0
+    generated: int = 0
+    skipped: int = 0
+    errors: int = 0
+
+
+@router.post("/run/qg-daily-pulse", response_model=QGDailyPulseResult)
+async def trigger_qg_daily_pulse(
+    x_cron_secret: Optional[str] = Header(default=None),
+    secret: Optional[str] = Query(default=None),
+    force: bool = Query(default=False),
+) -> QGDailyPulseResult:
+    """Cron quotidien : génère le briefing IA pour toutes les
+    entreprises actives. À planifier ~7h heure locale via cron-job.org
+    ou GitHub Actions. ``force=true`` regénère les briefings du jour."""
+    _check_secret(x_cron_secret, secret)
+    from app.db.session import AsyncSessionLocal
+    from app.services.qg_daily_pulse import generate_for_all_active
+
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await generate_for_all_active(db, force=force)
+            await db.commit()
+    except Exception as exc:
+        log.exception("Cron qg_daily_pulse failed: %s", exc)
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Job a échoué : {exc}",
+        )
+    return QGDailyPulseResult(
+        ok=True,
+        job="qg-daily-pulse",
+        total=result.get("total", 0),
+        generated=result.get("generated", 0),
+        skipped=result.get("skipped", 0),
+        errors=result.get("errors", 0),
+    )

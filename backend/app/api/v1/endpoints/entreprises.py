@@ -391,6 +391,98 @@ def _guess_status_from_group(group: Optional[str]) -> str:
     return TacheStatus.BACKLOG.value
 
 
+# ── Daily Pulse (briefing IA quotidien) ─────────────────────────────────
+
+
+class DailyBriefingOut(BaseModel):
+    id: int
+    entreprise_id: int
+    period_start: datetime
+    period_end: datetime
+    headline: str
+    summary_text: str
+    highlights: List[str] = Field(default_factory=list)
+    model_used: Optional[str] = None
+    provider: Optional[str] = None
+    created_at: datetime
+
+    @classmethod
+    def from_summary(cls, s: "Summary") -> "DailyBriefingOut":
+        import json as _json
+
+        try:
+            highlights = _json.loads(s.highlights_json or "[]")
+            if not isinstance(highlights, list):
+                highlights = []
+        except Exception:
+            highlights = []
+        return cls(
+            id=s.id,
+            entreprise_id=s.entreprise_id,
+            period_start=s.period_start,
+            period_end=s.period_end,
+            headline=s.headline,
+            summary_text=s.summary_text,
+            highlights=[str(h) for h in highlights],
+            model_used=s.model_used,
+            provider=s.provider,
+            created_at=s.created_at,
+        )
+
+
+@router.get(
+    "/{entreprise_id}/daily-pulse",
+    response_model=Optional[DailyBriefingOut],
+    summary="Dernier daily briefing IA d'une entreprise (None si aucun)",
+)
+async def get_daily_pulse(
+    entreprise_id: int, db: DBSession, user: CurrentUser
+) -> Optional[DailyBriefingOut]:
+    _require_volet(user)
+    from app.models.qg_strategic import Summary, SummaryType
+
+    s = (
+        await db.execute(
+            select(Summary)
+            .where(
+                Summary.entreprise_id == entreprise_id,
+                Summary.type == SummaryType.DAILY_BRIEFING.value,
+            )
+            .order_by(Summary.period_start.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if s is None:
+        return None
+    return DailyBriefingOut.from_summary(s)
+
+
+@router.post(
+    "/{entreprise_id}/daily-pulse",
+    response_model=Optional[DailyBriefingOut],
+    summary="Génère (ou retourne celui du jour) le daily briefing IA",
+)
+async def generate_daily_pulse(
+    entreprise_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    force: bool = False,
+) -> Optional[DailyBriefingOut]:
+    """Génération manuelle. Idempotent : un briefing par jour. Avec
+    `?force=true`, écrase celui du jour pour régénération à la demande."""
+    _require_volet(user)
+    from app.services.qg_daily_pulse import generate_for_entreprise
+
+    s = await generate_for_entreprise(db, entreprise_id, force=force)
+    if s is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "IA indisponible ou entreprise introuvable.",
+        )
+    await db.commit()
+    return DailyBriefingOut.from_summary(s)
+
+
 # ── Index sémantique (recherche IA) ─────────────────────────────────────
 
 
