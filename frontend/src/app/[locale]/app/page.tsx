@@ -331,6 +331,9 @@ export default function AppHome() {
           </Link>
         ) : null}
 
+        {/* Volets en développement — pastilles cliquables */}
+        <DevVoletsSection user={user} />
+
         {/* Shortcuts */}
         <section className="mt-10">
           <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
@@ -409,6 +412,94 @@ function PeriodPicker({
         />
       </div>
     </div>
+  );
+}
+
+
+/* ======================================================================
+ * Pastilles « En développement » — entreprises / immobilier / investisseur
+ *
+ * Affichées sur l'accueil du portail. Chaque tile est visible
+ * uniquement si l'utilisateur a le volet correspondant (whitelist
+ * gérée côté backend dans User.volets). Cliquer mène à une page
+ * placeholder du volet, qui sera étoffée au fur et à mesure.
+ * ====================================================================== */
+
+import type { CurrentUser } from "@/lib/auth";
+
+const DEV_VOLETS = [
+  {
+    volet: "entreprises",
+    label: "Gestion d'entreprises",
+    href: "/app/entreprises",
+    desc:
+      "Tâches multi-entreprises, scoring, assignation intelligente, suivi de projets, daily pulse.",
+    icon: Briefcase,
+    accent: "from-violet-500/20 to-violet-500/5 border-violet-500/40 text-violet-200"
+  },
+  {
+    volet: "immobilier",
+    label: "Gestion immobilière",
+    href: "/app/immobilier",
+    desc:
+      "Immeubles, locataires, baux, refinancements, valorisation. Inspiré de Plexflow + ProprioExpert.",
+    icon: FileText,
+    accent: "from-sky-500/20 to-sky-500/5 border-sky-500/40 text-sky-200"
+  },
+  {
+    volet: "investisseur",
+    label: "Investisseurs",
+    href: "/app/investisseur",
+    desc:
+      "Portail pour les investisseurs : capital, valeur live, projection KPI, activité 30 jours.",
+    icon: TrendingUp,
+    accent: "from-emerald-500/20 to-emerald-500/5 border-emerald-500/40 text-emerald-200"
+  }
+] as const;
+
+function DevVoletsSection({ user }: { user: CurrentUser | null }) {
+  const userVolets = (user?.volets as string[] | undefined) || [];
+  const visible = DEV_VOLETS.filter((v) => userVolets.includes(v.volet));
+  if (visible.length === 0) return null;
+
+  return (
+    <section className="mt-10">
+      <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-accent-500">
+        <span>Volets en développement</span>
+      </h2>
+      <p className="mt-1 text-xs text-white/50">
+        Espaces en construction — accès restreint pendant le développement.
+      </p>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {visible.map((v) => {
+          const Icon = v.icon;
+          return (
+            <Link
+              key={v.volet}
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={v.href as any}
+              className={`group relative flex flex-col gap-3 overflow-hidden rounded-2xl border bg-gradient-to-br p-5 transition hover:-translate-y-0.5 hover:shadow-lg ${v.accent}`}
+            >
+              <span className="absolute right-3 top-3 rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-200">
+                En développement
+              </span>
+              <Icon className="h-7 w-7" />
+              <div>
+                <h3 className="text-base font-bold text-white">
+                  {v.label}
+                </h3>
+                <p className="mt-1 text-xs leading-relaxed text-white/70">
+                  {v.desc}
+                </p>
+              </div>
+              <span className="mt-auto text-[11px] font-semibold uppercase tracking-wider text-white/60 group-hover:text-white">
+                Ouvrir →
+              </span>
+            </Link>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 

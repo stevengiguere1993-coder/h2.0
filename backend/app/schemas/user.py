@@ -5,9 +5,9 @@ These schemas handle validation and serialization for user-related API operation
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
 
 
 class UserBase(BaseModel):
@@ -72,6 +72,10 @@ class UserRead(UserBase):
     # Préférence visuelle du portail. 'light' (noir sur blanc, défaut)
     # ou 'dark' (blanc sur noir). Persistée par utilisateur en DB.
     theme_preference: str = "light"
+    # Volets accessibles à l'utilisateur. Calculé côté ORM par la
+    # propriété User.volets : combine volets_json + whitelists des
+    # volets en développement (entreprises/immobilier/investisseur).
+    volets: List[str] = Field(default_factory=list)
 
 
 class UserUpdate(BaseModel):
