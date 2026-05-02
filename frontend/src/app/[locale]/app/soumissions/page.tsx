@@ -58,6 +58,12 @@ export default function SoumissionsPage() {
   const [dragging, setDragging] = useState<number | null>(null);
   const [hoverCol, setHoverCol] = useState<string | null>(null);
 
+  // Fallback : somme des items par soumission. Utilisé quand le total
+  // persisté en DB est null/0 (cas legacy ou items ajoutés sans
+  // recalcul du total). Peuplé en 1 batch après le chargement de la
+  // liste.
+  const [itemsTotals, setItemsTotals] = useState<Record<number, number>>({});
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -67,7 +73,36 @@ export default function SoumissionsPage() {
         const res = await authedFetch("/api/v1/soumissions?limit=200");
         if (!res.ok) throw new Error(`http_${res.status}`);
         const data = (await res.json()) as Soumission[];
-        if (!cancelled) setItems(data);
+        if (cancelled) return;
+        setItems(data);
+
+        const ids = data
+          .filter(
+            (s) =>
+              !(Number(s.total) > 0) && !(Number(s.subtotal) > 0)
+          )
+          .map((s) => s.id);
+        if (ids.length > 0) {
+          const r = await authedFetch(
+            "/api/v1/soumissions/items-totals",
+            {
+              method: "POST",
+              body: JSON.stringify({ soumission_ids: ids })
+            }
+          );
+          if (!cancelled && r.ok) {
+            const j = (await r.json()) as {
+              totals: Record<string, number>;
+            };
+            const map: Record<number, number> = {};
+            for (const [k, v] of Object.entries(j.totals || {})) {
+              const num = Number(v);
+              if (Number.isFinite(num) && num > 0)
+                map[Number(k)] = num;
+            }
+            setItemsTotals(map);
+          }
+        }
       } catch {
         if (!cancelled) setError("Impossible de charger les soumissions.");
       } finally {
@@ -79,6 +114,18 @@ export default function SoumissionsPage() {
       cancelled = true;
     };
   }, []);
+
+  // Helper : montant à afficher pour une soumission (total >
+  // subtotal > somme des items > null).
+  const amountFor = useMemo(() => {
+    return (s: Soumission): number | null => {
+      if (Number(s.total) > 0) return Number(s.total);
+      if (Number(s.subtotal) > 0) return Number(s.subtotal);
+      const fallback = itemsTotals[s.id];
+      if (Number.isFinite(fallback) && fallback > 0) return fallback;
+      return null;
+    };
+  }, [itemsTotals]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -212,11 +259,7 @@ export default function SoumissionsPage() {
                     <span className="text-xs font-semibold text-emerald-300">
                       {fmtMoney(
                         cards.reduce(
-                          (sum, s) =>
-                            sum +
-                            (Number(s.total) > 0
-                              ? Number(s.total)
-                              : Number(s.subtotal || 0)),
+                          (sum, s) => sum + (amountFor(s) || 0),
                           0
                         )
                       )}

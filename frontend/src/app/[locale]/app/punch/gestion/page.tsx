@@ -65,15 +65,51 @@ function weekStartOf(d: Date): Date {
   return copy;
 }
 
+function monthStartOf(d: Date): Date {
+  const copy = new Date(d.getFullYear(), d.getMonth(), 1);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+}
+
+function monthEndOf(d: Date): Date {
+  // 1er du mois suivant — exclusif
+  return new Date(d.getFullYear(), d.getMonth() + 1, 1);
+}
+
+function calendarStartOf(monthStart: Date): Date {
+  // Lundi de la semaine qui contient le 1er du mois
+  return weekStartOf(monthStart);
+}
+
+function sameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
 function shortISO(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
+
+const MONTH_NAMES = [
+  "janvier", "février", "mars", "avril", "mai", "juin",
+  "juillet", "août", "septembre", "octobre", "novembre", "décembre"
+];
+
+type ViewMode = "week" | "month";
 
 export default function PunchGestionPage() {
   const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
 
+  const [viewMode, setViewMode] = useState<ViewMode>("week");
   const [weekStart, setWeekStart] = useState(() => weekStartOf(new Date()));
+  const [monthStart, setMonthStart] = useState(() => monthStartOf(new Date()));
+  // En vue mois : si une journée est cliquée, on filtre la liste sur
+  // ce jour seulement. Null = tout le mois affiché.
+  const [selectedDay, setSelectedDay] = useState<Date | null>(null);
   const [punches, setPunches] = useState<Punch[]>([]);
   const [employes, setEmployes] = useState<Employe[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -88,6 +124,22 @@ export default function PunchGestionPage() {
     d.setDate(d.getDate() + 7);
     return d;
   }, [weekStart]);
+
+  // Période active selon le mode courant. En vue mois avec un jour
+  // sélectionné : période = ce jour seulement.
+  const period = useMemo<{ start: Date; end: Date }>(() => {
+    if (viewMode === "month") {
+      if (selectedDay) {
+        const start = new Date(selectedDay);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(start);
+        end.setDate(end.getDate() + 1);
+        return { start, end };
+      }
+      return { start: monthStart, end: monthEndOf(monthStart) };
+    }
+    return { start: weekStart, end: weekEnd };
+  }, [viewMode, weekStart, weekEnd, monthStart, selectedDay]);
 
   useEffect(() => {
     let cancelled = false;
@@ -145,7 +197,7 @@ export default function PunchGestionPage() {
     return punches
       .filter((p) => {
         const d = new Date(p.started_at);
-        if (d < weekStart || d >= weekEnd) return false;
+        if (d < period.start || d >= period.end) return false;
         if (filterEmploye && String(p.employe_id) !== filterEmploye) return false;
         return true;
       })
@@ -153,7 +205,21 @@ export default function PunchGestionPage() {
         (a, b) =>
           new Date(b.started_at).getTime() - new Date(a.started_at).getTime()
       );
-  }, [punches, weekStart, weekEnd, filterEmploye]);
+  }, [punches, period, filterEmploye]);
+
+  // Map jour ISO → total heures, pour la heatmap du calendrier mois.
+  // Respecte le filtre employé courant.
+  const hoursByDay = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const p of punches) {
+      if (filterEmploye && String(p.employe_id) !== filterEmploye) continue;
+      if (p.hours == null) continue;
+      const d = new Date(p.started_at);
+      const key = shortISO(d);
+      map.set(key, (map.get(key) || 0) + Number(p.hours));
+    }
+    return map;
+  }, [punches, filterEmploye]);
 
   const totalHours = useMemo(
     () =>
@@ -242,43 +308,124 @@ export default function PunchGestionPage() {
             ← Vue employé
           </Link>
 
-          <div className="flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-900 p-1">
-            <button
-              type="button"
-              onClick={() => {
-                const d = new Date(weekStart);
-                d.setDate(d.getDate() - 7);
-                setWeekStart(d);
-              }}
-              className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
-              aria-label="Semaine précédente"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <span className="min-w-[180px] px-2 text-center text-sm font-semibold text-white">
-              Sem. {shortISO(weekStart)} → {shortISO(new Date(weekEnd.getTime() - 1))}
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                const d = new Date(weekStart);
-                d.setDate(d.getDate() + 7);
-                setWeekStart(d);
-              }}
-              className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
-              aria-label="Semaine suivante"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
+          {/* Toggle Semaine / Mois */}
+          <div className="inline-flex items-center rounded-lg border border-brand-800 bg-brand-900 p-1">
+            {(["week", "month"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => {
+                  setViewMode(m);
+                  setSelectedDay(null);
+                }}
+                className={`rounded-md px-3 py-1 text-xs font-semibold transition ${
+                  viewMode === m
+                    ? "bg-accent-500 text-brand-950"
+                    : "text-white/70 hover:bg-brand-800 hover:text-white"
+                }`}
+              >
+                {m === "week" ? "Semaine" : "Mois"}
+              </button>
+            ))}
           </div>
 
-          <button
-            type="button"
-            onClick={() => setWeekStart(weekStartOf(new Date()))}
-            className="btn-secondary text-xs"
-          >
-            Cette semaine
-          </button>
+          {/* Navigation période — varie selon le mode */}
+          {viewMode === "week" ? (
+            <>
+              <div className="flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-900 p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const d = new Date(weekStart);
+                    d.setDate(d.getDate() - 7);
+                    setWeekStart(d);
+                  }}
+                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+                  aria-label="Semaine précédente"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <span className="min-w-[180px] px-2 text-center text-sm font-semibold text-white">
+                  Sem. {shortISO(weekStart)} →{" "}
+                  {shortISO(new Date(weekEnd.getTime() - 1))}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const d = new Date(weekStart);
+                    d.setDate(d.getDate() + 7);
+                    setWeekStart(d);
+                  }}
+                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+                  aria-label="Semaine suivante"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => setWeekStart(weekStartOf(new Date()))}
+                className="btn-secondary text-xs"
+              >
+                Cette semaine
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-1 rounded-lg border border-brand-800 bg-brand-900 p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const d = new Date(monthStart);
+                    d.setMonth(d.getMonth() - 1);
+                    setMonthStart(monthStartOf(d));
+                    setSelectedDay(null);
+                  }}
+                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+                  aria-label="Mois précédent"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <span className="min-w-[160px] px-2 text-center text-sm font-semibold text-white">
+                  {MONTH_NAMES[monthStart.getMonth()]}{" "}
+                  {monthStart.getFullYear()}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const d = new Date(monthStart);
+                    d.setMonth(d.getMonth() + 1);
+                    setMonthStart(monthStartOf(d));
+                    setSelectedDay(null);
+                  }}
+                  className="rounded-md p-1.5 text-white/70 hover:bg-brand-800 hover:text-white"
+                  aria-label="Mois suivant"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setMonthStart(monthStartOf(new Date()));
+                  setSelectedDay(null);
+                }}
+                className="btn-secondary text-xs"
+              >
+                Ce mois
+              </button>
+              {selectedDay ? (
+                <button
+                  type="button"
+                  onClick={() => setSelectedDay(null)}
+                  className="rounded-md border border-accent-500/40 bg-accent-500/10 px-2 py-1 text-xs text-accent-300 hover:bg-accent-500/20"
+                  title="Réinitialiser le jour sélectionné"
+                >
+                  ✕ {shortISO(selectedDay)}
+                </button>
+              ) : null}
+            </>
+          )}
 
           <select
             value={filterEmploye}
@@ -301,16 +448,34 @@ export default function PunchGestionPage() {
           </div>
         </div>
 
+        {/* Calendrier mensuel — uniquement en vue Mois */}
+        {viewMode === "month" ? (
+          <MonthCalendar
+            monthStart={monthStart}
+            hoursByDay={hoursByDay}
+            selectedDay={selectedDay}
+            onSelectDay={(d) =>
+              setSelectedDay((cur) =>
+                cur && sameDay(cur, d) ? null : d
+              )
+            }
+          />
+        ) : null}
+
         {loading ? (
           <div className="flex min-h-[40vh] items-center justify-center">
             <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
           </div>
         ) : visible.length === 0 ? (
-          <p className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
-            Aucun punch pour cette semaine.
+          <p className="mt-4 rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
+            {viewMode === "month"
+              ? selectedDay
+                ? `Aucun punch le ${shortISO(selectedDay)}.`
+                : "Aucun punch ce mois-ci."
+              : "Aucun punch pour cette semaine."}
           </p>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-brand-800 bg-brand-900">
+          <div className="mt-4 overflow-x-auto rounded-xl border border-brand-800 bg-brand-900">
             <table className="w-full text-sm">
               <thead className="border-b border-brand-800 text-left text-xs uppercase tracking-wider text-white/50">
                 <tr>
@@ -820,4 +985,94 @@ function parseLatLng(s: string): { lat: number; lng: number } | null {
   const lng = Number(lngStr);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
   return { lat, lng };
+}
+
+
+// ---------------------------------------------------------------------------
+// MonthCalendar — grille 6×7 lun→dim. Chaque case affiche le total
+// d'heures (cumulé par jour, employés filtrés) et est cliquable pour
+// filtrer la liste sur ce jour seulement.
+// ---------------------------------------------------------------------------
+
+function MonthCalendar({
+  monthStart,
+  hoursByDay,
+  selectedDay,
+  onSelectDay
+}: {
+  monthStart: Date;
+  hoursByDay: Map<string, number>;
+  selectedDay: Date | null;
+  onSelectDay: (d: Date) => void;
+}) {
+  const calStart = calendarStartOf(monthStart);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // 6 rangées × 7 colonnes = 42 cases
+  const cells: Date[] = [];
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(calStart);
+    d.setDate(d.getDate() + i);
+    cells.push(d);
+  }
+
+  const dayLabels = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
+
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-900 p-3">
+      <div className="grid grid-cols-7 gap-1">
+        {dayLabels.map((l) => (
+          <div
+            key={l}
+            className="px-2 py-1 text-center text-[10px] font-semibold uppercase tracking-wider text-white/40"
+          >
+            {l}
+          </div>
+        ))}
+        {cells.map((d) => {
+          const inMonth = d.getMonth() === monthStart.getMonth();
+          const key = shortISO(d);
+          const hours = hoursByDay.get(key) || 0;
+          const isToday = sameDay(d, today);
+          const isSelected = selectedDay && sameDay(d, selectedDay);
+          const hasHours = hours > 0;
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => onSelectDay(d)}
+              className={`flex aspect-[1.1/1] flex-col items-start justify-between rounded-md border p-2 text-left transition ${
+                isSelected
+                  ? "border-accent-500 bg-accent-500/15"
+                  : isToday
+                  ? "border-accent-500/40 bg-brand-950"
+                  : "border-brand-800 bg-brand-950/60 hover:border-accent-500/40"
+              } ${inMonth ? "" : "opacity-30"}`}
+            >
+              <span
+                className={`text-xs ${
+                  isToday
+                    ? "font-bold text-accent-300"
+                    : "font-semibold text-white/70"
+                }`}
+              >
+                {d.getDate()}
+              </span>
+              {hasHours ? (
+                <span className="self-end text-[11px] font-bold text-emerald-300">
+                  {hours.toFixed(1)} h
+                </span>
+              ) : (
+                <span className="self-end text-[11px] text-white/20">—</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-2 text-[10px] text-white/40">
+        Clique une journée pour filtrer la liste sur ce jour seulement.
+      </p>
+    </div>
+  );
 }

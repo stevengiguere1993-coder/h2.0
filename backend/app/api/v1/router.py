@@ -73,6 +73,7 @@ from app.api.v1.endpoints import (
     soumission_status,
     soumission_to_client,
     soumission_to_project,
+    soumissions_aggregates,
     webhooks,
 )
 from app.api.v1.endpoints.business import (
@@ -139,6 +140,7 @@ api_router.include_router(soumission_items.router)
 api_router.include_router(soumission_qbo.router)
 api_router.include_router(soumission_send.router)
 api_router.include_router(soumission_status.router)
+api_router.include_router(soumissions_aggregates.router)
 api_router.include_router(soumission_to_client.router)
 api_router.include_router(soumission_to_project.router)
 # /agenda/unified DOIT être avant agenda_router (CRUD générique avec
