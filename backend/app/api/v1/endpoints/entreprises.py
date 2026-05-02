@@ -391,6 +391,88 @@ def _guess_status_from_group(group: Optional[str]) -> str:
     return TacheStatus.BACKLOG.value
 
 
+# ── Index sémantique (recherche IA) ─────────────────────────────────────
+
+
+class ReindexResponse(BaseModel):
+    indexed: int
+    skipped: int
+
+
+@router.post(
+    "/{entreprise_id}/reindex",
+    response_model=ReindexResponse,
+    summary="(Re)indexe toutes les tâches d'une entreprise pour la recherche IA",
+)
+async def reindex_entreprise(
+    entreprise_id: int, db: DBSession, user: CurrentUser
+) -> ReindexResponse:
+    _require_volet(user)
+    from app.services.qg_embeddings import index_entity
+
+    rows = (
+        await db.execute(
+            select(EntrepriseTache).where(
+                EntrepriseTache.entreprise_id == entreprise_id
+            )
+        )
+    ).scalars().all()
+    indexed = 0
+    skipped = 0
+    for t in rows:
+        text = (t.title or "") + (
+            "\n" + t.description if t.description else ""
+        )
+        e = await index_entity(
+            db,
+            entreprise_id=entreprise_id,
+            source_type="tache",
+            source_id=t.id,
+            content=text,
+        )
+        if e is None:
+            skipped += 1
+        else:
+            indexed += 1
+    await db.commit()
+    return ReindexResponse(indexed=indexed, skipped=skipped)
+
+
+class SearchRequest(BaseModel):
+    query: str = Field(..., min_length=2, max_length=500)
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+class SearchHitOut(BaseModel):
+    source_type: str
+    source_id: int
+    content: str
+    similarity: float
+
+
+@router.post(
+    "/{entreprise_id}/search",
+    response_model=List[SearchHitOut],
+    summary="Recherche sémantique dans les entités indexées d'une entreprise",
+)
+async def search_entreprise(
+    entreprise_id: int,
+    body: SearchRequest,
+    db: DBSession,
+    user: CurrentUser,
+) -> List[SearchHitOut]:
+    _require_volet(user)
+    from app.services.qg_embeddings import search_similar
+
+    hits = await search_similar(
+        db,
+        entreprise_id=entreprise_id,
+        query=body.query,
+        limit=body.limit,
+    )
+    return [SearchHitOut(**h.__dict__) for h in hits]
+
+
 @router.get(
     "/monday-workspaces",
     summary="Liste les workspaces Monday accessibles (debug import)",

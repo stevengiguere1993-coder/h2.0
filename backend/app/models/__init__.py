@@ -23,6 +23,7 @@ from app.models.email_template import EmailTemplate
 from app.models.employe import Employe
 from app.models.entreprise import Entreprise, EntreprisePartner
 from app.models.entreprise_tache import EntrepriseTache, TacheStatus  # noqa: F401
+from app.models.qg_embedding import Embedding  # noqa: F401
 from app.models.qg_strategic import (  # noqa: F401
     Activity,
     ActivityKind,
