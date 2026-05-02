@@ -67,6 +67,49 @@ class MondayClient:
                     break
         raise last_err or RuntimeError("Monday query failed")
 
+    async def list_workspaces(self) -> List[Dict[str, Any]]:
+        """Liste les workspaces accessibles au token courant.
+        Retourne [{ id, name, kind }, ...]."""
+        q = """
+        query {
+          workspaces { id name kind }
+        }"""
+        data = await self.query(q)
+        return data.get("workspaces") or []
+
+    async def list_boards(
+        self,
+        workspace_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Liste les boards (tableaux) accessibles. Si workspace_ids
+        fourni, filtre sur ces workspaces. Pagination interne par
+        page de 100. Retourne [{ id, name, workspace { id, name } }, ...]."""
+        out: List[Dict[str, Any]] = []
+        page = 1
+        while True:
+            q = """
+            query ($limit: Int!, $page: Int!, $wsIds: [ID!]) {
+              boards(limit: $limit, page: $page, workspace_ids: $wsIds) {
+                id
+                name
+                state
+                workspace { id name }
+              }
+            }"""
+            vars: Dict[str, Any] = {"limit": page_size, "page": page}
+            if workspace_ids:
+                vars["wsIds"] = [str(i) for i in workspace_ids]
+            data = await self.query(q, vars)
+            boards = data.get("boards") or []
+            # Garde uniquement les boards actifs (state='active')
+            boards = [b for b in boards if (b.get("state") or "active") == "active"]
+            out.extend(boards)
+            if len(boards) < page_size:
+                break
+            page += 1
+        return out
+
     async def paged_items(self, board_id: int, page_size: int = 100) -> List[Dict[str, Any]]:
         """Fetch all items of a board using items_page cursor pagination."""
         out: List[Dict[str, Any]] = []
