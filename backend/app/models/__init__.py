@@ -23,6 +23,24 @@ from app.models.email_template import EmailTemplate
 from app.models.employe import Employe
 from app.models.entreprise import Entreprise, EntreprisePartner
 from app.models.entreprise_tache import EntrepriseTache, TacheStatus  # noqa: F401
+from app.models.qg_strategic import (  # noqa: F401
+    Activity,
+    ActivityKind,
+    AIConversation,
+    AIMessage,
+    Domain,
+    DomainType,
+    Insight,
+    InsightStatus,
+    InsightType,
+    KPI,
+    StrategicProject,
+    StrategicProjectStatus,
+    Summary,
+    SummaryScope,
+    SummaryType,
+    Vision,
+)
 from app.models.facture import Facture
 from app.models.facture_item import FactureItem
 from app.models.follow_up import FollowUp
