@@ -84,8 +84,8 @@ export default function PaiePage() {
     setError(null);
     try {
       const url = override
-        ? `/api/v1/punches/payroll/bi-weekly?period_end=${override}`
-        : "/api/v1/punches/payroll/bi-weekly";
+        ? `/api/v1/punch/payroll/bi-weekly?period_end=${override}`
+        : "/api/v1/punch/payroll/bi-weekly";
       const res = await authedFetch(url);
       if (!res.ok) {
         const txt = await res.text().catch(() => "");
@@ -105,7 +105,7 @@ export default function PaiePage() {
 
   function downloadCsv() {
     if (!report) return;
-    const url = `/api/v1/punches/payroll/bi-weekly.csv?period_end=${report.period_end}`;
+    const url = `/api/v1/punch/payroll/bi-weekly.csv?period_end=${report.period_end}`;
     // Backend retourne le CSV avec Content-Disposition. authedFetch
     // ajoute le bearer token, donc on doit fetch puis créer un blob.
     (async () => {
