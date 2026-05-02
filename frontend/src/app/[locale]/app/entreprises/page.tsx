@@ -7,7 +7,8 @@ import {
   ExternalLink,
   Loader2,
   Plus,
-  Sparkles
+  Sparkles,
+  Upload
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
@@ -76,14 +77,25 @@ export default function EntreprisesListPage() {
         breadcrumbs={[{ label: "Gestion d'entreprises" }]}
         onOpenSidebar={onOpenSidebar}
         rightSlot={
-          <button
-            type="button"
-            onClick={() => setShowCreate(true)}
-            className="btn-accent text-sm"
-          >
-            <Plus className="mr-1.5 h-4 w-4" />
-            Nouvelle entreprise
-          </button>
+          <div className="flex items-center gap-2">
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/app/entreprises/import-monday" as any}
+              className="btn-secondary text-sm"
+              title="Importer les tableaux Monday en entreprises + tâches"
+            >
+              <Upload className="mr-1.5 h-4 w-4" />
+              Import Monday
+            </Link>
+            <button
+              type="button"
+              onClick={() => setShowCreate(true)}
+              className="btn-accent text-sm"
+            >
+              <Plus className="mr-1.5 h-4 w-4" />
+              Nouvelle entreprise
+            </button>
+          </div>
         }
       />
 
