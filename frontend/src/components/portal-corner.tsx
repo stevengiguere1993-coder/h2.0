@@ -28,7 +28,10 @@ export function PortalCorner({
   return (
     <div
       className={[
-        "pointer-events-none fixed right-3 top-3 z-[100] flex items-start gap-2 lg:right-5 lg:top-5",
+        // `absolute` plutôt que `fixed` : le coin Kratos+Toggle se
+        // positionne au top-right du document et défile avec la page.
+        // Évite de chevaucher les sidebars/topbars sticky en scrollant.
+        "pointer-events-none absolute right-3 top-3 z-30 flex items-start gap-2 lg:right-5 lg:top-5",
         className
       ].join(" ")}
       style={{ paddingTop: "env(safe-area-inset-top)" }}
