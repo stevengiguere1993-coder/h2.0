@@ -21,6 +21,7 @@ from app.api.v1.endpoints import (
     extension,
     follow_ups,
     contact,
+    entreprise_extras,
     immobilier,
     investissements,
     dashboard,
@@ -202,5 +203,9 @@ api_router.include_router(admin_data.router)
 api_router.include_router(help.router)
 api_router.include_router(ai.router)
 api_router.include_router(entreprises.router)
+# entreprise_extras DOIT être registered avant entreprises.router pour que
+# /entreprises/finance/* et /entreprises/value-plans/* matchent avant
+# /entreprises/{id}.
+api_router.include_router(entreprise_extras.router)
 api_router.include_router(immobilier.router)
 api_router.include_router(investissements.router)
