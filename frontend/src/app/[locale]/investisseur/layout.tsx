@@ -196,7 +196,7 @@ export function InvestisseurTopbar({
 }) {
   const { onOpenSidebar } = useInvestisseurLayout();
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-brand-800 bg-brand-950/95 px-4 backdrop-blur lg:px-6">
+    <header className="sticky top-0 z-30 flex min-h-[152px] items-center gap-3 border-b border-brand-800 bg-brand-950/95 px-4 backdrop-blur lg:px-6">
       <button
         type="button"
         onClick={onOpenSidebar}
@@ -231,7 +231,7 @@ export function InvestisseurTopbar({
       </nav>
       {rightSlot ? <div className="flex items-center gap-2">{rightSlot}</div> : null}
       <ThemeToggle />
-      <KratosLogo size={48} floating={false} />
+      <KratosLogo size={144} floating={false} />
     </header>
   );
 }
