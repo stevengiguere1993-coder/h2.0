@@ -5,10 +5,8 @@ import { Loader2 } from "lucide-react";
 
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
-import { KratosLogo } from "@/components/kratos-logo";
 import { ProspectionSidebar } from "@/components/prospection-sidebar";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
 export default function ProspectionLayout({
@@ -45,13 +43,9 @@ export default function ProspectionLayout({
             onOpenSidebar={() => setSidebarOpen(true)}
           >
             <ConfirmProvider>
-              {/* Topbar sticky uniforme — même pattern que les autres
-                  volets : Kratos statique + ThemeToggle à droite, pas
-                  de chevauchement du contenu. */}
-              <header className="sticky top-0 z-30 flex min-h-[152px] items-center justify-end gap-3 border-b border-brand-800 bg-brand-950/95 px-4 backdrop-blur lg:px-6">
-                <ThemeToggle />
-                <KratosLogo size={144} floating={false} />
-              </header>
+              {/* Pas de topbar layout-level : chaque page Prospection
+                  rend son propre <AppTopbar> qui contient déjà
+                  ThemeToggle + Kratos + recherche globale. */}
               <main className="flex-1 overflow-x-hidden">{children}</main>
               <HelpButton />
             </ConfirmProvider>
