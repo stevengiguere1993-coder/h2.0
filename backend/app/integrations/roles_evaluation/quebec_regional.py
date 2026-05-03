@@ -535,6 +535,17 @@ async def _ingest_one_xml(
                                 if len(batch) >= batch_size:
                                     await _bulk_upsert(db, batch)
                                     batch.clear()
+                                    # Commit-per-batch : pour les gros XML
+                                    # (Montréal ~1M unités), un commit-par-
+                                    # fichier serait trop tardif. Si la
+                                    # session se fait rollback en cours de
+                                    # route, on perd tout. Avec commit
+                                    # par batch (~2000 rows), au pire on
+                                    # perd le batch en cours.
+                                    try:
+                                        await db.commit()
+                                    except Exception:
+                                        pass
                     current_unit = {}
                     boundary_depth = None
                     elem.clear()
@@ -656,6 +667,11 @@ async def _ingest_one_csv(
             if len(batch) >= batch_size:
                 await _bulk_upsert(db, batch)
                 batch.clear()
+                # Commit-per-batch (cf. note dans _ingest_one_xml).
+                try:
+                    await db.commit()
+                except Exception:
+                    pass
             total = seen_so_far + seen_new
             if total > 0 and total % 5_000 == 0:
                 log.info(
