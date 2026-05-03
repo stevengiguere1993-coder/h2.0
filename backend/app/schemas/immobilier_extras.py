@@ -38,12 +38,28 @@ class TalFormRequest(BaseModel):
 
 
 class EnvoyerRenouvellementRequest(BaseModel):
-    """Déclenchement manuel d'un avis de renouvellement pour un bail."""
+    """Déclenchement manuel d'un avis de renouvellement pour un bail.
+
+    L'utilisateur peut spécifier la hausse soit en valeur absolue
+    (`nouveau_loyer`), soit en pourcentage du loyer courant
+    (`hausse_pct`), soit en montant additionnel (`hausse_montant`). Si
+    plusieurs sont fournis, `nouveau_loyer` prime > `hausse_pct` >
+    `hausse_montant`.
+
+    `request_read_receipt=True` ajoute la demande d'accusé de lecture
+    Microsoft Graph + envoie une copie BCC à l'expéditeur pour archive.
+    Vaut « envoi certifié » dans la pratique courante (preuve d'envoi
+    + accusé de lecture du locataire).
+    """
     nouveau_loyer: Optional[float] = Field(default=None, ge=0)
+    hausse_pct: Optional[float] = Field(default=None, ge=-50, le=200)
+    hausse_montant: Optional[float] = Field(default=None, ge=-2000, le=5000)
     nouvelle_date_debut: Optional[date] = None
     nouvelle_date_fin: Optional[date] = None
     motif: Optional[str] = None
     force: bool = False
+    request_read_receipt: bool = False
+    bcc_to_sender: bool = True
 
 
 class EnvoyerRenouvellementResult(BaseModel):

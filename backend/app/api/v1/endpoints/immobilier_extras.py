@@ -188,20 +188,35 @@ async def envoyer_renouvellement(
     db: DBSession,
     user: CurrentUser,
 ) -> EnvoyerRenouvellementResult:
-    """Génère + envoie l'avis de renouvellement pour un bail donné."""
+    """Génère + envoie l'avis de renouvellement pour un bail donné.
+
+    Supporte hausse absolue, hausse % ou hausse $ (priorité dans cet
+    ordre). Avec `request_read_receipt`, demande l'accusé de lecture
+    Microsoft Graph + BCC à l'expéditeur (= envoi certifié pratique).
+    """
     _require_volet(user)
     bail = await db.get(Bail, bail_id)
     if bail is None:
         raise HTTPException(status_code=404, detail="Bail introuvable.")
 
+    # Calcul du nouveau loyer selon le mode choisi
+    courant = float(bail.loyer_mensuel) if bail.loyer_mensuel else 0.0
+    nouveau = payload.nouveau_loyer
+    if nouveau is None and payload.hausse_pct is not None:
+        nouveau = round(courant * (1 + payload.hausse_pct / 100.0), 2)
+    elif nouveau is None and payload.hausse_montant is not None:
+        nouveau = round(courant + payload.hausse_montant, 2)
+
     obj, sent = await send_renouvellement_for_bail(
         db,
         bail,
-        nouveau_loyer=payload.nouveau_loyer,
+        nouveau_loyer=nouveau,
         nouvelle_date_debut=payload.nouvelle_date_debut,
         nouvelle_date_fin=payload.nouvelle_date_fin,
         motif=payload.motif,
         force=payload.force,
+        request_read_receipt=payload.request_read_receipt,
+        bcc_to_sender=payload.bcc_to_sender,
     )
     await db.commit()
     return EnvoyerRenouvellementResult(

@@ -62,6 +62,7 @@ export default function RenouvellementsPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sendingFor, setSendingFor] = useState<number | null>(null);
+  const [prepFor, setPrepFor] = useState<RenouvellementOverview | null>(null);
 
   async function reload() {
     setError(null);
@@ -311,16 +312,11 @@ export default function RenouvellementsPage() {
                     <td className="px-4 py-2.5 text-right">
                       <button
                         type="button"
-                        onClick={() => sendNow(r.bail_id)}
-                        disabled={sendingFor === r.bail_id}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-950 px-2.5 py-1 text-xs text-white/80 transition hover:border-sky-300 hover:text-sky-200 disabled:opacity-60"
+                        onClick={() => setPrepFor(r)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-950 px-2.5 py-1 text-xs text-white/80 transition hover:border-sky-300 hover:text-sky-200"
                       >
-                        {sendingFor === r.bail_id ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Mail className="h-3.5 w-3.5" />
-                        )}
-                        Envoyer
+                        <Mail className="h-3.5 w-3.5" />
+                        Préparer
                       </button>
                     </td>
                   </tr>
@@ -330,7 +326,346 @@ export default function RenouvellementsPage() {
           </div>
         )}
       </div>
+
+      {prepFor ? (
+        <PrepareRenouvellementModal
+          row={prepFor}
+          onClose={() => setPrepFor(null)}
+          onSent={(message) => {
+            setPrepFor(null);
+            setMsg(message);
+            void reload();
+            setTimeout(() => setMsg(null), 3500);
+          }}
+        />
+      ) : null}
     </>
+  );
+}
+
+// ─── Modal de préparation d'un avis de renouvellement ─────────────────
+
+const HAUSSE_PRESETS = [
+  { id: "rdl", label: "Grille TAL (estimation)", pct: 4.0 },
+  { id: "ipc", label: "Indexation IPC", pct: 3.0 },
+  { id: "moderee", label: "Hausse modérée", pct: 2.5 },
+  { id: "custom", label: "Personnalisée", pct: null }
+];
+
+function PrepareRenouvellementModal({
+  row,
+  onClose,
+  onSent
+}: {
+  row: RenouvellementOverview;
+  onClose: () => void;
+  onSent: (msg: string) => void;
+}) {
+  const [mode, setMode] = useState<"absolu" | "pct" | "montant">("pct");
+  const [absolu, setAbsolu] = useState(String(row.bail_loyer_mensuel));
+  const [pct, setPct] = useState("3.0");
+  const [montant, setMontant] = useState("25");
+  const [motif, setMotif] = useState("");
+  const [certifie, setCertifie] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function applyPreset(p: typeof HAUSSE_PRESETS[number]) {
+    if (p.pct == null) return;
+    setMode("pct");
+    setPct(String(p.pct));
+  }
+
+  // Calcul du nouveau loyer en preview
+  const courant = row.bail_loyer_mensuel;
+  const nouveau =
+    mode === "absolu"
+      ? Number(absolu) || 0
+      : mode === "pct"
+      ? courant * (1 + (Number(pct) || 0) / 100)
+      : courant + (Number(montant) || 0);
+  const delta = nouveau - courant;
+  const deltaPct = courant > 0 ? (delta / courant) * 100 : 0;
+
+  function buildBody(forPreview: boolean) {
+    const body: Record<string, unknown> = {
+      motif: motif.trim() || null,
+      request_read_receipt: certifie,
+      bcc_to_sender: certifie
+    };
+    if (forPreview) {
+      // L'endpoint TAL accepte les mêmes champs nouveau_loyer etc.
+    }
+    if (mode === "absolu" && absolu.trim()) {
+      body.nouveau_loyer = Number(absolu);
+    } else if (mode === "pct" && pct.trim()) {
+      body.hausse_pct = Number(pct);
+    } else if (mode === "montant" && montant.trim()) {
+      body.hausse_montant = Number(montant);
+    }
+    return body;
+  }
+
+  async function previewPdf() {
+    setPreviewing(true);
+    setErr(null);
+    try {
+      const body = {
+        ...buildBody(true),
+        // L'endpoint /tal/avis_modification.pdf attend les mêmes shapes
+        nouveau_loyer:
+          mode === "absolu"
+            ? Number(absolu)
+            : mode === "pct"
+            ? courant * (1 + (Number(pct) || 0) / 100)
+            : courant + (Number(montant) || 0)
+      };
+      const res = await authedFetch(
+        `/api/v1/immobilier/baux/${row.bail_id}/tal/avis_modification.pdf`,
+        { method: "POST", body: JSON.stringify(body) }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
+  async function send() {
+    setSending(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/baux/${row.bail_id}/envoyer-renouvellement`,
+        {
+          method: "POST",
+          body: JSON.stringify({ ...buildBody(false), force: false })
+        }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      const d = (await res.json()) as { courriel_envoye: boolean };
+      onSent(
+        d.courriel_envoye
+          ? "Avis envoyé au locataire (BCC + accusé de lecture)."
+          : "Avis créé. Courriel non envoyé (locataire sans email ou Microsoft Graph non configuré)."
+      );
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+      <div className="my-8 w-full max-w-2xl rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
+        <div className="border-b border-brand-800 px-5 py-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-sky-300">
+            Préparer le renouvellement — {row.immeuble_name} · {row.logement_numero}
+          </h2>
+          <p className="mt-1 text-[11px] text-white/50">
+            Locataire : {row.locataire_nom} · Bail jusqu&apos;au{" "}
+            {row.bail_date_fin}
+          </p>
+        </div>
+        <div className="grid gap-4 p-5">
+          {/* Bandeau résumé loyer */}
+          <div className="grid grid-cols-3 gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4">
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-white/50">
+                Loyer actuel
+              </p>
+              <p className="font-mono text-lg font-bold text-white">
+                {fmtCurrency(courant)}
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-white/50">
+                Nouveau loyer
+              </p>
+              <p className="font-mono text-lg font-bold text-emerald-300">
+                {fmtCurrency(nouveau)}
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-white/50">
+                Hausse
+              </p>
+              <p
+                className={`font-mono text-lg font-bold ${
+                  delta >= 0 ? "text-amber-200" : "text-rose-300"
+                }`}
+              >
+                {delta >= 0 ? "+" : ""}
+                {fmtCurrency(delta)}{" "}
+                <span className="text-xs text-white/40">
+                  ({delta >= 0 ? "+" : ""}
+                  {deltaPct.toFixed(1)}%)
+                </span>
+              </p>
+            </div>
+          </div>
+
+          {/* Presets */}
+          <div>
+            <label className="label">Choix usuels</label>
+            <div className="flex flex-wrap gap-2">
+              {HAUSSE_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => applyPreset(p)}
+                  className="rounded-full border border-white/15 bg-brand-900 px-3 py-1 text-xs text-white/80 hover:border-sky-300 hover:text-sky-200"
+                >
+                  {p.label}
+                  {p.pct != null ? ` (+${p.pct}%)` : ""}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Mode + saisie */}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <ModeBtn label="Hausse %" active={mode === "pct"} onClick={() => setMode("pct")} />
+            <ModeBtn label="Hausse $" active={mode === "montant"} onClick={() => setMode("montant")} />
+            <ModeBtn label="Loyer absolu" active={mode === "absolu"} onClick={() => setMode("absolu")} />
+          </div>
+          {mode === "pct" ? (
+            <div>
+              <label className="label">Hausse en %</label>
+              <input
+                type="number"
+                step="0.1"
+                value={pct}
+                onChange={(e) => setPct(e.target.value)}
+                className="input font-mono"
+                placeholder="3.0"
+              />
+            </div>
+          ) : null}
+          {mode === "montant" ? (
+            <div>
+              <label className="label">Hausse en $</label>
+              <input
+                type="number"
+                step="1"
+                value={montant}
+                onChange={(e) => setMontant(e.target.value)}
+                className="input font-mono"
+                placeholder="25"
+              />
+            </div>
+          ) : null}
+          {mode === "absolu" ? (
+            <div>
+              <label className="label">Nouveau loyer mensuel ($)</label>
+              <input
+                type="number"
+                step="1"
+                value={absolu}
+                onChange={(e) => setAbsolu(e.target.value)}
+                className="input font-mono"
+              />
+            </div>
+          ) : null}
+
+          <div>
+            <label className="label">Motif (optionnel)</label>
+            <textarea
+              value={motif}
+              onChange={(e) => setMotif(e.target.value)}
+              rows={2}
+              className="input"
+              placeholder="ex. Hausse des taxes municipales, travaux majeurs, ajustement marché…"
+            />
+          </div>
+
+          <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-emerald-400/30 bg-emerald-500/5 p-3 text-sm">
+            <input
+              type="checkbox"
+              checked={certifie}
+              onChange={(e) => setCertifie(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-emerald-500"
+            />
+            <span>
+              <span className="font-bold text-white">Envoi certifié</span>
+              <span className="block text-[11px] text-white/60">
+                Demande l&apos;accusé de lecture Outlook + envoie une copie BCC à
+                l&apos;expéditeur pour archive (preuve d&apos;envoi).
+              </span>
+            </span>
+          </label>
+
+          {err ? (
+            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              {err}
+            </p>
+          ) : null}
+
+          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-brand-800 pt-3">
+            <button type="button" onClick={onClose} className="btn-secondary text-sm">
+              Annuler
+            </button>
+            <button
+              type="button"
+              onClick={previewPdf}
+              disabled={previewing}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-900 px-3 py-1.5 text-xs font-semibold text-white/80 hover:border-sky-300 hover:text-sky-200 disabled:opacity-60"
+            >
+              {previewing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Aperçu PDF
+            </button>
+            <button
+              type="button"
+              onClick={send}
+              disabled={sending}
+              className="btn-accent inline-flex items-center text-sm disabled:opacity-60"
+            >
+              {sending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Mail className="mr-2 h-4 w-4" />
+              )}
+              Envoyer l&apos;avis
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ModeBtn({
+  label,
+  active,
+  onClick
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+        active
+          ? "border-sky-400/50 bg-sky-500/15 text-sky-200"
+          : "border-white/15 bg-brand-900 text-white/70 hover:text-white"
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 

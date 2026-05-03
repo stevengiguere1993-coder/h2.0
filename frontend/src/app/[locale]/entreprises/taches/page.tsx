@@ -94,6 +94,7 @@ export default function MesTachesPage() {
 
   // Filtres
   const [scope, setScope] = useState<"all" | "mine">("all");
+  const [view, setView] = useState<"table" | "kanban">("table");
   const [filterEntreprise, setFilterEntreprise] = useState<string>("");
   const [filterStatus, setFilterStatus] = useState<string>("open");
   const [filterDept, setFilterDept] = useState<string>("");
@@ -212,18 +213,32 @@ export default function MesTachesPage() {
       />
 
       <div className="px-5 py-6 lg:px-8">
-        {/* Toggle Mes / Toutes */}
-        <div className="mb-3 inline-flex rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-0.5">
-          <ScopeButton
-            label="Toutes les tâches"
-            active={scope === "all"}
-            onClick={() => setScope("all")}
-          />
-          <ScopeButton
-            label="Mes tâches"
-            active={scope === "mine"}
-            onClick={() => setScope("mine")}
-          />
+        {/* Toggles : Mes / Toutes — Tableau / Kanban */}
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-0.5">
+            <ScopeButton
+              label="Toutes les tâches"
+              active={scope === "all"}
+              onClick={() => setScope("all")}
+            />
+            <ScopeButton
+              label="Mes tâches"
+              active={scope === "mine"}
+              onClick={() => setScope("mine")}
+            />
+          </div>
+          <div className="inline-flex rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-0.5">
+            <ScopeButton
+              label="Tableau"
+              active={view === "table"}
+              onClick={() => setView("table")}
+            />
+            <ScopeButton
+              label="Kanban"
+              active={view === "kanban"}
+              onClick={() => setView("kanban")}
+            />
+          </div>
         </div>
 
         {/* Filtres */}
@@ -289,32 +304,38 @@ export default function MesTachesPage() {
           />
         </div>
 
-        {/* Tableau */}
-        <div
-          className="overflow-hidden rounded-xl"
-          style={{
-            backgroundColor: "var(--qg-card-bg)",
-            border: "1px solid var(--qg-border)"
-          }}
-        >
-          {error ? (
-            <p className="m-4 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
-              {error}
-            </p>
-          ) : null}
+        {/* Erreurs / loading communs aux deux vues */}
+        {error ? (
+          <p className="mb-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+            {error}
+          </p>
+        ) : null}
 
-          {loading ? (
-            <div className="flex min-h-[300px] items-center justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-[var(--qg-accent)]" />
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="px-6 py-12 text-center">
-              <Target className="mx-auto h-8 w-8 text-[var(--qg-text-faint)]" />
-              <p className="mt-3 text-sm text-[var(--qg-text-muted)]">
-                Aucune tâche pour ces filtres.
-              </p>
-            </div>
-          ) : (
+        {loading ? (
+          <div className="flex min-h-[300px] items-center justify-center rounded-xl border border-[var(--qg-border)] bg-[var(--qg-card-bg)]">
+            <Loader2 className="h-5 w-5 animate-spin text-[var(--qg-accent)]" />
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="rounded-xl border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-6 py-12 text-center">
+            <Target className="mx-auto h-8 w-8 text-[var(--qg-text-faint)]" />
+            <p className="mt-3 text-sm text-[var(--qg-text-muted)]">
+              Aucune tâche pour ces filtres.
+            </p>
+          </div>
+        ) : view === "kanban" ? (
+          <KanbanBoard
+            taches={filtered}
+            entById={entById}
+            team={team}
+          />
+        ) : (
+          <div
+            className="overflow-hidden rounded-xl"
+            style={{
+              backgroundColor: "var(--qg-card-bg)",
+              border: "1px solid var(--qg-border)"
+            }}
+          >
             <table className="w-full text-[13px]">
               <thead>
                 <tr
@@ -342,10 +363,163 @@ export default function MesTachesPage() {
                 ))}
               </tbody>
             </table>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </>
+  );
+}
+
+// ─── Vue Kanban ────────────────────────────────────────────────────────
+
+const KANBAN_COLUMNS = [
+  { id: "backlog", label: "Backlog" },
+  { id: "todo", label: "À faire" },
+  { id: "in_progress", label: "En cours" },
+  { id: "waiting", label: "En attente" },
+  { id: "done", label: "Terminé" }
+] as const;
+
+function KanbanBoard({
+  taches,
+  entById,
+  team
+}: {
+  taches: Tache[];
+  entById: Map<number, Entreprise>;
+  team: TeamMember[];
+}) {
+  const grouped = KANBAN_COLUMNS.map((c) => ({
+    ...c,
+    cards: taches.filter((t) => t.status === c.id)
+  }));
+  return (
+    <div className="flex gap-3 overflow-x-auto pb-2">
+      {grouped.map((col) => {
+        const accent = STATUS_COLORS[col.id] || "var(--qg-text-soft)";
+        return (
+          <div
+            key={col.id}
+            className="flex w-[280px] flex-shrink-0 flex-col rounded-xl border border-[var(--qg-border)] bg-[var(--qg-card-bg)]"
+          >
+            <div
+              className="flex items-center justify-between border-b border-[var(--qg-border)] px-3 py-2"
+            >
+              <div className="flex items-center gap-2">
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{ backgroundColor: accent }}
+                />
+                <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--qg-text-muted)]">
+                  {col.label}
+                </span>
+              </div>
+              <span className="font-mono text-[10px] text-[var(--qg-text-soft)]">
+                {col.cards.length}
+              </span>
+            </div>
+            <ul className="flex-1 space-y-2 overflow-y-auto p-2">
+              {col.cards.map((t) => (
+                <KanbanCard
+                  key={t.id}
+                  t={t}
+                  ent={entById.get(t.entreprise_id)}
+                  team={team}
+                />
+              ))}
+              {col.cards.length === 0 ? (
+                <li className="px-2 py-3 text-center text-[10px] text-[var(--qg-text-faint)]">
+                  —
+                </li>
+              ) : null}
+            </ul>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function KanbanCard({
+  t,
+  ent,
+  team
+}: {
+  t: Tache;
+  ent: Entreprise | undefined;
+  team: TeamMember[];
+}) {
+  const prio = scoreToPriority(t.score);
+  const due = dueLabel(t.due_date);
+  const assignee = team.find((u) => u.id === t.assignee_user_id) || null;
+  return (
+    <li>
+      <Link
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        href={`/entreprises/${t.entreprise_id}` as any}
+        className="block rounded-lg border border-[var(--qg-border)] bg-[var(--qg-bg)] p-2.5 transition hover:border-[var(--qg-accent)]"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span
+            className="rounded px-1.5 py-0.5 text-[9px] font-bold"
+            style={{
+              backgroundColor: prio.color + "26",
+              color: prio.color,
+              fontFamily: "var(--font-mono, ui-monospace), monospace"
+            }}
+          >
+            {prio.label}
+          </span>
+          {t.score != null ? (
+            <span
+              className="font-mono text-[10px] font-bold text-[var(--qg-accent)]"
+            >
+              {t.score.toFixed(1)}
+            </span>
+          ) : null}
+        </div>
+        <p className="mt-1.5 line-clamp-2 text-[12px] font-medium leading-snug text-[var(--qg-text)]">
+          {t.title}
+        </p>
+        {ent ? (
+          <p className="mt-1.5 flex items-center gap-1 text-[10px] text-[var(--qg-text-muted)]">
+            <span
+              className="h-1 w-1 rounded-full"
+              style={{ backgroundColor: ent.color_accent }}
+            />
+            <span className="truncate">{ent.name}</span>
+          </p>
+        ) : null}
+        <div className="mt-1.5 flex items-center justify-between text-[10px]">
+          <span
+            style={{
+              color: due.tone,
+              fontFamily: "var(--font-mono, ui-monospace), monospace"
+            }}
+          >
+            {due.text}
+          </span>
+          {assignee ? (
+            <span
+              className="flex h-4 w-4 items-center justify-center rounded-full font-bold"
+              style={{
+                backgroundColor: "var(--qg-accent)",
+                color: "var(--qg-bg)",
+                fontSize: "8px"
+              }}
+              title={assignee.full_name}
+            >
+              {assignee.full_name
+                .split(/\s+/)
+                .filter(Boolean)
+                .slice(0, 2)
+                .map((p) => p[0]?.toUpperCase() || "")
+                .join("")}
+            </span>
+          ) : null}
+        </div>
+      </Link>
+    </li>
   );
 }
 

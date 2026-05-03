@@ -22,6 +22,7 @@ from app.api.v1.endpoints import (
     follow_ups,
     contact,
     entreprise_extras,
+    entreprise_partners_links,
     immobilier,
     immobilier_extras,
     investissements,
@@ -208,6 +209,10 @@ api_router.include_router(entreprises.router)
 # /entreprises/finance/* et /entreprises/value-plans/* matchent avant
 # /entreprises/{id}.
 api_router.include_router(entreprise_extras.router)
+# Partners + links DOIT être avant entreprises.router pour matcher
+# /entreprises/{id}/partners et /entreprises/{id}/links avant
+# /entreprises/{id} (PATCH).
+api_router.include_router(entreprise_partners_links.router)
 # immobilier_extras DOIT être registered avant immobilier.router pour que
 # /immobilier/tal/* et /immobilier/renouvellements/* matchent avant les
 # routes plus génériques de /immobilier.
