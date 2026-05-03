@@ -83,6 +83,10 @@ export default function ProspectionSourcesPage() {
     total: number;
   } | null>(null);
   const [provStatus, setProvStatus] = useState<ProvStatus | null>(null);
+  const [provDbStats, setProvDbStats] = useState<{
+    total: number;
+    by_municipalite: { municipalite: string; count: number }[];
+  } | null>(null);
   const [provError, setProvError] = useState<string | null>(null);
   const provPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -336,6 +340,22 @@ export default function ProspectionSourcesPage() {
       if (data.status !== "running" && provPollRef.current !== null) {
         clearInterval(provPollRef.current);
         provPollRef.current = null;
+      }
+    } catch {
+      /* silent */
+    }
+    // Toujours refresh les stats DB en parallèle — survit aux reboots
+    // Render contrairement à `import-status` qui est en mémoire.
+    try {
+      const rs = await authedFetch(
+        "/api/v1/admin/data/provincial/db-stats"
+      );
+      if (rs.ok) {
+        const ds = (await rs.json()) as {
+          total: number;
+          by_municipalite: { municipalite: string; count: number }[];
+        };
+        setProvDbStats(ds);
       }
     } catch {
       /* silent */
@@ -703,6 +723,43 @@ export default function ProspectionSourcesPage() {
               </p>
             ) : null}
           </div>
+
+          {/* Compteurs DB — persistants, survivent aux reboots Render */}
+          {provDbStats ? (
+            <div className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-[11px] text-emerald-100">
+              <p className="font-semibold">
+                <CheckCircle2 className="mr-1.5 inline h-3.5 w-3.5" />
+                {provDbStats.total.toLocaleString("fr-CA")} unités
+                actuellement en DB
+                {provDbStats.by_municipalite.length > 0
+                  ? ` · ${provDbStats.by_municipalite.length} municipalité${provDbStats.by_municipalite.length > 1 ? "s" : ""} distincte${provDbStats.by_municipalite.length > 1 ? "s" : ""}`
+                  : ""}
+              </p>
+              {provDbStats.by_municipalite.length > 0 ? (
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-emerald-200/80 hover:text-emerald-100">
+                    Voir le détail par municipalité (top 200)
+                  </summary>
+                  <ul className="mt-2 grid max-h-72 grid-cols-1 gap-x-4 gap-y-0.5 overflow-y-auto pl-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {provDbStats.by_municipalite.map((m) => (
+                      <li key={m.municipalite} className="flex justify-between font-mono">
+                        <span className="truncate text-emerald-100/90">
+                          {m.municipalite}
+                        </span>
+                        <span className="ml-2 text-emerald-200/60">
+                          {m.count.toLocaleString("fr-CA")}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              ) : (
+                <p className="mt-1 text-emerald-200/60">
+                  La table est vide. Importe le ZIP pour commencer.
+                </p>
+              )}
+            </div>
+          ) : null}
 
           {provStatus?.status === "running" ? (
             <div className="mt-3 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
