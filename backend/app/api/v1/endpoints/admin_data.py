@@ -854,19 +854,20 @@ async def _provincial_ingest_worker(
             ingest_provincial_csv,
         )
 
-        # Sur Render Free (512 MB RAM), Montréal/Laval (~600-1000 MB
-        # de XML décompressé) déclenchent un OOM-kill du worker.
-        # On lit le seuil dans l'env (défaut 250 MB sur Render).
-        # Mettre la var à 0 ou une valeur très grande pour désactiver.
+        # Pas de skip par taille par défaut — `iterparse` + root.clear()
+        # après chaque unité + commit-per-file suffisent pour Montréal
+        # (~1 GB décompressé) sur Render Free 512 MB. L'env var
+        # RENDER_PROVINCIAL_MAX_XML_MB reste disponible pour limiter
+        # manuellement si nécessaire (ex. "200" pour skip Montréal).
         try:
             max_xml_mb_env = os.environ.get(
-                "RENDER_PROVINCIAL_MAX_XML_MB", "250"
+                "RENDER_PROVINCIAL_MAX_XML_MB", "0"
             )
             max_xml_mb: Optional[float] = float(max_xml_mb_env)
             if max_xml_mb <= 0:
                 max_xml_mb = None
         except ValueError:
-            max_xml_mb = 250.0
+            max_xml_mb = None
 
         async with AsyncSessionLocal() as session:
             result = await ingest_provincial_csv(
