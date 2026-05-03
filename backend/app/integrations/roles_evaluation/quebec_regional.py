@@ -676,6 +676,7 @@ async def ingest_provincial_csv(
     batch_size: int = 2000,
     max_rows: Optional[int] = None,
     max_km_from_mtl: Optional[float] = 50.0,
+    max_xml_uncompressed_mb: Optional[float] = None,
 ) -> dict:
     """Ingère le rôle provincial filtré par région + liste de villes.
 
@@ -697,6 +698,11 @@ async def ingest_provincial_csv(
                  pour tenir dans Postgres free 1 Go (~500 K-1 M
                  unités au lieu de ~5 M nationales).
                  None = pas de filtre distance (tout le QC).
+        max_xml_uncompressed_mb : si défini, skip les XML dont la
+                 taille décompressée dépasse ce seuil. Sert sur Render
+                 Free (512 MB RAM) où Montréal/Laval (~600-1000 MB de
+                 XML) déclenchent un OOM-kill du worker. Sur Hetzner
+                 ou un Render plan payant, laisser None (pas de skip).
     """
     cities_used = (
         list(cities)
@@ -759,19 +765,29 @@ async def ingest_provincial_csv(
         with tempfile.TemporaryDirectory(
             prefix="role_unzip_"
         ) as tmpdir, zipfile.ZipFile(csv_path) as zf:
-            all_members = zf.namelist()
-            csv_members = [
-                n for n in all_members if n.lower().endswith(".csv")
+            # On utilise infolist() pour avoir la taille décompressée
+            # de chaque entrée — sert à trier par taille croissante
+            # (les petites villes complètent en premier, maximisant
+            # ce qui est ingéré avant un éventuel OOM-kill sur Render
+            # Free) et à skip les fichiers > seuil si configuré.
+            infos = zf.infolist()
+            csv_infos = [
+                i for i in infos if i.filename.lower().endswith(".csv")
             ]
-            xml_members = [
-                n for n in all_members if n.lower().endswith(".xml")
+            xml_infos = [
+                i for i in infos if i.filename.lower().endswith(".xml")
             ]
+            xml_infos.sort(key=lambda i: i.file_size)
+            csv_members = [i.filename for i in csv_infos]
+            xml_members = [i.filename for i in xml_infos]
+            xml_size_by_name = {i.filename: i.file_size for i in xml_infos}
             log.info(
-                "ZIP détecté : %d entrées (%d CSV, %d XML). Tous : %s",
-                len(all_members),
+                "ZIP détecté : %d entrées (%d CSV, %d XML, "
+                "tri XML par taille croissante). Tous : %s",
+                len(infos),
                 len(csv_members),
                 len(xml_members),
-                all_members[:10],
+                [i.filename for i in infos[:10]],
             )
             if not csv_members and not xml_members:
                 diagnostics.append(
@@ -842,6 +858,42 @@ async def ingest_provincial_csv(
                             "headers_seen": [
                                 f"code_mamh={code or '?'}",
                                 f"municipalite={mun or '(non mappée)'}",
+                            ],
+                            "columns_mapped": [],
+                            "has_matricule": False,
+                        }
+                    )
+                    continue
+
+                # Skip par taille (Render Free 512 MB) : Montréal RL66023
+                # fait ~1 GB décompressé et OOM-kill le worker. On le
+                # laisse passer sur Hetzner (max_xml_uncompressed_mb=None).
+                xml_size = xml_size_by_name.get(name, 0)
+                if (
+                    max_xml_uncompressed_mb is not None
+                    and xml_size > max_xml_uncompressed_mb * 1024 * 1024
+                ):
+                    size_mb = xml_size / (1024 * 1024)
+                    log.warning(
+                        "Skip %s (%.0f MB > %.0f MB seuil) — utiliser "
+                        "le script Hetzner import_provincial_xml_zip.py",
+                        base,
+                        size_mb,
+                        max_xml_uncompressed_mb,
+                    )
+                    diagnostics.append(
+                        {
+                            "file": base,
+                            "encoding": "skipped",
+                            "delimiter": (
+                                f"trop volumineux ({size_mb:.0f} MB > "
+                                f"{max_xml_uncompressed_mb:.0f} MB seuil "
+                                f"Render). Utiliser Hetzner CLI."
+                            ),
+                            "headers_seen": [
+                                f"code_mamh={code or '?'}",
+                                f"municipalite={mun or '(non mappée)'}",
+                                f"size_mb={size_mb:.0f}",
                             ],
                             "columns_mapped": [],
                             "has_matricule": False,
