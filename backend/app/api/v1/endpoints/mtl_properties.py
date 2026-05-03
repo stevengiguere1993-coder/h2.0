@@ -190,18 +190,57 @@ async def list_properties(
             MontrealPropertyUnit.municipalite == municipalite.strip()
         )
     if region:
-        # Pour mtl-island, on accepte aussi region=NULL : c'est le cas
-        # des unités importées avant l'ajout du champ region (rôle
-        # Ville de Montréal pré-multi-régions).
-        if region == "mtl-island":
+        # Le filtre par région DOIT s'appuyer sur le nom de municipalité,
+        # pas sur le label `region` stocké en row. Pourquoi : l'import
+        # provincial XML (1 134 fichiers) écrit `region="quebec"` pour
+        # tout (993 K rows), l'import legacy Ville de Montréal écrit NULL
+        # ou "mtl-island". Si on filtre sur `region == "mtl-island"`, on
+        # rate les ~700 K unités MTL importées via le ZIP provincial dont
+        # le label est "quebec".
+        from sqlalchemy import func as sa_func
+
+        # Liste des municipalités par région (raw names, avec accents).
+        # MTL : île + arrondissements/villes liées.
+        MTL_RAW = [
+            "Montréal", "Montréal-Est", "Westmount", "Côte-Saint-Luc",
+            "Hampstead", "Montréal-Ouest", "Mont-Royal", "Outremont",
+            "Dorval", "Pointe-Claire", "Kirkland", "Beaconsfield",
+            "Baie-D'Urfé", "Sainte-Anne-de-Bellevue", "Senneville",
+            "L'Île-Bizard", "L'Île-Bizard-Sainte-Geneviève",
+        ]
+        from app.integrations.roles_evaluation.quebec_regional import (
+            LAVAL_CITIES,
+            RIVE_NORD_CITIES,
+            RIVE_SUD_CITIES,
+        )
+
+        def _variants(names) -> list[str]:
+            """Génère lowercase avec ET sans accents pour matcher la DB."""
+            out: set[str] = set()
+            for n in names:
+                low = n.strip().lower()
+                out.add(low)
+                nfd = unicodedata.normalize("NFD", low)
+                stripped = "".join(
+                    ch for ch in nfd if not unicodedata.combining(ch)
+                )
+                out.add(stripped)
+            return sorted(out)
+
+        region_to_names = {
+            "mtl-island": MTL_RAW,
+            "laval": list(LAVAL_CITIES),
+            "rive-sud": list(RIVE_SUD_CITIES),
+            "rive-nord": list(RIVE_NORD_CITIES),
+        }
+        names = region_to_names.get(region)
+        if names:
+            # Match : lower(municipalite) IN (variantes avec/sans accents).
             filters.append(
-                or_(
-                    MontrealPropertyUnit.region == region,
-                    MontrealPropertyUnit.region.is_(None),
+                sa_func.lower(MontrealPropertyUnit.municipalite).in_(
+                    _variants(names)
                 )
             )
-        else:
-            filters.append(MontrealPropertyUnit.region == region)
     if nom_rue_contains:
         filters.append(
             MontrealPropertyUnit.nom_rue.ilike(
