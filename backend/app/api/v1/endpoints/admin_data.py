@@ -1019,6 +1019,50 @@ async def provincial_import_status(_: RequireOwner) -> dict:
     }
 
 
+@router.get(
+    "/provincial/db-stats",
+    summary="Compteurs réels dans la DB par municipalité (persistant).",
+)
+async def provincial_db_stats(_: RequireOwner) -> dict:
+    """Lit la table `mtl_property_units` directement et retourne le total
+    + un breakdown par municipalité. Survit aux reboots Render
+    (contrairement à `provincial/import-status` qui est en mémoire)."""
+    from sqlalchemy import func, select
+
+    from app.db.session import AsyncSessionLocal
+    from app.models.montreal_property_unit import MontrealPropertyUnit
+
+    async with AsyncSessionLocal() as db:
+        total = (
+            await db.execute(
+                select(func.count(MontrealPropertyUnit.matricule))
+            )
+        ).scalar() or 0
+
+        rows = (
+            await db.execute(
+                select(
+                    MontrealPropertyUnit.municipalite,
+                    func.count(MontrealPropertyUnit.matricule).label("cnt"),
+                )
+                .group_by(MontrealPropertyUnit.municipalite)
+                .order_by(func.count(MontrealPropertyUnit.matricule).desc())
+                .limit(200)
+            )
+        ).all()
+
+    return {
+        "total": int(total),
+        "by_municipalite": [
+            {
+                "municipalite": (m or "(NULL)"),
+                "count": int(c),
+            }
+            for m, c in rows
+        ],
+    }
+
+
 @router.post(
     "/provincial/upload-finalize",
     summary="Réassemble les chunks reçus et lance l'ingest filtré "
