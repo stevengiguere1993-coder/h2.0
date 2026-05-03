@@ -838,6 +838,16 @@ async def ingest_provincial_csv(
                 )
                 total_seen += seen_new
                 total_kept += kept_new
+                # Commit après chaque CSV (cf. note plus bas dans la
+                # boucle XML — protège des rollbacks transitoires).
+                try:
+                    await db.commit()
+                except Exception as commit_exc:  # noqa: BLE001
+                    log.warning(
+                        "Commit après CSV %s a échoué : %s",
+                        os.path.basename(name),
+                        commit_exc,
+                    )
                 if max_rows is not None and total_seen >= max_rows:
                     break
             # XML (format MAMH RL-codes)
@@ -932,6 +942,20 @@ async def ingest_provincial_csv(
                     )
                     total_seen += seen_new
                     total_kept += kept_new
+                    # IMPORTANT : commit après chaque fichier. Sinon un
+                    # rollback transitoire (Postgres Render hiberne)
+                    # déclenché par _bulk_upsert pendant un fichier
+                    # ultérieur annule TOUTES les inserts non-commitées
+                    # de la session, y compris les fichiers déjà traités.
+                    # On rend chaque fichier durable au fur et à mesure.
+                    try:
+                        await db.commit()
+                    except Exception as commit_exc:  # noqa: BLE001
+                        log.warning(
+                            "Commit après %s a échoué : %s",
+                            base,
+                            commit_exc,
+                        )
                     diagnostics.append(
                         {
                             "file": base,
