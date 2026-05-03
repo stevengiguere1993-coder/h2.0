@@ -14,6 +14,7 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { ConfirmProvider } from "@/components/confirm-dialog";
+import { HorizonLogo } from "@/components/horizon-logo";
 import { HelpButton } from "@/components/help-button";
 import { KratosLogo } from "@/components/kratos-logo";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
@@ -83,11 +84,7 @@ export default function InvestisseurLayout({
           <div className="flex items-center justify-between border-b border-brand-800 px-4 py-4">
             <Link href="/investisseur" className="flex items-center gap-2">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src="/logo.png"
-                alt="Horizon"
-                className="h-9 w-auto object-contain"
-              />
+              <HorizonLogo className="h-9 w-auto object-contain" />
             </Link>
             <button
               type="button"

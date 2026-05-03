@@ -27,6 +27,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch, type UserRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { HorizonLogo } from "@/components/horizon-logo";
 import { InstallAppButton } from "@/components/install-app-button";
 
 type NavItem = {
@@ -149,12 +150,7 @@ export function AppSidebar({
       >
         <div className="flex items-center justify-between border-b border-brand-800 px-4 py-4">
           <Link href="/app" className="flex items-center gap-2">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/logo.png"
-              alt="Horizon"
-              className="h-9 w-auto object-contain"
-            />
+            <HorizonLogo className="h-9 w-auto object-contain" />
           </Link>
           <button
             type="button"
