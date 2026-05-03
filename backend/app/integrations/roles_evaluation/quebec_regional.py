@@ -455,8 +455,21 @@ async def _ingest_one_xml(
     current_depth = 0
     boundary_depth: Optional[int] = None
 
+    # IMPORTANT : pour les gros XML (Montréal ~1 GB non-compressé), il faut
+    # libérer le root du document régulièrement, sinon iterparse accumule
+    # tous les <RLUEx> sous le root jusqu'à OOM. Pattern canonique : on
+    # récupère le root via next() puis on appelle root.clear() après
+    # chaque unité flushée.
+    root = None
     try:
-        for event, elem in ET.iterparse(xml_path, events=("start", "end")):
+        context = ET.iterparse(xml_path, events=("start", "end"))
+        try:
+            _, root = next(context)
+        except StopIteration:
+            return seen_new, kept_new
+        # Le root vient juste de subir un événement 'start' → depth=1
+        current_depth = 1
+        for event, elem in context:
             # Strip namespace si présent
             tag = elem.tag.split("}", 1)[-1] if "}" in elem.tag else elem.tag
 
@@ -514,6 +527,11 @@ async def _ingest_one_xml(
                     current_unit = {}
                     boundary_depth = None
                     elem.clear()
+                    # Libère les références accumulées sous le root après
+                    # CHAQUE unité flushée — sinon le root garde tous les
+                    # <RLUEx> en mémoire et OOM sur les gros XML.
+                    if root is not None:
+                        root.clear()
                 else:
                     # Libère la mémoire des éléments terminaux non-boundary
                     if current_depth > (boundary_depth or 0):
@@ -545,6 +563,26 @@ async def _ingest_one_xml(
             os.path.basename(xml_path),
             exc,
         )
+        if batch:
+            try:
+                await _bulk_upsert(db, batch)
+            except Exception:
+                pass
+        return seen_new, kept_new
+    except MemoryError as exc:
+        # Si on OOM malgré root.clear() (XML pathologique), on log et on
+        # retourne ce qu'on a déjà accumulé pour ne pas tuer le worker.
+        log.exception(
+            "MemoryError on %s after %d units: %s",
+            os.path.basename(xml_path),
+            seen_new,
+            exc,
+        )
+        if batch:
+            try:
+                await _bulk_upsert(db, batch)
+            except Exception:
+                pass
         return seen_new, kept_new
 
     if batch:
@@ -813,31 +851,56 @@ async def ingest_provincial_csv(
 
                 zf.extract(name, tmpdir)
                 local_path = os.path.join(tmpdir, name)
-                diagnostics.append(
-                    {
-                        "file": base,
-                        "encoding": "xml",
-                        "delimiter": "(MAMH XML)",
-                        "headers_seen": [
-                            f"code_mamh={code or '?'}",
-                            f"municipalite={mun or '(non mappée)'}",
-                        ],
-                        "columns_mapped": ["xml_mamh"],
-                        "has_matricule": True,
-                    }
-                )
-                seen_new, kept_new = await _ingest_one_xml(
-                    db,
-                    local_path,
-                    region=region,
-                    match_set=match_set,
-                    batch_size=batch_size,
-                    max_rows=max_rows,
-                    seen_so_far=total_seen,
-                    kept_so_far=total_kept,
-                )
-                total_seen += seen_new
-                total_kept += kept_new
+                # Try/except par fichier : si un XML pathologique crash
+                # (parse error, OOM, etc.), on log et on continue avec
+                # le suivant — sinon l'utilisateur perd tout l'import.
+                try:
+                    seen_new, kept_new = await _ingest_one_xml(
+                        db,
+                        local_path,
+                        region=region,
+                        match_set=match_set,
+                        batch_size=batch_size,
+                        max_rows=max_rows,
+                        seen_so_far=total_seen,
+                        kept_so_far=total_kept,
+                    )
+                    total_seen += seen_new
+                    total_kept += kept_new
+                    diagnostics.append(
+                        {
+                            "file": base,
+                            "encoding": "xml",
+                            "delimiter": "(MAMH XML)",
+                            "headers_seen": [
+                                f"code_mamh={code or '?'}",
+                                f"municipalite={mun or '(non mappée)'}",
+                                f"units_seen={seen_new}",
+                                f"units_kept={kept_new}",
+                            ],
+                            "columns_mapped": ["xml_mamh"],
+                            "has_matricule": True,
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.exception(
+                        "Échec ingestion XML %s : %s", base, exc
+                    )
+                    diagnostics.append(
+                        {
+                            "file": base,
+                            "error": (
+                                f"{type(exc).__name__}: {str(exc)[:200]}"
+                            ),
+                        }
+                    )
+                # Supprime le fichier extrait pour libérer du disque tout
+                # de suite — un ZIP de tout le Québec décompressé tient
+                # ~5 GB sinon.
+                try:
+                    os.unlink(local_path)
+                except OSError:
+                    pass
     else:
         enc, delim, headers = _detect_encoding_and_delim(csv_path)
         fmap = _build_field_map(headers)
