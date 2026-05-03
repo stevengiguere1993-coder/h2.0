@@ -13,7 +13,7 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch, getToken } from "@/lib/auth";
-import { ImmobilierTopbar } from "./layout";
+import { ImmobilierTopbar, useImmobilierLayout } from "./layout";
 
 type ImmeubleListItem = {
   id: number;
@@ -44,14 +44,20 @@ function fmtPct(n: number): string {
 }
 
 export default function ImmobilierDashboard() {
+  const { currentEntrepriseId } = useImmobilierLayout();
   const [list, setList] = useState<ImmeubleListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setList(null);
     async function load() {
       try {
-        const res = await authedFetch("/api/v1/immobilier/immeubles");
+        const url =
+          currentEntrepriseId != null
+            ? `/api/v1/immobilier/immeubles?entreprise_id=${currentEntrepriseId}`
+            : "/api/v1/immobilier/immeubles";
+        const res = await authedFetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as ImmeubleListItem[];
         if (!cancelled) setList(data);
@@ -63,7 +69,7 @@ export default function ImmobilierDashboard() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [currentEntrepriseId]);
 
   const kpis = useMemo(() => {
     if (!list)

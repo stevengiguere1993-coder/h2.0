@@ -14,7 +14,7 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch, getToken } from "@/lib/auth";
-import { ImmobilierTopbar } from "../layout";
+import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 
 type ImmeubleListItem = {
   id: number;
@@ -49,16 +49,23 @@ function fmtCurrency(n: number): string {
 }
 
 export default function ImmeublesListPage() {
+  const { currentEntrepriseId, entreprises } = useImmobilierLayout();
   const [list, setList] = useState<ImmeubleListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
 
+  const currentEnt = entreprises.find((e) => e.id === currentEntrepriseId) || null;
+
   async function reload() {
     setError(null);
     try {
-      const res = await authedFetch("/api/v1/immobilier/immeubles");
+      const url =
+        currentEntrepriseId != null
+          ? `/api/v1/immobilier/immeubles?entreprise_id=${currentEntrepriseId}`
+          : "/api/v1/immobilier/immeubles";
+      const res = await authedFetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setList((await res.json()) as ImmeubleListItem[]);
     } catch (err) {
@@ -67,8 +74,10 @@ export default function ImmeublesListPage() {
   }
 
   useEffect(() => {
+    setList(null); // évite d'afficher l'ancienne liste pendant le swap
     void reload();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentEntrepriseId]);
 
   const filtered = list
     ? list.filter((x) => {
@@ -102,7 +111,13 @@ export default function ImmeublesListPage() {
             <button
               type="button"
               onClick={() => setShowCreate(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-200 hover:bg-sky-500/20"
+              disabled={currentEntrepriseId == null}
+              title={
+                currentEntrepriseId == null
+                  ? "Sélectionne une entreprise dans la barre latérale d'abord"
+                  : `Créer un immeuble pour ${currentEnt?.name}`
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-200 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Plus className="h-3.5 w-3.5" />
               Nouvel immeuble
@@ -112,6 +127,18 @@ export default function ImmeublesListPage() {
       />
 
       <div className="p-4 lg:p-6">
+        {currentEnt ? (
+          <p className="mb-3 inline-flex items-center gap-2 rounded-full border border-sky-400/30 bg-sky-500/10 px-3 py-1 text-[11px] font-semibold text-sky-200">
+            <Building2 className="h-3 w-3" />
+            Suivi pour <strong className="text-white">{currentEnt.name}</strong> · les immeubles affichés sont ceux qu&apos;elle détient.
+          </p>
+        ) : (
+          <p className="mb-3 inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold text-amber-200">
+            <AlertTriangle className="h-3 w-3" />
+            Aucune entreprise sélectionnée — sélectionne-en une dans la barre latérale pour pouvoir ajouter un immeuble.
+          </p>
+        )}
+
         <div className="mb-4 flex items-center gap-2">
           <div className="relative max-w-md flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
@@ -224,6 +251,8 @@ export default function ImmeublesListPage() {
 
       {showCreate ? (
         <CreateImmeubleModal
+          entrepriseId={currentEntrepriseId}
+          entrepriseName={currentEnt?.name || null}
           onClose={() => setShowCreate(false)}
           onSaved={() => {
             setShowCreate(false);
@@ -276,9 +305,13 @@ function ModalShell({
 }
 
 function CreateImmeubleModal({
+  entrepriseId,
+  entrepriseName,
   onClose,
   onSaved
 }: {
+  entrepriseId: number | null;
+  entrepriseName: string | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -307,13 +340,20 @@ function CreateImmeubleModal({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (entrepriseId == null) {
+      setErr(
+        "Sélectionne une entreprise propriétaire dans la barre latérale avant de créer un immeuble."
+      );
+      return;
+    }
     setSaving(true);
     setErr(null);
     try {
       // Création de l'immeuble (sans nom — backend prend l'adresse).
       const body: Record<string, unknown> = {
         address: form.address.trim(),
-        type: form.type
+        type: form.type,
+        entreprise_id: entrepriseId // auto-rattache l'ownership 100%
       };
       if (form.city.trim()) body.city = form.city.trim();
       if (form.postal_code.trim()) body.postal_code = form.postal_code.trim();
@@ -365,6 +405,11 @@ function CreateImmeubleModal({
   return (
     <ModalShell title="Nouvel immeuble" onClose={onClose}>
       <form onSubmit={submit} className="grid gap-4">
+        {entrepriseName ? (
+          <p className="rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
+            Cet immeuble sera rattaché à <strong className="text-white">{entrepriseName}</strong> à 100 %. Tu pourras ajuster les parts plus tard depuis la fiche immeuble &gt; section Ownership.
+          </p>
+        ) : null}
         <div>
           <label className="label">Adresse</label>
           <input
