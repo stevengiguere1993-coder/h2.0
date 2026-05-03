@@ -416,6 +416,38 @@ async def _compute_part_metrics(
 
 
 @router.get(
+    "/entreprises-counts",
+    response_model=List[dict],
+)
+async def entreprises_counts(
+    db: DBSession, user: CurrentUser
+) -> List[dict]:
+    """Pour chaque entreprise active du portefeuille, retourne le nombre
+    d'immeubles qu'elle détient (via ImmeubleOwnership). Permet à l'UI
+    de signaler les entreprises sans immeubles dans le sélecteur."""
+    _require_volet(user)
+    rows = (
+        await db.execute(
+            select(
+                Entreprise.id,
+                func.count(ImmeubleOwnership.id),
+            )
+            .select_from(Entreprise)
+            .outerjoin(
+                ImmeubleOwnership,
+                ImmeubleOwnership.entreprise_id == Entreprise.id,
+            )
+            .where(Entreprise.is_active.is_(True))
+            .group_by(Entreprise.id)
+        )
+    ).all()
+    return [
+        {"entreprise_id": int(eid), "nb_immeubles": int(cnt)}
+        for eid, cnt in rows
+    ]
+
+
+@router.get(
     "/par-entreprise/{entreprise_id}",
     response_model=EntrepriseImmobilierSummary,
 )
