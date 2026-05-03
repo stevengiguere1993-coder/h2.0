@@ -684,11 +684,11 @@ function TacheModal({
                 style={{
                   backgroundColor: "rgba(212,255,58,0.06)",
                   border: "1px solid rgba(212,255,58,0.25)",
-                  color: "#d4ff3a"
+                  color: "var(--qg-accent)"
                 }}
               >
                 <span className="font-bold">✦ Justification IA : </span>
-                <span className="text-[#f5f5f7]/85">{aiRationale}</span>
+                <span className="text-[var(--qg-text)]/85">{aiRationale}</span>
               </div>
             ) : null}
           </div>
@@ -881,7 +881,7 @@ function DailyPulseCard({
 
   const todayBriefing = briefing && isToday(briefing.period_start);
   // Accent lime pour le badge IA (cohérent avec spec QG)
-  const lime = "#d4ff3a";
+  const lime = "var(--qg-accent)";
 
   return (
     <section
@@ -929,7 +929,7 @@ function DailyPulseCard({
               className="rounded-md px-3 py-1 text-[11px] font-bold transition disabled:opacity-60"
               style={{
                 backgroundColor: lime,
-                color: "#0a0a0b"
+                color: "var(--qg-bg)"
               }}
             >
               {generating ? (
@@ -1069,7 +1069,7 @@ function AISuggestButton({
         style={{
           backgroundColor: "rgba(212,255,58,0.12)",
           border: "1px solid rgba(212,255,58,0.45)",
-          color: "#d4ff3a"
+          color: "var(--qg-accent)"
         }}
       >
         {busy ? (

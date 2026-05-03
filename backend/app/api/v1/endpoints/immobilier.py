@@ -20,8 +20,12 @@ import logging
 from datetime import date, datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import Response
 from sqlalchemy import and_, func, select
+
+from app.core.security import decode_token
+from app.repositories.user import UserRepository
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.immobilier import (
@@ -104,6 +108,17 @@ async def _get_immeuble_or_404(db, immeuble_id: int) -> Immeuble:
     return obj
 
 
+def _immeuble_to_read(obj: Immeuble) -> ImmeubleRead:
+    """Sérialise un Immeuble en exposant `has_cover_photo` sans charger le blob."""
+    out = ImmeubleRead.model_validate(obj, from_attributes=True)
+    # `cover_photo_blob` est deferred ; si la colonne n'a pas encore été
+    # touchée la valeur sera None et on ne déclenche pas de chargement.
+    state = getattr(obj, "__dict__", {})
+    has_blob = bool(state.get("cover_photo_blob") or obj.cover_photo_content_type)
+    out.has_cover_photo = has_blob
+    return out
+
+
 # ── Immeubles : liste + KPIs agrégés ────────────────────────────────────
 
 
@@ -173,6 +188,7 @@ async def list_immeubles(
                 type=imm.type,
                 nb_logements=imm.nb_logements,
                 cover_photo_url=imm.cover_photo_url,
+                has_cover_photo=bool(imm.cover_photo_content_type),
                 is_active=imm.is_active,
                 nb_logements_actifs=nb_actifs,
                 nb_logements_occupes=nb_occ,
@@ -192,13 +208,131 @@ async def create_immeuble(
     payload: ImmeubleCreate, db: DBSession, user: CurrentUser
 ) -> ImmeubleRead:
     _require_volet(user)
-    obj = Immeuble(**payload.model_dump())
+    data = payload.model_dump()
+    # Nom optionnel : si l'utilisateur n'en fournit pas, on prend l'adresse
+    # complète comme nom affichable (cas usuel : un immeuble = une adresse).
+    if not data.get("name") or not str(data["name"]).strip():
+        addr = data.get("address") or ""
+        city = data.get("city")
+        data["name"] = f"{addr}, {city}" if city else addr
+    obj = Immeuble(**data)
     obj.created_at = _now()
     obj.updated_at = _now()
     db.add(obj)
     await db.commit()
     await db.refresh(obj)
-    return ImmeubleRead.model_validate(obj)
+    return _immeuble_to_read(obj)
+
+
+# ── Upload + stream cover photo ────────────────────────────────────────
+
+
+_PHOTO_MIME_ALLOWED = {
+    "image/jpeg", "image/png", "image/webp", "image/heic", "image/heif",
+}
+_PHOTO_MAX_BYTES = 8 * 1024 * 1024  # 8 Mo
+
+
+@router.post(
+    "/immeubles/{immeuble_id}/cover-photo",
+    response_model=ImmeubleRead,
+)
+async def upload_cover_photo(
+    immeuble_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+) -> ImmeubleRead:
+    _require_volet(user)
+    obj = await _get_immeuble_or_404(db, immeuble_id)
+    ct = (file.content_type or "").lower()
+    if ct not in _PHOTO_MIME_ALLOWED:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Format non supporté (JPG, PNG, WEBP, HEIC).",
+        )
+    blob = await file.read()
+    if not blob:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Fichier vide."
+        )
+    if len(blob) > _PHOTO_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Fichier trop gros (> {_PHOTO_MAX_BYTES // (1024*1024)} Mo).",
+        )
+    obj.cover_photo_blob = blob
+    obj.cover_photo_content_type = ct
+    obj.updated_at = _now()
+    await db.commit()
+    await db.refresh(obj)
+    return _immeuble_to_read(obj)
+
+
+async def _resolve_user_for_image(
+    request: Request, db, t: Optional[str]
+):
+    """Lit le JWT depuis le header Authorization OU le query `?t=`,
+    valide et retourne l'utilisateur. Permet d'utiliser ces URL dans
+    `<img src>` qui ne porte pas de header personnalisé.
+    """
+    token = t
+    if not token:
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            token = auth.split(" ", 1)[1]
+    if not token:
+        raise HTTPException(401, "Token manquant.")
+    user_id = decode_token(token)
+    if not user_id:
+        raise HTTPException(401, "Token invalide.")
+    user = await UserRepository(db).get_by_id(int(user_id))
+    if user is None:
+        raise HTTPException(401, "Utilisateur introuvable.")
+    return user
+
+
+@router.get("/immeubles/{immeuble_id}/cover-photo")
+async def stream_cover_photo(
+    immeuble_id: int,
+    db: DBSession,
+    request: Request,
+    t: Optional[str] = Query(default=None),
+) -> Response:
+    user = await _resolve_user_for_image(request, db, t)
+    _require_volet(user)
+    obj = await _get_immeuble_or_404(db, immeuble_id)
+    # Force-load le blob deferred.
+    await db.refresh(obj, attribute_names=["cover_photo_blob"])
+    if not obj.cover_photo_blob:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Aucune photo de couverture.",
+        )
+    ct = obj.cover_photo_content_type or "application/octet-stream"
+    return Response(
+        content=bytes(obj.cover_photo_blob),
+        media_type=ct,
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "Content-Disposition": f'inline; filename="cover-{immeuble_id}.{ct.split("/")[-1] or "bin"}"',
+        },
+    )
+
+
+@router.delete(
+    "/immeubles/{immeuble_id}/cover-photo",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_cover_photo(
+    immeuble_id: int, db: DBSession, user: CurrentUser
+) -> None:
+    _require_volet(user)
+    obj = await _get_immeuble_or_404(db, immeuble_id)
+    obj.cover_photo_blob = None
+    obj.cover_photo_content_type = None
+    obj.updated_at = _now()
+    await db.commit()
 
 
 @router.get("/immeubles/{immeuble_id}", response_model=ImmeubleRead)
@@ -207,7 +341,7 @@ async def get_immeuble(
 ) -> ImmeubleRead:
     _require_volet(user)
     obj = await _get_immeuble_or_404(db, immeuble_id)
-    return ImmeubleRead.model_validate(obj)
+    return _immeuble_to_read(obj)
 
 
 @router.patch("/immeubles/{immeuble_id}", response_model=ImmeubleRead)
@@ -224,7 +358,7 @@ async def update_immeuble(
     obj.updated_at = _now()
     await db.commit()
     await db.refresh(obj)
-    return ImmeubleRead.model_validate(obj)
+    return _immeuble_to_read(obj)
 
 
 @router.delete(
@@ -1052,7 +1186,7 @@ async def import_immeuble_from_matricule(
     await db.commit()
     await db.refresh(imm)
     return ImmeubleImportResult(
-        immeuble=ImmeubleRead.model_validate(imm),
+        immeuble=_immeuble_to_read(imm),
         nb_logements_crees=nb_crees,
         matched_unit_id=getattr(unit, "id", None),
     )

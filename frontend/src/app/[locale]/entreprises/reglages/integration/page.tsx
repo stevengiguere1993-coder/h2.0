@@ -37,6 +37,9 @@ export default function ReglagesIntegrationPage() {
 
   const [workspaceId, setWorkspaceId] = useState("");
   const [boardFilter, setBoardFilter] = useState("");
+  const [selectedBoardIds, setSelectedBoardIds] = useState<Set<string>>(
+    new Set()
+  );
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
@@ -71,8 +74,13 @@ export default function ReglagesIntegrationPage() {
     setResult(null);
     try {
       const body: Record<string, unknown> = {};
-      if (workspaceId) body.workspace_id = Number(workspaceId);
-      if (boardFilter.trim()) body.board_name_filter = boardFilter.trim();
+      if (selectedBoardIds.size > 0) {
+        body.board_ids = [...selectedBoardIds];
+      } else {
+        if (workspaceId) body.workspace_id = Number(workspaceId);
+        if (boardFilter.trim())
+          body.board_name_filter = boardFilter.trim();
+      }
       const res = await authedFetch(
         "/api/v1/entreprises/import-monday-tasks",
         {
@@ -85,6 +93,7 @@ export default function ReglagesIntegrationPage() {
         throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
       }
       setResult((await res.json()) as ImportResult);
+      setSelectedBoardIds(new Set());
     } catch (err) {
       setImportError((err as Error).message);
     } finally {
@@ -100,6 +109,19 @@ export default function ReglagesIntegrationPage() {
         b.name.toLowerCase().includes(boardFilter.trim().toLowerCase())
       )
     : filteredBoards;
+
+  function toggleBoard(id: string) {
+    const next = new Set(selectedBoardIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedBoardIds(next);
+  }
+  function selectAllVisible() {
+    setSelectedBoardIds(new Set(previewBoards.map((b) => b.id)));
+  }
+  function clearSelection() {
+    setSelectedBoardIds(new Set());
+  }
 
   return (
     <div className="p-4 lg:p-6">
@@ -189,25 +211,62 @@ export default function ReglagesIntegrationPage() {
                 </ul>
               </details>
             )}
-            <details className="rounded-lg border border-brand-800 bg-brand-950 p-3 text-xs">
-              <summary className="cursor-pointer font-semibold text-white/80 hover:text-white">
-                {boards.length} board{boards.length > 1 ? "s" : ""} accessible
-                {boards.length > 1 ? "s" : ""}
-              </summary>
-              <ul className="mt-2 space-y-1">
-                {boards.map((b) => (
-                  <li
-                    key={b.id}
-                    className="flex items-center justify-between gap-2 rounded px-2 py-1 hover:bg-brand-900"
+            <div className="rounded-lg border border-brand-800 bg-brand-950 p-3 text-xs">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="font-semibold text-white/80">
+                  {previewBoards.length} board
+                  {previewBoards.length > 1 ? "s" : ""} — clique pour sélectionner
+                </p>
+                <div className="flex items-center gap-2 text-[10px]">
+                  <button
+                    type="button"
+                    onClick={selectAllVisible}
+                    className="text-violet-300 hover:text-violet-200"
                   >
-                    <span className="truncate text-white/80">{b.name}</span>
-                    <span className="flex-shrink-0 text-[10px] text-white/40">
-                      {b.workspace?.name || "—"}
-                    </span>
-                  </li>
-                ))}
+                    Tout sélectionner
+                  </button>
+                  {selectedBoardIds.size > 0 ? (
+                    <button
+                      type="button"
+                      onClick={clearSelection}
+                      className="text-white/50 hover:text-white"
+                    >
+                      Vider ({selectedBoardIds.size})
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <ul className="max-h-72 space-y-1 overflow-y-auto pr-1">
+                {previewBoards.map((b) => {
+                  const checked = selectedBoardIds.has(b.id);
+                  return (
+                    <li
+                      key={b.id}
+                      onClick={() => toggleBoard(b.id)}
+                      className={`flex cursor-pointer items-center justify-between gap-2 rounded border px-2 py-1.5 transition ${
+                        checked
+                          ? "border-violet-400/40 bg-violet-500/10"
+                          : "border-transparent hover:bg-brand-900"
+                      }`}
+                    >
+                      <label className="flex flex-1 cursor-pointer items-center gap-2 truncate">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleBoard(b.id)}
+                          className="h-3.5 w-3.5 accent-violet-500"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <span className="truncate text-white/85">{b.name}</span>
+                      </label>
+                      <span className="flex-shrink-0 text-[10px] text-white/40">
+                        {b.workspace?.name || "—"}
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
-            </details>
+            </div>
           </div>
         ) : null}
       </section>
@@ -254,23 +313,26 @@ export default function ReglagesIntegrationPage() {
           </div>
         </div>
 
-        {workspaces && previewBoards.length > 0 ? (
+        {workspaces ? (
           <div className="mt-4 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3">
-            <p className="text-[11px] font-semibold text-violet-200">
-              Aperçu : {previewBoards.length} board
-              {previewBoards.length > 1 ? "s" : ""} sera{previewBoards.length > 1 ? "ient" : ""}
-              {" "}importé{previewBoards.length > 1 ? "s" : ""} :
-            </p>
-            <ul className="mt-1 space-y-0.5 pl-2 text-[11px] text-white/70">
-              {previewBoards.slice(0, 8).map((b) => (
-                <li key={b.id}>· {b.name}</li>
-              ))}
-              {previewBoards.length > 8 ? (
-                <li className="text-white/40">
-                  + {previewBoards.length - 8} autres…
-                </li>
-              ) : null}
-            </ul>
+            {selectedBoardIds.size > 0 ? (
+              <p className="text-[11px] font-semibold text-violet-200">
+                <strong>{selectedBoardIds.size}</strong> board
+                {selectedBoardIds.size > 1 ? "s" : ""} sélectionné
+                {selectedBoardIds.size > 1 ? "s" : ""} sera
+                {selectedBoardIds.size > 1 ? "ont" : ""} importé
+                {selectedBoardIds.size > 1 ? "s" : ""}.
+              </p>
+            ) : previewBoards.length > 0 ? (
+              <p className="text-[11px] text-violet-200/80">
+                Aucune sélection : tous les {previewBoards.length} boards
+                visibles seront importés (filtre workspace + nom appliqués).
+              </p>
+            ) : (
+              <p className="text-[11px] text-white/50">
+                Lance la découverte ci-dessus pour voir les boards disponibles.
+              </p>
+            )}
           </div>
         ) : null}
 
@@ -288,7 +350,10 @@ export default function ReglagesIntegrationPage() {
           ) : (
             <>
               <Upload className="mr-2 h-4 w-4" />
-              Lancer l&apos;import
+              Importer
+              {selectedBoardIds.size > 0
+                ? ` (${selectedBoardIds.size})`
+                : ""}
             </>
           )}
         </button>

@@ -152,7 +152,7 @@ export default function VisionPage() {
             <span
               className="italic"
               style={{
-                color: "#d4ff3a",
+                color: "var(--qg-accent)",
                 fontFamily: "var(--font-fraunces, Georgia, serif)"
               }}
             >
@@ -166,7 +166,7 @@ export default function VisionPage() {
       <div className="px-5 py-6 lg:px-8">
         {/* Sélecteur d'entreprise */}
         <div className="mb-6 flex flex-wrap items-center gap-3">
-          <span className="text-[11px] uppercase tracking-wider text-[#66666e]">
+          <span className="text-[11px] uppercase tracking-wider text-[var(--qg-text-soft)]">
             Entreprise
           </span>
           <select
@@ -176,9 +176,9 @@ export default function VisionPage() {
             }
             className="rounded-md px-3 py-1.5 text-[13px] focus:outline-none"
             style={{
-              backgroundColor: "#15151a",
-              color: "#f5f5f7",
-              border: "1px solid #25252d"
+              backgroundColor: "var(--qg-card-bg)",
+              color: "var(--qg-text)",
+              border: "1px solid var(--qg-border)"
             }}
           >
             {ents.length === 0 ? (
@@ -188,7 +188,7 @@ export default function VisionPage() {
               <option
                 key={e.id}
                 value={e.id}
-                className="bg-[#15151a]"
+                className="bg-[var(--qg-card-bg)]"
               >
                 {e.name}
               </option>
@@ -212,21 +212,21 @@ export default function VisionPage() {
                 key={h.key}
                 className="flex flex-col rounded-xl"
                 style={{
-                  backgroundColor: "#15151a",
-                  border: "1px solid #25252d"
+                  backgroundColor: "var(--qg-card-bg)",
+                  border: "1px solid var(--qg-border)"
                 }}
               >
                 <header
                   className="flex items-center justify-between px-4 py-3"
-                  style={{ borderBottom: "1px solid #25252d" }}
+                  style={{ borderBottom: "1px solid var(--qg-border)" }}
                 >
                   <span className="flex items-center gap-2">
                     <span
                       className="h-1.5 w-1.5 rounded-full"
-                      style={{ backgroundColor: "#d4ff3a" }}
+                      style={{ backgroundColor: "var(--qg-accent)" }}
                     />
                     <h3
-                      className="text-[14px] font-bold text-[#f5f5f7]"
+                      className="text-[14px] font-bold text-[var(--qg-text)]"
                       style={{
                         fontFamily: "var(--font-fraunces, Georgia, serif)"
                       }}
@@ -235,7 +235,7 @@ export default function VisionPage() {
                     </h3>
                   </span>
                   <span
-                    className="text-[10px] uppercase tracking-wider text-[#66666e]"
+                    className="text-[10px] uppercase tracking-wider text-[var(--qg-text-soft)]"
                     style={{ fontFamily: "var(--font-mono, monospace)" }}
                   >
                     +{h.days}j
@@ -244,20 +244,20 @@ export default function VisionPage() {
 
                 {loading ? (
                   <div className="flex flex-1 items-center justify-center px-4 py-12">
-                    <Loader2 className="h-4 w-4 animate-spin text-[#66666e]" />
+                    <Loader2 className="h-4 w-4 animate-spin text-[var(--qg-text-soft)]" />
                   </div>
                 ) : v ? (
                   <VisionCard v={v} />
                 ) : (
                   <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 py-10 text-center">
-                    <Target className="h-6 w-6 text-[#35353f]" />
-                    <p className="text-[12px] text-[#66666e]">
+                    <Target className="h-6 w-6 text-[var(--qg-text-faint)]" />
+                    <p className="text-[12px] text-[var(--qg-text-soft)]">
                       Aucune vision pour cet horizon.
                     </p>
                   </div>
                 )}
 
-                <footer className="px-4 py-3" style={{ borderTop: "1px solid #25252d" }}>
+                <footer className="px-4 py-3" style={{ borderTop: "1px solid var(--qg-border)" }}>
                   <button
                     type="button"
                     onClick={() => generate(h.key, !!v)}
@@ -268,9 +268,9 @@ export default function VisionPage() {
                         ? "transparent"
                         : "rgba(212,255,58,0.12)",
                       border: v
-                        ? "1px solid #25252d"
+                        ? "1px solid var(--qg-border)"
                         : "1px solid rgba(212,255,58,0.45)",
-                      color: v ? "#a0a0a8" : "#d4ff3a"
+                      color: v ? "var(--qg-text-muted)" : "var(--qg-accent)"
                     }}
                   >
                     {generating ? (
@@ -299,29 +299,29 @@ function VisionCard({ v }: { v: Vision }) {
   return (
     <div className="flex flex-1 flex-col gap-3 p-4">
       <h4
-        className="text-[14px] font-bold leading-snug text-[#f5f5f7]"
+        className="text-[14px] font-bold leading-snug text-[var(--qg-text)]"
         style={{ fontFamily: "var(--font-fraunces, Georgia, serif)" }}
       >
         {v.title}
       </h4>
-      <p className="text-[12px] leading-relaxed text-[#a0a0a8]">
+      <p className="text-[12px] leading-relaxed text-[var(--qg-text-muted)]">
         {v.narrative}
       </p>
 
       {v.objectives.length > 0 ? (
         <section className="mt-1">
-          <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-[#66666e]">
+          <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-[var(--qg-text-soft)]">
             Objectifs
           </p>
           <ul className="space-y-1">
             {v.objectives.map((o, i) => (
               <li
                 key={i}
-                className="flex items-start gap-2 text-[11px] leading-snug text-[#f5f5f7]/85"
+                className="flex items-start gap-2 text-[11px] leading-snug text-[var(--qg-text)]/85"
               >
                 <CheckCircle2
                   className="mt-0.5 h-2.5 w-2.5 flex-shrink-0"
-                  style={{ color: "#d4ff3a" }}
+                  style={{ color: "var(--qg-accent)" }}
                 />
                 <span>{o}</span>
               </li>
@@ -332,16 +332,16 @@ function VisionCard({ v }: { v: Vision }) {
 
       {v.key_actions.length > 0 ? (
         <section className="mt-2">
-          <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-[#66666e]">
+          <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-[var(--qg-text-soft)]">
             Actions clés
           </p>
           <ul className="space-y-1">
             {v.key_actions.map((a, i) => (
               <li
                 key={i}
-                className="flex items-start gap-2 text-[11px] leading-snug text-[#a0a0a8]"
+                className="flex items-start gap-2 text-[11px] leading-snug text-[var(--qg-text-muted)]"
               >
-                <ArrowRight className="mt-0.5 h-2.5 w-2.5 flex-shrink-0 text-[#66666e]" />
+                <ArrowRight className="mt-0.5 h-2.5 w-2.5 flex-shrink-0 text-[var(--qg-text-soft)]" />
                 <span>{a}</span>
               </li>
             ))}
@@ -349,7 +349,7 @@ function VisionCard({ v }: { v: Vision }) {
         </section>
       ) : null}
 
-      <div className="mt-auto pt-2 text-[10px] text-[#66666e]">
+      <div className="mt-auto pt-2 text-[10px] text-[var(--qg-text-soft)]">
         Générée{" "}
         {new Date(v.created_at).toLocaleDateString("fr-CA", {
           day: "numeric",

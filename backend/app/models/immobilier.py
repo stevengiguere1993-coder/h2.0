@@ -25,11 +25,12 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, deferred, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
 
@@ -136,9 +137,17 @@ class Immeuble(Base, TimestampUpdateMixin):
     )
     purchase_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
-    # Photo de couverture (URL)
+    # Photo de couverture : soit URL externe, soit blob uploadé directement.
+    # Si `cover_photo_blob` est rempli, le frontend utilise l'endpoint de
+    # stream pour récupérer l'image ; sinon il fallback sur `cover_photo_url`.
     cover_photo_url: Mapped[Optional[str]] = mapped_column(
         String(1000), nullable=True
+    )
+    cover_photo_blob: Mapped[Optional[bytes]] = deferred(
+        mapped_column(LargeBinary, nullable=True)
+    )
+    cover_photo_content_type: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
     )
 
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

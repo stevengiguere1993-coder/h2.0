@@ -327,7 +327,7 @@ export default function ReglagesEntreprisesPage() {
                 {editingId === e.id && form ? (
                   <div
                     className="border-t px-4 py-4"
-                    style={{ borderColor: "#25252d", backgroundColor: "#0f0f12" }}
+                    style={{ borderColor: "var(--qg-border)", backgroundColor: "#0f0f12" }}
                   >
                     <EntrepriseForm
                       form={form}
