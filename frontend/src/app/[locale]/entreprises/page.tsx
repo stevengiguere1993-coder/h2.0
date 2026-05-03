@@ -186,7 +186,7 @@ export default function EntreprisesDashboard() {
             <span
               className="italic"
               style={{
-                color: "#d4ff3a",
+                color: "var(--qg-accent)",
                 fontFamily: "var(--font-fraunces, Georgia, serif)"
               }}
             >
@@ -200,7 +200,7 @@ export default function EntreprisesDashboard() {
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/entreprises/import-monday" as any}
-              className="hidden sm:inline-flex items-center gap-1.5 rounded-md border border-[#25252d] bg-[#15151a] px-3 py-1.5 text-[12px] font-medium text-[#a0a0a8] hover:border-[#35353f] hover:text-[#f5f5f7]"
+              className="hidden sm:inline-flex items-center gap-1.5 rounded-md border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-1.5 text-[12px] font-medium text-[var(--qg-text-muted)] hover:border-[var(--qg-text-faint)] hover:text-[var(--qg-text)]"
             >
               <Upload className="h-3.5 w-3.5" />
               Import Monday
@@ -283,26 +283,26 @@ export default function EntreprisesDashboard() {
           <div
             className="rounded-xl"
             style={{
-              backgroundColor: "#15151a",
-              border: "1px solid #25252d"
+              backgroundColor: "var(--qg-card-bg)",
+              border: "1px solid var(--qg-border)"
             }}
           >
             <div className="flex items-baseline justify-between px-5 pt-5">
               <h2
-                className="text-[18px] font-bold text-[#f5f5f7]"
+                className="text-[18px] font-bold text-[var(--qg-text)]"
                 style={{
                   fontFamily: "var(--font-fraunces, Georgia, serif)"
                 }}
               >
                 État des{" "}
-                <span className="italic" style={{ color: "#d4ff3a" }}>
+                <span className="italic" style={{ color: "var(--qg-accent)" }}>
                   entreprises
                 </span>
               </h2>
               <Link
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 href={"/entreprises/taches" as any}
-                className="text-[11px] text-[#66666e] hover:text-[#d4ff3a]"
+                className="text-[11px] text-[var(--qg-text-soft)] hover:text-[var(--qg-accent)]"
               >
                 Voir tout →
               </Link>
@@ -310,7 +310,7 @@ export default function EntreprisesDashboard() {
 
             {loading ? (
               <div className="flex min-h-[200px] items-center justify-center">
-                <Loader2 className="h-5 w-5 animate-spin text-[#d4ff3a]" />
+                <Loader2 className="h-5 w-5 animate-spin text-[var(--qg-accent)]" />
               </div>
             ) : health.length === 0 ? (
               <EmptyEntreprises />
@@ -318,8 +318,8 @@ export default function EntreprisesDashboard() {
               <table className="mt-4 w-full text-[13px]">
                 <thead>
                   <tr
-                    className="text-[10px] uppercase tracking-wider text-[#66666e]"
-                    style={{ borderBottom: "1px solid #25252d" }}
+                    className="text-[10px] uppercase tracking-wider text-[var(--qg-text-soft)]"
+                    style={{ borderBottom: "1px solid var(--qg-border)" }}
                   >
                     <th className="px-5 py-2.5 text-left font-semibold">
                       Entreprise · Domaine
@@ -370,13 +370,13 @@ function CTAButton({
       className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-bold transition ${
         isPrimary
           ? ""
-          : "border border-[#25252d] bg-[#15151a] text-[#a0a0a8] hover:border-[#35353f] hover:text-[#f5f5f7]"
+          : "border border-[var(--qg-border)] bg-[var(--qg-card-bg)] text-[var(--qg-text-muted)] hover:border-[var(--qg-text-faint)] hover:text-[var(--qg-text)]"
       }`}
       style={
         isPrimary
           ? {
-              backgroundColor: "#d4ff3a",
-              color: "#0a0a0b",
+              backgroundColor: "var(--qg-accent)",
+              color: "var(--qg-bg)",
               boxShadow: "0 0 24px -8px rgba(212,255,58,0.5)"
             }
           : undefined
@@ -404,23 +404,23 @@ function KpiCard({
       : tone === "success"
       ? "#4ade80"
       : tone === "lime"
-      ? "#d4ff3a"
+      ? "var(--qg-accent)"
       : tone === "info"
       ? "#60a5fa"
-      : "#66666e";
+      : "var(--qg-text-soft)";
   return (
     <div
       className="rounded-xl px-5 py-5"
       style={{
-        backgroundColor: "#15151a",
-        border: "1px solid #25252d"
+        backgroundColor: "var(--qg-card-bg)",
+        border: "1px solid var(--qg-border)"
       }}
     >
-      <p className="text-[10px] uppercase tracking-[0.16em] text-[#66666e]">
+      <p className="text-[10px] uppercase tracking-[0.16em] text-[var(--qg-text-soft)]">
         {label}
       </p>
       <p
-        className="mt-2 text-[28px] font-bold leading-tight text-[#f5f5f7] sm:text-[32px]"
+        className="mt-2 text-[28px] font-bold leading-tight text-[var(--qg-text)] sm:text-[32px]"
         style={{
           fontFamily: "var(--font-fraunces, Georgia, serif)"
         }}
@@ -454,8 +454,8 @@ function EntrepriseRow({ e }: { e: EntrepriseHealth }) {
   const overdueAlert = e.taches_overdue > 0;
   return (
     <tr
-      className="text-[13px] hover:bg-[#18181d]"
-      style={{ borderBottom: "1px solid #1e1e25" }}
+      className="text-[13px] hover:bg-[var(--qg-bg-alt)]"
+      style={{ borderBottom: "1px solid var(--qg-border-soft)" }}
     >
       <td className="px-5 py-3">
         <Link
@@ -473,10 +473,10 @@ function EntrepriseRow({ e }: { e: EntrepriseHealth }) {
             {initials || "—"}
           </span>
           <span className="min-w-0">
-            <span className="block truncate font-semibold text-[#f5f5f7]">
+            <span className="block truncate font-semibold text-[var(--qg-text)]">
               {e.name}
             </span>
-            <span className="block truncate text-[10px] uppercase tracking-wider text-[#66666e]">
+            <span className="block truncate text-[10px] uppercase tracking-wider text-[var(--qg-text-soft)]">
               {TYPE_LABELS[e.type] || e.type}
               {e.description ? ` · ${e.description.slice(0, 40)}` : ""}
             </span>
@@ -487,7 +487,7 @@ function EntrepriseRow({ e }: { e: EntrepriseHealth }) {
         <div className="flex items-center gap-3">
           <div
             className="h-1 w-20 overflow-hidden rounded-full"
-            style={{ backgroundColor: "#25252d" }}
+            style={{ backgroundColor: "var(--qg-border)" }}
           >
             <div
               className="h-full rounded-full transition-all"
@@ -516,15 +516,15 @@ function EntrepriseRow({ e }: { e: EntrepriseHealth }) {
           </span>
         ) : (
           <span
-            className="text-[12px] tabular-nums text-[#a0a0a8]"
+            className="text-[12px] tabular-nums text-[var(--qg-text-muted)]"
             style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}
           >
             {e.taches_open}
-            <span className="text-[#66666e]"> / {e.taches_total}</span>
+            <span className="text-[var(--qg-text-soft)]"> / {e.taches_total}</span>
           </span>
         )}
       </td>
-      <td className="px-3 py-3 text-right text-[#35353f]">
+      <td className="px-3 py-3 text-right text-[var(--qg-text-faint)]">
         <ChevronRight className="inline h-4 w-4" />
       </td>
     </tr>
@@ -534,7 +534,7 @@ function EntrepriseRow({ e }: { e: EntrepriseHealth }) {
 function EmptyEntreprises() {
   return (
     <div className="px-6 py-12 text-center">
-      <p className="text-sm text-[#a0a0a8]">
+      <p className="text-sm text-[var(--qg-text-muted)]">
         Aucune entreprise. Lance l&apos;import depuis Monday ou crée
         manuellement.
       </p>
@@ -542,7 +542,7 @@ function EmptyEntreprises() {
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={"/entreprises/import-monday" as any}
-          className="rounded-md border border-[#25252d] bg-[#15151a] px-3 py-1.5 text-[12px] text-[#a0a0a8] hover:text-[#f5f5f7]"
+          className="rounded-md border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-1.5 text-[12px] text-[var(--qg-text-muted)] hover:text-[var(--qg-text)]"
         >
           <Upload className="mr-1.5 inline h-3 w-3" />
           Import Monday
@@ -563,23 +563,23 @@ function BriefingCard({
     <aside
       className="rounded-xl"
       style={{
-        backgroundColor: "#15151a",
-        border: "1px solid #25252d"
+        backgroundColor: "var(--qg-card-bg)",
+        border: "1px solid var(--qg-border)"
       }}
     >
       <div className="flex items-baseline justify-between px-5 pt-5">
         <h2
-          className="text-[18px] font-bold text-[#f5f5f7]"
+          className="text-[18px] font-bold text-[var(--qg-text)]"
           style={{ fontFamily: "var(--font-fraunces, Georgia, serif)" }}
         >
           Briefing{" "}
-          <span className="italic" style={{ color: "#d4ff3a" }}>
+          <span className="italic" style={{ color: "var(--qg-accent)" }}>
             du jour
           </span>
         </h2>
         {briefing ? (
           <span
-            className="text-[10px] uppercase tracking-wider text-[#66666e]"
+            className="text-[10px] uppercase tracking-wider text-[var(--qg-text-soft)]"
             style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}
           >
             {new Date(briefing.created_at).toLocaleTimeString("fr-CA", {
@@ -595,37 +595,37 @@ function BriefingCard({
           <span className="relative flex h-2 w-2">
             <span
               className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60"
-              style={{ backgroundColor: "#d4ff3a" }}
+              style={{ backgroundColor: "var(--qg-accent)" }}
             />
             <span
               className="relative inline-flex h-2 w-2 rounded-full"
-              style={{ backgroundColor: "#d4ff3a" }}
+              style={{ backgroundColor: "var(--qg-accent)" }}
             />
           </span>
-          <span className="font-bold" style={{ color: "#d4ff3a" }}>
+          <span className="font-bold" style={{ color: "var(--qg-accent)" }}>
             Analyse IA
           </span>
           {briefing?.provider ? (
             <>
-              <span className="text-[#35353f]">·</span>
-              <span className="text-[#a0a0a8]">{briefing.provider}</span>
+              <span className="text-[var(--qg-text-faint)]">·</span>
+              <span className="text-[var(--qg-text-muted)]">{briefing.provider}</span>
             </>
           ) : null}
         </div>
 
         {loading ? (
-          <p className="text-[13px] text-[#66666e]">Chargement…</p>
+          <p className="text-[13px] text-[var(--qg-text-soft)]">Chargement…</p>
         ) : !briefing ? (
-          <div className="rounded-md border border-dashed border-[#25252d] p-4 text-center text-[12px] text-[#66666e]">
+          <div className="rounded-md border border-dashed border-[var(--qg-border)] p-4 text-center text-[12px] text-[var(--qg-text-soft)]">
             Aucun briefing aujourd&apos;hui. Ouvre une entreprise pour
             en générer un.
           </div>
         ) : (
           <>
-            <p className="mb-2 text-[14px] font-semibold leading-snug text-[#f5f5f7]">
+            <p className="mb-2 text-[14px] font-semibold leading-snug text-[var(--qg-text)]">
               {briefing.headline}
             </p>
-            <p className="text-[13px] leading-relaxed text-[#a0a0a8]">
+            <p className="text-[13px] leading-relaxed text-[var(--qg-text-muted)]">
               {briefing.summary_text}
             </p>
             {briefing.highlights && briefing.highlights.length > 0 ? (
@@ -639,7 +639,7 @@ function BriefingCard({
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={`/entreprises/${briefing.entreprise_id}` as any}
               className="mt-4 inline-flex items-center gap-1 text-[11px] font-semibold"
-              style={{ color: "#d4ff3a" }}
+              style={{ color: "var(--qg-accent)" }}
             >
               Voir l&apos;entreprise →
             </Link>
@@ -654,7 +654,7 @@ function HighlightBullet({ text, index }: { text: string; index: number }) {
   // Cycle 3 tons : risque (rose), opportunité (lime), synergie (info)
   const tones = [
     { icon: "⚠", color: "#ff5566", label: "Risque" },
-    { icon: "⚡", color: "#d4ff3a", label: "Opportunité" },
+    { icon: "⚡", color: "var(--qg-accent)", label: "Opportunité" },
     { icon: "◎", color: "#60a5fa", label: "Synergie" }
   ] as const;
   const tone = tones[index % tones.length];
@@ -676,7 +676,7 @@ function HighlightBullet({ text, index }: { text: string; index: number }) {
         {tone.icon}
       </span>
       <div className="min-w-0 flex-1">
-        <p className="text-[12px] leading-relaxed text-[#f5f5f7]">
+        <p className="text-[12px] leading-relaxed text-[var(--qg-text)]">
           {text}
         </p>
         <p

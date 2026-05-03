@@ -193,7 +193,7 @@ export default function PilotagePage({
         {/* Sections nav (sub-tabs) */}
         <nav
           className="mt-6 flex items-center gap-1 overflow-x-auto"
-          style={{ borderBottom: "1px solid #25252d" }}
+          style={{ borderBottom: "1px solid var(--qg-border)" }}
         >
           <SectionTab
             id="recurrence"
@@ -252,8 +252,8 @@ function SectionTab({
       onClick={onClick}
       className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition"
       style={{
-        color: active ? "#d4ff3a" : "rgba(245,245,247,0.6)",
-        borderBottom: active ? "2px solid #d4ff3a" : "2px solid transparent",
+        color: active ? "var(--qg-accent)" : "rgba(245,245,247,0.6)",
+        borderBottom: active ? "2px solid var(--qg-accent)" : "2px solid transparent",
         marginBottom: "-1px"
       }}
     >

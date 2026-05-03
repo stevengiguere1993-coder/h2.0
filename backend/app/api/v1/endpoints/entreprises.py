@@ -161,19 +161,101 @@ async def list_taches(
     user: CurrentUser,
     entreprise_id: Optional[int] = None,
     status_filter: Optional[str] = None,
+    assignee_user_id: Optional[int] = None,
+    mine: bool = False,
 ) -> List[EntrepriseTacheRead]:
+    """Liste des tâches du QG.
+
+    Filtres :
+    - `entreprise_id` : restreint à une entreprise.
+    - `status_filter` : restreint à un statut kanban.
+    - `assignee_user_id` : restreint à un assignee précis.
+    - `mine=true` : raccourci, filtre sur l'utilisateur connecté
+      (équivalent à passer `assignee_user_id=<mon id>`).
+    """
     _require_volet(user)
     stmt = select(EntrepriseTache)
     if entreprise_id is not None:
         stmt = stmt.where(EntrepriseTache.entreprise_id == entreprise_id)
     if status_filter:
         stmt = stmt.where(EntrepriseTache.status == status_filter)
+    if mine:
+        stmt = stmt.where(EntrepriseTache.assignee_user_id == user.id)
+    elif assignee_user_id is not None:
+        stmt = stmt.where(
+            EntrepriseTache.assignee_user_id == assignee_user_id
+        )
     stmt = stmt.order_by(
         EntrepriseTache.due_date.asc().nullslast(),
         EntrepriseTache.id.desc(),
     )
     rows = (await db.execute(stmt)).scalars().all()
     return [_to_tache_read(t) for t in rows]
+
+
+@router.get(
+    "/users/with-volet",
+    response_model=List[dict],
+)
+async def list_users_with_volet(
+    db: DBSession, user: CurrentUser
+) -> List[dict]:
+    """Liste les utilisateurs ayant accès au volet `entreprises`,
+    pour alimenter le picker d'assignation côté UI."""
+    _require_volet(user)
+    from app.models.user import User
+
+    rows = (
+        await db.execute(
+            select(User).order_by(User.email.asc())
+        )
+    ).scalars().all()
+    out: List[dict] = []
+    for u in rows:
+        volets = getattr(u, "volets", None) or []
+        if "entreprises" not in volets:
+            continue
+        out.append(
+            {
+                "id": u.id,
+                "email": u.email,
+                "full_name": getattr(u, "full_name", None) or u.email,
+            }
+        )
+    return out
+
+
+@router.get(
+    "/taches/{tache_id}/suggest-assignees",
+    response_model=List[dict],
+)
+async def suggest_tache_assignees(
+    tache_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    top_n: int = 3,
+) -> List[dict]:
+    """Top N utilisateurs proposés pour assignation d'une tâche, en
+    fonction de leur charge actuelle de tâches ouvertes et de leur
+    disponibilité dans les calendriers ICS (7 prochains jours)."""
+    _require_volet(user)
+    from app.models.user import User
+    from app.services.qg_smart_assign import suggest_assignees
+
+    t = await db.get(EntrepriseTache, tache_id)
+    if t is None:
+        raise HTTPException(404, "Tâche introuvable.")
+
+    # Candidats = users avec volet entreprises
+    candidates = []
+    rows = (await db.execute(select(User))).scalars().all()
+    for u in rows:
+        volets = getattr(u, "volets", None) or []
+        if "entreprises" in volets:
+            candidates.append(u)
+
+    suggestions = await suggest_assignees(db, candidates, top_n=top_n)
+    return [s.__dict__ for s in suggestions]
 
 
 @router.post(
@@ -263,6 +345,14 @@ class MondayImportRequest(BaseModel):
             "garder que les boards de tâches."
         ),
     )
+    board_ids: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Sélection explicite de boards à importer (IDs Monday). Quand "
+            "fourni, ignore `workspace_id` et `board_name_filter`. Permet "
+            "la multi-sélection depuis l'UI."
+        ),
+    )
 
 
 @router.post(
@@ -284,8 +374,17 @@ async def import_monday_tasks(
     except Exception as exc:
         raise HTTPException(500, f"Import indisponible : {exc}")
 
-    workspace_ids = [body.workspace_id] if body.workspace_id else None
-    name_filter = (body.board_name_filter or "").strip().lower()
+    explicit_ids = (
+        {str(b) for b in body.board_ids} if body.board_ids else None
+    )
+    # Si une sélection explicite est fournie, on liste tous les boards
+    # accessibles puis on filtre — pas besoin de workspace ni de pattern.
+    workspace_ids = (
+        None if explicit_ids else ([body.workspace_id] if body.workspace_id else None)
+    )
+    name_filter = (
+        "" if explicit_ids else (body.board_name_filter or "").strip().lower()
+    )
 
     result = TacheImportResult(
         boards_processed=0,
@@ -298,7 +397,9 @@ async def import_monday_tasks(
     try:
         async with MondayClient() as mc:
             boards = await mc.list_boards(workspace_ids=workspace_ids)
-            if name_filter:
+            if explicit_ids:
+                boards = [b for b in boards if str(b.get("id")) in explicit_ids]
+            elif name_filter:
                 boards = [
                     b for b in boards
                     if name_filter in (b.get("name") or "").lower()

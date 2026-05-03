@@ -38,7 +38,6 @@ class UserCalendarFeed(Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,
         index=True,
     )
     ics_url: Mapped[str] = mapped_column(String(2048), nullable=False)

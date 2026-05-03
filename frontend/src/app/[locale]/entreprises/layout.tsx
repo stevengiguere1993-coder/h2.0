@@ -109,8 +109,8 @@ export default function EntreprisesLayout({
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#0a0a0b]">
-        <Loader2 className="h-6 w-6 animate-spin text-[#d4ff3a]" />
+      <div className="flex min-h-screen items-center justify-center bg-[var(--qg-bg)]">
+        <Loader2 className="h-6 w-6 animate-spin text-[var(--qg-accent)]" />
       </div>
     );
   }
@@ -147,9 +147,9 @@ export default function EntreprisesLayout({
   return (
     <ThemeProvider initialTheme={initialTheme}>
       <div
-        className="flex min-h-screen text-[#f5f5f7]"
+        className="flex min-h-screen text-[var(--qg-text)]"
         style={{
-          backgroundColor: "#0a0a0b",
+          backgroundColor: "var(--qg-bg)",
           fontFamily:
             "var(--font-geist-sans, ui-sans-serif), system-ui, sans-serif"
         }}
@@ -171,33 +171,33 @@ export default function EntreprisesLayout({
               : "hidden -translate-x-full"
           }`}
           style={{
-            backgroundColor: "#111114",
-            borderRight: "1px solid #25252d"
+            backgroundColor: "var(--qg-sidebar-bg)",
+            borderRight: "1px solid var(--qg-border)"
           }}
         >
           {/* Logo Q + QG */}
           <div
             className="flex items-center justify-between px-5 py-5"
-            style={{ borderBottom: "1px solid #25252d" }}
+            style={{ borderBottom: "1px solid var(--qg-border)" }}
           >
             <Link href="/entreprises" className="flex items-center gap-2">
               <span
-                className="flex h-8 w-8 items-center justify-center rounded-md font-bold text-[#0a0a0b]"
+                className="flex h-8 w-8 items-center justify-center rounded-md font-bold text-[var(--qg-bg)]"
                 style={{
-                  backgroundColor: "#d4ff3a",
+                  backgroundColor: "var(--qg-accent)",
                   fontFamily: "var(--font-fraunces, Georgia, serif)"
                 }}
               >
                 Q
               </span>
-              <span className="text-base font-bold tracking-wide text-[#f5f5f7]">
+              <span className="text-base font-bold tracking-wide text-[var(--qg-text)]">
                 QG
               </span>
             </Link>
             <button
               type="button"
               onClick={() => setSidebarOpen(false)}
-              className="rounded-md p-2 text-[#a0a0a8] hover:bg-[#18181d] hover:text-[#f5f5f7] lg:hidden"
+              className="rounded-md p-2 text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)] lg:hidden"
               aria-label="Fermer"
             >
               <X className="h-5 w-5" />
@@ -233,8 +233,8 @@ export default function EntreprisesLayout({
                       onClick={() => setSidebarOpen(false)}
                       className={`flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition ${
                         pathname.includes(`/entreprises/${e.id}`)
-                          ? "bg-[#18181d] text-[#f5f5f7]"
-                          : "text-[#a0a0a8] hover:bg-[#18181d] hover:text-[#f5f5f7]"
+                          ? "bg-[var(--qg-bg-alt)] text-[var(--qg-text)]"
+                          : "text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
                       }`}
                     >
                       <span
@@ -249,9 +249,9 @@ export default function EntreprisesLayout({
                   <Link
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     href={"/entreprises" as any}
-                    className="flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[12px] text-[#66666e] hover:text-[#a0a0a8]"
+                    className="flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[12px] text-[var(--qg-text-soft)] hover:text-[var(--qg-text-muted)]"
                   >
-                    <span className="h-1.5 w-1.5 rounded-full bg-[#66666e]" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--qg-text-soft)]" />
                     + {entreprises.length - 8} autres
                   </Link>
                 ) : null}
@@ -272,11 +272,11 @@ export default function EntreprisesLayout({
 
           <div
             className="px-3 py-4"
-            style={{ borderTop: "1px solid #25252d" }}
+            style={{ borderTop: "1px solid var(--qg-border)" }}
           >
             {user.email ? (
               <p
-                className="mb-2 truncate px-3 text-[10px] text-[#66666e]"
+                className="mb-2 truncate px-3 text-[10px] text-[var(--qg-text-soft)]"
                 title={user.email}
               >
                 {user.email}
@@ -285,7 +285,7 @@ export default function EntreprisesLayout({
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/connexion" as any}
-              className="mb-1 flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[12px] text-[#a0a0a8] hover:bg-[#18181d] hover:text-[#f5f5f7]"
+              className="mb-1 flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[12px] text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
             >
               <Home className="h-3.5 w-3.5" />
               Accueil portail
@@ -293,7 +293,7 @@ export default function EntreprisesLayout({
             <button
               type="button"
               onClick={signOut}
-              className="flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-[12px] text-[#a0a0a8] hover:bg-[#18181d] hover:text-[#f5f5f7]"
+              className="flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-[12px] text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
             >
               <LogOut className="h-3.5 w-3.5" />
               Se déconnecter
@@ -332,7 +332,7 @@ function SidebarSection({
 }) {
   return (
     <div>
-      <p className="mb-2 px-3 text-[10px] font-bold uppercase tracking-[0.12em] text-[#66666e]">
+      <p className="mb-2 px-3 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--qg-text-soft)]">
         {title}
       </p>
       <ul className="space-y-0.5">{children}</ul>
@@ -357,20 +357,20 @@ function SidebarLink({
         onClick={onClick}
         className={`flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] font-medium transition ${
           active
-            ? "bg-[#18181d] text-[#f5f5f7]"
-            : "text-[#a0a0a8] hover:bg-[#18181d] hover:text-[#f5f5f7]"
+            ? "bg-[var(--qg-bg-alt)] text-[var(--qg-text)]"
+            : "text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
         }`}
       >
         <item.icon
           className={`h-4 w-4 flex-shrink-0 ${
-            active ? "text-[#d4ff3a]" : ""
+            active ? "text-[var(--qg-accent)]" : ""
           }`}
         />
         <span className="flex-1">{item.label}</span>
         {item.badge ? (
           <span
-            className="rounded-full px-1.5 py-0.5 text-[9px] font-bold text-[#0a0a0b]"
-            style={{ backgroundColor: "#d4ff3a" }}
+            className="rounded-full px-1.5 py-0.5 text-[9px] font-bold text-[var(--qg-bg)]"
+            style={{ backgroundColor: "var(--qg-accent)" }}
           >
             {item.badge}
           </span>
@@ -406,29 +406,29 @@ export function QGTopbar({
     <header
       className="sticky top-0 z-30 flex min-h-[80px] items-center gap-3 px-5 py-4 lg:px-8"
       style={{
-        backgroundColor: "rgba(10,10,11,0.95)",
+        backgroundColor: "var(--qg-bg-95)",
         backdropFilter: "blur(8px)",
-        borderBottom: "1px solid #25252d"
+        borderBottom: "1px solid var(--qg-border)"
       }}
     >
       <button
         type="button"
         onClick={onOpenSidebar}
-        className="rounded-md p-2 text-[#a0a0a8] hover:bg-[#18181d] hover:text-[#f5f5f7] lg:hidden"
+        className="rounded-md p-2 text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)] lg:hidden"
         aria-label="Ouvrir la barre latérale"
       >
         <Menu className="h-5 w-5" />
       </button>
       <div className="min-w-0 flex-1">
         <h1
-          className="text-[22px] font-bold leading-tight text-[#f5f5f7] sm:text-[26px]"
+          className="text-[22px] font-bold leading-tight text-[var(--qg-text)] sm:text-[26px]"
           style={{ fontFamily: "var(--font-fraunces, Georgia, serif)" }}
         >
           {greeting}
         </h1>
         {subtitle ? (
           <p
-            className="mt-1 text-[10px] uppercase tracking-[0.18em] text-[#66666e]"
+            className="mt-1 text-[10px] uppercase tracking-[0.18em] text-[var(--qg-text-soft)]"
             style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}
           >
             {subtitle}
@@ -455,15 +455,15 @@ export function EntreprisesTopbar({
     <header
       className="sticky top-0 z-30 flex h-16 items-center gap-3 px-4 lg:px-6"
       style={{
-        backgroundColor: "rgba(10,10,11,0.95)",
+        backgroundColor: "var(--qg-bg-95)",
         backdropFilter: "blur(8px)",
-        borderBottom: "1px solid #25252d"
+        borderBottom: "1px solid var(--qg-border)"
       }}
     >
       <button
         type="button"
         onClick={onOpenSidebar}
-        className="rounded-md p-2 text-[#a0a0a8] hover:bg-[#18181d] hover:text-[#f5f5f7] lg:hidden"
+        className="rounded-md p-2 text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)] lg:hidden"
         aria-label="Ouvrir la barre latérale"
       >
         <Menu className="h-5 w-5" />
@@ -473,15 +473,15 @@ export function EntreprisesTopbar({
           const isLast = i === breadcrumbs.length - 1;
           const cls = `truncate text-sm font-medium ${
             isLast
-              ? "text-[#f5f5f7]"
+              ? "text-[var(--qg-text)]"
               : c.href
-              ? "text-[#a0a0a8] hover:text-[#d4ff3a]"
-              : "text-[#66666e]"
+              ? "text-[var(--qg-text-muted)] hover:text-[var(--qg-accent)]"
+              : "text-[var(--qg-text-soft)]"
           }`;
           return (
             <span key={i} className="flex items-center gap-2">
               {i > 0 ? (
-                <ChevronRight className="h-3.5 w-3.5 text-[#35353f]" />
+                <ChevronRight className="h-3.5 w-3.5 text-[var(--qg-text-faint)]" />
               ) : null}
               {!isLast && c.href ? (
                 <Link

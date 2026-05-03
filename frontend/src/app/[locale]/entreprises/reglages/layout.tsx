@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { Plug, Building2, Users } from "lucide-react";
+import { Plug, Building2, Calendar, Users } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { EntreprisesTopbar } from "../layout";
@@ -15,6 +15,7 @@ type Tab = {
 const TABS: Tab[] = [
   { href: "/entreprises/reglages/integration", label: "Intégrations", icon: Plug },
   { href: "/entreprises/reglages/entreprises", label: "Entreprises", icon: Building2 },
+  { href: "/entreprises/reglages/calendriers", label: "Calendriers", icon: Calendar },
   { href: "/entreprises/reglages/equipe", label: "Équipe", icon: Users }
 ];
 
@@ -41,8 +42,8 @@ export default function ReglagesLayout({
       <nav
         className="flex items-center gap-1 overflow-x-auto px-4 lg:px-6"
         style={{
-          backgroundColor: "#0a0a0b",
-          borderBottom: "1px solid #25252d"
+          backgroundColor: "var(--qg-bg)",
+          borderBottom: "1px solid var(--qg-border)"
         }}
       >
         {TABS.map((t) => {
@@ -55,9 +56,9 @@ export default function ReglagesLayout({
               href={t.href as any}
               className="relative inline-flex items-center gap-2 px-4 py-3 text-sm font-medium transition"
               style={{
-                color: active ? "#d4ff3a" : "rgba(245,245,247,0.6)",
+                color: active ? "var(--qg-accent)" : "rgba(245,245,247,0.6)",
                 borderBottom: active
-                  ? "2px solid #d4ff3a"
+                  ? "2px solid var(--qg-accent)"
                   : "2px solid transparent",
                 marginBottom: "-1px"
               }}

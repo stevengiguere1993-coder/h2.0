@@ -133,6 +133,96 @@ async def sync_now(db: DBSession, user: CurrentUser) -> FeedRead:
     return FeedRead.model_validate(feed)
 
 
+# ---------- Multi-feeds (perso + travail + équipe…) ----------
+
+
+@router.get("/feeds", response_model=List[FeedRead])
+async def list_my_feeds(
+    db: DBSession, user: CurrentUser
+) -> List[FeedRead]:
+    """Tous les flux ICS de l'utilisateur courant."""
+    rows = (
+        await db.execute(
+            select(UserCalendarFeed)
+            .where(UserCalendarFeed.user_id == user.id)
+            .order_by(UserCalendarFeed.created_at.asc())
+        )
+    ).scalars().all()
+    return [FeedRead.model_validate(r) for r in rows]
+
+
+@router.post(
+    "/feeds",
+    response_model=FeedRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_feed(
+    body: FeedUpdate, db: DBSession, user: CurrentUser
+) -> FeedRead:
+    """Ajoute un nouveau flux ICS pour l'utilisateur (sans écraser les autres)."""
+    if not (
+        body.ics_url.startswith("http://") or body.ics_url.startswith("https://")
+    ):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "URL invalide — doit commencer par http(s)://",
+        )
+    obj = UserCalendarFeed(
+        user_id=user.id,
+        ics_url=body.ics_url.strip(),
+        label=(body.label.strip() if body.label else None),
+    )
+    db.add(obj)
+    await db.flush()
+    await db.refresh(obj)
+    return FeedRead.model_validate(obj)
+
+
+@router.delete(
+    "/feeds/{feed_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_feed_by_id(
+    feed_id: int, db: DBSession, user: CurrentUser
+) -> None:
+    obj = await db.get(UserCalendarFeed, feed_id)
+    if obj is None or obj.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Flux introuvable.")
+    await db.delete(obj)
+    await db.flush()
+
+
+@router.post("/feeds/{feed_id}/sync", response_model=FeedRead)
+async def sync_feed_by_id(
+    feed_id: int, db: DBSession, user: CurrentUser
+) -> FeedRead:
+    obj = await db.get(UserCalendarFeed, feed_id)
+    if obj is None or obj.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Flux introuvable.")
+    await sync_user_feed(db, obj)
+    await db.refresh(obj)
+    return FeedRead.model_validate(obj)
+
+
+@router.post("/feeds/sync-all", response_model=List[FeedRead])
+async def sync_all_my_feeds(
+    db: DBSession, user: CurrentUser
+) -> List[FeedRead]:
+    """Force la resynchronisation immédiate de tous mes flux."""
+    feeds = (
+        await db.execute(
+            select(UserCalendarFeed).where(
+                UserCalendarFeed.user_id == user.id
+            )
+        )
+    ).scalars().all()
+    for f in feeds:
+        try:
+            await sync_user_feed(db, f)
+        except Exception:
+            log.exception("sync feed %s failed", f.id)
+    return [FeedRead.model_validate(f) for f in feeds]
+
+
 # ---------- Busy blocks (opaque) ----------
 
 class BusyBlock(BaseModel):

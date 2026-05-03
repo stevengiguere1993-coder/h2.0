@@ -175,3 +175,42 @@ html[data-portal-theme="light"] .divide-brand-700 > :not([hidden]) ~ :not([hidde
 html[data-portal-theme="light"] .placeholder\:text-white\/40::placeholder { color: rgb(15 23 42 / 0.45) !important; }
 html[data-portal-theme="light"] .placeholder\:text-brand-300::placeholder { color: #94a3b8 !important; }
 
+/* =====================================================================
+ * Palette QG (volet entreprises). Le QG utilise des inline styles pour
+ * matcher la maquette Bloomberg-terminal, donc les overrides via classes
+ * Tailwind ci-dessus ne suffisent pas. On expose les couleurs via des
+ * variables CSS qui basculent avec data-portal-theme — les inline
+ * styles peuvent ainsi pointer sur var(--qg-*) et changer de palette
+ * sans modifier le JSX.
+ * ===================================================================== */
+:root {
+  --qg-bg: #0a0a0b;
+  --qg-bg-alt: #18181d;
+  --qg-sidebar-bg: #111114;
+  --qg-card-bg: #15151a;
+  --qg-border: #25252d;
+  --qg-border-soft: #1e1e25;
+  --qg-text: #f5f5f7;
+  --qg-text-muted: #a0a0a8;
+  --qg-text-soft: #66666e;
+  --qg-text-faint: #35353f;
+  --qg-accent: #d4ff3a;
+  --qg-accent-ink: #0a0a0b;
+  --qg-bg-95: rgba(10, 10, 11, 0.95);
+}
+html[data-portal-theme="light"] {
+  --qg-bg: #ffffff;
+  --qg-bg-alt: #f1f5f9;
+  --qg-sidebar-bg: #f8fafc;
+  --qg-card-bg: #ffffff;
+  --qg-border: #e2e8f0;
+  --qg-border-soft: #eef2f6;
+  --qg-text: #0f172a;
+  --qg-text-muted: #475569;
+  --qg-text-soft: #64748b;
+  --qg-text-faint: #cbd5e1;
+  --qg-accent: #65a30d;
+  --qg-accent-ink: #ffffff;
+  --qg-bg-95: rgba(255, 255, 255, 0.95);
+}
+

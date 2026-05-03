@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
-import { authedFetch } from "@/lib/auth";
+import { authedFetch, getToken } from "@/lib/auth";
 import { ImmobilierTopbar } from "./layout";
 
 type ImmeubleListItem = {
@@ -23,6 +23,7 @@ type ImmeubleListItem = {
   type: string;
   nb_logements?: number | null;
   cover_photo_url?: string | null;
+  has_cover_photo?: boolean;
   is_active: boolean;
   nb_logements_actifs: number;
   nb_logements_occupes: number;
@@ -236,10 +237,14 @@ function ImmeubleRow({ imm }: { imm: ImmeubleListItem }) {
         className="flex items-center gap-3 rounded-xl border border-brand-800 bg-brand-900 p-3 transition hover:border-sky-400/40"
       >
         <div className="h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg bg-brand-950">
-          {imm.cover_photo_url ? (
+          {imm.has_cover_photo || imm.cover_photo_url ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={imm.cover_photo_url}
+              src={
+                imm.has_cover_photo
+                  ? `/api/v1/immobilier/immeubles/${imm.id}/cover-photo?t=${getToken() || ""}`
+                  : (imm.cover_photo_url as string)
+              }
               alt={imm.name}
               className="h-full w-full object-cover"
             />

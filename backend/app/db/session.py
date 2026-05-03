@@ -279,6 +279,9 @@ async def init_db() -> None:
             ),
             # Région pour distinguer MTL / Laval / Rive-Sud / Rive-Nord
             ("mtl_property_units", "region", "VARCHAR(16)"),
+            # Immeuble cover photo en blob (upload direct, pas seulement URL).
+            ("imm_immeubles", "cover_photo_blob", "BYTEA"),
+            ("imm_immeubles", "cover_photo_content_type", "VARCHAR(64)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
@@ -341,6 +344,9 @@ async def init_db() -> None:
             # Le modèle Achat ne sépare plus PO et achat ; le champ
             # reference n'est plus obligatoire.
             ("achats", "reference"),
+            # Le nom d'immeuble est désormais facultatif — fallback sur
+            # l'adresse si non fourni.
+            ("imm_immeubles", "name"),
         ):
             try:
                 await conn.execute(
@@ -348,6 +354,23 @@ async def init_db() -> None:
                 )
             except Exception:
                 # Column may not exist yet on a brand-new DB — harmless.
+                pass
+
+        # Drop l'unique constraint sur user_calendar_feeds.user_id pour
+        # autoriser plusieurs flux ICS par user (perso + travail + équipe).
+        # Idempotent — DROP CONSTRAINT IF EXISTS si le nom est trouvé.
+        for cstr in (
+            "user_calendar_feeds_user_id_key",
+            "uq_user_calendar_feeds_user_id",
+        ):
+            try:
+                await conn.execute(
+                    text(
+                        f"ALTER TABLE user_calendar_feeds "
+                        f"DROP CONSTRAINT IF EXISTS {cstr}"
+                    )
+                )
+            except Exception:
                 pass
 
         # Refonte PO/Achat (Avril 2026) : sépare proprement les bons

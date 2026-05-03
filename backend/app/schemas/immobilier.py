@@ -12,7 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ImmeubleBase(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255)
+    # Nom optionnel : fallback automatique sur l'adresse si non fourni.
+    name: Optional[str] = Field(default=None, max_length=255)
     address: str = Field(..., min_length=1, max_length=500)
     city: Optional[str] = Field(default=None, max_length=128)
     postal_code: Optional[str] = Field(default=None, max_length=16)
@@ -54,6 +55,7 @@ class ImmeubleUpdate(BaseModel):
 class ImmeubleRead(ImmeubleBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    has_cover_photo: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -68,6 +70,7 @@ class ImmeubleListItem(BaseModel):
     type: str
     nb_logements: Optional[int] = None
     cover_photo_url: Optional[str] = None
+    has_cover_photo: bool = False
     is_active: bool
     # KPIs agrégés
     nb_logements_actifs: int = 0

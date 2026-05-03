@@ -26,6 +26,13 @@ type Tache = {
   effort: number | null;
   due_date: string | null;
   score: number | null;
+  assignee_user_id: number | null;
+};
+
+type TeamMember = {
+  id: number;
+  email: string;
+  full_name: string;
 };
 
 type Entreprise = {
@@ -43,8 +50,8 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  backlog: "#66666e",
-  todo: "#d4ff3a",
+  backlog: "var(--qg-text-soft)",
+  todo: "var(--qg-accent)",
   in_progress: "#60a5fa",
   waiting: "#ffaa33",
   done: "#4ade80"
@@ -54,17 +61,17 @@ function scoreToPriority(score: number | null): {
   label: string;
   color: string;
 } {
-  if (score == null) return { label: "P4", color: "#66666e" };
+  if (score == null) return { label: "P4", color: "var(--qg-text-soft)" };
   if (score >= 30) return { label: "P1", color: "#ff5566" };
   if (score >= 15) return { label: "P2", color: "#ffaa33" };
   if (score >= 5) return { label: "P3", color: "#60a5fa" };
-  return { label: "P4", color: "#66666e" };
+  return { label: "P4", color: "var(--qg-text-soft)" };
 }
 
 function dueLabel(s: string | null): { text: string; tone: string } {
-  if (!s) return { text: "—", tone: "#66666e" };
+  if (!s) return { text: "—", tone: "var(--qg-text-soft)" };
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
-  if (!m) return { text: s, tone: "#a0a0a8" };
+  if (!m) return { text: s, tone: "var(--qg-text-muted)" };
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
@@ -76,7 +83,7 @@ function dueLabel(s: string | null): { text: string; tone: string } {
   if (days < 0) return { text: `${fmt} (${-days}j)`, tone: "#ff5566" };
   if (days === 0) return { text: "Aujourd'hui", tone: "#ffaa33" };
   if (days <= 7) return { text: fmt, tone: "#ffaa33" };
-  return { text: fmt, tone: "#a0a0a8" };
+  return { text: fmt, tone: "var(--qg-text-muted)" };
 }
 
 export default function MesTachesPage() {
@@ -86,10 +93,13 @@ export default function MesTachesPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Filtres
+  const [scope, setScope] = useState<"all" | "mine">("all");
   const [filterEntreprise, setFilterEntreprise] = useState<string>("");
   const [filterStatus, setFilterStatus] = useState<string>("open");
   const [filterDept, setFilterDept] = useState<string>("");
   const [filterPriority, setFilterPriority] = useState<string>("");
+  const [filterAssignee, setFilterAssignee] = useState<string>("");
+  const [team, setTeam] = useState<TeamMember[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,14 +107,21 @@ export default function MesTachesPage() {
       setLoading(true);
       setError(null);
       try {
-        const [tRes, eRes] = await Promise.all([
-          authedFetch("/api/v1/entreprises/taches"),
-          authedFetch("/api/v1/entreprises")
+        const tachesUrl = scope === "mine"
+          ? "/api/v1/entreprises/taches?mine=true"
+          : "/api/v1/entreprises/taches";
+        const [tRes, eRes, uRes] = await Promise.all([
+          authedFetch(tachesUrl),
+          authedFetch("/api/v1/entreprises"),
+          authedFetch("/api/v1/entreprises/users/with-volet")
         ]);
         if (cancelled) return;
         if (!tRes.ok) throw new Error(`HTTP ${tRes.status}`);
         if (eRes.ok) {
           setEntreprises((await eRes.json()) as Entreprise[]);
+        }
+        if (uRes.ok) {
+          setTeam((await uRes.json()) as TeamMember[]);
         }
         setTaches((await tRes.json()) as Tache[]);
       } catch (err) {
@@ -116,7 +133,7 @@ export default function MesTachesPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [scope]);
 
   const entById = useMemo(() => {
     const m = new Map<number, Entreprise>();
@@ -143,6 +160,13 @@ export default function MesTachesPage() {
           const p = scoreToPriority(t.score).label;
           if (p !== filterPriority) return false;
         }
+        if (filterAssignee) {
+          if (filterAssignee === "unassigned") {
+            if (t.assignee_user_id != null) return false;
+          } else if (String(t.assignee_user_id ?? "") !== filterAssignee) {
+            return false;
+          }
+        }
         return true;
       })
       .sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
@@ -151,7 +175,8 @@ export default function MesTachesPage() {
     filterEntreprise,
     filterStatus,
     filterDept,
-    filterPriority
+    filterPriority,
+    filterAssignee
   ]);
 
   const subtitle = `${filtered.length} TÂCHE${filtered.length > 1 ? "S" : ""} · ${
@@ -175,7 +200,7 @@ export default function MesTachesPage() {
             <span
               className="italic"
               style={{
-                color: "#d4ff3a",
+                color: "var(--qg-accent)",
                 fontFamily: "var(--font-fraunces, Georgia, serif)"
               }}
             >
@@ -187,9 +212,23 @@ export default function MesTachesPage() {
       />
 
       <div className="px-5 py-6 lg:px-8">
+        {/* Toggle Mes / Toutes */}
+        <div className="mb-3 inline-flex rounded-lg border border-[var(--qg-border)] bg-[var(--qg-card-bg)] p-0.5">
+          <ScopeButton
+            label="Toutes les tâches"
+            active={scope === "all"}
+            onClick={() => setScope("all")}
+          />
+          <ScopeButton
+            label="Mes tâches"
+            active={scope === "mine"}
+            onClick={() => setScope("mine")}
+          />
+        </div>
+
         {/* Filtres */}
         <div className="mb-5 flex flex-wrap items-center gap-2">
-          <Filter className="h-4 w-4 text-[#66666e]" />
+          <Filter className="h-4 w-4 text-[var(--qg-text-soft)]" />
           <FilterSelect
             value={filterEntreprise}
             onChange={setFilterEntreprise}
@@ -201,6 +240,20 @@ export default function MesTachesPage() {
               }))
             ]}
           />
+          {scope === "all" ? (
+            <FilterSelect
+              value={filterAssignee}
+              onChange={setFilterAssignee}
+              options={[
+                { value: "", label: "Tous assignés" },
+                { value: "unassigned", label: "Non assignées" },
+                ...team.map((u) => ({
+                  value: String(u.id),
+                  label: u.full_name
+                }))
+              ]}
+            />
+          ) : null}
           <FilterSelect
             value={filterStatus}
             onChange={setFilterStatus}
@@ -240,8 +293,8 @@ export default function MesTachesPage() {
         <div
           className="overflow-hidden rounded-xl"
           style={{
-            backgroundColor: "#15151a",
-            border: "1px solid #25252d"
+            backgroundColor: "var(--qg-card-bg)",
+            border: "1px solid var(--qg-border)"
           }}
         >
           {error ? (
@@ -252,12 +305,12 @@ export default function MesTachesPage() {
 
           {loading ? (
             <div className="flex min-h-[300px] items-center justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-[#d4ff3a]" />
+              <Loader2 className="h-5 w-5 animate-spin text-[var(--qg-accent)]" />
             </div>
           ) : filtered.length === 0 ? (
             <div className="px-6 py-12 text-center">
-              <Target className="mx-auto h-8 w-8 text-[#35353f]" />
-              <p className="mt-3 text-sm text-[#a0a0a8]">
+              <Target className="mx-auto h-8 w-8 text-[var(--qg-text-faint)]" />
+              <p className="mt-3 text-sm text-[var(--qg-text-muted)]">
                 Aucune tâche pour ces filtres.
               </p>
             </div>
@@ -265,8 +318,8 @@ export default function MesTachesPage() {
             <table className="w-full text-[13px]">
               <thead>
                 <tr
-                  className="text-[10px] uppercase tracking-wider text-[#66666e]"
-                  style={{ borderBottom: "1px solid #25252d" }}
+                  className="text-[10px] uppercase tracking-wider text-[var(--qg-text-soft)]"
+                  style={{ borderBottom: "1px solid var(--qg-border)" }}
                 >
                   <th className="px-3 py-2.5 text-left">Prio</th>
                   <th className="px-3 py-2.5 text-right">Score</th>
@@ -274,6 +327,7 @@ export default function MesTachesPage() {
                   <th className="px-3 py-2.5 text-left">Entreprise</th>
                   <th className="px-3 py-2.5 text-left">Statut</th>
                   <th className="px-3 py-2.5 text-left">Département</th>
+                  <th className="px-3 py-2.5 text-left">Assigné</th>
                   <th className="px-3 py-2.5 text-right">Échéance</th>
                 </tr>
               </thead>
@@ -283,6 +337,7 @@ export default function MesTachesPage() {
                     key={t.id}
                     t={t}
                     ent={entById.get(t.entreprise_id)}
+                    team={team}
                   />
                 ))}
               </tbody>
@@ -291,6 +346,30 @@ export default function MesTachesPage() {
         </div>
       </div>
     </>
+  );
+}
+
+function ScopeButton({
+  label,
+  active,
+  onClick
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-md px-3 py-1.5 text-xs font-semibold transition"
+      style={{
+        backgroundColor: active ? "var(--qg-accent)" : "transparent",
+        color: active ? "var(--qg-bg)" : "rgba(245,245,247,0.6)"
+      }}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -309,13 +388,13 @@ function FilterSelect({
       onChange={(e) => onChange(e.target.value)}
       className="rounded-md px-3 py-1.5 text-[12px] focus:outline-none focus:ring-1"
       style={{
-        backgroundColor: "#15151a",
-        color: "#f5f5f7",
-        border: "1px solid #25252d"
+        backgroundColor: "var(--qg-card-bg)",
+        color: "var(--qg-text)",
+        border: "1px solid var(--qg-border)"
       }}
     >
       {options.map((o) => (
-        <option key={o.value} value={o.value} className="bg-[#15151a]">
+        <option key={o.value} value={o.value} className="bg-[var(--qg-card-bg)]">
           {o.label}
         </option>
       ))}
@@ -323,20 +402,58 @@ function FilterSelect({
   );
 }
 
+function initialsFor(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase() || "")
+    .join("");
+}
+
+function AssigneeChip({
+  user
+}: {
+  user: TeamMember | null;
+}) {
+  if (!user) {
+    return (
+      <span className="inline-flex items-center text-[11px] text-[var(--qg-text-soft)]">
+        Non assigné
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span
+        className="flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-bold"
+        style={{ backgroundColor: "var(--qg-accent)", color: "var(--qg-bg)" }}
+      >
+        {initialsFor(user.full_name)}
+      </span>
+      <span className="text-[11px] text-[var(--qg-text-muted)]">
+        {user.full_name.split(" ")[0]}
+      </span>
+    </span>
+  );
+}
+
 function TacheRow({
   t,
-  ent
+  ent,
+  team
 }: {
   t: Tache;
   ent: Entreprise | undefined;
+  team: TeamMember[];
 }) {
   const prio = scoreToPriority(t.score);
   const due = dueLabel(t.due_date);
-  const statusColor = STATUS_COLORS[t.status] || "#a0a0a8";
+  const statusColor = STATUS_COLORS[t.status] || "var(--qg-text-muted)";
   return (
     <tr
-      className="hover:bg-[#18181d]"
-      style={{ borderBottom: "1px solid #1e1e25" }}
+      className="hover:bg-[var(--qg-bg-alt)]"
+      style={{ borderBottom: "1px solid var(--qg-border-soft)" }}
     >
       <td className="px-3 py-3">
         <span
@@ -354,7 +471,7 @@ function TacheRow({
         className="px-3 py-3 text-right text-[12px] font-bold tabular-nums"
         style={{
           fontFamily: "var(--font-mono, ui-monospace), monospace",
-          color: t.score == null ? "#66666e" : "#d4ff3a"
+          color: t.score == null ? "var(--qg-text-soft)" : "var(--qg-accent)"
         }}
       >
         {t.score != null ? t.score.toFixed(1) : "—"}
@@ -363,12 +480,12 @@ function TacheRow({
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={`/entreprises/${t.entreprise_id}` as any}
-          className="block truncate font-medium text-[#f5f5f7] hover:text-[#d4ff3a]"
+          className="block truncate font-medium text-[var(--qg-text)] hover:text-[var(--qg-accent)]"
         >
           {t.title}
         </Link>
         {t.description ? (
-          <p className="mt-0.5 line-clamp-1 text-[11px] text-[#66666e]">
+          <p className="mt-0.5 line-clamp-1 text-[11px] text-[var(--qg-text-soft)]">
             {t.description}
           </p>
         ) : null}
@@ -380,10 +497,10 @@ function TacheRow({
               className="h-1.5 w-1.5 rounded-full"
               style={{ backgroundColor: ent.color_accent }}
             />
-            <span className="text-[#a0a0a8]">{ent.name}</span>
+            <span className="text-[var(--qg-text-muted)]">{ent.name}</span>
           </span>
         ) : (
-          <span className="text-[#66666e]">#{t.entreprise_id}</span>
+          <span className="text-[var(--qg-text-soft)]">#{t.entreprise_id}</span>
         )}
       </td>
       <td className="px-3 py-3">
@@ -401,8 +518,13 @@ function TacheRow({
           {STATUS_LABELS[t.status] || t.status}
         </span>
       </td>
-      <td className="px-3 py-3 text-[11px] text-[#a0a0a8]">
-        {t.departement || <span className="text-[#66666e]">—</span>}
+      <td className="px-3 py-3 text-[11px] text-[var(--qg-text-muted)]">
+        {t.departement || <span className="text-[var(--qg-text-soft)]">—</span>}
+      </td>
+      <td className="px-3 py-3">
+        <AssigneeChip
+          user={team.find((u) => u.id === t.assignee_user_id) || null}
+        />
       </td>
       <td className="px-3 py-3 text-right">
         {t.due_date ? (
@@ -421,7 +543,7 @@ function TacheRow({
             {due.text}
           </span>
         ) : (
-          <span className="text-[11px] text-[#66666e]">—</span>
+          <span className="text-[11px] text-[var(--qg-text-soft)]">—</span>
         )}
       </td>
     </tr>
