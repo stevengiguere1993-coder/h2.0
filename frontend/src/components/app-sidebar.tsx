@@ -150,7 +150,7 @@ export function AppSidebar({
       >
         <div className="flex items-center justify-between border-b border-brand-800 px-4 py-4">
           <Link href="/app" className="flex items-center gap-2">
-            <HorizonLogo className="h-9 w-auto object-contain" />
+            <HorizonLogo className="h-28 w-auto object-contain" />
           </Link>
           <button
             type="button"
