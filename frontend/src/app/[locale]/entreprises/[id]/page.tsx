@@ -296,6 +296,12 @@ export default function EntrepriseDetailPage() {
         {/* Immobilier — portefeuille détenu par cette entreprise */}
         <EntrepriseImmobilierSection entrepriseId={ent.id} />
 
+        {/* Partenaires + parts de détention */}
+        <PartnersSection entrepriseId={ent.id} />
+
+        {/* Liens documentation (Drive, SharePoint…) */}
+        <LinksSection entrepriseId={ent.id} />
+
         {error ? (
           <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {error}
@@ -1369,6 +1375,565 @@ function SuggestAssigneeButton({
           )}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// ─── Section Partenaires ───────────────────────────────────────────────
+
+type Partner = {
+  id: number;
+  entreprise_id: number;
+  user_id: number | null;
+  partner_name: string | null;
+  partner_email: string | null;
+  partner_notes: string | null;
+  role: string;
+  ownership_pct: number | null;
+  display_name: string;
+  display_email: string | null;
+};
+
+const PARTNER_ROLES = [
+  { value: "associe", label: "Associé" },
+  { value: "administrateur", label: "Administrateur" },
+  { value: "gerant", label: "Gérant" },
+  { value: "investisseur", label: "Investisseur" },
+  { value: "preteur", label: "Prêteur" },
+  { value: "autre", label: "Autre" }
+];
+
+function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
+  const [list, setList] = useState<Partner[] | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  async function reload() {
+    const res = await authedFetch(
+      `/api/v1/entreprises/${entrepriseId}/partners`
+    );
+    if (res.ok) setList((await res.json()) as Partner[]);
+  }
+  useEffect(() => {
+    void reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entrepriseId]);
+
+  async function remove(p: Partner) {
+    if (!confirm(`Retirer « ${p.display_name} » de l'entreprise ?`)) return;
+    await authedFetch(`/api/v1/entreprises/partners/${p.id}`, {
+      method: "DELETE"
+    });
+    void reload();
+  }
+
+  const totalPct = (list || []).reduce(
+    (a, p) => a + (Number(p.ownership_pct) || 0),
+    0
+  );
+
+  return (
+    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-violet-300">
+            Partenaires & parts
+          </h2>
+          {list && list.length > 0 ? (
+            <p className="mt-0.5 text-[11px] text-white/50">
+              Total parts détenues : {totalPct.toFixed(2)}%
+              {totalPct < 100 && totalPct > 0
+                ? ` · ${(100 - totalPct).toFixed(2)}% non attribués`
+                : totalPct > 100
+                ? " ⚠️ dépasse 100%"
+                : ""}
+            </p>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setEditingId(null);
+            setShowAdd(true);
+          }}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-200 hover:bg-violet-500/20"
+        >
+          <Plus className="h-3.5 w-3.5" /> Ajouter un partenaire
+        </button>
+      </div>
+
+      {list === null ? (
+        <p className="text-xs text-white/50">
+          <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Chargement…
+        </p>
+      ) : list.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-brand-800 bg-brand-950 p-3 text-xs text-white/50">
+          Aucun partenaire enregistré.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {list.map((p) => (
+            <li
+              key={p.id}
+              className="flex flex-wrap items-center gap-3 rounded-xl border border-brand-800 bg-brand-950 p-3"
+            >
+              <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-violet-500/15 text-[11px] font-bold text-violet-300">
+                {p.display_name
+                  .split(/\s+/)
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .map((s) => s[0]?.toUpperCase() || "")
+                  .join("")}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-bold text-white">
+                    {p.display_name}
+                  </span>
+                  <span className="rounded-full border border-white/15 bg-brand-900 px-2 py-0.5 text-[10px] font-semibold text-white/70">
+                    {PARTNER_ROLES.find((r) => r.value === p.role)?.label ||
+                      p.role}
+                  </span>
+                </div>
+                <p className="text-[11px] text-white/50">
+                  {p.display_email || "—"}
+                  {p.user_id ? (
+                    <span className="ml-2 text-emerald-300">· compte portail</span>
+                  ) : null}
+                </p>
+                {p.partner_notes ? (
+                  <p className="mt-1 text-[11px] text-white/60">{p.partner_notes}</p>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-sm font-bold text-violet-300">
+                  {p.ownership_pct != null
+                    ? `${Number(p.ownership_pct).toFixed(2)}%`
+                    : "—"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingId(p.id);
+                    setShowAdd(true);
+                  }}
+                  className="rounded-lg border border-white/15 bg-brand-900 p-1.5 text-white/60 hover:text-violet-200"
+                  title="Modifier"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => remove(p)}
+                  className="rounded-lg border border-white/15 bg-brand-900 p-1.5 text-white/40 hover:border-rose-400/50 hover:text-rose-300"
+                  title="Retirer"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {showAdd ? (
+        <PartnerModal
+          entrepriseId={entrepriseId}
+          existing={
+            editingId != null ? list?.find((p) => p.id === editingId) : null
+          }
+          onClose={() => {
+            setShowAdd(false);
+            setEditingId(null);
+          }}
+          onSaved={() => {
+            setShowAdd(false);
+            setEditingId(null);
+            void reload();
+          }}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function PartnerModal({
+  entrepriseId,
+  existing,
+  onClose,
+  onSaved
+}: {
+  entrepriseId: number;
+  existing?: Partner | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [partnerName, setPartnerName] = useState(existing?.partner_name || "");
+  const [partnerEmail, setPartnerEmail] = useState(
+    existing?.partner_email || ""
+  );
+  const [role, setRole] = useState(existing?.role || "associe");
+  const [pct, setPct] = useState(
+    existing?.ownership_pct != null ? String(existing.ownership_pct) : ""
+  );
+  const [notes, setNotes] = useState(existing?.partner_notes || "");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setErr(null);
+    try {
+      const body: Record<string, unknown> = {
+        entreprise_id: entrepriseId,
+        role,
+        partner_name: partnerName.trim() || null,
+        partner_email: partnerEmail.trim() || null,
+        partner_notes: notes.trim() || null,
+        ownership_pct: pct.trim() ? Number(pct) : null
+      };
+      const url = existing
+        ? `/api/v1/entreprises/partners/${existing.id}`
+        : "/api/v1/entreprises/partners";
+      const res = await authedFetch(url, {
+        method: existing ? "PATCH" : "POST",
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      onSaved();
+    } catch (e2) {
+      setErr((e2 as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+      <div className="my-8 w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
+        <div className="border-b border-brand-800 px-5 py-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-violet-300">
+            {existing ? "Modifier le partenaire" : "Nouveau partenaire"}
+          </h2>
+        </div>
+        <form onSubmit={submit} className="grid gap-3 p-5">
+          <div>
+            <label className="label">Nom complet</label>
+            <input
+              required={!existing}
+              value={partnerName}
+              onChange={(e) => setPartnerName(e.target.value)}
+              className="input"
+              placeholder="ex. Steven Giguère"
+            />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Email (optionnel)</label>
+              <input
+                type="email"
+                value={partnerEmail}
+                onChange={(e) => setPartnerEmail(e.target.value)}
+                className="input"
+              />
+            </div>
+            <div>
+              <label className="label">Rôle</label>
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+                className="input"
+              >
+                {PARTNER_ROLES.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="label">Parts détenues (%)</label>
+            <input
+              type="number"
+              step="0.01"
+              min={0}
+              max={100}
+              value={pct}
+              onChange={(e) => setPct(e.target.value)}
+              className="input font-mono"
+              placeholder="ex. 50.00"
+            />
+          </div>
+          <div>
+            <label className="label">Notes</label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={2}
+              className="input"
+              placeholder="Conditions particulières, classes d'actions, ententes…"
+            />
+          </div>
+
+          {err ? (
+            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              {err}
+            </p>
+          ) : null}
+
+          <div className="flex items-center justify-end gap-2 border-t border-brand-800 pt-3">
+            <button type="button" onClick={onClose} className="btn-secondary text-sm">
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="btn-accent inline-flex items-center text-sm disabled:opacity-60"
+            >
+              {saving ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : existing ? (
+                "Enregistrer"
+              ) : (
+                "Ajouter"
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ─── Section Liens documentation ───────────────────────────────────────
+
+type EntrepriseLink = {
+  id: number;
+  entreprise_id: number;
+  label: string;
+  url: string;
+  kind: string;
+  notes: string | null;
+  created_at: string;
+};
+
+const LINK_KINDS = [
+  { value: "drive", label: "Google Drive", icon: "🗂️" },
+  { value: "sharepoint", label: "SharePoint / OneDrive", icon: "🔷" },
+  { value: "dropbox", label: "Dropbox", icon: "📦" },
+  { value: "onenote", label: "OneNote", icon: "📓" },
+  { value: "notion", label: "Notion", icon: "📑" },
+  { value: "website", label: "Site web", icon: "🌐" },
+  { value: "autre", label: "Autre", icon: "🔗" }
+];
+
+function LinksSection({ entrepriseId }: { entrepriseId: number }) {
+  const [list, setList] = useState<EntrepriseLink[] | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
+
+  async function reload() {
+    const res = await authedFetch(
+      `/api/v1/entreprises/${entrepriseId}/links`
+    );
+    if (res.ok) setList((await res.json()) as EntrepriseLink[]);
+  }
+  useEffect(() => {
+    void reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entrepriseId]);
+
+  async function remove(l: EntrepriseLink) {
+    if (!confirm(`Retirer le lien « ${l.label} » ?`)) return;
+    await authedFetch(`/api/v1/entreprises/links/${l.id}`, {
+      method: "DELETE"
+    });
+    void reload();
+  }
+
+  return (
+    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-violet-300">
+          Liens & documentation
+        </h2>
+        <button
+          type="button"
+          onClick={() => setShowAdd(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-200 hover:bg-violet-500/20"
+        >
+          <Plus className="h-3.5 w-3.5" /> Ajouter un lien
+        </button>
+      </div>
+
+      {list === null ? (
+        <p className="text-xs text-white/50">
+          <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Chargement…
+        </p>
+      ) : list.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-brand-800 bg-brand-950 p-3 text-xs text-white/50">
+          Aucun lien. Ajoute le drive de l&apos;entreprise pour accès rapide.
+        </p>
+      ) : (
+        <ul className="grid gap-2 sm:grid-cols-2">
+          {list.map((l) => {
+            const kind = LINK_KINDS.find((k) => k.value === l.kind);
+            return (
+              <li key={l.id}>
+                <div className="flex items-center gap-2 rounded-xl border border-brand-800 bg-brand-950 p-3">
+                  <span className="text-xl">{kind?.icon || "🔗"}</span>
+                  <div className="min-w-0 flex-1">
+                    <a
+                      href={l.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block truncate text-sm font-bold text-white hover:text-violet-300"
+                    >
+                      {l.label} ↗
+                    </a>
+                    <p className="truncate text-[10px] text-white/40">
+                      {kind?.label || l.kind}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => remove(l)}
+                    className="rounded-lg border border-white/15 bg-brand-900 p-1.5 text-white/40 hover:border-rose-400/50 hover:text-rose-300"
+                    title="Retirer"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {showAdd ? (
+        <LinkModal
+          entrepriseId={entrepriseId}
+          onClose={() => setShowAdd(false)}
+          onSaved={() => {
+            setShowAdd(false);
+            void reload();
+          }}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function LinkModal({
+  entrepriseId,
+  onClose,
+  onSaved
+}: {
+  entrepriseId: number;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [label, setLabel] = useState("");
+  const [url, setUrl] = useState("");
+  const [kind, setKind] = useState("drive");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setErr(null);
+    try {
+      const res = await authedFetch("/api/v1/entreprises/links", {
+        method: "POST",
+        body: JSON.stringify({
+          entreprise_id: entrepriseId,
+          label: label.trim(),
+          url: url.trim(),
+          kind
+        })
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      onSaved();
+    } catch (e2) {
+      setErr((e2 as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+      <div className="my-8 w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
+        <div className="border-b border-brand-800 px-5 py-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-violet-300">
+            Nouveau lien
+          </h2>
+        </div>
+        <form onSubmit={submit} className="grid gap-3 p-5">
+          <div>
+            <label className="label">Libellé</label>
+            <input
+              required
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              className="input"
+              placeholder="ex. Drive HSI, statuts, P&L…"
+            />
+          </div>
+          <div>
+            <label className="label">URL</label>
+            <input
+              required
+              type="url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              className="input font-mono text-xs"
+              placeholder="https://drive.google.com/drive/folders/..."
+            />
+          </div>
+          <div>
+            <label className="label">Type</label>
+            <select
+              value={kind}
+              onChange={(e) => setKind(e.target.value)}
+              className="input"
+            >
+              {LINK_KINDS.map((k) => (
+                <option key={k.value} value={k.value}>
+                  {k.icon} {k.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {err ? (
+            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              {err}
+            </p>
+          ) : null}
+
+          <div className="flex items-center justify-end gap-2 border-t border-brand-800 pt-3">
+            <button type="button" onClick={onClose} className="btn-secondary text-sm">
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={saving || !label.trim() || !url.trim()}
+              className="btn-accent inline-flex items-center text-sm disabled:opacity-60"
+            >
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Ajouter"}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

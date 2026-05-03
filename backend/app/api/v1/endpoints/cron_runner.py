@@ -368,3 +368,48 @@ async def trigger_calendar_feeds_sync(
         feeds_synced=synced,
         feeds_failed=failed,
     )
+
+
+class BailRenewTasksResult(BaseModel):
+    ok: bool
+    job: str
+    bails_scanned: int = 0
+    tasks_created: int = 0
+    tasks_skipped: int = 0
+    errors: int = 0
+
+
+@router.api_route(
+    "/run/bail-renouvellement-tasks",
+    methods=["GET", "POST"],
+    response_model=BailRenewTasksResult,
+)
+async def trigger_bail_renouvellement_tasks(
+    x_cron_secret: Optional[str] = Header(default=None),
+    secret: Optional[str] = Query(default=None),
+) -> BailRenewTasksResult:
+    """Cron daily : crée les tâches QG « préparer le renouvellement »
+    pour les baux dont la fenêtre de rappel est ouverte (5 mois avant
+    la fin pour bail ≥ 12 mois, 2 mois sinon). Idempotent (tag
+    `bail-renew:{bail_id}` empêche les doublons)."""
+    _check_secret(x_cron_secret, secret)
+    from app.db.session import AsyncSessionLocal
+    from app.services.bail_renew_tasks import scan_and_create_renew_tasks
+
+    try:
+        async with AsyncSessionLocal() as db:
+            res = await scan_and_create_renew_tasks(db)
+    except Exception as exc:
+        log.exception("Cron bail_renew_tasks failed: %s", exc)
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Job a échoué : {exc}",
+        )
+    return BailRenewTasksResult(
+        ok=True,
+        job="bail-renouvellement-tasks",
+        bails_scanned=res.get("bails_scanned", 0),
+        tasks_created=res.get("tasks_created", 0),
+        tasks_skipped=res.get("tasks_skipped", 0),
+        errors=len(res.get("errors", []) or []),
+    )

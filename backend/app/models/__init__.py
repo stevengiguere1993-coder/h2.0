@@ -21,7 +21,7 @@ from app.models.contact_request import ContactRequest
 from app.models.contact_request_photo import ContactRequestPhoto
 from app.models.email_template import EmailTemplate
 from app.models.employe import Employe
-from app.models.entreprise import Entreprise, EntreprisePartner
+from app.models.entreprise import Entreprise, EntrepriseLink, EntreprisePartner  # noqa: F401
 from app.models.entreprise_finance import (  # noqa: F401
     EntrepriseFinanceSnapshot,
     EntrepriseValueMilestone,

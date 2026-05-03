@@ -142,6 +142,8 @@ async def send_renouvellement_for_bail(
     nouvelle_date_fin: Optional[date] = None,
     motif: Optional[str] = None,
     force: bool = False,
+    request_read_receipt: bool = False,
+    bcc_to_sender: bool = True,
 ) -> tuple[BailRenouvellement, bool]:
     """Crée le renouvellement (si nécessaire) et envoie le PDF par courriel.
 
@@ -189,10 +191,15 @@ async def send_renouvellement_for_bail(
                     f"Avis de modification du bail — {ctx.logement_adresse or ''}"
                 ).strip(" —")
                 body_html = _render_email_body(ctx)
+                # « Envoi certifié » : BCC à l'expéditeur pour archive +
+                # demande d'accusé de lecture (read receipt) Outlook.
+                bcc = [mailer.sender] if bcc_to_sender and mailer.sender else None
                 await mailer.send(
                     to=[ctx.locataire_email],
                     subject=subject,
                     html_body=body_html,
+                    bcc=bcc,
+                    request_read_receipt=request_read_receipt,
                     attachments=[
                         EmailAttachment(
                             name="avis-modification-bail.pdf",

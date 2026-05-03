@@ -282,6 +282,10 @@ async def init_db() -> None:
             # Immeuble cover photo en blob (upload direct, pas seulement URL).
             ("imm_immeubles", "cover_photo_blob", "BYTEA"),
             ("imm_immeubles", "cover_photo_content_type", "VARCHAR(64)"),
+            # Partenaire externe (sans user_id) ou notes additionnelles.
+            ("entreprise_partners", "partner_name", "VARCHAR(255)"),
+            ("entreprise_partners", "partner_email", "VARCHAR(320)"),
+            ("entreprise_partners", "partner_notes", "TEXT"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
@@ -347,6 +351,9 @@ async def init_db() -> None:
             # Le nom d'immeuble est désormais facultatif — fallback sur
             # l'adresse si non fourni.
             ("imm_immeubles", "name"),
+            # user_id devient optionnel sur entreprise_partners pour
+            # permettre des partenaires externes sans compte portail.
+            ("entreprise_partners", "user_id"),
         ):
             try:
                 await conn.execute(

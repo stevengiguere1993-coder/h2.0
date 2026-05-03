@@ -6,9 +6,10 @@ associés à plusieurs entreprises via EntreprisePartner avec un rôle
 et un pourcentage d'ownership.
 """
 
+from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -58,11 +59,14 @@ class Entreprise(Base, TimestampUpdateMixin):
 
 
 class EntreprisePartner(Base):
-    """Association user × entreprise + ownership / rôle.
+    """Partenaire d'une entreprise — interne (User du portail) ou externe.
 
     Plusieurs partenaires peuvent posséder une entreprise (ex. 50/50
     Steven + Philippe). Le rôle décrit la fonction (associé,
-    administrateur, gérant…).
+    administrateur, gérant, prêteur…).
+
+    `user_id` est optionnel : si le partenaire a un compte portail on
+    le lie ; sinon on saisit `partner_name` + email à la main.
     """
 
     __tablename__ = "entreprise_partners"
@@ -72,14 +76,53 @@ class EntreprisePartner(Base):
         ForeignKey("entreprises.id", ondelete="CASCADE"),
         nullable=False, index=True,
     )
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False, index=True,
+    user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True, index=True,
     )
+
+    # Identité du partenaire (utilisé si user_id est null OU pour
+    # surclasser le full_name auto issu de User).
+    partner_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    partner_email: Mapped[Optional[str]] = mapped_column(
+        String(320), nullable=True
+    )
+    partner_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     role: Mapped[str] = mapped_column(
         String(32), nullable=False, default="associe",
         server_default="associe",
     )
     ownership_pct: Mapped[Optional[float]] = mapped_column(
         Numeric(5, 2), nullable=True
+    )
+
+
+class EntrepriseLink(Base):
+    """Lien externe (Drive, SharePoint, Dropbox…) attaché à une entreprise.
+
+    Permet de pointer vers la documentation hébergée hors portail :
+    statuts, procès-verbaux, contrats, P&L, comptes annuels, etc.
+    """
+
+    __tablename__ = "entreprise_links"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    entreprise_id: Mapped[int] = mapped_column(
+        ForeignKey("entreprises.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    label: Mapped[str] = mapped_column(String(128), nullable=False)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    # Catégorie pour l'icône : drive | sharepoint | dropbox | onenote |
+    # notion | website | autre
+    kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="autre",
+        server_default="autre",
+    )
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
