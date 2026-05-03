@@ -16,10 +16,9 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { AppTopbar } from "@/components/app-topbar";
-import { HelpRequestsSection } from "@/components/help-requests-section";
 import { useAppLayout } from "./layout";
 import { useCurrentUser } from "@/hooks/use-current-user";
-import { authedFetch, hasMinRole } from "@/lib/auth";
+import { authedFetch } from "@/lib/auth";
 
 type TimeseriesPoint = {
   date: string;
@@ -146,8 +145,6 @@ export default function AppHome() {
       />
 
       <div className="p-4 lg:p-8">
-        {hasMinRole(user, "owner") ? <HelpRequestsSection /> : null}
-
         <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="text-sm text-white/50">Bonjour</p>

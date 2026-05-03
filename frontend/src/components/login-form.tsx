@@ -8,11 +8,16 @@ import {
   MapPin,
   Monitor,
   Smartphone,
+  Terminal,
   TrendingUp
 } from "lucide-react";
 
 import { useRouter } from "@/i18n/navigation";
 import { getMe, getToken, login, setToken } from "@/lib/auth";
+
+// Whitelist email autorisé à voir le bouton « Mode dev » sur le
+// sélecteur de portail. Centralisé pour matcher /dev/page.tsx.
+const DEV_ALLOWED_EMAILS = ["sgiguere@immohorizon.com"];
 
 /**
  * After a successful login, we show a small picker asking the user
@@ -28,6 +33,7 @@ export function LoginForm() {
   const [error, setError] = useState<string | null>(null);
   const [authed, setAuthed] = useState(false);
   const [nextUrl, setNextUrl] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -51,6 +57,7 @@ export function LoginForm() {
           router.replace("/m" as any);
           return;
         }
+        setUserEmail(me.email || null);
         setAuthed(true);
       } catch {
         // Token invalide → laisse le user voir le formulaire login
@@ -94,6 +101,7 @@ export function LoginForm() {
           router.replace("/m" as any);
           return;
         }
+        setUserEmail(me.email || null);
       } catch {
         /* fall through to picker */
       }
@@ -111,8 +119,25 @@ export function LoginForm() {
   }
 
   if (authed) {
+    const showDev =
+      !!userEmail &&
+      DEV_ALLOWED_EMAILS.includes(userEmail.toLowerCase().trim());
     return (
-      <div className="space-y-4">
+      <div className="relative space-y-4">
+        {showDev ? (
+          <button
+            type="button"
+            onClick={() => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              router.replace("/dev" as any);
+            }}
+            className="absolute right-0 top-0 inline-flex items-center gap-1.5 rounded-full border border-amber-400/40 bg-amber-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-amber-200 hover:bg-amber-500/20"
+            title="Outils internes (mode dev)"
+          >
+            <Terminal className="h-3 w-3" />
+            Mode dev
+          </button>
+        ) : null}
         <header className="text-center">
           <p className="text-sm text-white/60">Bienvenue 👋</p>
           <h2 className="mt-1 text-xl font-bold text-white">
