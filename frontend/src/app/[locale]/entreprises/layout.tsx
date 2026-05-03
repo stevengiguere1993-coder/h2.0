@@ -406,7 +406,7 @@ export function QGTopbar({
   const { onOpenSidebar } = useEntreprisesLayout();
   return (
     <header
-      className="sticky top-0 z-30 flex min-h-[80px] items-center gap-3 px-5 py-4 lg:px-8"
+      className="sticky top-0 z-30 flex min-h-[152px] items-center gap-3 px-5 py-4 lg:px-8"
       style={{
         backgroundColor: "var(--qg-bg-95)",
         backdropFilter: "blur(8px)",
@@ -441,7 +441,7 @@ export function QGTopbar({
         <div className="flex items-center gap-2">{rightSlot}</div>
       ) : null}
       <ThemeToggle />
-      <KratosLogo size={48} floating={false} />
+      <KratosLogo size={144} floating={false} />
     </header>
   );
 }
@@ -457,7 +457,7 @@ export function EntreprisesTopbar({
   const { onOpenSidebar } = useEntreprisesLayout();
   return (
     <header
-      className="sticky top-0 z-30 flex h-16 items-center gap-3 px-4 lg:px-6"
+      className="sticky top-0 z-30 flex min-h-[152px] items-center gap-3 px-4 lg:px-6"
       style={{
         backgroundColor: "var(--qg-bg-95)",
         backdropFilter: "blur(8px)",
@@ -506,7 +506,7 @@ export function EntreprisesTopbar({
         <div className="flex items-center gap-2">{rightSlot}</div>
       ) : null}
       <ThemeToggle />
-      <KratosLogo size={48} floating={false} />
+      <KratosLogo size={144} floating={false} />
     </header>
   );
 }

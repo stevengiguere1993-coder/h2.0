@@ -24,7 +24,7 @@ export function AppTopbar({
   onSearch?: (query: string) => void;
 }) {
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-brand-800 bg-brand-950/95 px-4 backdrop-blur lg:px-6">
+    <header className="sticky top-0 z-30 flex min-h-[152px] items-center gap-3 border-b border-brand-800 bg-brand-950/95 px-4 backdrop-blur lg:px-6">
       <button
         type="button"
         onClick={onOpenSidebar}
@@ -84,7 +84,7 @@ export function AppTopbar({
 
       {/* Kratos statique tout à droite — sticky avec le topbar (donc
           toujours visible) mais ne chevauche aucun contenu. */}
-      <KratosLogo size={48} floating={false} />
+      <KratosLogo size={144} floating={false} />
     </header>
   );
 }
