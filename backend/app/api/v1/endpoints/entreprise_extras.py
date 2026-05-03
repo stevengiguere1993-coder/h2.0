@@ -28,6 +28,9 @@ from app.models.entreprise_finance import (
 )
 from app.models.entreprise_recurrence import TacheTemplate
 from app.schemas.entreprise_extras import (
+    ComplianceCatalogItem,
+    ComplianceImportRequest,
+    ComplianceImportResult,
     EntrepriseFinanceSummary,
     FinanceSnapshotCreate,
     FinanceSnapshotRead,
@@ -44,6 +47,11 @@ from app.schemas.entreprise_extras import (
     ValuePlanDriverItem,
     ValuePlanRead,
     ValuePlanUpdate,
+)
+from app.services.qg_compliance_catalog import (
+    COMPLIANCE_TEMPLATES,
+    first_day_next_month,
+    get_by_codes,
 )
 from app.services.qg_recurrence import materialize_due_templates
 
@@ -176,6 +184,98 @@ async def delete_template(
         raise HTTPException(status_code=404, detail="Template introuvable.")
     await db.delete(obj)
     await db.commit()
+
+
+@router.get(
+    "/tache-templates/compliance-catalog",
+    response_model=List[ComplianceCatalogItem],
+)
+async def list_compliance_catalog(
+    user: CurrentUser,
+) -> List[ComplianceCatalogItem]:
+    """Liste les templates compliance Québec disponibles à l'import."""
+    _require_volet(user)
+    return [
+        ComplianceCatalogItem(**t.__dict__) for t in COMPLIANCE_TEMPLATES
+    ]
+
+
+@router.post(
+    "/{entreprise_id}/tache-templates/import-compliance",
+    response_model=ComplianceImportResult,
+)
+async def import_compliance_templates(
+    entreprise_id: int,
+    payload: ComplianceImportRequest,
+    db: DBSession,
+    user: CurrentUser,
+) -> ComplianceImportResult:
+    """Crée d'un coup les templates correspondant aux codes catalogue.
+
+    Idempotent par (entreprise_id, code catalogue) : si un template avec
+    le même titre existe déjà sur cette entreprise, on l'ignore et on
+    renvoie son code dans `skipped`.
+    """
+    _require_volet(user)
+    ent = await db.get(Entreprise, entreprise_id)
+    if ent is None:
+        raise HTTPException(status_code=404, detail="Entreprise introuvable.")
+
+    selected = get_by_codes(payload.codes)
+    if not selected:
+        raise HTTPException(
+            status_code=400,
+            detail="Aucun code catalogue valide.",
+        )
+
+    existing_titles = set(
+        (
+            await db.execute(
+                select(TacheTemplate.title).where(
+                    TacheTemplate.entreprise_id == entreprise_id
+                )
+            )
+        ).scalars().all()
+    )
+
+    next_due = payload.next_due or first_day_next_month(date.today())
+    now = _now()
+    created: List[TacheTemplate] = []
+    skipped: List[str] = []
+
+    for cat in selected:
+        if cat.label in existing_titles:
+            skipped.append(cat.code)
+            continue
+        obj = TacheTemplate(
+            entreprise_id=entreprise_id,
+            title=cat.label,
+            description=cat.description,
+            departement=cat.departement,
+            impact=cat.impact,
+            confidence=cat.confidence,
+            effort=cat.effort,
+            every_n=cat.every_n,
+            unit=cat.unit,
+            lead_days=cat.lead_days,
+            next_due=next_due,
+            is_active=True,
+        )
+        obj.created_at = now
+        obj.updated_at = now
+        db.add(obj)
+        created.append(obj)
+
+    if created:
+        await db.commit()
+        for c in created:
+            await db.refresh(c)
+
+    return ComplianceImportResult(
+        created=len(created),
+        skipped=skipped,
+        templates=[TacheTemplateRead.model_validate(c) for c in created],
+    )
 
 
 @router.post(

@@ -34,6 +34,7 @@ const NAV: NavItem[] = [
   { href: "/immobilier/immeubles", label: "Immeubles", icon: Building2 },
   { href: "/immobilier/locataires", label: "Locataires", icon: Users },
   { href: "/immobilier/baux", label: "Baux & paiements", icon: ClipboardList },
+  { href: "/immobilier/renouvellements", label: "Renouvellements", icon: ClipboardList },
   { href: "/immobilier/maintenance", label: "Maintenance", icon: Wrench }
 ];
 

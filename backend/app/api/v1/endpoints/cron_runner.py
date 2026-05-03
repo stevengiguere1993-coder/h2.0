@@ -260,3 +260,51 @@ async def trigger_qg_tache_recurrence(
         templates_updated=result.get("templates_updated", 0),
         errors=len(result.get("errors", [])),
     )
+
+
+class BailRenouvellementCronResult(BaseModel):
+    ok: bool
+    job: str
+    bails_scanned: int = 0
+    avis_crees: int = 0
+    courriels_envoyes: int = 0
+    skipped: int = 0
+    errors: int = 0
+
+
+@router.api_route(
+    "/run/bail-renouvellements",
+    methods=["GET", "POST"],
+    response_model=BailRenouvellementCronResult,
+)
+async def trigger_bail_renouvellements(
+    x_cron_secret: Optional[str] = Header(default=None),
+    secret: Optional[str] = Query(default=None),
+) -> BailRenouvellementCronResult:
+    """Cron quotidien : génère et envoie les avis de modification du bail
+    pour les baux dont l'échéance tombe dans 4-6 mois. Idempotent.
+    À planifier ~7h via cron-job.org."""
+    _check_secret(x_cron_secret, secret)
+    from app.db.session import AsyncSessionLocal
+    from app.services.bail_renouvellement import (
+        scan_and_send_due_renouvellements,
+    )
+
+    try:
+        async with AsyncSessionLocal() as db:
+            res = await scan_and_send_due_renouvellements(db)
+    except Exception as exc:
+        log.exception("Cron bail_renouvellements failed: %s", exc)
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Job a échoué : {exc}",
+        )
+    return BailRenouvellementCronResult(
+        ok=True,
+        job="bail-renouvellements",
+        bails_scanned=res.bails_scanned,
+        avis_crees=res.avis_crees,
+        courriels_envoyes=res.courriels_envoyes,
+        skipped=res.skipped,
+        errors=len(res.errors or []),
+    )

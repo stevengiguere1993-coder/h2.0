@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   CheckCircle2,
   DollarSign,
+  FileCheck,
   Loader2,
   Pencil,
   Play,
@@ -267,6 +268,7 @@ function SectionTab({
 function RecurrenceSection({ entrepriseId }: { entrepriseId: number }) {
   const [list, setList] = useState<TacheTemplate[] | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [showCompliance, setShowCompliance] = useState(false);
   const [running, setRunning] = useState(false);
   const [runMsg, setRunMsg] = useState<string | null>(null);
 
@@ -327,7 +329,15 @@ function RecurrenceSection({ entrepriseId }: { entrepriseId: number }) {
           Définis des tâches qui se créent automatiquement (TPS/TVQ trimestrielle,
           rapprochement bancaire mensuel, etc.). Le cron vérifie chaque jour.
         </p>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowCompliance(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/20"
+          >
+            <FileCheck className="h-3.5 w-3.5" />
+            Compliance Québec
+          </button>
           <button
             type="button"
             onClick={runMaterialize}
@@ -445,7 +455,215 @@ function RecurrenceSection({ entrepriseId }: { entrepriseId: number }) {
           }}
         />
       ) : null}
+
+      {showCompliance ? (
+        <ComplianceImportModal
+          entrepriseId={entrepriseId}
+          onClose={() => setShowCompliance(false)}
+          onSaved={(msg) => {
+            setShowCompliance(false);
+            setRunMsg(msg);
+            void reload();
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+type ComplianceItem = {
+  code: string;
+  label: string;
+  description: string;
+  departement: string;
+  every_n: number;
+  unit: string;
+  lead_days: number;
+};
+
+function ComplianceImportModal({
+  entrepriseId,
+  onClose,
+  onSaved
+}: {
+  entrepriseId: number;
+  onClose: () => void;
+  onSaved: (msg: string) => void;
+}) {
+  const [catalog, setCatalog] = useState<ComplianceItem[] | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [importing, setImporting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    authedFetch(
+      "/api/v1/entreprises/tache-templates/compliance-catalog"
+    )
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => {
+        if (cancelled) return;
+        const list = d as ComplianceItem[];
+        setCatalog(list);
+        // Présélection raisonnable : tout ce qui est mensuel ou trimestriel.
+        const presel = new Set(
+          list
+            .filter(
+              (c) =>
+                (c.unit === "mois" && c.every_n <= 3) ||
+                c.code === "req_annuel"
+            )
+            .map((c) => c.code)
+        );
+        setSelected(presel);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const grouped = (catalog || []).reduce<Record<string, ComplianceItem[]>>(
+    (acc, c) => {
+      (acc[c.departement] = acc[c.departement] || []).push(c);
+      return acc;
+    },
+    {}
+  );
+
+  function toggle(code: string) {
+    const next = new Set(selected);
+    if (next.has(code)) next.delete(code);
+    else next.add(code);
+    setSelected(next);
+  }
+
+  async function submit() {
+    if (selected.size === 0) return;
+    setImporting(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/entreprises/${entrepriseId}/tache-templates/import-compliance`,
+        {
+          method: "POST",
+          body: JSON.stringify({ codes: [...selected] })
+        }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      const d = (await res.json()) as {
+        created: number;
+        skipped: string[];
+      };
+      const skipMsg =
+        d.skipped.length > 0
+          ? ` · ${d.skipped.length} déjà présent${d.skipped.length > 1 ? "s" : ""}`
+          : "";
+      onSaved(
+        `${d.created} template${d.created > 1 ? "s" : ""} compliance importé${
+          d.created > 1 ? "s" : ""
+        }${skipMsg}.`
+      );
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <ModalShell title="Importer compliance Québec" onClose={onClose}>
+      <p className="mb-3 text-xs text-white/60">
+        Sélectionne les obligations qui s&apos;appliquent à cette entreprise.
+        Les templates sont créés avec une 1ère échéance le 1er du mois prochain
+        (ajustable ensuite). Idempotent : les titres déjà présents sont ignorés.
+      </p>
+
+      {catalog === null ? (
+        <Loading />
+      ) : (
+        <div className="max-h-96 space-y-4 overflow-y-auto pr-1">
+          {Object.entries(grouped).map(([dept, items]) => (
+            <div key={dept}>
+              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">
+                {dept}
+              </p>
+              <ul className="space-y-1">
+                {items.map((c) => (
+                  <li
+                    key={c.code}
+                    className={`flex cursor-pointer items-start gap-2 rounded-lg border p-2.5 text-sm transition ${
+                      selected.has(c.code)
+                        ? "border-emerald-400/40 bg-emerald-500/10"
+                        : "border-brand-800 bg-brand-950 hover:border-white/20"
+                    }`}
+                    onClick={() => toggle(c.code)}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.has(c.code)}
+                      onChange={() => toggle(c.code)}
+                      className="mt-0.5 h-4 w-4 accent-emerald-500"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="font-bold text-white">{c.label}</p>
+                      <p className="mt-0.5 text-[11px] text-white/60">
+                        {c.description}
+                      </p>
+                      <p className="mt-1 font-mono text-[10px] text-white/40">
+                        Tous les {c.every_n} {c.unit} · lead {c.lead_days}j
+                      </p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {err ? (
+        <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+          {err}
+        </p>
+      ) : null}
+
+      <div className="mt-4 flex items-center justify-between border-t border-brand-800 pt-3">
+        <span className="text-xs text-white/50">
+          {selected.size} sélectionnée{selected.size > 1 ? "s" : ""}
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn-secondary text-sm"
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={importing || selected.size === 0}
+            className="btn-accent inline-flex items-center text-sm disabled:opacity-60"
+          >
+            {importing ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Import…
+              </>
+            ) : (
+              <>
+                <FileCheck className="mr-2 h-4 w-4" />
+                Importer la sélection
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
   );
 }
 
