@@ -402,6 +402,7 @@ async def _ingest_one_xml(
     max_rows: Optional[int],
     seen_so_far: int,
     kept_so_far: int,
+    sample_out: Optional[Dict] = None,
 ) -> Tuple[int, int]:
     """Ingère un XML format MAMH (rôle d'évaluation foncière du Québec).
 
@@ -521,6 +522,16 @@ async def _ingest_one_xml(
                             if not match_set or mun_norm in match_set:
                                 batch.append(row)
                                 kept_new += 1
+                                if (
+                                    sample_out is not None
+                                    and "first_matricule" not in sample_out
+                                ):
+                                    sample_out["first_matricule"] = row.get(
+                                        "matricule"
+                                    )
+                                    sample_out["first_municipalite"] = row.get(
+                                        "municipalite"
+                                    )
                                 if len(batch) >= batch_size:
                                     await _bulk_upsert(db, batch)
                                     batch.clear()
@@ -907,6 +918,7 @@ async def ingest_provincial_csv(
                 # (parse error, OOM, etc.), on log et on continue avec
                 # le suivant — sinon l'utilisateur perd tout l'import.
                 try:
+                    sample_out: Dict = {}
                     seen_new, kept_new = await _ingest_one_xml(
                         db,
                         local_path,
@@ -916,6 +928,7 @@ async def ingest_provincial_csv(
                         max_rows=max_rows,
                         seen_so_far=total_seen,
                         kept_so_far=total_kept,
+                        sample_out=sample_out,
                     )
                     total_seen += seen_new
                     total_kept += kept_new
@@ -929,6 +942,7 @@ async def ingest_provincial_csv(
                                 f"municipalite={mun or '(non mappée)'}",
                                 f"units_seen={seen_new}",
                                 f"units_kept={kept_new}",
+                                f"sample_matricule={sample_out.get('first_matricule', '(none)')}",
                             ],
                             "columns_mapped": ["xml_mamh"],
                             "has_matricule": True,

@@ -1590,6 +1590,12 @@ function DiagnosticsPanel({ diagnostics }: { diagnostics: DiagItem[] }) {
     const n = parseInt(h.replace("units_seen=", ""), 10);
     return Number.isFinite(n) ? n : null;
   }
+  function sampleMatricule(d: DiagItem): string | null {
+    const h = (d.headers_seen || []).find((s) =>
+      s.startsWith("sample_matricule=")
+    );
+    return h ? h.replace("sample_matricule=", "") : null;
+  }
 
   // Vérif spécifique : Montréal (66023) / Laval (65005) / Québec — si
   // pas dans le ZIP, on prévient l'utilisateur que ces villes publient
@@ -1637,29 +1643,36 @@ function DiagnosticsPanel({ diagnostics }: { diagnostics: DiagItem[] }) {
               .map((d, i) => {
                 const k = unitsKept(d);
                 const s = unitsSeen(d);
+                const sm = sampleMatricule(d);
                 return (
-                  <li
-                    key={i}
-                    className="grid grid-cols-[1fr_auto_auto] gap-3 font-mono"
-                  >
-                    <span className="truncate">
-                      · {muniName(d)}{" "}
-                      <span className="text-emerald-200/60">({code(d)})</span>
-                    </span>
-                    <span
-                      className={`tabular-nums ${
-                        k != null && k > 0
-                          ? "text-emerald-300"
-                          : "text-rose-300"
-                      }`}
-                    >
-                      {k != null ? k.toLocaleString("fr-CA") : "—"}
-                    </span>
-                    <span className="tabular-nums text-emerald-200/40">
-                      {s != null
-                        ? `/ ${s.toLocaleString("fr-CA")} vus`
-                        : ""}
-                    </span>
+                  <li key={i} className="font-mono">
+                    <div className="grid grid-cols-[1fr_auto_auto] gap-3">
+                      <span className="truncate">
+                        · {muniName(d)}{" "}
+                        <span className="text-emerald-200/60">
+                          ({code(d)})
+                        </span>
+                      </span>
+                      <span
+                        className={`tabular-nums ${
+                          k != null && k > 0
+                            ? "text-emerald-300"
+                            : "text-rose-300"
+                        }`}
+                      >
+                        {k != null ? k.toLocaleString("fr-CA") : "—"}
+                      </span>
+                      <span className="tabular-nums text-emerald-200/40">
+                        {s != null
+                          ? `/ ${s.toLocaleString("fr-CA")} vus`
+                          : ""}
+                      </span>
+                    </div>
+                    {sm ? (
+                      <div className="ml-3 text-[10px] text-emerald-200/50">
+                        ex. matricule : {sm}
+                      </div>
+                    ) : null}
                   </li>
                 );
               })}
