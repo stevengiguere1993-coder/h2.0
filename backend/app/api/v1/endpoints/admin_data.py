@@ -962,13 +962,39 @@ async def purge_all_property_units(_: RequireOwner) -> dict:
     summary="Force le state du worker provincial à idle (déblocage manuel).",
 )
 async def provincial_reset(_: RequireOwner) -> dict:
-    """Reset l'état en mémoire du worker. Utile si un import est resté
-    bloqué sur 'running' après un crash ou un redéploiement. NE TUE PAS
-    le worker en cours s'il existe — celui-ci est tué naturellement par
-    le redémarrage du process Render."""
+    """Reset COMPLET de l'état en mémoire du worker provincial.
+
+    - Annule la task asyncio en cours s'il y en a une
+    - Reset status à `idle`, vide error/diagnostics
+    - Reset le module _progress (current_file, rows_so_far, last_progress_at)
+
+    Utile quand un import est resté bloqué après un crash, un OOM ou
+    un redéploiement. Le worker en cours, s'il tourne encore réellement,
+    est annulé via task.cancel() — le reset peut donc déclencher un
+    arrêt asynchrone du processing.
+    """
+    from app.integrations.roles_evaluation._progress import reset_progress
+
+    # Annule la task en vol si elle existe.
+    task = _provincial_state.get("_task")
+    if task is not None and not task.done():
+        try:
+            task.cancel()
+        except Exception:
+            pass
+
     _provincial_state["status"] = "idle"
     _provincial_state["error"] = None
-    return {"status": "idle", "message": "État réinitialisé."}
+    _provincial_state["diagnostics"] = []
+    _provincial_state["rows_processed"] = None
+    _provincial_state["rows_upserted"] = None
+    _provincial_state["region"] = None
+    _provincial_state["started_at"] = None
+    _provincial_state["finished_at"] = None
+    _provincial_state["_task"] = None
+    reset_progress()
+
+    return {"status": "idle", "message": "État réinitialisé complètement."}
 
 
 @router.get(
