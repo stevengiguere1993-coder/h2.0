@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  Check,
   CheckCircle2,
   CheckSquare,
+  Copy,
   HelpCircle,
   Loader2,
   RefreshCw,
@@ -292,6 +294,7 @@ export function HelpRequestsSection() {
                       </p>
                     ) : null}
                     <div className="mt-2 flex flex-wrap gap-2">
+                      <CopyReportButton report={r} />
                       {r.status === "pending" ? (
                         <>
                           <button
@@ -334,5 +337,69 @@ export function HelpRequestsSection() {
         </div>
       )}
     </section>
+  );
+}
+
+/** Bouton qui copie une demande formatée pour la coller à Claude. */
+function CopyReportButton({ report }: { report: HelpReport }) {
+  const [copied, setCopied] = useState(false);
+
+  function buildText(): string {
+    const date = new Date(report.created_at).toLocaleString("fr-CA");
+    const lines: string[] = [
+      `Bug signalé par ${report.user_email || "(anonyme)"} le ${date}`
+    ];
+    if (report.context_url) lines.push(`URL : ${report.context_url}`);
+    lines.push("", report.message.trim());
+    return lines.join("\n");
+  }
+
+  async function handleCopy() {
+    const text = buildText();
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        // Fallback : textarea + execCommand pour navigateurs anciens.
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* silent */
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-[11px] transition ${
+        copied
+          ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-300"
+          : "border-white/15 bg-brand-950 text-white/80 hover:border-accent-500/50 hover:text-accent-500"
+      }`}
+      title="Copier la demande pour la coller à Claude"
+    >
+      {copied ? (
+        <>
+          <Check className="h-3 w-3" />
+          Copié
+        </>
+      ) : (
+        <>
+          <Copy className="h-3 w-3" />
+          Copier
+        </>
+      )}
+    </button>
   );
 }
