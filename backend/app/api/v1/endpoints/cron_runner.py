@@ -144,7 +144,11 @@ class QGInsightsResult(CronResult):
     errors: int = 0
 
 
-@router.post("/run/qg-weekly-insights", response_model=QGInsightsResult)
+@router.api_route(
+    "/run/qg-weekly-insights",
+    methods=["GET", "POST"],
+    response_model=QGInsightsResult,
+)
 async def trigger_qg_weekly_insights(
     x_cron_secret: Optional[str] = Header(default=None),
     secret: Optional[str] = Query(default=None),
@@ -175,7 +179,11 @@ async def trigger_qg_weekly_insights(
     )
 
 
-@router.post("/run/qg-daily-pulse", response_model=QGDailyPulseResult)
+@router.api_route(
+    "/run/qg-daily-pulse",
+    methods=["GET", "POST"],
+    response_model=QGDailyPulseResult,
+)
 async def trigger_qg_daily_pulse(
     x_cron_secret: Optional[str] = Header(default=None),
     secret: Optional[str] = Query(default=None),
