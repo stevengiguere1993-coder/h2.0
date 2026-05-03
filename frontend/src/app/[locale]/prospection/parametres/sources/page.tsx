@@ -755,49 +755,9 @@ export default function ProspectionSourcesPage() {
             </div>
           ) : null}
           {provStatus?.status === "done" &&
-          (provStatus.rows_upserted ?? 0) === 0 &&
           provStatus.diagnostics &&
           provStatus.diagnostics.length > 0 ? (
-            <details className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-[11px] text-amber-100">
-              <summary className="cursor-pointer font-semibold">
-                ⚠ 0 unités ingérées — voir le diagnostic du fichier
-              </summary>
-              <div className="mt-2 space-y-2">
-                {provStatus.diagnostics.map((d, i) => (
-                  <div
-                    key={i}
-                    className="rounded border border-amber-500/20 bg-amber-500/5 p-2"
-                  >
-                    <div className="font-mono">{d.file}</div>
-                    {d.error ? (
-                      <div className="mt-1 text-rose-300">{d.error}</div>
-                    ) : (
-                      <>
-                        <div className="mt-1 text-amber-200/80">
-                          Encoding : {d.encoding} · Délimiteur :{" "}
-                          {d.delimiter} · Matricule détecté :{" "}
-                          {d.has_matricule ? "✅" : "❌"}
-                        </div>
-                        <div className="mt-1 text-amber-200/80">
-                          Colonnes mappées :{" "}
-                          {d.columns_mapped?.length
-                            ? d.columns_mapped.join(", ")
-                            : "(aucune)"}
-                        </div>
-                        <div className="mt-1 break-all text-amber-200/60">
-                          Headers vus : {d.headers_seen?.join(" | ")}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                ))}
-                <p className="text-amber-200/60">
-                  Si la colonne matricule n&apos;est pas détectée,
-                  copie-colle les headers ci-dessus dans le chat — j&apos;ajouterai
-                  les aliases manquants.
-                </p>
-              </div>
-            </details>
+            <DiagnosticsPanel diagnostics={provStatus.diagnostics} />
           ) : null}
           {provStatus?.status === "error" && provStatus.error ? (
             <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
@@ -1519,5 +1479,151 @@ function MondayImportSection() {
         </p>
       </div>
     </section>
+  );
+}
+
+// ─── Panel diagnostics post-import du rôle provincial ──────────────────
+
+type DiagItem = {
+  file: string;
+  encoding?: string;
+  delimiter?: string;
+  headers_seen?: string[];
+  columns_mapped?: string[];
+  has_matricule?: boolean;
+  error?: string;
+};
+
+function DiagnosticsPanel({ diagnostics }: { diagnostics: DiagItem[] }) {
+  // Catégorise les fichiers : importés / hors-périmètre / erreurs / autre.
+  const imported: DiagItem[] = [];
+  const skipped: DiagItem[] = [];
+  const errored: DiagItem[] = [];
+  const other: DiagItem[] = [];
+  for (const d of diagnostics) {
+    if (d.error) errored.push(d);
+    else if (d.encoding === "skipped") skipped.push(d);
+    else if (d.columns_mapped && d.columns_mapped.length > 0) imported.push(d);
+    else other.push(d);
+  }
+
+  function muniName(d: DiagItem): string {
+    const h = (d.headers_seen || []).find((s) =>
+      s.startsWith("municipalite=")
+    );
+    return h ? h.replace("municipalite=", "") : d.file;
+  }
+  function code(d: DiagItem): string {
+    const h = (d.headers_seen || []).find((s) => s.startsWith("code_mamh="));
+    return h ? h.replace("code_mamh=", "") : "";
+  }
+
+  // Vérif spécifique : Montréal (66023) / Laval (65005) / Québec — si
+  // pas dans le ZIP, on prévient l'utilisateur que ces villes publient
+  // leur rôle séparément.
+  const allCodes = diagnostics
+    .map(code)
+    .filter(Boolean);
+  const missingMtl = !allCodes.includes("66023");
+  const missingLaval = !allCodes.includes("65005");
+
+  return (
+    <div className="mt-3 space-y-3">
+      {(missingMtl || missingLaval) ? (
+        <div className="rounded-md border border-sky-400/30 bg-sky-500/10 p-3 text-xs text-sky-200">
+          <p className="font-bold">
+            ℹ Le ZIP que tu as importé ne contient pas{" "}
+            {[
+              missingMtl ? "Montréal" : null,
+              missingLaval ? "Laval" : null
+            ]
+              .filter(Boolean)
+              .join(" ni ")}
+            .
+          </p>
+          <p className="mt-1 text-sky-100/80">
+            Ces grandes villes gèrent leur rôle d&apos;évaluation
+            séparément (pas via MAMH). Pour Montréal, utilise le bouton
+            « Importer le rôle Ville de Montréal » plus haut sur cette
+            page (CSV officiel, ~720 K unités). Le ZIP MAMH provincial
+            contient les autres municipalités.
+          </p>
+        </div>
+      ) : null}
+
+      <details className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-[11px] text-emerald-100" open>
+        <summary className="cursor-pointer font-semibold">
+          ✓ {imported.length} fichier{imported.length > 1 ? "s" : ""} importé
+          {imported.length > 1 ? "s" : ""}
+        </summary>
+        {imported.length > 0 ? (
+          <ul className="mt-2 space-y-1 pl-3">
+            {imported.map((d, i) => (
+              <li key={i} className="font-mono">
+                · {muniName(d)} <span className="text-emerald-200/60">({code(d)})</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-2 text-emerald-200/60">
+            Aucun fichier n&apos;a passé le filtre. Vérifie le rayon
+            « max km depuis Montréal » et le contenu du ZIP.
+          </p>
+        )}
+      </details>
+
+      {skipped.length > 0 ? (
+        <details className="rounded-md border border-white/10 bg-white/5 p-3 text-[11px] text-white/70">
+          <summary className="cursor-pointer font-semibold">
+            ⏭ {skipped.length} fichier{skipped.length > 1 ? "s" : ""} ignoré
+            {skipped.length > 1 ? "s" : ""} (hors-périmètre)
+          </summary>
+          <ul className="mt-2 space-y-1 pl-3">
+            {skipped.slice(0, 30).map((d, i) => (
+              <li key={i} className="font-mono">
+                · {muniName(d)} <span className="text-white/40">({code(d)})</span>
+              </li>
+            ))}
+            {skipped.length > 30 ? (
+              <li className="text-white/40">
+                + {skipped.length - 30} autres…
+              </li>
+            ) : null}
+          </ul>
+        </details>
+      ) : null}
+
+      {errored.length > 0 ? (
+        <details className="rounded-md border border-rose-500/40 bg-rose-500/10 p-3 text-[11px] text-rose-200" open>
+          <summary className="cursor-pointer font-semibold">
+            ⚠ {errored.length} erreur{errored.length > 1 ? "s" : ""}
+          </summary>
+          <ul className="mt-2 space-y-1 pl-3">
+            {errored.map((d, i) => (
+              <li key={i}>
+                <span className="font-mono">{d.file}</span> — {d.error}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+
+      {other.length > 0 ? (
+        <details className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-[11px] text-amber-100">
+          <summary className="cursor-pointer font-semibold">
+            ? {other.length} fichier{other.length > 1 ? "s" : ""} sans données
+            mappées (vérifier headers)
+          </summary>
+          <ul className="mt-2 space-y-1 pl-3">
+            {other.map((d, i) => (
+              <li key={i} className="break-all">
+                <span className="font-mono">{d.file}</span> — headers :{" "}
+                {(d.headers_seen || []).join(" | ")}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </div>
   );
 }
