@@ -31,7 +31,9 @@ class ImmeubleBase(BaseModel):
 
 
 class ImmeubleCreate(ImmeubleBase):
-    pass
+    # Si fourni, crée automatiquement un ImmeubleOwnership pour cette
+    # entreprise à 100 % au moment de la création.
+    entreprise_id: Optional[int] = None
 
 
 class ImmeubleUpdate(BaseModel):

@@ -124,12 +124,23 @@ def _immeuble_to_read(obj: Immeuble) -> ImmeubleRead:
 
 @router.get("/immeubles", response_model=List[ImmeubleListItem])
 async def list_immeubles(
-    db: DBSession, user: CurrentUser, only_active: bool = True
+    db: DBSession,
+    user: CurrentUser,
+    only_active: bool = True,
+    entreprise_id: Optional[int] = None,
 ) -> List[ImmeubleListItem]:
+    """Liste des immeubles. Si `entreprise_id` est fourni, filtre sur
+    ceux dont l'entreprise est propriétaire (au moins une ImmeubleOwnership).
+    """
     _require_volet(user)
     q = select(Immeuble).order_by(Immeuble.name.asc())
     if only_active:
         q = q.where(Immeuble.is_active.is_(True))
+    if entreprise_id is not None:
+        q = q.join(
+            ImmeubleOwnership,
+            ImmeubleOwnership.immeuble_id == Immeuble.id,
+        ).where(ImmeubleOwnership.entreprise_id == entreprise_id)
     immeubles = (await db.execute(q)).scalars().all()
     if not immeubles:
         return []
@@ -209,6 +220,8 @@ async def create_immeuble(
 ) -> ImmeubleRead:
     _require_volet(user)
     data = payload.model_dump()
+    # Champ optionnel non persisté sur Immeuble : on l'extrait avant.
+    auto_entreprise_id = data.pop("entreprise_id", None)
     # Nom optionnel : si l'utilisateur n'en fournit pas, on prend l'adresse
     # complète comme nom affichable (cas usuel : un immeuble = une adresse).
     if not data.get("name") or not str(data["name"]).strip():
@@ -219,6 +232,17 @@ async def create_immeuble(
     obj.created_at = _now()
     obj.updated_at = _now()
     db.add(obj)
+    await db.flush()  # pour obtenir obj.id avant de créer l'ownership
+
+    # Auto-rattache à l'entreprise active à 100 % si fourni.
+    if auto_entreprise_id:
+        ownership = ImmeubleOwnership(
+            immeuble_id=obj.id,
+            entreprise_id=auto_entreprise_id,
+            ownership_pct=100.0,
+        )
+        db.add(ownership)
+
     await db.commit()
     await db.refresh(obj)
     return _immeuble_to_read(obj)

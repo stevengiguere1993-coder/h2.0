@@ -1,14 +1,24 @@
 "use client";
 
-import { createContext, useContext, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState
+} from "react";
 import { usePathname } from "next/navigation";
 import {
+  AlertTriangle,
   Building2,
+  Check,
+  ChevronDown,
   ClipboardList,
   Home,
   Loader2,
   LogOut,
   Menu,
+  Plus,
   Sparkles,
   Users,
   Wrench,
@@ -22,6 +32,7 @@ import { HelpButton } from "@/components/help-button";
 import { PortalCorner } from "@/components/portal-corner";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { authedFetch } from "@/lib/auth";
 
 type NavItem = {
   href: string;
@@ -38,12 +49,33 @@ const NAV: NavItem[] = [
   { href: "/immobilier/maintenance", label: "Maintenance", icon: Wrench }
 ];
 
-type Ctx = { onOpenSidebar: () => void };
-const ctx = createContext<Ctx>({ onOpenSidebar: () => {} });
+// ─── Context : entreprise active dans le volet immobilier ────────────
+
+type EntrepriseLite = { id: number; name: string; color_accent: string };
+
+type Ctx = {
+  onOpenSidebar: () => void;
+  // Entreprise active = celle dont on gère le portefeuille immobilier.
+  // null = vue « Toutes les entreprises ».
+  currentEntrepriseId: number | null;
+  setCurrentEntrepriseId: (id: number | null) => void;
+  entreprises: EntrepriseLite[];
+  refreshEntreprises: () => Promise<void>;
+};
+
+const ctx = createContext<Ctx>({
+  onOpenSidebar: () => {},
+  currentEntrepriseId: null,
+  setCurrentEntrepriseId: () => {},
+  entreprises: [],
+  refreshEntreprises: async () => {}
+});
 
 export function useImmobilierLayout() {
   return useContext(ctx);
 }
+
+const STORAGE_KEY = "h2-immo-entreprise-id";
 
 export default function ImmobilierLayout({
   children
@@ -53,6 +85,62 @@ export default function ImmobilierLayout({
   const { user, loading, signOut } = useCurrentUser();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const pathname = usePathname() || "";
+
+  // Contexte « entreprise active » (persistant dans localStorage).
+  const [currentEntrepriseId, _setEntrepriseId] = useState<number | null>(null);
+  const [entreprises, setEntreprises] = useState<EntrepriseLite[]>([]);
+
+  const setCurrentEntrepriseId = useCallback((id: number | null) => {
+    _setEntrepriseId(id);
+    if (typeof window !== "undefined") {
+      try {
+        if (id == null) window.localStorage.removeItem(STORAGE_KEY);
+        else window.localStorage.setItem(STORAGE_KEY, String(id));
+      } catch {
+        /* ignore */
+      }
+    }
+  }, []);
+
+  // Hydrate depuis localStorage au mount
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const n = Number(raw);
+        if (Number.isFinite(n) && n > 0) _setEntrepriseId(n);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const refreshEntreprises = useCallback(async () => {
+    try {
+      const res = await authedFetch("/api/v1/entreprises");
+      if (!res.ok) return;
+      const data = (await res.json()) as Array<{
+        id: number;
+        name: string;
+        color_accent: string;
+      }>;
+      setEntreprises(
+        data.map((e) => ({
+          id: e.id,
+          name: e.name,
+          color_accent: e.color_accent
+        }))
+      );
+    } catch {
+      /* silent */
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    void refreshEntreprises();
+  }, [user, refreshEntreprises]);
 
   if (loading) {
     return (
@@ -103,6 +191,14 @@ export default function ImmobilierLayout({
               <X className="h-5 w-5" />
             </button>
           </div>
+
+          {/* Sélecteur d'entreprise active (contexte du portefeuille) */}
+          <EntrepriseSelector
+            entreprises={entreprises}
+            currentId={currentEntrepriseId}
+            onChange={setCurrentEntrepriseId}
+            onAdded={refreshEntreprises}
+          />
 
           <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
             <div>
@@ -168,7 +264,15 @@ export default function ImmobilierLayout({
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <ctx.Provider value={{ onOpenSidebar: () => setSidebarOpen(true) }}>
+          <ctx.Provider
+            value={{
+              onOpenSidebar: () => setSidebarOpen(true),
+              currentEntrepriseId,
+              setCurrentEntrepriseId,
+              entreprises,
+              refreshEntreprises
+            }}
+          >
             <ConfirmProvider>
               <main className="flex-1 overflow-x-hidden">
                 {allowed ? children : <NoAccess />}
@@ -238,5 +342,256 @@ export function ImmobilierTopbar({
       </nav>
       {rightSlot ? <div className="flex items-center gap-2">{rightSlot}</div> : null}
     </header>
+  );
+}
+
+// ─── Sélecteur d'entreprise active dans la sidebar ─────────────────────
+
+function EntrepriseSelector({
+  entreprises,
+  currentId,
+  onChange,
+  onAdded
+}: {
+  entreprises: EntrepriseLite[];
+  currentId: number | null;
+  onChange: (id: number | null) => void;
+  onAdded: () => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const current = entreprises.find((e) => e.id === currentId) || null;
+
+  return (
+    <div className="border-b border-brand-800 px-3 py-3">
+      <p className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+        Suivi pour
+      </p>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-2 rounded-lg border border-brand-700 bg-brand-900 px-3 py-2 text-left text-sm transition hover:border-sky-400/50"
+      >
+        {current ? (
+          <span className="flex min-w-0 items-center gap-2">
+            <span
+              className="h-2 w-2 flex-shrink-0 rounded-full"
+              style={{ backgroundColor: current.color_accent }}
+            />
+            <span className="truncate font-bold text-white">
+              {current.name}
+            </span>
+          </span>
+        ) : (
+          <span className="text-white/70">Toutes les entreprises</span>
+        )}
+        <ChevronDown
+          className={`h-4 w-4 flex-shrink-0 text-white/50 transition ${
+            open ? "rotate-180" : ""
+          }`}
+        />
+      </button>
+      {open ? (
+        <div className="mt-1 max-h-72 overflow-y-auto rounded-lg border border-brand-700 bg-brand-950 py-1 shadow-2xl">
+          <button
+            type="button"
+            onClick={() => {
+              onChange(null);
+              setOpen(false);
+            }}
+            className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition hover:bg-brand-900 ${
+              currentId == null ? "bg-sky-500/10 text-sky-200" : "text-white/80"
+            }`}
+          >
+            <span>Toutes les entreprises</span>
+            {currentId == null ? <Check className="h-3.5 w-3.5" /> : null}
+          </button>
+          {entreprises.length > 0 ? (
+            <div className="my-1 border-t border-brand-800" />
+          ) : null}
+          {entreprises.map((e) => (
+            <button
+              key={e.id}
+              type="button"
+              onClick={() => {
+                onChange(e.id);
+                setOpen(false);
+              }}
+              className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm transition hover:bg-brand-900 ${
+                currentId === e.id
+                  ? "bg-sky-500/10 text-sky-200"
+                  : "text-white/80"
+              }`}
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <span
+                  className="h-2 w-2 flex-shrink-0 rounded-full"
+                  style={{ backgroundColor: e.color_accent }}
+                />
+                <span className="truncate">{e.name}</span>
+              </span>
+              {currentId === e.id ? (
+                <Check className="h-3.5 w-3.5 flex-shrink-0" />
+              ) : null}
+            </button>
+          ))}
+          <div className="my-1 border-t border-brand-800" />
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              setShowCreate(true);
+            }}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-emerald-300 transition hover:bg-emerald-500/10"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Nouvelle entreprise
+          </button>
+        </div>
+      ) : null}
+
+      {showCreate ? (
+        <CreateEntrepriseModal
+          onClose={() => setShowCreate(false)}
+          onCreated={async (id) => {
+            setShowCreate(false);
+            await onAdded();
+            onChange(id);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function CreateEntrepriseModal({
+  onClose,
+  onCreated
+}: {
+  onClose: () => void;
+  onCreated: (id: number) => void | Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [neq, setNeq] = useState("");
+  const [type, setType] = useState("immobiliere");
+  const [color, setColor] = useState("#0ea5e9");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setErr(null);
+    try {
+      const res = await authedFetch("/api/v1/entreprises", {
+        method: "POST",
+        body: JSON.stringify({
+          name: name.trim(),
+          neq: neq.trim() || null,
+          type,
+          color_accent: color,
+          is_active: true
+        })
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as { id: number };
+      await onCreated(data.id);
+    } catch (e2) {
+      setErr((e2 as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+      <div className="my-8 w-full max-w-md rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
+        <div className="border-b border-brand-800 px-5 py-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-sky-300">
+            Nouvelle entreprise propriétaire
+          </h2>
+        </div>
+        <form onSubmit={submit} className="grid gap-3 p-5">
+          <div>
+            <label className="label">Nom</label>
+            <input
+              required
+              value={name}
+              onChange={(ev) => setName(ev.target.value)}
+              className="input"
+              placeholder="ex. Immo BGV inc."
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">NEQ (optionnel)</label>
+              <input
+                value={neq}
+                onChange={(ev) => setNeq(ev.target.value)}
+                className="input font-mono"
+                maxLength={32}
+              />
+            </div>
+            <div>
+              <label className="label">Type</label>
+              <select
+                value={type}
+                onChange={(ev) => setType(ev.target.value)}
+                className="input"
+              >
+                <option value="immobiliere">Société immobilière</option>
+                <option value="gestion">Société de gestion</option>
+                <option value="investissement">Investissement</option>
+                <option value="autre">Autre</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="label">Couleur</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={color}
+                onChange={(ev) => setColor(ev.target.value)}
+                className="h-9 w-12 cursor-pointer rounded-lg border border-white/15 bg-transparent"
+              />
+              <input
+                value={color}
+                onChange={(ev) => setColor(ev.target.value)}
+                pattern="^#[0-9a-fA-F]{6}$"
+                className="input flex-1 font-mono text-sm"
+              />
+            </div>
+          </div>
+
+          {err ? (
+            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+              {err}
+            </p>
+          ) : null}
+
+          <div className="flex items-center justify-end gap-2 border-t border-brand-800 pt-3">
+            <button type="button" onClick={onClose} className="btn-secondary text-sm">
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={saving || !name.trim()}
+              className="btn-accent inline-flex items-center text-sm disabled:opacity-60"
+            >
+              {saving ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                "Créer & sélectionner"
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
