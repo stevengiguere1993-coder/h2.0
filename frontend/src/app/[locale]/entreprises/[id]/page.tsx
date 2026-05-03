@@ -232,14 +232,23 @@ export default function EntrepriseDetailPage() {
           { label: ent.name }
         ]}
         rightSlot={
-          <button
-            type="button"
-            onClick={() => setModal({ fresh: true })}
-            className="btn-accent text-sm"
-          >
-            <Plus className="mr-1.5 h-4 w-4" />
-            Nouvelle tâche
-          </button>
+          <>
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={`/entreprises/${ent.id}/pilotage` as any}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-200 hover:bg-violet-500/20"
+            >
+              Pilotage
+            </Link>
+            <button
+              type="button"
+              onClick={() => setModal({ fresh: true })}
+              className="btn-accent text-sm"
+            >
+              <Plus className="mr-1.5 h-4 w-4" />
+              Nouvelle tâche
+            </button>
+          </>
         }
       />
 

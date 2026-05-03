@@ -214,3 +214,49 @@ async def trigger_qg_daily_pulse(
         skipped=result.get("skipped", 0),
         errors=result.get("errors", 0),
     )
+
+
+class QGRecurrenceResult(BaseModel):
+    ok: bool
+    job: str
+    templates_scanned: int = 0
+    taches_created: int = 0
+    templates_updated: int = 0
+    errors: int = 0
+
+
+@router.api_route(
+    "/run/qg-tache-recurrence",
+    methods=["GET", "POST"],
+    response_model=QGRecurrenceResult,
+)
+async def trigger_qg_tache_recurrence(
+    x_cron_secret: Optional[str] = Header(default=None),
+    secret: Optional[str] = Query(default=None),
+) -> QGRecurrenceResult:
+    """Cron quotidien : matérialise les tâches récurrentes dues du jour.
+
+    À planifier ~6h heure locale via cron-job.org. Idempotent —
+    n'écrira pas en double pour le même (template, due_date).
+    """
+    _check_secret(x_cron_secret, secret)
+    from app.db.session import AsyncSessionLocal
+    from app.services.qg_recurrence import materialize_due_templates
+
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await materialize_due_templates(db)
+    except Exception as exc:
+        log.exception("Cron qg_tache_recurrence failed: %s", exc)
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Job a échoué : {exc}",
+        )
+    return QGRecurrenceResult(
+        ok=True,
+        job="qg-tache-recurrence",
+        templates_scanned=result.get("templates_scanned", 0),
+        taches_created=result.get("taches_created", 0),
+        templates_updated=result.get("templates_updated", 0),
+        errors=len(result.get("errors", [])),
+    )
