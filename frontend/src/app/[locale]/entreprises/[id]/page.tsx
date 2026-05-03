@@ -129,7 +129,14 @@ export default function EntrepriseDetailPage() {
   }
 
   useEffect(() => {
-    if (id) void load();
+    if (Number.isFinite(id) && id > 0) {
+      void load();
+    } else {
+      // ID invalide (ex. /entreprises/undefined) → on coupe le loader
+      // pour afficher un message d'erreur clair au lieu d'un spin sans fin.
+      setLoading(false);
+      setError("Identifiant d'entreprise invalide.");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
