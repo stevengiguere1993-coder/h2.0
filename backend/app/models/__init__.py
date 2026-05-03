@@ -47,6 +47,12 @@ from app.models.facture_item import FactureItem
 from app.models.follow_up import FollowUp
 from app.models.fournisseur import Fournisseur
 from app.models.help_request import HelpRequest
+from app.models.investissement import (  # noqa: F401
+    Distribution,
+    DistributionType,
+    Investissement,
+    InvestissementStatus,
+)
 from app.models.immobilier import (  # noqa: F401
     Bail,
     BailRenouvellement,
@@ -137,9 +143,11 @@ __all__ = [
     "Bail",
     "BailRenouvellement",
     "Evaluation",
+    "Distribution",
     "Hypotheque",
     "Immeuble",
     "ImmeubleOwnership",
+    "Investissement",
     "Logement",
     "Locataire",
     "MaintenanceOrdre",
