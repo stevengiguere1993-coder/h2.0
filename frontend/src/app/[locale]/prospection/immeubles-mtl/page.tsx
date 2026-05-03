@@ -86,7 +86,7 @@ export default function ImmeublesMtlPage() {
   const [sortBy, setSortBy] = useState("nombre_logement_desc");
   const [distanceBand, setDistanceBand] = useState<
     "" | "mtl_only" | "under_30" | "30_to_40" | "40_to_50" | "over_50"
-  >("under_30");
+  >("mtl_only");
   const [offset, setOffset] = useState(0);
   const limit = 100;
 
