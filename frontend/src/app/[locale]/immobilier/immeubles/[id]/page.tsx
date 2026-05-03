@@ -1,0 +1,769 @@
+"use client";
+
+import { use, useEffect, useState } from "react";
+import {
+  ArrowLeft,
+  Banknote,
+  Building2,
+  Calendar,
+  ClipboardList,
+  DollarSign,
+  Home,
+  Loader2,
+  Percent,
+  TrendingUp,
+  Wrench
+} from "lucide-react";
+
+import { Link } from "@/i18n/navigation";
+import { authedFetch } from "@/lib/auth";
+import { ImmobilierTopbar } from "../../layout";
+
+type Immeuble = {
+  id: number;
+  name: string;
+  address: string;
+  city?: string | null;
+  postal_code?: string | null;
+  type: string;
+  annee_construction?: number | null;
+  nb_logements?: number | null;
+  matricule?: string | null;
+  purchase_price?: number | null;
+  purchase_date?: string | null;
+  description?: string | null;
+  is_active: boolean;
+};
+
+type Logement = {
+  id: number;
+  numero: string;
+  nb_pieces_decimal?: number | null;
+  superficie_pi2?: number | null;
+  status: string;
+  loyer_demande?: number | null;
+};
+
+type Bail = {
+  id: number;
+  logement_id: number;
+  locataire_id: number;
+  date_debut: string;
+  date_fin: string;
+  loyer_mensuel: number;
+  status: string;
+};
+
+type Hypotheque = {
+  id: number;
+  rang: number;
+  preteur: string;
+  balance_actuelle?: number | null;
+  taux_pct?: number | null;
+  paiement_mensuel?: number | null;
+  date_fin_terme?: string | null;
+  status: string;
+};
+
+type Evaluation = {
+  id: number;
+  kind: string;
+  valeur: number;
+  date_evaluation: string;
+  source?: string | null;
+};
+
+type Maintenance = {
+  id: number;
+  titre: string;
+  priorite: string;
+  status: string;
+  cout_estime?: number | null;
+  cout_reel?: number | null;
+  plannifie_pour?: string | null;
+};
+
+type Financials = {
+  immeuble_id: number;
+  nb_logements_actifs: number;
+  nb_logements_occupes: number;
+  taux_occupation: number;
+  revenu_brut_mensuel: number;
+  revenu_brut_annuel: number;
+  paiement_hypotheque_mensuel: number;
+  balance_hypothecaire: number;
+  valeur_actuelle?: number | null;
+  valeur_municipale?: number | null;
+  purchase_price?: number | null;
+  grm?: number | null;
+  cap_rate?: number | null;
+  cash_flow_mensuel?: number | null;
+  appreciation_pct?: number | null;
+};
+
+const TABS = [
+  { id: "overview", label: "Vue d'ensemble", icon: Building2 },
+  { id: "logements", label: "Logements", icon: Home },
+  { id: "baux", label: "Baux", icon: ClipboardList },
+  { id: "hypotheques", label: "Hypothèques", icon: Banknote },
+  { id: "evaluations", label: "Évaluations", icon: TrendingUp },
+  { id: "maintenance", label: "Maintenance", icon: Wrench }
+] as const;
+
+function fmtCurrency(n: number | null | undefined): string {
+  if (n == null) return "—";
+  return new Intl.NumberFormat("fr-CA", {
+    style: "currency",
+    currency: "CAD",
+    maximumFractionDigits: 0
+  }).format(n);
+}
+
+function fmtPct(n: number | null | undefined, decimals = 0): string {
+  if (n == null) return "—";
+  return `${n.toFixed(decimals)}%`;
+}
+
+export default function ImmeubleDetailPage({
+  params
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = use(params);
+  const immeubleId = Number(id);
+  const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("overview");
+  const [immeuble, setImmeuble] = useState<Immeuble | null>(null);
+  const [financials, setFinancials] = useState<Financials | null>(null);
+  const [logements, setLogements] = useState<Logement[] | null>(null);
+  const [baux, setBaux] = useState<Bail[] | null>(null);
+  const [hypotheques, setHypotheques] = useState<Hypotheque[] | null>(null);
+  const [evaluations, setEvaluations] = useState<Evaluation[] | null>(null);
+  const [maintenance, setMaintenance] = useState<Maintenance[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!immeubleId) return;
+    let cancelled = false;
+    async function loadAll() {
+      try {
+        const [imm, fin, logs, bx, hyp, evals, maint] = await Promise.all([
+          authedFetch(`/api/v1/immobilier/immeubles/${immeubleId}`),
+          authedFetch(
+            `/api/v1/immobilier/immeubles/${immeubleId}/financials`
+          ),
+          authedFetch(
+            `/api/v1/immobilier/immeubles/${immeubleId}/logements`
+          ),
+          authedFetch(`/api/v1/immobilier/immeubles/${immeubleId}/baux`),
+          authedFetch(
+            `/api/v1/immobilier/immeubles/${immeubleId}/hypotheques`
+          ),
+          authedFetch(
+            `/api/v1/immobilier/immeubles/${immeubleId}/evaluations`
+          ),
+          authedFetch(
+            `/api/v1/immobilier/immeubles/${immeubleId}/maintenance`
+          )
+        ]);
+        if (cancelled) return;
+        if (!imm.ok) throw new Error(`Immeuble HTTP ${imm.status}`);
+        setImmeuble((await imm.json()) as Immeuble);
+        if (fin.ok) setFinancials((await fin.json()) as Financials);
+        if (logs.ok) setLogements((await logs.json()) as Logement[]);
+        if (bx.ok) setBaux((await bx.json()) as Bail[]);
+        if (hyp.ok) setHypotheques((await hyp.json()) as Hypotheque[]);
+        if (evals.ok) setEvaluations((await evals.json()) as Evaluation[]);
+        if (maint.ok) setMaintenance((await maint.json()) as Maintenance[]);
+      } catch (err) {
+        if (!cancelled) setError((err as Error).message);
+      }
+    }
+    void loadAll();
+    return () => {
+      cancelled = true;
+    };
+  }, [immeubleId]);
+
+  if (error) {
+    return (
+      <>
+        <ImmobilierTopbar
+          breadcrumbs={[
+            { label: "Gestion immobilière", href: "/immobilier" },
+            { label: "Immeuble" }
+          ]}
+        />
+        <div className="p-6">
+          <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+            {error}
+          </p>
+        </div>
+      </>
+    );
+  }
+
+  if (!immeuble) {
+    return (
+      <>
+        <ImmobilierTopbar
+          breadcrumbs={[
+            { label: "Gestion immobilière", href: "/immobilier" },
+            { label: "Immeuble" }
+          ]}
+        />
+        <div className="flex items-center gap-2 p-6 text-xs text-white/50">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <ImmobilierTopbar
+        breadcrumbs={[
+          { label: "Gestion immobilière", href: "/immobilier" },
+          { label: "Immeubles", href: "/immobilier/immeubles" },
+          { label: immeuble.name }
+        ]}
+      />
+
+      <div className="p-4 lg:p-6">
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={"/immobilier/immeubles" as any}
+          className="inline-flex items-center text-xs text-white/50 hover:text-sky-300"
+        >
+          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Liste des immeubles
+        </Link>
+
+        <header className="mt-4 flex flex-wrap items-start gap-4">
+          <div className="flex h-16 w-16 flex-shrink-0 items-center justify-center rounded-xl bg-sky-500/15 text-sky-300">
+            <Building2 className="h-7 w-7" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl font-bold text-white">{immeuble.name}</h1>
+            <p className="mt-1 text-sm text-white/60">
+              {immeuble.address}
+              {immeuble.city ? `, ${immeuble.city}` : ""}
+              {immeuble.postal_code ? ` (${immeuble.postal_code})` : ""}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+              <span className="rounded bg-brand-900 px-2 py-0.5 font-mono text-white/70">
+                {immeuble.type}
+              </span>
+              {immeuble.annee_construction ? (
+                <span className="rounded bg-brand-900 px-2 py-0.5 text-white/70">
+                  {immeuble.annee_construction}
+                </span>
+              ) : null}
+              {immeuble.matricule ? (
+                <span className="rounded bg-brand-900 px-2 py-0.5 font-mono text-white/50">
+                  Matricule {immeuble.matricule}
+                </span>
+              ) : null}
+              {!immeuble.is_active ? (
+                <span className="rounded bg-amber-500/15 px-2 py-0.5 font-semibold text-amber-300">
+                  Inactif
+                </span>
+              ) : null}
+            </div>
+          </div>
+        </header>
+
+        {/* KPIs financiers */}
+        {financials ? (
+          <section className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Kpi
+              label="Revenu mensuel"
+              value={fmtCurrency(financials.revenu_brut_mensuel)}
+              sub={`${fmtCurrency(financials.revenu_brut_annuel)} / an`}
+              icon={DollarSign}
+              tone="emerald"
+            />
+            <Kpi
+              label="Cash flow mensuel"
+              value={fmtCurrency(financials.cash_flow_mensuel)}
+              sub={`Hyp. ${fmtCurrency(financials.paiement_hypotheque_mensuel)}`}
+              icon={Banknote}
+              tone={
+                (financials.cash_flow_mensuel || 0) >= 0 ? "emerald" : "rose"
+              }
+            />
+            <Kpi
+              label="Cap rate (NOI ≈ 50%)"
+              value={fmtPct(financials.cap_rate, 2)}
+              sub={`GRM ${financials.grm ?? "—"}`}
+              icon={Percent}
+              tone="sky"
+            />
+            <Kpi
+              label="Occupation"
+              value={`${(financials.taux_occupation * 100).toFixed(0)}%`}
+              sub={`${financials.nb_logements_occupes}/${financials.nb_logements_actifs} occupés`}
+              icon={Home}
+              tone={financials.taux_occupation >= 0.9 ? "emerald" : "amber"}
+            />
+          </section>
+        ) : null}
+
+        {/* Tabs */}
+        <nav
+          className="mt-6 flex items-center gap-1 overflow-x-auto"
+          style={{ borderBottom: "1px solid #25252d" }}
+        >
+          {TABS.map((t) => {
+            const active = tab === t.id;
+            const Icon = t.icon;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition"
+                style={{
+                  color: active ? "#7dd3fc" : "rgba(245,245,247,0.6)",
+                  borderBottom: active
+                    ? "2px solid #7dd3fc"
+                    : "2px solid transparent",
+                  marginBottom: "-1px"
+                }}
+              >
+                <Icon className="h-4 w-4" />
+                {t.label}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="mt-5">
+          {tab === "overview" ? (
+            <OverviewTab
+              immeuble={immeuble}
+              financials={financials}
+              logementsCount={logements?.length || 0}
+            />
+          ) : null}
+          {tab === "logements" ? <LogementsTab list={logements} /> : null}
+          {tab === "baux" ? (
+            <BauxTab list={baux} logements={logements} />
+          ) : null}
+          {tab === "hypotheques" ? <HypothequesTab list={hypotheques} /> : null}
+          {tab === "evaluations" ? <EvaluationsTab list={evaluations} /> : null}
+          {tab === "maintenance" ? <MaintenanceTab list={maintenance} /> : null}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function Kpi({
+  label,
+  value,
+  sub,
+  icon: Icon,
+  tone
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  icon: React.ComponentType<{ className?: string }>;
+  tone: "sky" | "emerald" | "amber" | "rose";
+}) {
+  const cls: Record<typeof tone, string> = {
+    sky: "bg-sky-500/15 text-sky-300",
+    emerald: "bg-emerald-500/15 text-emerald-300",
+    amber: "bg-amber-500/15 text-amber-300",
+    rose: "bg-rose-500/15 text-rose-300"
+  };
+  return (
+    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
+          {label}
+        </span>
+        <span
+          className={`flex h-8 w-8 items-center justify-center rounded-lg ${cls[tone]}`}
+        >
+          <Icon className="h-4 w-4" />
+        </span>
+      </div>
+      <div className="mt-3 text-2xl font-bold text-white">{value}</div>
+      {sub ? <div className="mt-1 text-xs text-white/50">{sub}</div> : null}
+    </div>
+  );
+}
+
+function Section({
+  title,
+  children,
+  empty = "—"
+}: {
+  title: string;
+  children: React.ReactNode;
+  empty?: string;
+}) {
+  void empty;
+  return (
+    <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-sky-300">
+        {title}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+function OverviewTab({
+  immeuble,
+  financials,
+  logementsCount
+}: {
+  immeuble: Immeuble;
+  financials: Financials | null;
+  logementsCount: number;
+}) {
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <Section title="Caractéristiques">
+        <dl className="grid grid-cols-2 gap-y-2 text-sm">
+          <dt className="text-white/50">Type</dt>
+          <dd className="text-right text-white">{immeuble.type}</dd>
+          <dt className="text-white/50">Année</dt>
+          <dd className="text-right text-white">
+            {immeuble.annee_construction || "—"}
+          </dd>
+          <dt className="text-white/50">Logements (déclaré)</dt>
+          <dd className="text-right text-white">
+            {immeuble.nb_logements ?? "—"}
+          </dd>
+          <dt className="text-white/50">Logements (créés)</dt>
+          <dd className="text-right text-white">{logementsCount}</dd>
+          {immeuble.purchase_date ? (
+            <>
+              <dt className="text-white/50">Date d&apos;achat</dt>
+              <dd className="text-right text-white">{immeuble.purchase_date}</dd>
+            </>
+          ) : null}
+          {immeuble.purchase_price ? (
+            <>
+              <dt className="text-white/50">Prix d&apos;achat</dt>
+              <dd className="text-right font-mono text-white">
+                {fmtCurrency(immeuble.purchase_price)}
+              </dd>
+            </>
+          ) : null}
+        </dl>
+        {immeuble.description ? (
+          <p className="mt-4 border-t border-brand-800 pt-3 text-sm text-white/70">
+            {immeuble.description}
+          </p>
+        ) : null}
+      </Section>
+
+      <Section title="Valorisation">
+        <dl className="grid grid-cols-2 gap-y-2 text-sm">
+          <dt className="text-white/50">Valeur actuelle</dt>
+          <dd className="text-right font-mono text-white">
+            {fmtCurrency(financials?.valeur_actuelle)}
+          </dd>
+          <dt className="text-white/50">Valeur municipale</dt>
+          <dd className="text-right font-mono text-white">
+            {fmtCurrency(financials?.valeur_municipale)}
+          </dd>
+          <dt className="text-white/50">Prix d&apos;achat</dt>
+          <dd className="text-right font-mono text-white">
+            {fmtCurrency(financials?.purchase_price)}
+          </dd>
+          <dt className="text-white/50">Appréciation</dt>
+          <dd
+            className={`text-right font-mono ${
+              (financials?.appreciation_pct || 0) >= 0
+                ? "text-emerald-300"
+                : "text-rose-300"
+            }`}
+          >
+            {fmtPct(financials?.appreciation_pct, 1)}
+          </dd>
+          <dt className="text-white/50">Balance hypothécaire</dt>
+          <dd className="text-right font-mono text-white">
+            {fmtCurrency(financials?.balance_hypothecaire)}
+          </dd>
+        </dl>
+      </Section>
+    </div>
+  );
+}
+
+function LogementsTab({ list }: { list: Logement[] | null }) {
+  if (list === null)
+    return (
+      <p className="text-xs text-white/50">
+        <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Chargement…
+      </p>
+    );
+  if (list.length === 0)
+    return (
+      <p className="rounded-lg border border-brand-800 bg-brand-900 px-4 py-3 text-sm text-white/60">
+        Aucun logement créé.
+      </p>
+    );
+  return (
+    <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
+      <table className="w-full text-left text-sm">
+        <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
+          <tr>
+            <th className="px-4 py-2.5">Numéro</th>
+            <th className="px-4 py-2.5">Pièces</th>
+            <th className="px-4 py-2.5 text-right">Superficie</th>
+            <th className="px-4 py-2.5">Statut</th>
+            <th className="px-4 py-2.5 text-right">Loyer demandé</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-brand-800">
+          {list.map((l) => (
+            <tr key={l.id}>
+              <td className="px-4 py-2 font-bold text-white">{l.numero}</td>
+              <td className="px-4 py-2 text-xs text-white/70">
+                {l.nb_pieces_decimal != null
+                  ? `${l.nb_pieces_decimal}½`
+                  : "—"}
+              </td>
+              <td className="px-4 py-2 text-right font-mono text-xs text-white/70">
+                {l.superficie_pi2 ? `${l.superficie_pi2} pi²` : "—"}
+              </td>
+              <td className="px-4 py-2 text-xs">
+                <StatusBadge status={l.status} />
+              </td>
+              <td className="px-4 py-2 text-right font-mono text-xs text-white/70">
+                {fmtCurrency(l.loyer_demande)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function BauxTab({
+  list,
+  logements
+}: {
+  list: Bail[] | null;
+  logements: Logement[] | null;
+}) {
+  if (list === null) return <Loading />;
+  if (list.length === 0) return <Empty msg="Aucun bail." />;
+  const logMap = new Map((logements || []).map((l) => [l.id, l.numero]));
+  return (
+    <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
+      <table className="w-full text-left text-sm">
+        <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
+          <tr>
+            <th className="px-4 py-2.5">Logement</th>
+            <th className="px-4 py-2.5">Période</th>
+            <th className="px-4 py-2.5 text-right">Loyer/m</th>
+            <th className="px-4 py-2.5">Statut</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-brand-800">
+          {list.map((b) => (
+            <tr key={b.id}>
+              <td className="px-4 py-2 font-mono text-xs text-white">
+                {logMap.get(b.logement_id) || `#${b.logement_id}`}
+              </td>
+              <td className="px-4 py-2 text-xs text-white/70">
+                {b.date_debut} → {b.date_fin}
+              </td>
+              <td className="px-4 py-2 text-right font-mono text-xs text-white/80">
+                {fmtCurrency(b.loyer_mensuel)}
+              </td>
+              <td className="px-4 py-2 text-xs">
+                <StatusBadge status={b.status} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function HypothequesTab({ list }: { list: Hypotheque[] | null }) {
+  if (list === null) return <Loading />;
+  if (list.length === 0) return <Empty msg="Aucune hypothèque enregistrée." />;
+  return (
+    <div className="grid gap-3">
+      {list.map((h) => (
+        <div
+          key={h.id}
+          className="rounded-2xl border border-brand-800 bg-brand-900 p-4"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-bold text-white">
+                {h.preteur}{" "}
+                <span className="ml-1 rounded bg-brand-950 px-1.5 py-0.5 font-mono text-[10px] text-white/50">
+                  Rang {h.rang}
+                </span>
+              </p>
+              <p className="mt-1 text-xs text-white/50">
+                {h.taux_pct ? `${h.taux_pct}%` : "Taux ?"} · Renouv.{" "}
+                {h.date_fin_terme || "—"}
+              </p>
+            </div>
+            <div className="text-right">
+              <div className="font-mono text-sm font-bold text-white">
+                {fmtCurrency(h.balance_actuelle)}
+              </div>
+              <div className="text-[11px] text-white/50">
+                Paiement {fmtCurrency(h.paiement_mensuel)}/m
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function EvaluationsTab({ list }: { list: Evaluation[] | null }) {
+  if (list === null) return <Loading />;
+  if (list.length === 0) return <Empty msg="Aucune évaluation." />;
+  return (
+    <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
+      <table className="w-full text-left text-sm">
+        <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
+          <tr>
+            <th className="px-4 py-2.5">Date</th>
+            <th className="px-4 py-2.5">Type</th>
+            <th className="px-4 py-2.5">Source</th>
+            <th className="px-4 py-2.5 text-right">Valeur</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-brand-800">
+          {list.map((e) => (
+            <tr key={e.id}>
+              <td className="px-4 py-2 text-xs text-white/70">
+                {e.date_evaluation}
+              </td>
+              <td className="px-4 py-2 text-xs">
+                <span className="rounded bg-brand-950 px-1.5 py-0.5 font-mono text-white/70">
+                  {e.kind}
+                </span>
+              </td>
+              <td className="px-4 py-2 text-xs text-white/50">
+                {e.source || "—"}
+              </td>
+              <td className="px-4 py-2 text-right font-mono text-sm font-bold text-white">
+                {fmtCurrency(e.valeur)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function MaintenanceTab({ list }: { list: Maintenance[] | null }) {
+  if (list === null) return <Loading />;
+  if (list.length === 0) return <Empty msg="Aucun ordre de maintenance." />;
+  return (
+    <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
+      <table className="w-full text-left text-sm">
+        <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
+          <tr>
+            <th className="px-4 py-2.5">Titre</th>
+            <th className="px-4 py-2.5">Priorité</th>
+            <th className="px-4 py-2.5">Statut</th>
+            <th className="px-4 py-2.5">Planifié</th>
+            <th className="px-4 py-2.5 text-right">Coût</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-brand-800">
+          {list.map((m) => (
+            <tr key={m.id}>
+              <td className="px-4 py-2 text-sm font-bold text-white">
+                {m.titre}
+              </td>
+              <td className="px-4 py-2 text-xs">
+                <PrioriteBadge priorite={m.priorite} />
+              </td>
+              <td className="px-4 py-2 text-xs">
+                <StatusBadge status={m.status} />
+              </td>
+              <td className="px-4 py-2 text-xs text-white/60">
+                <Calendar className="mr-1 inline h-3 w-3 text-white/40" />
+                {m.plannifie_pour || "—"}
+              </td>
+              <td className="px-4 py-2 text-right font-mono text-xs text-white/70">
+                {fmtCurrency(m.cout_reel ?? m.cout_estime)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    occupe: "bg-emerald-500/15 text-emerald-300",
+    actif: "bg-emerald-500/15 text-emerald-300",
+    vacant: "bg-amber-500/15 text-amber-300",
+    reserve: "bg-sky-500/15 text-sky-300",
+    propose: "bg-sky-500/15 text-sky-300",
+    termine: "bg-white/10 text-white/50",
+    resilie: "bg-rose-500/15 text-rose-300",
+    hors_location: "bg-white/10 text-white/50",
+    ouvert: "bg-amber-500/15 text-amber-300",
+    en_cours: "bg-sky-500/15 text-sky-300",
+    en_attente: "bg-violet-500/15 text-violet-300",
+    annule: "bg-white/10 text-white/40"
+  };
+  const cls = map[status] || "bg-white/10 text-white/60";
+  return (
+    <span
+      className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase ${cls}`}
+    >
+      {status}
+    </span>
+  );
+}
+
+function PrioriteBadge({ priorite }: { priorite: string }) {
+  const map: Record<string, string> = {
+    urgence: "bg-rose-500/20 text-rose-300",
+    haute: "bg-amber-500/15 text-amber-300",
+    normale: "bg-white/10 text-white/60",
+    basse: "bg-white/5 text-white/40"
+  };
+  return (
+    <span
+      className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase ${
+        map[priorite] || "bg-white/10 text-white/60"
+      }`}
+    >
+      {priorite}
+    </span>
+  );
+}
+
+function Loading() {
+  return (
+    <p className="text-xs text-white/50">
+      <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Chargement…
+    </p>
+  );
+}
+
+function Empty({ msg }: { msg: string }) {
+  return (
+    <p className="rounded-lg border border-brand-800 bg-brand-900 px-4 py-3 text-sm text-white/60">
+      {msg}
+    </p>
+  );
+}
