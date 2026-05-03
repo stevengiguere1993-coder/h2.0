@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 
 import { useRouter } from "@/i18n/navigation";
-import { getMe, getToken, login, setToken } from "@/lib/auth";
+import { authedFetch, getMe, getToken, login, setToken } from "@/lib/auth";
 
 // Whitelist email autorisé à voir le bouton « Mode dev » sur le
 // sélecteur de portail. Centralisé pour matcher /dev/page.tsx.
@@ -34,6 +34,7 @@ export function LoginForm() {
   const [authed, setAuthed] = useState(false);
   const [nextUrl, setNextUrl] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [pendingHelp, setPendingHelp] = useState(0);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -118,6 +119,33 @@ export function LoginForm() {
     }
   }
 
+  // Fetch pending help requests count for the dev badge — visible
+  // uniquement pour les emails whitelistés. Refresh toutes les 60s.
+  useEffect(() => {
+    if (!authed || !userEmail) return;
+    const norm = userEmail.toLowerCase().trim();
+    if (!DEV_ALLOWED_EMAILS.includes(norm)) return;
+    let cancelled = false;
+    async function fetchCount() {
+      try {
+        const res = await authedFetch(
+          "/api/v1/help/reports?status_filter=pending"
+        );
+        if (!res.ok) return;
+        const data = (await res.json()) as Array<unknown>;
+        if (!cancelled) setPendingHelp(Array.isArray(data) ? data.length : 0);
+      } catch {
+        /* silent */
+      }
+    }
+    void fetchCount();
+    const t = setInterval(fetchCount, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [authed, userEmail]);
+
   if (authed) {
     const showDev =
       !!userEmail &&
@@ -132,10 +160,19 @@ export function LoginForm() {
               router.replace("/dev" as any);
             }}
             className="absolute right-0 top-0 inline-flex items-center gap-1.5 rounded-full border border-amber-400/40 bg-amber-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-amber-200 hover:bg-amber-500/20"
-            title="Outils internes (mode dev)"
+            title={
+              pendingHelp > 0
+                ? `${pendingHelp} demande(s) d'aide en attente`
+                : "Outils internes (mode dev)"
+            }
           >
             <Terminal className="h-3 w-3" />
             Mode dev
+            {pendingHelp > 0 ? (
+              <span className="ml-1 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-500 px-1 text-[9px] font-bold text-white">
+                {pendingHelp > 99 ? "99+" : pendingHelp}
+              </span>
+            ) : null}
           </button>
         ) : null}
         <header className="text-center">
