@@ -28,12 +28,19 @@ Usage Hetzner (ou Render Shell payant) :
     # 3) Exporte la DATABASE_URL Render (Settings > Environment)
     export DATABASE_URL='postgresql://USER:PASS@HOST.render.com/DB'
 
-    # 4) Lance l'import depuis une URL publique
+    # 4a) Import du ZIP provincial complet depuis une URL
     python -m scripts.import_provincial_xml_zip \\
         --url 'https://www.donneesquebec.ca/...rolex.zip'
 
-    # OU depuis un fichier déjà téléchargé
+    # 4b) OU depuis un ZIP déjà téléchargé
     python -m scripts.import_provincial_xml_zip --zip /tmp/roles.zip
+
+    # 4c) OU UN seul XML (typiquement Montréal RL66023, déjà sur Hetzner)
+    python -m scripts.import_provincial_xml_zip \\
+        --xml /data/RL66023_2026.xml
+
+    # 4d) OU un dossier de XMLs déjà extraits
+    python -m scripts.import_provincial_xml_zip --xml-dir /data/roles/
 
     # OU avec une limite pour tester
     python -m scripts.import_provincial_xml_zip --zip /tmp/roles.zip \\
@@ -170,6 +177,23 @@ def main() -> int:
             "Téléchargé en streaming dans /tmp avant ingest."
         ),
     )
+    src.add_argument(
+        "--xml",
+        help=(
+            "Path local vers UN fichier XML MAMH (ex. RL66023_2026.xml "
+            "pour Montréal). Sera empaqueté dans un ZIP temporaire "
+            "avant ingest. Utile sur Hetzner si Montréal est déjà "
+            "sur disque."
+        ),
+    )
+    src.add_argument(
+        "--xml-dir",
+        help=(
+            "Path vers un dossier contenant plusieurs fichiers XML "
+            "MAMH. Tous les .xml du dossier sont empaquetés dans un "
+            "ZIP temporaire avant ingest."
+        ),
+    )
     parser.add_argument(
         "--region",
         default="quebec",
@@ -218,11 +242,58 @@ def main() -> int:
     )
 
     async def _go() -> None:
+        import zipfile
+
         zip_path = args.zip
         downloaded_temp = False
-        if not zip_path:
+        wrapped_temp = False
+
+        if args.url:
             zip_path = await _download_to_tmp(args.url)
             downloaded_temp = True
+        elif args.xml:
+            # Empaquette le XML dans un ZIP temporaire pour réutiliser
+            # le pipeline d'ingestion existant (qui attend un ZIP).
+            xml_path = args.xml
+            if not os.path.isfile(xml_path):
+                log.error("XML introuvable : %s", xml_path)
+                raise SystemExit(1)
+            fd, zip_path = tempfile.mkstemp(
+                suffix=".zip", prefix="provincial-single-"
+            )
+            os.close(fd)
+            wrapped_temp = True
+            log.info("Empaquette %s → %s", xml_path, zip_path)
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
+                zf.write(xml_path, arcname=os.path.basename(xml_path))
+        elif args.xml_dir:
+            xml_dir = args.xml_dir
+            if not os.path.isdir(xml_dir):
+                log.error("Dossier introuvable : %s", xml_dir)
+                raise SystemExit(1)
+            xml_files = sorted(
+                os.path.join(xml_dir, f)
+                for f in os.listdir(xml_dir)
+                if f.lower().endswith(".xml")
+            )
+            if not xml_files:
+                log.error("Aucun .xml dans %s", xml_dir)
+                raise SystemExit(1)
+            fd, zip_path = tempfile.mkstemp(
+                suffix=".zip", prefix="provincial-dir-"
+            )
+            os.close(fd)
+            wrapped_temp = True
+            log.info(
+                "Empaquette %d XML de %s → %s",
+                len(xml_files),
+                xml_dir,
+                zip_path,
+            )
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
+                for xml_path in xml_files:
+                    zf.write(xml_path, arcname=os.path.basename(xml_path))
+
         try:
             await _run(
                 zip_path,
@@ -232,7 +303,7 @@ def main() -> int:
                 batch_size=args.batch_size,
             )
         finally:
-            if downloaded_temp:
+            if downloaded_temp or wrapped_temp:
                 try:
                     os.unlink(zip_path)
                 except OSError:
