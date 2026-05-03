@@ -85,12 +85,13 @@ export default function EntreprisesLayout({
           const data = await healthRes.json();
           setEntreprises(
             Array.isArray(data)
-              ? data.map((e: { id: number; name: string; color_accent: string; health_label: "good" | "warn" | "risk" }) => ({
-                  id: e.id,
+              ? data.map((e: { entreprise_id?: number; id?: number; name: string; color_accent: string; health_label: "good" | "warn" | "risk" }) => ({
+                  // L'endpoint /health retourne `entreprise_id` ; legacy `id` gardé en fallback.
+                  id: (e.entreprise_id ?? e.id) as number,
                   name: e.name,
                   color_accent: e.color_accent,
                   health_label: e.health_label
-                }))
+                })).filter((e) => Number.isFinite(e.id))
               : []
           );
         }
