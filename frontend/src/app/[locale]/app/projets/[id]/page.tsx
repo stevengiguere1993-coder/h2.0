@@ -2153,6 +2153,24 @@ function PlanificationTab({ projectId }: { projectId: number }) {
         </ol>
       )}
 
+      {phases.length > 0 ? (
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={() => addPhase()}
+            disabled={busyPhase === "new"}
+            className="inline-flex items-center gap-2 rounded-xl border border-dashed border-brand-700 bg-brand-900/40 px-4 py-3 text-sm font-medium text-white/70 transition hover:border-accent-500 hover:bg-accent-500/10 hover:text-white disabled:opacity-60"
+          >
+            {busyPhase === "new" ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Plus className="h-4 w-4" />
+            )}
+            Ajouter une phase
+          </button>
+        </div>
+      ) : null}
+
       {/* Floating bucket for tasks not tied to a phase. */}
       <section className="rounded-xl border border-brand-800 bg-brand-900/40 p-4">
         <div className="flex items-center justify-between">

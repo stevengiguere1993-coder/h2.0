@@ -413,3 +413,161 @@ async def trigger_bail_renouvellement_tasks(
         tasks_skipped=res.get("tasks_skipped", 0),
         errors=len(res.get("errors", []) or []),
     )
+
+
+# ─── Mega-cron : exécute tous les jobs daily en un seul appel ──────────
+
+
+class MegaCronResult(BaseModel):
+    """Résultat agrégé du mega-cron : statut par sous-job."""
+    ok: bool
+    job: str = "all-daily"
+    jobs_run: int = 0
+    jobs_ok: int = 0
+    jobs_failed: int = 0
+    details: dict = {}
+
+
+async def _safe(name: str, coro_factory, results: dict) -> None:
+    """Exécute coro_factory(); enregistre le résultat sous results[name]."""
+    try:
+        out = await coro_factory()
+        results[name] = {"ok": True, "result": out if out is not None else "ran"}
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Mega-cron sub-job %s failed: %s", name, exc)
+        results[name] = {"ok": False, "error": str(exc)[:240]}
+
+
+@router.api_route(
+    "/run/all-daily",
+    methods=["GET", "POST"],
+    response_model=MegaCronResult,
+)
+async def trigger_all_daily(
+    x_cron_secret: Optional[str] = Header(default=None),
+    secret: Optional[str] = Query(default=None),
+) -> MegaCronResult:
+    """Mega-cron daily : exécute tous les jobs schedulés du jour
+    en séquence dans un seul appel HTTP. À configurer une seule fois
+    dans cron-job.org (~6h heure locale) — toute nouvelle routine ajoutée
+    par la suite sera automatiquement incluse sans toucher à cron-job.
+
+    Gère les erreurs job par job — si l'un échoue, les suivants
+    s'exécutent quand même et le rapport agrégé remonte les détails.
+    """
+    _check_secret(x_cron_secret, secret)
+    from app.db.session import AsyncSessionLocal
+
+    details: dict = {}
+
+    # Jobs construction / prospection (legacy, sans DB session paramétrée)
+    from app.jobs.unassigned_day_alerts import _run as run_unassigned
+    from app.jobs.follow_up_reminders import _run as run_follow_ups
+    from app.jobs.facture_reminders import run as run_facture
+    from app.jobs.appointment_reminders import run as run_appointment
+
+    await _safe("unassigned-day-alerts", run_unassigned, details)
+    await _safe("follow-up-reminders", run_follow_ups, details)
+    await _safe("facture-reminders", run_facture, details)
+    await _safe("appointment-reminders", run_appointment, details)
+
+    # Jobs QG / immobilier (utilisent une session DB managée)
+    async def _run_qg_daily_pulse():
+        from app.services.qg_daily_pulse import generate_for_all_active
+
+        async with AsyncSessionLocal() as db:
+            r = await generate_for_all_active(db, force=False)
+            await db.commit()
+            return r
+
+    async def _run_qg_recurrence():
+        from app.services.qg_recurrence import materialize_due_templates
+
+        async with AsyncSessionLocal() as db:
+            r = await materialize_due_templates(db)
+            await db.commit()
+            return r
+
+    async def _run_bail_renew_tasks():
+        from app.services.bail_renew_tasks import scan_and_create_renew_tasks
+
+        async with AsyncSessionLocal() as db:
+            r = await scan_and_create_renew_tasks(db)
+            await db.commit()
+            return r
+
+    await _safe("qg-daily-pulse", _run_qg_daily_pulse, details)
+    await _safe("qg-tache-recurrence", _run_qg_recurrence, details)
+    await _safe("bail-renouvellement-tasks", _run_bail_renew_tasks, details)
+
+    # Insights weekly : on tente quand même daily, le service est
+    # idempotent et skip si rien à faire.
+    async def _run_qg_insights():
+        from app.services.qg_insights import generate_for_all_active
+
+        async with AsyncSessionLocal() as db:
+            r = await generate_for_all_active(db)
+            await db.commit()
+            return r
+
+    await _safe("qg-weekly-insights", _run_qg_insights, details)
+
+    ok_count = sum(1 for v in details.values() if v.get("ok"))
+    fail_count = sum(1 for v in details.values() if not v.get("ok"))
+    return MegaCronResult(
+        ok=fail_count == 0,
+        job="all-daily",
+        jobs_run=len(details),
+        jobs_ok=ok_count,
+        jobs_failed=fail_count,
+        details=details,
+    )
+
+
+@router.api_route(
+    "/run/all-hourly",
+    methods=["GET", "POST"],
+    response_model=MegaCronResult,
+)
+async def trigger_all_hourly(
+    x_cron_secret: Optional[str] = Header(default=None),
+    secret: Optional[str] = Query(default=None),
+) -> MegaCronResult:
+    """Mega-cron horaire : jobs à fréquence > 1× par jour (sync calendrier
+    ICS). À configurer une seule fois dans cron-job.org si tu veux les
+    busy blocks à jour pour les suggestions intelligentes d'assignation."""
+    _check_secret(x_cron_secret, secret)
+    from app.db.session import AsyncSessionLocal
+
+    details: dict = {}
+
+    async def _run_calendar_sync():
+        from app.models.calendar_sync import UserCalendarFeed
+        from app.services.ical_sync import sync_user_feed
+        from sqlalchemy import select
+
+        async with AsyncSessionLocal() as db:
+            feeds = (await db.execute(select(UserCalendarFeed))).scalars().all()
+            ok = 0
+            fail = 0
+            for f in feeds:
+                try:
+                    await sync_user_feed(db, f)
+                    ok += 1
+                except Exception:
+                    fail += 1
+            await db.commit()
+            return {"feeds_total": len(feeds), "synced": ok, "failed": fail}
+
+    await _safe("calendar-feeds-sync", _run_calendar_sync, details)
+
+    ok_count = sum(1 for v in details.values() if v.get("ok"))
+    fail_count = sum(1 for v in details.values() if not v.get("ok"))
+    return MegaCronResult(
+        ok=fail_count == 0,
+        job="all-hourly",
+        jobs_run=len(details),
+        jobs_ok=ok_count,
+        jobs_failed=fail_count,
+        details=details,
+    )
