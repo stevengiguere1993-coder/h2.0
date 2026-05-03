@@ -18,10 +18,9 @@ import {
   Loader2,
   LogOut,
   Menu,
-  Plug,
+  Settings,
   Sparkles,
   Target,
-  Users,
   X
 } from "lucide-react";
 
@@ -135,8 +134,7 @@ export default function EntreprisesLayout({
   ];
 
   const REGLAGES: NavItem[] = [
-    { href: "/entreprises/import-monday", label: "Intégrations", icon: Plug },
-    { href: "/entreprises/equipe", label: "Équipe", icon: Users }
+    { href: "/entreprises/reglages", label: "Réglages", icon: Settings }
   ];
 
   function isActive(href: string) {
