@@ -4,6 +4,7 @@ import { Menu, Search } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { GlobalSearch } from "@/components/global-search";
+import { KratosLogo } from "@/components/kratos-logo";
 import { NotificationBell } from "@/components/notification-bell";
 import { ThemeToggle } from "@/components/theme-toggle";
 
@@ -80,6 +81,10 @@ export function AppTopbar({
       )}
 
       {rightSlot ? <div className="flex items-center gap-2">{rightSlot}</div> : null}
+
+      {/* Kratos statique tout à droite — sticky avec le topbar (donc
+          toujours visible) mais ne chevauche aucun contenu. */}
+      <KratosLogo size={48} floating={false} />
     </header>
   );
 }

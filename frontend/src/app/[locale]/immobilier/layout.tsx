@@ -30,7 +30,8 @@ import { Link } from "@/i18n/navigation";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HorizonLogo } from "@/components/horizon-logo";
 import { HelpButton } from "@/components/help-button";
-import { PortalCorner } from "@/components/portal-corner";
+import { KratosLogo } from "@/components/kratos-logo";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { authedFetch } from "@/lib/auth";
@@ -278,7 +279,7 @@ export default function ImmobilierLayout({
               <main className="flex-1 overflow-x-hidden">
                 {allowed ? children : <NoAccess />}
               </main>
-              <PortalCorner />
+              {/* Kratos + ThemeToggle intégrés dans ImmobilierTopbar */}
               <HelpButton />
             </ConfirmProvider>
           </ctx.Provider>
@@ -342,6 +343,8 @@ export function ImmobilierTopbar({
         })}
       </nav>
       {rightSlot ? <div className="flex items-center gap-2">{rightSlot}</div> : null}
+      <ThemeToggle />
+      <KratosLogo size={48} floating={false} />
     </header>
   );
 }
