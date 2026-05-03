@@ -3,8 +3,7 @@ import { notFound } from "next/navigation";
 import { NextIntlClientProvider } from "next-intl";
 import { getMessages, getTranslations, setRequestLocale } from "next-intl/server";
 
-import { SiteHeader } from "@/components/site-header";
-import { SiteFooter } from "@/components/site-footer";
+import { PublicChrome } from "@/components/public-chrome";
 import { routing } from "@/i18n/routing";
 
 export function generateStaticParams() {
@@ -77,9 +76,7 @@ export default async function LocaleLayout({ children, params }: Props) {
   return (
     <NextIntlClientProvider locale={locale} messages={messages}>
       <div className="flex min-h-screen flex-col bg-brand-950 text-brand-100">
-        <SiteHeader />
-        <main className="flex-1">{children}</main>
-        <SiteFooter />
+        <PublicChrome>{children}</PublicChrome>
       </div>
     </NextIntlClientProvider>
   );
