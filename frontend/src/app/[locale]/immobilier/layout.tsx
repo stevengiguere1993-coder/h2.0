@@ -20,6 +20,7 @@ import {
   Menu,
   Plus,
   Sparkles,
+  Trash2,
   Users,
   Wrench,
   X
@@ -360,7 +361,65 @@ function EntrepriseSelector({
 }) {
   const [open, setOpen] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [counts, setCounts] = useState<Record<number, number>>({});
+  const [deleting, setDeleting] = useState<number | null>(null);
   const current = entreprises.find((e) => e.id === currentId) || null;
+
+  // Charge le nb d'immeubles par entreprise pour signaler celles qui
+  // sont vides (pas de portefeuille immobilier).
+  async function loadCounts() {
+    try {
+      const res = await authedFetch(
+        "/api/v1/immobilier/entreprises-counts"
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as Array<{
+        entreprise_id: number;
+        nb_immeubles: number;
+      }>;
+      const map: Record<number, number> = {};
+      for (const r of data) map[r.entreprise_id] = r.nb_immeubles;
+      setCounts(map);
+    } catch {
+      /* silent */
+    }
+  }
+  useEffect(() => {
+    void loadCounts();
+  }, [entreprises.length]);
+
+  async function deleteEntreprise(e: EntrepriseLite) {
+    const nb = counts[e.id] ?? 0;
+    const warn =
+      nb > 0
+        ? `\n\n⚠ Cette entreprise détient ${nb} immeuble${nb > 1 ? "s" : ""}. La suppression retirera l'ownership et toutes les données liées (tâches, finance, etc.).`
+        : "";
+    if (
+      !confirm(
+        `Supprimer définitivement l'entreprise « ${e.name} » ?${warn}`
+      )
+    )
+      return;
+    setDeleting(e.id);
+    try {
+      const res = await authedFetch(`/api/v1/entreprises/${e.id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) {
+        const t = await res.text();
+        alert(t.slice(0, 240) || `HTTP ${res.status}`);
+        return;
+      }
+      // Si on supprime l'entreprise active, retombe sur « Toutes ».
+      if (currentId === e.id) onChange(null);
+      await onAdded(); // refresh la liste
+      void loadCounts();
+    } catch (err) {
+      alert((err as Error).message);
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   return (
     <div className="border-b border-brand-800 px-3 py-3">
@@ -409,32 +468,72 @@ function EntrepriseSelector({
           {entreprises.length > 0 ? (
             <div className="my-1 border-t border-brand-800" />
           ) : null}
-          {entreprises.map((e) => (
-            <button
-              key={e.id}
-              type="button"
-              onClick={() => {
-                onChange(e.id);
-                setOpen(false);
-              }}
-              className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm transition hover:bg-brand-900 ${
-                currentId === e.id
-                  ? "bg-sky-500/10 text-sky-200"
-                  : "text-white/80"
-              }`}
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                <span
-                  className="h-2 w-2 flex-shrink-0 rounded-full"
-                  style={{ backgroundColor: e.color_accent }}
-                />
-                <span className="truncate">{e.name}</span>
-              </span>
-              {currentId === e.id ? (
-                <Check className="h-3.5 w-3.5 flex-shrink-0" />
-              ) : null}
-            </button>
-          ))}
+          {entreprises.map((e) => {
+            const nb = counts[e.id] ?? 0;
+            const isCurrent = currentId === e.id;
+            return (
+              <div
+                key={e.id}
+                className={`group flex items-center gap-1 px-1.5 py-0.5 transition hover:bg-brand-900 ${
+                  isCurrent ? "bg-sky-500/10" : ""
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChange(e.id);
+                    setOpen(false);
+                  }}
+                  className={`flex min-w-0 flex-1 items-center justify-between gap-2 rounded px-1.5 py-1.5 text-left text-sm ${
+                    isCurrent ? "text-sky-200" : "text-white/80"
+                  }`}
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span
+                      className="h-2 w-2 flex-shrink-0 rounded-full"
+                      style={{ backgroundColor: e.color_accent }}
+                    />
+                    <span className="truncate">{e.name}</span>
+                  </span>
+                  <span className="flex flex-shrink-0 items-center gap-1.5">
+                    <span
+                      className={`rounded-full px-1.5 py-0.5 font-mono text-[10px] ${
+                        nb === 0
+                          ? "bg-white/5 text-white/40"
+                          : "bg-sky-500/20 text-sky-200"
+                      }`}
+                      title={
+                        nb === 0
+                          ? "Aucun immeuble détenu"
+                          : `${nb} immeuble${nb > 1 ? "s" : ""} détenu${nb > 1 ? "s" : ""}`
+                      }
+                    >
+                      {nb}
+                    </span>
+                    {isCurrent ? (
+                      <Check className="h-3.5 w-3.5" />
+                    ) : null}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    void deleteEntreprise(e);
+                  }}
+                  disabled={deleting === e.id}
+                  className="flex-shrink-0 rounded p-1.5 text-white/30 opacity-0 transition hover:text-rose-300 group-hover:opacity-100 disabled:opacity-50"
+                  title="Supprimer cette entreprise"
+                >
+                  {deleting === e.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+            );
+          })}
           <div className="my-1 border-t border-brand-800" />
           <button
             type="button"
