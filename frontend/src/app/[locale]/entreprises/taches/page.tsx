@@ -1,18 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Clock,
   Filter,
   Loader2,
-  Sparkles,
   Target
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { QGTopbar } from "../layout";
+
+type TachePatch = Partial<
+  Pick<Tache, "status" | "assignee_user_id" | "due_date">
+>;
 
 type Tache = {
   id: number;
@@ -135,6 +138,35 @@ export default function MesTachesPage() {
       cancelled = true;
     };
   }, [scope]);
+
+  const onUpdate = useCallback(
+    async (id: number, patch: TachePatch) => {
+      // Optimistic update : on patche localement avant le PATCH HTTP.
+      const before = taches;
+      setTaches((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, ...patch } : t))
+      );
+      try {
+        const res = await authedFetch(
+          `/api/v1/entreprises/taches/${id}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(patch)
+          }
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const updated = (await res.json()) as Tache;
+        setTaches((prev) =>
+          prev.map((t) => (t.id === id ? { ...t, ...updated } : t))
+        );
+      } catch (err) {
+        setTaches(before); // rollback
+        setError(`Échec mise à jour : ${(err as Error).message}`);
+      }
+    },
+    [taches]
+  );
 
   const entById = useMemo(() => {
     const m = new Map<number, Entreprise>();
@@ -327,6 +359,7 @@ export default function MesTachesPage() {
             taches={filtered}
             entById={entById}
             team={team}
+            onUpdate={onUpdate}
           />
         ) : (
           <div
@@ -359,6 +392,7 @@ export default function MesTachesPage() {
                     t={t}
                     ent={entById.get(t.entreprise_id)}
                     team={team}
+                    onUpdate={onUpdate}
                   />
                 ))}
               </tbody>
@@ -383,12 +417,17 @@ const KANBAN_COLUMNS = [
 function KanbanBoard({
   taches,
   entById,
-  team
+  team,
+  onUpdate
 }: {
   taches: Tache[];
   entById: Map<number, Entreprise>;
   team: TeamMember[];
+  onUpdate: (id: number, patch: TachePatch) => void;
 }) {
+  const [draggingId, setDraggingId] = useState<number | null>(null);
+  const [overCol, setOverCol] = useState<string | null>(null);
+
   const grouped = KANBAN_COLUMNS.map((c) => ({
     ...c,
     cards: taches.filter((t) => t.status === c.id)
@@ -397,10 +436,39 @@ function KanbanBoard({
     <div className="flex gap-3 overflow-x-auto pb-2">
       {grouped.map((col) => {
         const accent = STATUS_COLORS[col.id] || "var(--qg-text-soft)";
+        const isOver = overCol === col.id && draggingId != null;
         return (
           <div
             key={col.id}
-            className="flex w-[280px] flex-shrink-0 flex-col rounded-xl border border-[var(--qg-border)] bg-[var(--qg-card-bg)]"
+            className="flex w-[280px] flex-shrink-0 flex-col rounded-xl border bg-[var(--qg-card-bg)] transition"
+            style={{
+              borderColor: isOver
+                ? "var(--qg-accent)"
+                : "var(--qg-border)",
+              backgroundColor: isOver
+                ? "color-mix(in srgb, var(--qg-accent) 10%, var(--qg-card-bg))"
+                : "var(--qg-card-bg)"
+            }}
+            onDragOver={(e) => {
+              if (draggingId != null) {
+                e.preventDefault();
+                setOverCol(col.id);
+              }
+            }}
+            onDragLeave={() => {
+              if (overCol === col.id) setOverCol(null);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (draggingId != null) {
+                const t = taches.find((x) => x.id === draggingId);
+                if (t && t.status !== col.id) {
+                  onUpdate(draggingId, { status: col.id });
+                }
+              }
+              setDraggingId(null);
+              setOverCol(null);
+            }}
           >
             <div
               className="flex items-center justify-between border-b border-[var(--qg-border)] px-3 py-2"
@@ -425,6 +493,12 @@ function KanbanBoard({
                   t={t}
                   ent={entById.get(t.entreprise_id)}
                   team={team}
+                  isDragging={draggingId === t.id}
+                  onDragStart={() => setDraggingId(t.id)}
+                  onDragEnd={() => {
+                    setDraggingId(null);
+                    setOverCol(null);
+                  }}
                 />
               ))}
               {col.cards.length === 0 ? (
@@ -443,21 +517,34 @@ function KanbanBoard({
 function KanbanCard({
   t,
   ent,
-  team
+  team,
+  isDragging,
+  onDragStart,
+  onDragEnd
 }: {
   t: Tache;
   ent: Entreprise | undefined;
   team: TeamMember[];
+  isDragging: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
 }) {
   const prio = scoreToPriority(t.score);
   const due = dueLabel(t.due_date);
   const assignee = team.find((u) => u.id === t.assignee_user_id) || null;
   return (
     <li>
-      <Link
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        href={`/entreprises/${t.entreprise_id}` as any}
-        className="block rounded-lg border border-[var(--qg-border)] bg-[var(--qg-bg)] p-2.5 transition hover:border-[var(--qg-accent)]"
+      <div
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.effectAllowed = "move";
+          // Firefox refuse de démarrer un drag sans payload
+          e.dataTransfer.setData("text/plain", String(t.id));
+          onDragStart();
+        }}
+        onDragEnd={onDragEnd}
+        className="block cursor-grab rounded-lg border border-[var(--qg-border)] bg-[var(--qg-bg)] p-2.5 transition hover:border-[var(--qg-accent)] active:cursor-grabbing"
+        style={{ opacity: isDragging ? 0.4 : 1 }}
       >
         <div className="flex items-center justify-between gap-2">
           <span
@@ -478,9 +565,17 @@ function KanbanCard({
             </span>
           ) : null}
         </div>
-        <p className="mt-1.5 line-clamp-2 text-[12px] font-medium leading-snug text-[var(--qg-text)]">
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={`/entreprises/${t.entreprise_id}` as any}
+          className="mt-1.5 block line-clamp-2 text-[12px] font-medium leading-snug text-[var(--qg-text)] hover:text-[var(--qg-accent)]"
+          // Le drag de la carte démarre sur le parent (draggable=true) ;
+          // on désactive le drag natif du <a> pour qu'il ne capture pas
+          // l'événement avant le parent.
+          draggable={false}
+        >
           {t.title}
-        </p>
+        </Link>
         {ent ? (
           <p className="mt-1.5 flex items-center gap-1 text-[10px] text-[var(--qg-text-muted)]">
             <span
@@ -518,7 +613,7 @@ function KanbanCard({
             </span>
           ) : null}
         </div>
-      </Link>
+      </div>
     </li>
   );
 }
@@ -585,45 +680,18 @@ function initialsFor(name: string): string {
     .join("");
 }
 
-function AssigneeChip({
-  user
-}: {
-  user: TeamMember | null;
-}) {
-  if (!user) {
-    return (
-      <span className="inline-flex items-center text-[11px] text-[var(--qg-text-soft)]">
-        Non assigné
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span
-        className="flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-bold"
-        style={{ backgroundColor: "var(--qg-accent)", color: "var(--qg-bg)" }}
-      >
-        {initialsFor(user.full_name)}
-      </span>
-      <span className="text-[11px] text-[var(--qg-text-muted)]">
-        {user.full_name.split(" ")[0]}
-      </span>
-    </span>
-  );
-}
-
 function TacheRow({
   t,
   ent,
-  team
+  team,
+  onUpdate
 }: {
   t: Tache;
   ent: Entreprise | undefined;
   team: TeamMember[];
+  onUpdate: (id: number, patch: TachePatch) => void;
 }) {
   const prio = scoreToPriority(t.score);
-  const due = dueLabel(t.due_date);
-  const statusColor = STATUS_COLORS[t.status] || "var(--qg-text-muted)";
   return (
     <tr
       className="hover:bg-[var(--qg-bg-alt)]"
@@ -678,48 +746,160 @@ function TacheRow({
         )}
       </td>
       <td className="px-3 py-3">
-        <span
-          className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-semibold"
-          style={{
-            backgroundColor: statusColor + "1f",
-            color: statusColor
-          }}
-        >
-          <span
-            className="h-1.5 w-1.5 rounded-full"
-            style={{ backgroundColor: statusColor }}
-          />
-          {STATUS_LABELS[t.status] || t.status}
-        </span>
+        <StatusEditor
+          status={t.status}
+          onChange={(v) => onUpdate(t.id, { status: v })}
+        />
       </td>
       <td className="px-3 py-3 text-[11px] text-[var(--qg-text-muted)]">
         {t.departement || <span className="text-[var(--qg-text-soft)]">—</span>}
       </td>
       <td className="px-3 py-3">
-        <AssigneeChip
-          user={team.find((u) => u.id === t.assignee_user_id) || null}
+        <AssigneeEditor
+          assigneeId={t.assignee_user_id}
+          team={team}
+          onChange={(v) => onUpdate(t.id, { assignee_user_id: v })}
         />
       </td>
       <td className="px-3 py-3 text-right">
-        {t.due_date ? (
-          <span
-            className="inline-flex items-center gap-1 text-[11px] font-semibold"
-            style={{
-              color: due.tone,
-              fontFamily: "var(--font-mono, ui-monospace), monospace"
-            }}
-          >
-            {due.tone === "#ff5566" ? (
-              <AlertTriangle className="h-2.5 w-2.5" />
-            ) : (
-              <Clock className="h-2.5 w-2.5" />
-            )}
-            {due.text}
-          </span>
-        ) : (
-          <span className="text-[11px] text-[var(--qg-text-soft)]">—</span>
-        )}
+        <DueDateEditor
+          value={t.due_date}
+          onChange={(v) => onUpdate(t.id, { due_date: v })}
+        />
       </td>
     </tr>
+  );
+}
+
+// ─── Éditeurs inline ────────────────────────────────────────────────────
+
+function StatusEditor({
+  status,
+  onChange
+}: {
+  status: string;
+  onChange: (v: string) => void;
+}) {
+  const color = STATUS_COLORS[status] || "var(--qg-text-muted)";
+  return (
+    <span
+      className="relative inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-semibold"
+      style={{ backgroundColor: color + "1f", color }}
+    >
+      <span
+        className="h-1.5 w-1.5 rounded-full"
+        style={{ backgroundColor: color }}
+      />
+      {STATUS_LABELS[status] || status}
+      <select
+        value={status}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="Modifier le statut"
+        className="absolute inset-0 cursor-pointer opacity-0"
+      >
+        {Object.entries(STATUS_LABELS).map(([v, label]) => (
+          <option key={v} value={v}>
+            {label}
+          </option>
+        ))}
+      </select>
+    </span>
+  );
+}
+
+function AssigneeEditor({
+  assigneeId,
+  team,
+  onChange
+}: {
+  assigneeId: number | null;
+  team: TeamMember[];
+  onChange: (v: number | null) => void;
+}) {
+  const user = team.find((u) => u.id === assigneeId) || null;
+  return (
+    <span className="relative inline-flex items-center gap-1.5">
+      {user ? (
+        <>
+          <span
+            className="flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-bold"
+            style={{
+              backgroundColor: "var(--qg-accent)",
+              color: "var(--qg-bg)"
+            }}
+          >
+            {initialsFor(user.full_name)}
+          </span>
+          <span className="text-[11px] text-[var(--qg-text-muted)]">
+            {user.full_name.split(" ")[0]}
+          </span>
+        </>
+      ) : (
+        <span className="text-[11px] text-[var(--qg-text-soft)] underline decoration-dotted">
+          Non assigné
+        </span>
+      )}
+      <select
+        value={assigneeId == null ? "" : String(assigneeId)}
+        onChange={(e) => {
+          const v = e.target.value;
+          onChange(v === "" ? null : Number(v));
+        }}
+        aria-label="Modifier l'assigné"
+        className="absolute inset-0 cursor-pointer opacity-0"
+      >
+        <option value="">— Non assigné</option>
+        {team.map((u) => (
+          <option key={u.id} value={u.id}>
+            {u.full_name}
+          </option>
+        ))}
+      </select>
+    </span>
+  );
+}
+
+function DueDateEditor({
+  value,
+  onChange
+}: {
+  value: string | null;
+  onChange: (v: string | null) => void;
+}) {
+  const due = dueLabel(value);
+  // Pour <input type="date">, on a besoin de YYYY-MM-DD strict.
+  const ymd = value
+    ? (/^(\d{4}-\d{2}-\d{2})/.exec(value)?.[1] ?? "")
+    : "";
+  return (
+    <span className="relative inline-flex items-center gap-1 text-[11px] font-semibold justify-end">
+      {value ? (
+        <span
+          className="inline-flex items-center gap-1"
+          style={{
+            color: due.tone,
+            fontFamily: "var(--font-mono, ui-monospace), monospace"
+          }}
+        >
+          {due.tone === "#ff5566" ? (
+            <AlertTriangle className="h-2.5 w-2.5" />
+          ) : (
+            <Clock className="h-2.5 w-2.5" />
+          )}
+          {due.text}
+        </span>
+      ) : (
+        <span className="text-[var(--qg-text-soft)] underline decoration-dotted">
+          + échéance
+        </span>
+      )}
+      <input
+        type="date"
+        value={ymd}
+        onChange={(e) => onChange(e.target.value || null)}
+        aria-label="Modifier l'échéance"
+        className="absolute inset-0 cursor-pointer opacity-0"
+      />
+    </span>
   );
 }
