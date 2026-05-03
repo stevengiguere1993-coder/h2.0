@@ -27,7 +27,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
-import { KratosLogo } from "@/components/kratos-logo";
+import { PortalCorner } from "@/components/portal-corner";
 import { QGCommandBar } from "@/components/qg-command-bar";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
@@ -311,7 +311,7 @@ export default function EntreprisesLayout({
               <main className="flex-1 overflow-x-hidden">
                 {allowed ? children : <NoAccess />}
               </main>
-              <KratosLogo />
+              <PortalCorner />
               {allowed ? <QGCommandBar /> : null}
               <HelpButton />
             </ConfirmProvider>

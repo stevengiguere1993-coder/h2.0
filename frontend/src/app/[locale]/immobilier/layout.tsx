@@ -4,11 +4,14 @@ import { createContext, useContext, useState } from "react";
 import { usePathname } from "next/navigation";
 import {
   Building2,
+  ClipboardList,
   Home,
   Loader2,
   LogOut,
   Menu,
   Sparkles,
+  Users,
+  Wrench,
   X
 } from "lucide-react";
 
@@ -16,7 +19,7 @@ import { Link } from "@/i18n/navigation";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HorizonLogo } from "@/components/horizon-logo";
 import { HelpButton } from "@/components/help-button";
-import { KratosLogo } from "@/components/kratos-logo";
+import { PortalCorner } from "@/components/portal-corner";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
@@ -27,7 +30,11 @@ type NavItem = {
 };
 
 const NAV: NavItem[] = [
-  { href: "/immobilier", label: "Vue d'ensemble", icon: Building2 }
+  { href: "/immobilier", label: "Vue d'ensemble", icon: Building2 },
+  { href: "/immobilier/immeubles", label: "Immeubles", icon: Building2 },
+  { href: "/immobilier/locataires", label: "Locataires", icon: Users },
+  { href: "/immobilier/baux", label: "Baux & paiements", icon: ClipboardList },
+  { href: "/immobilier/maintenance", label: "Maintenance", icon: Wrench }
 ];
 
 type Ctx = { onOpenSidebar: () => void };
@@ -165,7 +172,7 @@ export default function ImmobilierLayout({
               <main className="flex-1 overflow-x-hidden">
                 {allowed ? children : <NoAccess />}
               </main>
-              <KratosLogo />
+              <PortalCorner />
               <HelpButton />
             </ConfirmProvider>
           </ctx.Provider>

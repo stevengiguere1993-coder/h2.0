@@ -1,70 +1,106 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import {
   Building2,
-  CheckCircle2,
-  ClipboardList,
-  FileText,
+  DollarSign,
   Home,
-  Sparkles,
-  Wrench
+  Loader2,
+  Plus,
+  TrendingUp,
+  Users
 } from "lucide-react";
 
+import { Link } from "@/i18n/navigation";
+import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar } from "./layout";
 
-const ROADMAP = [
-  {
-    phase: "Phase 1",
-    title: "Modèle Immeubles + Logements + Locataires",
-    desc:
-      "Immeubles avec partenariats (% par entreprise), logements, " +
-      "locataires. Lien vers les rôles d'évaluation déjà importés.",
-    status: "pending",
-    icon: Home
-  },
-  {
-    phase: "Phase 2",
-    title: "Baux + renouvellements + paiements",
-    desc:
-      "Suivi des baux, alertes 90j avant échéance, comparables loyers " +
-      "(Kijiji/LesPAC), workflow paiement.",
-    status: "pending",
-    icon: ClipboardList
-  },
-  {
-    phase: "Phase 3",
-    title: "Hypothèques + valorisation + KPIs",
-    desc:
-      "Suivi prêts, alerte refinancement, valeurs (municipale, " +
-      "marchande, appraisal), GRM, cap rate, DSCR, cash-on-cash.",
-    status: "pending",
-    icon: Building2
-  },
-  {
-    phase: "Phase 4",
-    title: "Maintenance + fournisseurs",
-    desc:
-      "Ordres de travail, fournisseurs, photos avant/après, " +
-      "calendrier des entretiens récurrents.",
-    status: "pending",
-    icon: Wrench
-  },
-  {
-    phase: "Phase 5",
-    title: "Coffre-fort de documents",
-    desc:
-      "Baux, polices d'assurance, hypothèques, inspections, " +
-      "rapports d'évaluation. Recherche par tag, par immeuble.",
-    status: "pending",
-    icon: FileText
-  }
-] as const;
+type ImmeubleListItem = {
+  id: number;
+  name: string;
+  address: string;
+  city?: string | null;
+  type: string;
+  nb_logements?: number | null;
+  cover_photo_url?: string | null;
+  is_active: boolean;
+  nb_logements_actifs: number;
+  nb_logements_occupes: number;
+  revenu_mensuel: number;
+  taux_occupation: number;
+};
 
-export default function ImmobilierPlaceholder() {
+function fmtCurrency(n: number): string {
+  return new Intl.NumberFormat("fr-CA", {
+    style: "currency",
+    currency: "CAD",
+    maximumFractionDigits: 0
+  }).format(n);
+}
+
+function fmtPct(n: number): string {
+  return `${(n * 100).toFixed(0)}%`;
+}
+
+export default function ImmobilierDashboard() {
+  const [list, setList] = useState<ImmeubleListItem[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const res = await authedFetch("/api/v1/immobilier/immeubles");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as ImmeubleListItem[];
+        if (!cancelled) setList(data);
+      } catch (err) {
+        if (!cancelled) setError((err as Error).message);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const kpis = useMemo(() => {
+    if (!list)
+      return {
+        nbImmeubles: 0,
+        nbLogements: 0,
+        nbOccupes: 0,
+        revenu: 0,
+        taux: 0
+      };
+    const nbI = list.length;
+    const nbL = list.reduce((acc, x) => acc + x.nb_logements_actifs, 0);
+    const nbO = list.reduce((acc, x) => acc + x.nb_logements_occupes, 0);
+    const rev = list.reduce((acc, x) => acc + x.revenu_mensuel, 0);
+    const tx = nbL > 0 ? nbO / nbL : 0;
+    return {
+      nbImmeubles: nbI,
+      nbLogements: nbL,
+      nbOccupes: nbO,
+      revenu: rev,
+      taux: tx
+    };
+  }, [list]);
+
   return (
     <>
       <ImmobilierTopbar
         breadcrumbs={[{ label: "Gestion immobilière" }]}
+        rightSlot={
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/immobilier/immeubles" as any}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-200 hover:bg-sky-500/20"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Nouvel immeuble
+          </Link>
+        }
       />
       <div className="p-4 lg:p-6">
         <header className="flex items-start gap-3">
@@ -76,58 +112,191 @@ export default function ImmobilierPlaceholder() {
               Gestion immobilière
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-white/60">
-              Volet en développement. Inspiré de Plexflow + ProprioExpert
-              et des meilleures pratiques des PMS US (AppFolio, Yardi,
-              Buildium), adapté au contexte québécois.
+              Vue d&apos;ensemble du portefeuille : occupation, revenus
+              mensuels, immeubles à surveiller.
             </p>
           </div>
         </header>
 
-        <div className="mt-6 inline-flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-semibold text-amber-200">
-          <Sparkles className="h-3.5 w-3.5" />
-          En développement — accès restreint à la whitelist
-        </div>
+        {error ? (
+          <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+            {error}
+          </p>
+        ) : null}
 
+        {/* KPI cards */}
+        <section className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <KpiCard
+            label="Immeubles actifs"
+            value={String(kpis.nbImmeubles)}
+            icon={Building2}
+            tone="sky"
+          />
+          <KpiCard
+            label="Logements"
+            value={`${kpis.nbOccupes} / ${kpis.nbLogements}`}
+            sub={`Occupation ${fmtPct(kpis.taux)}`}
+            icon={Home}
+            tone="emerald"
+          />
+          <KpiCard
+            label="Revenu mensuel"
+            value={fmtCurrency(kpis.revenu)}
+            sub={`${fmtCurrency(kpis.revenu * 12)} / an`}
+            icon={DollarSign}
+            tone="violet"
+          />
+          <KpiCard
+            label="Taux d'occupation"
+            value={fmtPct(kpis.taux)}
+            icon={TrendingUp}
+            tone={kpis.taux >= 0.95 ? "emerald" : "amber"}
+          />
+        </section>
+
+        {/* Liste immeubles */}
         <section className="mt-8">
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-sky-300">
-            Roadmap
-          </h2>
-          <ol className="mt-4 space-y-3">
-            {ROADMAP.map((step) => {
-              const Icon = step.icon;
-              return (
-                <li
-                  key={step.phase}
-                  className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900/40 p-4"
-                >
-                  <span className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-brand-800 text-white/50">
-                    <Icon className="h-4 w-4" />
-                  </span>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-white/40">
-                        {step.phase}
-                      </span>
-                      <span className="rounded-full border border-brand-700 px-2 py-0.5 text-[10px] font-semibold text-white/40">
-                        À venir
-                      </span>
-                    </div>
-                    <h3 className="mt-1 text-sm font-bold text-white">
-                      {step.title}
-                    </h3>
-                    <p className="mt-1 text-xs text-white/60">
-                      {step.desc}
-                    </p>
-                  </div>
-                  {step.status === "done" ? (
-                    <CheckCircle2 className="h-5 w-5 flex-shrink-0 text-emerald-400" />
-                  ) : null}
-                </li>
-              );
-            })}
-          </ol>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-sky-300">
+              Portefeuille
+            </h2>
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/immobilier/immeubles" as any}
+              className="text-xs text-white/60 hover:text-sky-300"
+            >
+              Voir tout →
+            </Link>
+          </div>
+
+          {list === null ? (
+            <div className="flex items-center gap-2 text-xs text-white/50">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+            </div>
+          ) : list.length === 0 ? (
+            <EmptyState />
+          ) : (
+            <ul className="grid gap-3 lg:grid-cols-2">
+              {list.slice(0, 6).map((imm) => (
+                <ImmeubleRow key={imm.id} imm={imm} />
+              ))}
+            </ul>
+          )}
         </section>
       </div>
     </>
+  );
+}
+
+function KpiCard({
+  label,
+  value,
+  sub,
+  icon: Icon,
+  tone
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  icon: React.ComponentType<{ className?: string }>;
+  tone: "sky" | "emerald" | "violet" | "amber";
+}) {
+  const toneCls: Record<typeof tone, string> = {
+    sky: "bg-sky-500/15 text-sky-300",
+    emerald: "bg-emerald-500/15 text-emerald-300",
+    violet: "bg-violet-500/15 text-violet-300",
+    amber: "bg-amber-500/15 text-amber-300"
+  };
+  return (
+    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
+          {label}
+        </span>
+        <span
+          className={`flex h-8 w-8 items-center justify-center rounded-lg ${toneCls[tone]}`}
+        >
+          <Icon className="h-4 w-4" />
+        </span>
+      </div>
+      <div className="mt-3 text-2xl font-bold text-white">{value}</div>
+      {sub ? <div className="mt-1 text-xs text-white/50">{sub}</div> : null}
+    </div>
+  );
+}
+
+function ImmeubleRow({ imm }: { imm: ImmeubleListItem }) {
+  const taux = fmtPct(imm.taux_occupation);
+  const tauxOk = imm.taux_occupation >= 0.9;
+  return (
+    <li>
+      <Link
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        href={`/immobilier/immeubles/${imm.id}` as any}
+        className="flex items-center gap-3 rounded-xl border border-brand-800 bg-brand-900 p-3 transition hover:border-sky-400/40"
+      >
+        <div className="h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg bg-brand-950">
+          {imm.cover_photo_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={imm.cover_photo_url}
+              alt={imm.name}
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-white/30">
+              <Building2 className="h-6 w-6" />
+            </div>
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-bold text-white">
+            {imm.name}
+          </div>
+          <div className="truncate text-[11px] text-white/50">
+            {imm.address}
+            {imm.city ? `, ${imm.city}` : ""}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
+            <span className="rounded bg-brand-950 px-1.5 py-0.5 font-mono text-white/60">
+              {imm.nb_logements_occupes}/{imm.nb_logements_actifs} occ.
+            </span>
+            <span
+              className={`rounded px-1.5 py-0.5 font-mono ${
+                tauxOk ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300"
+              }`}
+            >
+              {taux}
+            </span>
+            <span className="rounded bg-brand-950 px-1.5 py-0.5 font-mono text-white/60">
+              {fmtCurrency(imm.revenu_mensuel)}/m
+            </span>
+          </div>
+        </div>
+      </Link>
+    </li>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 p-8 text-center">
+      <Building2 className="mx-auto h-10 w-10 text-white/30" />
+      <h3 className="mt-3 text-sm font-bold text-white">
+        Aucun immeuble dans le portefeuille
+      </h3>
+      <p className="mt-1 text-xs text-white/60">
+        Ajoute ton premier immeuble manuellement ou importe-le depuis le
+        rôle d&apos;évaluation MAMH (matricule).
+      </p>
+      <Link
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        href={"/immobilier/immeubles" as any}
+        className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-200 hover:bg-sky-500/20"
+      >
+        <Plus className="h-3.5 w-3.5" />
+        Ajouter un immeuble
+      </Link>
+    </div>
   );
 }
