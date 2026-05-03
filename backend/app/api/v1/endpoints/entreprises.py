@@ -134,6 +134,24 @@ async def update_entreprise(
     return EntrepriseRead.model_validate(e)
 
 
+@router.delete(
+    "/{entreprise_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_entreprise(
+    entreprise_id: int, db: DBSession, user: CurrentUser
+) -> None:
+    """Supprime définitivement une entreprise et toutes ses données liées
+    (tâches, templates, snapshots financiers, plans de valeur, ownerships
+    immeubles, investissements...). Cascade géré par les ON DELETE des FK.
+    """
+    _require_volet(user)
+    e = await db.get(Entreprise, entreprise_id)
+    if e is None:
+        raise HTTPException(404, "Entreprise non trouvée")
+    await db.delete(e)
+    await db.commit()
+
+
 # ── Tâches CRUD ─────────────────────────────────────────────────────────
 
 

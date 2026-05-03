@@ -63,6 +63,32 @@ class MaterializeResult(BaseModel):
     errors: List[str] = Field(default_factory=list)
 
 
+class ComplianceCatalogItem(BaseModel):
+    """Entrée du catalogue de templates compliance Québec."""
+    code: str
+    label: str
+    description: str
+    departement: str
+    every_n: int
+    unit: str
+    lead_days: int
+    impact: int
+    confidence: int
+    effort: int
+
+
+class ComplianceImportRequest(BaseModel):
+    """Sélection de codes catalogue à matérialiser comme templates."""
+    codes: List[str] = Field(default_factory=list, min_length=1)
+    next_due: Optional[date] = None  # default = 1er du mois prochain
+
+
+class ComplianceImportResult(BaseModel):
+    created: int = 0
+    skipped: List[str] = Field(default_factory=list)  # codes déjà présents
+    templates: List[TacheTemplateRead] = Field(default_factory=list)
+
+
 # ─── Finance snapshots ─────────────────────────────────────────────────
 
 

@@ -565,6 +565,7 @@ function BauxTab({
             <th className="px-4 py-2.5">Période</th>
             <th className="px-4 py-2.5 text-right">Loyer/m</th>
             <th className="px-4 py-2.5">Statut</th>
+            <th className="px-4 py-2.5 text-right">Documents TAL</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-brand-800">
@@ -582,10 +583,81 @@ function BauxTab({
               <td className="px-4 py-2 text-xs">
                 <StatusBadge status={b.status} />
               </td>
+              <td className="px-4 py-2 text-right">
+                <TalFormDropdown bailId={b.id} />
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+const TAL_FORMS = [
+  { code: "sommaire_bail", label: "Sommaire du bail" },
+  { code: "avis_modification", label: "Avis de modification" },
+  { code: "avis_fin_bail", label: "Avis de non-renouvellement" },
+  { code: "rappel_paiement", label: "Rappel de paiement" },
+  { code: "mise_en_demeure", label: "Mise en demeure" }
+] as const;
+
+function TalFormDropdown({ bailId }: { bailId: number }) {
+  const [open, setOpen] = useState(false);
+  const [downloading, setDownloading] = useState<string | null>(null);
+
+  async function download(code: string) {
+    setDownloading(code);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/baux/${bailId}/tal/${code}.pdf`,
+        {
+          method: "POST",
+          body: JSON.stringify({})
+        }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${code.replace(/_/g, "-")}-bail-${bailId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setOpen(false);
+    } catch (e) {
+      alert((e as Error).message);
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  return (
+    <div className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="inline-flex items-center gap-1 rounded border border-white/15 bg-brand-950 px-2 py-0.5 text-[11px] text-white/80 hover:border-sky-300 hover:text-sky-200"
+      >
+        Générer ▾
+      </button>
+      {open ? (
+        <div className="absolute right-0 z-30 mt-1 w-56 rounded-lg border border-brand-700 bg-brand-950 py-1 shadow-2xl">
+          {TAL_FORMS.map((f) => (
+            <button
+              key={f.code}
+              type="button"
+              onClick={() => download(f.code)}
+              disabled={downloading === f.code}
+              className="block w-full px-3 py-1.5 text-left text-xs text-white/80 hover:bg-brand-900 hover:text-white disabled:opacity-50"
+            >
+              {downloading === f.code ? "Génération…" : f.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

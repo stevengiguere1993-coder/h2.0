@@ -23,6 +23,7 @@ from app.api.v1.endpoints import (
     contact,
     entreprise_extras,
     immobilier,
+    immobilier_extras,
     investissements,
     dashboard,
     help,
@@ -207,5 +208,9 @@ api_router.include_router(entreprises.router)
 # /entreprises/finance/* et /entreprises/value-plans/* matchent avant
 # /entreprises/{id}.
 api_router.include_router(entreprise_extras.router)
+# immobilier_extras DOIT être registered avant immobilier.router pour que
+# /immobilier/tal/* et /immobilier/renouvellements/* matchent avant les
+# routes plus génériques de /immobilier.
+api_router.include_router(immobilier_extras.router)
 api_router.include_router(immobilier.router)
 api_router.include_router(investissements.router)

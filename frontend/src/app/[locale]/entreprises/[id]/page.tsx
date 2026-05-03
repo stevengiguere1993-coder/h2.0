@@ -293,6 +293,9 @@ export default function EntrepriseDetailPage() {
         {/* Daily Pulse — briefing IA quotidien */}
         <DailyPulseCard entrepriseId={ent.id} accent={ent.color_accent} />
 
+        {/* Immobilier — portefeuille détenu par cette entreprise */}
+        <EntrepriseImmobilierSection entrepriseId={ent.id} />
+
         {error ? (
           <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {error}
@@ -1081,6 +1084,168 @@ function AISuggestButton({
       {err ? (
         <span className="text-[10px] text-rose-300">{err}</span>
       ) : null}
+    </div>
+  );
+}
+
+// ─── Section Immobilier ────────────────────────────────────────────────
+
+type ImmobilierImmeubleItem = {
+  immeuble_id: number;
+  name: string;
+  address: string;
+  city: string | null;
+  cover_photo_url: string | null;
+  ownership_pct: number;
+  nb_logements_actifs: number;
+  nb_logements_occupes: number;
+  revenu_mensuel_part: number;
+  valeur_part: number | null;
+  balance_hyp_part: number | null;
+};
+
+type ImmobilierSummary = {
+  entreprise_id: number;
+  nb_immeubles: number;
+  nb_logements_actifs: number;
+  nb_logements_occupes: number;
+  taux_occupation: number;
+  revenu_mensuel_part: number;
+  revenu_annuel_part: number;
+  valeur_portefeuille_part: number;
+  balance_hypothecaire_part: number;
+  equity_part: number;
+  immeubles: ImmobilierImmeubleItem[];
+};
+
+function fmtCurrencyImmo(n: number | null | undefined): string {
+  if (n == null) return "—";
+  return new Intl.NumberFormat("fr-CA", {
+    style: "currency",
+    currency: "CAD",
+    maximumFractionDigits: 0
+  }).format(n);
+}
+
+function EntrepriseImmobilierSection({ entrepriseId }: { entrepriseId: number }) {
+  const [data, setData] = useState<ImmobilierSummary | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    authedFetch(`/api/v1/immobilier/par-entreprise/${entrepriseId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled) return;
+        setLoaded(true);
+        if (d) setData(d as ImmobilierSummary);
+      })
+      .catch(() => {
+        if (!cancelled) setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [entrepriseId]);
+
+  // Si l'entreprise ne possède aucun immeuble, on cache la section pour
+  // ne pas polluer la fiche.
+  if (!loaded) return null;
+  if (!data || data.nb_immeubles === 0) return null;
+
+  return (
+    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-sky-300">
+          Immobilier détenu
+        </h2>
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={"/immobilier" as any}
+          className="text-xs text-white/60 hover:text-sky-300"
+        >
+          Vue complète →
+        </Link>
+      </div>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <ImmoKpi
+          label="Immeubles"
+          value={`${data.nb_immeubles}`}
+          sub={`${data.nb_logements_occupes}/${data.nb_logements_actifs} logements occupés`}
+        />
+        <ImmoKpi
+          label="Revenu mensuel (part)"
+          value={fmtCurrencyImmo(data.revenu_mensuel_part)}
+          sub={`${fmtCurrencyImmo(data.revenu_annuel_part)} / an`}
+        />
+        <ImmoKpi
+          label="Valeur portefeuille (part)"
+          value={fmtCurrencyImmo(data.valeur_portefeuille_part)}
+          sub={`Hypothèque ${fmtCurrencyImmo(data.balance_hypothecaire_part)}`}
+        />
+        <ImmoKpi
+          label="Équité nette (part)"
+          value={fmtCurrencyImmo(data.equity_part)}
+          sub={`Occupation ${(data.taux_occupation * 100).toFixed(0)}%`}
+        />
+      </div>
+
+      <ul className="mt-4 grid gap-2 sm:grid-cols-2">
+        {data.immeubles.map((imm) => (
+          <li key={imm.immeuble_id}>
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={`/immobilier/immeubles/${imm.immeuble_id}` as any}
+              className="flex items-center gap-3 rounded-xl border border-brand-800 bg-brand-950 p-3 transition hover:border-sky-400/40"
+            >
+              <div className="h-12 w-12 flex-shrink-0 overflow-hidden rounded-lg bg-brand-900">
+                {imm.cover_photo_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={imm.cover_photo_url}
+                    alt=""
+                    className="h-full w-full object-cover"
+                  />
+                ) : null}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-bold text-white">
+                  {imm.name}
+                </p>
+                <p className="truncate text-[11px] text-white/50">
+                  {imm.address}
+                  {imm.city ? `, ${imm.city}` : ""}
+                </p>
+                <p className="mt-1 font-mono text-[10px] text-white/40">
+                  {imm.ownership_pct.toFixed(1)}% détenu ·{" "}
+                  {fmtCurrencyImmo(imm.revenu_mensuel_part)}/m
+                </p>
+              </div>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function ImmoKpi({
+  label,
+  value,
+  sub
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+}) {
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-950 p-3">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
+        {label}
+      </p>
+      <p className="mt-1.5 text-lg font-bold text-white">{value}</p>
+      {sub ? <p className="mt-0.5 text-[10px] text-white/40">{sub}</p> : null}
     </div>
   );
 }
