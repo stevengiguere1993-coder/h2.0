@@ -17,7 +17,7 @@ import { useEffect, useState } from "react";
 import { Link } from "@/i18n/navigation";
 
 export function KratosLogo({
-  size = 40,
+  size = 128,
   href = "/connexion",
   floating = true
 }: {

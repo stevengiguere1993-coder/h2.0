@@ -5,6 +5,7 @@ import { Menu, X } from "lucide-react";
 import { useTranslations } from "next-intl";
 
 import { Link } from "@/i18n/navigation";
+import { HorizonLogo } from "@/components/horizon-logo";
 import { LanguageSwitcher } from "./language-switcher";
 
 export function SiteHeader() {
@@ -22,9 +23,7 @@ export function SiteHeader() {
     <header className="sticky top-0 z-40 border-b border-brand-800 bg-brand-950/95 backdrop-blur">
       <div className="container flex items-center justify-between py-3">
         <Link href="/" className="flex items-center" aria-label="Horizon Services Immobiliers — accueil">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/logo.png"
+          <HorizonLogo
             alt="Horizon Services Immobiliers"
             className="h-24 w-auto object-contain sm:h-32"
           />

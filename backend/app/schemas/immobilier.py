@@ -1,0 +1,401 @@
+"""Pydantic schemas pour le volet Gestion immobilière."""
+
+from __future__ import annotations
+
+from datetime import date, datetime
+from typing import List, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+# ─── Immeuble ──────────────────────────────────────────────────────────
+
+
+class ImmeubleBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    address: str = Field(..., min_length=1, max_length=500)
+    city: Optional[str] = Field(default=None, max_length=128)
+    postal_code: Optional[str] = Field(default=None, max_length=16)
+    type: str = Field(default="residentiel", max_length=32)
+    annee_construction: Optional[int] = Field(default=None, ge=1700, le=2100)
+    nb_logements: Optional[int] = Field(default=None, ge=0)
+    superficie_terrain: Optional[float] = Field(default=None, ge=0)
+    superficie_batiment: Optional[float] = Field(default=None, ge=0)
+    matricule: Optional[str] = Field(default=None, max_length=64)
+    purchase_price: Optional[float] = Field(default=None, ge=0)
+    purchase_date: Optional[date] = None
+    cover_photo_url: Optional[str] = Field(default=None, max_length=1000)
+    description: Optional[str] = None
+    is_active: bool = True
+
+
+class ImmeubleCreate(ImmeubleBase):
+    pass
+
+
+class ImmeubleUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    address: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    city: Optional[str] = Field(default=None, max_length=128)
+    postal_code: Optional[str] = Field(default=None, max_length=16)
+    type: Optional[str] = Field(default=None, max_length=32)
+    annee_construction: Optional[int] = Field(default=None, ge=1700, le=2100)
+    nb_logements: Optional[int] = Field(default=None, ge=0)
+    superficie_terrain: Optional[float] = Field(default=None, ge=0)
+    superficie_batiment: Optional[float] = Field(default=None, ge=0)
+    matricule: Optional[str] = Field(default=None, max_length=64)
+    purchase_price: Optional[float] = Field(default=None, ge=0)
+    purchase_date: Optional[date] = None
+    cover_photo_url: Optional[str] = Field(default=None, max_length=1000)
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class ImmeubleRead(ImmeubleBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+# Liste : version allégée + KPIs calculés
+class ImmeubleListItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    address: str
+    city: Optional[str] = None
+    type: str
+    nb_logements: Optional[int] = None
+    cover_photo_url: Optional[str] = None
+    is_active: bool
+    # KPIs agrégés
+    nb_logements_actifs: int = 0
+    nb_logements_occupes: int = 0
+    revenu_mensuel: float = 0.0
+    taux_occupation: float = 0.0  # 0..1
+
+
+# ─── Ownership ──────────────────────────────────────────────────────────
+
+
+class ImmeubleOwnershipBase(BaseModel):
+    entreprise_id: int
+    ownership_pct: float = Field(default=100.0, ge=0, le=100)
+
+
+class ImmeubleOwnershipCreate(ImmeubleOwnershipBase):
+    pass
+
+
+class ImmeubleOwnershipRead(ImmeubleOwnershipBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    immeuble_id: int
+
+
+# ─── Logement ───────────────────────────────────────────────────────────
+
+
+class LogementBase(BaseModel):
+    immeuble_id: int
+    numero: str = Field(..., min_length=1, max_length=32)
+    nb_pieces_decimal: Optional[float] = Field(default=None, ge=0)
+    nb_chambres: Optional[int] = Field(default=None, ge=0)
+    nb_sdb: Optional[float] = Field(default=None, ge=0)
+    superficie_pi2: Optional[float] = Field(default=None, ge=0)
+    etage: Optional[int] = None
+    type: str = Field(default="residentiel", max_length=32)
+    status: str = Field(default="vacant", max_length=16)
+    loyer_demande: Optional[float] = Field(default=None, ge=0)
+    notes: Optional[str] = None
+
+
+class LogementCreate(LogementBase):
+    pass
+
+
+class LogementUpdate(BaseModel):
+    numero: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    nb_pieces_decimal: Optional[float] = Field(default=None, ge=0)
+    nb_chambres: Optional[int] = Field(default=None, ge=0)
+    nb_sdb: Optional[float] = Field(default=None, ge=0)
+    superficie_pi2: Optional[float] = Field(default=None, ge=0)
+    etage: Optional[int] = None
+    type: Optional[str] = Field(default=None, max_length=32)
+    status: Optional[str] = Field(default=None, max_length=16)
+    loyer_demande: Optional[float] = Field(default=None, ge=0)
+    notes: Optional[str] = None
+
+
+class LogementRead(LogementBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+# ─── Locataire ──────────────────────────────────────────────────────────
+
+
+class LocataireBase(BaseModel):
+    full_name: str = Field(..., min_length=1, max_length=255)
+    email: Optional[str] = Field(default=None, max_length=320)
+    phone: Optional[str] = Field(default=None, max_length=50)
+    nas_last4: Optional[str] = Field(default=None, max_length=4, min_length=4)
+    date_naissance: Optional[date] = None
+    employeur: Optional[str] = Field(default=None, max_length=255)
+    revenu_annuel: Optional[float] = Field(default=None, ge=0)
+    notes: Optional[str] = None
+
+
+class LocataireCreate(LocataireBase):
+    pass
+
+
+class LocataireUpdate(BaseModel):
+    full_name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    email: Optional[str] = Field(default=None, max_length=320)
+    phone: Optional[str] = Field(default=None, max_length=50)
+    nas_last4: Optional[str] = Field(default=None, max_length=4, min_length=4)
+    date_naissance: Optional[date] = None
+    employeur: Optional[str] = Field(default=None, max_length=255)
+    revenu_annuel: Optional[float] = Field(default=None, ge=0)
+    notes: Optional[str] = None
+
+
+class LocataireRead(LocataireBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    paiement_score: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+# ─── Bail ───────────────────────────────────────────────────────────────
+
+
+class BailBase(BaseModel):
+    logement_id: int
+    locataire_id: int
+    date_debut: date
+    date_fin: date
+    loyer_mensuel: float = Field(..., ge=0)
+    depot_garantie: Optional[float] = Field(default=None, ge=0)
+    chauffage_inclus: bool = False
+    eau_chaude_inclus: bool = False
+    electricite_inclus: bool = False
+    internet_inclus: bool = False
+    status: str = Field(default="actif", max_length=16)
+    document_url: Optional[str] = Field(default=None, max_length=1000)
+    notes: Optional[str] = None
+
+
+class BailCreate(BailBase):
+    pass
+
+
+class BailUpdate(BaseModel):
+    date_debut: Optional[date] = None
+    date_fin: Optional[date] = None
+    loyer_mensuel: Optional[float] = Field(default=None, ge=0)
+    depot_garantie: Optional[float] = Field(default=None, ge=0)
+    chauffage_inclus: Optional[bool] = None
+    eau_chaude_inclus: Optional[bool] = None
+    electricite_inclus: Optional[bool] = None
+    internet_inclus: Optional[bool] = None
+    status: Optional[str] = Field(default=None, max_length=16)
+    document_url: Optional[str] = Field(default=None, max_length=1000)
+    notes: Optional[str] = None
+
+
+class BailRead(BailBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+# ─── Hypothèque ─────────────────────────────────────────────────────────
+
+
+class HypothequeBase(BaseModel):
+    immeuble_id: int
+    rang: int = Field(default=1, ge=1, le=9)
+    preteur: str = Field(..., min_length=1, max_length=255)
+    montant_initial: float = Field(..., ge=0)
+    balance_actuelle: Optional[float] = Field(default=None, ge=0)
+    taux_pct: Optional[float] = Field(default=None, ge=0, le=100)
+    type_taux: Optional[str] = Field(default=None, max_length=32)
+    amortissement_mois: Optional[int] = Field(default=None, ge=1)
+    paiement_mensuel: Optional[float] = Field(default=None, ge=0)
+    date_debut: Optional[date] = None
+    date_fin_terme: Optional[date] = None
+    status: str = Field(default="active", max_length=16)
+    notes: Optional[str] = None
+
+
+class HypothequeCreate(HypothequeBase):
+    pass
+
+
+class HypothequeUpdate(BaseModel):
+    rang: Optional[int] = Field(default=None, ge=1, le=9)
+    preteur: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    montant_initial: Optional[float] = Field(default=None, ge=0)
+    balance_actuelle: Optional[float] = Field(default=None, ge=0)
+    taux_pct: Optional[float] = Field(default=None, ge=0, le=100)
+    type_taux: Optional[str] = Field(default=None, max_length=32)
+    amortissement_mois: Optional[int] = Field(default=None, ge=1)
+    paiement_mensuel: Optional[float] = Field(default=None, ge=0)
+    date_debut: Optional[date] = None
+    date_fin_terme: Optional[date] = None
+    status: Optional[str] = Field(default=None, max_length=16)
+    notes: Optional[str] = None
+
+
+class HypothequeRead(HypothequeBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+# ─── Évaluation ─────────────────────────────────────────────────────────
+
+
+class EvaluationBase(BaseModel):
+    immeuble_id: int
+    kind: str = Field(default="marchande", max_length=16)
+    valeur: float = Field(..., ge=0)
+    date_evaluation: date
+    source: Optional[str] = Field(default=None, max_length=128)
+    notes: Optional[str] = None
+
+
+class EvaluationCreate(EvaluationBase):
+    pass
+
+
+class EvaluationRead(EvaluationBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    created_at: datetime
+
+
+# ─── Paiement de loyer ──────────────────────────────────────────────────
+
+
+class PaiementLoyerBase(BaseModel):
+    bail_id: int
+    mois_couvert: date
+    montant: float = Field(..., ge=0)
+    paye_le: Optional[date] = None
+    methode: Optional[str] = Field(default=None, max_length=32)
+    reference: Optional[str] = Field(default=None, max_length=128)
+    notes: Optional[str] = None
+
+
+class PaiementLoyerCreate(PaiementLoyerBase):
+    pass
+
+
+class PaiementLoyerRead(PaiementLoyerBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    en_retard: bool
+    created_at: datetime
+
+
+# ─── Maintenance ────────────────────────────────────────────────────────
+
+
+class MaintenanceOrdreBase(BaseModel):
+    immeuble_id: int
+    logement_id: Optional[int] = None
+    titre: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    priorite: str = Field(default="normale", max_length=16)
+    status: str = Field(default="ouvert", max_length=16)
+    fournisseur: Optional[str] = Field(default=None, max_length=255)
+    cout_estime: Optional[float] = Field(default=None, ge=0)
+    cout_reel: Optional[float] = Field(default=None, ge=0)
+    plannifie_pour: Optional[date] = None
+    complete_le: Optional[date] = None
+    notes: Optional[str] = None
+
+
+class MaintenanceOrdreCreate(MaintenanceOrdreBase):
+    pass
+
+
+class MaintenanceOrdreUpdate(BaseModel):
+    logement_id: Optional[int] = None
+    titre: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    priorite: Optional[str] = Field(default=None, max_length=16)
+    status: Optional[str] = Field(default=None, max_length=16)
+    fournisseur: Optional[str] = Field(default=None, max_length=255)
+    cout_estime: Optional[float] = Field(default=None, ge=0)
+    cout_reel: Optional[float] = Field(default=None, ge=0)
+    plannifie_pour: Optional[date] = None
+    complete_le: Optional[date] = None
+    notes: Optional[str] = None
+
+
+class MaintenanceOrdreRead(MaintenanceOrdreBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+# ─── KPIs financiers (calculés) ─────────────────────────────────────────
+
+
+class ImmeubleFinancials(BaseModel):
+    """Snapshot financier d'un immeuble.
+
+    Calculé à la volée depuis baux + hypothèques + évaluations.
+    """
+
+    immeuble_id: int
+    nb_logements_actifs: int = 0
+    nb_logements_occupes: int = 0
+    taux_occupation: float = 0.0  # 0..1
+
+    # Revenus
+    revenu_brut_mensuel: float = 0.0
+    revenu_brut_annuel: float = 0.0
+
+    # Hypothèque
+    paiement_hypotheque_mensuel: float = 0.0
+    balance_hypothecaire: float = 0.0
+
+    # Valeurs
+    valeur_actuelle: Optional[float] = None
+    valeur_municipale: Optional[float] = None
+    purchase_price: Optional[float] = None
+
+    # Ratios (formules approximatives — sans NOI précis on utilise 50% rule)
+    grm: Optional[float] = None         # Gross Rent Multiplier = valeur / revenu_annuel
+    cap_rate: Optional[float] = None    # NOI estimé / valeur (NOI ≈ 50% revenu brut)
+    cash_flow_mensuel: Optional[float] = None
+    appreciation_pct: Optional[float] = None  # vs purchase_price
+
+
+# ─── Imports en batch ───────────────────────────────────────────────────
+
+
+class ImmeubleImportFromMatriculeRequest(BaseModel):
+    """Crée un immeuble en pré-remplissant depuis le rôle d'évaluation MAMH."""
+
+    matricule: str = Field(..., min_length=1, max_length=64)
+    name: Optional[str] = None
+    create_logements: bool = True
+
+
+class ImmeubleImportResult(BaseModel):
+    immeuble: ImmeubleRead
+    nb_logements_crees: int = 0
+    matched_unit_id: Optional[int] = None

@@ -47,6 +47,32 @@ from app.models.facture_item import FactureItem
 from app.models.follow_up import FollowUp
 from app.models.fournisseur import Fournisseur
 from app.models.help_request import HelpRequest
+from app.models.investissement import (  # noqa: F401
+    Distribution,
+    DistributionType,
+    Investissement,
+    InvestissementStatus,
+)
+from app.models.immobilier import (  # noqa: F401
+    Bail,
+    BailRenouvellement,
+    BailRenouvellementStatus,
+    BailStatus,
+    Evaluation,
+    EvaluationKind,
+    Hypotheque,
+    HypothequeStatus,
+    Immeuble,
+    ImmeubleOwnership,
+    ImmeubleType,
+    Logement,
+    LogementStatus,
+    Locataire,
+    MaintenanceOrdre,
+    MaintenancePriorite,
+    MaintenanceStatus,
+    PaiementLoyer,
+)
 from app.models.leave_request import LeaveRequest, LeaveStatus  # noqa: F401
 from app.models.measurement import MeasurementSnapshot
 from app.models.measurement_photo import MeasurementPhoto
@@ -114,6 +140,18 @@ __all__ = [
     "FollowUp",
     "Fournisseur",
     "HelpRequest",
+    "Bail",
+    "BailRenouvellement",
+    "Evaluation",
+    "Distribution",
+    "Hypotheque",
+    "Immeuble",
+    "ImmeubleOwnership",
+    "Investissement",
+    "Logement",
+    "Locataire",
+    "MaintenanceOrdre",
+    "PaiementLoyer",
     "LeaveRequest",
     "MarketRent",
     "MeasurementSnapshot",

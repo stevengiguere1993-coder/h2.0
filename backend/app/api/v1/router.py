@@ -21,6 +21,8 @@ from app.api.v1.endpoints import (
     extension,
     follow_ups,
     contact,
+    immobilier,
+    investissements,
     dashboard,
     help,
     achat_receipt,
@@ -200,3 +202,5 @@ api_router.include_router(admin_data.router)
 api_router.include_router(help.router)
 api_router.include_router(ai.router)
 api_router.include_router(entreprises.router)
+api_router.include_router(immobilier.router)
+api_router.include_router(investissements.router)
