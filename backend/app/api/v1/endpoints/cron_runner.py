@@ -308,3 +308,63 @@ async def trigger_bail_renouvellements(
         skipped=res.skipped,
         errors=len(res.errors or []),
     )
+
+
+class CalendarSyncCronResult(BaseModel):
+    ok: bool
+    job: str
+    feeds_total: int = 0
+    feeds_synced: int = 0
+    feeds_failed: int = 0
+
+
+@router.api_route(
+    "/run/calendar-feeds-sync",
+    methods=["GET", "POST"],
+    response_model=CalendarSyncCronResult,
+)
+async def trigger_calendar_feeds_sync(
+    x_cron_secret: Optional[str] = Header(default=None),
+    secret: Optional[str] = Query(default=None),
+) -> CalendarSyncCronResult:
+    """Cron horaire : resynchronise tous les flux ICS de tous les users.
+
+    À planifier toutes les heures via cron-job.org. Idempotent —
+    `sync_user_feed` remplace les ExternalBusyBlock existants par lot.
+    """
+    _check_secret(x_cron_secret, secret)
+    from app.db.session import AsyncSessionLocal
+    from app.models.calendar_sync import UserCalendarFeed
+    from app.services.ical_sync import sync_user_feed
+    from sqlalchemy import select
+
+    total = 0
+    synced = 0
+    failed = 0
+    try:
+        async with AsyncSessionLocal() as db:
+            feeds = (
+                await db.execute(select(UserCalendarFeed))
+            ).scalars().all()
+            total = len(feeds)
+            for f in feeds:
+                try:
+                    await sync_user_feed(db, f)
+                    synced += 1
+                except Exception:
+                    log.exception("sync feed %s failed", f.id)
+                    failed += 1
+            await db.commit()
+    except Exception as exc:
+        log.exception("Cron calendar_feeds_sync failed: %s", exc)
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Job a échoué : {exc}",
+        )
+    return CalendarSyncCronResult(
+        ok=True,
+        job="calendar-feeds-sync",
+        feeds_total=total,
+        feeds_synced=synced,
+        feeds_failed=failed,
+    )

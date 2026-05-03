@@ -225,6 +225,39 @@ async def list_users_with_volet(
     return out
 
 
+@router.get(
+    "/taches/{tache_id}/suggest-assignees",
+    response_model=List[dict],
+)
+async def suggest_tache_assignees(
+    tache_id: int,
+    db: DBSession,
+    user: CurrentUser,
+    top_n: int = 3,
+) -> List[dict]:
+    """Top N utilisateurs proposés pour assignation d'une tâche, en
+    fonction de leur charge actuelle de tâches ouvertes et de leur
+    disponibilité dans les calendriers ICS (7 prochains jours)."""
+    _require_volet(user)
+    from app.models.user import User
+    from app.services.qg_smart_assign import suggest_assignees
+
+    t = await db.get(EntrepriseTache, tache_id)
+    if t is None:
+        raise HTTPException(404, "Tâche introuvable.")
+
+    # Candidats = users avec volet entreprises
+    candidates = []
+    rows = (await db.execute(select(User))).scalars().all()
+    for u in rows:
+        volets = getattr(u, "volets", None) or []
+        if "entreprises" in volets:
+            candidates.append(u)
+
+    suggestions = await suggest_assignees(db, candidates, top_n=top_n)
+    return [s.__dict__ for s in suggestions]
+
+
 @router.post(
     "/taches",
     response_model=EntrepriseTacheRead,

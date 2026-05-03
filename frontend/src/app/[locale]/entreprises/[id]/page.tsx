@@ -695,7 +695,15 @@ function TacheModal({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label htmlFor="t_assignee" className="label">Assigné à</label>
+              <div className="flex items-center justify-between">
+                <label htmlFor="t_assignee" className="label">Assigné à</label>
+                {existing?.id ? (
+                  <SuggestAssigneeButton
+                    tacheId={existing.id}
+                    onPick={(uid) => setAssignee(String(uid))}
+                  />
+                ) : null}
+              </div>
               <select
                 id="t_assignee"
                 value={assignee}
@@ -1246,6 +1254,121 @@ function ImmoKpi({
       </p>
       <p className="mt-1.5 text-lg font-bold text-white">{value}</p>
       {sub ? <p className="mt-0.5 text-[10px] text-white/40">{sub}</p> : null}
+    </div>
+  );
+}
+
+// ─── Suggest assignee dropdown ─────────────────────────────────────────
+
+type AssignSuggestion = {
+  user_id: number;
+  full_name: string;
+  email: string;
+  score: number;
+  nb_taches_open: number;
+  charge_effort: number;
+  free_hours_next_7d: number;
+  next_free_slot?: string | null;
+  reasons: string[];
+};
+
+function SuggestAssigneeButton({
+  tacheId,
+  onPick
+}: {
+  tacheId: number;
+  onPick: (userId: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState<AssignSuggestion[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function load() {
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/entreprises/taches/${tacheId}/suggest-assignees?top_n=3`
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setSuggestions((await res.json()) as AssignSuggestion[]);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function toggle() {
+    if (!open) void load();
+    setOpen(!open);
+  }
+
+  return (
+    <div className="relative inline-block">
+      <button
+        type="button"
+        onClick={toggle}
+        className="inline-flex items-center gap-1 text-[10px] font-semibold text-violet-300 hover:text-violet-200"
+      >
+        ✦ Suggérer
+      </button>
+      {open ? (
+        <div className="absolute right-0 z-30 mt-1 w-72 rounded-lg border border-brand-700 bg-brand-950 p-2 shadow-2xl">
+          {loading ? (
+            <p className="px-2 py-1 text-[11px] text-white/50">
+              Calcul…
+            </p>
+          ) : err ? (
+            <p className="px-2 py-1 text-[11px] text-rose-300">{err}</p>
+          ) : suggestions.length === 0 ? (
+            <p className="px-2 py-1 text-[11px] text-white/50">
+              Aucun candidat trouvé.
+            </p>
+          ) : (
+            <ul className="space-y-1">
+              {suggestions.map((s, i) => (
+                <li key={s.user_id}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onPick(s.user_id);
+                      setOpen(false);
+                    }}
+                    className="block w-full rounded-md px-2 py-1.5 text-left hover:bg-brand-900"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-xs font-bold text-white">
+                        {i === 0 ? "★ " : ""}
+                        {s.full_name}
+                      </span>
+                      <span className="font-mono text-[10px] text-violet-300">
+                        {s.score >= 0 ? `+${s.score}` : s.score}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 truncate text-[10px] text-white/50">
+                      {s.reasons.join(" · ")}
+                    </div>
+                    {s.next_free_slot ? (
+                      <div className="mt-0.5 text-[10px] text-emerald-300">
+                        ⏱ Libre à partir de{" "}
+                        {new Date(s.next_free_slot).toLocaleString("fr-CA", {
+                          weekday: "short",
+                          day: "2-digit",
+                          month: "short",
+                          hour: "2-digit",
+                          minute: "2-digit"
+                        })}
+                      </div>
+                    ) : null}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
