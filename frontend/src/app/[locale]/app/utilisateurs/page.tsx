@@ -183,8 +183,18 @@ export default function UtilisateursPage() {
         const t = await res.text().catch(() => "");
         throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
       }
-      const updated = (await res.json()) as User;
+      const updated = (await res.json()) as User & {
+        welcome_email_sent?: boolean;
+        welcome_email_error?: string | null;
+      };
       setUsers((xs) => xs.map((x) => (x.id === u.id ? updated : x)));
+      if (updated.welcome_email_sent === false) {
+        setError(
+          `Mot de passe défini, mais le courriel N'A PAS été envoyé à ${u.email} : ${
+            updated.welcome_email_error || "raison inconnue"
+          }. Mot de passe temporaire : ${pwd}`
+        );
+      }
     } catch (e) {
       setError(`Réinitialisation échouée : ${(e as Error).message}`);
     } finally {

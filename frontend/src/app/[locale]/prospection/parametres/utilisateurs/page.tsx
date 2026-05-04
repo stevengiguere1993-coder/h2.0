@@ -294,9 +294,21 @@ function UsersTable({
         const t = await res.text().catch(() => "");
         throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
       }
-      setResetInfo(
-        `Mot de passe temporaire envoyé à ${u.email}. L'utilisateur sera forcé de le changer à sa prochaine connexion.`
-      );
+      const result = (await res.json()) as {
+        welcome_email_sent?: boolean;
+        welcome_email_error?: string | null;
+      };
+      if (result.welcome_email_sent) {
+        setResetInfo(
+          `Mot de passe temporaire envoyé à ${u.email}. L'utilisateur sera forcé de le changer à sa prochaine connexion.`
+        );
+      } else {
+        setResetErr(
+          `Mot de passe défini, mais le courriel N'A PAS été envoyé : ${
+            result.welcome_email_error || "raison inconnue"
+          }. Mot de passe temporaire : ${newPwd}`
+        );
+      }
       window.setTimeout(() => setResetInfo(null), 6000);
     } catch (e) {
       setResetErr(`Échec : ${(e as Error).message}`);

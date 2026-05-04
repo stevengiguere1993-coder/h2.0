@@ -362,13 +362,22 @@ class SetPasswordBody(BaseModel):
     send_email: bool = Field(default=True)
 
 
-@router.post("/{user_id}/set-password", response_model=UserRead)
+class SetPasswordResponse(UserRead):
+    """Réponse à set-password : on étend UserRead avec le diagnostic
+    d'envoi du courriel (utile pour distinguer un mailer KO d'une
+    réinitialisation réussie côté UI)."""
+
+    welcome_email_sent: bool = False
+    welcome_email_error: Optional[str] = None
+
+
+@router.post("/{user_id}/set-password", response_model=SetPasswordResponse)
 async def set_password(
     user_id: int,
     body: SetPasswordBody,
     db: DBSession,
     admin: RequireAdminRole,
-) -> UserRead:
+) -> SetPasswordResponse:
     u = (
         await db.execute(select(User).where(User.id == user_id))
     ).scalar_one_or_none()
@@ -379,20 +388,35 @@ async def set_password(
     await db.flush()
     await db.refresh(u)
 
+    welcome_email_sent = False
+    welcome_email_error: Optional[str] = None
     if body.send_email and u.email:
         try:
             from app.services.welcome_email import send_welcome_email
 
-            await send_welcome_email(
+            welcome_email_sent = await send_welcome_email(
                 to_email=u.email,
                 temporary_password=body.password,
                 role=u.role,
                 created_by=admin.email,
             )
-        except Exception:
-            pass
+            if not welcome_email_sent:
+                welcome_email_error = (
+                    "Mailer non disponible (Azure Graph non configuré, "
+                    "courriel invalide, ou échec d'envoi). Voir logs."
+                )
+        except Exception as exc:
+            log.exception("set-password welcome email failed: %s", exc)
+            welcome_email_error = f"Erreur mailer : {str(exc)[:200]}"
+    elif body.send_email and not u.email:
+        welcome_email_error = "L'utilisateur n'a pas d'adresse courriel."
 
-    return UserRead.model_validate(u)
+    base = _user_read(u, None)
+    return SetPasswordResponse(
+        **base.model_dump(),
+        welcome_email_sent=welcome_email_sent,
+        welcome_email_error=welcome_email_error,
+    )
 
 
 @router.delete(
