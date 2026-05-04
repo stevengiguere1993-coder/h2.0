@@ -307,7 +307,7 @@ function UsersTable({
 
   if (users.length === 0) return null;
   return (
-    <section className="mt-6 overflow-hidden rounded-xl border border-brand-800">
+    <section className="mt-6 rounded-xl border border-brand-800">
       <div className="flex items-center gap-2 border-b border-brand-800 bg-brand-900/60 px-4 py-3">
         <ShieldCheck className="h-4 w-4 text-emerald-400" />
         <h2 className="text-sm font-semibold text-white">{title}</h2>
@@ -320,7 +320,8 @@ function UsersTable({
           {hint}
         </p>
       ) : null}
-      <table className="min-w-full divide-y divide-brand-800/60 text-sm">
+      <div className="overflow-x-auto">
+      <table className="min-w-[860px] divide-y divide-brand-800/60 text-sm">
         <thead className="bg-brand-900/30 text-left text-xs uppercase tracking-wider text-white/50">
           <tr>
             <th className="px-4 py-2">Nom / Courriel</th>
@@ -437,6 +438,7 @@ function UsersTable({
           ))}
         </tbody>
       </table>
+      </div>
       {resetInfo ? (
         <p className="border-t border-brand-800 bg-emerald-500/10 px-4 py-2 text-xs text-emerald-300">
           ✓ {resetInfo}
