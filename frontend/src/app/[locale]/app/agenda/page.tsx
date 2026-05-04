@@ -228,6 +228,32 @@ export default function AgendaPage() {
   // Modal state
   const [modal, setModal] = useState<AgendaEvent | { date: Date } | null>(null);
 
+  // Capture le geste « back » mobile (swipe) quand la modal est ouverte :
+  // au lieu de naviguer vers la page précédente (qui pourrait être
+  // /app/projets), on ferme la modal d'abord. On push une entrée
+  // d'historique à l'ouverture, et on écoute popstate.
+  useEffect(() => {
+    if (!modal) return;
+    if (typeof window === "undefined") return;
+    const stateMarker = { __agendaModal: Date.now() };
+    window.history.pushState(stateMarker, "");
+    const onPop = () => {
+      // popstate déclenché par le swipe/back → on ferme la modal
+      // sans laisser le browser naviguer vers la page précédente.
+      setModal(null);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      // Si la modal a été fermée par un autre chemin (close button,
+      // save), on retire le marqueur d'historique pour ne pas laisser
+      // de back-stack pollué.
+      if (window.history.state && window.history.state.__agendaModal === stateMarker.__agendaModal) {
+        window.history.back();
+      }
+    };
+  }, [modal]);
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
