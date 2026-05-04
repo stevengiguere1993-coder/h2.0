@@ -61,6 +61,7 @@ ENTREPRISES_WHITELIST_EMAILS = {
     "stevengiguere1993@gmail.com",
     "sgiguere@immohorizon.com",
     "pmeuser@immohorizon.com",
+    "philippe.meuser@immohorizon.com",
     "mvilliard@immohorizon.com",
 }
 

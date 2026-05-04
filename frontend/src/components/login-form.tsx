@@ -34,6 +34,7 @@ export function LoginForm() {
   const [authed, setAuthed] = useState(false);
   const [nextUrl, setNextUrl] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userVolets, setUserVolets] = useState<string[]>([]);
   const [pendingHelp, setPendingHelp] = useState(0);
 
   useEffect(() => {
@@ -59,6 +60,7 @@ export function LoginForm() {
           return;
         }
         setUserEmail(me.email || null);
+        setUserVolets(Array.isArray(me.volets) ? me.volets : []);
         setAuthed(true);
       } catch {
         // Token invalide → laisse le user voir le formulaire login
@@ -150,6 +152,11 @@ export function LoginForm() {
     const showDev =
       !!userEmail &&
       DEV_ALLOWED_EMAILS.includes(userEmail.toLowerCase().trim());
+    // Filtre les pastilles de portail selon les volets accessibles.
+    // Si la liste est vide (anciens comptes sans volets_json), on
+    // affiche tout par sécurité (backward-compat).
+    const has = (v: string) =>
+      userVolets.length === 0 || userVolets.includes(v);
     return (
       <div className="relative space-y-4">
         {showDev ? (
@@ -183,27 +190,29 @@ export function LoginForm() {
         </header>
 
         <div className="grid gap-3">
-          <button
-            type="button"
-            onClick={() => {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              router.replace("/app" as any);
-            }}
-            className="group flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-accent-500 hover:bg-brand-800"
-          >
-            <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500 group-hover:bg-accent-500 group-hover:text-brand-950">
-              <Monitor className="h-6 w-6" />
-            </span>
-            <span className="flex-1">
-              <span className="block text-base font-bold text-white">
-                Portail web
+          {has("construction") ? (
+            <button
+              type="button"
+              onClick={() => {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                router.replace("/app" as any);
+              }}
+              className="group flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-accent-500 hover:bg-brand-800"
+            >
+              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500 group-hover:bg-accent-500 group-hover:text-brand-950">
+                <Monitor className="h-6 w-6" />
               </span>
-              <span className="mt-0.5 block text-xs text-white/60">
-                Bureau / ordinateur — CRM, soumissions, factures, agenda,
-                finances.
+              <span className="flex-1">
+                <span className="block text-base font-bold text-white">
+                  Portail web
+                </span>
+                <span className="mt-0.5 block text-xs text-white/60">
+                  Bureau / ordinateur — CRM, soumissions, factures, agenda,
+                  finances.
+                </span>
               </span>
-            </span>
-          </button>
+            </button>
+          ) : null}
 
           <button
             type="button"
@@ -227,105 +236,113 @@ export function LoginForm() {
             </span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              router.replace("/prospection" as any);
-            }}
-            className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-accent-500 hover:bg-brand-800"
-          >
-            <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400 group-hover:bg-emerald-500 group-hover:text-brand-950">
-              <MapPin className="h-6 w-6" />
-            </span>
-            <span className="flex-1">
-              <span className="block text-base font-bold text-white">
-                Prospection
+          {has("prospection") ? (
+            <button
+              type="button"
+              onClick={() => {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                router.replace("/prospection" as any);
+              }}
+              className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-accent-500 hover:bg-brand-800"
+            >
+              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400 group-hover:bg-emerald-500 group-hover:text-brand-950">
+                <MapPin className="h-6 w-6" />
               </span>
-              <span className="mt-0.5 block text-xs text-white/60">
-                Repérage d&apos;immeubles — drive-by, photos, lookup
-                propriétaire, campagnes de contact.
+              <span className="flex-1">
+                <span className="block text-base font-bold text-white">
+                  Prospection
+                </span>
+                <span className="mt-0.5 block text-xs text-white/60">
+                  Repérage d&apos;immeubles — drive-by, photos, lookup
+                  propriétaire, campagnes de contact.
+                </span>
               </span>
-            </span>
-            <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
-              En développement
-            </span>
-          </button>
+              <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+                En développement
+              </span>
+            </button>
+          ) : null}
 
-          <button
-            type="button"
-            onClick={() => {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              router.replace("/entreprises" as any);
-            }}
-            className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-violet-400 hover:bg-brand-800"
-          >
-            <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-violet-500/15 text-violet-300 group-hover:bg-violet-500 group-hover:text-white">
-              <Briefcase className="h-6 w-6" />
-            </span>
-            <span className="flex-1">
-              <span className="block text-base font-bold text-white">
-                Gestion d&apos;entreprises
+          {has("entreprises") ? (
+            <button
+              type="button"
+              onClick={() => {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                router.replace("/entreprises" as any);
+              }}
+              className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-violet-400 hover:bg-brand-800"
+            >
+              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-violet-500/15 text-violet-300 group-hover:bg-violet-500 group-hover:text-white">
+                <Briefcase className="h-6 w-6" />
               </span>
-              <span className="mt-0.5 block text-xs text-white/60">
-                Tâches multi-entreprises, scoring, assignation, daily
-                pulse, suivi de projets.
+              <span className="flex-1">
+                <span className="block text-base font-bold text-white">
+                  Gestion d&apos;entreprises
+                </span>
+                <span className="mt-0.5 block text-xs text-white/60">
+                  Tâches multi-entreprises, scoring, assignation, daily
+                  pulse, suivi de projets.
+                </span>
               </span>
-            </span>
-            <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
-              En développement
-            </span>
-          </button>
+              <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+                En développement
+              </span>
+            </button>
+          ) : null}
 
-          <button
-            type="button"
-            onClick={() => {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              router.replace("/immobilier" as any);
-            }}
-            className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-sky-400 hover:bg-brand-800"
-          >
-            <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-sky-500/15 text-sky-300 group-hover:bg-sky-500 group-hover:text-white">
-              <Building2 className="h-6 w-6" />
-            </span>
-            <span className="flex-1">
-              <span className="block text-base font-bold text-white">
-                Gestion immobilière
+          {has("immobilier") ? (
+            <button
+              type="button"
+              onClick={() => {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                router.replace("/immobilier" as any);
+              }}
+              className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-sky-400 hover:bg-brand-800"
+            >
+              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-sky-500/15 text-sky-300 group-hover:bg-sky-500 group-hover:text-white">
+                <Building2 className="h-6 w-6" />
               </span>
-              <span className="mt-0.5 block text-xs text-white/60">
-                Immeubles, locataires, baux, refinancements,
-                valorisation, documents.
+              <span className="flex-1">
+                <span className="block text-base font-bold text-white">
+                  Gestion immobilière
+                </span>
+                <span className="mt-0.5 block text-xs text-white/60">
+                  Immeubles, locataires, baux, refinancements,
+                  valorisation, documents.
+                </span>
               </span>
-            </span>
-            <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
-              En développement
-            </span>
-          </button>
+              <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+                En développement
+              </span>
+            </button>
+          ) : null}
 
-          <button
-            type="button"
-            onClick={() => {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              router.replace("/investisseur" as any);
-            }}
-            className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-emerald-400 hover:bg-brand-800"
-          >
-            <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-300 group-hover:bg-emerald-500 group-hover:text-brand-950">
-              <TrendingUp className="h-6 w-6" />
-            </span>
-            <span className="flex-1">
-              <span className="block text-base font-bold text-white">
-                Investisseurs
+          {has("investisseur") ? (
+            <button
+              type="button"
+              onClick={() => {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                router.replace("/investisseur" as any);
+              }}
+              className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-emerald-400 hover:bg-brand-800"
+            >
+              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-300 group-hover:bg-emerald-500 group-hover:text-brand-950">
+                <TrendingUp className="h-6 w-6" />
               </span>
-              <span className="mt-0.5 block text-xs text-white/60">
-                Portail investisseurs : capital, valeur live, projection
-                KPI, activité 30 jours.
+              <span className="flex-1">
+                <span className="block text-base font-bold text-white">
+                  Investisseurs
+                </span>
+                <span className="mt-0.5 block text-xs text-white/60">
+                  Portail investisseurs : capital, valeur live, projection
+                  KPI, activité 30 jours.
+                </span>
               </span>
-            </span>
-            <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
-              En développement
-            </span>
-          </button>
+              <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+                En développement
+              </span>
+            </button>
+          ) : null}
         </div>
 
         <p className="pt-1 text-center text-[11px] text-white/40">
