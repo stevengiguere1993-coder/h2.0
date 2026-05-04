@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
@@ -452,6 +452,14 @@ async def import_monday_tasks(
                     item_id = str(it.get("id"))
                     title = (it.get("name") or "").strip() or f"Item {item_id}"
                     group = (it.get("group") or {}).get("title") or None
+                    column_values = it.get("column_values") or []
+
+                    # Statut : on lit d'abord la colonne Monday de type
+                    # « status » (ex. « Done », « Working on it »…). Si
+                    # absente, fallback sur le nom de groupe.
+                    status_value = _status_from_columns(column_values)
+                    if status_value is None:
+                        status_value = _guess_status_from_group(group)
 
                     existing = (
                         await db.execute(
@@ -468,7 +476,7 @@ async def import_monday_tasks(
                             monday_item_id=item_id,
                             monday_board_id=board_id,
                             monday_group_title=group,
-                            status=_guess_status_from_group(group),
+                            status=status_value,
                         )
                         db.add(t)
                         result.taches_created += 1
@@ -481,6 +489,12 @@ async def import_monday_tasks(
                         # Si la tâche a été ré-attribuée à un autre board
                         if existing.entreprise_id != ent.id:
                             existing.entreprise_id = ent.id
+                        # Synchronise toujours le statut depuis Monday —
+                        # Monday est la source de vérité des statuts. Les
+                        # éventuels overrides locaux côté h2.0 sont
+                        # écrasés à chaque re-import.
+                        if existing.status != status_value:
+                            existing.status = status_value
                         result.taches_updated += 1
 
                 result.boards_processed += 1
@@ -493,21 +507,95 @@ async def import_monday_tasks(
     return result
 
 
-def _guess_status_from_group(group: Optional[str]) -> str:
-    """Heuristique : déduit un statut à partir du nom du groupe Monday.
-    Conservateur : tout ce qui n'est pas évident → backlog."""
-    if not group:
-        return TacheStatus.BACKLOG.value
-    g = group.lower()
-    if any(k in g for k in ("done", "termin", "complet", "fait")):
+def _map_status_label(label: Optional[str]) -> Optional[str]:
+    """Mappe un libellé de statut (Monday ou groupe) sur un TacheStatus.
+    Retourne None si rien ne matche — laisse l'appelant décider du
+    fallback (backlog ou autre)."""
+    if not label:
+        return None
+    s = label.lower().strip()
+    if any(k in s for k in ("done", "termin", "complet", "fait", "résolu", "resolu", "closed", "clos", "fini")):
         return TacheStatus.DONE.value
-    if any(k in g for k in ("progress", "en cours", "doing")):
+    if any(
+        k in s
+        for k in (
+            "in progress",
+            "in_progress",
+            "progress",
+            "working",
+            "working on it",
+            "en cours",
+            "doing",
+            "actif",
+            "wip",
+            "ongoing",
+        )
+    ):
         return TacheStatus.IN_PROGRESS.value
-    if any(k in g for k in ("attente", "wait", "block", "stuck")):
+    if any(
+        k in s
+        for k in (
+            "attente",
+            "wait",
+            "block",
+            "stuck",
+            "on hold",
+            "hold",
+            "pause",
+            "bloqu",
+            "pending review",
+        )
+    ):
         return TacheStatus.WAITING.value
-    if any(k in g for k in ("todo", "à faire", "a faire", "this week", "semaine")):
+    if any(
+        k in s
+        for k in (
+            "todo",
+            "to do",
+            "to-do",
+            "à faire",
+            "a faire",
+            "next",
+            "ready",
+            "planifié",
+            "planifie",
+            "this week",
+            "semaine",
+            "scheduled",
+            "open",
+        )
+    ):
         return TacheStatus.TODO.value
-    return TacheStatus.BACKLOG.value
+    if any(k in s for k in ("backlog", "icebox", "later", "someday", "idea", "idée", "idee")):
+        return TacheStatus.BACKLOG.value
+    return None
+
+
+def _status_from_columns(column_values: List[Dict[str, Any]]) -> Optional[str]:
+    """Cherche dans les column_values d'un item Monday la première
+    colonne de type 'status' (ou 'color' = ancien nom interne) et mappe
+    son libellé sur un TacheStatus. Retourne None si aucune colonne
+    statut n'est trouvée ou que le libellé ne matche aucun pattern."""
+    if not column_values:
+        return None
+    for cv in column_values:
+        if not isinstance(cv, dict):
+            continue
+        ctype = (cv.get("type") or "").lower()
+        if ctype not in ("status", "color"):
+            continue
+        text = cv.get("text") or ""
+        mapped = _map_status_label(text)
+        if mapped is not None:
+            return mapped
+    return None
+
+
+def _guess_status_from_group(group: Optional[str]) -> str:
+    """Fallback : déduit un statut à partir du nom du groupe Monday.
+    Conservateur : tout ce qui n'est pas évident → backlog."""
+    mapped = _map_status_label(group)
+    return mapped if mapped is not None else TacheStatus.BACKLOG.value
 
 
 # ── Insights (alertes IA) ───────────────────────────────────────────────
