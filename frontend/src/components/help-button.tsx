@@ -100,18 +100,30 @@ export function HelpButton({
     setBugSent(false);
     try {
       const ua =
-        typeof navigator !== "undefined" ? navigator.userAgent : null;
+        typeof navigator !== "undefined"
+          ? navigator.userAgent.slice(0, 500)
+          : null;
       const res = await authedFetch("/api/v1/help/reports", {
         method: "POST",
         body: JSON.stringify({
           message: bugMsg.trim(),
-          context_url: pathname,
+          context_url: pathname.slice(0, 500),
           user_agent: ua
         })
       });
       if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        throw new Error(`HTTP ${res.status} ${txt.slice(0, 120)}`);
+        // Surface du détail réel : on essaie d'extraire le `detail`
+        // du payload JSON FastAPI, sinon on tombe sur le texte brut.
+        let txt = "";
+        try {
+          const j = await res.json();
+          txt =
+            (j?.detail && (typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail))) ||
+            JSON.stringify(j);
+        } catch {
+          txt = await res.text().catch(() => "");
+        }
+        throw new Error(`HTTP ${res.status} — ${txt.slice(0, 200)}`);
       }
       setBugMsg("");
       setBugSent(true);
