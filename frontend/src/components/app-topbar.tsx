@@ -11,7 +11,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 
 type Crumb = { label: string; href?: string };
 
-function useIsMobile(breakpointPx = 640): boolean {
+function useIsMobile(breakpointPx = 1024): boolean {
   const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -38,13 +38,21 @@ export function AppTopbar({
   onSearch?: (query: string) => void;
 }) {
   const isMobile = useIsMobile();
-  const kratosSize = isMobile ? 56 : 144;
+  // Mobile : Kratos 168 px (3× le 56 px précédent), demande utilisateur.
+  // Desktop : 144 px (3× la version legacy 48 px).
+  const kratosSize = isMobile ? 168 : 144;
 
   return (
-    <header className="sticky top-0 z-30 border-b border-brand-800 bg-brand-950/95 px-4 backdrop-blur lg:px-6">
-      {/* Ligne 1 : menu + breadcrumb + Kratos. Sur mobile la deuxième
-          ligne héberge les actions pour éviter le chevauchement. */}
-      <div className="flex min-h-[64px] items-center gap-3 lg:min-h-[152px]">
+    <header
+      className="sticky top-0 z-30 border-b border-brand-800 bg-brand-950/95 px-4 backdrop-blur lg:px-6"
+      // Padding-top safe-area pour que le contenu (menu burger gauche +
+      // Kratos droite) ne passe PAS sous le notch / Dynamic Island.
+      style={{ paddingTop: "env(safe-area-inset-top)" }}
+    >
+      {/* Ligne 1 : menu + breadcrumb + ThemeToggle + Bell + Kratos.
+          Tout sur la même ligne — sur mobile la 2e ligne ne contient
+          que la recherche / les actions secondaires. */}
+      <div className="flex min-h-[64px] items-center gap-2 lg:min-h-[152px] lg:gap-3">
         <button
           type="button"
           onClick={onOpenSidebar}
@@ -86,10 +94,14 @@ export function AppTopbar({
           })}
         </nav>
 
-        {/* Actions desktop : tout sur la même ligne */}
+        {/* ThemeToggle + Bell visibles partout (mobile + desktop), placés
+            JUSTE AVANT le Kratos comme demandé. */}
+        <ThemeToggle />
+        <NotificationBell />
+
+        {/* Search + rightSlot : visibles inline sur desktop seulement.
+            Sur mobile, ils sont relégués sur la 2e ligne ci-dessous. */}
         <div className="hidden lg:flex items-center gap-3">
-          <ThemeToggle />
-          <NotificationBell />
           {onSearch ? (
             <div className="relative min-w-[220px]">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
@@ -108,16 +120,14 @@ export function AppTopbar({
           ) : null}
         </div>
 
-        {/* Kratos : taille réduite sur mobile, statique à droite */}
+        {/* Kratos — toujours à l'extrême droite, taille agrandie sur
+            mobile pour matcher visuellement la prestance desktop. */}
         <KratosLogo size={kratosSize} floating={false} />
       </div>
 
-      {/* Ligne 2 mobile : actions sur leur propre rangée pour éviter
-          que le breadcrumb, les icônes et le bouton primaire ne se
-          chevauchent. Scroll horizontal si vraiment trop de boutons. */}
+      {/* Ligne 2 mobile : recherche + bouton primaire (rightSlot, ex.
+          « + Créer un prospect »). overflow-x-auto si très large. */}
       <div className="flex items-center gap-2 overflow-x-auto pb-2 lg:hidden">
-        <ThemeToggle />
-        <NotificationBell />
         {onSearch ? (
           <div className="relative flex-1 min-w-[140px]">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
