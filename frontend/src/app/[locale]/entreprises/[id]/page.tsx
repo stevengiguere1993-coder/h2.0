@@ -104,6 +104,7 @@ export default function EntrepriseDetailPage() {
   const [modal, setModal] = useState<Tache | { fresh: true } | null>(null);
   const [dragging, setDragging] = useState<number | null>(null);
   const [hoverCol, setHoverCol] = useState<string | null>(null);
+  const [tachesView, setTachesView] = useState<"kanban" | "list">("kanban");
 
   async function load() {
     setLoading(true);
@@ -315,7 +316,48 @@ export default function EntrepriseDetailPage() {
           </p>
         ) : null}
 
-        <div className="mt-6 flex gap-3 overflow-x-auto pb-3">
+        {/* Toggle Tableau/Kanban — au-dessus du board */}
+        <div className="mt-6 flex items-center justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-white/50">
+            Tâches
+          </h2>
+          <div className="inline-flex rounded-lg border border-brand-800 bg-brand-900 p-0.5">
+            <button
+              type="button"
+              onClick={() => setTachesView("list")}
+              className="rounded-md px-3 py-1.5 text-xs font-semibold transition"
+              style={{
+                backgroundColor:
+                  tachesView === "list" ? "#a78bfa" : "transparent",
+                color: tachesView === "list" ? "#0a0a0b" : "rgba(245,245,247,0.6)"
+              }}
+            >
+              Tableau
+            </button>
+            <button
+              type="button"
+              onClick={() => setTachesView("kanban")}
+              className="rounded-md px-3 py-1.5 text-xs font-semibold transition"
+              style={{
+                backgroundColor:
+                  tachesView === "kanban" ? "#a78bfa" : "transparent",
+                color: tachesView === "kanban" ? "#0a0a0b" : "rgba(245,245,247,0.6)"
+              }}
+            >
+              Kanban
+            </button>
+          </div>
+        </div>
+
+        {tachesView === "list" ? (
+          <TachesListView
+            taches={taches}
+            empById={empById}
+            onClickRow={(t) => setModal(t)}
+            onChangeStatus={(t, s) => moveTache(t.id, s)}
+          />
+        ) : (
+        <div className="mt-3 flex gap-3 overflow-x-auto pb-3">
           {COLUMNS.map((col) => {
             const cards = byColumn[col.id] || [];
             const isHover = hoverCol === col.id;
@@ -383,6 +425,7 @@ export default function EntrepriseDetailPage() {
             );
           })}
         </div>
+        )}
       </div>
 
       {modal ? (
@@ -1941,6 +1984,128 @@ function LinkModal({
           </div>
         </form>
       </div>
+    </div>
+  );
+}
+
+// ─── Vue liste / tableau des tâches d'une entreprise ────────────────────
+
+function TachesListView({
+  taches,
+  empById,
+  onClickRow,
+  onChangeStatus
+}: {
+  taches: Tache[];
+  empById: Map<number, Employe>;
+  onClickRow: (t: Tache) => void;
+  onChangeStatus: (t: Tache, status: string) => void;
+}) {
+  // Trie par score décroissant (mêmes règles que le kanban) puis par
+  // colonne pour grouper visuellement.
+  const sorted = useMemo(() => {
+    return [...taches].sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+  }, [taches]);
+
+  if (sorted.length === 0) {
+    return (
+      <div className="mt-3 rounded-xl border border-brand-800 bg-brand-900/60 px-6 py-12 text-center">
+        <p className="text-sm text-white/50">Aucune tâche</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 overflow-hidden rounded-xl border border-brand-800 bg-brand-900/60">
+      <table className="w-full text-[13px]">
+        <thead>
+          <tr
+            className="text-[10px] uppercase tracking-wider text-white/50"
+            style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
+          >
+            <th className="px-3 py-2.5 text-right">Score</th>
+            <th className="px-4 py-2.5 text-left">Tâche</th>
+            <th className="px-3 py-2.5 text-left">Statut</th>
+            <th className="px-3 py-2.5 text-left">Département</th>
+            <th className="px-3 py-2.5 text-left">Assigné</th>
+            <th className="px-3 py-2.5 text-right">Échéance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((t) => {
+            const col = COLUMNS.find((c) => c.id === t.status);
+            const assignee =
+              t.assignee_user_id != null
+                ? empById.get(t.assignee_user_id)
+                : null;
+            const dueLabel = t.due_date
+              ? new Date(t.due_date).toLocaleDateString("fr-CA", {
+                  day: "2-digit",
+                  month: "short"
+                })
+              : "—";
+            return (
+              <tr
+                key={t.id}
+                onClick={() => onClickRow(t)}
+                className="cursor-pointer hover:bg-white/5"
+                style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
+              >
+                <td
+                  className="px-3 py-3 text-right font-mono text-[12px] font-bold"
+                  style={{
+                    color:
+                      t.score == null ? "rgba(255,255,255,0.4)" : "#a78bfa"
+                  }}
+                >
+                  {t.score != null ? t.score.toFixed(1) : "—"}
+                </td>
+                <td className="max-w-[420px] px-4 py-3">
+                  <p className="truncate font-medium text-white">
+                    {t.title}
+                  </p>
+                  {t.description ? (
+                    <p className="mt-0.5 line-clamp-1 text-[11px] text-white/50">
+                      {t.description}
+                    </p>
+                  ) : null}
+                </td>
+                <td
+                  className="px-3 py-3"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <select
+                    value={t.status}
+                    onChange={(e) => onChangeStatus(t, e.target.value)}
+                    className="rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-[11px] text-white"
+                  >
+                    {COLUMNS.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+                <td className="px-3 py-3 text-[11px] text-white/70">
+                  {t.departement || (
+                    <span className="text-white/30">—</span>
+                  )}
+                </td>
+                <td className="px-3 py-3 text-[11px] text-white/70">
+                  {assignee ? (
+                    assignee.full_name.split(" ")[0]
+                  ) : (
+                    <span className="text-white/30">Non assigné</span>
+                  )}
+                </td>
+                <td className="px-3 py-3 text-right text-[11px] text-white/60">
+                  {dueLabel}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
