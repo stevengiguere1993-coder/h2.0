@@ -1331,6 +1331,17 @@ function TasksTab({ projectId }: { projectId: number }) {
   );
 }
 
+type InvoiceLine = {
+  id: number;
+  reference: string;
+  status: string;
+  total: number;
+  issued_at: string | null;
+  due_at: string | null;
+  paid_at: string | null;
+  paid_amount: number;
+};
+
 type Finances = {
   projected_revenue: number;
   projected_service_cost: number;
@@ -1350,6 +1361,7 @@ type Finances = {
   invoiced_amount: number;
   paid_amount: number;
   balance_due: number;
+  invoices?: InvoiceLine[];
 };
 
 function FinancesTab({ projectId }: { projectId: number }) {
@@ -1749,6 +1761,26 @@ function FinancesTab({ projectId }: { projectId: number }) {
             </dd>
           </div>
         </dl>
+
+        {/* Liste des factures réellement émises — statut visuel
+            (brouillon / envoyée / en retard / payée / annulée), date
+            d'envoi, montant payé, solde, lien vers la fiche. */}
+        {data.invoices && data.invoices.length > 0 ? (
+          <div className="mt-5">
+            <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-white/50">
+              Factures émises ({data.invoices.length})
+            </h4>
+            <ul className="space-y-1.5">
+              {data.invoices.map((inv) => (
+                <InvoiceRow key={inv.id} inv={inv} />
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <p className="mt-5 text-[11px] text-white/40">
+            Aucune facture émise pour ce projet.
+          </p>
+        )}
       </section>
     </div>
   );
@@ -3494,5 +3526,77 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
         </>
       )}
     </section>
+  );
+}
+
+// ─── Ligne de facture émise dans la section Facturation ─────────────────
+
+const INVOICE_STATUS_LABEL: Record<string, string> = {
+  draft: "Brouillon",
+  sent: "Envoyée",
+  paid: "Payée",
+  overdue: "En retard",
+  void: "Annulée"
+};
+
+const INVOICE_STATUS_TONE: Record<string, string> = {
+  draft: "bg-white/10 text-white/70 border-white/20",
+  sent: "bg-blue-500/15 text-blue-300 border-blue-500/30",
+  paid: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+  overdue: "bg-rose-500/15 text-rose-300 border-rose-500/30",
+  void: "bg-white/5 text-white/40 border-white/10"
+};
+
+function InvoiceRow({ inv }: { inv: InvoiceLine }) {
+  const tone = INVOICE_STATUS_TONE[inv.status] || INVOICE_STATUS_TONE.draft;
+  const label = INVOICE_STATUS_LABEL[inv.status] || inv.status;
+  const balance = Math.max(0, inv.total - inv.paid_amount);
+  const issued = inv.issued_at
+    ? new Date(inv.issued_at).toLocaleDateString("fr-CA", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric"
+      })
+    : null;
+  return (
+    <li>
+      <Link
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        href={`/app/facturation/${inv.id}` as any}
+        className="flex items-center justify-between gap-2 rounded-lg border border-brand-800 bg-brand-950/50 px-3 py-2 text-xs hover:border-accent-500/40 hover:bg-brand-950"
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <span
+            className={`inline-flex flex-shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${tone}`}
+          >
+            {label}
+          </span>
+          <span className="truncate font-mono text-white/90">
+            {inv.reference}
+          </span>
+          {issued ? (
+            <span className="hidden flex-shrink-0 text-[10px] text-white/40 sm:inline">
+              · {issued}
+            </span>
+          ) : null}
+        </span>
+        <span className="flex flex-shrink-0 items-center gap-3">
+          <span className="text-right">
+            <span className="block font-semibold text-white">
+              {fmtMoney(inv.total)}
+            </span>
+            {balance > 0 ? (
+              <span className="block text-[10px] text-rose-300">
+                Solde {fmtMoney(balance)}
+              </span>
+            ) : (
+              <span className="block text-[10px] text-emerald-300">
+                Reçu intégral
+              </span>
+            )}
+          </span>
+        </span>
+      </Link>
+    </li>
   );
 }
