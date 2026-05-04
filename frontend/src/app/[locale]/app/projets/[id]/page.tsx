@@ -3345,8 +3345,8 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                 Aucun PO pour ce projet.
               </div>
             ) : (
-              <div className="overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
-                <table className="w-full text-sm">
+              <div className="overflow-x-auto rounded-xl border border-brand-800 bg-brand-900">
+                <table className="w-full min-w-[720px] text-sm">
                   <thead className="border-b border-brand-800 bg-brand-950/50 text-left text-[11px] uppercase tracking-wider text-white/50">
                     <tr>
                       <th className="px-3 py-2">PO</th>
@@ -3430,8 +3430,8 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                 Aucun achat enregistré pour ce projet.
               </div>
             ) : (
-              <div className="overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
-                <table className="w-full text-sm">
+              <div className="overflow-x-auto rounded-xl border border-brand-800 bg-brand-900">
+                <table className="w-full min-w-[860px] text-sm">
                   <thead className="border-b border-brand-800 bg-brand-950/50 text-left text-[11px] uppercase tracking-wider text-white/50">
                     <tr>
                       <th className="px-3 py-2">Réf.</th>
