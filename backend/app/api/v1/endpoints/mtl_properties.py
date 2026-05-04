@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import unicodedata
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Query, status
 
@@ -475,6 +475,14 @@ async def address_search(
     return out
 
 
+# Cache TTL en mémoire pour /utilisation-types — l'endpoint GROUP BY
+# sur ~1 M lignes coûte 1-3 s. La liste change rarement (seulement
+# après un import de rôle), donc on cache 5 min par valeur de
+# min_logements (None inclus).
+_UTILISATION_CACHE: Dict[Tuple[Optional[int]], Tuple[float, List["UtilisationType"]]] = {}
+_UTILISATION_CACHE_TTL_S = 300.0
+
+
 @router.get(
     "/utilisation-types",
     response_model=List[UtilisationType],
@@ -492,7 +500,16 @@ async def utilisation_types(
     20+ logements, on ne montre que les types pertinents).
 
     Trié par count desc — les types les plus courants en premier.
+    Cache 5 min en mémoire — la liste change rarement.
     """
+    import time as _time
+
+    cache_key: Tuple[Optional[int]] = (min_logements,)
+    cached = _UTILISATION_CACHE.get(cache_key)
+    now = _time.monotonic()
+    if cached is not None and (now - cached[0]) < _UTILISATION_CACHE_TTL_S:
+        return cached[1]
+
     stmt = (
         select(
             MontrealPropertyUnit.code_utilisation,
@@ -511,7 +528,7 @@ async def utilisation_types(
             MontrealPropertyUnit.nombre_logement >= min_logements
         )
     rows = (await db.execute(stmt)).all()
-    return [
+    result = [
         UtilisationType(
             code=str(code),
             libelle=libelle,
@@ -519,6 +536,8 @@ async def utilisation_types(
         )
         for code, libelle, count in rows
     ]
+    _UTILISATION_CACHE[cache_key] = (now, result)
+    return result
 
 
 @router.get(

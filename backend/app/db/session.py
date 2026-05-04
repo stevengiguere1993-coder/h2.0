@@ -470,6 +470,44 @@ async def init_db() -> None:
             # prochain démarrage.
             pass
 
+        # Index additionnels — perf des listes /prospection/mtl-properties
+        # avec ~900 K-1 M unités. CREATE INDEX IF NOT EXISTS est idempotent.
+        # Sans ces index, les filtres déclenchent des seq-scans (plusieurs
+        # secondes par requête).
+        additive_indexes = (
+            (
+                "ix_mtl_units_nombre_logement",
+                "mtl_property_units",
+                "(nombre_logement)",
+            ),
+            (
+                "ix_mtl_units_code_utilisation",
+                "mtl_property_units",
+                "(code_utilisation)",
+            ),
+            (
+                "ix_mtl_units_municipalite_lower",
+                "mtl_property_units",
+                "(LOWER(municipalite))",
+            ),
+            (
+                "ix_mtl_units_annee_construction",
+                "mtl_property_units",
+                "(annee_construction)",
+            ),
+        )
+        for idx_name, table, expr in additive_indexes:
+            try:
+                await conn.execute(
+                    text(
+                        f"CREATE INDEX IF NOT EXISTS {idx_name} "
+                        f"ON {table} {expr}"
+                    )
+                )
+            except Exception:
+                # Table absente au tout premier boot — sera ré-essayé.
+                pass
+
 
 async def close_db() -> None:
     """

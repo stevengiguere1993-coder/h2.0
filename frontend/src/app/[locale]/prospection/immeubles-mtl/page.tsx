@@ -83,6 +83,9 @@ export default function ImmeublesMtlPage() {
   const [minAnnee, setMinAnnee] = useState<string>("");
   const [maxAnnee, setMaxAnnee] = useState<string>("");
   const [rueSearch, setRueSearch] = useState<string>("");
+  // Valeur debouncée envoyée à l'API — évite un fetch par keystroke
+  // quand l'utilisateur tape un nom de rue.
+  const [rueSearchDebounced, setRueSearchDebounced] = useState<string>("");
   const [sortBy, setSortBy] = useState("nombre_logement_desc");
   const [distanceBand, setDistanceBand] = useState<
     "" | "mtl_only" | "under_30" | "30_to_40" | "40_to_50" | "over_50"
@@ -123,8 +126,8 @@ export default function ImmeublesMtlPage() {
       if (maxLogements) params.set("max_logements", maxLogements);
       if (minAnnee) params.set("min_annee", minAnnee);
       if (maxAnnee) params.set("max_annee", maxAnnee);
-      if (rueSearch.trim())
-        params.set("nom_rue_contains", rueSearch.trim());
+      if (rueSearchDebounced.trim())
+        params.set("nom_rue_contains", rueSearchDebounced.trim());
       // codes_utilisation : multi-valeur, FastAPI accepte
       // ?codes_utilisation=A&codes_utilisation=B
       for (const code of selectedCodes) {
@@ -155,23 +158,34 @@ export default function ImmeublesMtlPage() {
     maxLogements,
     minAnnee,
     maxAnnee,
-    rueSearch,
+    rueSearchDebounced,
     selectedCodes,
     sortBy,
     distanceBand,
     offset
   ]);
 
-  // Charge la liste des types d'utilisation au montage. Utilise
-  // min_logements pour ne montrer que les types pertinents au
-  // périmètre actuel.
+  // Debounce 350 ms : on déclenche le fetch seulement après que
+  // l'utilisateur arrête de taper. Évite une requête par keystroke
+  // sur la table de ~1 M unités.
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setRueSearchDebounced(rueSearch);
+      setOffset(0);
+    }, 350);
+    return () => clearTimeout(id);
+  }, [rueSearch]);
+
+  // Charge la liste des types d'utilisation UNE SEULE FOIS au montage.
+  // Anciennement re-fetché à chaque changement de minLogements, mais
+  // l'endpoint fait un GROUP BY sur 1M+ lignes — coûteux. La liste
+  // complète des codes change rarement (~après import), pas à chaque
+  // ajustement de filtre.
   useEffect(() => {
     void (async () => {
       try {
-        const params = new URLSearchParams();
-        if (minLogements) params.set("min_logements", minLogements);
         const r = await authedFetch(
-          `/api/v1/prospection/mtl-properties/utilisation-types?${params}`
+          `/api/v1/prospection/mtl-properties/utilisation-types`
         );
         if (!r.ok) return;
         setUtilTypes((await r.json()) as UtilisationType[]);
@@ -179,7 +193,7 @@ export default function ImmeublesMtlPage() {
         /* ignore */
       }
     })();
-  }, [minLogements]);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -330,10 +344,7 @@ export default function ImmeublesMtlPage() {
                 <input
                   type="search"
                   value={rueSearch}
-                  onChange={(e) => {
-                    setRueSearch(e.target.value);
-                    setOffset(0);
-                  }}
+                  onChange={(e) => setRueSearch(e.target.value)}
                   placeholder="Ex: Saint-Laurent, Sherbrooke, …"
                   className="input pl-8 text-sm"
                 />
