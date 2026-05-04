@@ -103,7 +103,7 @@ export default function MobileLayout({
           aria-label="Accueil du portail"
           className="flex items-center"
         >
-          <KratosLogo size={36} floating={false} />
+          <KratosLogo size={108} floating={false} />
         </Link>
       </div>
 
