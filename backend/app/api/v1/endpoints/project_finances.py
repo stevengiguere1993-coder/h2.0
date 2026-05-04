@@ -36,6 +36,21 @@ class CostLine(BaseModel):
     total: float
 
 
+class InvoiceLine(BaseModel):
+    """Une facture du projet — sert à afficher la liste des factures
+    réellement émises avec leur statut (draft/sent/paid/overdue/void),
+    leur référence, leurs dates clés et le montant total."""
+
+    id: int
+    reference: str
+    status: str
+    total: float
+    issued_at: Optional[datetime] = None
+    due_at: Optional[datetime] = None
+    paid_at: Optional[datetime] = None
+    paid_amount: float
+
+
 class FinancesResponse(BaseModel):
     projected_revenue: float
     projected_service_cost: float
@@ -57,6 +72,7 @@ class FinancesResponse(BaseModel):
     invoiced_amount: float
     paid_amount: float
     balance_due: float
+    invoices: List[InvoiceLine]
 
 
 @router.get(
@@ -322,43 +338,61 @@ async def get_finances(
 
     actual_total_cost = round(actual_material_cost + actual_labour_cost, 2)
 
-    # Invoicing
+    # Invoicing — liste des factures du projet avec leur statut, total
+    # et montant payé. Sert à la fois aux totaux agrégés et au listing
+    # détaillé côté UI (« suivre les factures réellement envoyées »).
     factures = (
         await db.execute(
-            select(Facture).where(Facture.project_id == project_id)
+            select(Facture)
+            .where(Facture.project_id == project_id)
+            .order_by(Facture.issued_at.desc().nulls_last(), Facture.id.desc())
         )
     ).scalars().all()
     invoiced = sum(float(f.total or 0) for f in factures)
-    paid_sum = 0.0
+
+    # Paiements par facture (un seul SELECT, on group puis on lookup).
+    paid_by_facture: dict[int, float] = {}
     if factures:
         ids = [f.id for f in factures]
-        paid_sum = float(
-            (
-                await db.execute(
-                    select(func.coalesce(func.sum(Payment.amount), 0)).where(
-                        Payment.facture_id.in_(ids)
-                    )
+        rows = (
+            await db.execute(
+                select(
+                    Payment.facture_id,
+                    func.coalesce(func.sum(Payment.amount), 0),
                 )
-            ).scalar_one()
-            or 0
-        )
-    # A facture with status=paid and no payments rows is counted too.
-    for f in factures:
-        if f.status == FactureStatus.PAID.value and f.paid_at is not None:
-            # If there are no payment rows, fall back to counting the
-            # total as paid to avoid double-counting.
-            paid_for_this = float(
-                (
-                    await db.execute(
-                        select(
-                            func.coalesce(func.sum(Payment.amount), 0)
-                        ).where(Payment.facture_id == f.id)
-                    )
-                ).scalar_one()
-                or 0
+                .where(Payment.facture_id.in_(ids))
+                .group_by(Payment.facture_id)
             )
-            if paid_for_this == 0:
-                paid_sum += float(f.total or 0)
+        ).all()
+        for fid, amt in rows:
+            paid_by_facture[int(fid)] = float(amt or 0)
+
+    # Construit les InvoiceLine + agrège paid_sum
+    invoices_out: List[InvoiceLine] = []
+    paid_sum = 0.0
+    for f in factures:
+        paid_for_this = paid_by_facture.get(f.id, 0.0)
+        # Fallback : facture marquée payée mais sans rangées Payment
+        # → on compte son total comme reçu (évite le double-compte).
+        if (
+            f.status == FactureStatus.PAID.value
+            and f.paid_at is not None
+            and paid_for_this == 0
+        ):
+            paid_for_this = float(f.total or 0)
+        paid_sum += paid_for_this
+        invoices_out.append(
+            InvoiceLine(
+                id=f.id,
+                reference=f.reference,
+                status=f.status,
+                total=round(float(f.total or 0), 2),
+                issued_at=f.issued_at,
+                due_at=f.due_at,
+                paid_at=f.paid_at,
+                paid_amount=round(paid_for_this, 2),
+            )
+        )
 
     balance = max(0.0, invoiced - paid_sum)
 
@@ -390,4 +424,5 @@ async def get_finances(
         invoiced_amount=round(invoiced, 2),
         paid_amount=round(paid_sum, 2),
         balance_due=round(balance, 2),
+        invoices=invoices_out,
     )
