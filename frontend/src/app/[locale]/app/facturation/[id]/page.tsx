@@ -158,6 +158,36 @@ export default function FactureDetailPage() {
   const [internalNotes, setInternalNotes] = useState("");
   const [clientNote, setClientNote] = useState("");
   const [notesSaving, setNotesSaving] = useState(false);
+  const [editingRef, setEditingRef] = useState(false);
+  const [refDraft, setRefDraft] = useState("");
+  const [refSaving, setRefSaving] = useState(false);
+
+  async function saveReference() {
+    if (!f) return;
+    const next = refDraft.trim();
+    if (!next || next === f.reference) {
+      setEditingRef(false);
+      return;
+    }
+    setRefSaving(true);
+    try {
+      const res = await authedFetch(`/api/v1/factures/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ reference: next })
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status} ${t.slice(0, 200)}`);
+      }
+      const u = (await res.json()) as Facture;
+      setF(u);
+      setEditingRef(false);
+    } catch (e) {
+      setError(`Renumérotation échouée : ${(e as Error).message}`);
+    } finally {
+      setRefSaving(false);
+    }
+  }
 
   const [importOpen, setImportOpen] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
@@ -533,7 +563,53 @@ export default function FactureDetailPage() {
           <>
             <header className="mt-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
-                <h1 className="text-2xl font-bold text-white">{f.reference}</h1>
+                {editingRef ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      autoFocus
+                      type="text"
+                      value={refDraft}
+                      onChange={(e) => setRefDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void saveReference();
+                        if (e.key === "Escape") setEditingRef(false);
+                      }}
+                      placeholder="Ex. 98 ou FAC-2026-098"
+                      className="rounded-md border border-accent-500/40 bg-brand-900 px-3 py-1.5 text-2xl font-bold text-white focus:outline-none focus:ring-2 focus:ring-accent-500/40"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void saveReference()}
+                      disabled={refSaving || !refDraft.trim()}
+                      className="rounded-md bg-accent-500 px-3 py-1.5 text-xs font-semibold text-brand-950 disabled:opacity-50"
+                    >
+                      {refSaving ? "…" : "Sauver"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingRef(false)}
+                      disabled={refSaving}
+                      className="rounded-md border border-brand-800 px-3 py-1.5 text-xs font-semibold text-white/60 hover:text-white"
+                    >
+                      Annuler
+                    </button>
+                  </div>
+                ) : (
+                  <h1 className="flex items-center gap-2 text-2xl font-bold text-white">
+                    {f.reference}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRefDraft(f.reference);
+                        setEditingRef(true);
+                      }}
+                      title="Modifier le numéro de facture"
+                      className="rounded p-1 text-white/30 hover:bg-brand-900 hover:text-accent-500"
+                    >
+                      <span aria-hidden className="text-sm">✏️</span>
+                    </button>
+                  </h1>
+                )}
                 <p className="mt-1 text-xs text-white/50">
                   {client ? `Client : ${client.name} · ` : ""}
                   {project ? (
