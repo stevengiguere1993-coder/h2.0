@@ -388,54 +388,16 @@ async def init_db() -> None:
             except Exception:
                 pass
 
-        # Refonte PO/Achat (Avril 2026) : sépare proprement les bons
-        # de commande (en planification) des achats (transactions
-        # comptables). Migre les anciens « achats » qui étaient en
-        # réalité des POs (status draft/ordered, jamais reçus) vers
-        # la nouvelle table purchase_orders, puis les supprime de la
-        # table achats. Idempotent : un second run ne trouve plus de
-        # candidats à migrer.
-        try:
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO purchase_orders (
-                        reference, fournisseur_id, project_id,
-                        assigned_employe_id, description, amount_max,
-                        payment_method, status, sent_at, notes,
-                        created_at, updated_at
-                    )
-                    SELECT
-                        reference, fournisseur_id, project_id,
-                        assigned_employe_id, description, amount,
-                        payment_method,
-                        CASE
-                            WHEN status = 'ordered' THEN 'sent'
-                            WHEN status = 'draft'   THEN 'draft'
-                            ELSE 'cancelled'
-                        END,
-                        ordered_at, notes,
-                        COALESCE(created_at, NOW()),
-                        COALESCE(updated_at, NOW())
-                    FROM achats
-                    WHERE status IN ('draft', 'ordered')
-                       OR (status = 'cancelled' AND received_at IS NULL)
-                    """
-                )
-            )
-            await conn.execute(
-                text(
-                    """
-                    DELETE FROM achats
-                    WHERE status IN ('draft', 'ordered')
-                       OR (status = 'cancelled' AND received_at IS NULL)
-                    """
-                )
-            )
-        except Exception:
-            # Tables ou colonnes absentes au tout premier boot — sera
-            # ré-essayé au démarrage suivant.
-            pass
+        # ⚠ DÉSACTIVÉ — était une migration one-shot (Avril 2026) qui
+        # déplaçait les anciens « achats » draft/ordered vers la table
+        # purchase_orders puis les SUPPRIMAIT de la table achats. Comme
+        # le bloc est resté dans init_db, il s'exécutait à CHAQUE
+        # démarrage et avalait silencieusement tout achat futur dont
+        # le status était draft/ordered ou cancelled+received_at=NULL.
+        # Conséquence : les achats annulés non-reçus, créés normalement
+        # par les utilisateurs, disparaissaient au prochain cold-start
+        # Render. Désactivé en novembre 2026 pour stopper la perte.
+        # On garde le bloc commenté pour la mémoire.
 
         # Backfill des tables de jointure pour les assignations
         # multi-personnes sur phases et tâches. Idempotent : ON CONFLICT
