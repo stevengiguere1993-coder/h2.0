@@ -542,13 +542,37 @@ def _render_bytes(
         )
         story.append(Spacer(1, 12))
 
-    story.append(Paragraph("MODALITÉS DE PAIEMENT", s["accent"]))
+    story.append(Paragraph("MODES DE PAIEMENT ACCEPTÉS", s["accent"]))
+    story.append(Paragraph(
+        "&bull; <b>Dépôt direct</b> (paiement de la facture)<br/>"
+        "&bull; <b>Virement Interac</b>",
+        s["small"],
+    ))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph("Informations pour dépôt direct", s["accent"]))
+    story.append(Paragraph(
+        f"Entreprise : <b>{COMPANY_NAME}</b><br/>"
+        "Institution : <b>815</b><br/>"
+        "Transit : <b>92004</b><br/>"
+        "Compte : <b>0935973</b>",
+        s["small"],
+    ))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(
+        "Virement Interac : <b>admin@immohorizon.com</b>",
+        s["small"],
+    ))
+    story.append(Spacer(1, 6))
+    if tax_gst or tax_qst:
+        tps_line = f"TPS : <b>{tax_gst}</b>" if tax_gst else ""
+        tvq_line = f"TVQ : <b>{tax_qst}</b>" if tax_qst else ""
+        sep = "<br/>" if tps_line and tvq_line else ""
+        story.append(Paragraph(f"{tps_line}{sep}{tvq_line}", s["small"]))
+        story.append(Spacer(1, 6))
     story.append(Paragraph(
         "Les taxes TPS (5 %) et TVQ (9,975 %) sont applicables. "
-        "Paiement dû à la date d'échéance indiquée ci-dessus. Les "
-        "virements bancaires (Interac) et chèques à l'ordre de "
-        f"{COMPANY_NAME} sont acceptés. Pour toute question, contacte-"
-        "nous à info@immohorizon.com.", s["small"],
+        "Paiement dû à la date d'échéance indiquée ci-dessus.",
+        s["small"],
     ))
     story.append(Spacer(1, 4))
     story.append(Paragraph(
@@ -674,16 +698,22 @@ def _render_bytes(
 
 
 async def _fetch_tax_numbers() -> tuple[Optional[str], Optional[str]]:
+    # Fallback hardcodé si QBO non configuré ou indisponible. Évite que
+    # la section Modalités de la facture sorte sans TPS/TVQ.
+    fallback_gst = "783649148TQ0001"
+    fallback_qst = "1228151242TQ0001"
     try:
         from app.integrations.quickbooks import get_qbo
         qbo = get_qbo()
         if not qbo.ready:
-            return None, None
+            return fallback_gst, fallback_qst
         nums = await qbo.tax_registration_numbers()
-        return nums.get("gst"), nums.get("qst")
+        gst = nums.get("gst") or fallback_gst
+        qst = nums.get("qst") or fallback_qst
+        return gst, qst
     except Exception as exc:
         log.warning("Could not fetch QBO tax numbers: %s", exc)
-        return None, None
+        return fallback_gst, fallback_qst
 
 
 async def render_facture_pdf(
