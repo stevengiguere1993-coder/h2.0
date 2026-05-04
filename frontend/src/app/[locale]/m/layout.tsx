@@ -88,10 +88,14 @@ export default function MobileLayout({
           ThemeToggle. Non-sticky volontairement — il scroll avec la
           page pour ne pas chevaucher les en-têtes de pages (qui ont
           leurs propres actions « Partager », « EN SERVICE », etc.).
-          L'utilisateur swipe vers le haut pour y revenir au besoin. */}
+          L'utilisateur swipe vers le haut pour y revenir au besoin.
+          Hauteur auto + padding-top safe-area : le bandeau s'agrandit
+          pour passer SOUS le notch/Dynamic Island sur iPhone. */}
       <div
-        className="flex h-12 items-center justify-between border-b border-brand-800 bg-brand-950/95 px-3"
-        style={{ paddingTop: "env(safe-area-inset-top)" }}
+        className="flex items-center justify-between border-b border-brand-800 bg-brand-950/95 px-3 py-2"
+        style={{
+          paddingTop: "calc(env(safe-area-inset-top) + 0.5rem)"
+        }}
       >
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -99,7 +103,7 @@ export default function MobileLayout({
           aria-label="Accueil du portail"
           className="flex items-center"
         >
-          <KratosLogo size={28} floating={false} />
+          <KratosLogo size={36} floating={false} />
         </Link>
         <ThemeToggle />
       </div>
