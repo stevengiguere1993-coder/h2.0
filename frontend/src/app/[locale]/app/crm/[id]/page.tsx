@@ -106,6 +106,12 @@ export default function ProspectDetailPage() {
   const [users, setUsers] = useState<
     { id: number; email: string; first_name?: string | null; last_name?: string | null }[]
   >([]);
+  // Adresse(s) du / des lieu(x) de soumission associé(s) au prospect.
+  // Affiché dans l'onglet Aperçu pour donner d'un coup d'œil le lieu
+  // où le travail aura lieu (souvent ≠ adresse du client).
+  const [prospectSoumissions, setProspectSoumissions] = useState<
+    ProspectSoumission[]
+  >([]);
 
   useEffect(() => {
     // Charge la liste des managers/admins pour le menu d'assignation.
@@ -124,6 +130,29 @@ export default function ProspectDetailPage() {
       cancelled = true;
     };
   }, []);
+
+  // Charge les soumissions associées au prospect — sert à afficher
+  // les adresses des lieux de soumission dans l'onglet Aperçu.
+  useEffect(() => {
+    if (!Number.isFinite(id) || id <= 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authedFetch("/api/v1/soumissions?limit=500");
+        if (!r.ok) return;
+        const all = (await r.json()) as ProspectSoumission[];
+        if (cancelled) return;
+        setProspectSoumissions(
+          all.filter((s) => s.contact_request_id === id)
+        );
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
 
   async function updateAssignee(userId: number | null) {
     if (!p) return;
@@ -355,6 +384,42 @@ export default function ProspectDetailPage() {
                     value={p.budget_range ? BUDGET_LABEL[p.budget_range] || p.budget_range : "—"}
                   />
                   <InfoCard title="Source" value={p.source || "—"} />
+                  {/* Adresse(s) du lieu de soumission — peut différer de
+                      l'adresse client si le projet est ailleurs. Une carte
+                      par soumission distincte (référence + adresse). */}
+                  <div className="lg:col-span-3 rounded-xl border border-brand-800 bg-brand-900 p-5">
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                      Adresse du lieu de soumission
+                    </h3>
+                    {prospectSoumissions.length === 0 ? (
+                      <p className="mt-3 text-sm text-white/50">
+                        Aucune soumission encore créée pour ce prospect.
+                      </p>
+                    ) : (
+                      <ul className="mt-3 space-y-2">
+                        {prospectSoumissions.map((s) => (
+                          <li
+                            key={s.id}
+                            className="flex items-start gap-2 text-sm"
+                          >
+                            <MapPin className="mt-0.5 h-4 w-4 flex-shrink-0 text-accent-500" />
+                            <span className="flex-1">
+                              <span className="text-white/90">
+                                {s.property_address || (
+                                  <span className="text-white/40">
+                                    (adresse non renseignée)
+                                  </span>
+                                )}
+                              </span>
+                              <span className="ml-2 text-[11px] text-white/50">
+                                · {s.reference}
+                              </span>
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                   <div className="lg:col-span-3 rounded-xl border border-brand-800 bg-brand-900 p-5">
                     <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                       Message du client
@@ -508,6 +573,7 @@ type ProspectSoumission = {
   accepted_at: string | null;
   signed_name: string | null;
   contact_request_id: number | null;
+  property_address: string | null;
 };
 
 function DocSection({
