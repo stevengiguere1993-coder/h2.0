@@ -286,6 +286,9 @@ async def init_db() -> None:
             ("entreprise_partners", "partner_name", "VARCHAR(255)"),
             ("entreprise_partners", "partner_email", "VARCHAR(320)"),
             ("entreprise_partners", "partner_notes", "TEXT"),
+            # Arrondissement (Ville de MTL) — dérivé via cross-référence
+            # avec le dataset public « Adresses Civiques de Montréal ».
+            ("mtl_property_units", "arrondissement", "VARCHAR(64)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
@@ -494,6 +497,11 @@ async def init_db() -> None:
                 "ix_mtl_units_annee_construction",
                 "mtl_property_units",
                 "(annee_construction)",
+            ),
+            (
+                "ix_mtl_units_arrondissement",
+                "mtl_property_units",
+                "(arrondissement)",
             ),
         )
         for idx_name, table, expr in additive_indexes:

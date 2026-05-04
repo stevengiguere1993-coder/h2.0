@@ -1079,6 +1079,221 @@ async def provincial_db_stats(_: RequireOwner) -> dict:
     }
 
 
+# ── Dérivation arrondissement (Ville de Montréal) ─────────────────────
+
+
+# Dataset public « Adresses Civiques de Montréal » — ressource CSV stable.
+# Colonnes pertinentes :
+#   - NUMERO_CIV (ou NO_CIVIQ)
+#   - NOM_VOIE (ou GENERIQUE + LIAISON + SPECIFIQUE)
+#   - MUNICIPALITY (code 5 chiffres) ou ARRONDISSEMENT_NOM
+# URL configurable via env MONTREAL_ADRESSES_CSV_URL si la ressource
+# change. Default pointe sur la version actuelle de donnees.montreal.ca.
+_MONTREAL_ADRESSES_CSV_URL = os.environ.get(
+    "MONTREAL_ADRESSES_CSV_URL",
+    "https://data.montreal.ca/dataset/"
+    "984f7a68-ab34-4092-9204-4bdfcca767c5/resource/"
+    "59d086b0-21fe-4d0c-9bd9-b25b32e4afaf/download/"
+    "adresses-quebec.csv",
+)
+
+
+@router.post(
+    "/montreal/derive-arrondissements",
+    summary="Dérive l'arrondissement de chaque unité Montréal en "
+    "cross-référencant le dataset public Adresses Civiques.",
+)
+async def derive_montreal_arrondissements(
+    _: RequireOwner,
+    csv_url: Optional[str] = None,
+) -> dict:
+    """One-shot : pour chaque row mtl_property_units où
+    municipalite='Montréal' et arrondissement IS NULL, on cherche son
+    (civique + nom_rue normalisés) dans le dataset Adresses Civiques
+    et on assigne l'arrondissement matché.
+
+    Le CSV est téléchargé en streaming (~50 Mo) puis indexé en RAM
+    sous forme de dict {(civique, nom_rue_norm) → arrondissement}.
+    Ensuite on UPDATE par batch.
+
+    Sans match, arrondissement reste NULL (l'UI le filtrera comme
+    « Inconnu »).
+    """
+    import csv as _csv
+    import io
+    import unicodedata
+
+    import httpx
+
+    url = csv_url or _MONTREAL_ADRESSES_CSV_URL
+
+    def _norm(s: str) -> str:
+        if not s:
+            return ""
+        nfd = unicodedata.normalize("NFD", s)
+        no_acc = "".join(
+            c for c in nfd if not unicodedata.combining(c)
+        ).lower()
+        # Retire les types de voie courants (rue, avenue, boul...)
+        for prefix in (
+            "rue ",
+            "avenue ",
+            "av. ",
+            "boulevard ",
+            "boul. ",
+            "boul ",
+            "chemin ",
+            "ch. ",
+            "place ",
+            "ruelle ",
+        ):
+            if no_acc.startswith(prefix):
+                no_acc = no_acc[len(prefix):]
+                break
+        # Espaces multiples → simple
+        return " ".join(no_acc.split()).strip()
+
+    # 1. Stream le CSV
+    log.info("Téléchargement Adresses Civiques MTL : %s", url)
+    csv_text = ""
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(None, connect=30.0)
+    ) as client:
+        async with client.stream("GET", url, follow_redirects=True) as r:
+            r.raise_for_status()
+            chunks: List[bytes] = []
+            async for c in r.aiter_bytes(chunk_size=1024 * 1024):
+                chunks.append(c)
+        raw = b"".join(chunks)
+        # Détection encodage : MTL exporte généralement en UTF-8 sinon cp1252
+        try:
+            csv_text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            csv_text = raw.decode("cp1252", errors="replace")
+    log.info(
+        "Téléchargé %d Mo, parsing…", len(csv_text) // (1024 * 1024)
+    )
+
+    # 2. Build mapping (civique_norm, nom_rue_norm) → arrondissement
+    mapping: Dict[Tuple[str, str], str] = {}
+    reader = _csv.DictReader(io.StringIO(csv_text))
+    headers = [h.upper() for h in (reader.fieldnames or [])]
+
+    def _pick(row: Dict, *names: str) -> str:
+        for n in names:
+            for k in row.keys():
+                if (k or "").upper() == n:
+                    v = row.get(k) or ""
+                    if v.strip():
+                        return v.strip()
+        return ""
+
+    for row in reader:
+        civ = _pick(row, "NUMERO_CIV", "NO_CIVIQ", "NO_CIVIQUE", "CIVIQUE")
+        nom = _pick(row, "NOM_VOIE", "NOM_RUE", "ODONYME", "RUE")
+        if not nom:
+            # Compose à partir de GENERIQUE + LIAISON + SPECIFIQUE
+            gen = _pick(row, "GENERIQUE")
+            spec = _pick(row, "SPECIFIQUE")
+            liaison = _pick(row, "LIAISON")
+            parts = [p for p in (gen, liaison, spec) if p]
+            nom = " ".join(parts)
+        arr = _pick(row, "ARRONDISSEMENT", "ARRONDISSEMENT_NOM", "NOM_ARROND")
+        if not arr:
+            # Si seul le code municipal est présent, on skip cette ligne
+            continue
+        if not civ or not nom:
+            continue
+        try:
+            civ_int = int(civ.split(".", 1)[0])
+        except (ValueError, AttributeError):
+            continue
+        key = (str(civ_int), _norm(nom))
+        # En cas de doublon (même civique+rue dans plusieurs arrondissements,
+        # rare), on garde le premier vu.
+        if key not in mapping:
+            mapping[key] = arr
+
+    log.info("Mapping construit : %d adresses uniques", len(mapping))
+
+    if not mapping:
+        return {
+            "downloaded_chars": len(csv_text),
+            "mapping_size": 0,
+            "rows_updated": 0,
+            "headers_seen": headers[:20],
+            "error": (
+                "Aucun mapping (civique, rue → arrondissement) construit. "
+                "Vérifie l'URL du CSV et les en-têtes (attendus : "
+                "NUMERO_CIV/NO_CIVIQ, NOM_VOIE/NOM_RUE, ARRONDISSEMENT)."
+            ),
+        }
+
+    # 3. Lit toutes les rows MTL avec municipalite='Montréal' et
+    #    arrondissement IS NULL, et UPDATE par batch.
+    from app.models.montreal_property_unit import MontrealPropertyUnit
+
+    rows_updated = 0
+    rows_skipped = 0
+
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(
+                    MontrealPropertyUnit.matricule,
+                    MontrealPropertyUnit.civique_debut,
+                    MontrealPropertyUnit.nom_rue,
+                ).where(
+                    func.lower(MontrealPropertyUnit.municipalite) == "montréal",
+                    MontrealPropertyUnit.arrondissement.is_(None),
+                )
+            )
+        ).all()
+        log.info("%d rows MTL sans arrondissement à dériver", len(rows))
+
+        # On groupe par arrondissement et on fait des UPDATE par chunks.
+        by_arr: Dict[str, List[str]] = {}
+        for matricule, civique, nom_rue in rows:
+            if not civique or not nom_rue:
+                rows_skipped += 1
+                continue
+            try:
+                civ_int = int(str(civique).split(".", 1)[0])
+            except (ValueError, AttributeError):
+                rows_skipped += 1
+                continue
+            key = (str(civ_int), _norm(str(nom_rue)))
+            arr = mapping.get(key)
+            if not arr:
+                rows_skipped += 1
+                continue
+            by_arr.setdefault(arr, []).append(matricule)
+
+        # 4. UPDATE par chunks de 1000 matricules (expanding bindparam
+        # → SQLAlchemy génère IN (?, ?, ?, …) automatiquement).
+        from sqlalchemy import update
+
+        for arr_name, mats in by_arr.items():
+            for i in range(0, len(mats), 1000):
+                chunk = mats[i:i + 1000]
+                await db.execute(
+                    update(MontrealPropertyUnit)
+                    .where(MontrealPropertyUnit.matricule.in_(chunk))
+                    .values(arrondissement=arr_name)
+                )
+                rows_updated += len(chunk)
+            await db.commit()
+
+    return {
+        "downloaded_chars": len(csv_text),
+        "mapping_size": len(mapping),
+        "rows_total": len(rows),
+        "rows_updated": rows_updated,
+        "rows_skipped": rows_skipped,
+        "by_arrondissement": {k: len(v) for k, v in by_arr.items()},
+    }
+
+
 @router.post(
     "/provincial/upload-finalize",
     summary="Réassemble les chunks reçus et lance l'ingest filtré "

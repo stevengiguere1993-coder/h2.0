@@ -94,6 +94,15 @@ class MontrealPropertyUnit(Base):
         String(16), nullable=True, index=True
     )
 
+    # Arrondissement (Ville de Montréal seulement). NULL pour toutes
+    # les autres municipalités. Dérivé via le dataset public
+    # « Adresses Civiques de Montréal » (donnees.montreal.ca) : on
+    # cross-référence (civique + nom_rue normalisés) → arrondissement.
+    # Voir l'endpoint admin /admin/data/montreal/derive-arrondissements.
+    arrondissement: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+
     __table_args__ = (
         Index("ix_mtl_units_nom_rue", "nom_rue"),
     )

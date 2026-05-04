@@ -828,6 +828,9 @@ export default function ProspectionSourcesPage() {
             </p>
           ) : null}
 
+          {/* Dérivation arrondissement Ville de Montréal */}
+          <DeriveArrondissementsCard />
+
           {/* Backfill leads existants depuis le rôle */}
           <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
             <h3 className="text-sm font-semibold text-amber-200">
@@ -1736,6 +1739,114 @@ function DiagnosticsPanel({ diagnostics }: { diagnostics: DiagItem[] }) {
             ))}
           </ul>
         </details>
+      ) : null}
+    </div>
+  );
+}
+
+// ─── Dérivation arrondissement Ville de Montréal ───────────────────────
+
+function DeriveArrondissementsCard() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{
+    rows_total?: number;
+    rows_updated?: number;
+    rows_skipped?: number;
+    mapping_size?: number;
+    by_arrondissement?: Record<string, number>;
+    error?: string;
+  } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function run() {
+    if (
+      !window.confirm(
+        "Lancer la dérivation des arrondissements pour les unités " +
+          "Ville de Montréal ? Cela télécharge le dataset Adresses " +
+          "Civiques (~50 Mo) et UPDATE chaque row matchée. Prend 2-5 min."
+      )
+    )
+      return;
+    setBusy(true);
+    setErr(null);
+    setResult(null);
+    try {
+      const res = await authedFetch(
+        "/api/v1/admin/data/montreal/derive-arrondissements",
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      setResult(await res.json());
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-lg border border-sky-500/30 bg-sky-500/5 p-3">
+      <h3 className="text-sm font-semibold text-sky-200">
+        Dériver l&apos;arrondissement (Ville de Montréal)
+      </h3>
+      <p className="mt-1 text-[11px] text-white/60">
+        Le rôle MAMH stocke « Montréal » comme une seule entité (pas
+        d&apos;arrondissement). On cross-référence chaque (civique +
+        nom_rue) avec le dataset public « Adresses Civiques de Montréal »
+        pour assigner Le Plateau-Mont-Royal, Ville-Marie, Rosemont…
+        à chaque unité. Idempotent : ne touche que les rows avec
+        arrondissement IS NULL.
+      </p>
+      <div className="mt-3">
+        <button
+          type="button"
+          onClick={run}
+          disabled={busy}
+          className="rounded-md border border-sky-400/40 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-200 hover:bg-sky-500/20 disabled:opacity-50"
+        >
+          {busy ? "Dérivation en cours…" : "Lancer la dérivation"}
+        </button>
+      </div>
+      {err ? (
+        <p className="mt-2 text-[11px] text-rose-300">Échec : {err}</p>
+      ) : null}
+      {result ? (
+        <div className="mt-2 space-y-1 text-[11px] text-sky-100/80">
+          {result.error ? (
+            <p className="text-rose-300">{result.error}</p>
+          ) : (
+            <>
+              <p>
+                ✓ {(result.rows_updated ?? 0).toLocaleString("fr-CA")} unités
+                taggées sur {(result.rows_total ?? 0).toLocaleString("fr-CA")}{" "}
+                ({(result.rows_skipped ?? 0).toLocaleString("fr-CA")} sans
+                match)
+              </p>
+              <p className="text-white/50">
+                Mapping : {(result.mapping_size ?? 0).toLocaleString("fr-CA")}{" "}
+                adresses uniques chargées du CSV.
+              </p>
+              {result.by_arrondissement ? (
+                <details className="mt-1">
+                  <summary className="cursor-pointer text-sky-200/80">
+                    Détail par arrondissement
+                  </summary>
+                  <ul className="mt-1 space-y-0.5 pl-3 font-mono text-[10px]">
+                    {Object.entries(result.by_arrondissement)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([k, v]) => (
+                        <li key={k}>
+                          · {k} : {v.toLocaleString("fr-CA")}
+                        </li>
+                      ))}
+                  </ul>
+                </details>
+              ) : null}
+            </>
+          )}
+        </div>
       ) : null}
     </div>
   );
