@@ -84,19 +84,19 @@ export default function MobileLayout({
     <ThemeProvider initialTheme={initialTheme}>
     <ConfirmProvider>
     <main className="flex min-h-screen flex-col bg-brand-950 text-white">
-      {/* Bandeau global mobile : Kratos cliquable (retour portail) +
-          ThemeToggle. Non-sticky volontairement — il scroll avec la
-          page pour ne pas chevaucher les en-têtes de pages (qui ont
-          leurs propres actions « Partager », « EN SERVICE », etc.).
-          L'utilisateur swipe vers le haut pour y revenir au besoin.
-          Hauteur auto + padding-top safe-area : le bandeau s'agrandit
-          pour passer SOUS le notch/Dynamic Island sur iPhone. */}
+      {/* Bandeau global mobile : ThemeToggle + Kratos cliquable
+          (retour portail), tous deux groupés à DROITE pour rester
+          alignés au-dessus de l'indicateur « Pas en service » des
+          en-têtes de page (sans le chevaucher car non-sticky).
+          Hauteur auto + padding-top safe-area pour passer sous le
+          notch/Dynamic Island sur iPhone. */}
       <div
-        className="flex items-center justify-between border-b border-brand-800 bg-brand-950/95 px-3 py-2"
+        className="flex items-center justify-end gap-2 border-b border-brand-800 bg-brand-950/95 px-3 py-2"
         style={{
           paddingTop: "calc(env(safe-area-inset-top) + 0.5rem)"
         }}
       >
+        <ThemeToggle />
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={"/connexion" as any}
@@ -105,7 +105,6 @@ export default function MobileLayout({
         >
           <KratosLogo size={36} floating={false} />
         </Link>
-        <ThemeToggle />
       </div>
 
       <div className={inProspection ? "flex-1" : "flex-1 pb-20"}>
