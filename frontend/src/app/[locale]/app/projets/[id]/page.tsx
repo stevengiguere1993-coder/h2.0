@@ -2589,6 +2589,7 @@ function ChantierAgendaTab({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [view, setView] = useState<"list" | "gantt">("list");
 
   // Inline form state for adding an event (replaces broken window.prompt
   // flow which is blocked in PWA standalone mode on iOS and Android).
@@ -2729,12 +2730,36 @@ function ChantierAgendaTab({
         </p>
       ) : null}
 
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs text-white/60">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="flex-1 min-w-[240px] text-xs text-white/60">
           Tous les événements agenda liés à ce projet — visites, livraisons,
           inspections, etc. Chaque employé voit ces événements dans son
           agenda personnel quand il lui est assigné.
         </p>
+        <div className="inline-flex rounded-lg border border-brand-800 bg-brand-900 p-0.5">
+          <button
+            type="button"
+            onClick={() => setView("list")}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+              view === "list"
+                ? "bg-accent-500 text-brand-950"
+                : "text-white/60 hover:text-white"
+            }`}
+          >
+            Liste
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("gantt")}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+              view === "gantt"
+                ? "bg-accent-500 text-brand-950"
+                : "text-white/60 hover:text-white"
+            }`}
+          >
+            Gantt
+          </button>
+        </div>
         <button
           type="button"
           onClick={() => setFormOpen((v) => !v)}
@@ -2848,45 +2873,55 @@ function ChantierAgendaTab({
         </form>
       ) : null}
 
-      <section>
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-accent-500">
-          À venir ({upcoming.length})
-        </h3>
-        {upcoming.length === 0 ? (
-          <p className="mt-2 text-xs text-white/50">
-            Aucun événement à venir.
-          </p>
-        ) : (
-          <ul className="mt-3 space-y-2">
-            {upcoming.map((e) => (
-              <EventRow
-                key={e.id}
-                event={e}
-                projectName={projectName}
-                onRemove={() => removeEvent(e.id)}
-              />
-            ))}
-          </ul>
-        )}
-      </section>
+      {view === "gantt" ? (
+        <ChantierGantt
+          events={events}
+          employes={employes}
+          onRemoveEvent={removeEvent}
+        />
+      ) : (
+        <>
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-accent-500">
+              À venir ({upcoming.length})
+            </h3>
+            {upcoming.length === 0 ? (
+              <p className="mt-2 text-xs text-white/50">
+                Aucun événement à venir.
+              </p>
+            ) : (
+              <ul className="mt-3 space-y-2">
+                {upcoming.map((e) => (
+                  <EventRow
+                    key={e.id}
+                    event={e}
+                    projectName={projectName}
+                    onRemove={() => removeEvent(e.id)}
+                  />
+                ))}
+              </ul>
+            )}
+          </section>
 
-      {past.length > 0 ? (
-        <section>
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-white/50">
-            Passés ({past.length})
-          </h3>
-          <ul className="mt-3 space-y-2 opacity-70">
-            {past.slice(0, 10).map((e) => (
-              <EventRow
-                key={e.id}
-                event={e}
-                projectName={projectName}
-                onRemove={() => removeEvent(e.id)}
-              />
-            ))}
-          </ul>
-        </section>
-      ) : null}
+          {past.length > 0 ? (
+            <section>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-white/50">
+                Passés ({past.length})
+              </h3>
+              <ul className="mt-3 space-y-2 opacity-70">
+                {past.slice(0, 10).map((e) => (
+                  <EventRow
+                    key={e.id}
+                    event={e}
+                    projectName={projectName}
+                    onRemove={() => removeEvent(e.id)}
+                  />
+                ))}
+              </ul>
+            </section>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }
@@ -2936,6 +2971,235 @@ function EventRow({
         <Trash2 className="h-3.5 w-3.5" />
       </button>
     </li>
+  );
+}
+
+// ---------- Vue Gantt de l'agenda chantier ----------
+// Une rangée par événement, ordonné par date. La timeline horizontale
+// couvre min(start) → max(end_or_start), avec une marge de 1 jour.
+// Bar = durée de l'événement (1 jour si all_day sans end_at). Click
+// sur la barre = ouvre le détail (pour l'instant : delete via icône
+// sous le titre, comme dans EventRow).
+
+function ChantierGantt({
+  events,
+  employes,
+  onRemoveEvent
+}: {
+  events: ChantierEvent[];
+  employes: Array<{ id: number; full_name: string }>;
+  onRemoveEvent: (id: number) => void;
+}) {
+  const empById = useMemo(() => {
+    const m = new Map<number, string>();
+    employes.forEach((e) => m.set(e.id, e.full_name));
+    return m;
+  }, [employes]);
+
+  const sorted = useMemo(
+    () =>
+      [...events].sort(
+        (a, b) =>
+          new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
+      ),
+    [events]
+  );
+
+  if (sorted.length === 0) {
+    return (
+      <p className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-4 py-8 text-center text-xs text-white/50">
+        Aucun événement pour ce projet — passe en vue Liste pour en ajouter
+        un.
+      </p>
+    );
+  }
+
+  // Timeline range : min(start) → max(end || start) +1 jour de marge.
+  const ts = sorted.map((e) => new Date(e.start_at).getTime());
+  const tsEnd = sorted.map((e) =>
+    new Date(e.end_at || e.start_at).getTime()
+  );
+  const rangeStart = new Date(Math.min(...ts));
+  rangeStart.setHours(0, 0, 0, 0);
+  const rangeEndRaw = new Date(Math.max(...tsEnd));
+  rangeEndRaw.setHours(23, 59, 59, 999);
+  // Ajoute au moins 7 jours d'amplitude pour les projets très courts
+  const minAmplitudeMs = 7 * 86400000;
+  const rangeEnd =
+    rangeEndRaw.getTime() - rangeStart.getTime() < minAmplitudeMs
+      ? new Date(rangeStart.getTime() + minAmplitudeMs)
+      : rangeEndRaw;
+  const totalMs = rangeEnd.getTime() - rangeStart.getTime();
+
+  // Découpe la frise horizontale en jours pour les graduations.
+  const days: Date[] = [];
+  for (
+    let d = new Date(rangeStart);
+    d.getTime() <= rangeEnd.getTime();
+    d.setDate(d.getDate() + 1)
+  ) {
+    days.push(new Date(d));
+  }
+  const dayWidthPct = 100 / days.length;
+
+  // Couleur par event_type (cohérent avec /app/agenda).
+  function colorFor(type: string): string {
+    switch (type) {
+      case "chantier":
+        return "#3b82f6"; // blue
+      case "livraison":
+        return "#a855f7"; // purple
+      case "inspection":
+        return "#ef4444"; // red
+      case "visite":
+        return "#10b981"; // emerald
+      case "conge":
+        return "#f59e0b"; // amber
+      default:
+        return "#64748b"; // slate
+    }
+  }
+
+  function dayLabel(d: Date): string {
+    return d.toLocaleDateString("fr-CA", {
+      day: "2-digit",
+      month: "short"
+    });
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-xl border border-brand-800 bg-brand-900">
+      <div className="min-w-[860px] p-4">
+        {/* Header timeline */}
+        <div className="mb-3 grid grid-cols-[180px_1fr] gap-3">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
+            Événement
+          </div>
+          <div className="relative h-5">
+            {days.map((d, i) => (
+              <div
+                key={i}
+                className="absolute top-0 text-[9px] text-white/40 tabular-nums"
+                style={{
+                  left: `${i * dayWidthPct}%`,
+                  width: `${dayWidthPct}%`
+                }}
+              >
+                {/* Affiche 1 label sur N selon la densité */}
+                {days.length <= 14 || i % Math.ceil(days.length / 14) === 0
+                  ? dayLabel(d)
+                  : ""}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Bars */}
+        <ul className="space-y-1.5">
+          {sorted.map((e) => {
+            const start = new Date(e.start_at).getTime();
+            const end = new Date(e.end_at || e.start_at).getTime();
+            const leftPct = Math.max(
+              0,
+              ((start - rangeStart.getTime()) / totalMs) * 100
+            );
+            // Largeur minimale visible = 1 jour
+            const dayPct = (86400000 / totalMs) * 100;
+            const widthPct = Math.max(
+              dayPct,
+              ((end - start) / totalMs) * 100
+            );
+            const color = colorFor(e.event_type);
+            const assignee =
+              e.assignee_id != null ? empById.get(e.assignee_id) : null;
+            const dateLabel = new Date(e.start_at).toLocaleDateString(
+              "fr-CA",
+              { day: "2-digit", month: "short" }
+            );
+            return (
+              <li
+                key={e.id}
+                className="grid grid-cols-[180px_1fr] items-center gap-3"
+              >
+                <div className="flex min-w-0 items-start gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => onRemoveEvent(e.id)}
+                    className="mt-0.5 flex-shrink-0 rounded p-0.5 text-white/30 hover:text-rose-300"
+                    aria-label="Supprimer"
+                    title="Supprimer"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-semibold text-white">
+                      {e.title}
+                    </p>
+                    <p className="truncate text-[10px] text-white/50">
+                      {dateLabel}
+                      {assignee ? ` · ${assignee.split(" ")[0]}` : ""}
+                    </p>
+                  </div>
+                </div>
+                <div className="relative h-6 rounded bg-brand-950/40">
+                  {/* Lignes de jours */}
+                  {days.map((_, i) => (
+                    <div
+                      key={i}
+                      className="absolute top-0 h-full border-l border-white/[0.04]"
+                      style={{ left: `${i * dayWidthPct}%` }}
+                    />
+                  ))}
+                  <div
+                    className="absolute top-0 h-full rounded transition hover:opacity-90"
+                    style={{
+                      left: `${leftPct}%`,
+                      width: `${widthPct}%`,
+                      backgroundColor: `${color}30`,
+                      borderLeft: `3px solid ${color}`
+                    }}
+                    title={`${e.title} · ${dateLabel}${
+                      assignee ? ` · ${assignee}` : ""
+                    }`}
+                  >
+                    <span
+                      className="block truncate px-2 py-1 text-[10px] font-medium text-white"
+                      style={{ color }}
+                    >
+                      {e.title}
+                    </span>
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+
+        {/* Légende */}
+        <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-brand-800 pt-3 text-[10px] text-white/50">
+          <span className="font-semibold uppercase tracking-wider">
+            Légende
+          </span>
+          {(
+            [
+              ["chantier", "Chantier"],
+              ["livraison", "Livraison"],
+              ["inspection", "Inspection"],
+              ["visite", "Visite"],
+              ["conge", "Congé"]
+            ] as const
+          ).map(([type, label]) => (
+            <span key={type} className="inline-flex items-center gap-1.5">
+              <span
+                className="h-2 w-2 rounded-sm"
+                style={{ backgroundColor: colorFor(type) }}
+              />
+              {label}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
