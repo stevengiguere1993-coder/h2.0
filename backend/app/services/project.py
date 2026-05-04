@@ -71,9 +71,26 @@ class ProjectService:
         return await self.repo.update(project, data)
 
     async def delete(self, project_id: int) -> bool:
-        """Delete a project. Returns True if deleted, False if not found."""
+        """Delete a project. Returns True if deleted, False if not found.
+
+        Si le projet est rattaché à une soumission, on marque celle-ci
+        avec `project_skip_backfill=True` pour empêcher le backfill au
+        prochain démarrage de re-provisionner un projet (cf. main.py ·
+        lifespan · backfill_accepted_soumissions). Sans ça, le projet
+        ressuscite à chaque cold-start Render."""
         project = await self.repo.get_by_id(project_id)
         if project is None:
             return False
+        soumission_id = project.soumission_id
+        if soumission_id is not None:
+            from sqlalchemy import update as _update
+
+            from app.models.soumission import Soumission
+
+            await self.db.execute(
+                _update(Soumission)
+                .where(Soumission.id == soumission_id)
+                .values(project_skip_backfill=True)
+            )
         await self.repo.delete(project)
         return True
