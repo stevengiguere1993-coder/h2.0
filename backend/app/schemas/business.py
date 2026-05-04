@@ -273,12 +273,18 @@ class PunchCreate(BaseModel):
 
 
 class PunchUpdate(BaseModel):
+    # Tous les champs sont optionnels — l'admin peut corriger l'heure
+    # de début, l'heure de fin, ou réassigner à un autre projet/lead.
+    started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     hours: Optional[float] = None
     task: Optional[str] = None
     geolocation: Optional[str] = None
     approved: Optional[bool] = None
     notes: Optional[str] = None
+    project_id: Optional[int] = None
+    contact_request_id: Optional[int] = None
+    employe_id: Optional[int] = None
 
 
 class PunchRead(_Base):
