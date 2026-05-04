@@ -798,7 +798,7 @@ export default function SoumissionDetailPage() {
                         <th className="px-3 py-3 text-right font-semibold">Qté</th>
                         <th className="px-3 py-3 text-left font-semibold">Unité</th>
                         <th
-                          className="px-3 py-3 text-right font-semibold text-amber-400"
+                          className="px-3 py-3 text-right font-bold text-amber-500"
                           title="Coût interne — invisible par le client"
                         >
                           Coût $/u 🔒
@@ -981,8 +981,8 @@ export default function SoumissionDetailPage() {
                 </div>
 
                 {/* Internal margin panel — never sent to the client. */}
-                <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-5">
-                  <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-amber-400">
+                <div className="rounded-xl border-2 border-amber-500/50 bg-amber-500/10 p-5">
+                  <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-amber-500">
                     🔒 Coût interne (non visible client)
                   </h2>
                   <dl className="mt-4 space-y-2 text-sm">
@@ -1315,7 +1315,7 @@ function ItemRow({
           value={costPerUnit}
           onChange={(e) => setCostPerUnit(e.target.value)}
           onBlur={() => commit("cost_per_unit")}
-          className="w-full rounded-md border border-amber-500/20 bg-amber-500/5 px-2 py-1.5 text-right text-sm text-amber-200 focus:border-amber-500/60 focus:outline-none"
+          className="w-full rounded-md border-2 border-amber-500/60 bg-amber-500/15 px-2 py-1.5 text-right text-sm font-semibold text-amber-500 placeholder:text-amber-500/40 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
           aria-label="Coût par unité (interne)"
         />
       </td>
