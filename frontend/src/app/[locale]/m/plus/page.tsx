@@ -92,9 +92,9 @@ export default function MobilePlus() {
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               href={"/m/approbations" as any}
-              className="flex w-full items-center gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3.5 text-amber-100"
+              className="flex w-full items-center gap-3 rounded-xl bg-amber-500 px-4 py-3.5 text-brand-950"
             >
-              <ShieldCheck className="h-5 w-5 text-amber-300" />
+              <ShieldCheck className="h-5 w-5 text-brand-950" />
               <span className="flex-1 text-left text-sm font-bold">
                 Approuver les punches
               </span>
