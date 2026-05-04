@@ -90,6 +90,10 @@ export default function ImmeublesMtlPage() {
   const [distanceBand, setDistanceBand] = useState<
     "" | "mtl_only" | "under_30" | "30_to_40" | "40_to_50" | "over_50"
   >("mtl_only");
+  const [arrondissement, setArrondissement] = useState<string>("");
+  const [arrondissementsList, setArrondissementsList] = useState<
+    Array<{ name: string; count: number }>
+  >([]);
   const [offset, setOffset] = useState(0);
   const limit = 100;
 
@@ -135,6 +139,7 @@ export default function ImmeublesMtlPage() {
       }
       params.set("sort_by", sortBy);
       if (distanceBand) params.set("distance_band", distanceBand);
+      if (arrondissement) params.set("arrondissement", arrondissement);
       params.set("limit", String(limit));
       params.set("offset", String(offset));
 
@@ -162,6 +167,7 @@ export default function ImmeublesMtlPage() {
     selectedCodes,
     sortBy,
     distanceBand,
+    arrondissement,
     offset
   ]);
 
@@ -175,6 +181,23 @@ export default function ImmeublesMtlPage() {
     }, 350);
     return () => clearTimeout(id);
   }, [rueSearch]);
+
+  // Charge la liste des arrondissements de Montréal une fois au mount.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/prospection/mtl-properties/arrondissements`
+        );
+        if (!r.ok) return;
+        setArrondissementsList(
+          (await r.json()) as Array<{ name: string; count: number }>
+        );
+      } catch {
+        /* ignore */
+      }
+    })();
+  }, []);
 
   // Charge la liste des types d'utilisation UNE SEULE FOIS au montage.
   // Anciennement re-fetché à chaque changement de minLogements, mais
@@ -257,6 +280,26 @@ export default function ImmeublesMtlPage() {
             <option value="40_to_50">40-50 km de MTL</option>
             <option value="over_50">&gt; 50 km de MTL</option>
           </select>
+          {/* Filtre arrondissement (visible quand mtl_only ou Tout le Québec
+              + des arrondissements existent en DB). */}
+          {arrondissementsList.length > 0 ? (
+            <select
+              value={arrondissement}
+              onChange={(e) => {
+                setArrondissement(e.target.value);
+                setOffset(0);
+              }}
+              className="rounded-lg border border-brand-700 bg-brand-950 px-3 py-2 text-sm font-medium text-white"
+              title="Arrondissement (Ville de Montréal seulement)"
+            >
+              <option value="">Tous arrondissements</option>
+              {arrondissementsList.map((a) => (
+                <option key={a.name} value={a.name}>
+                  {a.name} ({a.count.toLocaleString("fr-CA")})
+                </option>
+              ))}
+            </select>
+          ) : null}
         </header>
 
         {/* Filtres */}

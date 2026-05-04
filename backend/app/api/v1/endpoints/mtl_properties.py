@@ -148,6 +148,12 @@ async def list_properties(
         "30_to_40, 40_to_50, over_50 (> 50 km).",
     ),
     nom_rue_contains: Optional[str] = Query(default=None),
+    arrondissement: Optional[str] = Query(
+        default=None,
+        description="Filtre par arrondissement de la Ville de Montréal "
+        "(ex: « Le Plateau-Mont-Royal », « Ville-Marie »). Ne s'applique "
+        "qu'aux unités avec municipalite='Montréal'.",
+    ),
     codes_utilisation: Optional[List[str]] = Query(
         default=None,
         description="Liste de codes d'utilisation à inclure. "
@@ -255,6 +261,12 @@ async def list_properties(
             filters.append(
                 MontrealPropertyUnit.code_utilisation.in_(cleaned)
             )
+
+    if arrondissement:
+        # Filtre par arrondissement (Ville de MTL uniquement).
+        filters.append(
+            MontrealPropertyUnit.arrondissement == arrondissement.strip()
+        )
 
     # Filtre par distance depuis le centre-ville MTL via la table
     # quebec_distances. Matching insensible à la casse sur le nom de
@@ -538,6 +550,31 @@ async def utilisation_types(
     ]
     _UTILISATION_CACHE[cache_key] = (now, result)
     return result
+
+
+@router.get(
+    "/arrondissements",
+    summary="Liste les arrondissements de Montréal présents en DB.",
+)
+async def arrondissements_list(
+    db: DBSession,
+    _: CurrentUser,
+) -> List[dict]:
+    """Retourne les arrondissements distincts (Ville de MTL) avec
+    le compte d'unités. Utilisé par le frontend pour peupler le
+    filtre dropdown. Trié par nom alphabétique."""
+    rows = (
+        await db.execute(
+            select(
+                MontrealPropertyUnit.arrondissement,
+                func.count().label("cnt"),
+            )
+            .where(MontrealPropertyUnit.arrondissement.is_not(None))
+            .group_by(MontrealPropertyUnit.arrondissement)
+            .order_by(MontrealPropertyUnit.arrondissement.asc())
+        )
+    ).all()
+    return [{"name": str(name), "count": int(cnt or 0)} for name, cnt in rows]
 
 
 @router.get(

@@ -211,9 +211,18 @@ export default function ReglagesIntegrationPage() {
                 </ul>
               </details>
             )}
-            <div className="rounded-lg border border-brand-800 bg-brand-950 p-3 text-xs">
+            <div
+              className="rounded-lg border p-3 text-xs"
+              style={{
+                borderColor: "var(--qg-border)",
+                backgroundColor: "var(--qg-bg)"
+              }}
+            >
               <div className="mb-2 flex items-center justify-between">
-                <p className="font-semibold text-white/80">
+                <p
+                  className="font-semibold"
+                  style={{ color: "var(--qg-text)" }}
+                >
                   {previewBoards.length} board
                   {previewBoards.length > 1 ? "s" : ""} — clique pour sélectionner
                 </p>
@@ -221,7 +230,7 @@ export default function ReglagesIntegrationPage() {
                   <button
                     type="button"
                     onClick={selectAllVisible}
-                    className="text-violet-300 hover:text-violet-200"
+                    className="text-violet-500 hover:text-violet-400"
                   >
                     Tout sélectionner
                   </button>
@@ -229,7 +238,7 @@ export default function ReglagesIntegrationPage() {
                     <button
                       type="button"
                       onClick={clearSelection}
-                      className="text-white/50 hover:text-white"
+                      style={{ color: "var(--qg-text-muted)" }}
                     >
                       Vider ({selectedBoardIds.size})
                     </button>
@@ -243,11 +252,15 @@ export default function ReglagesIntegrationPage() {
                     <li
                       key={b.id}
                       onClick={() => toggleBoard(b.id)}
-                      className={`flex cursor-pointer items-center justify-between gap-2 rounded border px-2 py-1.5 transition ${
-                        checked
-                          ? "border-violet-400/40 bg-violet-500/10"
-                          : "border-transparent hover:bg-brand-900"
-                      }`}
+                      className="flex cursor-pointer items-center justify-between gap-2 rounded border px-2 py-1.5 transition"
+                      style={{
+                        borderColor: checked
+                          ? "rgba(167,139,250,0.4)"
+                          : "transparent",
+                        backgroundColor: checked
+                          ? "rgba(139,92,246,0.1)"
+                          : "transparent"
+                      }}
                     >
                       <label className="flex flex-1 cursor-pointer items-center gap-2 truncate">
                         <input
@@ -257,9 +270,17 @@ export default function ReglagesIntegrationPage() {
                           className="h-3.5 w-3.5 accent-violet-500"
                           onClick={(e) => e.stopPropagation()}
                         />
-                        <span className="truncate text-white/85">{b.name}</span>
+                        <span
+                          className="truncate"
+                          style={{ color: "var(--qg-text)" }}
+                        >
+                          {b.name}
+                        </span>
                       </label>
-                      <span className="flex-shrink-0 text-[10px] text-white/40">
+                      <span
+                        className="flex-shrink-0 text-[10px]"
+                        style={{ color: "var(--qg-text-soft)" }}
+                      >
                         {b.workspace?.name || "—"}
                       </span>
                     </li>
