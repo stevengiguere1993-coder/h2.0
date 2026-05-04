@@ -35,6 +35,7 @@ export function LoginForm() {
   const [nextUrl, setNextUrl] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userVolets, setUserVolets] = useState<string[]>([]);
+  const [userRole, setUserRole] = useState<string>("");
   const [pendingHelp, setPendingHelp] = useState(0);
 
   useEffect(() => {
@@ -61,6 +62,7 @@ export function LoginForm() {
         }
         setUserEmail(me.email || null);
         setUserVolets(Array.isArray(me.volets) ? me.volets : []);
+        setUserRole(me.role || "");
         setAuthed(true);
       } catch {
         // Token invalide → laisse le user voir le formulaire login
@@ -263,7 +265,7 @@ export function LoginForm() {
             </button>
           ) : null}
 
-          {has("entreprises") ? (
+          {has("entreprises") && userRole === "owner" ? (
             <button
               type="button"
               onClick={() => {

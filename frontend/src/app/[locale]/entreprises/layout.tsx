@@ -18,6 +18,7 @@ import {
   Loader2,
   LogOut,
   Menu,
+  Plus,
   Settings,
   Sparkles,
   Target,
@@ -70,6 +71,36 @@ export default function EntreprisesLayout({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [entreprises, setEntreprises] = useState<EntrepriseLite[]>([]);
   const [openTasksCount, setOpenTasksCount] = useState<number>(0);
+  const [addEntOpen, setAddEntOpen] = useState(false);
+  const [newEntName, setNewEntName] = useState("");
+  const [newEntBusy, setNewEntBusy] = useState(false);
+  const [newEntErr, setNewEntErr] = useState<string | null>(null);
+
+  async function createEntreprise() {
+    const name = newEntName.trim();
+    if (name.length < 1) return;
+    setNewEntBusy(true);
+    setNewEntErr(null);
+    try {
+      const res = await authedFetch("/api/v1/entreprises", {
+        method: "POST",
+        body: JSON.stringify({ name })
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status} ${t.slice(0, 200)}`);
+      }
+      const created = (await res.json()) as { id: number };
+      setNewEntName("");
+      setAddEntOpen(false);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      window.location.assign(`/entreprises/${created.id}` as any);
+    } catch (e) {
+      setNewEntErr((e as Error).message);
+    } finally {
+      setNewEntBusy(false);
+    }
+  }
   const pathname = usePathname() || "";
 
   useEffect(() => {
@@ -119,7 +150,13 @@ export default function EntreprisesLayout({
   if (!user) return null;
 
   const initialTheme = (user.theme_preference as Theme) || "light";
-  const allowed = (user.volets || []).includes("entreprises");
+  // Le volet Gestion d'entreprise est restreint aux owners pour
+  // l'instant — l'assignation des tâches utilise les users (pas les
+  // employés) et certains modules ne sont pas prêts pour les autres
+  // rôles. Dès qu'on aura clarifié employés vs users, on rouvrira aux
+  // admins/managers.
+  const allowed =
+    (user.volets || []).includes("entreprises") && user.role === "owner";
 
   const NAVIGATION: NavItem[] = [
     { href: "/entreprises", label: "Vue d'ensemble", icon: Home },
@@ -218,8 +255,24 @@ export default function EntreprisesLayout({
               ))}
             </SidebarSection>
 
-            {entreprises.length > 0 ? (
-              <SidebarSection title="Mes entreprises">
+            <SidebarSection
+              title="Mes entreprises"
+              action={
+                <button
+                  type="button"
+                  onClick={() => setAddEntOpen(true)}
+                  title="Ajouter une entreprise"
+                  className="rounded p-0.5 text-[var(--qg-text-soft)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              }
+            >
+              {entreprises.length === 0 ? (
+                <li className="px-3 py-1.5 text-[11px] text-[var(--qg-text-soft)]">
+                  Aucune entreprise. Clique sur + pour en créer une.
+                </li>
+              ) : null}
                 {entreprises.slice(0, 8).map((e) => {
                   const dot =
                     e.health_label === "risk"
@@ -257,8 +310,7 @@ export default function EntreprisesLayout({
                     + {entreprises.length - 8} autres
                   </Link>
                 ) : null}
-              </SidebarSection>
-            ) : null}
+            </SidebarSection>
 
             <SidebarSection title="Réglages">
               {REGLAGES.map((item) => (
@@ -317,6 +369,86 @@ export default function EntreprisesLayout({
               {/* Kratos + ThemeToggle intégrés dans QGTopbar/EntreprisesTopbar */}
               {allowed ? <QGCommandBar /> : null}
               <HelpButton />
+              {addEntOpen ? (
+                <div
+                  className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+                  onClick={() => !newEntBusy && setAddEntOpen(false)}
+                >
+                  <div
+                    className="w-full max-w-md rounded-2xl border p-5 shadow-2xl"
+                    style={{
+                      backgroundColor: "var(--qg-card-bg)",
+                      borderColor: "var(--qg-border)"
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <h3
+                      className="text-base font-bold"
+                      style={{ color: "var(--qg-text)" }}
+                    >
+                      Nouvelle entreprise
+                    </h3>
+                    <p
+                      className="mt-1 text-xs"
+                      style={{ color: "var(--qg-text-muted)" }}
+                    >
+                      Crée une fiche entreprise. Tu pourras ajouter NEQ,
+                      type, partenaires et tâches après.
+                    </p>
+                    <label
+                      className="mt-4 block text-[11px] font-semibold uppercase tracking-wider"
+                      style={{ color: "var(--qg-text-soft)" }}
+                    >
+                      Nom de l'entreprise
+                    </label>
+                    <input
+                      autoFocus
+                      type="text"
+                      value={newEntName}
+                      onChange={(e) => setNewEntName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void createEntreprise();
+                        if (e.key === "Escape" && !newEntBusy)
+                          setAddEntOpen(false);
+                      }}
+                      className="mt-1 w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-1"
+                      style={{
+                        backgroundColor: "var(--qg-bg)",
+                        color: "var(--qg-text)",
+                        borderColor: "var(--qg-border)"
+                      }}
+                      placeholder="Ex. 8900 St-Hubert Inc."
+                    />
+                    {newEntErr ? (
+                      <p className="mt-2 text-[11px] text-rose-500">
+                        {newEntErr}
+                      </p>
+                    ) : null}
+                    <div className="mt-4 flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setAddEntOpen(false)}
+                        disabled={newEntBusy}
+                        className="rounded-md border px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
+                        style={{
+                          color: "var(--qg-text-muted)",
+                          borderColor: "var(--qg-border)"
+                        }}
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void createEntreprise()}
+                        disabled={newEntBusy || newEntName.trim().length < 1}
+                        className="rounded-md bg-violet-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-400 disabled:opacity-50"
+                      >
+                        {newEntBusy ? "Création…" : "Créer"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </ConfirmProvider>
           </ctx.Provider>
         </div>
@@ -327,16 +459,21 @@ export default function EntreprisesLayout({
 
 function SidebarSection({
   title,
-  children
+  children,
+  action
 }: {
   title: string;
   children: React.ReactNode;
+  action?: React.ReactNode;
 }) {
   return (
     <div>
-      <p className="mb-2 px-3 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--qg-text-soft)]">
-        {title}
-      </p>
+      <div className="mb-2 flex items-center justify-between px-3">
+        <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--qg-text-soft)]">
+          {title}
+        </p>
+        {action ? <div className="flex items-center">{action}</div> : null}
+      </div>
       <ul className="space-y-0.5">{children}</ul>
     </div>
   );
