@@ -318,6 +318,10 @@ class FactureCreate(BaseModel):
 
 
 class FactureUpdate(BaseModel):
+    # Le numéro de référence est éditable par un admin (correction
+    # ponctuelle, alignement sur la séquence QBO, fusion). Conflit
+    # d'unicité géré par la contrainte SQL — l'API renverra une 4xx.
+    reference: Optional[str] = None
     subtotal: Optional[float] = None
     tps: Optional[float] = None
     tvq: Optional[float] = None
