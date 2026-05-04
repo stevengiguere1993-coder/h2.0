@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Check,
+  KeyRound,
   Loader2,
   Plus,
   ShieldCheck,
@@ -146,6 +147,46 @@ export default function UtilisateursPage() {
       setUsers((xs) => xs.map((x) => (x.id === u.id ? updated : x)));
     } catch {
       setError("Changement de rôle échoué.");
+    } finally {
+      setBusyUser(null);
+    }
+  }
+
+  async function quickResetPassword(u: User) {
+    if (
+      !(await confirm({
+        title: `Réinitialiser le mot de passe de ${u.email} ?`,
+        description:
+          "Un mot de passe temporaire sera généré et envoyé par courriel. À sa prochaine connexion, l'utilisateur sera forcé de le changer.",
+        confirmLabel: "Réinitialiser",
+        destructive: false
+      }))
+    )
+      return;
+    setBusyUser(u.id);
+    setError(null);
+    try {
+      const alphabet =
+        "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+      let pwd = "";
+      for (let i = 0; i < 12; i++)
+        pwd += alphabet[Math.floor(Math.random() * alphabet.length)];
+      const res = await authedFetch(`/api/v1/users/${u.id}/set-password`, {
+        method: "POST",
+        body: JSON.stringify({
+          password: pwd,
+          must_change: true,
+          send_email: true
+        })
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      const updated = (await res.json()) as User;
+      setUsers((xs) => xs.map((x) => (x.id === u.id ? updated : x)));
+    } catch (e) {
+      setError(`Réinitialisation échouée : ${(e as Error).message}`);
     } finally {
       setBusyUser(null);
     }
@@ -337,22 +378,36 @@ export default function UtilisateursPage() {
                             </p>
                           ) : null}
                         </div>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleActive(u);
-                          }}
-                          disabled={busyUser === u.id || u.id === me?.id}
-                          title={
-                            u.is_active
-                              ? "Désactiver l'utilisateur"
-                              : "Réactiver l'utilisateur"
-                          }
-                          className="rounded-md p-1.5 text-white/40 hover:bg-white/5 disabled:opacity-30"
-                        >
-                          <UserX className="h-4 w-4" />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              quickResetPassword(u);
+                            }}
+                            disabled={busyUser === u.id}
+                            title="Réinitialiser le mot de passe et envoyer un courriel à l'utilisateur"
+                            className="rounded-md p-1.5 text-amber-400/70 hover:bg-amber-500/10 hover:text-amber-300 disabled:opacity-30"
+                          >
+                            <KeyRound className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleActive(u);
+                            }}
+                            disabled={busyUser === u.id || u.id === me?.id}
+                            title={
+                              u.is_active
+                                ? "Désactiver l'utilisateur"
+                                : "Réactiver l'utilisateur"
+                            }
+                            className="rounded-md p-1.5 text-white/40 hover:bg-white/5 disabled:opacity-30"
+                          >
+                            <UserX className="h-4 w-4" />
+                          </button>
+                        </div>
                       </div>
                     </li>
                   ))}

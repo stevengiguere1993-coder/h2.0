@@ -8,6 +8,7 @@ import {
   Calculator,
   Calendar,
   Home,
+  KeyRound,
   Layers,
   LogOut,
   Map,
@@ -227,6 +228,14 @@ export function ProspectionSidebar({
             <UserCircle className="h-4 w-4" />
             <span className="truncate">{userEmail || "—"}</span>
           </div>
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/changer-mot-de-passe" as any}
+            className="mt-1 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-white/70 hover:bg-brand-900 hover:text-white"
+          >
+            <KeyRound className="h-4 w-4" />
+            Changer mon mot de passe
+          </Link>
           <button
             type="button"
             onClick={onSignOut}

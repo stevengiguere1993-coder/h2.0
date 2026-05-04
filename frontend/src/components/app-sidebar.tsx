@@ -13,6 +13,7 @@ import {
   HardHat,
   Home,
   Contact,
+  KeyRound,
   LogOut,
   Palmtree,
   Settings,
@@ -300,6 +301,14 @@ export function AppSidebar({
             </p>
           ) : null}
           <InstallAppButton variant="sidebar" />
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/changer-mot-de-passe" as any}
+            className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white/70 transition hover:bg-brand-900 hover:text-white"
+          >
+            <KeyRound className="h-4 w-4" />
+            <span>Changer mon mot de passe</span>
+          </Link>
           <button
             type="button"
             onClick={onSignOut}

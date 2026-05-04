@@ -252,6 +252,59 @@ function UsersTable({
   onChangeRole: (u: User, role: UserRole) => void;
   hint?: string;
 }) {
+  const confirm = useConfirm();
+  const [resetBusy, setResetBusy] = useState<number | null>(null);
+  const [resetInfo, setResetInfo] = useState<string | null>(null);
+  const [resetErr, setResetErr] = useState<string | null>(null);
+
+  function generatePassword(): string {
+    const alphabet =
+      "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+    let out = "";
+    for (let i = 0; i < 12; i++)
+      out += alphabet[Math.floor(Math.random() * alphabet.length)];
+    return out;
+  }
+
+  async function resetPassword(u: User) {
+    if (
+      !(await confirm({
+        title: `Réinitialiser le mot de passe de ${u.email} ?`,
+        description:
+          "Un mot de passe temporaire sera généré et envoyé par courriel. À sa prochaine connexion, l'utilisateur sera forcé de le changer.",
+        confirmLabel: "Réinitialiser",
+        destructive: false
+      }))
+    )
+      return;
+    setResetBusy(u.id);
+    setResetErr(null);
+    setResetInfo(null);
+    try {
+      const newPwd = generatePassword();
+      const res = await authedFetch(`/api/v1/users/${u.id}/set-password`, {
+        method: "POST",
+        body: JSON.stringify({
+          password: newPwd,
+          must_change: true,
+          send_email: true
+        })
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      setResetInfo(
+        `Mot de passe temporaire envoyé à ${u.email}. L'utilisateur sera forcé de le changer à sa prochaine connexion.`
+      );
+      window.setTimeout(() => setResetInfo(null), 6000);
+    } catch (e) {
+      setResetErr(`Échec : ${(e as Error).message}`);
+    } finally {
+      setResetBusy(null);
+    }
+  }
+
   if (users.length === 0) return null;
   return (
     <section className="mt-6 overflow-hidden rounded-xl border border-brand-800">
@@ -280,6 +333,7 @@ function UsersTable({
               Assigner RDV
             </th>
             <th className="px-4 py-2">État</th>
+            <th className="px-4 py-2">Mot de passe</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-brand-800/40">
@@ -363,10 +417,36 @@ function UsersTable({
                   </span>
                 )}
               </td>
+              <td className="px-4 py-2.5">
+                <button
+                  type="button"
+                  onClick={() => resetPassword(u)}
+                  disabled={resetBusy === u.id || !isAdmin}
+                  title="Génère un mot de passe temporaire et l'envoie par courriel. L'utilisateur devra le changer à sa prochaine connexion."
+                  className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold text-amber-300 hover:bg-amber-500/20 disabled:opacity-40"
+                >
+                  {resetBusy === u.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    "Réinitialiser"
+                  )}
+                </button>
+                {u.id === resetBusy ? null : null}
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+      {resetInfo ? (
+        <p className="border-t border-brand-800 bg-emerald-500/10 px-4 py-2 text-xs text-emerald-300">
+          ✓ {resetInfo}
+        </p>
+      ) : null}
+      {resetErr ? (
+        <p className="border-t border-brand-800 bg-rose-500/10 px-4 py-2 text-xs text-rose-300">
+          {resetErr}
+        </p>
+      ) : null}
     </section>
   );
 }
