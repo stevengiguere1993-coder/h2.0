@@ -114,6 +114,11 @@ async def init_db() -> None:
             ("soumissions", "signed_ip", "VARCHAR(64)"),
             ("bons_travail", "signature_token", "VARCHAR(64)"),
             ("soumissions", "property_address", "VARCHAR(500)"),
+            (
+                "soumissions",
+                "project_skip_backfill",
+                "BOOLEAN NOT NULL DEFAULT FALSE",
+            ),
             ("soumission_items", "tps_applicable", "BOOLEAN NOT NULL DEFAULT TRUE"),
             ("soumission_items", "tvq_applicable", "BOOLEAN NOT NULL DEFAULT TRUE"),
             ("soumission_items", "kind", "VARCHAR(16) NOT NULL DEFAULT 'service'"),

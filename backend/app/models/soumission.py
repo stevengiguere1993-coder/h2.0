@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, LargeBinary, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, LargeBinary, Numeric, String, Text
 from sqlalchemy.orm import Mapped, deferred, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -85,4 +85,12 @@ class Soumission(Base, TimestampUpdateMixin):
     # billing address).
     property_address: Mapped[Optional[str]] = mapped_column(
         String(500), nullable=True
+    )
+
+    # Quand l'utilisateur supprime explicitement le projet rattaché à
+    # cette soumission, on met ce flag à True pour empêcher le backfill
+    # de re-provisionner le projet à chaque démarrage du serveur. Sans
+    # ce flag, le projet « ressuscite » à chaque cold-start Render.
+    project_skip_backfill: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
     )

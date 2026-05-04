@@ -109,6 +109,17 @@ async def provision_project_for_soumission(
     ).scalar_one_or_none()
     if existing is not None:
         return existing, None
+    # Si l'utilisateur a explicitement supprimé le projet rattaché à
+    # cette soumission, on ne le re-provisionne PAS — sinon il
+    # ressuscite à chaque appel.
+    if getattr(sm, "project_skip_backfill", False):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=(
+                "Le projet rattaché à cette soumission a été supprimé "
+                "volontairement. Pour le recréer, repasse par /facturation."
+            ),
+        )
 
     contact: Optional[ContactRequest] = None
     if sm.contact_request_id:
@@ -203,6 +214,9 @@ async def backfill_accepted_soumissions(db: AsyncSession) -> int:
     from app.models.soumission import SoumissionStatus
 
     # Soumissions ACCEPTED sans Project lié (LEFT JOIN puis filtre).
+    # IMPORTANT : on exclut les soumissions dont le projet a été
+    # supprimé volontairement (project_skip_backfill=True). Sans ça,
+    # le projet ressuscite à chaque démarrage du serveur.
     rows = (
         await db.execute(
             select(Soumission)
@@ -210,6 +224,7 @@ async def backfill_accepted_soumissions(db: AsyncSession) -> int:
             .where(
                 Soumission.status == SoumissionStatus.ACCEPTED.value,
                 Project.id.is_(None),
+                Soumission.project_skip_backfill.is_(False),
             )
         )
     ).scalars().all()
