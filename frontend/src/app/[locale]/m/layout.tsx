@@ -13,7 +13,9 @@ import {
 import { Link } from "@/i18n/navigation";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
+import { KratosLogo } from "@/components/kratos-logo";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { getToken, getMe, type CurrentUser } from "@/lib/auth";
 
 type Tab = {
@@ -82,12 +84,25 @@ export default function MobileLayout({
     <ThemeProvider initialTheme={initialTheme}>
     <ConfirmProvider>
     <main className="flex min-h-screen flex-col bg-brand-950 text-white">
-      {/* Pas d'overlay Kratos + ThemeToggle sur /m : la PWA mobile est
-          dédiée aux employés qui poinçonnent et consultent agenda —
-          un bouton thème global chevauchait systématiquement les
-          actions des pages (« Partager » sur le profil, etc.). Le
-          thème est stocké côté user et bascule depuis le portail
-          desktop ; il persiste sur mobile. */}
+      {/* Bandeau global mobile : Kratos cliquable (retour portail) +
+          ThemeToggle. Non-sticky volontairement — il scroll avec la
+          page pour ne pas chevaucher les en-têtes de pages (qui ont
+          leurs propres actions « Partager », « EN SERVICE », etc.).
+          L'utilisateur swipe vers le haut pour y revenir au besoin. */}
+      <div
+        className="flex h-12 items-center justify-between border-b border-brand-800 bg-brand-950/95 px-3"
+        style={{ paddingTop: "env(safe-area-inset-top)" }}
+      >
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={"/connexion" as any}
+          aria-label="Accueil du portail"
+          className="flex items-center"
+        >
+          <KratosLogo size={28} floating={false} />
+        </Link>
+        <ThemeToggle />
+      </div>
 
       <div className={inProspection ? "flex-1" : "flex-1 pb-20"}>
         {children}
