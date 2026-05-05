@@ -189,10 +189,32 @@ export default function ProjectDetailPage() {
     };
   }, [id]);
 
+  const dirty = useMemo(() => {
+    if (!p) return false;
+    return (
+      name !== p.name ||
+      clientId !== (p.client_id ? String(p.client_id) : "") ||
+      address !== (p.address || "") ||
+      startDate !== isoToDateInput(p.start_date) ||
+      endDate !== isoToDateInput(p.end_date) ||
+      budget !== (p.budget != null ? String(p.budget) : "") ||
+      estimatedHoursOverride !==
+        (p.estimated_hours_override != null
+          ? String(p.estimated_hours_override)
+          : "") ||
+      description !== (p.description || "") ||
+      notes !== (p.notes || "")
+    );
+  }, [
+    p, name, clientId, address, startDate, endDate, budget,
+    estimatedHoursOverride, description, notes,
+  ]);
+
   // Auto-save : quand l'utilisateur modifie un champ (ex. sélectionne
   // une adresse dans l'autocomplete) et arrête d'éditer 1,2 s, on
   // persiste automatiquement. Évite la perte de données si l'usager
-  // oublie de cliquer Sauvegarder.
+  // oublie de cliquer Sauvegarder. Doit être déclaré APRÈS `dirty` —
+  // sinon TDZ ReferenceError au mount.
   useEffect(() => {
     if (!p) return;
     if (!dirty) return;
@@ -213,27 +235,6 @@ export default function ProjectDetailPage() {
     estimatedHoursOverride,
     description,
     notes
-  ]);
-
-  const dirty = useMemo(() => {
-    if (!p) return false;
-    return (
-      name !== p.name ||
-      clientId !== (p.client_id ? String(p.client_id) : "") ||
-      address !== (p.address || "") ||
-      startDate !== isoToDateInput(p.start_date) ||
-      endDate !== isoToDateInput(p.end_date) ||
-      budget !== (p.budget != null ? String(p.budget) : "") ||
-      estimatedHoursOverride !==
-        (p.estimated_hours_override != null
-          ? String(p.estimated_hours_override)
-          : "") ||
-      description !== (p.description || "") ||
-      notes !== (p.notes || "")
-    );
-  }, [
-    p, name, clientId, address, startDate, endDate, budget,
-    estimatedHoursOverride, description, notes,
   ]);
 
   async function updateStatus(newStatus: string) {
