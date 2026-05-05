@@ -113,7 +113,7 @@ export default function AchatDetailPage() {
           authedFetch(`/api/v1/achats/${id}`),
           authedFetch("/api/v1/projects?limit=500"),
           authedFetch("/api/v1/fournisseurs?limit=500"),
-          authedFetch("/api/v1/employes?limit=500")
+          authedFetch("/api/v1/employes?limit=500&volet=construction")
         ]);
         if (!aRes.ok) throw new Error(`http_${aRes.status}`);
         const data = (await aRes.json()) as Achat;

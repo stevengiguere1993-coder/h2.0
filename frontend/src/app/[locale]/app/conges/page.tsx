@@ -334,7 +334,7 @@ function AdminLogLeaveModal({
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const res = await authedFetch("/api/v1/employes?limit=500");
+      const res = await authedFetch("/api/v1/employes?limit=500&volet=construction");
       if (!res.ok) return;
       if (!cancelled)
         setEmployes(

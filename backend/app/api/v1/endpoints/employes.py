@@ -41,12 +41,54 @@ async def list_employes(
     _: CurrentUser,
     skip: int = Query(0, ge=0),
     limit: int = Query(200, ge=1, le=500),
+    volet: Optional[str] = Query(
+        None,
+        description=(
+            "Si fourni, ne retourne que les employés dont le compte "
+            "User a accès à ce volet (ex. 'construction'). Les employés "
+            "sans compte User (pas d'email) sont conservés — ce sont "
+            "les ouvriers chantier sans accès portail."
+        ),
+    ),
 ) -> List[EmployeRead]:
     rows = (
         await db.execute(
             select(Employe).order_by(Employe.full_name.asc()).offset(skip).limit(limit)
         )
     ).scalars().all()
+
+    if volet:
+        # Filtre : on garde un employé si (a) il n'a pas d'email donc
+        # pas de compte User (ouvrier chantier legacy) OU (b) son User
+        # lié a accès au volet demandé. Les Users avec volets_json NULL
+        # ont accès aux deux volets historiques (construction +
+        # prospection) par backward compat — voir User.volets.
+        emails = [e.email.strip().lower() for e in rows if e.email]
+        users_by_email: dict[str, User] = {}
+        if emails:
+            users = (
+                await db.execute(
+                    select(User).where(User.email.in_(emails))
+                )
+            ).scalars().all()
+            users_by_email = {u.email.strip().lower(): u for u in users}
+
+        filtered: list[Employe] = []
+        for e in rows:
+            if not e.email:
+                # Pas de compte portail → on conserve (legacy chantier).
+                filtered.append(e)
+                continue
+            u = users_by_email.get(e.email.strip().lower())
+            if u is None:
+                # Email sans User correspondant → on conserve par
+                # prudence (la création User a peut-être échoué).
+                filtered.append(e)
+                continue
+            if volet in u.volets:
+                filtered.append(e)
+        rows = filtered
+
     return [EmployeRead.model_validate(r) for r in rows]
 
 

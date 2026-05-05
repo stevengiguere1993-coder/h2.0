@@ -112,8 +112,12 @@ function projectColor(projectId: number | null | undefined): {
       solid: "rgb(71, 85, 105)"
     };
   }
-  // 137.508 = 360 / phi → spread maximal des teintes (golden ratio)
-  const hue = Math.floor((projectId * 137.508) % 360);
+  // 137.508 = 360 / phi → spread maximal des teintes (golden ratio).
+  // On évite les rouges (340°-360° et 0°-20°) qui sont réservés aux
+  // non-disponibilités (congés, busy). On replie cette plage sur le
+  // reste du cercle (320° de plage utile : 20° → 340°).
+  const raw = (projectId * 137.508) % 320;
+  const hue = Math.floor(20 + raw);
   return {
     hue,
     bg: `hsl(${hue}, 65%, 42%)`, // saturé, lisible sur blanc et noir
@@ -290,7 +294,14 @@ export default function AgendaPage() {
   const [fAssignee, setFAssignee] = useState("");
 
   // Modal state
-  const [modal, setModal] = useState<AgendaEvent | { date: Date } | null>(null);
+  // Modal de création/édition. Pour les nouvelles créations on peut
+  // pré-remplir l'employé assigné (depuis la grille « Par personne »
+  // par exemple).
+  const [modal, setModal] = useState<
+    | AgendaEvent
+    | { date: Date; assigneeId?: number | null }
+    | null
+  >(null);
 
   // Projets dont les phases / événements sont déployés dans la vue
   // mois. Par défaut tout est replié — le calendrier ne montre que les
@@ -344,7 +355,7 @@ export default function AgendaPage() {
         const [evRes, prRes, empRes, phRes] = await Promise.all([
           authedFetch("/api/v1/agenda?limit=500"),
           authedFetch("/api/v1/projects?limit=200"),
-          authedFetch("/api/v1/employes?limit=200"),
+          authedFetch("/api/v1/employes?limit=200&volet=construction"),
           authedFetch("/api/v1/phases")
         ]);
         if (!evRes.ok) throw new Error(`http_${evRes.status}`);
@@ -778,7 +789,9 @@ export default function AgendaPage() {
             events={filteredEvents}
             phases={phases}
             projects={projects}
-            onCellClick={(_employeId, date) => setModal({ date })}
+            onCellClick={(employeId, date) =>
+              setModal({ date, assigneeId: employeId })
+            }
             onEventClick={(e) =>
               e.event_type === "busy"
                 ? null
@@ -1049,22 +1062,52 @@ function MonthView({
                   ) : null}
 
                   <div className="mt-1 space-y-0.5">
-                    {dayEvents.slice(0, 3).map((e) => (
-                      <button
-                        key={e.id}
-                        type="button"
-                        onClick={(ev) => {
-                          ev.stopPropagation();
-                          onEventClick(e);
-                        }}
-                        className={`block w-full truncate rounded border px-1 py-0.5 text-left text-[10px] font-medium ${
-                          TYPE_CLASS[e.event_type] || TYPE_CLASS.autre
-                        }`}
-                      >
-                        {!e.all_day ? `${fmtTime(e.start_at)} ` : ""}
-                        {e.title}
-                      </button>
-                    ))}
+                    {dayEvents.slice(0, 3).map((e) => {
+                      // Couleur du chantier prioritaire — si l'event
+                      // est rattaché à un projet, on prend la teinte
+                      // unique du projet (cohérent avec les bandes
+                      // multi-jours et le reste du calendrier).
+                      const pc = e.project_id
+                        ? projectColor(e.project_id)
+                        : null;
+                      const cls = pc
+                        ? "block w-full overflow-hidden rounded border px-1 py-0.5 text-left text-[10px] font-medium leading-tight"
+                        : `block w-full overflow-hidden rounded border px-1 py-0.5 text-left text-[10px] font-medium leading-tight ${
+                            TYPE_CLASS[e.event_type] || TYPE_CLASS.autre
+                          }`;
+                      const style = pc
+                        ? {
+                            backgroundColor: pc.bg,
+                            borderColor: pc.border,
+                            color: pc.text
+                          }
+                        : undefined;
+                      return (
+                        <button
+                          key={e.id}
+                          type="button"
+                          onClick={(ev) => {
+                            ev.stopPropagation();
+                            onEventClick(e);
+                          }}
+                          title={`${e.title}${
+                            !e.all_day ? ` — ${fmtTime(e.start_at)}` : ""
+                          }${e.location ? ` · ${e.location}` : ""}`}
+                          className={cls}
+                          style={style}
+                        >
+                          <span className="block truncate font-semibold">
+                            {e.title}
+                          </span>
+                          {!e.all_day ? (
+                            <span className="block text-[9px] opacity-80">
+                              {fmtTime(e.start_at)}
+                              {e.end_at ? `–${fmtTime(e.end_at)}` : ""}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               );
@@ -1256,7 +1299,9 @@ function EventModal({
   onSaved,
   onDeleted
 }: {
-  seed: AgendaEvent | { date: Date };
+  seed:
+    | AgendaEvent
+    | { date: Date; assigneeId?: number | null };
   projects: Project[];
   employes: Employe[];
   onClose: () => void;
@@ -1264,9 +1309,14 @@ function EventModal({
   onDeleted: (id: number) => void;
 }) {
   const existing = "id" in seed ? (seed as AgendaEvent) : null;
+  const seedDate = "id" in seed ? null : (seed as { date: Date }).date;
+  const seedAssignee =
+    "id" in seed
+      ? null
+      : (seed as { assigneeId?: number | null }).assigneeId ?? null;
   const initialStart = existing
     ? isoLocal(new Date(existing.start_at))
-    : isoLocal(seed.date);
+    : isoLocal(seedDate || new Date());
   const initialEnd = existing?.end_at ? isoLocal(new Date(existing.end_at)) : "";
 
   const [title, setTitle] = useState(existing?.title || "");
@@ -1280,7 +1330,11 @@ function EventModal({
     existing?.project_id ? String(existing.project_id) : ""
   );
   const [assigneeId, setAssigneeId] = useState(
-    existing?.assignee_id ? String(existing.assignee_id) : ""
+    existing?.assignee_id
+      ? String(existing.assignee_id)
+      : seedAssignee
+        ? String(seedAssignee)
+        : ""
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1808,6 +1862,32 @@ function WeeklyTeamGridView({
             </div>
             {week.map((d, i) => {
               const blocks = blocksFor(emp.id, d);
+              const unavailEvents = blocks
+                .filter((b) => b.kind === "event")
+                .map((b) => (b as { kind: "event"; event: AgendaEvent }).event)
+                .filter((ev) =>
+                  [
+                    "conge",
+                    "congé",
+                    "indispo",
+                    "busy",
+                    "absent",
+                    "vacances"
+                  ].includes((ev.event_type || "").toLowerCase())
+                );
+              const cellUnavail = unavailEvents.length > 0;
+              const cellClassName = cellUnavail
+                ? "flex min-h-[64px] flex-col gap-1 border-r-2 border-red-700 px-1.5 py-1.5 text-left transition"
+                : "flex min-h-[64px] flex-col gap-1 border-r border-brand-800 px-1.5 py-1.5 text-left transition hover:bg-brand-800/30";
+              // Hachures diagonales rouges en CSS pour signaler la
+              // case indisponible (pattern repeating-linear-gradient).
+              const cellStyle: React.CSSProperties | undefined = cellUnavail
+                ? {
+                    backgroundImage:
+                      "repeating-linear-gradient(45deg, rgba(185,28,28,0.45) 0px, rgba(185,28,28,0.45) 6px, rgba(127,29,29,0.55) 6px, rgba(127,29,29,0.55) 12px)",
+                    border: "2px solid rgb(185, 28, 28)"
+                  }
+                : undefined;
               return (
                 <button
                   key={i}
@@ -1819,7 +1899,8 @@ function WeeklyTeamGridView({
                       onCellClick(emp.id, at);
                     }
                   }}
-                  className="flex min-h-[64px] flex-col gap-1 border-r border-brand-800 px-1.5 py-1.5 text-left transition hover:bg-brand-800/30"
+                  className={cellClassName}
+                  style={cellStyle}
                 >
                   {blocks.length === 0 ? (
                     <span className="text-xs italic text-white/30">
@@ -1852,9 +1933,42 @@ function WeeklyTeamGridView({
                         );
                       }
                       const ev = b.event;
-                      const c = ev.project_id
-                        ? projectColor(ev.project_id)
-                        : null;
+                      // Non-disponibilité : congés, indispo, busy → rouge
+                      // unifié peu importe le scope (l'employé est tout
+                      // simplement indisponible).
+                      const isUnavail = [
+                        "conge",
+                        "congé",
+                        "indispo",
+                        "busy",
+                        "absent",
+                        "vacances"
+                      ].includes((ev.event_type || "").toLowerCase());
+                      const c =
+                        !isUnavail && ev.project_id
+                          ? projectColor(ev.project_id)
+                          : null;
+                      const style = isUnavail
+                        ? {
+                            // Sur la case hachurée rouge, on garde
+                            // juste le texte blanc en gras (pas de
+                            // fond pour ne pas masquer le pattern).
+                            backgroundColor: "transparent",
+                            color: "#ffffff",
+                            textShadow: "0 1px 2px rgba(0,0,0,0.7)",
+                            border: "none"
+                          }
+                        : c
+                          ? {
+                              backgroundColor: c.bg,
+                              color: c.text,
+                              border: `1px solid ${c.border}`
+                            }
+                          : {
+                              backgroundColor: "rgb(71, 85, 105)",
+                              color: "#ffffff",
+                              border: "1px solid rgb(51, 65, 85)"
+                            };
                       return (
                         <span
                           key={`e-${ev.id}-${idx}`}
@@ -1863,29 +1977,23 @@ function WeeklyTeamGridView({
                             onEventClick(ev);
                           }}
                           className="block cursor-pointer rounded px-1.5 py-1 text-[10px] font-semibold leading-tight hover:opacity-90"
-                          style={
-                            c
-                              ? {
-                                  backgroundColor: c.bg,
-                                  color: c.text,
-                                  border: `1px solid ${c.border}`
-                                }
-                              : {
-                                  backgroundColor: "rgb(71, 85, 105)",
-                                  color: "#ffffff",
-                                  border: "1px solid rgb(51, 65, 85)"
-                                }
+                          style={style}
+                          title={
+                            isUnavail
+                              ? `Indisponible — ${ev.title}`
+                              : ev.title
                           }
-                          title={ev.title}
                         >
                           <span className="block">
-                            {ev.all_day
-                              ? "⏰"
-                              : `${fmtTimeShort(ev.start_at)}${
-                                  ev.end_at
-                                    ? " - " + fmtTimeShort(ev.end_at)
-                                    : ""
-                                }`}
+                            {isUnavail
+                              ? "🚫"
+                              : ev.all_day
+                                ? "⏰"
+                                : `${fmtTimeShort(ev.start_at)}${
+                                    ev.end_at
+                                      ? " - " + fmtTimeShort(ev.end_at)
+                                      : ""
+                                  }`}
                           </span>
                           <span className="block truncate">
                             {ev.title}

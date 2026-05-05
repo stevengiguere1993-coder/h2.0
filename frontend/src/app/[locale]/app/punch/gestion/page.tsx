@@ -218,7 +218,7 @@ export default function PunchGestionPage() {
       try {
         const [pRes, eRes, prRes, csRes] = await Promise.all([
           authedFetch("/api/v1/punch?limit=500"),
-          authedFetch("/api/v1/employes?limit=500"),
+          authedFetch("/api/v1/employes?limit=500&volet=construction"),
           authedFetch("/api/v1/projects?limit=500"),
           authedFetch("/api/v1/contact?limit=500")
         ]);
