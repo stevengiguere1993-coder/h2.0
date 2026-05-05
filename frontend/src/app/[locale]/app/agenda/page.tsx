@@ -293,14 +293,44 @@ export default function AgendaPage() {
     };
   }, []);
 
+  // Phases du projet → événements virtuels (read-only) qui apparaissent
+  // dans toutes les vues calendrier/list/timeline. Permet de voir la
+  // planification du projet dans l'agenda chantier global, pas seulement
+  // dans l'onglet Planification du projet.
+  const phaseAsEvents = useMemo<AgendaEvent[]>(() => {
+    return phases
+      .filter((p) => p.start_date && p.duration_days && p.duration_days > 0)
+      .map((p) => {
+        const s = new Date(`${p.start_date!}T08:00:00`);
+        const e = new Date(s);
+        e.setDate(e.getDate() + (p.duration_days || 1));
+        return {
+          id: -p.id, // négatif pour ne pas collisionner avec events réels
+          title: `📐 ${p.name}`,
+          description: null,
+          location: null,
+          start_at: s.toISOString(),
+          end_at: e.toISOString(),
+          all_day: true,
+          project_id: p.project_id,
+          assignee_id:
+            p.assignee_employe_id != null
+              ? p.assignee_employe_id
+              : null,
+          event_type: "phase",
+          created_at: s.toISOString()
+        } as AgendaEvent;
+      });
+  }, [phases]);
+
   const filteredEvents = useMemo(() => {
-    return events.filter((e) => {
+    return [...events, ...phaseAsEvents].filter((e) => {
       if (fType && e.event_type !== fType) return false;
       if (fProject && String(e.project_id || "") !== fProject) return false;
       if (fAssignee && String(e.assignee_id || "") !== fAssignee) return false;
       return true;
     });
-  }, [events, fType, fProject, fAssignee]);
+  }, [events, phaseAsEvents, fType, fProject, fAssignee]);
 
   const grid = useMemo(() => buildMonthGrid(ref), [ref]);
 
@@ -613,7 +643,9 @@ export default function AgendaPage() {
             events={filteredEvents}
             onSlotClick={(d) => setModal({ date: d })}
             onEventClick={(e) =>
-              e.event_type === "busy" ? null : setModal(e)
+              e.event_type === "busy" || e.event_type === "phase"
+                ? null
+                : setModal(e)
             }
           />
         ) : view === "month" ? (
@@ -626,14 +658,18 @@ export default function AgendaPage() {
             projectHasTeam={projectHasTeam}
             onDayClick={(d) => setModal({ date: d })}
             onEventClick={(e) =>
-              e.event_type === "busy" ? null : setModal(e)
+              e.event_type === "busy" || e.event_type === "phase"
+                ? null
+                : setModal(e)
             }
           />
         ) : view === "list" ? (
           <ListView
             events={filteredEvents}
             onEventClick={(e) =>
-              e.event_type === "busy" ? null : setModal(e)
+              e.event_type === "busy" || e.event_type === "phase"
+                ? null
+                : setModal(e)
             }
           />
         ) : (
@@ -646,7 +682,9 @@ export default function AgendaPage() {
             projects={projects}
             employes={employes}
             onEventClick={(e) =>
-              e.event_type === "busy" ? null : setModal(e)
+              e.event_type === "busy" || e.event_type === "phase"
+                ? null
+                : setModal(e)
             }
           />
         )}
