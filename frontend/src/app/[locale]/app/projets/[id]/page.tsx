@@ -163,6 +163,32 @@ export default function ProjectDetailPage() {
     };
   }, [id]);
 
+  // Auto-save : quand l'utilisateur modifie un champ (ex. sélectionne
+  // une adresse dans l'autocomplete) et arrête d'éditer 1,2 s, on
+  // persiste automatiquement. Évite la perte de données si l'usager
+  // oublie de cliquer Sauvegarder.
+  useEffect(() => {
+    if (!p) return;
+    if (!dirty) return;
+    if (saving) return;
+    const t = setTimeout(() => {
+      void saveAll();
+    }, 1200);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    dirty,
+    name,
+    clientId,
+    address,
+    startDate,
+    endDate,
+    budget,
+    estimatedHoursOverride,
+    description,
+    notes
+  ]);
+
   const dirty = useMemo(() => {
     if (!p) return false;
     return (
@@ -2608,13 +2634,46 @@ function ChantierAgendaTab({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [evRes, empRes] = await Promise.all([
+      const [evRes, empRes, phRes] = await Promise.all([
         authedFetch(`/api/v1/agenda?limit=500`),
-        authedFetch(`/api/v1/employes?limit=200`)
+        authedFetch(`/api/v1/employes?limit=200`),
+        authedFetch(`/api/v1/projects/${projectId}/phases`)
       ]);
       if (!evRes.ok) throw new Error();
       const all = (await evRes.json()) as ChantierEvent[];
-      setEvents(all.filter((e) => e.project_id === projectId));
+      const realEvents = all.filter((e) => e.project_id === projectId);
+
+      // Transforme les phases du projet en événements virtuels
+      // (event_type="phase", id négatif pour ne pas collisionner) afin
+      // qu'elles s'affichent dans la liste / le Gantt de l'onglet
+      // Agenda chantier — sinon la planification n'apparaissait nulle
+      // part en dehors de l'onglet Planification.
+      let phaseEvents: ChantierEvent[] = [];
+      if (phRes.ok) {
+        type Phase = {
+          id: number;
+          name: string;
+          start_date: string | null;
+          end_date: string | null;
+        };
+        const phs = (await phRes.json()) as Phase[];
+        phaseEvents = phs
+          .filter((p) => p.start_date)
+          .map((p) => ({
+            id: -p.id, // négatif pour éviter collision avec events réels
+            title: `📐 ${p.name}`,
+            description: null,
+            location: null,
+            start_at: `${p.start_date}T08:00:00`,
+            end_at: p.end_date ? `${p.end_date}T17:00:00` : null,
+            all_day: true,
+            project_id: projectId,
+            assignee_id: null,
+            event_type: "phase"
+          }));
+      }
+
+      setEvents([...realEvents, ...phaseEvents]);
       if (empRes.ok) {
         setEmployes(
           (await empRes.json()) as Array<{ id: number; full_name: string }>
@@ -2689,6 +2748,15 @@ function ChantierAgendaTab({
   }
 
   async function removeEvent(id: number) {
+    // id négatif = phase virtuelle (cf. load) → renvoie l'utilisateur
+    // vers l'onglet Planification au lieu de tenter une DELETE qui
+    // échouera côté API.
+    if (id < 0) {
+      setError(
+        "Cette ligne vient de la Planification du projet. Modifie-la depuis l'onglet « Planification »."
+      );
+      return;
+    }
     if (!(await confirm("Supprimer cet événement ?"))) return;
     try {
       const res = await authedFetch(`/api/v1/agenda/${id}`, {
@@ -3045,6 +3113,8 @@ function ChantierGantt({
   // Couleur par event_type (cohérent avec /app/agenda).
   function colorFor(type: string): string {
     switch (type) {
+      case "phase":
+        return "#d4ff3a"; // accent (planification du projet)
       case "chantier":
         return "#3b82f6"; // blue
       case "livraison":
@@ -3182,6 +3252,7 @@ function ChantierGantt({
           </span>
           {(
             [
+              ["phase", "Phase planifiée"],
               ["chantier", "Chantier"],
               ["livraison", "Livraison"],
               ["inspection", "Inspection"],
