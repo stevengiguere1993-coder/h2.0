@@ -2558,6 +2558,43 @@ function TimeGridView({
     return out;
   }, [timed, days]);
 
+  // Pack all-day bars into vertical tracks so qu'ils ne s'empilent
+  // pas l'un par-dessus l'autre. Algo identique aux clusters timed :
+  // la première bande qui peut tenir dans une track la prend, sinon
+  // on en crée une nouvelle.
+  type AllDayLaidOut = AllDayBar & { track: number };
+  const allDayLaidOut: AllDayLaidOut[] = useMemo(() => {
+    const sorted = [...allDay].sort((a, b) =>
+      a.startIdx !== b.startIdx
+        ? a.startIdx - b.startIdx
+        : a.endIdx - b.endIdx
+    );
+    const tracksEnd: number[] = []; // dernier endIdx (inclusif) par track
+    const out: AllDayLaidOut[] = [];
+    for (const bar of sorted) {
+      let t = -1;
+      for (let i = 0; i < tracksEnd.length; i++) {
+        if (tracksEnd[i] < bar.startIdx) {
+          t = i;
+          break;
+        }
+      }
+      if (t === -1) {
+        t = tracksEnd.length;
+        tracksEnd.push(bar.endIdx);
+      } else {
+        tracksEnd[t] = bar.endIdx;
+      }
+      out.push({ ...bar, track: t });
+    }
+    return out;
+  }, [allDay]);
+
+  const allDayTrackCount = useMemo(
+    () => allDayLaidOut.reduce((m, b) => Math.max(m, b.track + 1), 0),
+    [allDayLaidOut]
+  );
+
   const today = new Date();
   const todayCol = diffDays(start, today);
   const todayInRange = todayCol >= 0 && todayCol < days;
@@ -2613,20 +2650,21 @@ function TimeGridView({
           })}
         </div>
 
-        {/* All-day strip */}
+        {/* All-day strip — bandes empilées en tracks pour éviter le
+            chevauchement quand 2 phases couvrent le même jour. */}
         {allDay.length > 0 ? (
           <div
             className="grid border-b border-brand-800 bg-brand-900/60"
             style={{ gridTemplateColumns: gridCols }}
           >
-            <div className="flex items-center justify-end px-2 py-1 text-[10px] uppercase tracking-wider text-white/40">
+            <div className="flex items-start justify-end px-2 py-1 text-[10px] uppercase tracking-wider text-white/40">
               Toute
             </div>
             <div
               className="relative py-1"
               style={{
                 gridColumn: `2 / span ${days}`,
-                minHeight: "28px"
+                height: `${4 + allDayTrackCount * 26}px`
               }}
             >
               <div
@@ -2639,20 +2677,43 @@ function TimeGridView({
                   <div key={i} className="border-l border-brand-800/60" />
                 ))}
               </div>
-              {allDay.map(({ e, startIdx, endIdx }, k) => {
+              {allDayLaidOut.map(({ e, startIdx, endIdx, track }, k) => {
                 const left = (startIdx / days) * 100;
                 const width = ((endIdx - startIdx + 1) / days) * 100;
+                const top = 2 + track * 26;
+                const pc = e.project_id
+                  ? projectColor(e.project_id)
+                  : null;
+                const baseCls =
+                  "absolute z-[2] overflow-hidden rounded-md border px-2 py-0.5 text-left text-[11px] font-semibold shadow-sm hover:brightness-110";
                 return (
                   <button
                     key={`ad-${e.id}-${k}`}
                     type="button"
                     onClick={() => onEventClick(e)}
-                    className={`absolute top-1 z-[2] rounded-md border px-2 py-0.5 text-left text-[11px] font-semibold shadow-sm hover:brightness-110 ${eventAccent(e.event_type)}`}
-                    style={{
-                      left: `calc(${left}% + 2px)`,
-                      width: `calc(${width}% - 4px)`,
-                      height: "22px"
-                    }}
+                    className={
+                      pc
+                        ? baseCls
+                        : `${baseCls} ${eventAccent(e.event_type)}`
+                    }
+                    style={
+                      pc
+                        ? {
+                            left: `calc(${left}% + 2px)`,
+                            width: `calc(${width}% - 4px)`,
+                            top: `${top}px`,
+                            height: "22px",
+                            backgroundColor: pc.bg,
+                            borderColor: pc.border,
+                            color: pc.text
+                          }
+                        : {
+                            left: `calc(${left}% + 2px)`,
+                            width: `calc(${width}% - 4px)`,
+                            top: `${top}px`,
+                            height: "22px"
+                          }
+                    }
                     title={e.title}
                   >
                     <span className="truncate block">{e.title}</span>
@@ -2732,6 +2793,11 @@ function TimeGridView({
                     const colWidth = 100 / ev.colCount;
                     const left = ev.col * colWidth;
                     const width = colWidth;
+                    const pc = ev.project_id
+                      ? projectColor(ev.project_id)
+                      : null;
+                    const baseCls =
+                      "absolute z-[2] overflow-hidden rounded-md border text-left shadow-sm hover:brightness-110";
                     return (
                       <button
                         key={`ev-${ev.id}`}
@@ -2740,13 +2806,29 @@ function TimeGridView({
                           evt.stopPropagation();
                           onEventClick(ev);
                         }}
-                        className={`absolute z-[2] overflow-hidden rounded-md border text-left shadow-sm hover:brightness-110 ${eventAccent(ev.event_type)}`}
-                        style={{
-                          top: `${top}px`,
-                          height: `${height}px`,
-                          left: `calc(${left}% + 2px)`,
-                          width: `calc(${width}% - 4px)`
-                        }}
+                        className={
+                          pc
+                            ? baseCls
+                            : `${baseCls} ${eventAccent(ev.event_type)}`
+                        }
+                        style={
+                          pc
+                            ? {
+                                top: `${top}px`,
+                                height: `${height}px`,
+                                left: `calc(${left}% + 2px)`,
+                                width: `calc(${width}% - 4px)`,
+                                backgroundColor: pc.bg,
+                                borderColor: pc.border,
+                                color: pc.text
+                              }
+                            : {
+                                top: `${top}px`,
+                                height: `${height}px`,
+                                left: `calc(${left}% + 2px)`,
+                                width: `calc(${width}% - 4px)`
+                              }
+                        }
                         title={`${ev.title} — ${fmtTime(ev.start_at)}${
                           ev.end_at ? ` → ${fmtTime(ev.end_at)}` : ""
                         }`}
