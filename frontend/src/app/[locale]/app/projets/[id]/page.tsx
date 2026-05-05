@@ -2539,11 +2539,11 @@ function PhaseCard({
   ]);
 
   // Dérive la durée actuelle (en jours décimaux) selon le mode.
+  // « Journée complète » = 1 jour fixe (pas de N jours configurable).
+  // Pour planifier sur plusieurs jours, l'utilisateur crée plusieurs
+  // phases — chaque phase = une journée (ou un créneau) précis.
   const currentDuration: number | null = (() => {
-    if (fullDay) {
-      const n = Number(daysPart);
-      return Number.isFinite(n) && n > 0 ? n : null;
-    }
+    if (fullDay) return 1;
     if (!startTime || !endTime) return null;
     const [sh, sm] = startTime.split(":").map(Number);
     const [eh, em] = endTime.split(":").map(Number);
@@ -2553,8 +2553,8 @@ function PhaseCard({
   })();
 
   const endDate =
-    startDate && fullDay && currentDuration != null && currentDuration > 0
-      ? addDays(startDate, Math.max(0, Math.ceil(currentDuration) - 1))
+    startDate && fullDay
+      ? startDate // 1 journée = même jour
       : startDate && !fullDay
         ? startDate
         : null;
@@ -2628,11 +2628,10 @@ function PhaseCard({
                     const next = e.target.checked;
                     setFullDay(next);
                     // Persiste tout de suite le mode pour que la
-                    // ligne s'aligne sur le serveur. On envoie aussi
-                    // les valeurs cohérentes du nouveau mode.
+                    // ligne s'aligne sur le serveur. Journée complète
+                    // = 1 j sec, créneau = duration calculée.
                     if (next) {
-                      const n = Number(daysPart) || 1;
-                      onPatch({ start_time: null, duration_days: n });
+                      onPatch({ start_time: null, duration_days: 1 });
                     } else {
                       const [sh, sm] = startTime.split(":").map(Number);
                       const [eh, em] = endTime.split(":").map(Number);
@@ -2648,22 +2647,7 @@ function PhaseCard({
                 />
                 Journée complète
               </label>
-              {fullDay ? (
-                <div className="mt-2">
-                  <span className="text-[11px] uppercase tracking-wider text-white/40">
-                    Nombre de jours
-                  </span>
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={daysPart}
-                    onChange={(e) => setDaysPart(e.target.value)}
-                    onBlur={persist}
-                    className="mt-1 w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
-                  />
-                </div>
-              ) : (
+              {fullDay ? null : (
                 <div className="mt-2 grid grid-cols-2 gap-2">
                   <label className="text-[11px] uppercase tracking-wider text-white/40">
                     Heure début
@@ -3581,15 +3565,30 @@ function ChantierGantt({
     );
   }
 
-  // Timeline range : min(start) → max(end || start) +1 jour de marge.
+  // Timeline range : min(start) → max(end || start). On NE prolonge
+  // PAS la fin à 23h59 — sinon une phase de 1 j qui termine à minuit
+  // pile (start + 24 h) ajoute une colonne vide pour le lendemain.
   const ts = sorted.map((e) => new Date(e.start_at).getTime());
   const tsEnd = sorted.map((e) =>
     new Date(e.end_at || e.start_at).getTime()
   );
   const rangeStart = new Date(Math.min(...ts));
   rangeStart.setHours(0, 0, 0, 0);
-  const rangeEndRaw = new Date(Math.max(...tsEnd));
-  rangeEndRaw.setHours(23, 59, 59, 999);
+  // Pour la fin, on prend max(end_at) mais on retire 1 ms si c'est
+  // pile sur un minuit (cas standard d'une phase all-day = start + N×24h).
+  // Comme ça la dernière colonne représente bien le dernier jour
+  // d'activité, sans phantom day.
+  let rangeEndMs = Math.max(...tsEnd);
+  const lastDate = new Date(rangeEndMs);
+  if (
+    lastDate.getHours() === 0 &&
+    lastDate.getMinutes() === 0 &&
+    lastDate.getSeconds() === 0 &&
+    lastDate.getMilliseconds() === 0
+  ) {
+    rangeEndMs -= 1;
+  }
+  const rangeEndRaw = new Date(rangeEndMs);
   // Ajoute au moins 7 jours d'amplitude pour les projets très courts
   const minAmplitudeMs = 7 * 86400000;
   const rangeEnd =
