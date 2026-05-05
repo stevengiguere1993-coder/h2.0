@@ -161,7 +161,7 @@ export function QGCommandBar() {
         onClick={() => setOpen(true)}
         className="fixed bottom-6 left-1/2 z-30 -translate-x-1/2 transform"
         aria-label="Ouvrir la barre de commande"
-        title="Demander à QG (⌘K)"
+        title="Demander à Kratos (⌘K)"
       >
         <span
           className="flex items-center gap-2 rounded-full px-4 py-2 text-[12px] font-semibold backdrop-blur transition hover:scale-105"
@@ -174,7 +174,7 @@ export function QGCommandBar() {
           }}
         >
           <Sparkles className="h-3.5 w-3.5" style={{ color: "#d4ff3a" }} />
-          Demander à QG
+          Demander à Kratos
           <kbd
             className="ml-2 rounded border px-1.5 py-0.5 text-[10px] font-mono"
             style={{
