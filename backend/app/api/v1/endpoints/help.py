@@ -117,7 +117,9 @@ async def ask(
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     try:
         msg = client.messages.create(
-            model="claude-haiku-4-5",
+            # ID canonique (l'alias court fonctionne mais peut casser
+            # silencieusement si Anthropic met à jour le snapshot).
+            model="claude-haiku-4-5-20251001",
             max_tokens=1024,
             system=[
                 {
