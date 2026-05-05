@@ -351,7 +351,7 @@ export default function AgendaPage() {
         const [evRes, prRes, empRes, phRes] = await Promise.all([
           authedFetch("/api/v1/agenda?limit=500"),
           authedFetch("/api/v1/projects?limit=200"),
-          authedFetch("/api/v1/employes?limit=200"),
+          authedFetch("/api/v1/employes?limit=200&volet=construction"),
           authedFetch("/api/v1/phases")
         ]);
         if (!evRes.ok) throw new Error(`http_${evRes.status}`);

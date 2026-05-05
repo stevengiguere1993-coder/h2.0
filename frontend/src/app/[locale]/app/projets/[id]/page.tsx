@@ -1243,7 +1243,7 @@ function TasksTab({ projectId }: { projectId: number }) {
       try {
         const [tRes, eRes] = await Promise.all([
           authedFetch(`/api/v1/projects/${projectId}/tasks`),
-          authedFetch("/api/v1/employes?limit=500")
+          authedFetch("/api/v1/employes?limit=500&volet=construction")
         ]);
         if (!tRes.ok) throw new Error();
         const ts = (await tRes.json()) as Task[];
@@ -1989,7 +1989,7 @@ function PlanificationTab({ projectId }: { projectId: number }) {
       const [phRes, tRes, eRes, sRes, agRes] = await Promise.all([
         authedFetch(`/api/v1/projects/${projectId}/phases`),
         authedFetch(`/api/v1/projects/${projectId}/tasks`),
-        authedFetch(`/api/v1/employes?limit=200`),
+        authedFetch(`/api/v1/employes?limit=200&volet=construction`),
         authedFetch(`/api/v1/sous-traitants?limit=200`),
         authedFetch(`/api/v1/agenda?limit=500`)
       ]);
@@ -2865,7 +2865,7 @@ function ChantierAgendaTab({
     try {
       const [evRes, empRes, phRes] = await Promise.all([
         authedFetch(`/api/v1/agenda?limit=500`),
-        authedFetch(`/api/v1/employes?limit=200`),
+        authedFetch(`/api/v1/employes?limit=200&volet=construction`),
         authedFetch(`/api/v1/projects/${projectId}/phases`)
       ]);
       if (!evRes.ok) throw new Error();

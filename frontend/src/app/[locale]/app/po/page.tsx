@@ -73,7 +73,7 @@ export default function PurchaseOrdersListPage() {
           authedFetch("/api/v1/purchase-orders?limit=500"),
           authedFetch("/api/v1/projects?limit=500"),
           authedFetch("/api/v1/fournisseurs?limit=500"),
-          authedFetch("/api/v1/employes?limit=500")
+          authedFetch("/api/v1/employes?limit=500&volet=construction")
         ]);
         if (!poRes.ok) throw new Error();
         if (cancelled) return;

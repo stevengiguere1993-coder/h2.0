@@ -108,7 +108,7 @@ export default function AssignationsPage() {
     setError(null);
     try {
       const [empRes, prRes, phRes, evRes] = await Promise.all([
-        authedFetch("/api/v1/employes?limit=500"),
+        authedFetch("/api/v1/employes?limit=500&volet=construction"),
         authedFetch("/api/v1/projects?limit=500"),
         authedFetch("/api/v1/phases"),
         authedFetch("/api/v1/agenda?limit=1000")

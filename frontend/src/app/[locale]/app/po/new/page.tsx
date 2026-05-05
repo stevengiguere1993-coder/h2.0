@@ -61,7 +61,7 @@ export default function NewPurchaseOrderPage() {
         const [pRes, frRes, eRes] = await Promise.all([
           authedFetch("/api/v1/projects?limit=500"),
           authedFetch("/api/v1/fournisseurs?limit=500"),
-          authedFetch("/api/v1/employes?limit=500")
+          authedFetch("/api/v1/employes?limit=500&volet=construction")
         ]);
         if (!cancelled) {
           if (pRes.ok) setProjects((await pRes.json()) as Project[]);

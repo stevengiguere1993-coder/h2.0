@@ -109,7 +109,7 @@ export default function PurchaseOrderDetailPage() {
           authedFetch(`/api/v1/purchase-orders/${id}`),
           authedFetch("/api/v1/projects?limit=500"),
           authedFetch("/api/v1/fournisseurs?limit=500"),
-          authedFetch("/api/v1/employes?limit=500")
+          authedFetch("/api/v1/employes?limit=500&volet=construction")
         ]);
         if (!poRes.ok) throw new Error();
         const data = (await poRes.json()) as PurchaseOrder;
