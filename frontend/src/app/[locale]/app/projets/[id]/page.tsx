@@ -3647,7 +3647,7 @@ function ChantierGantt({
             {days.map((d, i) => (
               <div
                 key={i}
-                className="absolute top-0 text-[9px] text-white/40 tabular-nums"
+                className="absolute top-0 text-center text-[9px] text-white/40 tabular-nums"
                 style={{
                   left: `${i * dayWidthPct}%`,
                   width: `${dayWidthPct}%`
