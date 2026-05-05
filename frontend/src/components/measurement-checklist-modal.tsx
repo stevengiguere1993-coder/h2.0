@@ -57,10 +57,21 @@ export function MeasurementChecklistModal({
       setError("Donne un libellé à ce relevé (ex. cuisine 2e étage).");
       return;
     }
-    const headline =
-      template.headlineField && values[template.headlineField] !== undefined
-        ? Number(values[template.headlineField] || 0)
-        : 0;
+    let headline = 0;
+    if (template.custom) {
+      // Pour les relevés personnalisés, headline = somme des valeurs
+      // numériques saisies. Permet d'avoir un total approximatif sur
+      // la carte d'aperçu (pratique pour un appartement complet).
+      const items = Array.isArray((values as { items?: unknown[] }).items)
+        ? ((values as { items: Array<{ value: unknown }> }).items)
+        : [];
+      headline = items.reduce((acc, it) => {
+        const n = Number(it.value);
+        return acc + (Number.isFinite(n) ? n : 0);
+      }, 0);
+    } else if (template.headlineField && values[template.headlineField] !== undefined) {
+      headline = Number(values[template.headlineField] || 0);
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -140,16 +151,23 @@ export function MeasurementChecklistModal({
               />
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              {template.fields.filter(shouldShow).map((f) => (
-                <FieldInput
-                  key={f.key}
-                  field={f}
-                  value={values[f.key]}
-                  onChange={(v) => setField(f.key, v)}
-                />
-              ))}
-            </div>
+            {template.custom ? (
+              <CustomItemsEditor
+                values={values}
+                onChange={setValues}
+              />
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {template.fields.filter(shouldShow).map((f) => (
+                  <FieldInput
+                    key={f.key}
+                    field={f}
+                    value={values[f.key]}
+                    onChange={(v) => setField(f.key, v)}
+                  />
+                ))}
+              </div>
+            )}
 
             <div>
               <label className="label">Notes complémentaires</label>
@@ -204,6 +222,115 @@ export function MeasurementChecklistModal({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+type CustomItem = {
+  label: string;
+  value: number | string;
+  unit: string;
+};
+
+function CustomItemsEditor({
+  values,
+  onChange
+}: {
+  values: Record<string, unknown>;
+  onChange: (next: Record<string, unknown>) => void;
+}) {
+  const items: CustomItem[] = Array.isArray(values.items)
+    ? (values.items as CustomItem[])
+    : [];
+
+  function patch(idx: number, patchObj: Partial<CustomItem>) {
+    const next = items.map((it, i) =>
+      i === idx ? { ...it, ...patchObj } : it
+    );
+    onChange({ ...values, items: next });
+  }
+
+  function add() {
+    const next = [...items, { label: "", value: "", unit: "ft²" }];
+    onChange({ ...values, items: next });
+  }
+
+  function remove(idx: number) {
+    const next = items.filter((_, i) => i !== idx);
+    onChange({ ...values, items: next });
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-white/50">
+        Ajoute autant de mesures que nécessaire (ex. salon 200 ft²,
+        chambres, balcons…). Le total sert d&apos;aire principale sur
+        la carte d&apos;aperçu.
+      </p>
+      {items.length === 0 ? (
+        <p className="rounded-md border border-dashed border-brand-800 bg-brand-900/40 px-3 py-3 text-center text-xs text-white/40">
+          Aucune mesure — clique « Ajouter une ligne » pour commencer.
+        </p>
+      ) : null}
+      <ul className="space-y-2">
+        {items.map((it, i) => (
+          <li
+            key={i}
+            className="grid grid-cols-[1fr_auto_auto_auto] items-end gap-2 rounded-lg border border-brand-800 bg-brand-900 p-2"
+          >
+            <div>
+              <label className="label">Libellé</label>
+              <input
+                type="text"
+                value={it.label}
+                onChange={(e) => patch(i, { label: e.target.value })}
+                placeholder="Ex. Salon, chambre 1…"
+                className="input"
+              />
+            </div>
+            <div className="w-24">
+              <label className="label">Valeur</label>
+              <input
+                type="number"
+                step="0.01"
+                value={it.value === undefined ? "" : String(it.value)}
+                onChange={(e) =>
+                  patch(i, {
+                    value: e.target.value === "" ? "" : Number(e.target.value)
+                  })
+                }
+                className="input"
+              />
+            </div>
+            <div className="w-20">
+              <label className="label">Unité</label>
+              <input
+                type="text"
+                value={it.unit ?? ""}
+                onChange={(e) => patch(i, { unit: e.target.value })}
+                placeholder="ft²"
+                className="input"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => remove(i)}
+              className="mb-1 rounded-md p-1.5 text-white/40 hover:bg-rose-500/20 hover:text-rose-300"
+              aria-label="Retirer cette ligne"
+              title="Retirer"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </li>
+        ))}
+      </ul>
+      <button
+        type="button"
+        onClick={add}
+        className="w-full rounded-md border border-dashed border-brand-700 px-3 py-2 text-xs text-white/60 hover:border-accent-500 hover:text-accent-400"
+      >
+        + Ajouter une ligne
+      </button>
     </div>
   );
 }
