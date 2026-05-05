@@ -28,6 +28,10 @@ export type Template = {
   /** Field key used as the headline area for the card preview. */
   headlineField?: string;
   fields: TemplateField[];
+  /** Si true, le template n'a pas de champs prédéfinis : l'utilisateur
+   *  ajoute lui-même ses lignes (libellé + valeur + unité). Pratique
+   *  pour mesurer un appartement complet sans cocher de cases. */
+  custom?: boolean;
 };
 
 export const ROOM_TEMPLATES: Template[] = [
@@ -119,6 +123,13 @@ export const ROOM_TEMPLATES: Template[] = [
       { key: "demolition", label: "Démolition complète ?", type: "boolean" },
       { key: "permis_requis", label: "Permis requis ?", type: "boolean" }
     ]
+  },
+  {
+    id: "personnalise",
+    label: "Personnalisé",
+    icon: "✏️",
+    custom: true,
+    fields: []
   }
 ];
 
@@ -127,7 +138,17 @@ export function getTemplate(id: string | null | undefined): Template | null {
   return ROOM_TEMPLATES.find((t) => t.id === id) || null;
 }
 
-/** Return [{ field, value }] entries that have a non-empty value. */
+/** Une ligne d'un relevé personnalisé. */
+export type CustomMeasurementItem = {
+  label: string;
+  value: number | string;
+  unit?: string;
+};
+
+/** Return [{ field, value }] entries that have a non-empty value. Pour
+ *  les templates `custom`, on retourne plutôt les items saisis sous
+ *  forme de pseudo-fields (key = `__custom_${i}`) pour réutiliser le
+ *  rendu existant. */
 export function readTemplateValues(
   template: Template,
   json: string | null
@@ -138,6 +159,21 @@ export function readTemplateValues(
     data = JSON.parse(json) as Record<string, unknown>;
   } catch {
     return [];
+  }
+  if (template.custom) {
+    const items = Array.isArray(data.items)
+      ? (data.items as CustomMeasurementItem[])
+      : [];
+    return items
+      .filter((it) => it && it.label && (it.value !== undefined && it.value !== ""))
+      .map((it, i) => ({
+        field: {
+          key: `__custom_${i}`,
+          label: it.label,
+          unit: it.unit
+        } as TemplateField,
+        value: String(it.value)
+      }));
   }
   const out: Array<{ field: TemplateField; value: string }> = [];
   for (const f of template.fields) {
