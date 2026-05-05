@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Calendar as CalendarIcon,
   ChevronLeft,
@@ -98,29 +98,28 @@ const TYPE_LABELS: Record<string, string> = {
  */
 function projectColor(projectId: number | null | undefined): {
   hue: number;
-  bg: string; // pour la bande de fond (transparent)
-  border: string; // pour le contour
-  text: string; // pour le texte sur la bande
-  solid: string; // couleur pleine (pour les events ponctuels)
+  bg: string; // bande pleine, lisible sur fond clair ou sombre
+  border: string; // contour plus foncé
+  text: string; // texte sur la bande (blanc cassé pour contraste)
+  solid: string; // couleur pleine (events ponctuels, légende)
 } {
-  // Le 0 ou null tombe sur slate (gris) comme avant
   if (!projectId) {
     return {
       hue: 0,
-      bg: "rgba(100,116,139,0.25)",
-      border: "rgba(100,116,139,0.65)",
-      text: "rgba(226,232,240,0.95)",
-      solid: "rgb(100,116,139)"
+      bg: "rgb(71, 85, 105)", // slate-600
+      border: "rgb(51, 65, 85)", // slate-700
+      text: "#ffffff",
+      solid: "rgb(71, 85, 105)"
     };
   }
-  // 137.508 = 360 / phi → spread maximal des teintes
+  // 137.508 = 360 / phi → spread maximal des teintes (golden ratio)
   const hue = Math.floor((projectId * 137.508) % 360);
   return {
     hue,
-    bg: `hsla(${hue}, 65%, 45%, 0.28)`,
-    border: `hsla(${hue}, 70%, 55%, 0.7)`,
-    text: `hsl(${hue}, 80%, 80%)`,
-    solid: `hsl(${hue}, 65%, 55%)`
+    bg: `hsl(${hue}, 65%, 42%)`, // saturé, lisible sur blanc et noir
+    border: `hsl(${hue}, 70%, 32%)`,
+    text: "#ffffff",
+    solid: `hsl(${hue}, 65%, 50%)`
   };
 }
 
@@ -292,6 +291,23 @@ export default function AgendaPage() {
 
   // Modal state
   const [modal, setModal] = useState<AgendaEvent | { date: Date } | null>(null);
+
+  // Projets dont les phases / événements sont déployés dans la vue
+  // mois. Par défaut tout est replié — le calendrier ne montre que les
+  // bandes de chantier (« 🛠️ Cuisine Quévillon »). Click sur la bande
+  // → on ajoute le project_id au set → les phases/events de ce projet
+  // s'affichent. Re-click → on retire → tout se replie.
+  const [expandedProjects, setExpandedProjects] = useState<Set<number>>(
+    new Set()
+  );
+  const toggleProject = useCallback((projectId: number) => {
+    setExpandedProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+  }, []);
 
   // Capture le geste « back » mobile (swipe) quand la modal est ouverte :
   // au lieu de naviguer vers la page précédente (qui pourrait être
@@ -725,6 +741,8 @@ export default function AgendaPage() {
             multiDayEventsByDay={multiDayEventsByDay}
             projectsByDay={projectsByDay}
             projectHasTeam={projectHasTeam}
+            expandedProjects={expandedProjects}
+            onToggleProject={toggleProject}
             onDayClick={(d) => setModal({ date: d })}
             onEventClick={(e) =>
               e.event_type === "busy"
@@ -828,6 +846,8 @@ function MonthView({
   multiDayEventsByDay,
   projectsByDay,
   projectHasTeam,
+  expandedProjects,
+  onToggleProject,
   onDayClick,
   onEventClick
 }: {
@@ -837,6 +857,8 @@ function MonthView({
   multiDayEventsByDay: Map<string, AgendaEvent[]>;
   projectsByDay: Map<string, Project[]>;
   projectHasTeam: Map<number, boolean>;
+  expandedProjects: Set<number>;
+  onToggleProject: (projectId: number) => void;
   onDayClick: (d: Date) => void;
   onEventClick: (e: AgendaEvent) => void;
 }) {
@@ -889,6 +911,15 @@ function MonthView({
         }
       }
       for (const ev of multiDayEventsByDay.get(key) || []) {
+        // Si l'event est lié à un projet et que ce projet n'est PAS
+        // dépliée, on cache la bande individuelle — seule la bande
+        // chantier reste visible. Click sur la bande → expand.
+        if (
+          ev.project_id != null &&
+          !expandedProjects.has(ev.project_id)
+        ) {
+          continue;
+        }
         const ex = eventSpans.get(ev.id);
         if (!ex) {
           eventSpans.set(ev.id, { event: ev, startCol: i, endCol: i });
@@ -981,7 +1012,15 @@ function MonthView({
             {week.map((d, i) => {
               const inMonth = d.getMonth() === ref.getMonth();
               const isToday = sameDay(d, today);
-              const dayEvents = eventsByDay.get(d.toDateString()) || [];
+              const allDayEvents = eventsByDay.get(d.toDateString()) || [];
+              // Cache les events liés à un projet replié — seuls les
+              // events sans projet (réunions, RDV externes) ou ceux
+              // dont le projet est déplié restent visibles inline.
+              const dayEvents = allDayEvents.filter(
+                (e) =>
+                  e.project_id == null ||
+                  expandedProjects.has(e.project_id)
+              );
               return (
                 <div
                   key={i}
@@ -1058,18 +1097,23 @@ function MonthView({
                 // par golden ratio sur project_id). Le marqueur ⚠️
                 // signale toujours l'absence d'équipe assignée.
                 const c = projectColor(bar.project.id);
+                const expanded = expandedProjects.has(bar.project.id);
                 return (
-                  <Link
+                  <button
                     key={bar.key}
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    href={`/app/projets/${bar.project.id}` as any}
-                    onClick={(ev) => ev.stopPropagation()}
+                    type="button"
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      onToggleProject(bar.project.id);
+                    }}
                     title={
-                      hasTeam
-                        ? `Projet : ${bar.project.name}`
-                        : `Projet : ${bar.project.name} — aucune équipe assignée`
+                      (expanded
+                        ? "Cliquer pour replier"
+                        : "Cliquer pour voir les phases & événements") +
+                      ` — ${bar.project.name}` +
+                      (hasTeam ? "" : " · aucune équipe assignée")
                     }
-                    className="absolute z-[2] flex items-center overflow-hidden rounded-md border px-1.5 text-[10px] font-medium shadow-sm"
+                    className="absolute z-[2] flex items-center gap-1 overflow-hidden rounded-md border px-1.5 text-left text-[10px] font-bold shadow-sm transition hover:opacity-90"
                     style={{
                       ...style,
                       backgroundColor: c.bg,
@@ -1077,10 +1121,13 @@ function MonthView({
                       color: c.text
                     }}
                   >
+                    <span className="flex-shrink-0">
+                      {expanded ? "▼" : "▶"}
+                    </span>
                     <span className="truncate">
                       {hasTeam ? "🛠️" : "⚠️"} {bar.project.name}
                     </span>
-                  </Link>
+                  </button>
                 );
               }
 
