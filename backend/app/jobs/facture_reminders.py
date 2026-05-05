@@ -31,6 +31,8 @@ from app.db.session import AsyncSessionLocal
 from app.integrations.email_graph import get_mailer
 from app.models.client import Client
 from app.models.facture import Facture, FactureStatus
+from app.models.facture_item import FactureItem
+from app.models.payment import Payment
 from app.services.facture_pdf import render_facture_pdf
 from app.integrations.email_graph import EmailAttachment
 
@@ -128,6 +130,49 @@ async def _client_for(db, client_id: Optional[int]) -> Optional[Client]:
     ).scalar_one_or_none()
 
 
+async def _compute_balance(db, fa: Facture) -> float:
+    """Calcule le solde dû d'une facture en LIVE :
+    - subtotal = somme des items (qty × unit_price) ou it.total si présent
+    - total TTC = subtotal × 1,14975 (TPS 5 % + TVQ 9,975 %)
+    - balance = total TTC − somme des paiements
+
+    On ne se fie PAS au champ `Facture.total` qui peut être 0/null si
+    les items ont été ajoutés sans recalculer la facture."""
+    from sqlalchemy import func as _func
+
+    items = (
+        await db.execute(
+            select(FactureItem).where(FactureItem.facture_id == fa.id)
+        )
+    ).scalars().all()
+    subtotal = 0.0
+    for it in items:
+        if it.total is not None:
+            subtotal += float(it.total)
+        else:
+            subtotal += float(it.quantity) * float(it.unit_price)
+    total_ttc = round(subtotal * 1.14975, 2)
+
+    # Si le champ Facture.total est plus précis (taxes pré-calculées
+    # avec règles TPS/TVQ par item), on le préfère. Sinon, fallback
+    # sur le calcul live.
+    if fa.total is not None and float(fa.total) > 0:
+        total_ttc = float(fa.total)
+
+    paid = float(
+        (
+            await db.execute(
+                select(_func.coalesce(_func.sum(Payment.amount), 0)).where(
+                    Payment.facture_id == fa.id
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    balance = round(max(0.0, total_ttc - paid), 2)
+    return balance
+
+
 async def run() -> dict:
     """Walk all unpaid factures, flip overdue and send the right reminder."""
     mailer = get_mailer()
@@ -193,7 +238,10 @@ async def run() -> dict:
                     if pdf_bytes
                     else None
                 )
-                total_val = float(fa.total or 0)
+                # Solde dû LIVE (items + taxes − paiements) — évite
+                # d'envoyer « 0,00 $ » quand fa.total n'a pas été
+                # recalculé après l'ajout d'items.
+                total_val = await _compute_balance(db, fa)
                 await mailer.send(
                     to=[to_email],
                     cc=[settings.mail_from_email]
