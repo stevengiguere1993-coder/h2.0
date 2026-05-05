@@ -45,6 +45,15 @@ class AgendaEvent(Base, TimestampUpdateMixin):
     project_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Phase de chantier liée (ex. « Livraison conteneur 8h » sous la
+    # phase « Démolition »). Permet d'afficher l'event sous la phase
+    # dans l'onglet Planification du projet, et dans les calendriers
+    # agenda. Plus de doublon entre événements et planification.
+    phase_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("project_phases.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     assignee_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("employes.id", ondelete="SET NULL"), nullable=True, index=True
     )
