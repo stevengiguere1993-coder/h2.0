@@ -242,6 +242,7 @@ async def init_db() -> None:
                 "VARCHAR(16) NOT NULL DEFAULT 'construction'",
             ),
             ("agenda_events", "lead_id", "INTEGER"),
+            ("agenda_events", "phase_id", "INTEGER"),
             ("agenda_events", "assignee_user_id", "INTEGER"),
             # EvalWeb : propriétaires scrapés à la demande, cachés
             # par matricule pour éviter les re-scrapes.

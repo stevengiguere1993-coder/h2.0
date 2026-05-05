@@ -177,6 +177,7 @@ class AgendaEventCreate(BaseModel):
     all_day: bool = False
     scope: str = Field(default="construction", pattern="^(construction|prospection)$")
     project_id: Optional[int] = None
+    phase_id: Optional[int] = None
     assignee_id: Optional[int] = None
     contact_request_id: Optional[int] = None
     lead_id: Optional[int] = None
@@ -195,6 +196,7 @@ class AgendaEventUpdate(BaseModel):
         default=None, pattern="^(construction|prospection)$"
     )
     project_id: Optional[int] = None
+    phase_id: Optional[int] = None
     assignee_id: Optional[int] = None
     contact_request_id: Optional[int] = None
     lead_id: Optional[int] = None
@@ -212,6 +214,7 @@ class AgendaEventRead(_Base):
     all_day: bool
     scope: str = "construction"
     project_id: Optional[int]
+    phase_id: Optional[int] = None
     assignee_id: Optional[int]
     contact_request_id: Optional[int] = None
     lead_id: Optional[int] = None

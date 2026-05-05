@@ -2773,8 +2773,13 @@ function ChantierAgendaTab({
   const [fTime, setFTime] = useState("08:00");
   const [fAllDay, setFAllDay] = useState(false);
   const [fDurationDays, setFDurationDays] = useState("1");
+  const [fPhaseId, setFPhaseId] = useState<string>(""); // event linké à phase
   const [fAssigneeIds, setFAssigneeIds] = useState<number[]>([]);
   const [fDescription, setFDescription] = useState("");
+  // Phases du projet pour le sélecteur (chargées avec les events).
+  const [projectPhases, setProjectPhases] = useState<
+    Array<{ id: number; name: string }>
+  >([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2802,6 +2807,11 @@ function ChantierAgendaTab({
           end_date: string | null;
         };
         const phs = (await phRes.json()) as Phase[];
+        // Mémorise la liste {id, name} pour le sélecteur de phase
+        // dans le formulaire de création d'event.
+        setProjectPhases(
+          phs.map((p) => ({ id: p.id, name: p.name }))
+        );
         phaseEvents = phs
           .filter((p) => p.start_date)
           .map((p) => ({
@@ -2840,6 +2850,7 @@ function ChantierAgendaTab({
     setFTime("08:00");
     setFAllDay(false);
     setFDurationDays("1");
+    setFPhaseId("");
     setFAssigneeIds([]);
     setFDescription("");
   }
@@ -2896,6 +2907,7 @@ function ChantierAgendaTab({
         // aucun assignee → un seul event sans assignee.
         const targets =
           fAssigneeIds.length > 0 ? fAssigneeIds : [null];
+        const phaseLink = fPhaseId ? Number(fPhaseId) : null;
         for (const assigneeId of targets) {
           const res = await authedFetch(`/api/v1/agenda`, {
             method: "POST",
@@ -2905,6 +2917,7 @@ function ChantierAgendaTab({
               start_at: startIso,
               all_day: false,
               project_id: projectId,
+              phase_id: phaseLink,
               assignee_id: assigneeId,
               event_type: "chantier"
             })
@@ -3084,9 +3097,32 @@ function ChantierAgendaTab({
             multi-jour visible dans la Planification ET dans tous les
             calendriers agenda.{" "}
             <strong>Événement</strong> ponctuel (case décochée) =
-            moment précis (livraison, inspection…) visible dans les
-            calendriers agenda.
+            moment précis (livraison, inspection…). Tu peux le rattacher
+            à une phase existante via le sélecteur ci-dessous.
           </p>
+          {!fAllDay && projectPhases.length > 0 ? (
+            <div>
+              <label className="label">
+                Rattacher à une phase (optionnel)
+              </label>
+              <select
+                value={fPhaseId}
+                onChange={(e) => setFPhaseId(e.target.value)}
+                className="input"
+              >
+                <option value="">— Aucune phase —</option>
+                {projectPhases.map((p) => (
+                  <option key={p.id} value={String(p.id)}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[10px] text-white/40">
+                L&apos;événement apparaîtra sous cette phase dans
+                l&apos;onglet Planification, en plus de la liste agenda.
+              </p>
+            </div>
+          ) : null}
           <div>
             <label className="label">Assigné(s)</label>
             <MultiSelectDropdown
