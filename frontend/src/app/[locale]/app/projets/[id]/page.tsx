@@ -110,6 +110,24 @@ export default function ProjectDetailPage() {
   const [dueInDays, setDueInDays] = useState("30");
   const [tab, setTab] = useState<TabId>("summary");
 
+  // Si l'URL contient un fragment (#planification, #agenda…) on bascule
+  // sur ce tab au mount. Permet le deep-link depuis l'agenda chantier
+  // (click sur une phase virtuelle ouvre /app/projets/{id}#planification).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const hash = window.location.hash.replace(/^#/, "") as TabId;
+    const valid: TabId[] = [
+      "summary",
+      "planification",
+      "agenda",
+      "achats",
+      "photos",
+      "tasks",
+      "finances"
+    ];
+    if (valid.includes(hash)) setTab(hash);
+  }, []);
+
   // form state
   const [name, setName] = useState("");
   const [clientId, setClientId] = useState("");
@@ -452,7 +470,12 @@ export default function ProjectDetailPage() {
                 <button
                   key={t.id}
                   type="button"
-                  onClick={() => setTab(t.id)}
+                  onClick={() => {
+                    setTab(t.id);
+                    if (typeof window !== "undefined") {
+                      window.history.replaceState(null, "", `#${t.id}`);
+                    }
+                  }}
                   className={`px-4 py-2.5 text-sm font-medium transition ${
                     tab === t.id
                       ? "border-b-2 border-accent-500 text-white"
@@ -493,7 +516,16 @@ export default function ProjectDetailPage() {
               ) : tab === "planification" ? (
                 <PlanificationTab projectId={id} />
               ) : tab === "agenda" ? (
-                <ChantierAgendaTab projectId={id} projectName={p?.name || ""} />
+                <ChantierAgendaTab
+                  projectId={id}
+                  projectName={p?.name || ""}
+                  onOpenPhase={() => {
+                    setTab("planification");
+                    if (typeof window !== "undefined") {
+                      window.history.replaceState(null, "", "#planification");
+                    }
+                  }}
+                />
               ) : tab === "achats" ? (
                 <ProjectAchatsTab projectId={id} />
               ) : tab === "finances" ? (
@@ -2604,10 +2636,12 @@ type ChantierEvent = {
 
 function ChantierAgendaTab({
   projectId,
-  projectName
+  projectName,
+  onOpenPhase
 }: {
   projectId: number;
   projectName: string;
+  onOpenPhase: () => void;
 }) {
   const confirm = useConfirm();
   const [events, setEvents] = useState<ChantierEvent[]>([]);
@@ -2946,6 +2980,7 @@ function ChantierAgendaTab({
           events={events}
           employes={employes}
           onRemoveEvent={removeEvent}
+          onOpenPhase={onOpenPhase}
         />
       ) : (
         <>
@@ -2965,6 +3000,7 @@ function ChantierAgendaTab({
                     event={e}
                     projectName={projectName}
                     onRemove={() => removeEvent(e.id)}
+                    onClickPhase={onOpenPhase}
                   />
                 ))}
               </ul>
@@ -2983,6 +3019,7 @@ function ChantierAgendaTab({
                     event={e}
                     projectName={projectName}
                     onRemove={() => removeEvent(e.id)}
+                    onClickPhase={onOpenPhase}
                   />
                 ))}
               </ul>
@@ -2997,11 +3034,13 @@ function ChantierAgendaTab({
 function EventRow({
   event,
   projectName,
-  onRemove
+  onRemove,
+  onClickPhase
 }: {
   event: ChantierEvent;
   projectName: string;
   onRemove: () => void;
+  onClickPhase?: () => void;
 }) {
   const s = new Date(event.start_at);
   const dayFmt = s.toLocaleDateString("fr-CA", {
@@ -3016,8 +3055,14 @@ function EventRow({
         hour: "2-digit",
         minute: "2-digit"
       });
+  const isPhase = event.event_type === "phase";
   return (
-    <li className="flex items-start justify-between gap-3 rounded-xl border border-brand-800 bg-brand-900 p-3">
+    <li
+      className={`flex items-start justify-between gap-3 rounded-xl border border-brand-800 bg-brand-900 p-3 ${
+        isPhase ? "cursor-pointer hover:border-accent-500" : ""
+      }`}
+      onClick={isPhase && onClickPhase ? onClickPhase : undefined}
+    >
       <div className="min-w-0">
         <p className="text-sm font-semibold text-white">{event.title}</p>
         <p className="mt-0.5 text-xs text-white/60">
@@ -3030,14 +3075,16 @@ function EventRow({
           {event.event_type} · {projectName}
         </span>
       </div>
-      <button
-        type="button"
-        onClick={onRemove}
-        className="rounded p-1 text-white/40 hover:text-rose-300"
-        aria-label="Supprimer"
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </button>
+      {isPhase ? null : (
+        <button
+          type="button"
+          onClick={onRemove}
+          className="rounded p-1 text-white/40 hover:text-rose-300"
+          aria-label="Supprimer"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      )}
     </li>
   );
 }
@@ -3052,11 +3099,13 @@ function EventRow({
 function ChantierGantt({
   events,
   employes,
-  onRemoveEvent
+  onRemoveEvent,
+  onOpenPhase
 }: {
   events: ChantierEvent[];
   employes: Array<{ id: number; full_name: string }>;
   onRemoveEvent: (id: number) => void;
+  onOpenPhase: () => void;
 }) {
   const empById = useMemo(() => {
     const m = new Map<number, string>();
@@ -3189,18 +3238,27 @@ function ChantierGantt({
             return (
               <li
                 key={e.id}
-                className="grid grid-cols-[180px_1fr] items-center gap-3"
+                className={`grid grid-cols-[180px_1fr] items-center gap-3 ${
+                  e.event_type === "phase"
+                    ? "cursor-pointer rounded hover:bg-accent-500/5"
+                    : ""
+                }`}
+                onClick={
+                  e.event_type === "phase" ? onOpenPhase : undefined
+                }
               >
                 <div className="flex min-w-0 items-start gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => onRemoveEvent(e.id)}
-                    className="mt-0.5 flex-shrink-0 rounded p-0.5 text-white/30 hover:text-rose-300"
-                    aria-label="Supprimer"
-                    title="Supprimer"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
+                  {e.event_type === "phase" ? null : (
+                    <button
+                      type="button"
+                      onClick={() => onRemoveEvent(e.id)}
+                      className="mt-0.5 flex-shrink-0 rounded p-0.5 text-white/30 hover:text-rose-300"
+                      aria-label="Supprimer"
+                      title="Supprimer"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
                   <div className="min-w-0">
                     <p className="truncate text-xs font-semibold text-white">
                       {e.title}

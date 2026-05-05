@@ -643,8 +643,12 @@ export default function AgendaPage() {
             events={filteredEvents}
             onSlotClick={(d) => setModal({ date: d })}
             onEventClick={(e) =>
-              e.event_type === "busy" || e.event_type === "phase"
+              e.event_type === "busy"
                 ? null
+                : e.event_type === "phase" && e.project_id
+                ? window.location.assign(
+                    `/app/projets/${e.project_id}#planification`
+                  )
                 : setModal(e)
             }
           />
@@ -658,8 +662,12 @@ export default function AgendaPage() {
             projectHasTeam={projectHasTeam}
             onDayClick={(d) => setModal({ date: d })}
             onEventClick={(e) =>
-              e.event_type === "busy" || e.event_type === "phase"
+              e.event_type === "busy"
                 ? null
+                : e.event_type === "phase" && e.project_id
+                ? window.location.assign(
+                    `/app/projets/${e.project_id}#planification`
+                  )
                 : setModal(e)
             }
           />
@@ -667,8 +675,12 @@ export default function AgendaPage() {
           <ListView
             events={filteredEvents}
             onEventClick={(e) =>
-              e.event_type === "busy" || e.event_type === "phase"
+              e.event_type === "busy"
                 ? null
+                : e.event_type === "phase" && e.project_id
+                ? window.location.assign(
+                    `/app/projets/${e.project_id}#planification`
+                  )
                 : setModal(e)
             }
           />
@@ -682,8 +694,12 @@ export default function AgendaPage() {
             projects={projects}
             employes={employes}
             onEventClick={(e) =>
-              e.event_type === "busy" || e.event_type === "phase"
+              e.event_type === "busy"
                 ? null
+                : e.event_type === "phase" && e.project_id
+                ? window.location.assign(
+                    `/app/projets/${e.project_id}#planification`
+                  )
                 : setModal(e)
             }
           />
