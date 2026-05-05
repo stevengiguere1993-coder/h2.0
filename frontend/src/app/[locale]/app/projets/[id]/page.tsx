@@ -2772,6 +2772,7 @@ function ChantierAgendaTab({
   });
   const [fTime, setFTime] = useState("08:00");
   const [fAllDay, setFAllDay] = useState(false);
+  const [fDurationDays, setFDurationDays] = useState("1");
   const [fAssigneeIds, setFAssigneeIds] = useState<number[]>([]);
   const [fDescription, setFDescription] = useState("");
 
@@ -2838,6 +2839,7 @@ function ChantierAgendaTab({
     setFTitle("");
     setFTime("08:00");
     setFAllDay(false);
+    setFDurationDays("1");
     setFAssigneeIds([]);
     setFDescription("");
   }
@@ -2852,33 +2854,65 @@ function ChantierAgendaTab({
       setError("La date est requise.");
       return;
     }
-    const startIso =
-      fAllDay || !fTime
-        ? new Date(`${fDate}T00:00:00`).toISOString()
-        : new Date(`${fDate}T${fTime}:00`).toISOString();
     setCreating(true);
     setError(null);
     try {
-      // Multi-assignees : crée 1 event par personne sélectionnée
-      // (le backend ne supporte qu'un assignee_id par event). Si
-      // aucun assignee → un seul event sans assignee.
-      const targets = fAssigneeIds.length > 0 ? fAssigneeIds : [null];
-      for (const assigneeId of targets) {
-        const res = await authedFetch(`/api/v1/agenda`, {
-          method: "POST",
-          body: JSON.stringify({
-            title: fTitle.trim(),
-            description: fDescription.trim() || null,
-            start_at: startIso,
-            all_day: fAllDay,
-            project_id: projectId,
-            assignee_id: assigneeId,
-            event_type: "chantier"
-          })
-        });
+      // ROUTING UNIFIÉ : pour éviter le doublon entre planification
+      // et agenda chantier, on crée la BONNE entité selon le contexte :
+      //
+      // - all_day coché (multi-jour ou journée entière) → PHASE de
+      //   projet, visible dans l'onglet Planification ET (comme event
+      //   virtuel) dans tous les calendriers agenda.
+      //
+      // - all_day décoché (heure spécifique, ex. « Livraison 8h ») →
+      //   AgendaEvent ponctuel comme avant.
+      //
+      // Une seule création, visible partout — plus besoin de doubler.
+      if (fAllDay) {
+        const dur = Math.max(1, Number(fDurationDays) || 1);
+        const res = await authedFetch(
+          `/api/v1/projects/${projectId}/phases`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              name: fTitle.trim(),
+              start_date: fDate,
+              duration_days: dur,
+              assignee_employe_ids:
+                fAssigneeIds.length > 0 ? fAssigneeIds : null
+            })
+          }
+        );
         if (!res.ok) {
           const txt = await res.text();
           throw new Error(txt.slice(0, 200));
+        }
+      } else {
+        const startIso = new Date(
+          `${fDate}T${fTime || "08:00"}:00`
+        ).toISOString();
+        // Multi-assignees : crée 1 event par personne sélectionnée
+        // (le backend ne supporte qu'un assignee_id par event). Si
+        // aucun assignee → un seul event sans assignee.
+        const targets =
+          fAssigneeIds.length > 0 ? fAssigneeIds : [null];
+        for (const assigneeId of targets) {
+          const res = await authedFetch(`/api/v1/agenda`, {
+            method: "POST",
+            body: JSON.stringify({
+              title: fTitle.trim(),
+              description: fDescription.trim() || null,
+              start_at: startIso,
+              all_day: false,
+              project_id: projectId,
+              assignee_id: assigneeId,
+              event_type: "chantier"
+            })
+          });
+          if (!res.ok) {
+            const txt = await res.text();
+            throw new Error(txt.slice(0, 200));
+          }
         }
       }
       resetForm();
@@ -3010,16 +3044,29 @@ function ChantierAgendaTab({
                 required
               />
             </div>
-            <div>
-              <label className="label">Heure</label>
-              <input
-                type="time"
-                value={fTime}
-                onChange={(e) => setFTime(e.target.value)}
-                disabled={fAllDay}
-                className="input disabled:opacity-50"
-              />
-            </div>
+            {fAllDay ? (
+              <div>
+                <label className="label">Durée (jours)</label>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={fDurationDays}
+                  onChange={(e) => setFDurationDays(e.target.value)}
+                  className="input"
+                />
+              </div>
+            ) : (
+              <div>
+                <label className="label">Heure</label>
+                <input
+                  type="time"
+                  value={fTime}
+                  onChange={(e) => setFTime(e.target.value)}
+                  className="input"
+                />
+              </div>
+            )}
             <div className="flex items-end">
               <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-brand-800 bg-brand-900 px-3 py-2.5 text-sm text-white">
                 <input
@@ -3028,10 +3075,18 @@ function ChantierAgendaTab({
                   onChange={(e) => setFAllDay(e.target.checked)}
                   className="h-4 w-4 accent-accent-500"
                 />
-                <span>Journée complète</span>
+                <span>Phase de chantier (journée complète)</span>
               </label>
             </div>
           </div>
+          <p className="text-[11px] text-white/50">
+            <strong>Phase</strong> (case cochée) = bloc de travail
+            multi-jour visible dans la Planification ET dans tous les
+            calendriers agenda.{" "}
+            <strong>Événement</strong> ponctuel (case décochée) =
+            moment précis (livraison, inspection…) visible dans les
+            calendriers agenda.
+          </p>
           <div>
             <label className="label">Assigné(s)</label>
             <MultiSelectDropdown
