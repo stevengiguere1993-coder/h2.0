@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import {
   AlertCircle,
@@ -41,6 +41,9 @@ export function HelpButton({
   const [bugError, setBugError] = useState<string | null>(null);
 
   const pathname = usePathname() || "";
+  // Référence sur le bloc « Réponse » pour scroller dessus dès qu'elle
+  // arrive (sur mobile la réponse pourrait apparaître hors écran).
+  const answerRef = useRef<HTMLDivElement | null>(null);
 
   // ESC pour fermer
   useEffect(() => {
@@ -51,6 +54,13 @@ export function HelpButton({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
+
+  // Scroll automatique sur la réponse quand elle est prête.
+  useEffect(() => {
+    if (answer && answerRef.current) {
+      answerRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [answer]);
 
   // Reset des messages quand on change d'onglet
   function switchTab(next: Tab) {
@@ -246,13 +256,21 @@ export function HelpButton({
                     )}
                     Envoyer
                   </button>
+                  {askLoading ? (
+                    <p className="rounded-md border border-brand-800 bg-brand-900 px-3 py-2 text-xs text-white/60">
+                      L&apos;assistant réfléchit… (quelques secondes)
+                    </p>
+                  ) : null}
                   {askError ? (
                     <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
                       {askError}
                     </p>
                   ) : null}
                   {answer ? (
-                    <div className="rounded-md border border-brand-800 bg-brand-900 px-3 py-3 text-sm text-white/85 whitespace-pre-wrap">
+                    <div
+                      ref={answerRef}
+                      className="rounded-md border border-brand-800 bg-brand-900 px-3 py-3 text-sm text-white/85 whitespace-pre-wrap"
+                    >
                       {answer}
                     </div>
                   ) : null}

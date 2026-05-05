@@ -10,6 +10,7 @@
   acceptés », l'agent fetch et marque resolved après livraison.
 """
 
+import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -20,6 +21,8 @@ from sqlalchemy import select, update
 from app.api.deps import CurrentUser, DBSession, RequireOwner
 from app.core.config import settings
 from app.models.help_request import HelpRequest, HelpRequestKind, HelpRequestStatus
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/help", tags=["help"])
 
@@ -133,11 +136,16 @@ async def ask(
         answer_parts = [b.text for b in msg.content if b.type == "text"]
         answer = "\n".join(answer_parts).strip() or "(réponse vide)"
     except anthropic.APIError as e:
+        # Log côté serveur pour qu'on puisse diagnostiquer (model ID
+        # invalide, quota épuisé, etc.). Le frontend reçoit le détail
+        # tronqué pour informer l'utilisateur.
+        log.exception("anthropic_api_error: %s", e)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Claude API : {e.message[:200]}",
+            detail=f"Claude API : {str(e)[:200]}",
         )
     except Exception as e:  # pragma: no cover
+        log.exception("help_ask_failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erreur assistant : {str(e)[:200]}",
