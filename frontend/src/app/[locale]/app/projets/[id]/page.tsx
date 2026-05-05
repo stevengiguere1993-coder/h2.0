@@ -131,7 +131,9 @@ export default function ProjectDetailPage() {
   // form state
   const [name, setName] = useState("");
   const [clientId, setClientId] = useState("");
-  const [clients, setClients] = useState<Array<{ id: number; name: string }>>([]);
+  const [clients, setClients] = useState<
+    Array<{ id: number; name: string; address?: string | null }>
+  >([]);
   const [address, setAddress] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -167,7 +169,13 @@ export default function ProjectDetailPage() {
         // Load the client list in parallel so the selector has options.
         const cs = await authedFetch("/api/v1/clients?limit=500");
         if (cs.ok && !cancelled) {
-          setClients((await cs.json()) as Array<{ id: number; name: string }>);
+          setClients(
+            (await cs.json()) as Array<{
+              id: number;
+              name: string;
+              address?: string | null;
+            }>
+          );
         }
       } catch {
         if (!cancelled) setError("Projet introuvable.");
@@ -748,7 +756,7 @@ function SummaryTab(props: {
   onName: (v: string) => void;
   clientId: string;
   onClientId: (v: string) => void;
-  clients: Array<{ id: number; name: string }>;
+  clients: Array<{ id: number; name: string; address?: string | null }>;
   address: string;
   onAddress: (v: string) => void;
   startDate: string;
@@ -805,12 +813,45 @@ function SummaryTab(props: {
             </p>
           </div>
           <div>
-            <label className="label" htmlFor="p_address">Adresse du chantier</label>
+            <div className="flex items-center justify-between gap-2">
+              <label className="label" htmlFor="p_address">
+                Adresse du chantier
+              </label>
+              {(() => {
+                const selectedClient = props.clients.find(
+                  (c) => String(c.id) === props.clientId
+                );
+                const clientAddress = selectedClient?.address?.trim() || "";
+                if (!clientAddress) return null;
+                if (props.address.trim() === clientAddress) {
+                  return (
+                    <span className="text-[10px] uppercase tracking-wider text-emerald-400">
+                      ✓ Adresse du client
+                    </span>
+                  );
+                }
+                return (
+                  <button
+                    type="button"
+                    onClick={() => props.onAddress(clientAddress)}
+                    className="text-[10px] uppercase tracking-wider text-accent-400 underline decoration-dotted hover:text-accent-300"
+                    title={`Importer : ${clientAddress}`}
+                  >
+                    ↩ Utiliser l&apos;adresse du client
+                  </button>
+                );
+              })()}
+            </div>
             <AddressInput
               id="p_address"
               value={props.address}
               onChange={props.onAddress}
             />
+            <p className="mt-1 text-[11px] text-white/50">
+              Adresse du chantier (peut différer de l&apos;adresse du
+              client). Tape pour autocomplete ou clique sur «&nbsp;Utiliser
+              l&apos;adresse du client&nbsp;» pour importer celle-ci.
+            </p>
           </div>
         </div>
       </section>
