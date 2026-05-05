@@ -1953,10 +1953,25 @@ function addDays(iso: string, days: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+type LinkedEvent = {
+  id: number;
+  title: string;
+  start_at: string;
+  all_day: boolean;
+  phase_id: number | null;
+  project_id: number | null;
+  assignee_id: number | null;
+  event_type: string;
+};
+
 function PlanificationTab({ projectId }: { projectId: number }) {
   const confirm = useConfirm();
   const [phases, setPhases] = useState<Phase[]>([]);
   const [tasks, setTasks] = useState<PhaseTask[]>([]);
+  // Events ponctuels liés au projet ET rattachés à une phase précise.
+  // Affichés inline sous leur phase (« Livraison conteneur 8h » sous
+  // « Démolition »).
+  const [phaseEvents, setPhaseEvents] = useState<LinkedEvent[]>([]);
   const [employes, setEmployes] = useState<
     Array<{ id: number; full_name: string }>
   >([]);
@@ -1971,15 +1986,27 @@ function PlanificationTab({ projectId }: { projectId: number }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [phRes, tRes, eRes, sRes] = await Promise.all([
+      const [phRes, tRes, eRes, sRes, agRes] = await Promise.all([
         authedFetch(`/api/v1/projects/${projectId}/phases`),
         authedFetch(`/api/v1/projects/${projectId}/tasks`),
         authedFetch(`/api/v1/employes?limit=200`),
-        authedFetch(`/api/v1/sous-traitants?limit=200`)
+        authedFetch(`/api/v1/sous-traitants?limit=200`),
+        authedFetch(`/api/v1/agenda?limit=500`)
       ]);
       if (!phRes.ok) throw new Error();
       setPhases((await phRes.json()) as Phase[]);
       if (tRes.ok) setTasks((await tRes.json()) as PhaseTask[]);
+      if (agRes.ok) {
+        const all = (await agRes.json()) as LinkedEvent[];
+        // Garde seulement les events liés au projet ET rattachés à
+        // une phase. Les events sans phase apparaissent dans l'onglet
+        // Agenda chantier mais pas ici.
+        setPhaseEvents(
+          all.filter(
+            (e) => e.project_id === projectId && e.phase_id != null
+          )
+        );
+      }
       if (eRes.ok)
         setEmployes(
           (await eRes.json()) as Array<{ id: number; full_name: string }>
@@ -2337,6 +2364,9 @@ function PlanificationTab({ projectId }: { projectId: number }) {
               count={phases.length}
               projectId={projectId}
               tasks={tasks.filter((t) => t.phase_id === ph.id)}
+              linkedEvents={phaseEvents.filter(
+                (e) => e.phase_id === ph.id
+              )}
               employes={employes}
               sousTraitants={sousTraitants}
               busyPhase={busyPhase === ph.id}
@@ -2411,6 +2441,7 @@ function PhaseCard({
   count,
   projectId,
   tasks,
+  linkedEvents,
   employes,
   sousTraitants,
   busyPhase,
@@ -2430,6 +2461,7 @@ function PhaseCard({
   sousTraitants: Array<{ id: number; full_name: string; trade?: string | null }>;
   count: number;
   tasks: PhaseTask[];
+  linkedEvents: LinkedEvent[];
   busyPhase: boolean;
   busyTask: number | "new" | null;
   onPatch: (patch: Partial<Phase>) => void;
@@ -2653,6 +2685,53 @@ function PhaseCard({
             Aucune tâche dans cette phase.
           </p>
         )}
+
+        {/* Événements ponctuels rattachés à cette phase (Livraison
+            8h, Inspection 14h…). Lien vers l'agenda chantier pour
+            modifier. */}
+        {linkedEvents.length > 0 ? (
+          <div className="mt-4 border-t border-brand-800 pt-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-accent-300/70">
+              📅 Événements rattachés ({linkedEvents.length})
+            </p>
+            <ul className="mt-1.5 space-y-1">
+              {linkedEvents
+                .slice()
+                .sort(
+                  (a, b) =>
+                    new Date(a.start_at).getTime() -
+                    new Date(b.start_at).getTime()
+                )
+                .map((e) => {
+                  const d = new Date(e.start_at);
+                  const dayFmt = d.toLocaleDateString("fr-CA", {
+                    weekday: "short",
+                    day: "numeric",
+                    month: "short"
+                  });
+                  const timeFmt = e.all_day
+                    ? "Journée"
+                    : d.toLocaleTimeString("fr-CA", {
+                        hour: "2-digit",
+                        minute: "2-digit"
+                      });
+                  return (
+                    <li
+                      key={e.id}
+                      className="flex items-center gap-2 rounded-md border border-brand-800 bg-brand-950/50 px-2 py-1.5 text-xs"
+                    >
+                      <span className="text-white/40 tabular-nums">
+                        {dayFmt} · {timeFmt}
+                      </span>
+                      <span className="flex-1 truncate text-white/90">
+                        {e.title}
+                      </span>
+                    </li>
+                  );
+                })}
+            </ul>
+          </div>
+        ) : null}
       </div>
     </li>
   );
