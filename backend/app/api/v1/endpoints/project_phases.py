@@ -19,7 +19,7 @@ et `assignee_sous_traitant_ids` (listes). Les anciens champs scalaires
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, status
@@ -40,6 +40,8 @@ class PhaseCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     position: int = Field(default=0, ge=0)
     start_date: Optional[date] = None
+    # Heure de début dans la journée. NULL = phase « journée complète ».
+    start_time: Optional[time] = None
     # Décimal pour exprimer des heures (ex. 0.5 = ½ journée = 4 h).
     duration_days: Optional[float] = Field(default=None, ge=0, le=3650)
     notes: Optional[str] = None
@@ -55,6 +57,7 @@ class PhaseUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     position: Optional[int] = Field(default=None, ge=0)
     start_date: Optional[date] = None
+    start_time: Optional[time] = None
     # Décimal pour exprimer des heures (ex. 0.5 = ½ journée = 4 h).
     duration_days: Optional[float] = Field(default=None, ge=0, le=3650)
     notes: Optional[str] = None
@@ -71,6 +74,7 @@ class PhaseRead(BaseModel):
     name: str
     position: int
     start_date: Optional[date]
+    start_time: Optional[time] = None
     duration_days: Optional[float]
     notes: Optional[str]
     # Champs scalaires legacy — renseignés au « primary » assignee
@@ -156,6 +160,7 @@ def _phase_read(
         name=ph.name,
         position=ph.position,
         start_date=ph.start_date,
+        start_time=ph.start_time,
         duration_days=ph.duration_days,
         notes=ph.notes,
         assignee_employe_id=primary_emp,
@@ -298,6 +303,7 @@ async def create_phase(
         name=data.name.strip(),
         position=pos,
         start_date=data.start_date,
+        start_time=data.start_time,
         duration_days=data.duration_days,
         notes=(data.notes.strip() if data.notes else None),
         assignee_employe_id=(emp_list[0] if emp_list else None),

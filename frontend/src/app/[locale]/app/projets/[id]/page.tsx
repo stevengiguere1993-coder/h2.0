@@ -1923,6 +1923,9 @@ type Phase = {
   name: string;
   position: number;
   start_date: string | null;
+  // "HH:MM:SS" si la phase démarre à une heure précise (créneau dans
+  // la journée). NULL = phase « journée complète ».
+  start_time: string | null;
   duration_days: number | null;
   notes: string | null;
   assignee_employe_id: number | null;
@@ -2474,39 +2477,116 @@ function PhaseCard({
 }) {
   const [name, setName] = useState(phase.name);
   const [startDate, setStartDate] = useState(phase.start_date || "");
-  // Décompose duration_days en jours entiers + heures (0-7) pour le
-  // formulaire. Convention : 1 journée de travail = 8 h. Ex. 1.5 →
-  // 1 j + 4 h. Ex. 0.5 → 0 j + 4 h.
-  const splitDuration = (d: number | null): { days: string; hours: string } => {
-    if (d == null) return { days: "", hours: "" };
-    const whole = Math.floor(d);
-    const fraction = d - whole;
-    const h = Math.round(fraction * 8);
-    return { days: String(whole), hours: h > 0 ? String(h) : "" };
+  // Mode « journée complète » (durée en jours entiers, pas d'heure
+  // précise) vs créneau horaire (start + end dans la même journée).
+  // L'état initial est dérivé du modèle : si start_time est défini,
+  // on est en mode créneau ; sinon journée complète.
+  const initFullDay = phase.start_time == null;
+  const [fullDay, setFullDay] = useState(initFullDay);
+  // Mode journée complète : nombre de jours.
+  const [daysPart, setDaysPart] = useState(
+    initFullDay && phase.duration_days != null
+      ? String(Math.max(1, Math.ceil(phase.duration_days)))
+      : "1"
+  );
+  // Mode créneau : heure début + heure fin (HH:MM).
+  const trimSec = (t: string | null) => (t ? t.slice(0, 5) : "");
+  const computeEndFromDuration = (
+    startHHMM: string,
+    durationDays: number | null
+  ) => {
+    if (!startHHMM || durationDays == null) return "";
+    const [h, m] = startHHMM.split(":").map(Number);
+    const totalMin = h * 60 + m + durationDays * 8 * 60;
+    const eh = Math.floor(totalMin / 60) % 24;
+    const em = Math.floor(totalMin % 60);
+    return `${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`;
   };
-  const init = splitDuration(phase.duration_days);
-  const [daysPart, setDaysPart] = useState(init.days);
-  const [hoursPart, setHoursPart] = useState(init.hours);
+  const [startTime, setStartTime] = useState(
+    !initFullDay ? trimSec(phase.start_time) : "08:00"
+  );
+  const [endTime, setEndTime] = useState(
+    !initFullDay
+      ? computeEndFromDuration(trimSec(phase.start_time), phase.duration_days)
+      : "12:00"
+  );
+
   useEffect(() => {
     setName(phase.name);
     setStartDate(phase.start_date || "");
-    const s = splitDuration(phase.duration_days);
-    setDaysPart(s.days);
-    setHoursPart(s.hours);
-  }, [phase.id, phase.name, phase.start_date, phase.duration_days]);
+    const fd = phase.start_time == null;
+    setFullDay(fd);
+    setDaysPart(
+      fd && phase.duration_days != null
+        ? String(Math.max(1, Math.ceil(phase.duration_days)))
+        : "1"
+    );
+    setStartTime(!fd ? trimSec(phase.start_time) : "08:00");
+    setEndTime(
+      !fd
+        ? computeEndFromDuration(
+            trimSec(phase.start_time),
+            phase.duration_days
+          )
+        : "12:00"
+    );
+  }, [
+    phase.id,
+    phase.name,
+    phase.start_date,
+    phase.start_time,
+    phase.duration_days
+  ]);
 
-  const combinedDuration = (() => {
-    const dn = daysPart === "" ? 0 : Number(daysPart);
-    const hn = hoursPart === "" ? 0 : Number(hoursPart);
-    if (!Number.isFinite(dn) || !Number.isFinite(hn)) return null;
-    if (daysPart === "" && hoursPart === "") return null;
-    return dn + hn / 8;
+  // Dérive la durée actuelle (en jours décimaux) selon le mode.
+  const currentDuration: number | null = (() => {
+    if (fullDay) {
+      const n = Number(daysPart);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    }
+    if (!startTime || !endTime) return null;
+    const [sh, sm] = startTime.split(":").map(Number);
+    const [eh, em] = endTime.split(":").map(Number);
+    const diffMin = eh * 60 + em - (sh * 60 + sm);
+    if (diffMin <= 0) return null;
+    return diffMin / 60 / 8; // 8 h = 1 jour
   })();
 
   const endDate =
-    startDate && combinedDuration != null && combinedDuration > 0
-      ? addDays(startDate, Math.max(0, Math.ceil(combinedDuration) - 1))
-      : null;
+    startDate && fullDay && currentDuration != null && currentDuration > 0
+      ? addDays(startDate, Math.max(0, Math.ceil(currentDuration) - 1))
+      : startDate && !fullDay
+        ? startDate
+        : null;
+
+  // Persiste les changements (mode + jours/heures) en un seul patch
+  // pour éviter les races (ex. on bascule full→partial : on doit
+  // envoyer start_time + duration_days nouveau d'un coup).
+  const persist = () => {
+    if (fullDay) {
+      const patch: Partial<Phase> = {
+        start_time: null,
+        duration_days: currentDuration
+      };
+      if (
+        phase.start_time !== null ||
+        currentDuration !== phase.duration_days
+      ) {
+        onPatch(patch);
+      }
+    } else {
+      const patch: Partial<Phase> = {
+        start_time: startTime ? `${startTime}:00` : null,
+        duration_days: currentDuration
+      };
+      if (
+        trimSec(phase.start_time) !== startTime ||
+        currentDuration !== phase.duration_days
+      ) {
+        onPatch(patch);
+      }
+    }
+  };
 
   return (
     <li className="rounded-2xl border border-brand-800 bg-brand-900 p-4">
@@ -2539,42 +2619,83 @@ function PhaseCard({
                 className="mt-1 w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
               />
             </label>
-            <div className="text-xs text-white/60">
-              <span>Durée (j + h)</span>
-              <div className="mt-1 grid grid-cols-2 gap-1">
+            <div className="text-xs text-white/60 sm:col-span-2">
+              <label className="flex items-center gap-2 text-white/70">
                 <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  placeholder="j"
-                  value={daysPart}
-                  onChange={(e) => setDaysPart(e.target.value)}
-                  onBlur={() => {
-                    if (combinedDuration !== phase.duration_days)
-                      onPatch({ duration_days: combinedDuration });
+                  type="checkbox"
+                  checked={fullDay}
+                  onChange={(e) => {
+                    const next = e.target.checked;
+                    setFullDay(next);
+                    // Persiste tout de suite le mode pour que la
+                    // ligne s'aligne sur le serveur. On envoie aussi
+                    // les valeurs cohérentes du nouveau mode.
+                    if (next) {
+                      const n = Number(daysPart) || 1;
+                      onPatch({ start_time: null, duration_days: n });
+                    } else {
+                      const [sh, sm] = startTime.split(":").map(Number);
+                      const [eh, em] = endTime.split(":").map(Number);
+                      const diffMin = eh * 60 + em - (sh * 60 + sm);
+                      const dur = diffMin > 0 ? diffMin / 60 / 8 : 0.5;
+                      onPatch({
+                        start_time: `${startTime}:00`,
+                        duration_days: dur
+                      });
+                    }
                   }}
-                  className="rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
+                  className="h-4 w-4 rounded border-brand-800 bg-brand-950 accent-accent-500"
                 />
-                <input
-                  type="number"
-                  min="0"
-                  max="7"
-                  step="1"
-                  placeholder="h"
-                  value={hoursPart}
-                  onChange={(e) => setHoursPart(e.target.value)}
-                  onBlur={() => {
-                    if (combinedDuration !== phase.duration_days)
-                      onPatch({ duration_days: combinedDuration });
-                  }}
-                  className="rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
-                />
-              </div>
+                Journée complète
+              </label>
+              {fullDay ? (
+                <div className="mt-2">
+                  <span className="text-[11px] uppercase tracking-wider text-white/40">
+                    Nombre de jours
+                  </span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={daysPart}
+                    onChange={(e) => setDaysPart(e.target.value)}
+                    onBlur={persist}
+                    className="mt-1 w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
+                  />
+                </div>
+              ) : (
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <label className="text-[11px] uppercase tracking-wider text-white/40">
+                    Heure début
+                    <input
+                      type="time"
+                      value={startTime}
+                      onChange={(e) => setStartTime(e.target.value)}
+                      onBlur={persist}
+                      className="mt-1 w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
+                    />
+                  </label>
+                  <label className="text-[11px] uppercase tracking-wider text-white/40">
+                    Heure fin
+                    <input
+                      type="time"
+                      value={endTime}
+                      onChange={(e) => setEndTime(e.target.value)}
+                      onBlur={persist}
+                      className="mt-1 w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
+                    />
+                  </label>
+                </div>
+              )}
             </div>
-            <div className="text-xs text-white/60">
+            <div className="text-xs text-white/60 sm:col-span-3">
               Fin (calculée)
               <p className="mt-1 rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-sm font-semibold text-accent-500">
-                {endDate || "—"}
+                {fullDay
+                  ? endDate || "—"
+                  : startDate
+                    ? `${startDate} · ${startTime} → ${endTime}`
+                    : "—"}
               </p>
             </div>
           </div>
@@ -2918,6 +3039,7 @@ function ChantierAgendaTab({
           id: number;
           name: string;
           start_date: string | null;
+          start_time: string | null;
           duration_days: number | null;
         };
         const phs = (await phRes.json()) as Phase[];
@@ -2929,13 +3051,17 @@ function ChantierAgendaTab({
         phaseEvents = phs
           .filter((p) => p.start_date)
           .map((p) => {
-            // Aligne sur les bornes de jour pour que le Gantt /
-            // calendrier affichent la bande sur la(les) bonne(s)
-            // case(s). Une phase de 1 j = full day, une phase de 0.5 j
-            // = demi-journée (jusqu'à midi).
+            // Aligne sur les bornes de jour quand la phase est en
+            // « journée complète ». Si start_time est défini, la
+            // phase est un créneau horaire — on utilise alors
+            // start_time + duration × 8 h.
             const dur = Math.max(0.125, Number(p.duration_days) || 1);
-            const startMs = new Date(`${p.start_date}T00:00:00`).getTime();
-            const endMs = startMs + dur * 86400000;
+            const t = (p.start_time || "00:00:00").slice(0, 8);
+            const startMs = new Date(`${p.start_date}T${t}`).getTime();
+            const endMs =
+              p.start_time != null
+                ? startMs + dur * 8 * 3_600_000
+                : startMs + dur * 86_400_000;
             return {
               id: -p.id, // négatif pour éviter collision avec events réels
               title: `📐 ${p.name}`,
@@ -2943,7 +3069,7 @@ function ChantierAgendaTab({
               location: null,
               start_at: new Date(startMs).toISOString(),
               end_at: new Date(endMs).toISOString(),
-              all_day: true,
+              all_day: p.start_time == null,
               project_id: projectId,
               assignee_id: null,
               event_type: "phase"

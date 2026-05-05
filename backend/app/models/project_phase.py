@@ -6,7 +6,7 @@ duration in days, which drives the end date. ProjectTask rows can
 optionally be attached to a phase via phase_id.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Optional
 
 from sqlalchemy import (
@@ -17,6 +17,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    Time,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -38,6 +39,11 @@ class ProjectPhase(Base):
         Integer, nullable=False, default=0, server_default="0"
     )
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    # Heure de début dans la journée. NULL = phase « journée complète »
+    # (start_date à 00h00, durée en jours entiers). Sinon la phase
+    # commence à cette heure-là le start_date — utilisé pour les
+    # phases qui occupent un créneau (ex. 09h00 → 13h00 = 4 h).
+    start_time: Mapped[Optional[time]] = mapped_column(Time, nullable=True)
     # Duration in calendar days. Décimal pour supporter des phases en
     # heures (ex. 0.5 = ½ journée = 4 h, 1.25 = 1 j + 2 h). End date
     # est dérivée côté client comme start_date + ceil(duration_days) - 1.
