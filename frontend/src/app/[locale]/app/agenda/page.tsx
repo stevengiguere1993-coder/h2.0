@@ -768,35 +768,27 @@ export default function AgendaPage() {
             }
           />
         ) : view === "by-person" ? (
-          // Vue « Par personne » : calendrier mensuel filtré par
-          // employé. Si aucun employé n'est choisi, on demande de
-          // sélectionner. Sinon, MonthView avec filtre fAssignee
-          // déjà appliqué dans filteredEvents/eventsByDay.
-          !fAssignee ? (
-            <div className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
-              Choisis un employé dans le filtre <strong>« Assigné »</strong>
-              {" "}ci-dessus pour voir son calendrier mensuel.
-            </div>
-          ) : (
-            <MonthView
-              grid={grid}
-              ref={ref}
-              eventsByDay={eventsByDay}
-              multiDayEventsByDay={multiDayEventsByDay}
-              projectsByDay={projectsByDay}
-              projectHasTeam={projectHasTeam}
-              onDayClick={(d) => setModal({ date: d })}
-              onEventClick={(e) =>
-                e.event_type === "busy"
-                  ? null
-                  : e.event_type === "phase" && e.project_id
-                  ? window.location.assign(
-                      `/app/projets/${e.project_id}#planification`
-                    )
-                  : setModal(e)
-              }
-            />
-          )
+          // Vue « Par personne » : grille hebdomadaire complète de
+          // l'équipe (chaque ligne = un employé, chaque colonne = un
+          // jour). Style PlanOps : blocs d'assignation colorés par
+          // chantier, « Libre » quand vide, sommaire heures en bas.
+          <WeeklyTeamGridView
+            ref={ref}
+            employes={employes}
+            events={filteredEvents}
+            phases={phases}
+            projects={projects}
+            onCellClick={(_employeId, date) => setModal({ date })}
+            onEventClick={(e) =>
+              e.event_type === "busy"
+                ? null
+                : e.event_type === "phase" && e.project_id
+                ? window.location.assign(
+                    `/app/projets/${e.project_id}#planification`
+                  )
+                : setModal(e)
+            }
+          />
         ) : (
           <TimelineView
             mode="project"
@@ -1630,6 +1622,302 @@ function eventAccent(type: string): string {
     default:
       return "bg-white/20 border-white/30 text-white";
   }
+}
+
+// ─── Vue « Par personne » : grille hebdomadaire équipe × jours ──────
+//
+// Inspirée du visuel PlanOps. Chaque ligne = un employé, chaque
+// colonne = un jour de la semaine en cours. Dans la cellule on liste
+// les blocs d'assignation : phases (multi-jour) et événements ponctuels
+// où cet employé est dans `assignee_id`/`assignee_employe_ids`. Si
+// rien → « Libre » en gris. Click sur cellule vide → modal pour
+// assigner à un chantier existant ou créer un événement distinct.
+//
+// Ligne « Sommaire » en bas : total heures par jour (somme
+// duration des phases + 8h all-day events). Cost ajouté plus tard.
+
+function WeeklyTeamGridView({
+  ref: refDate,
+  employes,
+  events,
+  phases,
+  projects,
+  onCellClick,
+  onEventClick
+}: {
+  ref: Date;
+  employes: Employe[];
+  events: AgendaEvent[];
+  phases: Phase[];
+  projects: Project[];
+  onCellClick: (employeId: number, date: Date) => void;
+  onEventClick: (event: AgendaEvent) => void;
+}) {
+  // Calcule les 7 jours de la semaine (lundi → dimanche) qui
+  // contiennent refDate.
+  const week = useMemo(() => {
+    const monday = new Date(refDate);
+    const dow = monday.getDay(); // 0=dim, 1=lun…
+    const offset = dow === 0 ? -6 : 1 - dow;
+    monday.setDate(monday.getDate() + offset);
+    monday.setHours(0, 0, 0, 0);
+    const days: Date[] = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      days.push(d);
+    }
+    return days;
+  }, [refDate]);
+
+  const projectById = useMemo(() => {
+    const m = new Map<number, Project>();
+    projects.forEach((p) => m.set(p.id, p));
+    return m;
+  }, [projects]);
+
+  function dayLabel(d: Date): string {
+    const dow = d.toLocaleDateString("fr-CA", { weekday: "short" });
+    const day = d.getDate();
+    const month = d.toLocaleDateString("fr-CA", { month: "short" });
+    return `${dow} ${day} ${month}`;
+  }
+
+  function isSameDay(a: Date, b: Date): boolean {
+    return (
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate()
+    );
+  }
+
+  function fmtTimeShort(iso: string): string {
+    const d = new Date(iso);
+    const h = String(d.getHours()).padStart(2, "0");
+    const m = String(d.getMinutes()).padStart(2, "0");
+    return `${h}:${m}`;
+  }
+
+  // Pour un employé donné et un jour, retourne les phases actives
+  // (qui couvrent ce jour) + les events qui démarrent ce jour-là où
+  // cet employé est assigné.
+  function blocksFor(empId: number, day: Date): Array<
+    | {
+        kind: "phase";
+        phase: Phase;
+        project: Project | null;
+      }
+    | { kind: "event"; event: AgendaEvent }
+  > {
+    const out: Array<
+      | { kind: "phase"; phase: Phase; project: Project | null }
+      | { kind: "event"; event: AgendaEvent }
+    > = [];
+    // Phases : assignée ET range couvre ce jour
+    for (const p of phases) {
+      const ids = p.assignee_employe_ids || [];
+      const single =
+        p.assignee_employe_id != null ? [p.assignee_employe_id] : [];
+      const all = [...ids, ...single];
+      if (!all.includes(empId)) continue;
+      if (!p.start_date || !p.duration_days) continue;
+      const ps = new Date(p.start_date);
+      ps.setHours(0, 0, 0, 0);
+      const pe = new Date(ps);
+      pe.setDate(pe.getDate() + (p.duration_days - 1));
+      pe.setHours(23, 59, 59, 999);
+      const t = day.getTime();
+      if (t >= ps.getTime() && t <= pe.getTime()) {
+        out.push({
+          kind: "phase",
+          phase: p,
+          project: projectById.get(p.project_id) || null
+        });
+      }
+    }
+    // Events : démarre ce jour ET assigné à cet employé
+    for (const e of events) {
+      if (e.assignee_id !== empId) continue;
+      const s = new Date(e.start_at);
+      if (!isSameDay(s, day)) continue;
+      out.push({ kind: "event", event: e });
+    }
+    return out;
+  }
+
+  // Sommaire : somme des heures par jour pour TOUTE l'équipe
+  function dayTotalHours(day: Date): number {
+    let total = 0;
+    for (const emp of employes) {
+      for (const b of blocksFor(emp.id, day)) {
+        if (b.kind === "phase") {
+          total += 8; // jour ouvrable standard
+        } else {
+          const ev = b.event;
+          if (ev.all_day) total += 8;
+          else if (ev.end_at) {
+            const ms =
+              new Date(ev.end_at).getTime() -
+              new Date(ev.start_at).getTime();
+            total += Math.max(0, ms / 3_600_000);
+          } else {
+            total += 1;
+          }
+        }
+      }
+    }
+    return Math.round(total * 10) / 10;
+  }
+
+  if (employes.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
+        Aucun employé — ajoute des membres d&apos;équipe pour voir leur
+        planning ici.
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-xl border border-brand-800">
+      <div
+        className="grid min-w-[900px] divide-y divide-brand-800 bg-brand-900"
+        style={{ gridTemplateColumns: "180px repeat(7, 1fr)" }}
+      >
+        {/* Header row */}
+        <div
+          className="bg-brand-950 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-white/40"
+          style={{ gridColumn: 1 }}
+        >
+          Employé
+        </div>
+        {week.map((d, i) => (
+          <div
+            key={i}
+            className="bg-brand-950 px-2 py-2 text-center text-[11px] font-semibold text-white/70"
+          >
+            {dayLabel(d)}
+          </div>
+        ))}
+
+        {/* Rows */}
+        {employes.map((emp) => (
+          <div key={emp.id} className="contents">
+            <div className="border-r border-brand-800 bg-brand-900/60 px-3 py-2 text-sm font-medium text-white">
+              {emp.full_name}
+            </div>
+            {week.map((d, i) => {
+              const blocks = blocksFor(emp.id, d);
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => {
+                    if (blocks.length === 0) {
+                      const at = new Date(d);
+                      at.setHours(8, 0, 0, 0);
+                      onCellClick(emp.id, at);
+                    }
+                  }}
+                  className="flex min-h-[64px] flex-col gap-1 border-r border-brand-800 px-1.5 py-1.5 text-left transition hover:bg-brand-800/30"
+                >
+                  {blocks.length === 0 ? (
+                    <span className="text-xs italic text-white/30">
+                      Libre
+                    </span>
+                  ) : (
+                    blocks.map((b, idx) => {
+                      if (b.kind === "phase") {
+                        const c = projectColor(b.phase.project_id);
+                        return (
+                          <span
+                            key={`p-${b.phase.id}-${idx}`}
+                            className="block rounded px-1.5 py-1 text-[10px] font-semibold leading-tight"
+                            style={{
+                              backgroundColor: c.bg,
+                              color: c.text,
+                              border: `1px solid ${c.border}`
+                            }}
+                            title={`${b.phase.name}${
+                              b.project ? ` · ${b.project.name}` : ""
+                            }`}
+                          >
+                            <span className="block">📐 {b.phase.name}</span>
+                            {b.project ? (
+                              <span className="block text-[9px] opacity-80">
+                                {b.project.name}
+                              </span>
+                            ) : null}
+                          </span>
+                        );
+                      }
+                      const ev = b.event;
+                      const c = ev.project_id
+                        ? projectColor(ev.project_id)
+                        : null;
+                      return (
+                        <span
+                          key={`e-${ev.id}-${idx}`}
+                          onClick={(clickEv) => {
+                            clickEv.stopPropagation();
+                            onEventClick(ev);
+                          }}
+                          className="block cursor-pointer rounded px-1.5 py-1 text-[10px] font-semibold leading-tight hover:opacity-90"
+                          style={
+                            c
+                              ? {
+                                  backgroundColor: c.bg,
+                                  color: c.text,
+                                  border: `1px solid ${c.border}`
+                                }
+                              : {
+                                  backgroundColor: "rgb(71, 85, 105)",
+                                  color: "#ffffff",
+                                  border: "1px solid rgb(51, 65, 85)"
+                                }
+                          }
+                          title={ev.title}
+                        >
+                          <span className="block">
+                            {ev.all_day
+                              ? "⏰"
+                              : `${fmtTimeShort(ev.start_at)}${
+                                  ev.end_at
+                                    ? " - " + fmtTimeShort(ev.end_at)
+                                    : ""
+                                }`}
+                          </span>
+                          <span className="block truncate">
+                            {ev.title}
+                          </span>
+                        </span>
+                      );
+                    })
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+
+        {/* Sommaire row */}
+        <div className="border-t-2 border-brand-700 bg-brand-950 px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-accent-500">
+          Sommaire
+        </div>
+        {week.map((d, i) => {
+          const h = dayTotalHours(d);
+          return (
+            <div
+              key={i}
+              className="border-t-2 border-r border-brand-700 bg-brand-950 px-2 py-2 text-center text-[11px] font-semibold text-accent-300"
+            >
+              {h > 0 ? `${h}h` : <span className="text-white/20">—</span>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function TimelineView({
