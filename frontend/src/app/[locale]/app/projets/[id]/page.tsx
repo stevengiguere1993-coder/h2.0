@@ -2094,6 +2094,74 @@ function PlanificationTab({ projectId }: { projectId: number }) {
   }
 
   async function patchPhase(id: number, patch: Partial<Phase>) {
+    // Avertit si on assigne un employé déjà occupé sur une autre
+    // phase qui chevauche la période de celle-ci. Évite le double-
+    // booking silencieux.
+    const newAssignees = patch.assignee_employe_ids;
+    const currentPhase = phases.find((p) => p.id === id);
+    if (
+      Array.isArray(newAssignees) &&
+      currentPhase &&
+      currentPhase.start_date &&
+      currentPhase.duration_days
+    ) {
+      const previous = new Set(currentPhase.assignee_employe_ids || []);
+      const added = newAssignees.filter((eid) => !previous.has(eid));
+      if (added.length > 0) {
+        const start = new Date(currentPhase.start_date);
+        const end = new Date(start);
+        end.setDate(end.getDate() + (currentPhase.duration_days || 1));
+        const empNameById = new Map(
+          employes.map((e) => [e.id, e.full_name])
+        );
+        // Récupère TOUTES les phases visibles (tous projets confondus)
+        // pour détecter les conflits cross-projets — la state locale
+        // ne contient que les phases de ce projet.
+        let allPhases: Phase[] = phases;
+        try {
+          const r = await authedFetch("/api/v1/phases");
+          if (r.ok) allPhases = (await r.json()) as Phase[];
+        } catch {
+          /* fallback sur les phases locales */
+        }
+        const conflicts: string[] = [];
+        for (const eid of added) {
+          // Cherche une phase d'un AUTRE projet qui chevauche +
+          // assigne le même employé
+          const conflictPhases = allPhases.filter((p) => {
+            if (p.id === id) return false;
+            if (!p.start_date || !p.duration_days) return false;
+            if (!(p.assignee_employe_ids || []).includes(eid)) return false;
+            const ps = new Date(p.start_date);
+            const pe = new Date(ps);
+            pe.setDate(pe.getDate() + (p.duration_days || 1));
+            // Overlap si ps < end && pe > start
+            return ps.getTime() < end.getTime() && pe.getTime() > start.getTime();
+          });
+          for (const p of conflictPhases) {
+            const empName = empNameById.get(eid) || `Employé #${eid}`;
+            conflicts.push(
+              `${empName} : déjà sur phase « ${p.name} » (projet #${p.project_id}) du ${p.start_date} pour ${p.duration_days} jour(s)`
+            );
+          }
+        }
+        if (conflicts.length > 0) {
+          const ok = await confirm({
+            title: "Conflit d'assignation détecté",
+            description:
+              "Un ou plusieurs employés sont déjà assignés à des phases qui chevauchent cette période :\n\n" +
+              conflicts.map((c) => `• ${c}`).join("\n") +
+              "\n\nAssigner quand même ?",
+            confirmLabel: "Assigner quand même",
+            destructive: true
+          });
+          if (!ok) {
+            return;
+          }
+        }
+      }
+    }
+
     setBusyPhase(id);
     try {
       const res = await authedFetch(
