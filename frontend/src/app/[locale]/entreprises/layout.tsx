@@ -229,9 +229,6 @@ export default function EntreprisesLayout({
               >
                 Q
               </span>
-              <span className="text-base font-bold tracking-wide text-[var(--qg-text)]">
-                QG
-              </span>
             </Link>
             <button
               type="button"
