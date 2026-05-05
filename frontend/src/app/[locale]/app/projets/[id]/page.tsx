@@ -163,6 +163,32 @@ export default function ProjectDetailPage() {
     };
   }, [id]);
 
+  // Auto-save : quand l'utilisateur modifie un champ (ex. sélectionne
+  // une adresse dans l'autocomplete) et arrête d'éditer 1,2 s, on
+  // persiste automatiquement. Évite la perte de données si l'usager
+  // oublie de cliquer Sauvegarder.
+  useEffect(() => {
+    if (!p) return;
+    if (!dirty) return;
+    if (saving) return;
+    const t = setTimeout(() => {
+      void saveAll();
+    }, 1200);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    dirty,
+    name,
+    clientId,
+    address,
+    startDate,
+    endDate,
+    budget,
+    estimatedHoursOverride,
+    description,
+    notes
+  ]);
+
   const dirty = useMemo(() => {
     if (!p) return false;
     return (
