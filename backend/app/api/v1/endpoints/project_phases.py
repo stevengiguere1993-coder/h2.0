@@ -40,7 +40,8 @@ class PhaseCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     position: int = Field(default=0, ge=0)
     start_date: Optional[date] = None
-    duration_days: Optional[int] = Field(default=None, ge=0, le=3650)
+    # Décimal pour exprimer des heures (ex. 0.5 = ½ journée = 4 h).
+    duration_days: Optional[float] = Field(default=None, ge=0, le=3650)
     notes: Optional[str] = None
     # Legacy scalar fields — toujours acceptés pour compat. Si les
     # listes ci-dessous sont fournies, elles priment.
@@ -54,7 +55,8 @@ class PhaseUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     position: Optional[int] = Field(default=None, ge=0)
     start_date: Optional[date] = None
-    duration_days: Optional[int] = Field(default=None, ge=0, le=3650)
+    # Décimal pour exprimer des heures (ex. 0.5 = ½ journée = 4 h).
+    duration_days: Optional[float] = Field(default=None, ge=0, le=3650)
     notes: Optional[str] = None
     assignee_employe_id: Optional[int] = None
     assignee_sous_traitant_id: Optional[int] = None
@@ -69,7 +71,7 @@ class PhaseRead(BaseModel):
     name: str
     position: int
     start_date: Optional[date]
-    duration_days: Optional[int]
+    duration_days: Optional[float]
     notes: Optional[str]
     # Champs scalaires legacy — renseignés au « primary » assignee
     # (= premier employé / sous-traitant de la liste) pour que les
