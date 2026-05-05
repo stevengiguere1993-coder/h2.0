@@ -87,6 +87,43 @@ const TYPE_LABELS: Record<string, string> = {
   autre: "Autre"
 };
 
+/**
+ * Couleur déterministe et bien spread pour chaque projet.
+ *
+ * Utilise le « golden ratio conjugate » comme multiplicateur sur
+ * project_id pour distribuer les teintes uniformément sur le cercle
+ * chromatique. Conséquence : deux projets différents (même IDs
+ * consécutifs) auront toujours des couleurs visuellement distinctes,
+ * et la couleur d'un projet reste stable d'une session à l'autre.
+ */
+function projectColor(projectId: number | null | undefined): {
+  hue: number;
+  bg: string; // pour la bande de fond (transparent)
+  border: string; // pour le contour
+  text: string; // pour le texte sur la bande
+  solid: string; // couleur pleine (pour les events ponctuels)
+} {
+  // Le 0 ou null tombe sur slate (gris) comme avant
+  if (!projectId) {
+    return {
+      hue: 0,
+      bg: "rgba(100,116,139,0.25)",
+      border: "rgba(100,116,139,0.65)",
+      text: "rgba(226,232,240,0.95)",
+      solid: "rgb(100,116,139)"
+    };
+  }
+  // 137.508 = 360 / phi → spread maximal des teintes
+  const hue = Math.floor((projectId * 137.508) % 360);
+  return {
+    hue,
+    bg: `hsla(${hue}, 65%, 45%, 0.28)`,
+    border: `hsla(${hue}, 70%, 55%, 0.7)`,
+    text: `hsl(${hue}, 80%, 80%)`,
+    solid: `hsl(${hue}, 65%, 55%)`
+  };
+}
+
 const TYPE_CLASS: Record<string, string> = {
   chantier: "bg-accent-500/20 text-accent-300 border-accent-500/40",
   conge: "bg-orange-500/20 text-orange-300 border-orange-500/40",
@@ -207,9 +244,37 @@ function timelineRangeLabel(ref: Date, span: number): string {
 export default function AgendaPage() {
   const { onOpenSidebar } = useAppLayout();
   const [ref, setRef] = useState(() => new Date());
+  // Le `view` est persisté dans l'URL (?view=month) pour que le back
+  // navigateur restaure la même vue après être allé sur un projet.
   const [view, setView] = useState<
     "day" | "week" | "month" | "list" | "by-project" | "by-person"
-  >("month");
+  >(() => {
+    if (typeof window === "undefined") return "month";
+    const v = new URLSearchParams(window.location.search).get("view");
+    if (
+      v === "day" ||
+      v === "week" ||
+      v === "month" ||
+      v === "list" ||
+      v === "by-project" ||
+      v === "by-person"
+    ) {
+      return v;
+    }
+    return "month";
+  });
+
+  // Quand le user change de vue, on met à jour l'URL (replaceState
+  // pour ne pas polluer le back-stack — le back ramène à la page
+  // d'origine, pas à la vue précédente).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("view") !== view) {
+      url.searchParams.set("view", view);
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, [view]);
   // Timeline span (days) for the Gantt-like views.
   const [spanDays, setSpanDays] = useState<7 | 14 | 28>(14);
 
@@ -959,9 +1024,10 @@ function MonthView({
               if (bar.kind === "project") {
                 const hasTeam =
                   projectHasTeam.get(bar.project.id) ?? false;
-                const bg = hasTeam
-                  ? "bg-emerald-500/40 border-emerald-500/60 text-emerald-100"
-                  : "bg-rose-500/40 border-rose-500/60 text-rose-100";
+                // Couleur stable et unique par chantier (HSL spread
+                // par golden ratio sur project_id). Le marqueur ⚠️
+                // signale toujours l'absence d'équipe assignée.
+                const c = projectColor(bar.project.id);
                 return (
                   <Link
                     key={bar.key}
@@ -973,8 +1039,13 @@ function MonthView({
                         ? `Projet : ${bar.project.name}`
                         : `Projet : ${bar.project.name} — aucune équipe assignée`
                     }
-                    className={`absolute z-[2] flex items-center overflow-hidden rounded-md border px-1.5 text-[10px] font-medium shadow-sm ${bg}`}
-                    style={style}
+                    className="absolute z-[2] flex items-center overflow-hidden rounded-md border px-1.5 text-[10px] font-medium shadow-sm"
+                    style={{
+                      ...style,
+                      backgroundColor: c.bg,
+                      borderColor: c.border,
+                      color: c.text
+                    }}
                   >
                     <span className="truncate">
                       {hasTeam ? "🛠️" : "⚠️"} {bar.project.name}
@@ -983,12 +1054,16 @@ function MonthView({
                 );
               }
 
-              // Événement multi-jours — même look que les event pills
-              // mono-jour mais rendu en bande continue. Garde la couleur
-              // du type (chantier jaune, visite bleue, etc.).
+              // Événement multi-jours — couleur du chantier si lié à
+              // un projet (même couleur que la bande). Sinon couleur
+              // par event_type (livraison violet, inspection rouge…).
               const ev = bar.event;
-              const typeClass =
-                TYPE_CLASS[ev.event_type] || TYPE_CLASS.autre;
+              const projColor = ev.project_id
+                ? projectColor(ev.project_id)
+                : null;
+              const typeClass = projColor
+                ? ""
+                : TYPE_CLASS[ev.event_type] || TYPE_CLASS.autre;
               return (
                 <button
                   key={bar.key}
@@ -1001,7 +1076,16 @@ function MonthView({
                     ev.location ? ` · ${ev.location}` : ""
                   }`}
                   className={`absolute z-[2] flex items-center overflow-hidden rounded-md border px-1.5 text-left text-[10px] font-medium shadow-sm ${typeClass}`}
-                  style={style}
+                  style={
+                    projColor
+                      ? {
+                          ...style,
+                          backgroundColor: projColor.bg,
+                          borderColor: projColor.border,
+                          color: projColor.text
+                        }
+                      : style
+                  }
                 >
                   <span className="truncate">
                     {!ev.all_day ? `${fmtTime(ev.start_at)} ` : ""}
