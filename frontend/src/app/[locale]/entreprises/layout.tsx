@@ -543,42 +543,61 @@ export function QGTopbar({
   const { onOpenSidebar } = useEntreprisesLayout();
   return (
     <header
-      className="sticky top-0 z-30 flex min-h-[152px] items-center gap-3 px-5 py-4 lg:px-8"
+      className="sticky top-0 z-30 px-5 lg:px-8"
       style={{
         backgroundColor: "var(--qg-bg-95)",
         backdropFilter: "blur(8px)",
-        borderBottom: "1px solid var(--qg-border)"
+        borderBottom: "1px solid var(--qg-border)",
+        paddingTop: "calc(env(safe-area-inset-top) + 1rem)",
+        paddingBottom: "1rem"
       }}
     >
-      <button
-        type="button"
-        onClick={onOpenSidebar}
-        className="rounded-md p-2 text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)] lg:hidden"
-        aria-label="Ouvrir la barre latérale"
-      >
-        <Menu className="h-5 w-5" />
-      </button>
-      <div className="min-w-0 flex-1">
-        <h1
-          className="text-[22px] font-bold leading-tight text-[var(--qg-text)] sm:text-[26px]"
-          style={{ fontFamily: "var(--font-fraunces, Georgia, serif)" }}
+      {/* Ligne 1 : menu (mobile) + greeting + ThemeToggle + Kratos */}
+      <div className="flex min-h-[64px] items-center gap-2 lg:min-h-[120px] lg:gap-3">
+        <button
+          type="button"
+          onClick={onOpenSidebar}
+          className="rounded-md p-2 text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)] lg:hidden"
+          aria-label="Ouvrir la barre latérale"
         >
-          {greeting}
-        </h1>
-        {subtitle ? (
-          <p
-            className="mt-1 text-[10px] uppercase tracking-[0.18em] text-[var(--qg-text-soft)]"
-            style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}
+          <Menu className="h-5 w-5" />
+        </button>
+        <div className="min-w-0 flex-1">
+          <h1
+            className="text-[22px] font-bold leading-tight text-[var(--qg-text)] sm:text-[26px]"
+            style={{ fontFamily: "var(--font-fraunces, Georgia, serif)" }}
           >
-            {subtitle}
-          </p>
+            {greeting}
+          </h1>
+          {subtitle ? (
+            <p
+              className="mt-1 text-[10px] uppercase tracking-[0.18em] text-[var(--qg-text-soft)]"
+              style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}
+            >
+              {subtitle}
+            </p>
+          ) : null}
+        </div>
+        {/* Desktop : rightSlot inline avec greeting */}
+        {rightSlot ? (
+          <div className="hidden lg:flex items-center gap-2">{rightSlot}</div>
         ) : null}
+        <ThemeToggle />
+        <div className="lg:hidden">
+          <KratosLogo size={64} floating={false} />
+        </div>
+        <div className="hidden lg:block">
+          <KratosLogo size={144} floating={false} />
+        </div>
       </div>
+
+      {/* Ligne 2 mobile : rightSlot (Briefing complet, Nouvelle tâche…)
+          sur sa propre rangée pour ne pas chevaucher le greeting. */}
       {rightSlot ? (
-        <div className="flex items-center gap-2">{rightSlot}</div>
+        <div className="flex items-center gap-2 overflow-x-auto pt-2 lg:hidden">
+          {rightSlot}
+        </div>
       ) : null}
-      <ThemeToggle />
-      <KratosLogo size={144} floating={false} />
     </header>
   );
 }
@@ -594,56 +613,72 @@ export function EntreprisesTopbar({
   const { onOpenSidebar } = useEntreprisesLayout();
   return (
     <header
-      className="sticky top-0 z-30 flex min-h-[152px] items-center gap-3 px-4 lg:px-6"
+      className="sticky top-0 z-30 px-4 lg:px-6"
       style={{
         backgroundColor: "var(--qg-bg-95)",
         backdropFilter: "blur(8px)",
-        borderBottom: "1px solid var(--qg-border)"
+        borderBottom: "1px solid var(--qg-border)",
+        paddingTop: "env(safe-area-inset-top)"
       }}
     >
-      <button
-        type="button"
-        onClick={onOpenSidebar}
-        className="rounded-md p-2 text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)] lg:hidden"
-        aria-label="Ouvrir la barre latérale"
-      >
-        <Menu className="h-5 w-5" />
-      </button>
-      <nav className="flex min-w-0 flex-1 items-center gap-2">
-        {breadcrumbs.map((c, i) => {
-          const isLast = i === breadcrumbs.length - 1;
-          const cls = `truncate text-sm font-medium ${
-            isLast
-              ? "text-[var(--qg-text)]"
-              : c.href
-              ? "text-[var(--qg-text-muted)] hover:text-[var(--qg-accent)]"
-              : "text-[var(--qg-text-soft)]"
-          }`;
-          return (
-            <span key={i} className="flex items-center gap-2">
-              {i > 0 ? (
-                <ChevronRight className="h-3.5 w-3.5 text-[var(--qg-text-faint)]" />
-              ) : null}
-              {!isLast && c.href ? (
-                <Link
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  href={c.href as any}
-                  className={cls}
-                >
-                  {c.label}
-                </Link>
-              ) : (
-                <span className={cls}>{c.label}</span>
-              )}
-            </span>
-          );
-        })}
-      </nav>
+      {/* Ligne 1 : menu + breadcrumbs + ThemeToggle + Kratos */}
+      <div className="flex min-h-[64px] items-center gap-2 lg:min-h-[152px] lg:gap-3">
+        <button
+          type="button"
+          onClick={onOpenSidebar}
+          className="rounded-md p-2 text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)] lg:hidden"
+          aria-label="Ouvrir la barre latérale"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+        <nav className="flex min-w-0 flex-1 items-center gap-2">
+          {breadcrumbs.map((c, i) => {
+            const isLast = i === breadcrumbs.length - 1;
+            const cls = `truncate text-sm font-medium ${
+              isLast
+                ? "text-[var(--qg-text)]"
+                : c.href
+                ? "text-[var(--qg-text-muted)] hover:text-[var(--qg-accent)]"
+                : "text-[var(--qg-text-soft)]"
+            }`;
+            return (
+              <span key={i} className="flex items-center gap-2 min-w-0">
+                {i > 0 ? (
+                  <ChevronRight className="h-3.5 w-3.5 text-[var(--qg-text-faint)]" />
+                ) : null}
+                {!isLast && c.href ? (
+                  <Link
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    href={c.href as any}
+                    className={cls}
+                  >
+                    {c.label}
+                  </Link>
+                ) : (
+                  <span className={cls}>{c.label}</span>
+                )}
+              </span>
+            );
+          })}
+        </nav>
+        {rightSlot ? (
+          <div className="hidden lg:flex items-center gap-2">{rightSlot}</div>
+        ) : null}
+        <ThemeToggle />
+        <div className="lg:hidden">
+          <KratosLogo size={64} floating={false} />
+        </div>
+        <div className="hidden lg:block">
+          <KratosLogo size={144} floating={false} />
+        </div>
+      </div>
+
+      {/* Ligne 2 mobile : rightSlot sous les breadcrumbs */}
       {rightSlot ? (
-        <div className="flex items-center gap-2">{rightSlot}</div>
+        <div className="flex items-center gap-2 overflow-x-auto pb-2 lg:hidden">
+          {rightSlot}
+        </div>
       ) : null}
-      <ThemeToggle />
-      <KratosLogo size={144} floating={false} />
     </header>
   );
 }
