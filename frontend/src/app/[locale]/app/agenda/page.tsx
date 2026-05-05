@@ -645,7 +645,7 @@ export default function AgendaPage() {
               <option value="by-project">Par chantier</option>
               <option value="by-person">Par personne</option>
             </select>
-            {view === "by-project" || view === "by-person" ? (
+            {view === "by-project" ? (
               <select
                 value={String(spanDays)}
                 onChange={(e) =>
@@ -749,9 +749,39 @@ export default function AgendaPage() {
                 : setModal(e)
             }
           />
+        ) : view === "by-person" ? (
+          // Vue « Par personne » : calendrier mensuel filtré par
+          // employé. Si aucun employé n'est choisi, on demande de
+          // sélectionner. Sinon, MonthView avec filtre fAssignee
+          // déjà appliqué dans filteredEvents/eventsByDay.
+          !fAssignee ? (
+            <div className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
+              Choisis un employé dans le filtre <strong>« Assigné »</strong>
+              {" "}ci-dessus pour voir son calendrier mensuel.
+            </div>
+          ) : (
+            <MonthView
+              grid={grid}
+              ref={ref}
+              eventsByDay={eventsByDay}
+              multiDayEventsByDay={multiDayEventsByDay}
+              projectsByDay={projectsByDay}
+              projectHasTeam={projectHasTeam}
+              onDayClick={(d) => setModal({ date: d })}
+              onEventClick={(e) =>
+                e.event_type === "busy"
+                  ? null
+                  : e.event_type === "phase" && e.project_id
+                  ? window.location.assign(
+                      `/app/projets/${e.project_id}#planification`
+                    )
+                  : setModal(e)
+              }
+            />
+          )
         ) : (
           <TimelineView
-            mode={view === "by-project" ? "project" : "person"}
+            mode="project"
             ref={ref}
             spanDays={spanDays}
             events={filteredEvents}
