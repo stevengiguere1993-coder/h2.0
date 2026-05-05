@@ -122,7 +122,7 @@ export function NotificationBell() {
       </button>
 
       {open ? (
-        <div className="absolute right-0 top-full z-40 mt-1 w-80 max-h-[70vh] overflow-y-auto rounded-xl border border-brand-800 bg-brand-950 shadow-xl">
+        <div className="fixed inset-x-3 top-[60px] z-40 max-h-[70vh] overflow-y-auto rounded-xl border border-brand-800 bg-brand-950 shadow-xl lg:absolute lg:inset-x-auto lg:right-0 lg:top-full lg:mt-1 lg:w-80">
           <div className="sticky top-0 flex items-center justify-between border-b border-brand-800 bg-brand-950 px-3 py-2">
             <p className="text-xs font-semibold uppercase tracking-wider text-accent-500">
               Notifications
