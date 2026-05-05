@@ -70,6 +70,7 @@ type Phase = {
   name: string;
   position: number;
   start_date: string | null;
+  start_time: string | null;
   duration_days: number | null;
   assignee_employe_id: number | null;
   assignee_sous_traitant_id: number | null;
@@ -393,11 +394,16 @@ export default function AgendaPage() {
     return phases
       .filter((p) => p.start_date && p.duration_days && p.duration_days > 0)
       .map((p) => {
-        // Bornes de jour pour les bandes all-day. Une phase de 0.5 j
-        // s'arrête à midi du jour de début ; 1 j → de minuit à minuit.
+        // Bornes de jour pour les phases « journée complète ». Si
+        // start_time est défini, la phase est un créneau horaire :
+        // duration_days en jours-travail (8 h = 1 jour).
         const dur = Math.max(0.125, Number(p.duration_days) || 1);
-        const sMs = new Date(`${p.start_date!}T00:00:00`).getTime();
-        const eMs = sMs + dur * 86400000;
+        const t = (p.start_time || "00:00:00").slice(0, 8);
+        const sMs = new Date(`${p.start_date!}T${t}`).getTime();
+        const eMs =
+          p.start_time != null
+            ? sMs + dur * 8 * 3_600_000
+            : sMs + dur * 86_400_000;
         const s = new Date(sMs);
         const e = new Date(eMs);
         return {
@@ -407,7 +413,7 @@ export default function AgendaPage() {
           location: null,
           start_at: s.toISOString(),
           end_at: e.toISOString(),
-          all_day: true,
+          all_day: p.start_time == null,
           project_id: p.project_id,
           assignee_id:
             p.assignee_employe_id != null
