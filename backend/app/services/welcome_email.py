@@ -89,7 +89,7 @@ async def send_welcome_email(
 
   <p style="font-size:13px;color:#555">
     Si tu n'attendais pas ce compte, ignore ce courriel et préviens
-    {created_by or 'l\\'équipe Horizon'}.
+    {created_by or "l&apos;équipe Horizon"}.
   </p>
 
   <p style="margin-top:24px;color:#888;font-size:12px">
