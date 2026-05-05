@@ -2474,20 +2474,38 @@ function PhaseCard({
 }) {
   const [name, setName] = useState(phase.name);
   const [startDate, setStartDate] = useState(phase.start_date || "");
-  const [durationDays, setDurationDays] = useState(
-    phase.duration_days != null ? String(phase.duration_days) : ""
-  );
+  // Décompose duration_days en jours entiers + heures (0-7) pour le
+  // formulaire. Convention : 1 journée de travail = 8 h. Ex. 1.5 →
+  // 1 j + 4 h. Ex. 0.5 → 0 j + 4 h.
+  const splitDuration = (d: number | null): { days: string; hours: string } => {
+    if (d == null) return { days: "", hours: "" };
+    const whole = Math.floor(d);
+    const fraction = d - whole;
+    const h = Math.round(fraction * 8);
+    return { days: String(whole), hours: h > 0 ? String(h) : "" };
+  };
+  const init = splitDuration(phase.duration_days);
+  const [daysPart, setDaysPart] = useState(init.days);
+  const [hoursPart, setHoursPart] = useState(init.hours);
   useEffect(() => {
     setName(phase.name);
     setStartDate(phase.start_date || "");
-    setDurationDays(
-      phase.duration_days != null ? String(phase.duration_days) : ""
-    );
+    const s = splitDuration(phase.duration_days);
+    setDaysPart(s.days);
+    setHoursPart(s.hours);
   }, [phase.id, phase.name, phase.start_date, phase.duration_days]);
 
+  const combinedDuration = (() => {
+    const dn = daysPart === "" ? 0 : Number(daysPart);
+    const hn = hoursPart === "" ? 0 : Number(hoursPart);
+    if (!Number.isFinite(dn) || !Number.isFinite(hn)) return null;
+    if (daysPart === "" && hoursPart === "") return null;
+    return dn + hn / 8;
+  })();
+
   const endDate =
-    startDate && durationDays
-      ? addDays(startDate, Math.max(0, Number(durationDays) - 1))
+    startDate && combinedDuration != null && combinedDuration > 0
+      ? addDays(startDate, Math.max(0, Math.ceil(combinedDuration) - 1))
       : null;
 
   return (
@@ -2521,21 +2539,38 @@ function PhaseCard({
                 className="mt-1 w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
               />
             </label>
-            <label className="text-xs text-white/60">
-              Durée (jours)
-              <input
-                type="number"
-                min="0"
-                value={durationDays}
-                onChange={(e) => setDurationDays(e.target.value)}
-                onBlur={() => {
-                  const n = durationDays === "" ? null : Number(durationDays);
-                  if (n !== phase.duration_days)
-                    onPatch({ duration_days: n });
-                }}
-                className="mt-1 w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
-              />
-            </label>
+            <div className="text-xs text-white/60">
+              <span>Durée (j + h)</span>
+              <div className="mt-1 grid grid-cols-2 gap-1">
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="j"
+                  value={daysPart}
+                  onChange={(e) => setDaysPart(e.target.value)}
+                  onBlur={() => {
+                    if (combinedDuration !== phase.duration_days)
+                      onPatch({ duration_days: combinedDuration });
+                  }}
+                  className="rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
+                />
+                <input
+                  type="number"
+                  min="0"
+                  max="7"
+                  step="1"
+                  placeholder="h"
+                  value={hoursPart}
+                  onChange={(e) => setHoursPart(e.target.value)}
+                  onBlur={() => {
+                    if (combinedDuration !== phase.duration_days)
+                      onPatch({ duration_days: combinedDuration });
+                  }}
+                  className="rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-sm text-white"
+                />
+              </div>
+            </div>
             <div className="text-xs text-white/60">
               Fin (calculée)
               <p className="mt-1 rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-sm font-semibold text-accent-500">
@@ -2883,7 +2918,7 @@ function ChantierAgendaTab({
           id: number;
           name: string;
           start_date: string | null;
-          end_date: string | null;
+          duration_days: number | null;
         };
         const phs = (await phRes.json()) as Phase[];
         // Mémorise la liste {id, name} pour le sélecteur de phase
@@ -2893,18 +2928,27 @@ function ChantierAgendaTab({
         );
         phaseEvents = phs
           .filter((p) => p.start_date)
-          .map((p) => ({
-            id: -p.id, // négatif pour éviter collision avec events réels
-            title: `📐 ${p.name}`,
-            description: null,
-            location: null,
-            start_at: `${p.start_date}T08:00:00`,
-            end_at: p.end_date ? `${p.end_date}T17:00:00` : null,
-            all_day: true,
-            project_id: projectId,
-            assignee_id: null,
-            event_type: "phase"
-          }));
+          .map((p) => {
+            // Aligne sur les bornes de jour pour que le Gantt /
+            // calendrier affichent la bande sur la(les) bonne(s)
+            // case(s). Une phase de 1 j = full day, une phase de 0.5 j
+            // = demi-journée (jusqu'à midi).
+            const dur = Math.max(0.125, Number(p.duration_days) || 1);
+            const startMs = new Date(`${p.start_date}T00:00:00`).getTime();
+            const endMs = startMs + dur * 86400000;
+            return {
+              id: -p.id, // négatif pour éviter collision avec events réels
+              title: `📐 ${p.name}`,
+              description: null,
+              location: null,
+              start_at: new Date(startMs).toISOString(),
+              end_at: new Date(endMs).toISOString(),
+              all_day: true,
+              project_id: projectId,
+              assignee_id: null,
+              event_type: "phase"
+            };
+          });
       }
 
       setEvents([...realEvents, ...phaseEvents]);

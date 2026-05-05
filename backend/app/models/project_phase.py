@@ -14,6 +14,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     func,
@@ -37,12 +38,12 @@ class ProjectPhase(Base):
         Integer, nullable=False, default=0, server_default="0"
     )
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    # Duration in calendar days. End date is derived on the client side
-    # as start_date + duration_days - 1 (so a 1-day phase spans exactly
-    # its start_date). Nullable so half-defined phases are allowed while
-    # the project is being sketched out.
-    duration_days: Mapped[Optional[int]] = mapped_column(
-        Integer, nullable=True
+    # Duration in calendar days. Décimal pour supporter des phases en
+    # heures (ex. 0.5 = ½ journée = 4 h, 1.25 = 1 j + 2 h). End date
+    # est dérivée côté client comme start_date + ceil(duration_days) - 1.
+    # Nullable pour permettre les phases mi-définies.
+    duration_days: Mapped[Optional[float]] = mapped_column(
+        Numeric(6, 2), nullable=True
     )
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

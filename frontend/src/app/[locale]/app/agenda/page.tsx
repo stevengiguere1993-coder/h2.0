@@ -393,9 +393,13 @@ export default function AgendaPage() {
     return phases
       .filter((p) => p.start_date && p.duration_days && p.duration_days > 0)
       .map((p) => {
-        const s = new Date(`${p.start_date!}T08:00:00`);
-        const e = new Date(s);
-        e.setDate(e.getDate() + (p.duration_days || 1));
+        // Bornes de jour pour les bandes all-day. Une phase de 0.5 j
+        // s'arrête à midi du jour de début ; 1 j → de minuit à minuit.
+        const dur = Math.max(0.125, Number(p.duration_days) || 1);
+        const sMs = new Date(`${p.start_date!}T00:00:00`).getTime();
+        const eMs = sMs + dur * 86400000;
+        const s = new Date(sMs);
+        const e = new Date(eMs);
         return {
           id: -p.id, // négatif pour ne pas collisionner avec events réels
           title: `📐 ${p.name}`,

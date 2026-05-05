@@ -350,6 +350,20 @@ async def init_db() -> None:
             except Exception:
                 pass
 
+        # project_phases.duration_days passe de INTEGER → NUMERIC(6,2)
+        # pour supporter les phases en heures (ex. 0.5 = ½ journée).
+        # ALTER TYPE NUMERIC est idempotent côté PG quand la conversion
+        # est implicite (INTEGER → NUMERIC ne perd jamais de données).
+        try:
+            await conn.execute(
+                text(
+                    "ALTER TABLE project_phases "
+                    "ALTER COLUMN duration_days TYPE NUMERIC(6,2)"
+                )
+            )
+        except Exception:
+            pass
+
         # Relaxations — columns whose nullability changed.
         # ALTER ... DROP NOT NULL is idempotent on PostgreSQL.
         for table, column in (
