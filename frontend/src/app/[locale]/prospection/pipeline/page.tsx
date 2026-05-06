@@ -771,9 +771,11 @@ function TaskRow({
               onPatch({ name: trimmed });
             }
           }}
-          // Bordure noire fine en permanence pour bien délimiter
-          // chaque champ de saisie (demande Monday-style).
-          className="min-w-0 flex-1 resize-none rounded border border-black bg-transparent px-1 py-0.5 text-xs text-white focus:border-accent-500 focus:outline-none"
+          // Bordure très discrète juste pour signaler que c'est un
+          // champ éditable (le hover et le focus la mettent en
+          // évidence). Style Monday — moins agressif qu'une ligne
+          // noire pleine.
+          className="min-w-0 flex-1 resize-none rounded border border-white/15 bg-transparent px-1 py-0.5 text-xs text-white hover:border-white/30 focus:border-accent-500 focus:outline-none"
         />
         {/* Boutons empilés verticalement : note au-dessus, poubelle
             en-dessous (demande utilisateur). */}
@@ -1427,15 +1429,16 @@ function DatePill({
     : null;
 
   return (
-    <div className="relative inline-flex">
+    <div className="relative">
       <button
         type="button"
         onClick={open}
         aria-label="Date butoir"
-        // Plus petite que les autres pastilles : px-1.5 py-0.5 vs
-        // px-2 py-1. Toujours noire avec texte blanc, peu importe
-        // le délai.
-        className="inline-flex items-center justify-center rounded-md bg-black px-1.5 py-0.5 text-[10px] font-semibold text-white"
+        // pill-date-invert : noir sur thème clair, blanc sur thème
+        // dark — défini dans globals.css. rounded-full = forme
+        // capsule (rectangle aux extrémités demi-cercle). w-full
+        // pour s'aligner sur la largeur des autres pastilles.
+        className="pill-date-invert inline-flex w-full items-center justify-center rounded-full px-2 py-1 text-[10px] font-semibold"
       >
         {formatted || "+ Date"}
       </button>
