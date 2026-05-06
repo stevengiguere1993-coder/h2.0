@@ -214,3 +214,15 @@ html[data-portal-theme="light"] {
   --qg-bg-95: rgba(255, 255, 255, 0.95);
 }
 
+
+/* Pastille « date butoir » — toujours le contraire du fond de la
+ * page pour rester lisible : blanche sur thème dark, noire sur
+ * thème clair. Style demandé pour le Pipeline des deals. */
+.pill-date-invert {
+  background-color: #ffffff;
+  color: #0f172a;
+}
+html[data-portal-theme="light"] .pill-date-invert {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+}
