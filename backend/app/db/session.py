@@ -504,6 +504,62 @@ async def init_db() -> None:
                 # Table absente au tout premier boot — sera ré-essayé.
                 pass
 
+        # Reclassification one-shot des tâches d'entreprises importées
+        # de Monday qui sont restées en « backlog ». L'utilisateur veut
+        # qu'aucune tâche importée ne reste classée backlog : on la
+        # ventile dans À faire / En cours / En attente / Terminé selon
+        # son `monday_group_title` (le nom du groupe d'origine sur le
+        # board Monday). Idempotent — chaque UPDATE ne touche que les
+        # lignes encore en backlog, donc une fois reclassifiées elles
+        # ne bougent plus aux boots suivants.
+        #
+        # On limite aux tâches avec monday_item_id NOT NULL pour ne pas
+        # toucher les backlogs créés manuellement par les utilisateurs.
+        for sql in (
+            # Terminé : si completed_at est déjà set OU si le titre du
+            # groupe matche done/complete/✓/etc.
+            """
+            UPDATE entreprise_taches SET status = 'done'
+            WHERE status = 'backlog'
+              AND monday_item_id IS NOT NULL
+              AND (
+                completed_at IS NOT NULL
+                OR LOWER(COALESCE(monday_group_title, '')) ~
+                   '(done|complete|fini|termin|✓|✅|achev|fait)'
+              )
+            """,
+            # En cours
+            """
+            UPDATE entreprise_taches SET status = 'in_progress'
+            WHERE status = 'backlog'
+              AND monday_item_id IS NOT NULL
+              AND LOWER(COALESCE(monday_group_title, '')) ~
+                  '(working|en cours|doing|actif|wip|ongoing|en traitement)'
+            """,
+            # En attente / bloqué
+            """
+            UPDATE entreprise_taches SET status = 'waiting'
+            WHERE status = 'backlog'
+              AND monday_item_id IS NOT NULL
+              AND LOWER(COALESCE(monday_group_title, '')) ~
+                  '(attente|wait|block|stuck|on hold|hold|pause|bloqu|pending review)'
+            """,
+            # Tout le reste qui venait de Monday → À faire (TODO)
+            # par défaut. C'est plus utile que de laisser en backlog,
+            # et l'utilisateur pourra raffiner manuellement par la suite.
+            """
+            UPDATE entreprise_taches SET status = 'todo'
+            WHERE status = 'backlog'
+              AND monday_item_id IS NOT NULL
+            """,
+        ):
+            try:
+                await conn.execute(text(sql))
+            except Exception:
+                # Table absente / colonne pas encore migrée — on
+                # passe sans bloquer le boot.
+                pass
+
 
 async def close_db() -> None:
     """

@@ -322,6 +322,77 @@ async def delete_tache(
     await db.flush()
 
 
+# ── Reclassification batch ──────────────────────────────────────────────
+
+
+class ReclassifyOut(BaseModel):
+    done: int
+    in_progress: int
+    waiting: int
+    todo: int
+    untouched_backlog: int
+
+
+@router.post(
+    "/taches/reclassify",
+    response_model=ReclassifyOut,
+    summary="Re-classe toutes les tâches encore en backlog",
+)
+async def reclassify_taches(
+    db: DBSession, user: CurrentUser
+) -> ReclassifyOut:
+    """Ventile les tâches encore en backlog dans les 4 colonnes
+    cibles (todo, in_progress, waiting, done) en se basant sur leur
+    `monday_group_title`. Aussi déclenché automatiquement au boot
+    via `init_db` ; cet endpoint permet de re-jouer la passe à la
+    main après un nouvel import."""
+    _require_volet(user)
+
+    rows = (
+        await db.execute(
+            select(EntrepriseTache).where(
+                EntrepriseTache.status == TacheStatus.BACKLOG.value
+            )
+        )
+    ).scalars().all()
+
+    counts = {"done": 0, "in_progress": 0, "waiting": 0, "todo": 0, "left": 0}
+    for t in rows:
+        # Si la tâche a déjà une date de complétion, c'est terminé
+        # peu importe ce que dit le groupe Monday.
+        if t.completed_at is not None:
+            t.status = TacheStatus.DONE.value
+            counts["done"] += 1
+            continue
+        guess = _map_status_label(t.monday_group_title)
+        if guess == TacheStatus.BACKLOG.value:
+            guess = None  # backlog = pas de signal → fallback TODO
+        if guess is None and t.monday_item_id:
+            # Importée de Monday sans signal clair → À faire par défaut.
+            guess = TacheStatus.TODO.value
+        if guess is None:
+            counts["left"] += 1
+            continue
+        t.status = guess
+        if guess == TacheStatus.DONE.value:
+            counts["done"] += 1
+        elif guess == TacheStatus.IN_PROGRESS.value:
+            counts["in_progress"] += 1
+        elif guess == TacheStatus.WAITING.value:
+            counts["waiting"] += 1
+        elif guess == TacheStatus.TODO.value:
+            counts["todo"] += 1
+    await db.flush()
+
+    return ReclassifyOut(
+        done=counts["done"],
+        in_progress=counts["in_progress"],
+        waiting=counts["waiting"],
+        todo=counts["todo"],
+        untouched_backlog=counts["left"],
+    )
+
+
 # ── Import Monday ───────────────────────────────────────────────────────
 
 
