@@ -49,6 +49,9 @@ export type CurrentUser = {
   /** True quand un avatar est uploadé — récupéré via
    *  GET /api/v1/auth/me/avatar. */
   has_avatar?: boolean;
+  /** Couleur de profil choisie par l'utilisateur (clé courte type
+   *  « violet »). NULL = neutre. Voir lib/profile-colors.ts. */
+  profile_color?: string | null;
   /** Nom calculé côté serveur : « Prénom Nom » sinon partie locale
    *  du courriel. */
   display_name?: string;

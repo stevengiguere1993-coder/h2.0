@@ -5,6 +5,7 @@ import { useRouter } from "@/i18n/navigation";
 import {
   ArrowLeft,
   Camera,
+  Check,
   KeyRound,
   Loader2,
   Save,
@@ -16,6 +17,11 @@ import { authedFetch, getToken, setToken } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { Link } from "@/i18n/navigation";
 import { KratosLogo } from "@/components/kratos-logo";
+import {
+  PROFILE_COLORS,
+  PROFILE_COLOR_SWATCH as PROFILE_SWATCH_CLS,
+  type ProfileColor
+} from "@/lib/profile-colors";
 
 /**
  * Page « Mon profil » accessible depuis la sidebar de tous les
@@ -29,6 +35,9 @@ export default function ProfilePage() {
   const { user, loading, signOut } = useCurrentUser();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
+  const [profileColor, setProfileColor] = useState<ProfileColor | null>(
+    null
+  );
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileMsg, setProfileMsg] = useState<string | null>(null);
   const [profileErr, setProfileErr] = useState<string | null>(null);
@@ -51,6 +60,10 @@ export default function ProfilePage() {
     if (user) {
       setFirstName(user.first_name || "");
       setLastName(user.last_name || "");
+      setProfileColor(
+        ((user as unknown) as { profile_color?: ProfileColor | null })
+          .profile_color ?? null
+      );
     }
   }, [user]);
 
@@ -92,7 +105,8 @@ export default function ProfilePage() {
         method: "PATCH",
         body: JSON.stringify({
           first_name: firstName,
-          last_name: lastName
+          last_name: lastName,
+          profile_color: profileColor
         })
       });
       if (!res.ok) {
@@ -106,6 +120,24 @@ export default function ProfilePage() {
       setProfileErr((e as Error).message || "Échec");
     } finally {
       setSavingProfile(false);
+    }
+  }
+
+  async function persistColor(c: ProfileColor | null) {
+    setProfileMsg(null);
+    setProfileErr(null);
+    try {
+      const res = await authedFetch("/api/v1/auth/me/profile", {
+        method: "PATCH",
+        body: JSON.stringify({ profile_color: c })
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status} ${txt.slice(0, 120)}`);
+      }
+      router.refresh();
+    } catch (e) {
+      setProfileErr((e as Error).message || "Échec");
     }
   }
 
@@ -375,6 +407,60 @@ export default function ProfilePage() {
             Enregistrer
           </button>
         </form>
+      </section>
+
+      {/* Couleur de profil */}
+      <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          Couleur de profil
+        </h2>
+        <p className="mt-1 text-xs text-white/50">
+          Sert à teinter ta pastille d&apos;assignation dans le pipeline
+          des deals et les listes d&apos;équipe.
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setProfileColor(null);
+              void persistColor(null);
+            }}
+            aria-label="Aucune couleur"
+            className={`flex h-9 w-9 items-center justify-center rounded-full border-2 bg-brand-800 transition ${
+              profileColor === null
+                ? "border-white"
+                : "border-transparent hover:border-white/30"
+            }`}
+          >
+            {profileColor === null ? (
+              <Check className="h-4 w-4 text-white" />
+            ) : null}
+          </button>
+          {PROFILE_COLORS.map((c) => {
+            const isActive = profileColor === c.value;
+            return (
+              <button
+                key={c.value}
+                type="button"
+                onClick={() => {
+                  setProfileColor(c.value);
+                  void persistColor(c.value);
+                }}
+                aria-label={c.label}
+                title={c.label}
+                className={`flex h-9 w-9 items-center justify-center rounded-full border-2 transition ${
+                  isActive
+                    ? "border-white"
+                    : "border-transparent hover:border-white/30"
+                } ${PROFILE_SWATCH_CLS[c.value]}`}
+              >
+                {isActive ? (
+                  <Check className="h-4 w-4 text-white drop-shadow" />
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
       </section>
 
       {/* Mot de passe */}

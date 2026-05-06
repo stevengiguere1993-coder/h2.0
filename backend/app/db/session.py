@@ -147,6 +147,7 @@ async def init_db() -> None:
             ("users", "last_name", "VARCHAR(100)"),
             ("users", "avatar_image", "BYTEA"),
             ("users", "avatar_content_type", "VARCHAR(64)"),
+            ("users", "profile_color", "VARCHAR(16)"),
             ("soumissions", "client_note", "TEXT"),
             ("factures", "internal_notes", "TEXT"),
             ("factures", "client_note", "TEXT"),

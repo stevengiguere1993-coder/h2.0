@@ -225,12 +225,26 @@ async def update_my_theme(
 # ---------- Profil utilisateur (Prénom / Nom / Photo) ----------
 
 
+#: Palette autorisée pour la couleur de profil. Clés courtes ;
+#: leur traduction Tailwind est gérée côté frontend.
+PROFILE_COLOR_PATTERN = (
+    r"^(violet|rose|pink|red|orange|amber|yellow|lime|green|"
+    r"emerald|teal|cyan|sky|blue|indigo|fuchsia|slate)$"
+)
+
+
 class ProfileUpdate(BaseModel):
-    """Mise à jour du profil — Prénom + Nom uniquement. La photo
-    passe par /me/avatar (multipart)."""
+    """Mise à jour du profil — Prénom, Nom, et couleur de profil.
+    La photo passe par /me/avatar (multipart)."""
 
     first_name: Optional[str] = Field(default=None, max_length=100)
     last_name: Optional[str] = Field(default=None, max_length=100)
+    # `None` explicite (à différencier d'« absent ») permet à
+    # l'utilisateur de revenir au neutre. Pydantic v2 + exclude_unset
+    # garde la nuance.
+    profile_color: Optional[str] = Field(
+        default=None, pattern=PROFILE_COLOR_PATTERN
+    )
 
 
 @router.patch(

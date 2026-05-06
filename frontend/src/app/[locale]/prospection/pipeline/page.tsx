@@ -15,6 +15,10 @@ import { AppTopbar } from "@/components/app-topbar";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { useProspectionLayout } from "../layout";
+import {
+  PROFILE_COLOR_PILL,
+  DEFAULT_PILL_CLASS
+} from "@/lib/profile-colors";
 
 // ─── Priorités du DEAL (au niveau de la carte entière) ────────────
 type DealPriority =
@@ -89,12 +93,12 @@ const STATUS_STYLE: Record<
   }
 > = {
   a_venir: {
-    // Rose pâle (pas rouge) — teinte pink-300/200, fond très clair.
-    border: "border-pink-300/50",
-    bg: "bg-pink-300/5",
-    label: "text-pink-200",
-    dragOverBg: "bg-pink-300/15",
-    pill: "bg-pink-400 text-white"
+    // Violet — bordure soutenue + fond très pâle.
+    border: "border-violet-400/60",
+    bg: "bg-violet-400/5",
+    label: "text-violet-200",
+    dragOverBg: "bg-violet-400/15",
+    pill: "bg-violet-500 text-white"
   },
   a_faire: {
     // Bleu
@@ -162,7 +166,16 @@ type Task = {
   updated_at: string;
 };
 
-type UserMini = { id: number; email: string; volets: string[] };
+type UserMini = {
+  id: number;
+  email: string;
+  volets: string[];
+  display_name?: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  profile_color?: string | null;
+  has_avatar?: boolean;
+};
 
 export default function ProspectionPipelinePage() {
   const { onOpenSidebar } = useProspectionLayout();
@@ -1045,9 +1058,14 @@ function PillPicker({
 }
 
 /**
- * Pastille « personne assignée » — avatar en initiales + courte
- * étiquette. Au clic, ouvre la liste des users (avec « Personne »
- * pour désassigner).
+ * Pastille « personne assignée » — Monday-style.
+ * Affiche la photo de profil de l'utilisateur (ou ses initiales)
+ * dans un rond, son display_name, et la pastille prend la couleur
+ * que l'utilisateur a choisie dans /profil. Si pas de couleur ni
+ * de photo, on tombe sur un fond neutre.
+ *
+ * Au clic, ouvre la liste des users — chaque ligne reprend la
+ * couleur du user pour qu'on identifie tout le monde au coup d'œil.
  */
 function AssigneePill({
   users,
@@ -1076,16 +1094,6 @@ function AssigneePill({
   }, [open]);
 
   const current = value ? users.find((u) => u.id === value) : null;
-  const localPart = current ? current.email.split("@")[0] : "";
-  const initials = localPart
-    ? localPart
-        .split(/[._-]/)
-        .map((s) => s[0])
-        .filter(Boolean)
-        .slice(0, 2)
-        .join("")
-        .toUpperCase()
-    : "";
 
   return (
     <div ref={wrapRef} className="relative">
@@ -1095,23 +1103,21 @@ function AssigneePill({
         aria-label="Personne assignée"
         className={`inline-flex w-full items-center justify-center gap-1 rounded px-2 py-1 text-[10px] font-semibold ${
           current
-            ? "bg-violet-500 text-white"
+            ? userPillCls(current)
             : "bg-brand-800 text-white/60"
         }`}
       >
         {current ? (
           <>
-            <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-white/20 text-[8px] font-bold">
-              {initials || "?"}
-            </span>
-            <span className="truncate">{localPart}</span>
+            <UserAvatarBadge user={current} size={14} />
+            <span className="truncate">{userDisplayName(current)}</span>
           </>
         ) : (
           <span>+ Personne</span>
         )}
       </button>
       {open ? (
-        <div className="absolute left-0 right-0 z-30 mt-1 max-h-56 min-w-[160px] space-y-1 overflow-y-auto rounded-lg border border-brand-800 bg-brand-950 p-1 shadow-lg">
+        <div className="absolute left-0 right-0 z-30 mt-1 max-h-56 min-w-[180px] space-y-1 overflow-y-auto rounded-lg border border-brand-800 bg-brand-950 p-1 shadow-lg">
           <button
             type="button"
             onClick={() => {
@@ -1130,18 +1136,104 @@ function AssigneePill({
                 onChange(u.id);
                 setOpen(false);
               }}
-              className={`block w-full rounded px-2 py-1 text-left text-[10px] font-semibold ${
+              className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-[10px] font-semibold ${userPillCls(u)} ${
                 u.id === value
-                  ? "bg-violet-500 text-white"
-                  : "text-white hover:bg-white/5"
+                  ? "ring-2 ring-white/60"
+                  : "opacity-90 hover:opacity-100"
               }`}
             >
-              {u.email.split("@")[0]}
+              <UserAvatarBadge user={u} size={14} />
+              <span className="truncate">{userDisplayName(u)}</span>
             </button>
           ))}
         </div>
       ) : null}
     </div>
+  );
+}
+
+function userDisplayName(u: UserMini): string {
+  if (u.display_name) return u.display_name;
+  const fn = (u.first_name || "").trim();
+  const ln = (u.last_name || "").trim();
+  if (fn || ln) return `${fn} ${ln}`.trim();
+  return u.email.split("@")[0];
+}
+
+function userInitials(u: UserMini): string {
+  const fn = (u.first_name || "").trim();
+  const ln = (u.last_name || "").trim();
+  if (fn || ln) {
+    return `${fn[0] || ""}${ln[0] || ""}`.toUpperCase() || "?";
+  }
+  const local = u.email.split("@")[0];
+  return (local[0] || "?").toUpperCase();
+}
+
+function userPillCls(u: UserMini): string {
+  const c = u.profile_color;
+  if (c && (PROFILE_COLOR_PILL as Record<string, string>)[c]) {
+    return PROFILE_COLOR_PILL[c as keyof typeof PROFILE_COLOR_PILL];
+  }
+  return DEFAULT_PILL_CLASS;
+}
+
+/**
+ * Petit rond avatar — photo si disponible (chargée via authedFetch
+ * pour pouvoir envoyer le Bearer token), sinon initiales.
+ */
+function UserAvatarBadge({
+  user,
+  size = 14
+}: {
+  user: UserMini;
+  size?: number;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let revoke: string | null = null;
+    (async () => {
+      if (!user.has_avatar) {
+        setUrl(null);
+        return;
+      }
+      try {
+        const r = await authedFetch(
+          `/api/v1/auth/users/${user.id}/avatar`
+        );
+        if (!r.ok) return;
+        const blob = await r.blob();
+        const u = URL.createObjectURL(blob);
+        revoke = u;
+        setUrl(u);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      if (revoke) URL.revokeObjectURL(revoke);
+    };
+  }, [user.id, user.has_avatar]);
+
+  const dim = `${size}px`;
+  if (url) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={url}
+        alt=""
+        className="flex-shrink-0 rounded-full object-cover"
+        style={{ width: dim, height: dim }}
+      />
+    );
+  }
+  return (
+    <span
+      className="flex flex-shrink-0 items-center justify-center rounded-full bg-white/20 text-[8px] font-bold"
+      style={{ width: dim, height: dim }}
+    >
+      {userInitials(user)}
+    </span>
   );
 }
 
