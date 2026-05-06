@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ChevronDown,
@@ -30,7 +30,7 @@ const DEAL_PRIORITIES: {
   label: string;
   dot: string;
 }[] = [
-  { value: "urgent", label: "Urgent", dot: "bg-rose-500" },
+  { value: "urgent", label: "Urgent ⚠️", dot: "bg-rose-500" },
   { value: "eleve", label: "Élevé", dot: "bg-orange-500" },
   { value: "moyenne", label: "Moyenne", dot: "bg-amber-400" },
   { value: "en_attente", label: "En attente", dot: "bg-sky-400" },
@@ -85,35 +85,40 @@ const STATUS_STYLE: Record<
     bg: string;
     label: string;
     dragOverBg: string;
+    pill: string; // pastille pleine pour le picker dans la tâche
   }
 > = {
   a_venir: {
-    // Rose
-    border: "border-rose-400/70",
-    bg: "bg-rose-500/10",
-    label: "text-rose-300",
-    dragOverBg: "bg-rose-500/20"
+    // Rose pâle (pas rouge) — teinte pink-300/200, fond très clair.
+    border: "border-pink-300/50",
+    bg: "bg-pink-300/5",
+    label: "text-pink-200",
+    dragOverBg: "bg-pink-300/15",
+    pill: "bg-pink-400 text-white"
   },
   a_faire: {
     // Bleu
     border: "border-sky-400/70",
     bg: "bg-sky-500/10",
     label: "text-sky-300",
-    dragOverBg: "bg-sky-500/20"
+    dragOverBg: "bg-sky-500/20",
+    pill: "bg-sky-500 text-white"
   },
   en_traitement: {
     // Jaune/orange
     border: "border-amber-400/70",
     bg: "bg-amber-500/10",
     label: "text-amber-300",
-    dragOverBg: "bg-amber-500/20"
+    dragOverBg: "bg-amber-500/20",
+    pill: "bg-amber-500 text-brand-950"
   },
   termine: {
     // Vert
     border: "border-emerald-400/70",
     bg: "bg-emerald-500/10",
     label: "text-emerald-300",
-    dragOverBg: "bg-emerald-500/20"
+    dragOverBg: "bg-emerald-500/20",
+    pill: "bg-emerald-500 text-white"
   }
 };
 
@@ -122,17 +127,25 @@ const TASK_PRIORITIES: {
   label: string;
   emoji?: string;
 }[] = [
-  { value: "urgent", label: "Urgent", emoji: "⚠️" },
+  { value: "urgent", label: "Urgent ⚠️" },
   { value: "eleve", label: "Élevé" },
   { value: "moyenne", label: "Moyenne" },
   { value: "faible", label: "Faible" }
 ];
 
 const TASK_PRIORITY_LABEL: Record<TaskPriority, string> = {
-  urgent: "Urgent",
+  urgent: "Urgent ⚠️",
   eleve: "Élevé",
   moyenne: "Moyenne",
   faible: "Faible"
+};
+
+// Pastilles pleines style Monday — fond saturé, texte qui contraste.
+const TASK_PRIORITY_PILL: Record<TaskPriority, string> = {
+  urgent: "bg-rose-500 text-white",
+  eleve: "bg-orange-500 text-white",
+  moyenne: "bg-amber-400 text-brand-950",
+  faible: "bg-slate-500 text-white"
 };
 
 type Task = {
@@ -206,6 +219,23 @@ export default function ProspectionPipelinePage() {
     }
   }
 
+  async function changeDealAddress(id: number, address: string) {
+    const prev = deals;
+    setDeals((xs) =>
+      xs.map((d) => (d.id === id ? { ...d, address } : d))
+    );
+    try {
+      const res = await authedFetch(`/api/v1/prospection/deals/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ address })
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      setDeals(prev);
+      setError("Mise à jour de l'adresse échouée.");
+    }
+  }
+
   async function removeDeal(deal: Deal) {
     if (
       !(await confirm({
@@ -271,6 +301,7 @@ export default function ProspectionPipelinePage() {
                 deal={d}
                 users={users}
                 onChangePriority={(p) => changeDealPriority(d.id, p)}
+                onChangeAddress={(a) => changeDealAddress(d.id, a)}
                 onRemove={() => removeDeal(d)}
               />
             ))}
@@ -307,11 +338,13 @@ function DealCard({
   deal,
   users,
   onChangePriority,
+  onChangeAddress,
   onRemove
 }: {
   deal: Deal;
   users: UserMini[];
   onChangePriority: (p: DealPriority) => void;
+  onChangeAddress: (address: string) => void;
   onRemove: () => void;
 }) {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -323,6 +356,12 @@ function DealCard({
   const [dragOverStatus, setDragOverStatus] = useState<TaskStatus | null>(
     null
   );
+  // Édition inline du nom du deal (adresse).
+  const [editingName, setEditingName] = useState(false);
+  const [draftName, setDraftName] = useState(deal.address);
+  useEffect(() => {
+    setDraftName(deal.address);
+  }, [deal.address]);
 
   const loadTasks = useCallback(async () => {
     setLoadingTasks(true);
@@ -435,11 +474,39 @@ function DealCard({
 
   return (
     <div className="rounded-xl border border-brand-800 bg-brand-900 p-4 shadow-sm">
-      {/* Header carte */}
+      {/* Header carte — adresse éditable inline */}
       <div className="flex items-start justify-between gap-2">
-        <h3 className="min-w-0 flex-1 text-sm font-semibold text-white">
-          {deal.address}
-        </h3>
+        {editingName ? (
+          <input
+            autoFocus
+            type="text"
+            value={draftName}
+            onChange={(e) => setDraftName(e.target.value)}
+            onBlur={() => {
+              const v = draftName.trim();
+              setEditingName(false);
+              if (v && v !== deal.address) onChangeAddress(v);
+              else setDraftName(deal.address);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") {
+                setDraftName(deal.address);
+                setEditingName(false);
+              }
+            }}
+            className="min-w-0 flex-1 rounded border border-accent-500 bg-brand-950 px-1.5 py-1 text-sm font-semibold text-white focus:outline-none"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setEditingName(true)}
+            className="min-w-0 flex-1 truncate rounded px-1.5 py-1 text-left text-sm font-semibold text-white hover:bg-white/5"
+            title="Cliquer pour modifier l'adresse"
+          >
+            {deal.address}
+          </button>
+        )}
         <DealPriorityPicker
           value={deal.priority}
           onChange={onChangePriority}
@@ -683,59 +750,37 @@ function TaskRow({
         </div>
       ) : null}
 
-      {/* Sélecteurs : assigné / statut / priorité / échéance */}
-      <div className="mt-1.5 grid grid-cols-2 gap-1 text-[10px]">
-        <select
-          value={task.assignee_user_id ?? ""}
-          onChange={(e) =>
-            onPatch({
-              assignee_user_id: e.target.value ? Number(e.target.value) : null
-            })
-          }
-          className="rounded border border-brand-800 bg-brand-900 px-1 py-0.5 text-white"
-        >
-          <option value="">— Personne —</option>
-          {users.map((u) => (
-            <option key={u.id} value={u.id}>
-              {u.email.split("@")[0]}
-            </option>
-          ))}
-        </select>
-        <select
+      {/* Pastilles style Monday : assigné / statut / priorité / échéance */}
+      <div className="mt-1.5 grid grid-cols-2 gap-1">
+        <AssigneePill
+          users={users}
+          value={task.assignee_user_id}
+          onChange={(uid) => onPatch({ assignee_user_id: uid })}
+        />
+        <PillPicker
+          options={TASK_STATUSES.map((s) => ({
+            value: s.value,
+            label: s.label,
+            cls: STATUS_STYLE[s.value].pill
+          }))}
           value={task.status}
-          onChange={(e) =>
-            onPatch({ status: e.target.value as TaskStatus })
-          }
-          className="rounded border border-brand-800 bg-brand-900 px-1 py-0.5 text-white"
-        >
-          {TASK_STATUSES.map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-        <select
+          onChange={(v) => onPatch({ status: v as TaskStatus })}
+          ariaLabel="Statut"
+        />
+        <PillPicker
+          options={TASK_PRIORITIES.map((p) => ({
+            value: p.value,
+            label: p.label,
+            cls: TASK_PRIORITY_PILL[p.value]
+          }))}
           value={task.priority}
-          onChange={(e) =>
-            onPatch({ priority: e.target.value as TaskPriority })
-          }
-          className="rounded border border-brand-800 bg-brand-900 px-1 py-0.5 text-white"
-        >
-          {TASK_PRIORITIES.map((p) => (
-            <option key={p.value} value={p.value}>
-              {p.emoji ? `${p.emoji} ${p.label}` : p.label}
-            </option>
-          ))}
-        </select>
-        <input
-          type="date"
-          value={task.due_date || ""}
-          onChange={(e) =>
-            onPatch({ due_date: e.target.value || null })
-          }
-          className={`rounded border bg-brand-900 px-1 py-0.5 text-white ${
-            overdue ? "border-rose-500/60" : "border-brand-800"
-          }`}
+          onChange={(v) => onPatch({ priority: v as TaskPriority })}
+          ariaLabel="Priorité"
+        />
+        <DatePill
+          value={task.due_date}
+          overdue={overdue}
+          onChange={(d) => onPatch({ due_date: d })}
         />
       </div>
 
@@ -918,3 +963,250 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
 // Empêche le warning "unused var" pour la table de labels exportée
 // (utilisée dans les futures vues filtrées par priorité de tâche).
 export const _TASK_PRIORITY_LABEL = TASK_PRIORITY_LABEL;
+
+// ─── Composants Monday-like ───────────────────────────────────────
+
+type PillOption = {
+  value: string;
+  label: string;
+  cls: string; // Classes Tailwind appliquées au fond + texte de la pastille
+};
+
+/**
+ * Pastille pleine style Monday : la valeur courante est affichée
+ * comme un bouton coloré ; au clic, un petit menu flottant montre
+ * toutes les options sous forme de pastilles. Chaque option, au clic,
+ * applique + ferme.
+ */
+function PillPicker({
+  options,
+  value,
+  onChange,
+  ariaLabel
+}: {
+  options: PillOption[];
+  value: string;
+  onChange: (v: string) => void;
+  ariaLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  // Ferme le menu si on clique ailleurs.
+  useEffect(() => {
+    if (!open) return;
+    function onClick(e: MouseEvent) {
+      if (
+        wrapRef.current &&
+        !wrapRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [open]);
+
+  const current = options.find((o) => o.value === value) ?? options[0];
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label={ariaLabel}
+        className={`inline-flex w-full items-center justify-center rounded px-2 py-1 text-[10px] font-semibold ${current.cls}`}
+      >
+        <span className="truncate">{current.label}</span>
+      </button>
+      {open ? (
+        <div className="absolute left-0 right-0 z-30 mt-1 min-w-[140px] space-y-1 rounded-lg border border-brand-800 bg-brand-950 p-1 shadow-lg">
+          {options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => {
+                onChange(o.value);
+                setOpen(false);
+              }}
+              className={`block w-full rounded px-2 py-1 text-left text-[10px] font-semibold ${o.cls} ${
+                o.value === value
+                  ? "ring-2 ring-white/60"
+                  : "opacity-90 hover:opacity-100"
+              }`}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Pastille « personne assignée » — avatar en initiales + courte
+ * étiquette. Au clic, ouvre la liste des users (avec « Personne »
+ * pour désassigner).
+ */
+function AssigneePill({
+  users,
+  value,
+  onChange
+}: {
+  users: UserMini[];
+  value: number | null;
+  onChange: (uid: number | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onClick(e: MouseEvent) {
+      if (
+        wrapRef.current &&
+        !wrapRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [open]);
+
+  const current = value ? users.find((u) => u.id === value) : null;
+  const localPart = current ? current.email.split("@")[0] : "";
+  const initials = localPart
+    ? localPart
+        .split(/[._-]/)
+        .map((s) => s[0])
+        .filter(Boolean)
+        .slice(0, 2)
+        .join("")
+        .toUpperCase()
+    : "";
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label="Personne assignée"
+        className={`inline-flex w-full items-center justify-center gap-1 rounded px-2 py-1 text-[10px] font-semibold ${
+          current
+            ? "bg-violet-500 text-white"
+            : "bg-brand-800 text-white/60"
+        }`}
+      >
+        {current ? (
+          <>
+            <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-white/20 text-[8px] font-bold">
+              {initials || "?"}
+            </span>
+            <span className="truncate">{localPart}</span>
+          </>
+        ) : (
+          <span>+ Personne</span>
+        )}
+      </button>
+      {open ? (
+        <div className="absolute left-0 right-0 z-30 mt-1 max-h-56 min-w-[160px] space-y-1 overflow-y-auto rounded-lg border border-brand-800 bg-brand-950 p-1 shadow-lg">
+          <button
+            type="button"
+            onClick={() => {
+              onChange(null);
+              setOpen(false);
+            }}
+            className="block w-full rounded px-2 py-1 text-left text-[10px] font-semibold text-white/60 hover:bg-white/5"
+          >
+            — Personne —
+          </button>
+          {users.map((u) => (
+            <button
+              key={u.id}
+              type="button"
+              onClick={() => {
+                onChange(u.id);
+                setOpen(false);
+              }}
+              className={`block w-full rounded px-2 py-1 text-left text-[10px] font-semibold ${
+                u.id === value
+                  ? "bg-violet-500 text-white"
+                  : "text-white hover:bg-white/5"
+              }`}
+            >
+              {u.email.split("@")[0]}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Pastille date butoir — affiche la date formatée (ou « Date butoir »
+ * si vide). Au clic, ouvre un input date masqué.
+ */
+function DatePill({
+  value,
+  overdue,
+  onChange
+}: {
+  value: string | null;
+  overdue: boolean;
+  onChange: (d: string | null) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  function open() {
+    const el = inputRef.current;
+    if (!el) return;
+    // showPicker est dispo Chrome/Edge ; fallback en focus + clic.
+    const anyEl = el as HTMLInputElement & { showPicker?: () => void };
+    if (typeof anyEl.showPicker === "function") {
+      try {
+        anyEl.showPicker();
+        return;
+      } catch {
+        /* fallback */
+      }
+    }
+    el.focus();
+    el.click();
+  }
+
+  const formatted = value
+    ? new Date(value + "T12:00:00").toLocaleDateString("fr-CA", {
+        day: "2-digit",
+        month: "short"
+      })
+    : null;
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={open}
+        aria-label="Date butoir"
+        className={`inline-flex w-full items-center justify-center gap-1 rounded px-2 py-1 text-[10px] font-semibold ${
+          overdue
+            ? "bg-rose-500 text-white"
+            : value
+              ? "bg-emerald-500/80 text-white"
+              : "bg-brand-800 text-white/60"
+        }`}
+      >
+        {formatted || "+ Date butoir"}
+      </button>
+      <input
+        ref={inputRef}
+        type="date"
+        value={value || ""}
+        onChange={(e) => onChange(e.target.value || null)}
+        className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
+      />
+    </div>
+  );
+}
