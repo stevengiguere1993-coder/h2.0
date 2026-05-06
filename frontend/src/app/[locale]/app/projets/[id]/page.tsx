@@ -978,6 +978,11 @@ type Photo = {
 function PhotosTab({ projectId }: { projectId: number }) {
   const confirm = useConfirm();
   const [photos, setPhotos] = useState<Photo[]>([]);
+  // Object URLs résolus via authedFetch pour chaque photo. Une balise
+  // <img src=...> directe ne peut pas envoyer le Bearer token, donc
+  // les images affichaient un placeholder cassé. On fetch chaque blob
+  // côté JS, on crée une object URL et on la met dans src.
+  const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -1005,6 +1010,50 @@ function PhotosTab({ projectId }: { projectId: number }) {
       cancelled = true;
     };
   }, [projectId]);
+
+  // Charge les blobs (images ou PDF) via authedFetch et les expose
+  // comme object URLs. Les PDF sont skippés (on affiche une icône).
+  useEffect(() => {
+    let cancelled = false;
+    const created: string[] = [];
+    (async () => {
+      for (const p of photos) {
+        if (photoUrls[p.id]) continue;
+        if (p.content_type === "application/pdf") continue;
+        try {
+          const r = await authedFetch(
+            `/api/v1/projects/${projectId}/photos/${p.id}/image`
+          );
+          if (!r.ok) continue;
+          const blob = await r.blob();
+          const url = URL.createObjectURL(blob);
+          created.push(url);
+          if (cancelled) {
+            URL.revokeObjectURL(url);
+            continue;
+          }
+          setPhotoUrls((prev) => ({ ...prev, [p.id]: url }));
+        } catch {
+          /* ignore — l'utilisateur verra le placeholder */
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      // Les URLs sont revoke quand la photo disparaît du state via
+      // remove() — pas ici pour éviter de casser un re-render qui
+      // garde les mêmes blobs.
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photos, projectId]);
+
+  // Cleanup global au démontage de la tab.
+  useEffect(() => {
+    return () => {
+      Object.values(photoUrls).forEach((url) => URL.revokeObjectURL(url));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function uploadOne(file: File): Promise<Photo> {
     const fd = new FormData();
@@ -1066,6 +1115,13 @@ function PhotosTab({ projectId }: { projectId: number }) {
       );
       if (!res.ok && res.status !== 204) throw new Error();
       setPhotos((xs) => xs.filter((p) => p.id !== id));
+      setPhotoUrls((prev) => {
+        const url = prev[id];
+        if (url) URL.revokeObjectURL(url);
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
     } catch {
       setErr("Suppression échouée.");
     }
@@ -1176,14 +1232,18 @@ function PhotosTab({ projectId }: { projectId: number }) {
                     <div className="flex h-full items-center justify-center text-sm text-white/60">
                       📄 PDF
                     </div>
-                  ) : (
+                  ) : photoUrls[p.id] ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
-                      src={`${process.env.NEXT_PUBLIC_API_BASE_URL || ""}/api/v1/projects/${projectId}/photos/${p.id}/image`}
+                      src={photoUrls[p.id]}
                       alt={p.caption || ""}
                       className="h-full w-full object-cover"
                       loading="lazy"
                     />
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-xs text-white/30">
+                      Chargement…
+                    </div>
                   )}
                 </button>
                 <p className="mt-2 line-clamp-2 text-xs text-white/80">
