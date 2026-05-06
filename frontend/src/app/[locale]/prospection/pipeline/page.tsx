@@ -75,6 +75,48 @@ const TASK_STATUSES: { value: TaskStatus; label: string }[] = [
   { value: "termine", label: "Terminé" }
 ];
 
+// Style Monday-like : chaque groupe de statut a sa propre teinte —
+// bordure vive et fond pastel pour qu'on identifie au coup d'œil
+// dans quel état est une tâche.
+const STATUS_STYLE: Record<
+  TaskStatus,
+  {
+    border: string;
+    bg: string;
+    label: string;
+    dragOverBg: string;
+  }
+> = {
+  a_venir: {
+    // Rose
+    border: "border-rose-400/70",
+    bg: "bg-rose-500/10",
+    label: "text-rose-300",
+    dragOverBg: "bg-rose-500/20"
+  },
+  a_faire: {
+    // Bleu
+    border: "border-sky-400/70",
+    bg: "bg-sky-500/10",
+    label: "text-sky-300",
+    dragOverBg: "bg-sky-500/20"
+  },
+  en_traitement: {
+    // Jaune/orange
+    border: "border-amber-400/70",
+    bg: "bg-amber-500/10",
+    label: "text-amber-300",
+    dragOverBg: "bg-amber-500/20"
+  },
+  termine: {
+    // Vert
+    border: "border-emerald-400/70",
+    bg: "bg-emerald-500/10",
+    label: "text-emerald-300",
+    dragOverBg: "bg-emerald-500/20"
+  }
+};
+
 const TASK_PRIORITIES: {
   value: TaskPriority;
   label: string;
@@ -443,6 +485,7 @@ function DealCard({
             TASK_STATUSES.map((s) => {
               const list = tasksByStatus[s.value];
               const isDragOver = dragOverStatus === s.value;
+              const style = STATUS_STYLE[s.value];
               return (
                 <div
                   key={s.value}
@@ -456,16 +499,16 @@ function DealCard({
                     )
                   }
                   onDrop={() => handleDrop(s.value)}
-                  className={`rounded-md border ${
-                    isDragOver
-                      ? "border-accent-500 bg-accent-500/5"
-                      : "border-transparent"
+                  className={`rounded-lg border-2 p-2 transition ${style.border} ${
+                    isDragOver ? style.dragOverBg : style.bg
                   }`}
                 >
-                  <div className="flex items-center justify-between px-1 py-1">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-white/50">
-                      {s.label}{" "}
-                      <span className="ml-1 text-white/30">
+                  <div className="mb-1.5 flex items-center justify-between px-0.5">
+                    <p
+                      className={`text-[10px] font-bold uppercase tracking-wider ${style.label}`}
+                    >
+                      {s.label}
+                      <span className="ml-1 opacity-60">
                         ({list.length})
                       </span>
                     </p>
@@ -475,7 +518,7 @@ function DealCard({
                         setAdding(s.value);
                         setNewName("");
                       }}
-                      className="rounded p-0.5 text-white/40 hover:bg-white/5 hover:text-white"
+                      className={`rounded p-0.5 ${style.label} hover:bg-white/10`}
                       title="Ajouter une tâche"
                       aria-label="Ajouter une tâche"
                     >
