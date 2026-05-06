@@ -191,6 +191,13 @@ class User(Base, TimestampMixin):
     avatar_content_type: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
     )
+    # Couleur de profil — clé courte (ex. « violet », « rose »,
+    # « emerald »…). Sert à teinter la pastille d'assignation et
+    # à donner une identité visuelle propre à chaque utilisateur
+    # dans les listes / kanban. NULL = bleu neutre par défaut.
+    profile_color: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True
+    )
 
     @property
     def display_name(self) -> str:

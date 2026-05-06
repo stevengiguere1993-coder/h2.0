@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import delete, func, insert, select
 
-from app.api.deps import DBSession, RequireAdminRole, RequireOwner
+from app.api.deps import CurrentUser, DBSession, RequireAdminRole, RequireOwner
 from app.core.security import get_password_hash
 from app.models.employe import Employe
 from app.models.project import Project
@@ -56,6 +56,14 @@ class UserRead(BaseModel):
     # Volets accessibles (construction / prospection).
     volets: List[str] = Field(default_factory=lambda: list(DEFAULT_VOLETS))
     can_assign_others: bool = False
+    # Profil utilisateur — affichage dans les pastilles d'assignation,
+    # listes, etc. Le frontend utilise display_name + profile_color +
+    # has_avatar pour rendre une pastille personnalisée.
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    display_name: str = ""
+    profile_color: Optional[str] = None
+    has_avatar: bool = False
 
 
 async def _user_full_names(db, users: List[User]) -> dict[int, str]:
@@ -158,7 +166,16 @@ class ProjectMini(BaseModel):
 
 
 @router.get("", response_model=List[UserRead])
-async def list_users(db: DBSession, _: RequireOwner) -> List[UserRead]:
+async def list_users(db: DBSession, _: CurrentUser) -> List[UserRead]:
+    """Liste plate de tous les utilisateurs.
+
+    Accessible à tout utilisateur connecté — les sélecteurs
+    d'assignation (Pipeline, agenda, etc.) en ont besoin pour
+    afficher la liste des coéquipiers. Les données retournées
+    sont basiques (identifiant, courriel, profil) ; aucun secret
+    n'est exposé. Les actions de création/modification/suppression
+    restent réservées aux owners ou admins.
+    """
     rows = (
         await db.execute(select(User).order_by(User.email.asc()))
     ).scalars().all()
