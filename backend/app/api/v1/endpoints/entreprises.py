@@ -603,6 +603,10 @@ def _map_status_label(label: Optional[str]) -> Optional[str]:
         )
     ):
         return TacheStatus.IN_PROGRESS.value
+    # « En attente / bloqué / pause » : on n'utilise plus la colonne
+    # WAITING dans l'UI (alignement avec le Pipeline des deals). Ces
+    # tâches passent dans À venir (todo) — l'utilisateur pourra les
+    # déplacer manuellement vers En traitement quand débloquées.
     if any(
         k in s
         for k in (
@@ -617,7 +621,7 @@ def _map_status_label(label: Optional[str]) -> Optional[str]:
             "pending review",
         )
     ):
-        return TacheStatus.WAITING.value
+        return TacheStatus.TODO.value
     if any(
         k in s
         for k in (

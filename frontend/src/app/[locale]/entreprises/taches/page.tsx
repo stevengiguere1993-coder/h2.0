@@ -44,27 +44,25 @@ type Entreprise = {
   color_accent: string;
 };
 
-// 4 statuts opérationnels affichés dans les listes / kanban /
-// sélecteurs. La colonne « backlog » a été retirée de l'UI ; les
-// rares tâches encore avec ce statut sont affichées via le fallback
-// `STATUS_DISPLAY_FALLBACK` ci-dessous le temps qu'elles soient
-// reclassifiées (au prochain boot ou via PATCH).
+// 3 statuts opérationnels — alignés sur le Pipeline des deals
+// (Prospection > Acquisition). Mêmes labels et mêmes couleurs.
+// Les statuts legacy (backlog / waiting) sont rendus via le
+// fallback ci-dessous le temps qu'ils soient reclassifiés.
 const STATUS_LABELS: Record<string, string> = {
-  todo: "À faire",
-  in_progress: "En cours",
-  waiting: "En attente",
+  todo: "À venir",
+  in_progress: "En traitement",
   done: "Terminé"
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  todo: "var(--qg-accent)",
-  in_progress: "#60a5fa",
-  waiting: "#ffaa33",
-  done: "#4ade80"
+  todo: "#8b5cf6",        // violet-500
+  in_progress: "#f59e0b", // amber-500
+  done: "#10b981"         // emerald-500
 };
 
 const STATUS_DISPLAY_FALLBACK: Record<string, { label: string; color: string }> = {
-  backlog: { label: "Backlog", color: "var(--qg-text-soft)" }
+  backlog: { label: "Backlog", color: "var(--qg-text-soft)" },
+  waiting: { label: "En attente", color: "#ffaa33" }
 };
 
 function scoreToPriority(score: number | null): {
@@ -414,9 +412,8 @@ export default function MesTachesPage() {
 // ─── Vue Kanban ────────────────────────────────────────────────────────
 
 const KANBAN_COLUMNS = [
-  { id: "todo", label: "À faire" },
-  { id: "in_progress", label: "En cours" },
-  { id: "waiting", label: "En attente" },
+  { id: "todo", label: "À venir" },
+  { id: "in_progress", label: "En traitement" },
   { id: "done", label: "Terminé" }
 ] as const;
 
