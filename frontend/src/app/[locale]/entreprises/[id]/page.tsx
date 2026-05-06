@@ -51,7 +51,6 @@ type Employe = { id: number; full_name: string; email: string | null };
 type Column = { id: string; label: string; dot: string };
 
 const COLUMNS: Column[] = [
-  { id: "backlog", label: "Backlog", dot: "bg-white/30" },
   { id: "todo", label: "À faire", dot: "bg-violet-400" },
   { id: "in_progress", label: "En cours", dot: "bg-blue-400" },
   { id: "waiting", label: "En attente", dot: "bg-amber-400" },
@@ -152,7 +151,10 @@ export default function EntrepriseDetailPage() {
       COLUMNS.map((c) => [c.id, [] as Tache[]])
     );
     for (const t of taches) {
-      const target = COLUMNS.find((c) => c.id === t.status) ? t.status : "backlog";
+      // Si le statut DB n'est pas une des 4 colonnes affichées
+      // (ex. backlog hérité d'un import Monday non re-classifié),
+      // on retombe sur « À faire » par défaut.
+      const target = COLUMNS.find((c) => c.id === t.status) ? t.status : "todo";
       out[target].push(t);
     }
     // Tri par score décroissant à l'intérieur de chaque colonne
@@ -539,7 +541,9 @@ function TacheModal({
   const [departement, setDepartement] = useState(
     existing?.departement || ""
   );
-  const [status, setStatus] = useState(existing?.status || "backlog");
+  // Nouvelles tâches : on démarre direct dans « À faire » plutôt
+  // que dans un Backlog (la colonne Backlog a été retirée de l'UI).
+  const [status, setStatus] = useState(existing?.status || "todo");
   const [impact, setImpact] = useState(
     existing?.impact != null ? String(existing.impact) : ""
   );

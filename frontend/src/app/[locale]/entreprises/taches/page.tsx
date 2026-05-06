@@ -44,8 +44,12 @@ type Entreprise = {
   color_accent: string;
 };
 
+// 4 statuts opérationnels affichés dans les listes / kanban /
+// sélecteurs. La colonne « backlog » a été retirée de l'UI ; les
+// rares tâches encore avec ce statut sont affichées via le fallback
+// `STATUS_DISPLAY_FALLBACK` ci-dessous le temps qu'elles soient
+// reclassifiées (au prochain boot ou via PATCH).
 const STATUS_LABELS: Record<string, string> = {
-  backlog: "Backlog",
   todo: "À faire",
   in_progress: "En cours",
   waiting: "En attente",
@@ -53,11 +57,14 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  backlog: "var(--qg-text-soft)",
   todo: "var(--qg-accent)",
   in_progress: "#60a5fa",
   waiting: "#ffaa33",
   done: "#4ade80"
+};
+
+const STATUS_DISPLAY_FALLBACK: Record<string, { label: string; color: string }> = {
+  backlog: { label: "Backlog", color: "var(--qg-text-soft)" }
 };
 
 function scoreToPriority(score: number | null): {
@@ -407,7 +414,6 @@ export default function MesTachesPage() {
 // ─── Vue Kanban ────────────────────────────────────────────────────────
 
 const KANBAN_COLUMNS = [
-  { id: "backlog", label: "Backlog" },
   { id: "todo", label: "À faire" },
   { id: "in_progress", label: "En cours" },
   { id: "waiting", label: "En attente" },
@@ -780,7 +786,13 @@ function StatusEditor({
   status: string;
   onChange: (v: string) => void;
 }) {
-  const color = STATUS_COLORS[status] || "var(--qg-text-muted)";
+  // Fallback de display pour les statuts hors-UI (ex. backlog
+  // hérité d'imports Monday non re-classifiés) — on affiche
+  // quand même la pastille pour ne pas perdre l'info.
+  const fallback = STATUS_DISPLAY_FALLBACK[status];
+  const color =
+    STATUS_COLORS[status] || fallback?.color || "var(--qg-text-muted)";
+  const label = STATUS_LABELS[status] || fallback?.label || status;
   return (
     <span
       className="relative inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-semibold"
@@ -790,7 +802,7 @@ function StatusEditor({
         className="h-1.5 w-1.5 rounded-full"
         style={{ backgroundColor: color }}
       />
-      {STATUS_LABELS[status] || status}
+      {label}
       <select
         value={status}
         onChange={(e) => onChange(e.target.value)}
