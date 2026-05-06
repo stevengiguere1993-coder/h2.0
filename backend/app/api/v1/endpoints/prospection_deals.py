@@ -35,7 +35,7 @@ router = APIRouter(prefix="/prospection/deals", tags=["prospection-deals"])
 
 # Validation : on accepte uniquement les valeurs canoniques côté API
 # pour ne pas se retrouver avec des typos en DB.
-PRIORITY_PATTERN = r"^(urgent|eleve|moyenne|en_attente|a_venir|termine)$"
+PRIORITY_PATTERN = r"^(urgent|eleve|moyenne|a_venir|termine|abandonne)$"
 
 
 class DealCreate(BaseModel):
