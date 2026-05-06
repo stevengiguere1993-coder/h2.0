@@ -12,7 +12,7 @@ import {
   Trash2
 } from "lucide-react";
 
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { EntreprisesTopbar } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -112,6 +112,7 @@ export default function EntrepriseDetailPage() {
   const idStr = String(params?.id ?? "");
   const id = Number(idStr);
   const confirm = useConfirm();
+  const router = useRouter();
 
   const [ent, setEnt] = useState<Entreprise | null>(null);
   const [taches, setTaches] = useState<Tache[]>([]);
@@ -193,6 +194,32 @@ export default function EntrepriseDetailPage() {
     }
     return out;
   }, [taches]);
+
+  async function removeEntreprise() {
+    if (!ent) return;
+    const ok = await confirm({
+      title: `Supprimer « ${ent.name} » ?`,
+      description:
+        "Cette action est irréversible. Toutes les tâches, partenaires, " +
+        "et liens associés à cette entreprise seront aussi supprimés.",
+      confirmLabel: "Supprimer",
+      destructive: true
+    });
+    if (!ok) return;
+    try {
+      const res = await authedFetch(`/api/v1/entreprises/${ent.id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      router.replace("/entreprises");
+    } catch (err) {
+      setError(
+        `Suppression échouée — ${(err as Error).message || "erreur inconnue"}`
+      );
+    }
+  }
 
   async function moveTache(tacheId: number, newStatus: string) {
     await patchTache(tacheId, { status: newStatus });
@@ -328,9 +355,22 @@ export default function EntrepriseDetailPage() {
               </p>
             ) : null}
           </div>
-          <div className="rounded-md bg-brand-900 px-3 py-2 text-sm">
-            <span className="text-white/50">Tâches </span>
-            <span className="font-bold text-white">{taches.length}</span>
+          {/* Compteur de tâches + petit bouton « supprimer
+              l'entreprise » juste en dessous (avec confirm). */}
+          <div className="flex flex-col items-end gap-1.5">
+            <div className="rounded-md bg-brand-900 px-3 py-2 text-sm">
+              <span className="text-white/50">Tâches </span>
+              <span className="font-bold text-white">{taches.length}</span>
+            </div>
+            <button
+              type="button"
+              onClick={removeEntreprise}
+              title="Supprimer cette entreprise"
+              aria-label="Supprimer l'entreprise"
+              className="rounded-md p-1.5 text-white/40 transition hover:bg-rose-500/15 hover:text-rose-300"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
           </div>
         </header>
 
