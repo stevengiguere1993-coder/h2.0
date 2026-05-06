@@ -55,6 +55,15 @@ class EntrepriseTache(Base, TimestampUpdateMixin):
         index=True,
     )
 
+    # Priorité côté UI — alignée sur les tâches du Pipeline des deals.
+    # Valeurs : urgent / eleve / moyenne / faible. Sert à teinter la
+    # pastille « Priorité » dans la carte Monday-style.
+    priority: Mapped[str] = mapped_column(
+        String(16), nullable=False,
+        default="moyenne",
+        server_default="moyenne",
+    )
+
     # ── Scoring ICE × Urgence ────────────────────────────────────────
     # Impact (1-10) — effet sur revenu / risque / conformité
     impact: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

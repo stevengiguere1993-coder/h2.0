@@ -55,9 +55,17 @@ class EntrepriseTacheBase(BaseModel):
     # Défaut « todo » (= « À venir » dans l'UI) — la colonne backlog
     # n'est plus affichée côté front, donc démarrer là est trompeur.
     status: str = Field(default="todo", max_length=16)
+    # Priorité Monday-style (alignée sur les tâches du Pipeline).
+    priority: str = Field(
+        default="moyenne", pattern=r"^(urgent|eleve|moyenne|faible)$"
+    )
     impact: Optional[int] = Field(default=None, ge=1, le=10)
     confidence: Optional[int] = Field(default=None, ge=1, le=10)
     effort: Optional[int] = Field(default=None, ge=1, le=10)
+    # Source de vérité — liste d'utilisateurs assignés. Le scalaire
+    # legacy `assignee_user_id` reste accepté + maintenu (= primary,
+    # premier de la liste) pour les anciens consumers.
+    assignee_user_ids: Optional[List[int]] = None
     assignee_user_id: Optional[int] = None
     due_date: Optional[date] = None
     recurrence: Optional[str] = Field(default=None, max_length=16)
@@ -73,9 +81,13 @@ class EntrepriseTacheUpdate(BaseModel):
     description: Optional[str] = None
     departement: Optional[str] = Field(default=None, max_length=32)
     status: Optional[str] = Field(default=None, max_length=16)
+    priority: Optional[str] = Field(
+        default=None, pattern=r"^(urgent|eleve|moyenne|faible)$"
+    )
     impact: Optional[int] = Field(default=None, ge=1, le=10)
     confidence: Optional[int] = Field(default=None, ge=1, le=10)
     effort: Optional[int] = Field(default=None, ge=1, le=10)
+    assignee_user_ids: Optional[List[int]] = None
     assignee_user_id: Optional[int] = None
     due_date: Optional[date] = None
     recurrence: Optional[str] = Field(default=None, max_length=16)
@@ -83,10 +95,27 @@ class EntrepriseTacheUpdate(BaseModel):
     completed_at: Optional[datetime] = None
 
 
-class EntrepriseTacheRead(EntrepriseTacheBase):
+class EntrepriseTacheRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    entreprise_id: int
+    title: str
+    description: Optional[str] = None
+    departement: Optional[str] = None
+    status: str = "todo"
+    priority: str = "moyenne"
+    impact: Optional[int] = None
+    confidence: Optional[int] = None
+    effort: Optional[int] = None
+    # Champ legacy = primary (premier de la liste). Conservé pour
+    # les vieux clients qui n'auraient pas migré.
+    assignee_user_id: Optional[int] = None
+    # Source de vérité — liste d'utilisateurs assignés.
+    assignee_user_ids: List[int] = Field(default_factory=list)
+    due_date: Optional[date] = None
     completed_at: Optional[datetime] = None
+    recurrence: Optional[str] = None
+    tags_json: Optional[str] = None
     monday_item_id: Optional[str] = None
     monday_board_id: Optional[str] = None
     monday_group_title: Optional[str] = None

@@ -74,10 +74,79 @@ def _compute_score(t: EntrepriseTache) -> Optional[float]:
     return round(base * urgency, 2)
 
 
-def _to_tache_read(t: EntrepriseTache) -> EntrepriseTacheRead:
+def _to_tache_read(
+    t: EntrepriseTache,
+    assignee_user_ids: Optional[List[int]] = None,
+) -> EntrepriseTacheRead:
     out = EntrepriseTacheRead.model_validate(t)
     out.score = _compute_score(t)
+    if assignee_user_ids is not None:
+        out.assignee_user_ids = assignee_user_ids
+    elif t.assignee_user_id is not None:
+        # Pas de pré-fetch fourni → on retombe au moins sur le legacy.
+        out.assignee_user_ids = [t.assignee_user_id]
+    else:
+        out.assignee_user_ids = []
     return out
+
+
+async def _load_tache_assignees(
+    db, tache_ids: List[int]
+) -> dict[int, List[int]]:
+    """Retourne {tache_id: [user_id, ...]} pour les tâches données."""
+    if not tache_ids:
+        return {}
+    from app.models.entreprise_tache_assignee import (
+        EntrepriseTacheAssignee,
+    )
+    rows = (
+        await db.execute(
+            select(
+                EntrepriseTacheAssignee.tache_id,
+                EntrepriseTacheAssignee.user_id,
+            ).where(EntrepriseTacheAssignee.tache_id.in_(tache_ids))
+        )
+    ).all()
+    out: dict[int, List[int]] = {tid: [] for tid in tache_ids}
+    for tid, uid in rows:
+        out[int(tid)].append(int(uid))
+    for k in out:
+        out[k].sort()
+    return out
+
+
+def _resolve_tache_assignee_ids(
+    legacy_uid: Optional[int],
+    list_uids: Optional[List[int]],
+) -> Optional[List[int]]:
+    """Combine champ legacy + liste : None = ne pas toucher,
+    liste vide = retire tous, sinon dédupe + ordre conservé."""
+    if list_uids is not None:
+        return [int(u) for u in dict.fromkeys(list_uids) if u]
+    if legacy_uid is not None:
+        return [int(legacy_uid)] if legacy_uid else []
+    return None
+
+
+async def _replace_tache_assignees(
+    db, tache: EntrepriseTache, user_ids: Optional[List[int]]
+) -> None:
+    """Remplace les assignations en bloc. None = on ne touche pas.
+    Met aussi à jour le scalaire `assignee_user_id` au primary."""
+    if user_ids is None:
+        return
+    from app.models.entreprise_tache_assignee import (
+        EntrepriseTacheAssignee,
+    )
+    from sqlalchemy import delete as _delete
+    await db.execute(
+        _delete(EntrepriseTacheAssignee).where(
+            EntrepriseTacheAssignee.tache_id == tache.id
+        )
+    )
+    for uid in user_ids:
+        db.add(EntrepriseTacheAssignee(tache_id=tache.id, user_id=uid))
+    tache.assignee_user_id = user_ids[0] if user_ids else None
 
 
 # ── Entreprises CRUD ────────────────────────────────────────────────────
@@ -190,7 +259,11 @@ async def list_taches(
         EntrepriseTache.id.desc(),
     )
     rows = (await db.execute(stmt)).scalars().all()
-    return [_to_tache_read(t) for t in rows]
+    assignees = await _load_tache_assignees(db, [r.id for r in rows])
+    return [
+        _to_tache_read(t, assignees.get(t.id, []))
+        for t in rows
+    ]
 
 
 @router.get(
@@ -267,11 +340,22 @@ async def create_tache(
     body: EntrepriseTacheCreate, db: DBSession, user: CurrentUser
 ) -> EntrepriseTacheRead:
     _require_volet(user)
-    t = EntrepriseTache(**body.model_dump())
+    payload = body.model_dump()
+    # Sépare les assignés de la création principale.
+    legacy_uid = payload.pop("assignee_user_id", None)
+    list_uids = payload.pop("assignee_user_ids", None)
+    uids = _resolve_tache_assignee_ids(legacy_uid, list_uids)
+    primary = uids[0] if uids else None
+
+    t = EntrepriseTache(**payload, assignee_user_id=primary)
     db.add(t)
     await db.flush()
+    if uids is not None:
+        await _replace_tache_assignees(db, t, uids)
+    await db.flush()
     await db.refresh(t)
-    return _to_tache_read(t)
+    final = await _load_tache_assignees(db, [t.id])
+    return _to_tache_read(t, final.get(t.id, []))
 
 
 @router.patch("/taches/{tache_id}", response_model=EntrepriseTacheRead)
@@ -297,11 +381,28 @@ async def update_tache(
         and t.completed_at is None
     ):
         payload.setdefault("completed_at", datetime.now(timezone.utc))
+    # Assignés : on les traite à part pour ne pas se faire écraser
+    # par le simple setattr qui ne gère pas la table de jointure.
+    legacy_uid_set = "assignee_user_id" in body.model_fields_set
+    list_uids_set = "assignee_user_ids" in body.model_fields_set
+    legacy_uid = payload.pop("assignee_user_id", None)
+    payload.pop("assignee_user_ids", None)
+
     for k, v in payload.items():
         setattr(t, k, v)
     await db.flush()
+
+    if list_uids_set or legacy_uid_set:
+        uids = _resolve_tache_assignee_ids(
+            legacy_uid if legacy_uid_set else None,
+            body.assignee_user_ids if list_uids_set else None,
+        )
+        await _replace_tache_assignees(db, t, uids)
+        await db.flush()
+
     await db.refresh(t)
-    return _to_tache_read(t)
+    final = await _load_tache_assignees(db, [t.id])
+    return _to_tache_read(t, final.get(t.id, []))
 
 
 @router.delete(

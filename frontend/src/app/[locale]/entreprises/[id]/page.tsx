@@ -8,6 +8,7 @@ import {
   ExternalLink,
   Loader2,
   Plus,
+  StickyNote,
   Trash2
 } from "lucide-react";
 
@@ -15,6 +16,14 @@ import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { EntreprisesTopbar } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
+import {
+  AssigneePicker,
+  AutoGrowTextarea,
+  DatePill,
+  PillField,
+  PillPicker,
+  type TaskUserMini
+} from "@/components/task-pills";
 
 type Entreprise = {
   id: number;
@@ -33,10 +42,15 @@ type Tache = {
   description: string | null;
   departement: string | null;
   status: string;
+  // Priorité Monday-style alignée sur les tâches du Pipeline
+  // (urgent / eleve / moyenne / faible).
+  priority: string;
   impact: number | null;
   confidence: number | null;
   effort: number | null;
+  // Champ legacy (= primary) ; la liste ci-dessous est la source de vérité.
   assignee_user_id: number | null;
+  assignee_user_ids: number[];
   due_date: string | null;
   completed_at: string | null;
   recurrence: string | null;
@@ -102,6 +116,9 @@ export default function EntrepriseDetailPage() {
   const [ent, setEnt] = useState<Entreprise | null>(null);
   const [taches, setTaches] = useState<Tache[]>([]);
   const [employes, setEmployes] = useState<Employe[]>([]);
+  // Liste des users (avec leur profil enrichi : prénom/nom/couleur/avatar)
+  // pour alimenter l'AssigneePicker des cartes de tâche.
+  const [users, setUsers] = useState<TaskUserMini[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<Tache | { fresh: true } | null>(null);
@@ -113,10 +130,11 @@ export default function EntrepriseDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const [entRes, tachesRes, empRes] = await Promise.all([
+      const [entRes, tachesRes, empRes, usersRes] = await Promise.all([
         authedFetch(`/api/v1/entreprises`),
         authedFetch(`/api/v1/entreprises/taches?entreprise_id=${id}`),
-        authedFetch("/api/v1/employes?limit=500")
+        authedFetch("/api/v1/employes?limit=500"),
+        authedFetch("/api/v1/users")
       ]);
       if (!entRes.ok) throw new Error(`HTTP ${entRes.status}`);
       const ents = (await entRes.json()) as Entreprise[];
@@ -125,6 +143,14 @@ export default function EntrepriseDetailPage() {
       setEnt(found);
       if (tachesRes.ok) setTaches((await tachesRes.json()) as Tache[]);
       if (empRes.ok) setEmployes((await empRes.json()) as Employe[]);
+      if (usersRes.ok) {
+        const all = (await usersRes.json()) as Array<
+          TaskUserMini & { volets?: string[] }
+        >;
+        setUsers(
+          all.filter((u) => (u.volets || []).includes("entreprises"))
+        );
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -169,16 +195,20 @@ export default function EntrepriseDetailPage() {
   }, [taches]);
 
   async function moveTache(tacheId: number, newStatus: string) {
+    await patchTache(tacheId, { status: newStatus });
+  }
+
+  async function patchTache(tacheId: number, patch: Partial<Tache>) {
     const prev = taches;
     setTaches((xs) =>
-      xs.map((x) => (x.id === tacheId ? { ...x, status: newStatus } : x))
+      xs.map((x) => (x.id === tacheId ? { ...x, ...patch } : x))
     );
     try {
       const res = await authedFetch(
         `/api/v1/entreprises/taches/${tacheId}`,
         {
           method: "PATCH",
-          body: JSON.stringify({ status: newStatus })
+          body: JSON.stringify(patch)
         }
       );
       if (!res.ok) throw new Error();
@@ -410,19 +440,19 @@ export default function EntrepriseDetailPage() {
                       <TacheCard
                         key={t.id}
                         t={t}
-                        empById={empById}
+                        users={users}
                         onClick={() => setModal(t)}
                         onDragStart={() => setDragging(t.id)}
                         onDragEnd={() => {
                           setDragging(null);
                           setHoverCol(null);
                         }}
+                        onPatch={(patch) => void patchTache(t.id, patch)}
                         onDelete={(ev) => {
                           ev.stopPropagation();
                           ev.preventDefault();
                           void removeTache(t);
                         }}
-                        accent={ent.color_accent}
                       />
                     ))
                   )}
@@ -450,77 +480,199 @@ export default function EntrepriseDetailPage() {
   );
 }
 
+// Pastilles statut alignées sur le Pipeline des deals.
+const ENT_STATUS_PILLS: Array<{ value: string; label: string; cls: string }> = [
+  { value: "todo", label: "À venir", cls: "bg-violet-500 text-white" },
+  { value: "a_faire", label: "À faire", cls: "bg-sky-500 text-white" },
+  { value: "in_progress", label: "En traitement", cls: "bg-amber-500 text-brand-950" },
+  { value: "done", label: "Terminé", cls: "bg-emerald-500 text-white" }
+];
+
+const ENT_PRIORITY_PILLS: Array<{ value: string; label: string; cls: string }> = [
+  { value: "urgent", label: "Urgent ⚠️", cls: "bg-red-700 text-white" },
+  { value: "eleve", label: "Élevé", cls: "bg-orange-500 text-white" },
+  { value: "moyenne", label: "Moyenne", cls: "bg-yellow-400 text-brand-950" },
+  { value: "faible", label: "Faible", cls: "bg-lime-500 text-brand-950" }
+];
+
 function TacheCard({
   t,
-  empById,
+  users,
   onClick,
   onDragStart,
   onDragEnd,
-  onDelete,
-  accent
+  onPatch,
+  onDelete
 }: {
   t: Tache;
-  empById: Map<number, Employe>;
+  users: TaskUserMini[];
   onClick: () => void;
   onDragStart: () => void;
   onDragEnd: () => void;
+  onPatch: (patch: Partial<Tache>) => void;
   onDelete: (e: React.MouseEvent) => void;
-  accent: string;
 }) {
-  const assignee = t.assignee_user_id
-    ? empById.get(t.assignee_user_id)
-    : null;
+  const [showNotes, setShowNotes] = useState(false);
+  const [notesDraft, setNotesDraft] = useState(t.description || "");
+  useEffect(() => {
+    setNotesDraft(t.description || "");
+  }, [t.description]);
+
   return (
-    <button
-      type="button"
+    <div
       draggable
-      onDragStart={onDragStart}
+      onDragStart={(e) => {
+        const tag = (e.target as HTMLElement).tagName;
+        if (
+          tag === "INPUT" ||
+          tag === "SELECT" ||
+          tag === "TEXTAREA" ||
+          tag === "BUTTON"
+        ) {
+          e.preventDefault();
+          return;
+        }
+        e.dataTransfer.effectAllowed = "move";
+        onDragStart();
+      }}
       onDragEnd={onDragEnd}
-      onClick={onClick}
-      className="group relative block w-full rounded-lg border border-brand-800 bg-brand-950 p-3 text-left transition hover:border-violet-500/50"
+      onClick={(e) => {
+        // Si l'utilisateur clique dans un input/select/textarea
+        // on n'ouvre pas la modal — il édite inline.
+        const tag = (e.target as HTMLElement).tagName;
+        if (
+          tag === "INPUT" ||
+          tag === "SELECT" ||
+          tag === "TEXTAREA" ||
+          tag === "BUTTON"
+        ) {
+          return;
+        }
+        onClick();
+      }}
+      className="group block rounded-lg border border-brand-800 bg-brand-950 p-2"
     >
-      <button
-        type="button"
-        onClick={onDelete}
-        aria-label="Supprimer"
-        className="absolute right-2 top-2 rounded-md p-1 text-white/30 opacity-0 transition hover:bg-rose-500/15 hover:text-rose-400 group-hover:opacity-100"
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </button>
-      <h3 className="pr-6 text-sm font-semibold text-white">{t.title}</h3>
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px]">
-        {t.score != null ? (
-          <span
-            className="rounded-full px-1.5 py-0.5 font-bold"
-            style={{
-              backgroundColor: `${accent}33`,
-              color: accent
+      {/* Première ligne : nom (éditable inline) + boutons note/poubelle */}
+      <div className="flex items-start gap-1.5">
+        <AutoGrowTextarea
+          value={t.title}
+          onChange={(v) => onPatch({ title: v })}
+          onCommit={(v) => {
+            const trimmed = v.trim();
+            if (trimmed && trimmed !== t.title) onPatch({ title: trimmed });
+          }}
+          className="min-w-0 flex-1 resize-none rounded border border-slate-500/40 bg-transparent px-1 py-0.5 text-xs font-medium text-white hover:border-slate-400/60 focus:border-accent-500 focus:outline-none"
+        />
+        <div className="flex flex-shrink-0 flex-col items-center gap-0.5">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowNotes((v) => !v);
             }}
-            title="Score = (impact × confiance / effort) × urgence"
+            className={`rounded p-1 ${
+              t.description
+                ? "text-amber-300 hover:bg-amber-500/15"
+                : "text-white/40 hover:bg-white/5"
+            }`}
+            title={t.description ? "Voir / éditer les notes" : "Ajouter une note"}
+            aria-label="Notes"
           >
-            ★ {t.score.toFixed(1)}
-          </span>
-        ) : null}
-        {t.recurrence ? (
-          <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-amber-200">
-            ⟲ {RECURRENCE_LABELS[t.recurrence] || t.recurrence}
-          </span>
-        ) : null}
-        {t.departement ? (
-          <span className="rounded-full border border-brand-700 px-1.5 py-0.5 text-white/60">
-            {t.departement}
-          </span>
-        ) : null}
+            <StickyNote className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            className="rounded p-1 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
+            title="Supprimer la tâche"
+            aria-label="Supprimer"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </div>
       </div>
-      <div className="mt-2 flex items-center justify-between text-[11px]">
-        <span className={dueDateClass(t.due_date)}>
-          {fmtDate(t.due_date)}
-        </span>
-        <span className="truncate text-white/50">
-          {assignee ? assignee.full_name.split(" ")[0] : "—"}
-        </span>
+
+      {/* Notes : zone repliable */}
+      {showNotes ? (
+        <div className="mt-1.5">
+          <textarea
+            value={notesDraft}
+            onChange={(e) => setNotesDraft(e.target.value)}
+            onBlur={() => {
+              if (notesDraft !== (t.description || "")) {
+                onPatch({ description: notesDraft || null });
+              }
+            }}
+            onClick={(e) => e.stopPropagation()}
+            rows={3}
+            placeholder="Notes…"
+            className="w-full rounded border border-brand-800 bg-brand-900 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
+          />
+        </div>
+      ) : null}
+
+      {/* Pastilles : Personnes / Statut / Priorité / Date butoire */}
+      <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+        <PillField label="Personnes">
+          <AssigneePicker
+            users={users}
+            values={t.assignee_user_ids || []}
+            onChange={(ids) =>
+              onPatch({
+                assignee_user_ids: ids,
+                assignee_user_id: ids[0] ?? null
+              })
+            }
+          />
+        </PillField>
+        <PillField label="Statut">
+          <PillPicker
+            options={ENT_STATUS_PILLS}
+            value={t.status}
+            onChange={(v) => onPatch({ status: v })}
+            ariaLabel="Statut"
+          />
+        </PillField>
+        <PillField label="Priorité">
+          <PillPicker
+            options={ENT_PRIORITY_PILLS}
+            value={t.priority || "moyenne"}
+            onChange={(v) => onPatch({ priority: v })}
+            ariaLabel="Priorité"
+          />
+        </PillField>
+        <PillField label="Date butoire">
+          <DatePill
+            value={t.due_date}
+            onChange={(d) => onPatch({ due_date: d })}
+          />
+        </PillField>
       </div>
-    </button>
+
+      {/* Footer subtil : score + récurrence + département */}
+      {t.score != null || t.recurrence || t.departement ? (
+        <div className="mt-2 flex flex-wrap items-center gap-1 text-[9px] text-white/40">
+          {t.score != null ? (
+            <span
+              className="rounded-full bg-white/5 px-1.5 py-0.5"
+              title="Score = (impact × confiance / effort) × urgence"
+            >
+              ★ {t.score.toFixed(1)}
+            </span>
+          ) : null}
+          {t.recurrence ? (
+            <span className="rounded-full border border-amber-500/30 px-1.5 py-0.5 text-amber-200/80">
+              ⟲ {RECURRENCE_LABELS[t.recurrence] || t.recurrence}
+            </span>
+          ) : null}
+          {t.departement ? (
+            <span className="rounded-full border border-brand-700 px-1.5 py-0.5">
+              {t.departement}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
