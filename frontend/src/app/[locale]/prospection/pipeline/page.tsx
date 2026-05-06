@@ -93,36 +93,36 @@ const STATUS_STYLE: Record<
   }
 > = {
   a_venir: {
-    // Violet — bordure soutenue + fond très pâle.
     border: "border-violet-400/60",
     bg: "bg-violet-400/5",
     label: "text-violet-200",
     dragOverBg: "bg-violet-400/15",
-    pill: "bg-violet-500 text-white"
+    // Pill du status sélectionné dans la tâche : version pâle de la
+    // teinte du groupe (équivalent /20 en bg + texte clair de la
+    // même famille). Rend le sélecteur cohérent avec son bandeau
+    // tout en restant moins « criard » que les pastilles priorité.
+    pill: "bg-violet-400/30 text-violet-100"
   },
   a_faire: {
-    // Bleu
     border: "border-sky-400/70",
     bg: "bg-sky-500/10",
     label: "text-sky-300",
     dragOverBg: "bg-sky-500/20",
-    pill: "bg-sky-500 text-white"
+    pill: "bg-sky-500/30 text-sky-100"
   },
   en_traitement: {
-    // Jaune/orange
     border: "border-amber-400/70",
     bg: "bg-amber-500/10",
     label: "text-amber-300",
     dragOverBg: "bg-amber-500/20",
-    pill: "bg-amber-500 text-brand-950"
+    pill: "bg-amber-500/30 text-amber-100"
   },
   termine: {
-    // Vert
     border: "border-emerald-400/70",
     bg: "bg-emerald-500/10",
     label: "text-emerald-300",
     dragOverBg: "bg-emerald-500/20",
-    pill: "bg-emerald-500 text-white"
+    pill: "bg-emerald-500/30 text-emerald-100"
   }
 };
 
@@ -149,7 +149,16 @@ const TASK_PRIORITY_PILL: Record<TaskPriority, string> = {
   urgent: "bg-rose-500 text-white",
   eleve: "bg-orange-500 text-white",
   moyenne: "bg-amber-400 text-brand-950",
-  faible: "bg-slate-500 text-white"
+  faible: "bg-emerald-500 text-white"
+};
+
+// Rang utilisé pour trier les tâches dans un même groupe de statut :
+// urgent en haut, faible en bas.
+const TASK_PRIORITY_RANK: Record<TaskPriority, number> = {
+  urgent: 0,
+  eleve: 1,
+  moyenne: 2,
+  faible: 3
 };
 
 type Task = {
@@ -157,7 +166,10 @@ type Task = {
   deal_id: number;
   name: string;
   notes: string | null;
+  // Champ legacy = primary (= premier de la liste). On garde pour
+  // compat ; la source de vérité est la liste.
   assignee_user_id: number | null;
+  assignee_user_ids: number[];
   status: TaskStatus;
   priority: TaskPriority;
   due_date: string | null;
@@ -409,8 +421,16 @@ function DealCard({
       termine: []
     };
     for (const t of tasks) groups[t.status]?.push(t);
+    // Tri dans chaque groupe : urgent → faible, puis position pour
+    // les tâches de même priorité (l'ordre manuel par drag-drop
+    // reste respecté à priorité égale).
     for (const k of Object.keys(groups) as TaskStatus[]) {
-      groups[k].sort((a, b) => a.position - b.position);
+      groups[k].sort((a, b) => {
+        const ra = TASK_PRIORITY_RANK[a.priority] ?? 99;
+        const rb = TASK_PRIORITY_RANK[b.priority] ?? 99;
+        if (ra !== rb) return ra - rb;
+        return a.position - b.position;
+      });
     }
     return groups;
   }, [tasks]);
@@ -769,12 +789,17 @@ function TaskRow({
         </div>
       ) : null}
 
-      {/* Pastilles style Monday : assigné / statut / priorité / échéance */}
+      {/* Pastilles style Monday : assigné(s) / statut / priorité / échéance */}
       <div className="mt-1.5 grid grid-cols-2 gap-1">
-        <AssigneePill
+        <AssigneePicker
           users={users}
-          value={task.assignee_user_id}
-          onChange={(uid) => onPatch({ assignee_user_id: uid })}
+          values={task.assignee_user_ids || []}
+          onChange={(ids) =>
+            onPatch({
+              assignee_user_ids: ids,
+              assignee_user_id: ids[0] ?? null
+            })
+          }
         />
         <PillPicker
           options={TASK_STATUSES.map((s) => ({
@@ -1064,23 +1089,20 @@ function PillPicker({
 }
 
 /**
- * Pastille « personne assignée » — Monday-style.
- * Affiche la photo de profil de l'utilisateur (ou ses initiales)
- * dans un rond, son display_name, et la pastille prend la couleur
- * que l'utilisateur a choisie dans /profil. Si pas de couleur ni
- * de photo, on tombe sur un fond neutre.
- *
- * Au clic, ouvre la liste des users — chaque ligne reprend la
- * couleur du user pour qu'on identifie tout le monde au coup d'œil.
+ * Picker multi-personnes Monday-style. Affiche les avatars empilés
+ * (jusqu'à 3) + le nom du primary, ou un compteur « +N » si plus
+ * d'assignés. Au clic, ouvre la liste des users — chaque ligne est
+ * cliquable pour toggle (ajout / retrait). Une croix permet aussi
+ * de retirer un assigné directement depuis sa pastille.
  */
-function AssigneePill({
+function AssigneePicker({
   users,
-  value,
+  values,
   onChange
 }: {
   users: UserMini[];
-  value: number | null;
-  onChange: (uid: number | null) => void;
+  values: number[];
+  onChange: (ids: number[]) => void;
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -1099,59 +1121,97 @@ function AssigneePill({
     return () => document.removeEventListener("mousedown", onClick);
   }, [open]);
 
-  const current = value ? users.find((u) => u.id === value) : null;
+  const assigned = values
+    .map((id) => users.find((u) => u.id === id))
+    .filter((u): u is UserMini => Boolean(u));
+  const primary = assigned[0];
+  const extras = assigned.length - 1;
+
+  function toggle(uid: number) {
+    if (values.includes(uid)) {
+      onChange(values.filter((v) => v !== uid));
+    } else {
+      onChange([...values, uid]);
+    }
+  }
 
   return (
     <div ref={wrapRef} className="relative">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        aria-label="Personne assignée"
+        aria-label="Personne(s) assignée(s)"
         className={`inline-flex w-full items-center justify-center gap-1 rounded px-2 py-1 text-[10px] font-semibold ${
-          current
-            ? userPillCls(current)
-            : "bg-brand-800 text-white/60"
+          primary ? userPillCls(primary) : "bg-brand-800 text-white/60"
         }`}
       >
-        {current ? (
+        {primary ? (
           <>
-            <UserAvatarBadge user={current} size={14} />
-            <span className="truncate">{userDisplayName(current)}</span>
+            <span className="flex items-center -space-x-1">
+              {assigned.slice(0, 3).map((u) => (
+                <span
+                  key={u.id}
+                  className="rounded-full ring-1 ring-black/20"
+                >
+                  <UserAvatarBadge user={u} size={14} />
+                </span>
+              ))}
+            </span>
+            <span className="truncate">
+              {userDisplayName(primary)}
+              {extras > 0 ? ` +${extras}` : ""}
+            </span>
           </>
         ) : (
           <span>+ Personne</span>
         )}
       </button>
       {open ? (
-        <div className="absolute left-0 right-0 z-30 mt-1 max-h-56 min-w-[180px] space-y-1 overflow-y-auto rounded-lg border border-brand-800 bg-brand-950 p-1 shadow-lg">
-          <button
-            type="button"
-            onClick={() => {
-              onChange(null);
-              setOpen(false);
-            }}
-            className="block w-full rounded px-2 py-1 text-left text-[10px] font-semibold text-white/60 hover:bg-white/5"
-          >
-            — Personne —
-          </button>
-          {users.map((u) => (
-            <button
-              key={u.id}
-              type="button"
-              onClick={() => {
-                onChange(u.id);
-                setOpen(false);
-              }}
-              className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-[10px] font-semibold ${userPillCls(u)} ${
-                u.id === value
-                  ? "ring-2 ring-white/60"
-                  : "opacity-90 hover:opacity-100"
-              }`}
-            >
-              <UserAvatarBadge user={u} size={14} />
-              <span className="truncate">{userDisplayName(u)}</span>
-            </button>
-          ))}
+        <div className="absolute left-0 right-0 z-30 mt-1 max-h-72 min-w-[200px] overflow-y-auto rounded-lg border border-brand-800 bg-brand-950 p-1 shadow-lg">
+          {/* Liste des assignés courants — clic pour retirer */}
+          {assigned.length > 0 ? (
+            <div className="mb-1 space-y-1 border-b border-brand-800 pb-1">
+              {assigned.map((u) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  onClick={() => toggle(u.id)}
+                  className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-[10px] font-semibold ring-2 ring-white/40 ${userPillCls(u)} hover:opacity-90`}
+                  title="Cliquer pour retirer"
+                >
+                  <UserAvatarBadge user={u} size={14} />
+                  <span className="flex-1 truncate">
+                    {userDisplayName(u)}
+                  </span>
+                  <span className="text-[10px] opacity-80">×</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {/* Tous les autres users — clic pour ajouter */}
+          <div className="space-y-1">
+            {users
+              .filter((u) => !values.includes(u.id))
+              .map((u) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  onClick={() => toggle(u.id)}
+                  className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-[10px] font-semibold ${userPillCls(u)} opacity-80 hover:opacity-100`}
+                >
+                  <UserAvatarBadge user={u} size={14} />
+                  <span className="truncate">
+                    {userDisplayName(u)}
+                  </span>
+                </button>
+              ))}
+            {users.length === values.length && values.length > 0 ? (
+              <p className="px-2 py-1 text-[10px] text-white/40">
+                Toute l&apos;équipe est assignée.
+              </p>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </div>

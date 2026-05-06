@@ -3,7 +3,11 @@ import type { Config } from "tailwindcss";
 const config: Config = {
   content: [
     "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
-    "./src/components/**/*.{js,ts,jsx,tsx,mdx}"
+    "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
+    // Inclure lib/ — les fichiers qui définissent des classes
+    // dynamiques (profile-colors.ts par ex.) doivent être scannés
+    // sinon le JIT ne génère pas les bg-rose-500, bg-amber-400…
+    "./src/lib/**/*.{js,ts,jsx,tsx}"
   ],
   theme: {
     container: {
