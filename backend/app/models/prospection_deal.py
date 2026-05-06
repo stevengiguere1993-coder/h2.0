@@ -25,9 +25,9 @@ PRIORITY_ORDER = (
     "urgent",
     "eleve",
     "moyenne",
-    "en_attente",
     "a_venir",
     "termine",
+    "abandonne",
 )
 
 

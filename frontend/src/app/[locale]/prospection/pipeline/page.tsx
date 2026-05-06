@@ -25,9 +25,9 @@ type DealPriority =
   | "urgent"
   | "eleve"
   | "moyenne"
-  | "en_attente"
   | "a_venir"
-  | "termine";
+  | "termine"
+  | "abandonne";
 
 const DEAL_PRIORITIES: {
   value: DealPriority;
@@ -37,27 +37,27 @@ const DEAL_PRIORITIES: {
   { value: "urgent", label: "Urgent ⚠️", dot: "bg-rose-500" },
   { value: "eleve", label: "Élevé", dot: "bg-orange-500" },
   { value: "moyenne", label: "Moyenne", dot: "bg-amber-400" },
-  { value: "en_attente", label: "En attente", dot: "bg-sky-400" },
   { value: "a_venir", label: "À venir", dot: "bg-white/40" },
-  { value: "termine", label: "Terminé", dot: "bg-emerald-500" }
+  { value: "termine", label: "Terminé", dot: "bg-emerald-500" },
+  { value: "abandonne", label: "Abandonné", dot: "bg-slate-500" }
 ];
 
 const DEAL_PRIORITY_RANK: Record<DealPriority, number> = {
   urgent: 0,
   eleve: 1,
   moyenne: 2,
-  en_attente: 3,
-  a_venir: 4,
-  termine: 5
+  a_venir: 3,
+  termine: 4,
+  abandonne: 5
 };
 
 const DEAL_PRIORITY_DOT: Record<DealPriority, string> = {
   urgent: "bg-rose-500",
   eleve: "bg-orange-500",
   moyenne: "bg-amber-400",
-  en_attente: "bg-sky-400",
   a_venir: "bg-white/40",
-  termine: "bg-emerald-500"
+  termine: "bg-emerald-500",
+  abandonne: "bg-slate-500"
 };
 
 type Deal = {
@@ -541,31 +541,26 @@ function DealCard({
       {/* Header carte — adresse éditable inline */}
       <div className="flex items-start justify-between gap-2">
         {editingName ? (
-          <input
-            autoFocus
-            type="text"
+          <AutoGrowTextarea
             value={draftName}
-            onChange={(e) => setDraftName(e.target.value)}
-            onBlur={() => {
+            onChange={setDraftName}
+            onCommit={() => {
               const v = draftName.trim();
               setEditingName(false);
               if (v && v !== deal.address) onChangeAddress(v);
               else setDraftName(deal.address);
             }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-              if (e.key === "Escape") {
-                setDraftName(deal.address);
-                setEditingName(false);
-              }
-            }}
-            className="min-w-0 flex-1 rounded border border-accent-500 bg-brand-950 px-1.5 py-1 text-sm font-semibold text-white focus:outline-none"
+            autoFocus
+            className="min-w-0 flex-1 resize-none rounded border border-accent-500 bg-brand-950 px-1.5 py-1 text-sm font-semibold text-white focus:outline-none"
           />
         ) : (
           <button
             type="button"
             onClick={() => setEditingName(true)}
-            className="min-w-0 flex-1 truncate rounded px-1.5 py-1 text-left text-sm font-semibold text-white hover:bg-white/5"
+            // break-words : le titre s'enroule sur plusieurs lignes
+            // dès qu'il dépasse la largeur de la carte (ex. adresse
+            // longue avec nom de rue + ville). Plus de truncate.
+            className="min-w-0 flex-1 rounded px-1.5 py-1 text-left text-sm font-semibold text-white break-words hover:bg-white/5"
             title="Cliquer pour modifier l'adresse"
           >
             {deal.address}
@@ -607,7 +602,7 @@ function DealCard({
 
       {/* Liste des tâches groupées */}
       {!collapsed ? (
-        <div className="mt-3 space-y-2.5 border-t border-brand-800 pt-3">
+        <div className="mt-3 space-y-2.5 border-y border-brand-800 py-3">
           {loadingTasks ? (
             <p className="text-center text-[11px] text-white/40">
               Chargement…
@@ -1049,12 +1044,14 @@ function AutoGrowTextarea({
   value,
   onChange,
   onCommit,
-  className
+  className,
+  autoFocus
 }: {
   value: string;
   onChange: (v: string) => void;
   onCommit?: (v: string) => void;
   className?: string;
+  autoFocus?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
 
@@ -1070,6 +1067,7 @@ function AutoGrowTextarea({
     <textarea
       ref={ref}
       rows={1}
+      autoFocus={autoFocus}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       onBlur={(e) => onCommit?.(e.target.value)}
