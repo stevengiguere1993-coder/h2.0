@@ -68,6 +68,12 @@ const PROSPECTION_NAV: NavItem[] = [
     minRole: "employee"
   },
   {
+    href: "/prospection/pipeline",
+    label: "Pipeline des deals",
+    icon: Trello,
+    minRole: "employee"
+  },
+  {
     href: "/prospection/analyse",
     label: "Analyses financières",
     icon: Calculator,
