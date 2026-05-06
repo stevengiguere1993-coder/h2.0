@@ -32,67 +32,95 @@ type NavItem = {
   minRole?: UserRole;
 };
 
-// Tous les volets opérationnels sont accessibles aux employés
-// (un prospecteur a besoin de la carte, des leads, de l'agenda…).
-// Seul Paramètres reste réservé aux managers+.
-const PROSPECTION_NAV: NavItem[] = [
+type NavSection = {
+  label: string;
+  items: NavItem[];
+};
+
+// Sidebar Prospection découpée en sections (style Monday/Notion).
+// Tous les items opérationnels restent accessibles aux employés ;
+// seul Paramètres exige manager+.
+const PROSPECTION_SECTIONS: NavSection[] = [
   {
-    href: "/prospection/aujourdhui",
-    label: "Aujourd'hui",
-    icon: Sun,
-    minRole: "employee"
+    label: "Accueil",
+    items: [
+      {
+        href: "/prospection/aujourdhui",
+        label: "Aujourd'hui",
+        icon: Sun,
+        minRole: "employee"
+      },
+      {
+        href: "/prospection/agenda",
+        label: "Agenda",
+        icon: Calendar,
+        minRole: "employee"
+      }
+    ]
   },
   {
-    href: "/prospection/agenda",
-    label: "Agenda",
-    icon: Calendar,
-    minRole: "employee"
-  },
-  { href: "/prospection", label: "Carte", icon: Map, minRole: "employee" },
-  {
-    href: "/prospection/leads",
-    label: "Suivi de leads",
-    icon: Trello,
-    minRole: "employee"
-  },
-  {
-    href: "/prospection/immeubles-mtl",
-    label: "Rôles fonciers",
-    icon: Building2,
-    minRole: "employee"
-  },
-  {
-    href: "/prospection/lists",
-    label: "Listes (segments)",
-    icon: Layers,
-    minRole: "employee"
-  },
-  {
-    href: "/prospection/pipeline",
-    label: "Pipeline des deals",
-    icon: Trello,
-    minRole: "employee"
-  },
-  {
-    href: "/prospection/analyse",
-    label: "Analyses financières",
-    icon: Calculator,
-    minRole: "employee"
-  },
-  {
-    href: "/prospection/dashboard",
-    label: "Dashboard",
-    icon: BarChart3,
-    minRole: "employee"
+    label: "Prospection",
+    items: [
+      {
+        href: "/prospection",
+        label: "Carte",
+        icon: Map,
+        minRole: "employee"
+      },
+      {
+        href: "/prospection/leads",
+        label: "Suivi de leads",
+        icon: Trello,
+        minRole: "employee"
+      },
+      {
+        href: "/prospection/immeubles-mtl",
+        label: "Rôles fonciers",
+        icon: Building2,
+        minRole: "employee"
+      },
+      {
+        href: "/prospection/lists",
+        label: "Listes (segments)",
+        icon: Layers,
+        minRole: "employee"
+      },
+      {
+        href: "/prospection/analyse",
+        label: "Analyses financières",
+        icon: Calculator,
+        minRole: "employee"
+      },
+      {
+        href: "/prospection/dashboard",
+        label: "Dashboard",
+        icon: BarChart3,
+        minRole: "employee"
+      }
+    ]
   },
   {
-    href: "/prospection/parametres",
-    label: "Paramètres",
-    icon: Settings,
-    minRole: "manager"
+    label: "Acquisition",
+    items: [
+      {
+        href: "/prospection/pipeline",
+        label: "Pipeline des deals",
+        icon: Trello,
+        minRole: "employee"
+      }
+    ]
   },
-  // Phase 3+ : campagnes
-  // { href: "/prospection/campagnes", label: "Campagnes", icon: Mail },
+  {
+    label: "Ressources",
+    items: [
+      {
+        href: "/prospection/parametres",
+        label: "Paramètres",
+        icon: Settings,
+        minRole: "manager"
+      }
+    ]
+  }
 ];
 
 const ROLE_RANK: Record<UserRole, number> = {
@@ -120,7 +148,12 @@ export function ProspectionSidebar({
   const pathname = usePathname();
   const { user } = useCurrentUser();
   const role = (user?.role as UserRole | undefined) || "employee";
-  const visible = PROSPECTION_NAV.filter((i) => canSee(role, i.minRole));
+  // Filtre chaque section selon les rôles, et ne garde que les
+  // sections qui contiennent au moins un item visible.
+  const visibleSections = PROSPECTION_SECTIONS.map((s) => ({
+    ...s,
+    items: s.items.filter((i) => canSee(role, i.minRole))
+  })).filter((s) => s.items.length > 0);
 
   function isActive(href: string) {
     if (href === "/prospection") {
@@ -174,32 +207,36 @@ export function ProspectionSidebar({
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 py-3">
-          <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-500/80">
-            Prospection
-          </p>
-          <ul className="space-y-0.5">
-            {visible.map((it) => {
-              const Icon = it.icon;
-              const active = isActive(it.href);
-              return (
-                <li key={it.href}>
-                  <Link
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    href={it.href as any}
-                    onClick={onClose}
-                    className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition ${
-                      active
-                        ? "bg-emerald-500/15 text-emerald-300"
-                        : "text-white/70 hover:bg-brand-900 hover:text-white"
-                    }`}
-                  >
-                    <Icon className="h-4 w-4" />
-                    {it.label}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
+          {visibleSections.map((section, idx) => (
+            <div key={section.label} className={idx === 0 ? "" : "mt-4"}>
+              <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-500/80">
+                {section.label}
+              </p>
+              <ul className="space-y-0.5">
+                {section.items.map((it) => {
+                  const Icon = it.icon;
+                  const active = isActive(it.href);
+                  return (
+                    <li key={it.href}>
+                      <Link
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={it.href as any}
+                        onClick={onClose}
+                        className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition ${
+                          active
+                            ? "bg-emerald-500/15 text-emerald-300"
+                            : "text-white/70 hover:bg-brand-900 hover:text-white"
+                        }`}
+                      >
+                        <Icon className="h-4 w-4" />
+                        {it.label}
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
 
           <div className="mt-6 border-t border-brand-800 pt-3">
             <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">
