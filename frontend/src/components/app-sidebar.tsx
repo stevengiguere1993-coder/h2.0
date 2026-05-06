@@ -13,7 +13,6 @@ import {
   HardHat,
   Home,
   Contact,
-  KeyRound,
   LogOut,
   Palmtree,
   Settings,
@@ -30,6 +29,7 @@ import { authedFetch, type UserRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { HorizonLogo } from "@/components/horizon-logo";
 import { InstallAppButton } from "@/components/install-app-button";
+import { AccountBadge } from "@/components/account-badge";
 
 type NavItem = {
   href: string;
@@ -292,22 +292,16 @@ export function AppSidebar({
         </nav>
 
         <div className="border-t border-brand-800 px-3 py-4">
-          {userEmail ? (
-            <p
-              className="mb-2 truncate px-3 text-xs text-white/50"
-              title={userEmail}
-            >
-              {userEmail}
-            </p>
-          ) : null}
+          <AccountBadge />
           <InstallAppButton variant="sidebar" />
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/changer-mot-de-passe" as any}
+            href={"/profil" as any}
+            onClick={onClose}
             className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white/70 transition hover:bg-brand-900 hover:text-white"
           >
-            <KeyRound className="h-4 w-4" />
-            <span>Changer mon mot de passe</span>
+            <UserCircle className="h-4 w-4" />
+            <span>Mon profil</span>
           </Link>
           <button
             type="button"

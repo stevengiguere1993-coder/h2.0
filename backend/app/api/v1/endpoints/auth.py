@@ -6,7 +6,16 @@ Handles user login, registration, and profile retrieval.
 
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, Form, HTTPException, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.security import OAuth2PasswordRequestForm
 
 from app.api.deps import CurrentAdmin, CurrentUser, DBSession
@@ -211,6 +220,150 @@ async def update_my_theme(
     await db.flush()
     await db.refresh(u)
     return UserRead.model_validate(u)
+
+
+# ---------- Profil utilisateur (Prénom / Nom / Photo) ----------
+
+
+class ProfileUpdate(BaseModel):
+    """Mise à jour du profil — Prénom + Nom uniquement. La photo
+    passe par /me/avatar (multipart)."""
+
+    first_name: Optional[str] = Field(default=None, max_length=100)
+    last_name: Optional[str] = Field(default=None, max_length=100)
+
+
+@router.patch(
+    "/me/profile",
+    response_model=UserRead,
+    summary="Mettre à jour mon profil (prénom + nom)",
+)
+async def update_my_profile(
+    body: ProfileUpdate,
+    db: DBSession,
+    current_user: CurrentUser,
+) -> UserRead:
+    u = (
+        await db.execute(select(User).where(User.id == current_user.id))
+    ).scalar_one()
+    # On accepte la chaîne vide → NULL (l'utilisateur peut effacer son
+    # prénom ou nom). exclude_unset garantit qu'on ne remet pas les
+    # champs absents à NULL par accident.
+    fields = body.model_dump(exclude_unset=True)
+    for k, v in fields.items():
+        if v == "":
+            v = None
+        elif isinstance(v, str):
+            v = v.strip()
+        setattr(u, k, v)
+    await db.flush()
+    await db.refresh(u)
+    return UserRead.model_validate(u)
+
+
+# Limite raisonnable côté serveur — Render a un body limit aussi mais
+# on coupe avant pour donner une erreur claire.
+MAX_AVATAR_BYTES = 4 * 1024 * 1024  # 4 Mo
+ALLOWED_AVATAR_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+
+@router.post(
+    "/me/avatar",
+    response_model=UserRead,
+    summary="Uploader ma photo de profil",
+)
+async def upload_my_avatar(
+    db: DBSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+) -> UserRead:
+    if file.content_type not in ALLOWED_AVATAR_TYPES:
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            "Format non supporté — JPEG, PNG ou WEBP uniquement.",
+        )
+    data = await file.read()
+    if len(data) > MAX_AVATAR_BYTES:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            f"Image trop grosse — max {MAX_AVATAR_BYTES // 1024 // 1024} Mo.",
+        )
+    u = (
+        await db.execute(select(User).where(User.id == current_user.id))
+    ).scalar_one()
+    u.avatar_image = data
+    u.avatar_content_type = file.content_type
+    await db.flush()
+    await db.refresh(u)
+    return UserRead.model_validate(u)
+
+
+@router.delete(
+    "/me/avatar",
+    response_model=UserRead,
+    summary="Retirer ma photo de profil",
+)
+async def delete_my_avatar(
+    db: DBSession,
+    current_user: CurrentUser,
+) -> UserRead:
+    u = (
+        await db.execute(select(User).where(User.id == current_user.id))
+    ).scalar_one()
+    u.avatar_image = None
+    u.avatar_content_type = None
+    await db.flush()
+    await db.refresh(u)
+    return UserRead.model_validate(u)
+
+
+@router.get(
+    "/me/avatar",
+    summary="Récupérer ma photo de profil",
+    responses={
+        200: {"content": {"image/*": {}}},
+        404: {"description": "Aucune photo"},
+    },
+)
+async def get_my_avatar(
+    db: DBSession,
+    current_user: CurrentUser,
+) -> Response:
+    u = (
+        await db.execute(select(User).where(User.id == current_user.id))
+    ).scalar_one()
+    if not u.avatar_image:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Aucune photo")
+    return Response(
+        content=u.avatar_image,
+        media_type=u.avatar_content_type or "image/jpeg",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
+@router.get(
+    "/users/{user_id}/avatar",
+    summary="Récupérer la photo de profil d'un autre utilisateur",
+    responses={
+        200: {"content": {"image/*": {}}},
+        404: {"description": "Aucune photo"},
+    },
+)
+async def get_user_avatar(
+    user_id: int,
+    db: DBSession,
+    _: CurrentUser,
+) -> Response:
+    u = (
+        await db.execute(select(User).where(User.id == user_id))
+    ).scalar_one_or_none()
+    if u is None or not u.avatar_image:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Aucune photo")
+    return Response(
+        content=u.avatar_image,
+        media_type=u.avatar_content_type or "image/jpeg",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 @router.post(

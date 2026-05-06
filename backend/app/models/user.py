@@ -6,7 +6,7 @@ import json
 from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, String, Text
+from sqlalchemy import Boolean, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
@@ -171,6 +171,44 @@ class User(Base, TimestampMixin):
         default="light",
         server_default="light",
     )
+
+    # Profil utilisateur — affichage dans la sidebar et dans toutes
+    # les listes (assignations, agenda, etc.). Si NULL on retombe sur
+    # la partie locale du courriel comme avant.
+    first_name: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True
+    )
+    last_name: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True
+    )
+    # Photo de profil stockée en bytes (style avatar). Le content-type
+    # est gardé séparément pour pouvoir resservir la blob telle quelle
+    # dans la réponse HTTP (image/jpeg, image/png, image/webp). Limite
+    # côté upload : ~2 Mo, redimensionnée au besoin par le client.
+    avatar_image: Mapped[Optional[bytes]] = mapped_column(
+        LargeBinary, nullable=True
+    )
+    avatar_content_type: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+
+    @property
+    def display_name(self) -> str:
+        """Nom affichable : « Prénom Nom » s'ils sont renseignés,
+        sinon la partie locale du courriel."""
+        parts: list[str] = []
+        if self.first_name:
+            parts.append(self.first_name.strip())
+        if self.last_name:
+            parts.append(self.last_name.strip())
+        if parts:
+            return " ".join(parts)
+        return (self.email or "").split("@", 1)[0]
+
+    @property
+    def has_avatar(self) -> bool:
+        """True dès qu'un binaire d'avatar est stocké."""
+        return self.avatar_image is not None
 
     def has_min_role(self, role: str) -> bool:
         return ROLE_RANK.get(self.role, 0) >= ROLE_RANK.get(role, 99)

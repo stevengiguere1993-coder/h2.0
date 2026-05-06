@@ -76,6 +76,18 @@ class UserRead(UserBase):
     # propriété User.volets : combine volets_json + whitelists des
     # volets en développement (entreprises/immobilier/investisseur).
     volets: List[str] = Field(default_factory=list)
+    # Profil — Prénom + Nom optionnels. NULL si pas encore renseignés.
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    # True quand l'utilisateur a uploadé une photo de profil. Le
+    # binaire est servi via GET /api/v1/auth/me/avatar (ou par id
+    # pour les autres). On expose juste le booléen ici pour éviter
+    # de transporter les bytes dans chaque /me.
+    has_avatar: bool = False
+    # Nom d'affichage dérivé : « Prénom Nom » si renseignés, sinon la
+    # partie locale du courriel. La propriété est calculée côté ORM
+    # (User.display_name) et lue automatiquement via from_attributes.
+    display_name: str = ""
 
 
 class UserUpdate(BaseModel):
