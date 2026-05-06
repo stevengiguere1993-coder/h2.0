@@ -97,32 +97,28 @@ const STATUS_STYLE: Record<
     bg: "bg-violet-400/5",
     label: "text-violet-200",
     dragOverBg: "bg-violet-400/15",
-    // Pill du status sélectionné dans la tâche : version pâle de la
-    // teinte du groupe (équivalent /20 en bg + texte clair de la
-    // même famille). Rend le sélecteur cohérent avec son bandeau
-    // tout en restant moins « criard » que les pastilles priorité.
-    pill: "bg-violet-400/30 text-violet-100"
+    pill: "bg-violet-500 text-white"
   },
   a_faire: {
     border: "border-sky-400/70",
     bg: "bg-sky-500/10",
     label: "text-sky-300",
     dragOverBg: "bg-sky-500/20",
-    pill: "bg-sky-500/30 text-sky-100"
+    pill: "bg-sky-500 text-white"
   },
   en_traitement: {
     border: "border-amber-400/70",
     bg: "bg-amber-500/10",
     label: "text-amber-300",
     dragOverBg: "bg-amber-500/20",
-    pill: "bg-amber-500/30 text-amber-100"
+    pill: "bg-amber-500 text-brand-950"
   },
   termine: {
     border: "border-emerald-400/70",
     bg: "bg-emerald-500/10",
     label: "text-emerald-300",
     dragOverBg: "bg-emerald-500/20",
-    pill: "bg-emerald-500/30 text-emerald-100"
+    pill: "bg-emerald-500 text-white"
   }
 };
 
@@ -144,12 +140,23 @@ const TASK_PRIORITY_LABEL: Record<TaskPriority, string> = {
   faible: "Faible"
 };
 
-// Pastilles pleines style Monday — fond saturé, texte qui contraste.
+// Pastilles pleines style Monday — chaque axe (statut / priorité /
+// date butoir) doit avoir des teintes distinctes pour éviter qu'on
+// les confonde quand 4 pastilles s'alignent sur la même tâche.
+//
+// Statut : violet / sky / amber / emerald  (saturés)
+// Priorité : rose-700 / orange-500 / yellow-400 / lime-500
+// Date butoir : teal / yellow-200 / orange-700 / red-700
 const TASK_PRIORITY_PILL: Record<TaskPriority, string> = {
-  urgent: "bg-rose-500 text-white",
+  // urgent : rouge profond — différent du rose vif de la date « en
+  // retard » (ci-dessous) pour ne pas confondre.
+  urgent: "bg-red-700 text-white",
   eleve: "bg-orange-500 text-white",
-  moyenne: "bg-amber-400 text-brand-950",
-  faible: "bg-emerald-500 text-white"
+  // moyenne : jaune saturé. La date 7-14 j utilise yellow-200 (pâle)
+  // pour ne pas se confondre avec.
+  moyenne: "bg-yellow-400 text-brand-950",
+  // faible : vert lime, distinct du vert emerald (statut Terminé).
+  faible: "bg-lime-500 text-brand-950"
 };
 
 // Rang utilisé pour trier les tâches dans un même groupe de statut :
@@ -324,18 +331,36 @@ export default function ProspectionPipelinePage() {
           // empiler beaucoup de deals sans rétrécir leur contenu.
           // L'utilisateur scrolle latéralement pour voir tous les
           // deals (style Monday/Trello en mode rangée unique).
-          <div className="flex gap-3 overflow-x-auto pb-3">
-            {deals.map((d) => (
-              <div key={d.id} className="w-72 flex-shrink-0">
-                <DealCard
-                  deal={d}
-                  users={users}
-                  onChangePriority={(p) => changeDealPriority(d.id, p)}
-                  onChangeAddress={(a) => changeDealAddress(d.id, a)}
-                  onRemove={() => removeDeal(d)}
-                />
-              </div>
-            ))}
+          //
+          // On insère une fine ligne noire verticale juste avant le
+          // premier deal « Terminé » pour visuellement séparer ce
+          // qui est encore en cours du reste.
+          <div className="flex items-stretch gap-3 overflow-x-auto pb-3">
+            {deals.map((d, i) => {
+              const prev = i > 0 ? deals[i - 1] : null;
+              const showDoneSeparator =
+                d.priority === "termine" &&
+                (prev == null || prev.priority !== "termine");
+              return (
+                <div key={d.id} className="contents">
+                  {showDoneSeparator ? (
+                    <div
+                      className="mx-1 w-px flex-shrink-0 self-stretch bg-black"
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  <div className="w-72 flex-shrink-0">
+                    <DealCard
+                      deal={d}
+                      users={users}
+                      onChangePriority={(p) => changeDealPriority(d.id, p)}
+                      onChangeAddress={(a) => changeDealAddress(d.id, a)}
+                      onRemove={() => removeDeal(d)}
+                    />
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -735,17 +760,20 @@ function TaskRow({
           : "border-brand-800"
       }`}
     >
-      {/* Première ligne : nom (éditable inline) + boutons */}
-      <div className="flex items-center gap-1.5">
-        <input
-          type="text"
+      {/* Première ligne : nom (éditable inline, retour à la ligne
+          auto si trop long) + boutons. textarea + auto-resize via
+          le hook ci-dessous, plutôt qu'un <input> qui truncate. */}
+      <div className="flex items-start gap-1.5">
+        <AutoGrowTextarea
           value={task.name}
-          onChange={(e) => onPatch({ name: e.target.value })}
-          onBlur={(e) => {
-            const v = e.target.value.trim();
-            if (v && v !== task.name) onPatch({ name: v });
+          onChange={(v) => onPatch({ name: v })}
+          onCommit={(v) => {
+            const trimmed = v.trim();
+            if (trimmed && trimmed !== task.name) {
+              onPatch({ name: trimmed });
+            }
           }}
-          className="min-w-0 flex-1 truncate rounded border border-transparent bg-transparent px-1 py-0.5 text-xs text-white hover:border-brand-800 focus:border-accent-500 focus:outline-none"
+          className="min-w-0 flex-1 resize-none rounded border border-transparent bg-transparent px-1 py-0.5 text-xs text-white hover:border-brand-800 focus:border-accent-500 focus:outline-none"
         />
         <button
           type="button"
@@ -1007,6 +1035,57 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
 // Empêche le warning "unused var" pour la table de labels exportée
 // (utilisée dans les futures vues filtrées par priorité de tâche).
 export const _TASK_PRIORITY_LABEL = TASK_PRIORITY_LABEL;
+
+/**
+ * Textarea qui s'agrandit automatiquement à la hauteur de son
+ * contenu (style « note »). Sur la première ligne il est aussi
+ * petit qu'un input ; sitôt qu'on dépasse la largeur, le texte
+ * passe à la ligne et la zone grandit en conséquence.
+ *
+ * Utilisé pour le nom de tâche dans le Pipeline — un input simple
+ * truncate-rait le texte qui dépasse, alors qu'on veut tout voir.
+ */
+function AutoGrowTextarea({
+  value,
+  onChange,
+  onCommit,
+  className
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onCommit?: (v: string) => void;
+  className?: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+
+  // Resync la hauteur à chaque changement de valeur.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value]);
+
+  return (
+    <textarea
+      ref={ref}
+      rows={1}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={(e) => onCommit?.(e.target.value)}
+      onKeyDown={(e) => {
+        // Enter (sans Shift) commit + blur — on ne veut pas saisir
+        // un retour à la ligne explicite dans un nom de tâche.
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          (e.target as HTMLTextAreaElement).blur();
+        }
+      }}
+      className={className}
+      style={{ overflow: "hidden" }}
+    />
+  );
+}
 
 // ─── Composants Monday-like ───────────────────────────────────────
 
@@ -1350,6 +1429,13 @@ function DatePill({
   // Calcule le nombre de jours d'écart entre l'échéance et aujourd'hui
   // (les deux ramenés à minuit local) pour stabiliser le rang quand
   // l'utilisateur change d'heure.
+  //
+  // Couleurs distinctes des autres axes (priorité, statut) pour qu'on
+  // ne confonde pas la date avec une priorité ou un statut :
+  //   ≥14 j : teal (vert-bleu, ≠ emerald de Terminé/faible)
+  //   7-14  : yellow-200 (jaune pâle, ≠ yellow-400 de moyenne)
+  //   0-7   : orange-700 (orange profond, ≠ orange-500 de élevé)
+  //   <0    : rose-500 (rose vif, ≠ red-700 de urgent)
   let pillCls = "bg-brand-800 text-white/60";
   if (value) {
     const today = new Date();
@@ -1362,11 +1448,11 @@ function DatePill({
     if (overdue || diffDays < 0) {
       pillCls = "bg-rose-500 text-white";
     } else if (diffDays <= 7) {
-      pillCls = "bg-orange-500 text-white";
+      pillCls = "bg-orange-700 text-white";
     } else if (diffDays < 14) {
-      pillCls = "bg-amber-400 text-brand-950";
+      pillCls = "bg-yellow-200 text-brand-950";
     } else {
-      pillCls = "bg-emerald-500 text-white";
+      pillCls = "bg-teal-500 text-white";
     }
   }
 
