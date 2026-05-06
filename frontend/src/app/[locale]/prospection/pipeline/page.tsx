@@ -771,11 +771,10 @@ function TaskRow({
               onPatch({ name: trimmed });
             }
           }}
-          // Bordure très discrète juste pour signaler que c'est un
-          // champ éditable (le hover et le focus la mettent en
-          // évidence). Style Monday — moins agressif qu'une ligne
-          // noire pleine.
-          className="min-w-0 flex-1 resize-none rounded border border-white/15 bg-transparent px-1 py-0.5 text-xs text-white hover:border-white/30 focus:border-accent-500 focus:outline-none"
+          // Bordure gris normal (slate-500/40) : assez visible pour
+          // signaler le champ éditable, sans crier comme noir plein.
+          // Hover/focus le mettent en accent-500.
+          className="min-w-0 flex-1 resize-none rounded border border-slate-500/40 bg-transparent px-1 py-0.5 text-xs text-white hover:border-slate-400/60 focus:border-accent-500 focus:outline-none"
         />
         {/* Boutons empilés verticalement : note au-dessus, poubelle
             en-dessous (demande utilisateur). */}
@@ -823,42 +822,52 @@ function TaskRow({
         </div>
       ) : null}
 
-      {/* Pastilles style Monday : assigné(s) / statut / priorité / échéance */}
-      <div className="mt-1.5 grid grid-cols-2 gap-1">
-        <AssigneePicker
-          users={users}
-          values={task.assignee_user_ids || []}
-          onChange={(ids) =>
-            onPatch({
-              assignee_user_ids: ids,
-              assignee_user_id: ids[0] ?? null
-            })
-          }
-        />
-        <PillPicker
-          options={TASK_STATUSES.map((s) => ({
-            value: s.value,
-            label: s.label,
-            cls: STATUS_STYLE[s.value].pill
-          }))}
-          value={task.status}
-          onChange={(v) => onPatch({ status: v as TaskStatus })}
-          ariaLabel="Statut"
-        />
-        <PillPicker
-          options={TASK_PRIORITIES.map((p) => ({
-            value: p.value,
-            label: p.label,
-            cls: TASK_PRIORITY_PILL[p.value]
-          }))}
-          value={task.priority}
-          onChange={(v) => onPatch({ priority: v as TaskPriority })}
-          ariaLabel="Priorité"
-        />
-        <DatePill
-          value={task.due_date}
-          onChange={(d) => onPatch({ due_date: d })}
-        />
+      {/* Pastilles style Monday : assigné(s) / statut / priorité / échéance.
+          Chaque pastille porte un petit libellé gris pâle au-dessus
+          (Personnes / Statut / Priorité / Date butoire). */}
+      <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+        <PillField label="Personnes">
+          <AssigneePicker
+            users={users}
+            values={task.assignee_user_ids || []}
+            onChange={(ids) =>
+              onPatch({
+                assignee_user_ids: ids,
+                assignee_user_id: ids[0] ?? null
+              })
+            }
+          />
+        </PillField>
+        <PillField label="Statut">
+          <PillPicker
+            options={TASK_STATUSES.map((s) => ({
+              value: s.value,
+              label: s.label,
+              cls: STATUS_STYLE[s.value].pill
+            }))}
+            value={task.status}
+            onChange={(v) => onPatch({ status: v as TaskStatus })}
+            ariaLabel="Statut"
+          />
+        </PillField>
+        <PillField label="Priorité">
+          <PillPicker
+            options={TASK_PRIORITIES.map((p) => ({
+              value: p.value,
+              label: p.label,
+              cls: TASK_PRIORITY_PILL[p.value]
+            }))}
+            value={task.priority}
+            onChange={(v) => onPatch({ priority: v as TaskPriority })}
+            ariaLabel="Priorité"
+          />
+        </PillField>
+        <PillField label="Date butoire">
+          <DatePill
+            value={task.due_date}
+            onChange={(d) => onPatch({ due_date: d })}
+          />
+        </PillField>
       </div>
 
       {overdue ? (
@@ -1040,6 +1049,28 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
 // Empêche le warning "unused var" pour la table de labels exportée
 // (utilisée dans les futures vues filtrées par priorité de tâche).
 export const _TASK_PRIORITY_LABEL = TASK_PRIORITY_LABEL;
+
+/**
+ * Wrapper d'une pastille dans la grille 2x2 des tâches : libellé
+ * gris pâle au-dessus (Personnes / Statut / Priorité / Date
+ * butoire) puis la pastille en-dessous.
+ */
+function PillField({
+  label,
+  children
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="mb-0.5 truncate px-0.5 text-[9px] font-medium uppercase tracking-wider text-white/40">
+        {label}
+      </p>
+      {children}
+    </div>
+  );
+}
 
 /**
  * Textarea qui s'agrandit automatiquement à la hauteur de son
@@ -1224,33 +1255,32 @@ function AssigneePicker({
 
   return (
     <div ref={wrapRef} className="relative">
+      {/* Container gris pâle qui héberge les chips. Reste toujours
+          visible (style Monday : on identifie tout de suite que
+          c'est la zone « personnes assignées »). Les chips
+          empruntent la couleur de chaque personne — le container
+          NE prend PAS la couleur. */}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-label="Personne(s) assignée(s)"
-        className={`inline-flex w-full items-center justify-center gap-1 rounded px-2 py-1 text-[10px] font-semibold ${
-          primary ? userPillCls(primary) : "bg-brand-800 text-white/60"
-        }`}
+        className="inline-flex w-full items-center gap-1 rounded bg-brand-800 px-1.5 py-1 text-[10px] font-semibold text-white/60 hover:bg-brand-700"
       >
-        {primary ? (
-          <>
-            <span className="flex items-center -space-x-1">
-              {assigned.slice(0, 3).map((u) => (
-                <span
-                  key={u.id}
-                  className="rounded-full ring-1 ring-black/20"
-                >
-                  <UserAvatarBadge user={u} size={14} />
-                </span>
-              ))}
-            </span>
-            <span className="truncate">
-              {userDisplayName(primary)}
-              {extras > 0 ? ` +${extras}` : ""}
-            </span>
-          </>
+        {assigned.length === 0 ? (
+          <span className="px-0.5">+ Personne</span>
         ) : (
-          <span>+ Personne</span>
+          <span className="flex flex-wrap items-center gap-1">
+            {assigned.map((u) => (
+              <span
+                key={u.id}
+                className={`inline-flex items-center gap-1 rounded-full px-1 py-0.5 text-[9px] font-bold ${userPillCls(u)}`}
+                title={userDisplayName(u)}
+              >
+                <UserAvatarBadge user={u} size={12} />
+                <span className="leading-none">{userInitials(u)}</span>
+              </span>
+            ))}
+          </span>
         )}
       </button>
       {open ? (
