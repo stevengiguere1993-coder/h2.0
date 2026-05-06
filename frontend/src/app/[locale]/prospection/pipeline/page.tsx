@@ -538,8 +538,9 @@ function DealCard({
 
   return (
     <div className="rounded-xl border border-brand-800 bg-brand-900 p-4 shadow-sm">
-      {/* Header carte — adresse éditable inline */}
-      <div className="flex items-start justify-between gap-2">
+      {/* Header carte — adresse éditable inline (prend toute la
+          largeur, plus de pastille priorité à droite). */}
+      <div>
         {editingName ? (
           <AutoGrowTextarea
             value={draftName}
@@ -551,7 +552,7 @@ function DealCard({
               else setDraftName(deal.address);
             }}
             autoFocus
-            className="min-w-0 flex-1 resize-none rounded border border-accent-500 bg-brand-950 px-1.5 py-1 text-sm font-semibold text-white focus:outline-none"
+            className="w-full resize-none rounded border border-accent-500 bg-brand-950 px-1.5 py-1 text-sm font-semibold text-white focus:outline-none"
           />
         ) : (
           <button
@@ -560,20 +561,18 @@ function DealCard({
             // break-words : le titre s'enroule sur plusieurs lignes
             // dès qu'il dépasse la largeur de la carte (ex. adresse
             // longue avec nom de rue + ville). Plus de truncate.
-            className="min-w-0 flex-1 rounded px-1.5 py-1 text-left text-sm font-semibold text-white break-words hover:bg-white/5"
+            className="block w-full rounded px-1.5 py-1 text-left text-sm font-semibold text-white break-words hover:bg-white/5"
             title="Cliquer pour modifier l'adresse"
           >
             {deal.address}
           </button>
         )}
-        <DealPriorityPicker
-          value={deal.priority}
-          onChange={onChangePriority}
-        />
       </div>
 
-      {/* Bandeau d'action */}
-      <div className="mt-3 flex items-center justify-between text-[10px] text-white/40">
+      {/* Bandeau d'action — la priorité du deal est maintenant au
+          milieu, entre le compteur de tâches (gauche) et la
+          poubelle (droite). */}
+      <div className="mt-3 flex items-center justify-between gap-2 text-[10px] text-white/40">
         <button
           type="button"
           onClick={() => setCollapsed((v) => !v)}
@@ -589,6 +588,10 @@ function DealCard({
             {tasks.length} tâche{tasks.length > 1 ? "s" : ""}
           </span>
         </button>
+        <DealPriorityPicker
+          value={deal.priority}
+          onChange={onChangePriority}
+        />
         <button
           type="button"
           onClick={onRemove}
@@ -768,30 +771,36 @@ function TaskRow({
               onPatch({ name: trimmed });
             }
           }}
-          className="min-w-0 flex-1 resize-none rounded border border-transparent bg-transparent px-1 py-0.5 text-xs text-white hover:border-brand-800 focus:border-accent-500 focus:outline-none"
+          // Bordure noire fine en permanence pour bien délimiter
+          // chaque champ de saisie (demande Monday-style).
+          className="min-w-0 flex-1 resize-none rounded border border-black bg-transparent px-1 py-0.5 text-xs text-white focus:border-accent-500 focus:outline-none"
         />
-        <button
-          type="button"
-          onClick={() => setShowNotes((v) => !v)}
-          className={`flex-shrink-0 rounded p-1 ${
-            task.notes
-              ? "text-amber-300 hover:bg-amber-500/15"
-              : "text-white/40 hover:bg-white/5"
-          }`}
-          title={task.notes ? "Voir / éditer les notes" : "Ajouter une note"}
-          aria-label="Notes"
-        >
-          <StickyNote className="h-3 w-3" />
-        </button>
-        <button
-          type="button"
-          onClick={onDelete}
-          className="flex-shrink-0 rounded p-1 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
-          title="Supprimer la tâche"
-          aria-label="Supprimer"
-        >
-          <Trash2 className="h-3 w-3" />
-        </button>
+        {/* Boutons empilés verticalement : note au-dessus, poubelle
+            en-dessous (demande utilisateur). */}
+        <div className="flex flex-shrink-0 flex-col items-center gap-0.5">
+          <button
+            type="button"
+            onClick={() => setShowNotes((v) => !v)}
+            className={`rounded p-1 ${
+              task.notes
+                ? "text-amber-300 hover:bg-amber-500/15"
+                : "text-white/40 hover:bg-white/5"
+            }`}
+            title={task.notes ? "Voir / éditer les notes" : "Ajouter une note"}
+            aria-label="Notes"
+          >
+            <StickyNote className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            className="rounded p-1 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
+            title="Supprimer la tâche"
+            aria-label="Supprimer"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </div>
       </div>
 
       {/* Notes : zone repliable */}
@@ -846,7 +855,6 @@ function TaskRow({
         />
         <DatePill
           value={task.due_date}
-          overdue={overdue}
           onChange={(d) => onPatch({ due_date: d })}
         />
       </div>
@@ -1381,21 +1389,16 @@ function UserAvatarBadge({
 }
 
 /**
- * Pastille date butoir — affiche la date formatée (ou « Date butoir »
- * si vide). Couleur dégradée selon l'urgence :
- *   14 j et + → vert    (loin)
- *   7 à 14 j  → jaune   (approche)
- *   0 à 7 j   → orange  (cette semaine)
- *   < 0 j     → rouge   (en retard)
- * Au clic, ouvre un input date masqué.
+ * Pastille date butoir — petit rectangle noir à coins arrondis, plus
+ * compact que les autres pastilles. Pas de couleur dépendante du
+ * délai (l'utilisateur a explicitement demandé de retirer ça pour
+ * un look uniforme style Monday). Au clic, ouvre un input date masqué.
  */
 function DatePill({
   value,
-  overdue,
   onChange
 }: {
   value: string | null;
-  overdue: boolean;
   onChange: (d: string | null) => void;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -1403,7 +1406,6 @@ function DatePill({
   function open() {
     const el = inputRef.current;
     if (!el) return;
-    // showPicker est dispo Chrome/Edge ; fallback en focus + clic.
     const anyEl = el as HTMLInputElement & { showPicker?: () => void };
     if (typeof anyEl.showPicker === "function") {
       try {
@@ -1424,45 +1426,18 @@ function DatePill({
       })
     : null;
 
-  // Calcule le nombre de jours d'écart entre l'échéance et aujourd'hui
-  // (les deux ramenés à minuit local) pour stabiliser le rang quand
-  // l'utilisateur change d'heure.
-  //
-  // Couleurs distinctes des autres axes (priorité, statut) pour qu'on
-  // ne confonde pas la date avec une priorité ou un statut :
-  //   ≥14 j : teal (vert-bleu, ≠ emerald de Terminé/faible)
-  //   7-14  : yellow-200 (jaune pâle, ≠ yellow-400 de moyenne)
-  //   0-7   : orange-700 (orange profond, ≠ orange-500 de élevé)
-  //   <0    : rose-500 (rose vif, ≠ red-700 de urgent)
-  let pillCls = "bg-brand-800 text-white/60";
-  if (value) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const due = new Date(value + "T00:00:00");
-    due.setHours(0, 0, 0, 0);
-    const diffDays = Math.round(
-      (due.getTime() - today.getTime()) / 86_400_000
-    );
-    if (overdue || diffDays < 0) {
-      pillCls = "bg-rose-500 text-white";
-    } else if (diffDays <= 7) {
-      pillCls = "bg-orange-700 text-white";
-    } else if (diffDays < 14) {
-      pillCls = "bg-yellow-200 text-brand-950";
-    } else {
-      pillCls = "bg-teal-500 text-white";
-    }
-  }
-
   return (
-    <div className="relative">
+    <div className="relative inline-flex">
       <button
         type="button"
         onClick={open}
         aria-label="Date butoir"
-        className={`inline-flex w-full items-center justify-center gap-1 rounded px-2 py-1 text-[10px] font-semibold ${pillCls}`}
+        // Plus petite que les autres pastilles : px-1.5 py-0.5 vs
+        // px-2 py-1. Toujours noire avec texte blanc, peu importe
+        // le délai.
+        className="inline-flex items-center justify-center rounded-md bg-black px-1.5 py-0.5 text-[10px] font-semibold text-white"
       >
-        {formatted || "+ Date butoir"}
+        {formatted || "+ Date"}
       </button>
       <input
         ref={inputRef}
