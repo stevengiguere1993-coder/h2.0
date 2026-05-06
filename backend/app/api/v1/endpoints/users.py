@@ -98,6 +98,13 @@ def _user_read(u: User, full_name: Optional[str]) -> UserRead:
         full_name=full_name,
         volets=u.volets,
         can_assign_others=bool(getattr(u, "can_assign_others", False)),
+        # Profil — propage les nouveaux champs sinon les sélecteurs
+        # d'assignation retombent sur l'email faute de display_name.
+        first_name=u.first_name,
+        last_name=u.last_name,
+        display_name=u.display_name,
+        profile_color=u.profile_color,
+        has_avatar=u.has_avatar,
     )
 
 

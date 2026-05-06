@@ -307,16 +307,22 @@ export default function ProspectionPipelinePage() {
         ) : deals.length === 0 ? (
           <EmptyState onAdd={() => setModalOpen(true)} />
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          // Une seule ligne horizontale qui scrolle vers la droite —
+          // chaque carte garde une largeur fixe pour qu'on puisse
+          // empiler beaucoup de deals sans rétrécir leur contenu.
+          // L'utilisateur scrolle latéralement pour voir tous les
+          // deals (style Monday/Trello en mode rangée unique).
+          <div className="flex gap-3 overflow-x-auto pb-3">
             {deals.map((d) => (
-              <DealCard
-                key={d.id}
-                deal={d}
-                users={users}
-                onChangePriority={(p) => changeDealPriority(d.id, p)}
-                onChangeAddress={(a) => changeDealAddress(d.id, a)}
-                onRemove={() => removeDeal(d)}
-              />
+              <div key={d.id} className="w-72 flex-shrink-0">
+                <DealCard
+                  deal={d}
+                  users={users}
+                  onChangePriority={(p) => changeDealPriority(d.id, p)}
+                  onChangeAddress={(a) => changeDealAddress(d.id, a)}
+                  onRemove={() => removeDeal(d)}
+                />
+              </div>
             ))}
           </div>
         )}
