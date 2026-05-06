@@ -56,8 +56,11 @@ class EntrepriseTacheBase(BaseModel):
     # n'est plus affichée côté front, donc démarrer là est trompeur.
     status: str = Field(default="todo", max_length=16)
     # Priorité Monday-style (alignée sur les tâches du Pipeline).
+    # Défaut « non_assigne » — pastille grise — tant que l'utilisateur
+    # n'a pas choisi une priorité explicite.
     priority: str = Field(
-        default="moyenne", pattern=r"^(urgent|eleve|moyenne|faible)$"
+        default="non_assigne",
+        pattern=r"^(non_assigne|urgent|eleve|moyenne|faible)$"
     )
     impact: Optional[int] = Field(default=None, ge=1, le=10)
     confidence: Optional[int] = Field(default=None, ge=1, le=10)
@@ -82,7 +85,7 @@ class EntrepriseTacheUpdate(BaseModel):
     departement: Optional[str] = Field(default=None, max_length=32)
     status: Optional[str] = Field(default=None, max_length=16)
     priority: Optional[str] = Field(
-        default=None, pattern=r"^(urgent|eleve|moyenne|faible)$"
+        default=None, pattern=r"^(non_assigne|urgent|eleve|moyenne|faible)$"
     )
     impact: Optional[int] = Field(default=None, ge=1, le=10)
     confidence: Optional[int] = Field(default=None, ge=1, le=10)
@@ -103,7 +106,7 @@ class EntrepriseTacheRead(BaseModel):
     description: Optional[str] = None
     departement: Optional[str] = None
     status: str = "todo"
-    priority: str = "moyenne"
+    priority: str = "non_assigne"
     impact: Optional[int] = None
     confidence: Optional[int] = None
     effort: Optional[int] = None

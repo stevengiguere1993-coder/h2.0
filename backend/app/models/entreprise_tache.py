@@ -56,12 +56,13 @@ class EntrepriseTache(Base, TimestampUpdateMixin):
     )
 
     # Priorité côté UI — alignée sur les tâches du Pipeline des deals.
-    # Valeurs : urgent / eleve / moyenne / faible. Sert à teinter la
-    # pastille « Priorité » dans la carte Monday-style.
+    # Valeurs : non_assigne (défaut) / urgent / eleve / moyenne / faible.
+    # « non_assigne » = pastille grise affichée tant que l'utilisateur
+    # n'a pas choisi explicitement une priorité.
     priority: Mapped[str] = mapped_column(
         String(16), nullable=False,
-        default="moyenne",
-        server_default="moyenne",
+        default="non_assigne",
+        server_default="non_assigne",
     )
 
     # ── Scoring ICE × Urgence ────────────────────────────────────────

@@ -141,7 +141,7 @@ async def delete_deal(
 # ============================================================
 
 TASK_STATUS_PATTERN = r"^(a_venir|a_faire|en_traitement|termine)$"
-TASK_PRIORITY_PATTERN = r"^(urgent|eleve|moyenne|faible)$"
+TASK_PRIORITY_PATTERN = r"^(non_assigne|urgent|eleve|moyenne|faible)$"
 
 
 class TaskCreate(BaseModel):
@@ -153,7 +153,9 @@ class TaskCreate(BaseModel):
     assignee_user_ids: Optional[List[int]] = None
     assignee_user_id: Optional[int] = Field(default=None, gt=0)
     status: str = Field(default="a_venir", pattern=TASK_STATUS_PATTERN)
-    priority: str = Field(default="moyenne", pattern=TASK_PRIORITY_PATTERN)
+    # Défaut « non_assigne » : tant que l'utilisateur n'a pas
+    # explicitement choisi une priorité, on ne suppose rien.
+    priority: str = Field(default="non_assigne", pattern=TASK_PRIORITY_PATTERN)
     due_date: Optional[date] = None
 
 
