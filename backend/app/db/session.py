@@ -552,6 +552,14 @@ async def init_db() -> None:
             WHERE status = 'backlog'
               AND monday_item_id IS NOT NULL
             """,
+            # Les tâches en « waiting » sont rapatriées dans « todo »
+            # (À venir) — on a retiré la colonne « En attente » de
+            # l'UI pour aligner sur le Pipeline des deals. Idempotent :
+            # une fois passées à todo, elles n'y reviennent plus.
+            """
+            UPDATE entreprise_taches SET status = 'todo'
+            WHERE status = 'waiting'
+            """,
         ):
             try:
                 await conn.execute(text(sql))
