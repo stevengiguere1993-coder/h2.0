@@ -561,7 +561,9 @@ function TacheCard({
             const trimmed = v.trim();
             if (trimmed && trimmed !== t.title) onPatch({ title: trimmed });
           }}
-          className="min-w-0 flex-1 resize-none rounded border border-slate-500/40 bg-transparent px-1 py-0.5 text-xs font-medium text-white hover:border-slate-400/60 focus:border-accent-500 focus:outline-none"
+          // Style « titre de tâche » comme avant : semibold, pas de
+          // bordure visible au repos, juste un focus accent au clic.
+          className="min-w-0 flex-1 resize-none rounded border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold text-white focus:border-accent-500 focus:outline-none"
         />
         <div className="flex flex-shrink-0 flex-col items-center gap-0.5">
           <button
