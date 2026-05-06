@@ -301,6 +301,12 @@ async def init_db() -> None:
             # Arrondissement (Ville de MTL) — dérivé via cross-référence
             # avec le dataset public « Adresses Civiques de Montréal ».
             ("mtl_property_units", "arrondissement", "VARCHAR(64)"),
+            # Priorité côté UI (Monday-style) sur les tâches d'entreprise.
+            (
+                "entreprise_taches",
+                "priority",
+                "VARCHAR(16) NOT NULL DEFAULT 'moyenne'",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
