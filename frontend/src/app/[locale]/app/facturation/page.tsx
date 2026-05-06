@@ -58,6 +58,12 @@ function fmtDate(iso: string | null): string {
 export default function FacturationPage() {
   const { onOpenSidebar } = useAppLayout();
   const [items, setItems] = useState<Facture[]>([]);
+  const [clientNames, setClientNames] = useState<Map<number, string>>(
+    new Map()
+  );
+  const [projectNames, setProjectNames] = useState<Map<number, string>>(
+    new Map()
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -70,10 +76,24 @@ export default function FacturationPage() {
       setLoading(true);
       setError(null);
       try {
-        const res = await authedFetch("/api/v1/factures?limit=500");
-        if (!res.ok) throw new Error(`http_${res.status}`);
-        const data = (await res.json()) as Facture[];
-        if (!cancelled) setItems(data);
+        const [fRes, cRes, pRes] = await Promise.all([
+          authedFetch("/api/v1/factures?limit=500"),
+          authedFetch("/api/v1/clients?limit=500"),
+          authedFetch("/api/v1/projects?limit=500")
+        ]);
+        if (!fRes.ok) throw new Error(`http_${fRes.status}`);
+        const data = (await fRes.json()) as Facture[];
+        const cs = cRes.ok
+          ? ((await cRes.json()) as Array<{ id: number; name: string }>)
+          : [];
+        const ps = pRes.ok
+          ? ((await pRes.json()) as Array<{ id: number; name: string }>)
+          : [];
+        if (!cancelled) {
+          setItems(data);
+          setClientNames(new Map(cs.map((c) => [c.id, c.name])));
+          setProjectNames(new Map(ps.map((p) => [p.id, p.name])));
+        }
       } catch {
         if (!cancelled) setError("Impossible de charger les factures.");
       } finally {
@@ -89,12 +109,17 @@ export default function FacturationPage() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return items;
-    return items.filter(
-      (f) =>
+    return items.filter((f) => {
+      const cn = f.client_id ? (clientNames.get(f.client_id) || "") : "";
+      const pn = f.project_id ? (projectNames.get(f.project_id) || "") : "";
+      return (
         f.reference.toLowerCase().includes(q) ||
-        String(f.total || "").includes(q)
-    );
-  }, [items, search]);
+        String(f.total || "").includes(q) ||
+        cn.toLowerCase().includes(q) ||
+        pn.toLowerCase().includes(q)
+      );
+    });
+  }, [items, search, clientNames, projectNames]);
 
   const byColumn = useMemo(() => {
     const map: Record<string, Facture[]> = Object.fromEntries(
@@ -203,6 +228,12 @@ export default function FacturationPage() {
                         <Card
                           key={f.id}
                           fa={f}
+                          clientName={
+                            f.client_id ? clientNames.get(f.client_id) ?? null : null
+                          }
+                          projectName={
+                            f.project_id ? projectNames.get(f.project_id) ?? null : null
+                          }
                           dragging={dragging === f.id}
                           onDragStart={() => setDragging(f.id)}
                           onDragEnd={() => {
@@ -225,11 +256,15 @@ export default function FacturationPage() {
 
 function Card({
   fa,
+  clientName,
+  projectName,
   dragging,
   onDragStart,
   onDragEnd
 }: {
   fa: Facture;
+  clientName: string | null;
+  projectName: string | null;
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -250,6 +285,13 @@ function Card({
       <h3 className="truncate text-sm font-semibold text-white">
         {fa.reference}
       </h3>
+      {clientName || projectName ? (
+        <p className="mt-0.5 truncate text-[11px] text-white/60">
+          {clientName ? clientName : ""}
+          {clientName && projectName ? " · " : ""}
+          {projectName ? projectName : ""}
+        </p>
+      ) : null}
       <div className="mt-1 flex items-center justify-between text-xs">
         <span className="text-white/50">
           {fa.due_at ? `Échéance ${fmtDate(fa.due_at)}` : fmtDate(fa.created_at)}
