@@ -9,7 +9,16 @@ et un pourcentage d'ownership.
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -55,6 +64,14 @@ class Entreprise(Base, TimestampUpdateMixin):
 
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
+    )
+
+    # Ordre d'affichage dans la sidebar « Mes entreprises ». Modifiable
+    # par drag & drop côté frontend. On alloue par pas de 1000 à la
+    # création pour pouvoir insérer entre deux items sans renuméroter
+    # tout le monde à chaque déplacement.
+    position: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", index=True
     )
 
 

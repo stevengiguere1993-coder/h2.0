@@ -75,6 +75,45 @@ export default function EntreprisesLayout({
   const [newEntName, setNewEntName] = useState("");
   const [newEntBusy, setNewEntBusy] = useState(false);
   const [newEntErr, setNewEntErr] = useState<string | null>(null);
+  // ID en cours de drag pour l'ordre des entreprises dans la sidebar.
+  const [dragId, setDragId] = useState<number | null>(null);
+
+  async function reorderEntreprises(ids: number[]) {
+    // MAJ optimiste : on réordonne le state localement, puis on
+    // pousse côté serveur. En cas d'échec, on n'affiche pas d'erreur
+    // bloquante — l'ordre reviendra au prochain reload.
+    setEntreprises((prev) => {
+      const byId = new Map(prev.map((e) => [e.id, e]));
+      const sorted = ids
+        .map((id) => byId.get(id))
+        .filter((e): e is EntrepriseLite => Boolean(e));
+      // Conserve les éventuels items hors `ids` à la fin (failsafe).
+      for (const e of prev) {
+        if (!ids.includes(e.id)) sorted.push(e);
+      }
+      return sorted;
+    });
+    try {
+      await authedFetch("/api/v1/entreprises/reorder", {
+        method: "POST",
+        body: JSON.stringify({ ids })
+      });
+    } catch {
+      /* ignore — l'UI montrera le bon ordre au prochain reload */
+    }
+  }
+
+  function handleDragEntreprise(droppedOnId: number) {
+    if (dragId == null || dragId === droppedOnId) return;
+    const ids = entreprises.map((e) => e.id);
+    const fromIdx = ids.indexOf(dragId);
+    const toIdx = ids.indexOf(droppedOnId);
+    if (fromIdx < 0 || toIdx < 0) return;
+    ids.splice(fromIdx, 1);
+    ids.splice(toIdx, 0, dragId);
+    setDragId(null);
+    void reorderEntreprises(ids);
+  }
 
   async function createEntreprise() {
     const name = newEntName.trim();
@@ -277,17 +316,29 @@ export default function EntreprisesLayout({
                       : e.health_label === "warn"
                       ? "#ffaa33"
                       : "#4ade80";
+                  const dragging = dragId === e.id;
                   return (
                     <Link
                       key={e.id}
                       // eslint-disable-next-line @typescript-eslint/no-explicit-any
                       href={`/entreprises/${e.id}` as any}
                       onClick={() => setSidebarOpen(false)}
+                      draggable
+                      onDragStart={() => setDragId(e.id)}
+                      onDragEnd={() => setDragId(null)}
+                      onDragOver={(ev) => {
+                        // Permet le drop sur cet item.
+                        ev.preventDefault();
+                      }}
+                      onDrop={(ev) => {
+                        ev.preventDefault();
+                        handleDragEntreprise(e.id);
+                      }}
                       className={`flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition ${
                         pathname.includes(`/entreprises/${e.id}`)
                           ? "bg-[var(--qg-bg-alt)] text-[var(--qg-text)]"
                           : "text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
-                      }`}
+                      } ${dragging ? "opacity-50" : ""}`}
                     >
                       <span
                         className="h-1.5 w-1.5 rounded-full flex-shrink-0"

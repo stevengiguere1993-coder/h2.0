@@ -303,23 +303,13 @@ export default function EntrepriseDetailPage() {
           { label: ent.name }
         ]}
         rightSlot={
-          <>
-            <Link
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              href={`/entreprises/${ent.id}/pilotage` as any}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-200 hover:bg-violet-500/20"
-            >
-              Pilotage
-            </Link>
-            <button
-              type="button"
-              onClick={() => setModal({ fresh: true })}
-              className="btn-accent text-sm"
-            >
-              <Plus className="mr-1.5 h-4 w-4" />
-              Nouvelle tâche
-            </button>
-          </>
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={`/entreprises/${ent.id}/pilotage` as any}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-200 hover:bg-violet-500/20"
+          >
+            Pilotage
+          </Link>
         }
       />
 
@@ -393,10 +383,20 @@ export default function EntrepriseDetailPage() {
         ) : null}
 
         {/* Toggle Tableau/Kanban — au-dessus du board */}
-        <div className="mt-6 flex items-center justify-between">
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-white/50">
-            Tâches
-          </h2>
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-white/50">
+              Tâches
+            </h2>
+            <button
+              type="button"
+              onClick={() => setModal({ fresh: true })}
+              className="btn-accent inline-flex items-center text-xs"
+            >
+              <Plus className="mr-1 h-3.5 w-3.5" />
+              Nouvelle tâche
+            </button>
+          </div>
           <div className="inline-flex rounded-lg border border-brand-800 bg-brand-900 p-0.5">
             <button
               type="button"
@@ -429,7 +429,9 @@ export default function EntrepriseDetailPage() {
           <TachesListView
             taches={taches}
             empById={empById}
-            onClickRow={(t) => setModal(t)}
+            onClickRow={() => {
+              /* Modal de modification désactivé (demande utilisateur) */
+            }}
             onChangeStatus={(t, s) => moveTache(t.id, s)}
           />
         ) : (
@@ -481,7 +483,6 @@ export default function EntrepriseDetailPage() {
                         key={t.id}
                         t={t}
                         users={users}
-                        onClick={() => setModal(t)}
                         onDragStart={() => setDragging(t.id)}
                         onDragEnd={() => {
                           setDragging(null);
@@ -539,7 +540,6 @@ const ENT_PRIORITY_PILLS: Array<{ value: string; label: string; cls: string }> =
 function TacheCard({
   t,
   users,
-  onClick,
   onDragStart,
   onDragEnd,
   onPatch,
@@ -547,7 +547,6 @@ function TacheCard({
 }: {
   t: Tache;
   users: TaskUserMini[];
-  onClick: () => void;
   onDragStart: () => void;
   onDragEnd: () => void;
   onPatch: (patch: Partial<Tache>) => void;
@@ -577,20 +576,6 @@ function TacheCard({
         onDragStart();
       }}
       onDragEnd={onDragEnd}
-      onClick={(e) => {
-        // Si l'utilisateur clique dans un input/select/textarea
-        // on n'ouvre pas la modal — il édite inline.
-        const tag = (e.target as HTMLElement).tagName;
-        if (
-          tag === "INPUT" ||
-          tag === "SELECT" ||
-          tag === "TEXTAREA" ||
-          tag === "BUTTON"
-        ) {
-          return;
-        }
-        onClick();
-      }}
       className="group block rounded-lg border border-brand-800 bg-brand-950 p-2"
     >
       {/* Première ligne : nom (éditable inline) + boutons note/poubelle */}
@@ -740,9 +725,11 @@ function TacheModal({
   const [departement, setDepartement] = useState(
     existing?.departement || ""
   );
-  // Nouvelles tâches : on démarre direct dans « À faire » plutôt
-  // que dans un Backlog (la colonne Backlog a été retirée de l'UI).
-  const [status, setStatus] = useState(existing?.status || "todo");
+  // Nouvelles tâches : on démarre direct dans « À faire » (a_faire) —
+  // l'utilisateur veut généralement que la tâche soit déjà engagée
+  // à la création. Backlog a été retiré ; todo (« À venir ») est
+  // moins pertinent comme défaut.
+  const [status, setStatus] = useState(existing?.status || "a_faire");
   const [impact, setImpact] = useState(
     existing?.impact != null ? String(existing.impact) : ""
   );

@@ -307,7 +307,9 @@ export function AssigneePicker({
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-label="Personne(s) assignée(s)"
-        className="inline-flex w-full items-center justify-center gap-1 rounded bg-brand-800 px-1.5 py-1 text-[10px] font-semibold text-white/60 hover:bg-brand-700"
+        // Fin contour noir/40 pour signaler la zone, sans concurrencer
+        // les pastilles colorées des autres axes.
+        className="inline-flex w-full items-center justify-center gap-1 rounded border border-black/40 bg-brand-800 px-1.5 py-1 text-[10px] font-semibold text-white/60 hover:bg-brand-700"
       >
         {assigned.length === 0 ? (
           <span className="px-0.5">+ Personne</span>

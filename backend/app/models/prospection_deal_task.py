@@ -55,8 +55,9 @@ class ProspectionDealTask(Base):
     status: Mapped[str] = mapped_column(
         String(16),
         nullable=False,
-        default="a_venir",
-        server_default="a_venir",
+        # Démarre dans « À faire » par défaut — plus utile qu'« À venir ».
+        default="a_faire",
+        server_default="a_faire",
         index=True,
     )
     priority: Mapped[str] = mapped_column(

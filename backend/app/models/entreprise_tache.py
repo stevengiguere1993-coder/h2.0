@@ -50,8 +50,12 @@ class EntrepriseTache(Base, TimestampUpdateMixin):
 
     status: Mapped[str] = mapped_column(
         String(16), nullable=False,
-        default=TacheStatus.BACKLOG.value,
-        server_default=TacheStatus.BACKLOG.value,
+        # Démarre dans « À faire » (a_faire) par défaut. Auparavant
+        # « backlog », puis « todo » — mais la pratique a montré
+        # qu'« À faire » est plus utile car l'utilisateur veut
+        # généralement que la tâche soit déjà engagée à la création.
+        default=TacheStatus.A_FAIRE.value,
+        server_default=TacheStatus.A_FAIRE.value,
         index=True,
     )
 
