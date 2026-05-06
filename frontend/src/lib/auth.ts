@@ -43,6 +43,15 @@ export type CurrentUser = {
   /** Volets accessibles : construction, prospection, entreprises,
    *  immobilier, investisseur. Absent = backward compat (tous). */
   volets?: string[];
+  /** Profil utilisateur (Prénom + Nom). NULL si pas encore renseignés. */
+  first_name?: string | null;
+  last_name?: string | null;
+  /** True quand un avatar est uploadé — récupéré via
+   *  GET /api/v1/auth/me/avatar. */
+  has_avatar?: boolean;
+  /** Nom calculé côté serveur : « Prénom Nom » sinon partie locale
+   *  du courriel. */
+  display_name?: string;
 };
 
 const ROLE_RANK: Record<UserRole, number> = {

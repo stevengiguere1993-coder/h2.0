@@ -1147,7 +1147,12 @@ function AssigneePill({
 
 /**
  * Pastille date butoir — affiche la date formatée (ou « Date butoir »
- * si vide). Au clic, ouvre un input date masqué.
+ * si vide). Couleur dégradée selon l'urgence :
+ *   14 j et + → vert    (loin)
+ *   7 à 14 j  → jaune   (approche)
+ *   0 à 7 j   → orange  (cette semaine)
+ *   < 0 j     → rouge   (en retard)
+ * Au clic, ouvre un input date masqué.
  */
 function DatePill({
   value,
@@ -1184,19 +1189,36 @@ function DatePill({
       })
     : null;
 
+  // Calcule le nombre de jours d'écart entre l'échéance et aujourd'hui
+  // (les deux ramenés à minuit local) pour stabiliser le rang quand
+  // l'utilisateur change d'heure.
+  let pillCls = "bg-brand-800 text-white/60";
+  if (value) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const due = new Date(value + "T00:00:00");
+    due.setHours(0, 0, 0, 0);
+    const diffDays = Math.round(
+      (due.getTime() - today.getTime()) / 86_400_000
+    );
+    if (overdue || diffDays < 0) {
+      pillCls = "bg-rose-500 text-white";
+    } else if (diffDays <= 7) {
+      pillCls = "bg-orange-500 text-white";
+    } else if (diffDays < 14) {
+      pillCls = "bg-amber-400 text-brand-950";
+    } else {
+      pillCls = "bg-emerald-500 text-white";
+    }
+  }
+
   return (
     <div className="relative">
       <button
         type="button"
         onClick={open}
         aria-label="Date butoir"
-        className={`inline-flex w-full items-center justify-center gap-1 rounded px-2 py-1 text-[10px] font-semibold ${
-          overdue
-            ? "bg-rose-500 text-white"
-            : value
-              ? "bg-emerald-500/80 text-white"
-              : "bg-brand-800 text-white/60"
-        }`}
+        className={`inline-flex w-full items-center justify-center gap-1 rounded px-2 py-1 text-[10px] font-semibold ${pillCls}`}
       >
         {formatted || "+ Date butoir"}
       </button>

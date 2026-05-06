@@ -21,7 +21,8 @@ const PORTAL_PREFIXES = [
   "/prospection",
   "/investisseur",
   "/dev",
-  "/changer-mot-de-passe"
+  "/changer-mot-de-passe",
+  "/profil"
 ];
 
 function stripLocale(pathname: string): string {

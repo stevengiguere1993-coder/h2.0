@@ -8,7 +8,6 @@ import {
   Calculator,
   Calendar,
   Home,
-  KeyRound,
   Layers,
   LogOut,
   Map,
@@ -24,6 +23,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { type UserRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { AccountBadge } from "@/components/account-badge";
 
 type NavItem = {
   href: string;
@@ -267,17 +267,15 @@ export function ProspectionSidebar({
         </nav>
 
         <div className="border-t border-brand-800 px-2 py-3">
-          <div className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-white/60">
-            <UserCircle className="h-4 w-4" />
-            <span className="truncate">{userEmail || "—"}</span>
-          </div>
+          <AccountBadge />
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/changer-mot-de-passe" as any}
+            href={"/profil" as any}
+            onClick={onClose}
             className="mt-1 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-white/70 hover:bg-brand-900 hover:text-white"
           >
-            <KeyRound className="h-4 w-4" />
-            Changer mon mot de passe
+            <UserCircle className="h-4 w-4" />
+            Mon profil
           </Link>
           <button
             type="button"
