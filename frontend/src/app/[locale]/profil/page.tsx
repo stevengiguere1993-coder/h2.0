@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "@/i18n/navigation";
 import {
+  ArrowLeft,
   Camera,
   KeyRound,
   Loader2,
@@ -13,6 +14,8 @@ import {
 
 import { authedFetch, getToken, setToken } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { Link } from "@/i18n/navigation";
+import { KratosLogo } from "@/components/kratos-logo";
 
 /**
  * Page « Mon profil » accessible depuis la sidebar de tous les
@@ -203,7 +206,40 @@ export default function ProfilePage() {
   })();
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6 p-4 lg:p-6">
+    <>
+      {/* Topbar minimaliste — flèche back à gauche, Kratos à droite
+          (renvoie au portail). Pas de sidebar ici parce que /profil
+          est partagé entre tous les volets. */}
+      <header
+        className="sticky top-0 z-30 flex items-center justify-between border-b border-brand-800 bg-brand-950/95 px-4 backdrop-blur lg:px-6"
+        style={{ paddingTop: "env(safe-area-inset-top)" }}
+      >
+        <div className="flex min-h-[64px] items-center gap-3 lg:min-h-[120px]">
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-white/70 hover:bg-brand-900 hover:text-white"
+            aria-label="Retour"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            <span>Retour</span>
+          </button>
+          <span className="text-sm font-semibold text-white">
+            Mon profil
+          </span>
+        </div>
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={"/connexion" as any}
+          aria-label="Retour au portail"
+          title="Retour au portail"
+          className="rounded-md p-1 hover:opacity-80"
+        >
+          <KratosLogo size={120} floating={false} />
+        </Link>
+      </header>
+
+      <div className="mx-auto max-w-2xl space-y-6 p-4 lg:p-6">
       <header>
         <h1 className="text-2xl font-bold text-white">Mon profil</h1>
         <p className="mt-1 text-sm text-white/60">
@@ -429,6 +465,7 @@ export default function ProfilePage() {
           Se déconnecter
         </button>
       </section>
-    </div>
+      </div>
+    </>
   );
 }
