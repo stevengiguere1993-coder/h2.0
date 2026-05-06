@@ -773,8 +773,9 @@ function TaskRow({
           }}
           // Bordure gris normal (slate-500/40) : assez visible pour
           // signaler le champ éditable, sans crier comme noir plein.
-          // Hover/focus le mettent en accent-500.
-          className="min-w-0 flex-1 resize-none rounded border border-slate-500/40 bg-transparent px-1 py-0.5 text-xs text-white hover:border-slate-400/60 focus:border-accent-500 focus:outline-none"
+          // Hover/focus le mettent en accent-500. Léger gras
+          // (font-medium) pour bien démarquer le titre du reste.
+          className="min-w-0 flex-1 resize-none rounded border border-slate-500/40 bg-transparent px-1 py-0.5 text-xs font-medium text-white hover:border-slate-400/60 focus:border-accent-500 focus:outline-none"
         />
         {/* Boutons empilés verticalement : note au-dessus, poubelle
             en-dessous (demande utilisateur). */}
@@ -1264,12 +1265,14 @@ function AssigneePicker({
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-label="Personne(s) assignée(s)"
-        className="inline-flex w-full items-center gap-1 rounded bg-brand-800 px-1.5 py-1 text-[10px] font-semibold text-white/60 hover:bg-brand-700"
+        // justify-center : qu'il y ait 1 ou 5 chips, l'ensemble
+        // est toujours centré horizontalement dans le rectangle.
+        className="inline-flex w-full items-center justify-center gap-1 rounded bg-brand-800 px-1.5 py-1 text-[10px] font-semibold text-white/60 hover:bg-brand-700"
       >
         {assigned.length === 0 ? (
           <span className="px-0.5">+ Personne</span>
         ) : (
-          <span className="flex flex-wrap items-center gap-1">
+          <span className="flex flex-wrap items-center justify-center gap-1">
             {assigned.map((u) => (
               <span
                 key={u.id}
