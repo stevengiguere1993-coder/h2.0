@@ -529,6 +529,7 @@ const ENT_STATUS_PILLS: Array<{ value: string; label: string; cls: string }> = [
 ];
 
 const ENT_PRIORITY_PILLS: Array<{ value: string; label: string; cls: string }> = [
+  { value: "non_assigne", label: "Non-assigné", cls: "bg-slate-500 text-white" },
   { value: "urgent", label: "Urgent ⚠️", cls: "bg-red-700 text-white" },
   { value: "eleve", label: "Élevé", cls: "bg-orange-500 text-white" },
   { value: "moyenne", label: "Moyenne", cls: "bg-yellow-400 text-brand-950" },
@@ -678,7 +679,7 @@ function TacheCard({
         <PillField label="Priorité">
           <PillPicker
             options={ENT_PRIORITY_PILLS}
-            value={t.priority || "moyenne"}
+            value={t.priority || "non_assigne"}
             onChange={(v) => onPatch({ priority: v })}
             ariaLabel="Priorité"
           />

@@ -70,7 +70,12 @@ type Deal = {
 
 // ─── Statuts et priorités de TÂCHES ───────────────────────────────
 type TaskStatus = "a_venir" | "a_faire" | "en_traitement" | "termine";
-type TaskPriority = "urgent" | "eleve" | "moyenne" | "faible";
+type TaskPriority =
+  | "non_assigne"
+  | "urgent"
+  | "eleve"
+  | "moyenne"
+  | "faible";
 
 const TASK_STATUSES: { value: TaskStatus; label: string }[] = [
   { value: "a_venir", label: "À venir" },
@@ -127,6 +132,7 @@ const TASK_PRIORITIES: {
   label: string;
   emoji?: string;
 }[] = [
+  { value: "non_assigne", label: "Non-assigné" },
   { value: "urgent", label: "Urgent ⚠️" },
   { value: "eleve", label: "Élevé" },
   { value: "moyenne", label: "Moyenne" },
@@ -134,6 +140,7 @@ const TASK_PRIORITIES: {
 ];
 
 const TASK_PRIORITY_LABEL: Record<TaskPriority, string> = {
+  non_assigne: "Non-assigné",
   urgent: "Urgent ⚠️",
   eleve: "Élevé",
   moyenne: "Moyenne",
@@ -148,6 +155,9 @@ const TASK_PRIORITY_LABEL: Record<TaskPriority, string> = {
 // Priorité : rose-700 / orange-500 / yellow-400 / lime-500
 // Date butoir : teal / yellow-200 / orange-700 / red-700
 const TASK_PRIORITY_PILL: Record<TaskPriority, string> = {
+  // non_assigne : pastille grise par défaut — affichée tant que
+  // l'utilisateur n'a pas explicitement choisi une priorité.
+  non_assigne: "bg-slate-500 text-white",
   // urgent : rouge profond — différent du rose vif de la date « en
   // retard » (ci-dessous) pour ne pas confondre.
   urgent: "bg-red-700 text-white",
@@ -160,12 +170,13 @@ const TASK_PRIORITY_PILL: Record<TaskPriority, string> = {
 };
 
 // Rang utilisé pour trier les tâches dans un même groupe de statut :
-// urgent en haut, faible en bas.
+// urgent en haut, non-assigné en bas (= moins prioritaire que faible).
 const TASK_PRIORITY_RANK: Record<TaskPriority, number> = {
   urgent: 0,
   eleve: 1,
   moyenne: 2,
-  faible: 3
+  faible: 3,
+  non_assigne: 4
 };
 
 type Task = {
