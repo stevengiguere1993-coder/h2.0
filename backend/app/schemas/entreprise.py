@@ -52,7 +52,9 @@ class EntrepriseTacheBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     departement: Optional[str] = Field(default=None, max_length=32)
-    status: str = Field(default="backlog", max_length=16)
+    # Défaut « todo » (= « À venir » dans l'UI) — la colonne backlog
+    # n'est plus affichée côté front, donc démarrer là est trompeur.
+    status: str = Field(default="todo", max_length=16)
     impact: Optional[int] = Field(default=None, ge=1, le=10)
     confidence: Optional[int] = Field(default=None, ge=1, le=10)
     effort: Optional[int] = Field(default=None, ge=1, le=10)

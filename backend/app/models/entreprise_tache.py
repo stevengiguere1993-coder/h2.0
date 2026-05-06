@@ -22,11 +22,12 @@ from app.db.base import Base, TimestampUpdateMixin
 
 
 class TacheStatus(str, Enum):
-    BACKLOG = "backlog"            # à classer / pas encore prêt
-    TODO = "todo"                  # à faire (cette semaine)
-    IN_PROGRESS = "in_progress"    # en cours
-    WAITING = "waiting"            # bloqué / en attente d'un tiers
-    DONE = "done"                  # terminé
+    BACKLOG = "backlog"            # legacy, plus utilisé dans l'UI
+    TODO = "todo"                  # « À venir » — leftmost, à classer
+    A_FAIRE = "a_faire"            # « À faire » — engagée, à exécuter
+    IN_PROGRESS = "in_progress"    # « En traitement » — actif
+    WAITING = "waiting"            # legacy, migré vers todo au boot
+    DONE = "done"                  # « Terminé »
 
 
 class EntrepriseTache(Base, TimestampUpdateMixin):
