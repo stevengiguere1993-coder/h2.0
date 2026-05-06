@@ -50,12 +50,13 @@ type Employe = { id: number; full_name: string; email: string | null };
 
 type Column = { id: string; label: string; dot: string };
 
-// Mêmes 3 statuts (et couleurs) que le Pipeline des deals
+// Mêmes 4 statuts (et couleurs) que le Pipeline des deals
 // (volet Prospection > Acquisition) — uniformité demandée par
-// l'utilisateur. La clé DB reste stable (todo / in_progress /
-// done) ; seul le libellé visible change.
+// l'utilisateur. Seuls les libellés visibles diffèrent des clés
+// DB historiques.
 const COLUMNS: Column[] = [
   { id: "todo", label: "À venir", dot: "bg-violet-500" },
+  { id: "a_faire", label: "À faire", dot: "bg-sky-500" },
   { id: "in_progress", label: "En traitement", dot: "bg-amber-500" },
   { id: "done", label: "Terminé", dot: "bg-emerald-500" }
 ];

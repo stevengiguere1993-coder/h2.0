@@ -44,18 +44,20 @@ type Entreprise = {
   color_accent: string;
 };
 
-// 3 statuts opérationnels — alignés sur le Pipeline des deals
+// 4 statuts opérationnels — alignés sur le Pipeline des deals
 // (Prospection > Acquisition). Mêmes labels et mêmes couleurs.
 // Les statuts legacy (backlog / waiting) sont rendus via le
 // fallback ci-dessous le temps qu'ils soient reclassifiés.
 const STATUS_LABELS: Record<string, string> = {
   todo: "À venir",
+  a_faire: "À faire",
   in_progress: "En traitement",
   done: "Terminé"
 };
 
 const STATUS_COLORS: Record<string, string> = {
   todo: "#8b5cf6",        // violet-500
+  a_faire: "#0ea5e9",     // sky-500
   in_progress: "#f59e0b", // amber-500
   done: "#10b981"         // emerald-500
 };
@@ -413,6 +415,7 @@ export default function MesTachesPage() {
 
 const KANBAN_COLUMNS = [
   { id: "todo", label: "À venir" },
+  { id: "a_faire", label: "À faire" },
   { id: "in_progress", label: "En traitement" },
   { id: "done", label: "Terminé" }
 ] as const;
