@@ -152,7 +152,9 @@ class TaskCreate(BaseModel):
     # à la création / mise à jour.
     assignee_user_ids: Optional[List[int]] = None
     assignee_user_id: Optional[int] = Field(default=None, gt=0)
-    status: str = Field(default="a_venir", pattern=TASK_STATUS_PATTERN)
+    # Démarre dans « À faire » par défaut — plus utile qu'« À venir »
+    # car la tâche fraîchement créée est généralement déjà engagée.
+    status: str = Field(default="a_faire", pattern=TASK_STATUS_PATTERN)
     # Défaut « non_assigne » : tant que l'utilisateur n'a pas
     # explicitement choisi une priorité, on ne suppose rien.
     priority: str = Field(default="non_assigne", pattern=TASK_PRIORITY_PATTERN)

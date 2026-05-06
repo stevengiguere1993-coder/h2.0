@@ -157,12 +157,59 @@ async def list_entreprises(
     db: DBSession, user: CurrentUser
 ) -> List[EntrepriseRead]:
     _require_volet(user)
+    # Tri par `position` (modifiable via drag & drop dans la sidebar),
+    # puis par nom en fallback. Position 0 = entreprises jamais
+    # repositionnées (les nouvelles + le legacy avant migration) ;
+    # leur sous-tri par nom garde l'ordre stable.
     rows = (
         await db.execute(
-            select(Entreprise).order_by(Entreprise.name.asc())
+            select(Entreprise).order_by(
+                Entreprise.position.asc(),
+                Entreprise.name.asc(),
+            )
         )
     ).scalars().all()
     return [EntrepriseRead.model_validate(e) for e in rows]
+
+
+class ReorderEntreprises(BaseModel):
+    """Liste ordonnée d'IDs d'entreprises — détermine leur ordre
+    d'affichage dans la sidebar."""
+    ids: List[int]
+
+
+@router.post(
+    "/reorder",
+    response_model=List[EntrepriseRead],
+    summary="Réordonner les entreprises (drag & drop)",
+)
+async def reorder_entreprises(
+    body: ReorderEntreprises,
+    db: DBSession,
+    user: CurrentUser,
+) -> List[EntrepriseRead]:
+    _require_volet(user)
+    # Réassigne les positions par pas de 1000 (idem ProjectPhase) pour
+    # pouvoir insérer entre deux items à l'avenir sans renuméroter.
+    rows = (
+        await db.execute(select(Entreprise).where(Entreprise.id.in_(body.ids)))
+    ).scalars().all()
+    by_id = {e.id: e for e in rows}
+    for pos, eid in enumerate(body.ids):
+        ent = by_id.get(eid)
+        if ent is not None:
+            ent.position = (pos + 1) * 1000
+    await db.flush()
+    # Retourne la liste re-triée pour confirmation.
+    rows2 = (
+        await db.execute(
+            select(Entreprise).order_by(
+                Entreprise.position.asc(),
+                Entreprise.name.asc(),
+            )
+        )
+    ).scalars().all()
+    return [EntrepriseRead.model_validate(e) for e in rows2]
 
 
 @router.post(

@@ -307,6 +307,12 @@ async def init_db() -> None:
                 "priority",
                 "VARCHAR(16) NOT NULL DEFAULT 'moyenne'",
             ),
+            # Ordre d'affichage des entreprises dans la sidebar.
+            (
+                "entreprises",
+                "position",
+                "INTEGER NOT NULL DEFAULT 0",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

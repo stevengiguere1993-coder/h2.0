@@ -52,9 +52,10 @@ class EntrepriseTacheBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     departement: Optional[str] = Field(default=None, max_length=32)
-    # Défaut « todo » (= « À venir » dans l'UI) — la colonne backlog
-    # n'est plus affichée côté front, donc démarrer là est trompeur.
-    status: str = Field(default="todo", max_length=16)
+    # Défaut « a_faire » — colonne « À faire » (sky). Plus pertinent
+    # qu'un démarrage en À venir : l'utilisateur qui crée une tâche
+    # veut généralement qu'elle soit déjà engagée.
+    status: str = Field(default="a_faire", max_length=16)
     # Priorité Monday-style (alignée sur les tâches du Pipeline).
     # Défaut « non_assigne » — pastille grise — tant que l'utilisateur
     # n'a pas choisi une priorité explicite.
