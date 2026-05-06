@@ -21,7 +21,14 @@ from app.db.base import Base
 # Ordre canonique des priorités. Le champ stocke la valeur textuelle
 # pour rester lisible en SQL ; le tri côté API/frontend mappe vers
 # un rang numérique.
-PRIORITY_ORDER = ("urgent", "eleve", "moyenne", "en_attente", "a_venir")
+PRIORITY_ORDER = (
+    "urgent",
+    "eleve",
+    "moyenne",
+    "en_attente",
+    "a_venir",
+    "termine",
+)
 
 
 class ProspectionDeal(Base):

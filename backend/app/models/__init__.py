@@ -105,6 +105,7 @@ from app.models.project_photo import ProjectPhoto
 from app.models.project_task import ProjectTask
 from app.models.prospection_analyse import ProspectionAnalyse
 from app.models.prospection_deal import ProspectionDeal
+from app.models.prospection_deal_task import ProspectionDealTask
 from app.models.prospection_lead import ProspectionLead
 from app.models.prospection_lead_list import (
     ProspectionLeadList,
@@ -180,6 +181,7 @@ __all__ = [
     "ProjectTask",
     "ProspectionAnalyse",
     "ProspectionDeal",
+    "ProspectionDealTask",
     "ProspectionLead",
     "ProspectionLeadList",
     "ProspectionLeadListMember",
