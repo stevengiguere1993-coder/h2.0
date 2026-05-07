@@ -68,6 +68,19 @@ class ProspectionDealTask(Base):
         server_default="moyenne",
     )
     due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    # Champs « riches » alignés sur EntrepriseTache pour que la fiche
+    # détaillée des tâches soit identique entre Pipeline et Entreprise.
+    departement: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    recurrence: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True
+    )
+    impact: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    confidence: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    effort: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # Ordre dans le groupe de statut. Drag & drop met à jour ce
     # champ ; on alloue un grand pas (1000) pour pouvoir insérer
     # entre deux items sans renuméroter à chaque fois.

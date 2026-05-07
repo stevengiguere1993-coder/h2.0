@@ -213,6 +213,12 @@ export default function EntrepriseDetailPage() {
         assignee_user_ids: t.assignee_user_ids || [],
         hasNote: Boolean(t.description),
         notes: t.description,
+        departement: t.departement,
+        recurrence: t.recurrence,
+        impact: t.impact,
+        confidence: t.confidence,
+        effort: t.effort,
+        score: t.score,
         // Pas de position côté entreprise : on classe par score
         // décroissant en utilisant `position = -score` (les positions
         // négatives plus basses arrivent en premier).
@@ -469,6 +475,11 @@ export default function EntrepriseDetailPage() {
             if (patch.immeuble_ids !== undefined) {
               out.immeuble_ids = patch.immeuble_ids;
             }
+            if (patch.departement !== undefined) out.departement = patch.departement;
+            if (patch.recurrence !== undefined) out.recurrence = patch.recurrence;
+            if (patch.impact !== undefined) out.impact = patch.impact;
+            if (patch.confidence !== undefined) out.confidence = patch.confidence;
+            if (patch.effort !== undefined) out.effort = patch.effort;
             // patch.position est ignoré : les tâches d'entreprise
             // ne s'ordonnent pas par position (tri par score).
             void patchTache(taskId, out);

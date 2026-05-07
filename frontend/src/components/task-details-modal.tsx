@@ -18,15 +18,14 @@ import {
 } from "@/lib/task-config";
 
 /**
- * Modal de détails / modification d'une tâche — version simplifiée
- * commune au Pipeline des deals et au kanban Entreprise (l'Entreprise
- * a aussi sa propre TacheModal pour les champs avancés ICE /
- * récurrence ; cette modal-ci se concentre sur les champs de base
- * qui apparaissent aussi sur la carte).
+ * Modal de détails / modification d'une tâche — fiche **complète**
+ * partagée par Pipeline et Entreprise. Tout y est édité inline avec
+ * auto-save (PATCH au blur ou au change selon le champ) — pas de
+ * bouton « Enregistrer ».
  *
- * Champs : titre, notes/description, statut, priorité, personnes
- * assignées, échéance. Tout est édité inline + auto-save (PATCH au
- * blur ou au change selon le champ).
+ * Champs : titre, statut, priorité, personnes, échéance, immeuble
+ * (multi), département, récurrence, ICE (impact / confiance / effort)
+ * + score auto-calculé, notes / description.
  */
 export type TaskDetailsModalData = {
   id: number;
@@ -37,6 +36,13 @@ export type TaskDetailsModalData = {
   due_date: string | null;
   assignee_user_ids: number[];
   immeuble_ids: number[];
+  departement: string | null;
+  recurrence: string | null;
+  impact: number | null;
+  confidence: number | null;
+  effort: number | null;
+  /** Score serveur — read-only (ICE × multiplicateur d'urgence). */
+  score: number | null;
 };
 
 export type TaskDetailsModalPatch = {
@@ -47,6 +53,11 @@ export type TaskDetailsModalPatch = {
   due_date?: string | null;
   assignee_user_ids?: number[];
   immeuble_ids?: number[];
+  departement?: string | null;
+  recurrence?: string | null;
+  impact?: number | null;
+  confidence?: number | null;
+  effort?: number | null;
 };
 
 export function TaskDetailsModal({
@@ -218,6 +229,73 @@ export function TaskDetailsModal({
             />
           </div>
 
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="label">Département</label>
+              <input
+                type="text"
+                value={task.departement || ""}
+                onChange={(e) =>
+                  onPatch({ departement: e.target.value || null })
+                }
+                placeholder="finance / opérations / RH…"
+                className="input"
+              />
+            </div>
+            <div>
+              <label className="label">Récurrence</label>
+              <select
+                value={task.recurrence || ""}
+                onChange={(e) =>
+                  onPatch({ recurrence: e.target.value || null })
+                }
+                className="input"
+              >
+                <option value="">— Tâche unique —</option>
+                <option value="daily">Quotidienne</option>
+                <option value="weekly">Hebdomadaire</option>
+                <option value="biweekly">Aux 2 semaines</option>
+                <option value="monthly">Mensuelle</option>
+                <option value="quarterly">Trimestrielle</option>
+                <option value="yearly">Annuelle</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-1.5 flex items-baseline justify-between">
+              <span className="block text-sm font-medium text-white">
+                ICE (1–10)
+              </span>
+              <span className="text-[10px] text-white/40">
+                Impact × Confiance / Effort × multiplicateur d&apos;urgence
+              </span>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <ICEField
+                label="Impact"
+                value={task.impact}
+                onChange={(v) => onPatch({ impact: v })}
+              />
+              <ICEField
+                label="Confiance"
+                value={task.confidence}
+                onChange={(v) => onPatch({ confidence: v })}
+              />
+              <ICEField
+                label="Effort"
+                value={task.effort}
+                onChange={(v) => onPatch({ effort: v })}
+              />
+            </div>
+            {task.score != null ? (
+              <p className="mt-1.5 text-[11px] text-violet-300">
+                Score :{" "}
+                <span className="font-bold">{task.score.toFixed(1)}</span>
+              </p>
+            ) : null}
+          </div>
+
           <div>
             <label className="label">Notes</label>
             <textarea
@@ -241,6 +319,57 @@ export function TaskDetailsModal({
           </button>
         </footer>
       </div>
+    </div>
+  );
+}
+
+function ICEField({
+  label,
+  value,
+  onChange
+}: {
+  label: string;
+  value: number | null;
+  onChange: (v: number | null) => void;
+}) {
+  // State local pour autoriser la saisie progressive sans push à
+  // chaque caractère ; commit au blur uniquement.
+  const [draft, setDraft] = useState<string>(
+    value != null ? String(value) : ""
+  );
+  useEffect(() => {
+    setDraft(value != null ? String(value) : "");
+  }, [value]);
+
+  function commit() {
+    if (draft.trim() === "") {
+      if (value !== null) onChange(null);
+      return;
+    }
+    const v = Number(draft);
+    if (Number.isNaN(v) || v < 1 || v > 10) {
+      // Annule la saisie invalide et revient au précédent.
+      setDraft(value != null ? String(value) : "");
+      return;
+    }
+    if (v !== value) onChange(v);
+  }
+
+  return (
+    <div>
+      <label className="block text-[10px] font-medium text-white/70">
+        {label}
+      </label>
+      <input
+        type="number"
+        min={1}
+        max={10}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        placeholder="—"
+        className="input mt-0.5"
+      />
     </div>
   );
 }

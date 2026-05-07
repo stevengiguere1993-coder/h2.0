@@ -54,6 +54,13 @@ export type TaskBoardItem = TaskCardData & {
    *  dans la TaskDetailsModal. `immeubleLabels` reste utilisé pour
    *  l'affichage compact sur la carte. */
   immeuble_ids?: number[];
+  /** Champs avancés — alimentent la TaskDetailsModal partagée. */
+  departement?: string | null;
+  recurrence?: string | null;
+  impact?: number | null;
+  confidence?: number | null;
+  effort?: number | null;
+  score?: number | null;
   /** Footer libre rendu sous les pastilles de la carte (utilisé par
    *  l'entreprise pour les badges score / récurrence / département). */
   footer?: React.ReactNode;
@@ -62,6 +69,11 @@ export type TaskBoardItem = TaskCardData & {
 export type TaskBoardPatch = TaskCardPatch & {
   notes?: string | null;
   position?: number;
+  departement?: string | null;
+  recurrence?: string | null;
+  impact?: number | null;
+  confidence?: number | null;
+  effort?: number | null;
 };
 
 export function TaskBoard({
@@ -103,7 +115,25 @@ export function TaskBoard({
 }) {
   const [view, setView] = useState<"kanban" | "list">("kanban");
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
-  const [sortBy, setSortBy] = useState<SortKey>("default");
+  const [criteria, setCriteria] = useState<
+    Record<CriterionKey, CriterionState>
+  >(DEFAULT_FILTERS);
+
+  // Si l'utilisateur passe un critère sur « Trier », s'assure qu'aucun
+  // autre n'est déjà sur « Trier » (un seul tri actif à la fois).
+  function setCriterion(key: CriterionKey, s: CriterionState) {
+    setCriteria((prev) => {
+      const next = { ...prev, [key]: s };
+      if (s.kind === "sort") {
+        for (const k of Object.keys(next) as CriterionKey[]) {
+          if (k !== key && next[k].kind === "sort") {
+            next[k] = { kind: "all" };
+          }
+        }
+      }
+      return next;
+    });
+  }
 
   async function handleNewTask() {
     // Crée une tâche placeholder dans la première colonne (« À faire »)
@@ -117,9 +147,45 @@ export function TaskBoard({
     await onCreate(status, name);
   }
 
-  const sortedTasks = useMemo(
-    () => sortTasks(tasks, sortBy, users, immeubles),
-    [tasks, sortBy, users, immeubles]
+  const sortedTasks = useMemo(() => {
+    const filtered = applyFilters(tasks, criteria);
+    return sortTasks(filtered, criteria, users, immeubles);
+  }, [tasks, criteria, users, immeubles]);
+
+  const sortActive = (Object.values(criteria) as CriterionState[]).some(
+    (c) => c.kind === "sort"
+  );
+
+  const personOptions = useMemo(
+    () => [
+      { value: "none", label: "— Non assigné" },
+      ...users.map((u) => ({
+        value: String(u.id),
+        label:
+          [u.first_name, u.last_name].filter(Boolean).join(" ").trim() ||
+          u.email ||
+          `User #${u.id}`
+      }))
+    ],
+    [users]
+  );
+  const priorityOptions = useMemo(
+    () =>
+      [
+        { value: "urgent", label: "Urgent" },
+        { value: "eleve", label: "Élevé" },
+        { value: "moyenne", label: "Moyenne" },
+        { value: "faible", label: "Faible" },
+        { value: "non_assigne", label: "Non-assigné" }
+      ],
+    []
+  );
+  const immeubleOptions = useMemo(
+    () => [
+      { value: "none", label: "— Aucun" },
+      ...immeubles.map((i) => ({ value: String(i.id), label: i.name }))
+    ],
+    [immeubles]
   );
 
   const detailTask =
@@ -129,8 +195,8 @@ export function TaskBoard({
 
   return (
     <div className="mt-6">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-sm font-semibold uppercase tracking-wider text-white/50">
             {title}
           </h2>
@@ -144,7 +210,6 @@ export function TaskBoard({
               {newTaskLabel}
             </button>
           ) : null}
-          <SortPicker value={sortBy} onChange={setSortBy} />
         </div>
         <div className="inline-flex rounded-lg border border-brand-800 bg-brand-900 p-0.5">
           <button
@@ -176,6 +241,33 @@ export function TaskBoard({
         </div>
       </div>
 
+      <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-brand-800 bg-brand-900/40 px-3 py-2">
+        <CriterionPicker
+          label="Personne"
+          state={criteria.person}
+          onChange={(s) => setCriterion("person", s)}
+          values={personOptions}
+        />
+        <CriterionPicker
+          label="Priorité"
+          state={criteria.priority}
+          onChange={(s) => setCriterion("priority", s)}
+          values={priorityOptions}
+        />
+        <CriterionPicker
+          label="Échéance"
+          state={criteria.due_date}
+          onChange={(s) => setCriterion("due_date", s)}
+          values={DUE_FILTER_OPTIONS}
+        />
+        <CriterionPicker
+          label="Immeuble"
+          state={criteria.immeuble}
+          onChange={(s) => setCriterion("immeuble", s)}
+          values={immeubleOptions}
+        />
+      </div>
+
       {view === "kanban" ? (
         <KanbanView
           tasks={sortedTasks}
@@ -185,7 +277,7 @@ export function TaskBoard({
           onOpenDetails={(id) => setDetailTaskId(id)}
           onMove={onMove}
           onCreate={(s, n) => void handleColumnCreate(s, n)}
-          sorted={sortBy !== "default"}
+          sorted={sortActive}
         />
       ) : (
         <TaskListView
@@ -206,7 +298,13 @@ export function TaskBoard({
             priority: detailTask.priority || "non_assigne",
             due_date: detailTask.due_date,
             assignee_user_ids: detailTask.assignee_user_ids || [],
-            immeuble_ids: detailTask.immeuble_ids || []
+            immeuble_ids: detailTask.immeuble_ids || [],
+            departement: detailTask.departement ?? null,
+            recurrence: detailTask.recurrence ?? null,
+            impact: detailTask.impact ?? null,
+            confidence: detailTask.confidence ?? null,
+            effort: detailTask.effort ?? null,
+            score: detailTask.score ?? null
           }}
           users={users}
           immeubles={immeubles}
@@ -221,47 +319,28 @@ export function TaskBoard({
   );
 }
 
-// ─── Tri ───────────────────────────────────────────────────────────
+// ─── Tri + filtres ─────────────────────────────────────────────────
+// Pour chaque critère (Personne / Priorité / Échéance / Immeuble) un
+// seul sélecteur expose à la fois :
+//   - « Tous / Toutes »  → ne fait rien
+//   - « Trier »          → utilise ce critère pour trier (un seul à
+//                          la fois)
+//   - une valeur précise → filtre la liste à cette valeur (cumulatif
+//                          avec les autres critères filtrés)
 
-type SortKey =
-  | "default"
-  | "person"
-  | "priority"
-  | "due_date"
-  | "immeuble";
+type CriterionKey = "person" | "priority" | "due_date" | "immeuble";
 
-const SORT_OPTIONS: Array<{ value: SortKey; label: string }> = [
-  { value: "default", label: "Aucun" },
-  { value: "person", label: "Personne" },
-  { value: "priority", label: "Priorité" },
-  { value: "due_date", label: "Échéance" },
-  { value: "immeuble", label: "Immeuble" }
-];
+type CriterionState =
+  | { kind: "all" }
+  | { kind: "sort" }
+  | { kind: "filter"; value: string };
 
-function SortPicker({
-  value,
-  onChange
-}: {
-  value: SortKey;
-  onChange: (v: SortKey) => void;
-}) {
-  return (
-    <label className="inline-flex items-center gap-1.5 text-xs text-white/60">
-      <span>Trier&nbsp;:</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value as SortKey)}
-        className="rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
-      >
-        {SORT_OPTIONS.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
+const DEFAULT_FILTERS: Record<CriterionKey, CriterionState> = {
+  person: { kind: "all" },
+  priority: { kind: "all" },
+  due_date: { kind: "all" },
+  immeuble: { kind: "all" }
+};
 
 const PRIORITY_RANK: Record<string, number> = {
   urgent: 0,
@@ -271,13 +350,132 @@ const PRIORITY_RANK: Record<string, number> = {
   non_assigne: 4
 };
 
+const DUE_FILTER_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "overdue", label: "En retard" },
+  { value: "today", label: "Aujourd'hui" },
+  { value: "this_week", label: "Cette semaine" },
+  { value: "no_date", label: "Sans échéance" }
+];
+
+function CriterionPicker({
+  label,
+  state,
+  onChange,
+  values
+}: {
+  label: string;
+  state: CriterionState;
+  onChange: (s: CriterionState) => void;
+  /** Valeurs concrètes filtrables (label affiché, value envoyée). */
+  values: Array<{ value: string; label: string }>;
+}) {
+  // Encode l'état sur une seule clé string pour le <select>.
+  const current =
+    state.kind === "all"
+      ? "__all"
+      : state.kind === "sort"
+        ? "__sort"
+        : `v:${state.value}`;
+  return (
+    <label className="inline-flex items-center gap-1.5 text-xs text-white/60">
+      <span>{label}&nbsp;:</span>
+      <select
+        value={current}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === "__all") onChange({ kind: "all" });
+          else if (v === "__sort") onChange({ kind: "sort" });
+          else onChange({ kind: "filter", value: v.slice(2) });
+        }}
+        className="rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
+      >
+        <option value="__all">Tous</option>
+        <option value="__sort">Trier</option>
+        <option disabled value="__sep">
+          ──────────
+        </option>
+        {values.map((o) => (
+          <option key={o.value} value={`v:${o.value}`}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function isSameDate(a: string, b: Date): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(a);
+  if (!m) return false;
+  return (
+    Number(m[1]) === b.getFullYear() &&
+    Number(m[2]) === b.getMonth() + 1 &&
+    Number(m[3]) === b.getDate()
+  );
+}
+
+function applyFilters(
+  tasks: TaskBoardItem[],
+  filters: Record<CriterionKey, CriterionState>
+): TaskBoardItem[] {
+  const today = new Date();
+  const inAWeek = new Date();
+  inAWeek.setDate(today.getDate() + 7);
+
+  return tasks.filter((t) => {
+    // Personne
+    const fp = filters.person;
+    if (fp.kind === "filter") {
+      const ids = t.assignee_user_ids || [];
+      if (fp.value === "none" ? ids.length > 0 : !ids.includes(Number(fp.value)))
+        return false;
+    }
+    // Priorité
+    const fpr = filters.priority;
+    if (fpr.kind === "filter") {
+      if ((t.priority || "non_assigne") !== fpr.value) return false;
+    }
+    // Échéance — buckets temporels.
+    const fd = filters.due_date;
+    if (fd.kind === "filter") {
+      const d = t.due_date;
+      if (fd.value === "no_date") {
+        if (d) return false;
+      } else if (!d) {
+        return false;
+      } else {
+        const due = new Date(d);
+        if (fd.value === "overdue") {
+          if (due >= new Date(today.toDateString())) return false;
+        } else if (fd.value === "today") {
+          if (!isSameDate(d, today)) return false;
+        } else if (fd.value === "this_week") {
+          if (due < new Date(today.toDateString()) || due > inAWeek)
+            return false;
+        }
+      }
+    }
+    // Immeuble
+    const fi = filters.immeuble;
+    if (fi.kind === "filter") {
+      const ids = t.immeuble_ids || [];
+      if (fi.value === "none" ? ids.length > 0 : !ids.includes(Number(fi.value)))
+        return false;
+    }
+    return true;
+  });
+}
+
 function sortTasks(
   tasks: TaskBoardItem[],
-  key: SortKey,
+  filters: Record<CriterionKey, CriterionState>,
   users: TaskUserMini[],
   immeubles: ImmeubleMini[]
 ): TaskBoardItem[] {
-  if (key === "default") return tasks;
+  const sortKey = (Object.keys(filters) as CriterionKey[]).find(
+    (k) => filters[k].kind === "sort"
+  );
+  if (!sortKey) return tasks;
 
   const userName = new Map(
     users.map(
@@ -293,18 +491,17 @@ function sortTasks(
   );
 
   function keyOf(t: TaskBoardItem): string | number {
-    if (key === "person") {
+    if (sortKey === "person") {
       const id = (t.assignee_user_ids || [])[0];
       return id != null ? userName.get(id) ?? "zzz" : "zzz";
     }
-    if (key === "priority") {
+    if (sortKey === "priority") {
       return PRIORITY_RANK[t.priority] ?? 99;
     }
-    if (key === "due_date") {
-      // Pas de date → en bas (chaîne lexicale max).
+    if (sortKey === "due_date") {
       return t.due_date || "9999-99-99";
     }
-    if (key === "immeuble") {
+    if (sortKey === "immeuble") {
       const id = (t.immeuble_ids || [])[0];
       return id != null ? immeubleName.get(id) ?? "zzz" : "zzz";
     }
@@ -506,20 +703,32 @@ function TaskListView({
   onPatch: (taskId: number, patch: TaskBoardPatch) => void;
   onOpenDetails: (taskId: number) => void;
 }) {
-  const sorted = useMemo(
-    () =>
-      [...tasks].sort(
-        (a, b) => (a.position ?? 0) - (b.position ?? 0)
-      ),
-    [tasks]
-  );
+  // Le parent (TaskBoard) trie déjà selon les critères choisis ; on
+  // n'écrase pas l'ordre. Si aucun tri actif, l'ordre source est la
+  // position.
+  const [dragId, setDragId] = useState<number | null>(null);
+  const [hoverId, setHoverId] = useState<number | null>(null);
 
-  if (sorted.length === 0) {
+  if (tasks.length === 0) {
     return (
       <div className="rounded-xl border border-brand-800 bg-brand-900/60 px-6 py-12 text-center">
         <p className="text-sm text-white/50">Aucune tâche</p>
       </div>
     );
+  }
+
+  function handleDrop(targetId: number) {
+    const id = dragId;
+    setDragId(null);
+    setHoverId(null);
+    if (id == null || id === targetId) return;
+    const target = tasks.find((t) => t.id === targetId);
+    if (!target) return;
+    // Insère la tâche déplacée juste avant la cible : nouvelle
+    // position = position cible − 1. Le backend va trier par
+    // position et on évite ainsi d'avoir à renuméroter en cascade.
+    const newPos = (target.position ?? 0) - 1;
+    onPatch(id, { position: newPos });
   }
 
   return (
@@ -528,7 +737,7 @@ function TaskListView({
         <thead>
           <tr
             className="text-[10px] uppercase tracking-wider text-white/50"
-            style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
+            style={{ borderBottom: "1px solid rgba(255,255,255,0.15)" }}
           >
             <th className="px-4 py-2.5 text-left">Tâche</th>
             <th className="px-3 py-2.5 text-left">Statut</th>
@@ -538,79 +747,122 @@ function TaskListView({
           </tr>
         </thead>
         <tbody>
-          {sorted.map((t) => (
-            <tr
-              key={t.id}
-              onClick={() => onOpenDetails(t.id)}
-              className="cursor-pointer hover:bg-white/5"
-              style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
-            >
-              <td className="max-w-[420px] px-4 py-3">
-                <p className="truncate font-medium text-white">
-                  {t.title}
-                </p>
-                {t.immeubleLabels && t.immeubleLabels.length > 0 ? (
-                  <p className="mt-0.5 truncate text-[11px] text-white/85">
-                    {t.immeubleLabels.join(", ")}
-                  </p>
-                ) : null}
-                {t.footer ? (
-                  <div className="mt-1">{t.footer}</div>
-                ) : null}
-              </td>
-              <td
-                className="px-3 py-3"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <PillPicker
-                  options={TASK_STATUS_OPTIONS.map((o) => ({
-                    value: o.value,
-                    label: o.label,
-                    cls: o.pill
-                  }))}
-                  value={t.status}
-                  onChange={(v) => onPatch(t.id, { status: v })}
-                  ariaLabel="Statut"
-                />
-              </td>
-              <td
-                className="px-3 py-3"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <PillPicker
-                  options={TASK_PRIORITY_OPTIONS.map((o) => ({
-                    value: o.value,
-                    label: o.label,
-                    cls: o.pill
-                  }))}
-                  value={t.priority || "non_assigne"}
-                  onChange={(v) => onPatch(t.id, { priority: v })}
-                  ariaLabel="Priorité"
-                />
-              </td>
-              <td
-                className="px-3 py-3"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <AssigneePicker
-                  users={users}
-                  values={t.assignee_user_ids || []}
-                  onChange={(ids) =>
-                    onPatch(t.id, { assignee_user_ids: ids })
+          {tasks.map((t) => {
+            const dragging = dragId === t.id;
+            const hover = hoverId === t.id && dragId !== null && dragId !== t.id;
+            return (
+              <tr
+                key={t.id}
+                draggable
+                onDragStart={(e) => {
+                  // Bloque le drag s'il vient d'un widget interactif.
+                  const tag = (e.target as HTMLElement).tagName;
+                  if (
+                    tag === "INPUT" ||
+                    tag === "SELECT" ||
+                    tag === "TEXTAREA" ||
+                    tag === "BUTTON"
+                  ) {
+                    e.preventDefault();
+                    return;
                   }
-                />
-              </td>
-              <td
-                className="px-3 py-3 text-right"
-                onClick={(e) => e.stopPropagation()}
+                  e.dataTransfer.effectAllowed = "move";
+                  setDragId(t.id);
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (dragId !== null) setHoverId(t.id);
+                }}
+                onDragLeave={() =>
+                  setHoverId((id) => (id === t.id ? null : id))
+                }
+                onDrop={(e) => {
+                  e.preventDefault();
+                  handleDrop(t.id);
+                }}
+                onDragEnd={() => {
+                  setDragId(null);
+                  setHoverId(null);
+                }}
+                onClick={() => onOpenDetails(t.id)}
+                className={`cursor-pointer transition ${
+                  dragging
+                    ? "opacity-50"
+                    : hover
+                      ? "bg-violet-500/10"
+                      : "hover:bg-white/5"
+                }`}
+                style={{
+                  borderBottom: "1px solid rgba(255,255,255,0.10)"
+                }}
               >
-                <DatePill
-                  value={t.due_date}
-                  onChange={(d) => onPatch(t.id, { due_date: d })}
-                />
-              </td>
-            </tr>
-          ))}
+                <td className="max-w-[420px] px-4 py-3">
+                  <p className="truncate font-medium text-white">
+                    {t.title}
+                  </p>
+                  {t.immeubleLabels && t.immeubleLabels.length > 0 ? (
+                    <p className="mt-0.5 truncate text-[11px] text-white/85">
+                      {t.immeubleLabels.join(", ")}
+                    </p>
+                  ) : null}
+                  {t.footer ? (
+                    <div className="mt-1">{t.footer}</div>
+                  ) : null}
+                </td>
+                <td
+                  className="px-3 py-3"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <PillPicker
+                    options={TASK_STATUS_OPTIONS.map((o) => ({
+                      value: o.value,
+                      label: o.label,
+                      cls: o.pill
+                    }))}
+                    value={t.status}
+                    onChange={(v) => onPatch(t.id, { status: v })}
+                    ariaLabel="Statut"
+                  />
+                </td>
+                <td
+                  className="px-3 py-3"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <PillPicker
+                    options={TASK_PRIORITY_OPTIONS.map((o) => ({
+                      value: o.value,
+                      label: o.label,
+                      cls: o.pill
+                    }))}
+                    value={t.priority || "non_assigne"}
+                    onChange={(v) => onPatch(t.id, { priority: v })}
+                    ariaLabel="Priorité"
+                  />
+                </td>
+                <td
+                  className="px-3 py-3"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <AssigneePicker
+                    users={users}
+                    values={t.assignee_user_ids || []}
+                    onChange={(ids) =>
+                      onPatch(t.id, { assignee_user_ids: ids })
+                    }
+                  />
+                </td>
+                <td
+                  className="px-3 py-3 text-right"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <DatePill
+                    value={t.due_date}
+                    onChange={(d) => onPatch(t.id, { due_date: d })}
+                  />
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

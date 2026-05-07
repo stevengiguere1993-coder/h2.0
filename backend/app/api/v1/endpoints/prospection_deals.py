@@ -220,6 +220,12 @@ class TaskCreate(BaseModel):
     # explicitement choisi une priorité, on ne suppose rien.
     priority: str = Field(default="non_assigne", pattern=TASK_PRIORITY_PATTERN)
     due_date: Optional[date] = None
+    # Champs « riches » alignés sur EntrepriseTache.
+    departement: Optional[str] = Field(default=None, max_length=64)
+    recurrence: Optional[str] = Field(default=None, max_length=16)
+    impact: Optional[int] = Field(default=None, ge=1, le=10)
+    confidence: Optional[int] = Field(default=None, ge=1, le=10)
+    effort: Optional[int] = Field(default=None, ge=1, le=10)
     # Immeubles concernés par la tâche (multi-select dans la fiche).
     immeuble_ids: Optional[List[int]] = None
 
@@ -239,6 +245,11 @@ class TaskUpdate(BaseModel):
     # « Déplacer » du kanban). Le deal cible doit exister.
     deal_id: Optional[int] = Field(default=None, gt=0)
     immeuble_ids: Optional[List[int]] = None
+    departement: Optional[str] = Field(default=None, max_length=64)
+    recurrence: Optional[str] = Field(default=None, max_length=16)
+    impact: Optional[int] = Field(default=None, ge=1, le=10)
+    confidence: Optional[int] = Field(default=None, ge=1, le=10)
+    effort: Optional[int] = Field(default=None, ge=1, le=10)
 
 
 class TaskRead(BaseModel):
@@ -256,10 +267,40 @@ class TaskRead(BaseModel):
     priority: str
     due_date: Optional[date]
     position: int
+    departement: Optional[str] = None
+    recurrence: Optional[str] = None
+    impact: Optional[int] = None
+    confidence: Optional[int] = None
+    effort: Optional[int] = None
+    # Score ICE × urgence (calculé serveur-side, identique à
+    # l'entreprise). None si l'un des trois champs ICE est absent.
+    score: Optional[float] = None
     # Immeubles liés à la tâche.
     immeuble_ids: List[int] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+def _compute_task_score(task: ProspectionDealTask) -> Optional[float]:
+    """Même formule que les tâches d'entreprise : ICE × urgence."""
+    if task.impact is None or task.confidence is None or task.effort is None:
+        return None
+    base = (task.impact * task.confidence) / max(task.effort, 1)
+    if task.due_date:
+        delta = (task.due_date - date.today()).days
+        if delta < 0:
+            urgency = 5.0
+        elif delta <= 7:
+            urgency = 3.0
+        elif delta <= 14:
+            urgency = 2.0
+        elif delta <= 30:
+            urgency = 1.5
+        else:
+            urgency = 1.0
+    else:
+        urgency = 1.0
+    return round(base * urgency, 2)
 
 
 def _task_status_rank_expr():
@@ -392,6 +433,12 @@ def _task_to_read(
         priority=task.priority,
         due_date=task.due_date,
         position=task.position,
+        departement=task.departement,
+        recurrence=task.recurrence,
+        impact=task.impact,
+        confidence=task.confidence,
+        effort=task.effort,
+        score=_compute_task_score(task),
         immeuble_ids=immeuble_ids,
         created_at=task.created_at,
         updated_at=task.updated_at,
@@ -468,6 +515,11 @@ async def create_task(
         priority=data.priority,
         due_date=data.due_date,
         position=next_pos,
+        departement=data.departement,
+        recurrence=data.recurrence,
+        impact=data.impact,
+        confidence=data.confidence,
+        effort=data.effort,
     )
     db.add(task)
     await db.flush()
