@@ -136,9 +136,17 @@ export function PillField({
 export type PillOption = {
   value: string;
   label: string;
+  /** Petit point coloré devant le label (style Linear / Notion). Si
+   *  absent, on retombe sur l'extraction du bg- de `cls`. */
+  dot?: string;
+  /** Classe legacy pour la pastille pleine — gardée en fallback. */
   cls: string;
 };
 
+/** Style 2026 : un petit point coloré + le label en texte muted, sur
+ *  un fond transparent (hover bg subtil). Lit nettement plus aéré
+ *  que la pastille pleine, tout en gardant la couleur comme indice
+ *  d'identification. Le picker ouvert utilise le même rendu. */
 export function PillPicker({
   options,
   value,
@@ -168,6 +176,7 @@ export function PillPicker({
   }, [open]);
 
   const current = options.find((o) => o.value === value) ?? options[0];
+  const currentDot = current.dot || extractBgClass(current.cls);
 
   return (
     <div ref={wrapRef} className="relative">
@@ -175,33 +184,57 @@ export function PillPicker({
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-label={ariaLabel}
-        className={`inline-flex items-center justify-center rounded-md px-2 py-0.5 text-[10px] font-semibold ${current.cls}`}
+        className="inline-flex items-center gap-1.5 rounded-md border border-brand-800/60 bg-brand-900 px-2 py-1 text-[10px] font-medium text-white/80 transition hover:border-brand-700 hover:text-white"
       >
+        <span
+          aria-hidden
+          className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${currentDot}`}
+        />
         <span className="truncate">{current.label}</span>
       </button>
       {open ? (
-        <div className="absolute left-0 right-0 z-30 mt-1 min-w-[140px] space-y-1 rounded-lg border border-brand-800 bg-brand-950 p-1 shadow-lg">
-          {options.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              onClick={() => {
-                onChange(o.value);
-                setOpen(false);
-              }}
-              className={`block w-full rounded px-2 py-1 text-left text-[10px] font-semibold ${o.cls} ${
-                o.value === value
-                  ? "ring-2 ring-white/60"
-                  : "opacity-90 hover:opacity-100"
-              }`}
-            >
-              {o.label}
-            </button>
-          ))}
+        <div className="absolute left-0 z-30 mt-1 min-w-[160px] space-y-0.5 rounded-lg border border-brand-800 bg-brand-950 p-1 shadow-lg">
+          {options.map((o) => {
+            const dot = o.dot || extractBgClass(o.cls);
+            const selected = o.value === value;
+            return (
+              <button
+                key={o.value}
+                type="button"
+                onClick={() => {
+                  onChange(o.value);
+                  setOpen(false);
+                }}
+                className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-[11px] font-medium transition ${
+                  selected
+                    ? "bg-white/5 text-white"
+                    : "text-white/70 hover:bg-white/5 hover:text-white"
+                }`}
+              >
+                <span
+                  aria-hidden
+                  className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${dot}`}
+                />
+                <span className="flex-1 truncate">{o.label}</span>
+                {selected ? (
+                  <span className="text-[9px] text-white/40">✓</span>
+                ) : null}
+              </button>
+            );
+          })}
         </div>
       ) : null}
     </div>
   );
+}
+
+/** Helper : extrait la classe `bg-X-Y` d'une string `cls` du legacy
+ *  (ex. "bg-sky-500 text-white" → "bg-sky-500"). Permet de produire
+ *  un dot coloré sans demander aux callers de fournir explicitement
+ *  `dot` partout. */
+function extractBgClass(cls: string): string {
+  const m = /\bbg-[a-z]+-\d{2,3}\b/.exec(cls);
+  return m ? m[0] : "bg-slate-400";
 }
 
 // ─── UserAvatarBadge ──────────────────────────────────────────────

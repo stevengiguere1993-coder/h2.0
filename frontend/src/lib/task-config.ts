@@ -70,32 +70,41 @@ export type TaskPriorityValue =
 export const TASK_PRIORITY_OPTIONS: Array<{
   value: TaskPriorityValue;
   label: string;
+  // Pastille pleine — fallback / compat. Style 2026 préféré : dot.
   pill: string;
+  // Petit point coloré pour le rendu dot+label sur les cartes /
+  // tableau (style Linear / Notion).
+  dot: string;
 }> = [
   {
     value: "non_assigne",
     label: "Non-assigné",
-    pill: "bg-slate-500 text-white"
+    pill: "bg-slate-500 text-white",
+    dot: "bg-slate-400"
   },
   {
     value: "urgent",
-    label: "Urgent ⚠️",
-    pill: "bg-red-700 text-white"
+    label: "Urgent",
+    pill: "bg-red-700 text-white",
+    dot: "bg-rose-500"
   },
   {
     value: "eleve",
     label: "Élevé",
-    pill: "bg-orange-500 text-white"
+    pill: "bg-orange-500 text-white",
+    dot: "bg-orange-500"
   },
   {
     value: "moyenne",
     label: "Moyenne",
-    pill: "bg-yellow-400 text-brand-950"
+    pill: "bg-yellow-400 text-brand-950",
+    dot: "bg-yellow-400"
   },
   {
     value: "faible",
     label: "Faible",
-    pill: "bg-lime-500 text-brand-950"
+    pill: "bg-lime-500 text-brand-950",
+    dot: "bg-lime-500"
   }
 ];
 
