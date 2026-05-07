@@ -47,6 +47,7 @@ type EntrepriseLite = {
   name: string;
   color_accent: string;
   health_label?: "good" | "warn" | "risk";
+  is_active: boolean;
 };
 
 type Ctx = {
@@ -103,8 +104,42 @@ export default function EntreprisesLayout({
     }
   }
 
+  /** Archive ou réactive une entreprise. `target` = "fermee" → met
+   *  is_active=false (range dans le dossier Fermée). "active" →
+   *  remet is_active=true. */
+  async function archiveEntreprise(
+    id: number,
+    target: "fermee" | "active"
+  ) {
+    const wantActive = target === "active";
+    const prev = entreprises;
+    setEntreprises((xs) =>
+      xs.map((e) =>
+        e.id === id ? { ...e, is_active: wantActive } : e
+      )
+    );
+    try {
+      const r = await authedFetch(`/api/v1/entreprises/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ is_active: wantActive })
+      });
+      if (!r.ok) throw new Error();
+    } catch {
+      setEntreprises(prev);
+    }
+  }
+
   function handleDragEntreprise(droppedOnId: number) {
     if (dragId == null || dragId === droppedOnId) return;
+    // Si l'entreprise traînée est archivée, on la réactive en plus
+    // de la déposer dans la liste principale.
+    const dragged = entreprises.find((e) => e.id === dragId);
+    const target = entreprises.find((e) => e.id === droppedOnId);
+    if (dragged && !dragged.is_active && target && target.is_active) {
+      void archiveEntreprise(dragId, "active");
+      setDragId(null);
+      return;
+    }
     const ids = entreprises.map((e) => e.id);
     const fromIdx = ids.indexOf(dragId);
     const toIdx = ids.indexOf(droppedOnId);
@@ -148,7 +183,9 @@ export default function EntreprisesLayout({
     void (async () => {
       try {
         const [healthRes, statsRes] = await Promise.all([
-          authedFetch("/api/v1/entreprises/health"),
+          authedFetch(
+            "/api/v1/entreprises/health?include_archived=true"
+          ),
           authedFetch("/api/v1/entreprises/stats/overview")
         ]);
         if (cancelled) return;
@@ -156,12 +193,13 @@ export default function EntreprisesLayout({
           const data = await healthRes.json();
           setEntreprises(
             Array.isArray(data)
-              ? data.map((e: { entreprise_id?: number; id?: number; name: string; color_accent: string; health_label: "good" | "warn" | "risk" }) => ({
+              ? data.map((e: { entreprise_id?: number; id?: number; name: string; color_accent: string; health_label: "good" | "warn" | "risk"; is_active?: boolean }) => ({
                   // L'endpoint /health retourne `entreprise_id` ; legacy `id` gardé en fallback.
                   id: (e.entreprise_id ?? e.id) as number,
                   name: e.name,
                   color_accent: e.color_accent,
-                  health_label: e.health_label
+                  health_label: e.health_label,
+                  is_active: e.is_active !== false
                 })).filter((e) => Number.isFinite(e.id))
               : []
           );
@@ -304,59 +342,15 @@ export default function EntreprisesLayout({
                 </button>
               }
             >
-              {entreprises.length === 0 ? (
-                <li className="px-3 py-1.5 text-[11px] text-[var(--qg-text-soft)]">
-                  Aucune entreprise. Clique sur + pour en créer une.
-                </li>
-              ) : null}
-                {entreprises.map((e) => {
-                  const dot =
-                    e.health_label === "risk"
-                      ? "#ff5566"
-                      : e.health_label === "warn"
-                      ? "#ffaa33"
-                      : "#4ade80";
-                  const dragging = dragId === e.id;
-                  return (
-                    <div
-                      key={e.id}
-                      draggable
-                      onDragStart={(ev) => {
-                        ev.dataTransfer.setData("text/plain", String(e.id));
-                        ev.dataTransfer.effectAllowed = "move";
-                        setDragId(e.id);
-                      }}
-                      onDragEnd={() => setDragId(null)}
-                      onDragOver={(ev) => {
-                        if (dragId != null) ev.preventDefault();
-                      }}
-                      onDrop={(ev) => {
-                        ev.preventDefault();
-                        ev.stopPropagation();
-                        handleDragEntreprise(e.id);
-                      }}
-                      className={dragging ? "opacity-50" : ""}
-                    >
-                      <Link
-                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                        href={`/entreprises/${e.id}` as any}
-                        onClick={() => setSidebarOpen(false)}
-                        draggable={false}
-                        className={`flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition ${
-                          pathname.includes(`/entreprises/${e.id}`)
-                            ? "bg-[var(--qg-bg-alt)] text-[var(--qg-text)]"
-                            : "text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
-                        }`}
-                      >
-                        <span
-                          className="h-1.5 w-1.5 rounded-full flex-shrink-0"
-                          style={{ backgroundColor: dot }}
-                        />
-                        <span className="truncate">{e.name}</span>
-                      </Link>
-                    </div>
-                  );
-                })}
+              <EntrepriseListWithFolder
+                entreprises={entreprises}
+                pathname={pathname}
+                onClose={() => setSidebarOpen(false)}
+                dragId={dragId}
+                setDragId={setDragId}
+                onReorderDrop={handleDragEntreprise}
+                onArchive={(id, target) => void archiveEntreprise(id, target)}
+              />
             </SidebarSection>
 
             <SidebarSection title="Réglages">
@@ -727,5 +721,171 @@ export function EntreprisesTopbar({
         </div>
       ) : null}
     </header>
+  );
+}
+
+
+/**
+ * Sous-composant : la liste des entreprises dans la sidebar Mes
+ * entreprises, découpée en :
+ *   - liste principale (is_active = true)
+ *   - sous-dossier collapsible « Fermée » (is_active = false), trié
+ *     alphabétiquement
+ *
+ * Drag & drop :
+ *   - drop sur une entreprise active → réordonne. Si l'entreprise
+ *     traînée venait du dossier Fermée, le parent la réactive
+ *     automatiquement avant le drop.
+ *   - drop sur l'en-tête « Fermée » → archive l'entreprise.
+ */
+function EntrepriseListWithFolder({
+  entreprises,
+  pathname,
+  onClose,
+  dragId,
+  setDragId,
+  onReorderDrop,
+  onArchive
+}: {
+  entreprises: EntrepriseLite[];
+  pathname: string;
+  onClose: () => void;
+  dragId: number | null;
+  setDragId: (id: number | null) => void;
+  onReorderDrop: (droppedOnId: number) => void;
+  onArchive: (id: number, target: "fermee" | "active") => void;
+}) {
+  const [openClosed, setOpenClosed] = useState(false);
+  const active = entreprises.filter((e) => e.is_active);
+  const closed = [...entreprises.filter((e) => !e.is_active)].sort(
+    (a, b) => a.name.localeCompare(b.name, "fr-CA")
+  );
+
+  function startDrag(ev: React.DragEvent, id: number) {
+    try {
+      ev.dataTransfer.setData("text/plain", String(id));
+      ev.dataTransfer.effectAllowed = "move";
+    } catch {
+      /* ignore */
+    }
+    setDragId(id);
+  }
+
+  return (
+    <>
+      {active.length === 0 ? (
+        <li className="px-3 py-1.5 text-[11px] text-[var(--qg-text-soft)]">
+          Aucune entreprise. Clique sur + pour en créer une.
+        </li>
+      ) : null}
+      {active.map((e) => {
+        const dot =
+          e.health_label === "risk"
+            ? "#ff5566"
+            : e.health_label === "warn"
+              ? "#ffaa33"
+              : "#4ade80";
+        const dragging = dragId === e.id;
+        return (
+          <div
+            key={e.id}
+            draggable
+            onDragStart={(ev) => startDrag(ev, e.id)}
+            onDragEnd={() => setDragId(null)}
+            onDragOver={(ev) => {
+              if (dragId != null) ev.preventDefault();
+            }}
+            onDrop={(ev) => {
+              ev.preventDefault();
+              ev.stopPropagation();
+              onReorderDrop(e.id);
+            }}
+            className={dragging ? "opacity-50" : ""}
+          >
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={`/entreprises/${e.id}` as any}
+              onClick={onClose}
+              draggable={false}
+              className={`flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition ${
+                pathname.includes(`/entreprises/${e.id}`)
+                  ? "bg-[var(--qg-bg-alt)] text-[var(--qg-text)]"
+                  : "text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
+              }`}
+            >
+              <span
+                className="h-1.5 w-1.5 rounded-full flex-shrink-0"
+                style={{ backgroundColor: dot }}
+              />
+              <span className="truncate">{e.name}</span>
+            </Link>
+          </div>
+        );
+      })}
+
+      <div
+        className="mt-2"
+        onDragOver={(ev) => {
+          if (dragId != null) ev.preventDefault();
+        }}
+        onDrop={(ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (dragId != null) {
+            onArchive(dragId, "fermee");
+            setDragId(null);
+            setOpenClosed(true);
+          }
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setOpenClosed(!openClosed)}
+          className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--qg-text-soft)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
+        >
+          <span className="text-[10px]">{openClosed ? "▼" : "▶"}</span>
+          <span className="flex-1">Fermée</span>
+          <span className="rounded-full bg-white/10 px-1.5 text-[10px] font-bold">
+            {closed.length}
+          </span>
+        </button>
+        {openClosed ? (
+          <div className="mt-0.5 space-y-0.5 pl-2">
+            {closed.length === 0 ? (
+              <p className="px-2.5 py-1 text-[11px] text-[var(--qg-text-soft)]">
+                Glisse une entreprise ici pour la fermer.
+              </p>
+            ) : null}
+            {closed.map((e) => {
+              const dragging = dragId === e.id;
+              return (
+                <div
+                  key={e.id}
+                  draggable
+                  onDragStart={(ev) => startDrag(ev, e.id)}
+                  onDragEnd={() => setDragId(null)}
+                  className={dragging ? "opacity-50" : ""}
+                >
+                  <Link
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    href={`/entreprises/${e.id}` as any}
+                    onClick={onClose}
+                    draggable={false}
+                    className={`flex items-center gap-2.5 rounded-md px-2.5 py-1 text-[12px] transition ${
+                      pathname.includes(`/entreprises/${e.id}`)
+                        ? "bg-[var(--qg-bg-alt)] text-[var(--qg-text)]"
+                        : "text-[var(--qg-text-soft)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text-muted)]"
+                    }`}
+                  >
+                    <span className="h-1 w-1 flex-shrink-0 rounded-full bg-[var(--qg-text-faint)]" />
+                    <span className="truncate">{e.name}</span>
+                  </Link>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    </>
   );
 }

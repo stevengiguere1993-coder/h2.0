@@ -135,45 +135,24 @@ async def immeubles_picker(
     Le catalogue est **scopé** : un immeuble créé depuis la fiche
     d'une entreprise n'apparaît que dans le picker de cette
     entreprise ; idem pour un deal Pipeline. Ce contexte est passé en
-    query string. Aucun contexte → fallback sur les immeubles non
-    rattachés (legacy) — utile pour les anciens consumers.
+    query string. Sans scope → uniquement les immeubles globaux
+    (ni entreprise ni deal) — comportement legacy pour les pickers
+    qui n'envoient pas de scope.
     """
-    from sqlalchemy import text as _sql_text
-
-    # Construit dynamiquement le filtre ; on s'appuie sur des colonnes
-    # ajoutées via migration (peuvent être absentes en DB ultra-fraîche
-    # avant le boot). Le fallback embarque uniquement is_active.
     q = (
         select(Immeuble.id, Immeuble.name, Immeuble.address)
         .where(Immeuble.is_active.is_(True))
         .order_by(Immeuble.name.asc())
     )
-    try:
-        if entreprise_id is not None:
-            q = q.where(
-                _sql_text("owner_entreprise_id = :eid").bindparams(
-                    eid=int(entreprise_id)
-                )
-            )
-        elif deal_id is not None:
-            q = q.where(
-                _sql_text("owner_deal_id = :did").bindparams(
-                    did=int(deal_id)
-                )
-            )
-        else:
-            # Pas de scope → seulement les immeubles « globaux »
-            # (ni entreprise ni deal). Évite la pollution.
-            q = q.where(
-                _sql_text(
-                    "owner_entreprise_id IS NULL "
-                    "AND owner_deal_id IS NULL"
-                )
-            )
-    except Exception:
-        # Colonnes absentes (migration pas encore appliquée) — on
-        # retombe sur la liste globale.
-        pass
+    if entreprise_id is not None:
+        q = q.where(Immeuble.owner_entreprise_id == int(entreprise_id))
+    elif deal_id is not None:
+        q = q.where(Immeuble.owner_deal_id == int(deal_id))
+    else:
+        q = q.where(
+            Immeuble.owner_entreprise_id.is_(None),
+            Immeuble.owner_deal_id.is_(None),
+        )
 
     rows = (await db.execute(q)).all()
     return [
@@ -212,37 +191,20 @@ async def immeubles_picker_create(
     Pas de garde de volet : tout user authentifié peut enrichir le
     catalogue. Si `entreprise_id` ou `deal_id` est fourni, l'immeuble
     n'est visible que dans ce contexte."""
-    from sqlalchemy import text as _sql_text
-
     name = body.name.strip()
     address = (body.address or "").strip() or name
     obj = Immeuble(
         name=name,
         address=address,
         is_active=True,
+        owner_entreprise_id=body.entreprise_id,
+        owner_deal_id=(
+            body.deal_id if body.entreprise_id is None else None
+        ),
     )
     obj.created_at = _now()
     obj.updated_at = _now()
     db.add(obj)
-    await db.flush()
-
-    # Définit le scope via SQL direct pour ne pas dépendre du modèle
-    # SQLAlchemy (les colonnes owner_* ne sont pas mappées dans
-    # Immeuble — gérées via migration init_db).
-    if body.entreprise_id is not None:
-        await db.execute(
-            _sql_text(
-                "UPDATE imm_immeubles SET owner_entreprise_id = :eid "
-                "WHERE id = :iid"
-            ).bindparams(eid=int(body.entreprise_id), iid=int(obj.id))
-        )
-    elif body.deal_id is not None:
-        await db.execute(
-            _sql_text(
-                "UPDATE imm_immeubles SET owner_deal_id = :did "
-                "WHERE id = :iid"
-            ).bindparams(did=int(body.deal_id), iid=int(obj.id))
-        )
     await db.flush()
 
     return {"id": int(obj.id), "name": obj.name, "address": obj.address}

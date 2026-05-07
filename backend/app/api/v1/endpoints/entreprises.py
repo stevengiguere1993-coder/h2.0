@@ -541,6 +541,49 @@ async def delete_tache(
     await db.flush()
 
 
+def _map_status_label(label: Optional[str]) -> Optional[str]:
+    """Mappe un libellé de statut (legacy Monday) sur un TacheStatus.
+    Retourne None si rien ne matche — laisse l'appelant décider du
+    fallback (backlog ou autre).
+
+    Utilisé par la reclassification des tâches importées de Monday qui
+    sont restées en backlog : on regarde leur ancien nom de groupe
+    Monday pour deviner le statut courant."""
+    if not label:
+        return None
+    s = label.lower().strip()
+    if any(k in s for k in ("done", "termin", "complet", "fait", "résolu", "resolu", "closed", "clos", "fini")):
+        return TacheStatus.DONE.value
+    if any(
+        k in s
+        for k in (
+            "in progress", "in_progress", "progress", "working",
+            "working on it", "en cours", "doing", "actif", "wip", "ongoing",
+        )
+    ):
+        return TacheStatus.IN_PROGRESS.value
+    if any(
+        k in s
+        for k in (
+            "attente", "wait", "block", "stuck", "on hold", "hold",
+            "pause", "bloqu", "pending review",
+        )
+    ):
+        return TacheStatus.TODO.value
+    if any(
+        k in s
+        for k in (
+            "todo", "to do", "to-do", "à faire", "a faire", "next",
+            "ready", "planifié", "planifie", "this week", "semaine",
+            "scheduled", "open",
+        )
+    ):
+        return TacheStatus.TODO.value
+    if any(k in s for k in ("backlog", "icebox", "later", "someday", "idea", "idée", "idee")):
+        return TacheStatus.BACKLOG.value
+    return None
+
+
 # ── Reclassification batch ──────────────────────────────────────────────
 
 
@@ -611,6 +654,49 @@ async def reclassify_taches(
         untouched_backlog=counts["left"],
     )
 
+
+# ── Insights (alertes IA) ───────────────────────────────────────────────
+
+
+class InsightOut(BaseModel):
+    id: int
+    entreprise_id: int
+    type: str
+    status: str
+    title: str
+    body: str
+    confidence: Optional[float] = None
+    suggested_actions: List[str] = Field(default_factory=list)
+    estimated_impact_label: Optional[str] = None
+    estimated_impact_currency: Optional[float] = None
+    created_at: datetime
+
+    @classmethod
+    def from_model(cls, i: "Insight") -> "InsightOut":
+        import json as _json
+        try:
+            actions = _json.loads(i.suggested_actions_json or "[]")
+            if not isinstance(actions, list):
+                actions = []
+        except Exception:
+            actions = []
+        return cls(
+            id=i.id,
+            entreprise_id=i.entreprise_id,
+            type=i.type,
+            status=i.status,
+            title=i.title,
+            body=i.body,
+            confidence=float(i.confidence) if i.confidence is not None else None,
+            suggested_actions=[str(a) for a in actions],
+            estimated_impact_label=i.estimated_impact_label,
+            estimated_impact_currency=(
+                float(i.estimated_impact_currency)
+                if i.estimated_impact_currency is not None
+                else None
+            ),
+            created_at=i.created_at,
+        )
 
 
 @router.get(
@@ -899,6 +985,7 @@ class EntrepriseHealth(BaseModel):
     color_accent: str
     type: str
     description: Optional[str] = None
+    is_active: bool = True
     health_score: int  # 0-100
     health_label: str  # 'good' | 'warn' | 'risk'
     taches_open: int
@@ -915,16 +1002,19 @@ class EntrepriseHealth(BaseModel):
     summary="Santé consolidée par entreprise (tableau « État des entreprises »)",
 )
 async def entreprises_health(
-    db: DBSession, user: CurrentUser
+    db: DBSession,
+    user: CurrentUser,
+    include_archived: bool = False,
 ) -> List[EntrepriseHealth]:
     _require_volet(user)
     from app.models.qg_strategic import Summary, SummaryType
 
+    q = select(Entreprise)
+    if not include_archived:
+        q = q.where(Entreprise.is_active.is_(True))
     ents = (
         await db.execute(
-            select(Entreprise)
-            .where(Entreprise.is_active.is_(True))
-            .order_by(
+            q.order_by(
                 Entreprise.position.asc(),
                 Entreprise.name.asc(),
             )
@@ -996,6 +1086,7 @@ async def entreprises_health(
             color_accent=e.color_accent,
             type=e.type,
             description=e.description,
+            is_active=bool(e.is_active),
             health_score=int(score),
             health_label=label,
             taches_open=int(open_t),

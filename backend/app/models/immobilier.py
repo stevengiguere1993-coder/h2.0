@@ -155,6 +155,16 @@ class Immeuble(Base, TimestampUpdateMixin):
         Boolean, nullable=False, default=True, server_default="true"
     )
 
+    # Scope du catalogue (immeubles créés depuis le picker de tâche).
+    # Au plus l'un des deux est rempli. Tous deux NULL = immeuble
+    # « global » (legacy ou créé via le CRUD complet du volet immo).
+    owner_entreprise_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
+    )
+    owner_deal_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
+    )
+
 
 class ImmeubleOwnership(Base):
     """Quelle entreprise détient quel immeuble, à quel %.
