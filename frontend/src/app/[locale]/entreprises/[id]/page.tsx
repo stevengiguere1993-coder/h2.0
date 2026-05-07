@@ -64,6 +64,7 @@ type Tache = {
   monday_group_title: string | null;
   score: number | null;
   immeuble_ids: number[];
+  position: number;
 };
 
 type Employe = { id: number; full_name: string; email: string | null };
@@ -219,10 +220,16 @@ export default function EntrepriseDetailPage() {
         confidence: t.confidence,
         effort: t.effort,
         score: t.score,
-        // Pas de position côté entreprise : on classe par score
-        // décroissant en utilisant `position = -score` (les positions
-        // négatives plus basses arrivent en premier).
-        position: t.score != null ? -t.score : 0,
+        // Position : si l'utilisateur a drag-droppé (position != 0),
+        // on l'utilise telle quelle ; sinon on retombe sur un
+        // classement par score (le score le plus haut en premier ;
+        // mappé en position négative car le tri est ascendant).
+        position:
+          t.position && t.position !== 0
+            ? t.position
+            : t.score != null
+              ? -Math.round(t.score * 1000)
+              : 0,
         immeuble_ids: t.immeuble_ids || [],
         immeubleLabels: (t.immeuble_ids || [])
           .map((id) => immeubleNameById.get(id))
@@ -480,8 +487,7 @@ export default function EntrepriseDetailPage() {
             if (patch.impact !== undefined) out.impact = patch.impact;
             if (patch.confidence !== undefined) out.confidence = patch.confidence;
             if (patch.effort !== undefined) out.effort = patch.effort;
-            // patch.position est ignoré : les tâches d'entreprise
-            // ne s'ordonnent pas par position (tri par score).
+            if (patch.position !== undefined) out.position = patch.position;
             void patchTache(taskId, out);
           }}
           onDelete={(taskId) => {

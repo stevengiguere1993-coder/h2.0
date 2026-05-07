@@ -328,6 +328,13 @@ async def init_db() -> None:
             ("prospection_deal_tasks", "impact", "INTEGER"),
             ("prospection_deal_tasks", "confidence", "INTEGER"),
             ("prospection_deal_tasks", "effort", "INTEGER"),
+            # Position manuelle — pour le drag & drop dans le tableau
+            # de tâches d'entreprise (sinon classement par score).
+            (
+                "entreprise_taches",
+                "position",
+                "INTEGER NOT NULL DEFAULT 0",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

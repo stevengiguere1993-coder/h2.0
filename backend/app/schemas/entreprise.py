@@ -103,6 +103,8 @@ class EntrepriseTacheUpdate(BaseModel):
     # via le bouton « Déplacer » dans la carte.
     entreprise_id: Optional[int] = Field(default=None, gt=0)
     immeuble_ids: Optional[List[int]] = None
+    # Ordre manuel (drag & drop dans le tableau).
+    position: Optional[int] = None
 
 
 class EntrepriseTacheRead(BaseModel):
@@ -124,6 +126,9 @@ class EntrepriseTacheRead(BaseModel):
     assignee_user_ids: List[int] = Field(default_factory=list)
     # Immeubles liés à la tâche.
     immeuble_ids: List[int] = Field(default_factory=list)
+    # Position manuelle (drag & drop). 0 = pas réordonné — le frontend
+    # retombe sur un classement par score.
+    position: int = 0
     due_date: Optional[date] = None
     completed_at: Optional[datetime] = None
     recurrence: Optional[str] = None

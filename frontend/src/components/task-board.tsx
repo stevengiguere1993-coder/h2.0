@@ -215,26 +215,22 @@ export function TaskBoard({
           <button
             type="button"
             onClick={() => setView("list")}
-            className="rounded-md px-3 py-1.5 text-xs font-semibold transition"
-            style={{
-              backgroundColor:
-                view === "list" ? "#a78bfa" : "transparent",
-              color:
-                view === "list" ? "#0a0a0b" : "rgba(245,245,247,0.6)"
-            }}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+              view === "list"
+                ? "bg-violet-400 text-brand-950 shadow"
+                : "border border-brand-700 bg-brand-950/40 text-white hover:bg-brand-950/70"
+            }`}
           >
             Tableau
           </button>
           <button
             type="button"
             onClick={() => setView("kanban")}
-            className="rounded-md px-3 py-1.5 text-xs font-semibold transition"
-            style={{
-              backgroundColor:
-                view === "kanban" ? "#a78bfa" : "transparent",
-              color:
-                view === "kanban" ? "#0a0a0b" : "rgba(245,245,247,0.6)"
-            }}
+            className={`ml-0.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+              view === "kanban"
+                ? "bg-violet-400 text-brand-950 shadow"
+                : "border border-brand-700 bg-brand-950/40 text-white hover:bg-brand-950/70"
+            }`}
           >
             Kanban
           </button>
@@ -737,7 +733,7 @@ function TaskListView({
         <thead>
           <tr
             className="text-[10px] uppercase tracking-wider text-white/50"
-            style={{ borderBottom: "1px solid rgba(255,255,255,0.15)" }}
+            style={{ borderBottom: "2px solid rgba(100,116,139,0.55)" }}
           >
             <th className="px-4 py-2.5 text-left">Tâche</th>
             <th className="px-3 py-2.5 text-left">Statut</th>
@@ -793,7 +789,7 @@ function TaskListView({
                       : "hover:bg-white/5"
                 }`}
                 style={{
-                  borderBottom: "1px solid rgba(255,255,255,0.10)"
+                  borderBottom: "1px solid rgba(100,116,139,0.45)"
                 }}
               >
                 <td className="max-w-[420px] px-4 py-3">
