@@ -175,7 +175,7 @@ export function PillPicker({
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-label={ariaLabel}
-        className={`inline-flex w-full items-center justify-center rounded px-2 py-1 text-[10px] font-semibold ${current.cls}`}
+        className={`inline-flex items-center justify-center rounded-md px-2 py-0.5 text-[10px] font-semibold ${current.cls}`}
       >
         <span className="truncate">{current.label}</span>
       </button>
@@ -315,7 +315,7 @@ export function AssigneePicker({
   // padding standard) afin de matcher les autres champs.
   const triggerCls = isModal
     ? "flex w-full flex-wrap items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3.5 py-2 text-sm text-white/70 shadow-sm transition hover:border-brand-600 focus:border-accent-500 focus:outline-none"
-    : "inline-flex w-full items-center justify-center gap-1 rounded border border-black/40 bg-brand-800 px-1.5 py-1 text-[10px] font-semibold text-white/60 hover:bg-brand-700";
+    : "inline-flex items-center justify-center gap-1 rounded-md border border-brand-800/60 bg-brand-900 px-2 py-0.5 text-[10px] font-semibold text-white/60 hover:border-brand-700 hover:text-white/80";
   const chipCls = isModal
     ? "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-bold"
     : "inline-flex items-center gap-1 rounded-full px-1 py-0.5 text-[9px] font-bold";
@@ -439,7 +439,11 @@ export function DatePill({
         type="button"
         onClick={open}
         aria-label="Date butoir"
-        className="pill-date-invert inline-flex w-full items-center justify-center rounded-full px-2 py-1 text-[10px] font-semibold"
+        className={
+          formatted
+            ? "inline-flex items-center justify-center rounded-md bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white"
+            : "inline-flex items-center justify-center rounded-md border border-dashed border-brand-700 px-2 py-0.5 text-[10px] font-semibold text-white/40 hover:border-brand-600 hover:text-white/60"
+        }
       >
         {formatted || "+ Date"}
       </button>

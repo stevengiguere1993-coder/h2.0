@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus } from "lucide-react";
+import { Building2, Plus } from "lucide-react";
 
 import {
   TaskCard,
@@ -736,19 +736,19 @@ function TaskListView({
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-brand-800 bg-brand-900/60">
+    <div className="overflow-hidden rounded-xl border border-brand-800 bg-brand-900/40">
       <table className="w-full text-[13px]">
         <thead>
           <tr
-            className="text-[10px] uppercase tracking-wider text-white/50"
-            style={{ borderBottom: "2px solid rgba(100,116,139,0.55)" }}
+            className="text-[10px] font-semibold uppercase tracking-wider text-white/40"
+            style={{ borderBottom: "1px solid rgba(100,116,139,0.35)" }}
           >
-            <th className="px-3 py-2.5 text-left">P · Score</th>
-            <th className="px-4 py-2.5 text-left">Tâche</th>
-            <th className="px-3 py-2.5 text-left">Statut</th>
-            <th className="px-3 py-2.5 text-left">Priorité</th>
-            <th className="px-3 py-2.5 text-left">Personnes</th>
-            <th className="px-3 py-2.5 text-right">Échéance</th>
+            <th className="w-[88px] px-3 py-3 text-left">P · Score</th>
+            <th className="px-4 py-3 text-left">Tâche</th>
+            <th className="w-[120px] px-3 py-3 text-left">Statut</th>
+            <th className="w-[110px] px-3 py-3 text-left">Priorité</th>
+            <th className="w-[120px] px-3 py-3 text-left">Personnes</th>
+            <th className="w-[110px] px-3 py-3 text-right">Échéance</th>
           </tr>
         </thead>
         <tbody>
@@ -790,30 +790,34 @@ function TaskListView({
                   setHoverId(null);
                 }}
                 onClick={() => onOpenDetails(t.id)}
-                className={`cursor-pointer transition ${
+                className={`relative cursor-pointer transition ${
                   dragging
                     ? "opacity-50"
                     : hover
                       ? "bg-violet-500/10"
-                      : "hover:bg-white/5"
+                      : "hover:bg-white/[0.03]"
                 }`}
                 style={{
-                  borderBottom: "1px solid rgba(100,116,139,0.45)"
+                  borderBottom: "1px solid rgba(100,116,139,0.18)"
                 }}
               >
-                <td className="px-3 py-3">
+                <td className="px-3 py-2.5">
                   {(() => {
                     const tier = scoreToPTier(t.score);
                     const hasScore = t.score != null;
                     return (
                       <span
-                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${tier.pill}`}
+                        className={`relative inline-flex items-center gap-1 overflow-hidden rounded-full pl-2.5 pr-2 py-0.5 text-[10px] font-bold ${tier.pill}`}
                         title={`${tier.label} — ${tier.description}${
                           hasScore
                             ? ` (score ${(t.score as number).toFixed(1)})`
                             : ""
                         }`}
                       >
+                        <span
+                          aria-hidden
+                          className={`absolute inset-y-0 left-0 w-[3px] ${tier.accent}`}
+                        />
                         {tier.label}
                         {hasScore ? (
                           <span className="opacity-90">
@@ -824,13 +828,16 @@ function TaskListView({
                     );
                   })()}
                 </td>
-                <td className="max-w-[420px] px-4 py-3">
-                  <p className="truncate font-medium text-white">
+                <td className="max-w-[420px] px-4 py-2.5">
+                  <p className="truncate font-medium leading-tight text-white">
                     {t.title}
                   </p>
                   {t.immeubleLabels && t.immeubleLabels.length > 0 ? (
-                    <p className="mt-0.5 truncate text-[11px] text-white/85">
-                      {t.immeubleLabels.join(", ")}
+                    <p className="mt-0.5 inline-flex items-center gap-1 truncate text-[10px] text-white/55">
+                      <Building2 className="h-2.5 w-2.5 flex-shrink-0" />
+                      <span className="truncate">
+                        {t.immeubleLabels.join(", ")}
+                      </span>
                     </p>
                   ) : null}
                   {t.footer ? (
@@ -838,7 +845,7 @@ function TaskListView({
                   ) : null}
                 </td>
                 <td
-                  className="px-3 py-3"
+                  className="px-3 py-2.5"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <PillPicker
@@ -853,7 +860,7 @@ function TaskListView({
                   />
                 </td>
                 <td
-                  className="px-3 py-3"
+                  className="px-3 py-2.5"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <PillPicker
@@ -868,7 +875,7 @@ function TaskListView({
                   />
                 </td>
                 <td
-                  className="px-3 py-3"
+                  className="px-3 py-2.5"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <AssigneePicker
@@ -880,7 +887,7 @@ function TaskListView({
                   />
                 </td>
                 <td
-                  className="px-3 py-3 text-right"
+                  className="px-3 py-2.5 text-right"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <DatePill
