@@ -118,3 +118,54 @@ export const TASK_PRIORITY_RANK: Record<TaskPriorityValue, number> = {
   faible: 3,
   non_assigne: 4
 };
+
+// ─── Classement P1 → P4 dérivé du score ICE × urgence ─────────────
+//
+// Le score est calculé serveur-side : (impact × confiance / effort)
+// × multiplicateur d'urgence (5 si en retard, 3 si ≤ 7j, 2 si ≤ 14j,
+// 1.5 si ≤ 30j, 1 sinon). Cette fonction transpose le score numérique
+// en pastille de priorité (P1 critique → P4 basse) avec sa couleur.
+
+export type PScoreTier = {
+  label: "P1" | "P2" | "P3" | "P4";
+  // Classes Tailwind pour le bg + text de la pastille (lisibles sur
+  // fond clair comme sombre).
+  pill: string;
+  description: string;
+};
+
+export function scoreToPTier(score: number | null | undefined): PScoreTier {
+  if (score == null) {
+    return {
+      label: "P4",
+      pill: "bg-slate-500 text-white",
+      description: "Non évaluée"
+    };
+  }
+  if (score >= 30) {
+    return {
+      label: "P1",
+      pill: "bg-rose-600 text-white",
+      description: "Critique"
+    };
+  }
+  if (score >= 15) {
+    return {
+      label: "P2",
+      pill: "bg-orange-500 text-white",
+      description: "Haute"
+    };
+  }
+  if (score >= 5) {
+    return {
+      label: "P3",
+      pill: "bg-sky-500 text-white",
+      description: "Normale"
+    };
+  }
+  return {
+    label: "P4",
+    pill: "bg-slate-500 text-white",
+    description: "Basse"
+  };
+}

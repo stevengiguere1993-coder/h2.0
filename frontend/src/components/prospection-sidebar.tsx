@@ -221,48 +221,57 @@ export function ProspectionSidebar({
     }
   }
 
-  function handleDealDrop(droppedOnId: number) {
-    if (dragDealId == null || dragDealId === droppedOnId) return;
+  /** Drop handler unique : mirror exact de `handleDragEntreprise`
+   *  côté Mes entreprises, qui marche sans crash. Toute la logique
+   *  (archive si dragué d'un dossier, sinon réordonner) vit ici dans
+   *  le parent — pas dans les drop handlers JSX, pour éviter qu'un
+   *  setState intermédiaire pendant le dragend ne fasse crasher le
+   *  sous-arbre React. */
+  function handleDealDrop(
+    droppedOnId: number,
+    target: "active" | "termine" | "abandonne"
+  ) {
+    const id = dragDealId;
+    setDragDealId(null);
+    if (id == null) return;
+    const dragged = deals.find((d) => d.id === id);
+    if (!dragged) return;
+
+    if (target === "termine" || target === "abandonne") {
+      // Drop sur l'en-tête du dossier d'archive : patch priorité.
+      void patchDealPriority(id, target);
+      return;
+    }
+
+    // Drop sur la liste principale ou sur un deal actif.
+    if (
+      dragged.priority === "termine" ||
+      dragged.priority === "abandonne"
+    ) {
+      // Réactivation depuis un dossier.
+      void patchDealPriority(id, "moyenne");
+      return;
+    }
+
+    if (id === droppedOnId) return;
     const ids = deals.map((d) => d.id);
-    const fromIdx = ids.indexOf(dragDealId);
+    const fromIdx = ids.indexOf(id);
     const toIdx = ids.indexOf(droppedOnId);
     if (fromIdx < 0 || toIdx < 0) return;
     ids.splice(fromIdx, 1);
-    ids.splice(toIdx, 0, dragDealId);
-    setDragDealId(null);
+    ids.splice(toIdx, 0, id);
     void reorderDeals(ids);
   }
 
-  /** Range un deal dans un dossier d'archive ou le retire (= ramène
-   *  dans la liste principale). Patche `priority` côté serveur.
-   *  Le state update est volontairement déferré dans un microtask
-   *  (`queueMicrotask`) pour éviter un crash React quand le nœud DOM
-   *  source du drag est démonté pendant que le navigateur est encore
-   *  en train de finaliser l'événement dragend. */
-  function archiveDeal(
-    dealId: number,
-    target: "termine" | "abandonne" | "active"
-  ) {
-    queueMicrotask(() => {
-      void archiveDealAsync(dealId, target);
-    });
-  }
-
-  async function archiveDealAsync(
-    dealId: number,
-    target: "termine" | "abandonne" | "active"
-  ) {
-    const newPriority = target === "active" ? "moyenne" : target;
+  async function patchDealPriority(dealId: number, priority: string) {
     const prev = deals;
     setDeals((xs) =>
-      xs.map((d) =>
-        d.id === dealId ? { ...d, priority: newPriority } : d
-      )
+      xs.map((d) => (d.id === dealId ? { ...d, priority } : d))
     );
     try {
       const r = await authedFetch(
         `/api/v1/prospection/deals/${dealId}`,
-        { method: "PATCH", body: JSON.stringify({ priority: newPriority }) }
+        { method: "PATCH", body: JSON.stringify({ priority }) }
       );
       if (!r.ok) throw new Error();
     } catch {
@@ -404,9 +413,8 @@ export function ProspectionSidebar({
                   onClose={onClose}
                   dragDealId={dragDealId}
                   setDragDealId={setDragDealId}
-                  onReorder={(droppedOnId) => handleDealDrop(droppedOnId)}
-                  onArchive={(dealId, target) =>
-                    void archiveDeal(dealId, target)
+                  onDrop={(droppedOnId, target) =>
+                    handleDealDrop(droppedOnId, target)
                   }
                 />
               ) : null}
@@ -486,18 +494,18 @@ function PipelineDealsList({
   onClose,
   dragDealId,
   setDragDealId,
-  onReorder,
-  onArchive
+  onDrop
 }: {
   deals: DealLite[];
   pathname: string;
   onClose: () => void;
   dragDealId: number | null;
   setDragDealId: (id: number | null) => void;
-  onReorder: (droppedOnId: number) => void;
-  onArchive: (
-    dealId: number,
-    target: "termine" | "abandonne" | "active"
+  /** Drop unifié : `target` = "active" si lâché sur la liste
+   *  principale, "termine" / "abandonne" sur l'en-tête d'un dossier. */
+  onDrop: (
+    droppedOnId: number,
+    target: "active" | "termine" | "abandonne"
   ) => void;
 }) {
   const [openTermine, setOpenTermine] = useState(false);
@@ -513,80 +521,63 @@ function PipelineDealsList({
     ...deals.filter((d) => d.priority === "abandonne")
   ].sort((a, b) => a.address.localeCompare(b.address, "fr-CA"));
 
-  function startDrag(ev: React.DragEvent, id: number) {
-    try {
-      ev.dataTransfer.setData("text/plain", String(id));
-      ev.dataTransfer.effectAllowed = "move";
-    } catch {
-      /* certains navigateurs / extensions throw — on continue. */
-    }
-    setDragDealId(id);
-  }
-
   return (
-    <div>
-      {/* Liste principale (active) */}
-      <ul className="mt-0.5 space-y-0.5">
-        {active.length === 0 ? (
-          <li className="px-2.5 py-1.5 text-[11px] text-white/40">
-            Aucun deal — clique sur + pour en créer un.
-          </li>
-        ) : null}
-        {active.map((d) => {
-          const dragging = dragDealId === d.id;
-          const onPath = pathname.includes(
-            `/prospection/pipeline/${d.id}`
-          );
-          return (
-            <li key={d.id}>
-              <div
-                draggable
-                onDragStart={(ev) => startDrag(ev, d.id)}
-                onDragEnd={() => setDragDealId(null)}
-                onDragOver={(ev) => {
-                  if (dragDealId != null) ev.preventDefault();
-                }}
-                onDrop={(ev) => {
-                  ev.preventDefault();
-                  ev.stopPropagation();
-                  if (dragDealId == null) return;
-                  // Si le deal traîné est archivé, on le réactive en
-                  // plus de le déposer ici.
-                  const dragged = deals.find((x) => x.id === dragDealId);
-                  if (
-                    dragged &&
-                    (dragged.priority === "termine" ||
-                      dragged.priority === "abandonne")
-                  ) {
-                    onArchive(dragDealId, "active");
-                  } else {
-                    onReorder(d.id);
-                  }
-                  setDragDealId(null);
-                }}
-                className={dragging ? "opacity-50" : ""}
-              >
-                <Link
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  href={`/prospection/pipeline/${d.id}` as any}
-                  onClick={onClose}
-                  draggable={false}
-                  className={`flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] transition ${
-                    onPath
-                      ? "bg-emerald-500/15 text-emerald-300"
-                      : "text-white/70 hover:bg-brand-900 hover:text-white"
-                  }`}
-                >
-                  <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-400/80" />
-                  <span className="truncate">{d.address}</span>
-                </Link>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+    <>
+      {/* Liste principale (active) — mirror exact du pattern
+          Mes entreprises : drop appelle juste le parent, qui
+          consolide la logique. */}
+      {active.length === 0 ? (
+        <p className="px-2.5 py-1.5 text-[11px] text-white/40">
+          Aucun deal — clique sur + pour en créer un.
+        </p>
+      ) : null}
+      {active.map((d) => {
+        const dragging = dragDealId === d.id;
+        const onPath = pathname.includes(
+          `/prospection/pipeline/${d.id}`
+        );
+        return (
+          <div
+            key={d.id}
+            draggable
+            onDragStart={(ev) => {
+              try {
+                ev.dataTransfer.setData("text/plain", String(d.id));
+                ev.dataTransfer.effectAllowed = "move";
+              } catch {
+                /* ignore */
+              }
+              setDragDealId(d.id);
+            }}
+            onDragEnd={() => setDragDealId(null)}
+            onDragOver={(ev) => {
+              if (dragDealId != null) ev.preventDefault();
+            }}
+            onDrop={(ev) => {
+              ev.preventDefault();
+              ev.stopPropagation();
+              onDrop(d.id, "active");
+            }}
+            className={dragging ? "opacity-50" : ""}
+          >
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={`/prospection/pipeline/${d.id}` as any}
+              onClick={onClose}
+              draggable={false}
+              className={`flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] transition ${
+                onPath
+                  ? "bg-emerald-500/15 text-emerald-300"
+                  : "text-white/70 hover:bg-brand-900 hover:text-white"
+              }`}
+            >
+              <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-400/80" />
+              <span className="truncate">{d.address}</span>
+            </Link>
+          </div>
+        );
+      })}
 
-      {/* Sous-dossier Terminé */}
       <ArchiveFolder
         label="Terminé"
         target="termine"
@@ -596,12 +587,10 @@ function PipelineDealsList({
         pathname={pathname}
         onClose={onClose}
         dragDealId={dragDealId}
-        startDrag={startDrag}
         setDragDealId={setDragDealId}
-        onArchive={onArchive}
+        onDrop={onDrop}
       />
 
-      {/* Sous-dossier Abandonné */}
       <ArchiveFolder
         label="Abandonné"
         target="abandonne"
@@ -611,11 +600,10 @@ function PipelineDealsList({
         pathname={pathname}
         onClose={onClose}
         dragDealId={dragDealId}
-        startDrag={startDrag}
         setDragDealId={setDragDealId}
-        onArchive={onArchive}
+        onDrop={onDrop}
       />
-    </div>
+    </>
   );
 }
 
@@ -628,9 +616,8 @@ function ArchiveFolder({
   pathname,
   onClose,
   dragDealId,
-  startDrag,
   setDragDealId,
-  onArchive
+  onDrop
 }: {
   label: string;
   target: "termine" | "abandonne";
@@ -640,11 +627,10 @@ function ArchiveFolder({
   pathname: string;
   onClose: () => void;
   dragDealId: number | null;
-  startDrag: (ev: React.DragEvent, id: number) => void;
   setDragDealId: (id: number | null) => void;
-  onArchive: (
-    dealId: number,
-    target: "termine" | "abandonne" | "active"
+  onDrop: (
+    droppedOnId: number,
+    target: "active" | "termine" | "abandonne"
   ) => void;
 }) {
   return (
@@ -657,8 +643,7 @@ function ArchiveFolder({
         ev.preventDefault();
         ev.stopPropagation();
         if (dragDealId != null) {
-          onArchive(dragDealId, target);
-          setDragDealId(null);
+          onDrop(dragDealId, target);
           setOpen(true);
         }
       }}
@@ -675,11 +660,11 @@ function ArchiveFolder({
         </span>
       </button>
       {open ? (
-        <ul className="mt-0.5 space-y-0.5 pl-2">
+        <div className="mt-0.5 space-y-0.5 pl-2">
           {deals.length === 0 ? (
-            <li className="px-2.5 py-1 text-[11px] text-white/40">
+            <p className="px-2.5 py-1 text-[11px] text-white/40">
               Glisse un deal ici pour l&apos;archiver.
-            </li>
+            </p>
           ) : null}
           {deals.map((d) => {
             const onPath = pathname.includes(
@@ -687,32 +672,39 @@ function ArchiveFolder({
             );
             const dragging = dragDealId === d.id;
             return (
-              <li key={d.id}>
-                <div
-                  draggable
-                  onDragStart={(ev) => startDrag(ev, d.id)}
-                  onDragEnd={() => setDragDealId(null)}
-                  className={dragging ? "opacity-50" : ""}
+              <div
+                key={d.id}
+                draggable
+                onDragStart={(ev) => {
+                  try {
+                    ev.dataTransfer.setData("text/plain", String(d.id));
+                    ev.dataTransfer.effectAllowed = "move";
+                  } catch {
+                    /* ignore */
+                  }
+                  setDragDealId(d.id);
+                }}
+                onDragEnd={() => setDragDealId(null)}
+                className={dragging ? "opacity-50" : ""}
+              >
+                <Link
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  href={`/prospection/pipeline/${d.id}` as any}
+                  onClick={onClose}
+                  draggable={false}
+                  className={`flex items-center gap-2.5 rounded-md px-2.5 py-1 text-[12px] transition ${
+                    onPath
+                      ? "bg-emerald-500/15 text-emerald-300"
+                      : "text-white/50 hover:bg-brand-900 hover:text-white/80"
+                  }`}
                 >
-                  <Link
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    href={`/prospection/pipeline/${d.id}` as any}
-                    onClick={onClose}
-                    draggable={false}
-                    className={`flex items-center gap-2.5 rounded-md px-2.5 py-1 text-[12px] transition ${
-                      onPath
-                        ? "bg-emerald-500/15 text-emerald-300"
-                        : "text-white/50 hover:bg-brand-900 hover:text-white/80"
-                    }`}
-                  >
-                    <span className="h-1 w-1 flex-shrink-0 rounded-full bg-white/30" />
-                    <span className="truncate">{d.address}</span>
-                  </Link>
-                </div>
-              </li>
+                  <span className="h-1 w-1 flex-shrink-0 rounded-full bg-white/30" />
+                  <span className="truncate">{d.address}</span>
+                </Link>
+              </div>
             );
           })}
-        </ul>
+        </div>
       ) : null}
     </div>
   );
