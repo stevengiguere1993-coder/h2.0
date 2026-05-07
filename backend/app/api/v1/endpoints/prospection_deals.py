@@ -230,6 +230,9 @@ class TaskUpdate(BaseModel):
     )
     due_date: Optional[date] = None
     position: Optional[int] = Field(default=None, ge=0)
+    # Permet de déplacer une tâche vers un autre deal (bouton
+    # « Déplacer » du kanban). Le deal cible doit exister.
+    deal_id: Optional[int] = Field(default=None, gt=0)
 
 
 class TaskRead(BaseModel):
@@ -440,6 +443,12 @@ async def update_task(
     legacy_uid_set = "assignee_user_id" in data.model_fields_set
     list_uids_set = "assignee_user_ids" in data.model_fields_set
     legacy_uid = fields.pop("assignee_user_id", None)
+
+    # Déplacement vers un autre deal — valider que la cible existe
+    # avant d'écraser deal_id.
+    target_deal_id = fields.get("deal_id")
+    if target_deal_id is not None and target_deal_id != task.deal_id:
+        await _ensure_deal_exists(db, target_deal_id)
 
     for field, value in fields.items():
         if field == "name" and value is not None:

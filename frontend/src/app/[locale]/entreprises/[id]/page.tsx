@@ -4,12 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   ArrowLeft,
-  ArrowRightLeft,
   Briefcase,
   ExternalLink,
   Loader2,
   Plus,
-  StickyNote,
   Trash2
 } from "lucide-react";
 
@@ -19,10 +17,9 @@ import { EntreprisesTopbar } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
 import {
   AssigneePicker,
-  AutoGrowTextarea,
   type TaskUserMini
 } from "@/components/task-pills";
-import { TaskCard } from "@/components/task-card";
+import { TaskBoard, type TaskBoardItem } from "@/components/task-board";
 import {
   TASK_PRIORITY_OPTIONS,
   TASK_STATUS_OPTIONS
@@ -130,8 +127,6 @@ export default function EntrepriseDetailPage() {
   // Tâche à déplacer vers une autre entreprise. Quand c'est défini,
   // on affiche un mini dialogue qui liste les entreprises.
   const [moveTask, setMoveTask] = useState<Tache | null>(null);
-  const [dragging, setDragging] = useState<number | null>(null);
-  const [hoverCol, setHoverCol] = useState<string | null>(null);
   const [tachesView, setTachesView] = useState<"kanban" | "list">("kanban");
 
   async function load() {
@@ -184,23 +179,50 @@ export default function EntrepriseDetailPage() {
     return m;
   }, [employes]);
 
-  const byColumn = useMemo(() => {
-    const out: Record<string, Tache[]> = Object.fromEntries(
-      COLUMNS.map((c) => [c.id, [] as Tache[]])
-    );
-    for (const t of taches) {
-      // Si le statut DB n'est pas une des 4 colonnes affichées
-      // (ex. backlog hérité d'un import Monday non re-classifié),
-      // on retombe sur « À faire » par défaut.
-      const target = COLUMNS.find((c) => c.id === t.status) ? t.status : "todo";
-      out[target].push(t);
-    }
-    // Tri par score décroissant à l'intérieur de chaque colonne
-    for (const k of Object.keys(out)) {
-      out[k].sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
-    }
-    return out;
-  }, [taches]);
+  // Tache → TaskBoardItem. Le footer reprend les badges spécifiques
+  // entreprise (score ICE, récurrence, département) ; pour les
+  // tâches Pipeline ces métadonnées n'existent pas, donc le footer
+  // y est laissé vide.
+  const boardItems: TaskBoardItem[] = useMemo(
+    () =>
+      taches.map((t) => ({
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        priority: t.priority || "non_assigne",
+        due_date: t.due_date,
+        assignee_user_ids: t.assignee_user_ids || [],
+        hasNote: Boolean(t.description),
+        // Pas de position côté entreprise : on classe par score
+        // décroissant en utilisant `position = -score` (les positions
+        // négatives plus basses arrivent en premier).
+        position: t.score != null ? -t.score : 0,
+        footer:
+          t.score != null || t.recurrence || t.departement ? (
+            <div className="flex flex-wrap items-center gap-1 text-[9px] text-white/40">
+              {t.score != null ? (
+                <span
+                  className="rounded-full bg-white/5 px-1.5 py-0.5"
+                  title="Score = (impact × confiance / effort) × urgence"
+                >
+                  ★ {t.score.toFixed(1)}
+                </span>
+              ) : null}
+              {t.recurrence ? (
+                <span className="rounded-full border border-amber-500/30 px-1.5 py-0.5 text-amber-200/80">
+                  ⟲ {RECURRENCE_LABELS[t.recurrence] || t.recurrence}
+                </span>
+              ) : null}
+              {t.departement ? (
+                <span className="rounded-full border border-brand-700 px-1.5 py-0.5">
+                  {t.departement}
+                </span>
+              ) : null}
+            </div>
+          ) : null
+      })),
+    [taches]
+  );
 
   async function removeEntreprise() {
     if (!ent) return;
@@ -230,6 +252,29 @@ export default function EntrepriseDetailPage() {
 
   async function moveTache(tacheId: number, newStatus: string) {
     await patchTache(tacheId, { status: newStatus });
+  }
+
+  // Création inline depuis le bouton « + Tâche » d'une colonne du
+  // kanban. Crée une tâche minimale (titre + statut) ; les autres
+  // champs (description, ICE, récurrence) restent éditables ensuite
+  // via la fiche complète.
+  async function createTacheInline(status: string, title: string) {
+    if (!ent) return;
+    try {
+      const res = await authedFetch("/api/v1/entreprises/taches", {
+        method: "POST",
+        body: JSON.stringify({
+          entreprise_id: ent.id,
+          title,
+          status
+        })
+      });
+      if (!res.ok) throw new Error();
+      const created = (await res.json()) as Tache;
+      setTaches((xs) => [...xs, created]);
+    } catch {
+      setError("Création de tâche échouée.");
+    }
   }
 
   async function patchTache(tacheId: number, patch: Partial<Tache>) {
@@ -442,75 +487,37 @@ export default function EntrepriseDetailPage() {
             onChangeStatus={(t, s) => moveTache(t.id, s)}
           />
         ) : (
-        <div className="mt-3 flex gap-3 overflow-x-auto pb-3">
-          {COLUMNS.map((col) => {
-            const cards = byColumn[col.id] || [];
-            const isHover = hoverCol === col.id;
-            return (
-              <div
-                key={col.id}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setHoverCol(col.id);
-                }}
-                onDragLeave={() => setHoverCol(null)}
-                onDrop={() => {
-                  setHoverCol(null);
-                  if (dragging !== null) {
-                    const t = taches.find((x) => x.id === dragging);
-                    if (t && t.status !== col.id) moveTache(dragging, col.id);
-                  }
-                }}
-                className={`flex w-72 min-w-[280px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
-                  isHover
-                    ? "border-violet-500 bg-brand-900"
-                    : "border-brand-800"
-                }`}
-              >
-                <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <span className={`h-2 w-2 rounded-full ${col.dot}`} />
-                    <h2 className="text-sm font-semibold text-white">
-                      {col.label}
-                    </h2>
-                    <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
-                      {cards.length}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex-1 space-y-2 p-3">
-                  {cards.length === 0 ? (
-                    <p className="py-8 text-center text-xs text-white/40">
-                      Aucune tâche
-                    </p>
-                  ) : (
-                    cards.map((t) => (
-                      <TacheCard
-                        key={t.id}
-                        t={t}
-                        users={users}
-                        onDragStart={() => setDragging(t.id)}
-                        onDragEnd={() => {
-                          setDragging(null);
-                          setHoverCol(null);
-                        }}
-                        onPatch={(patch) => void patchTache(t.id, patch)}
-                        onDelete={(ev) => {
-                          ev.stopPropagation();
-                          ev.preventDefault();
-                          void removeTache(t);
-                        }}
-                        onOpenDetails={() => setModal(t)}
-                        onMove={() => setMoveTask(t)}
-                      />
-                    ))
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+          <TaskBoard
+            tasks={boardItems}
+            users={users}
+            onPatch={(taskId, patch) => {
+              const out: Partial<Tache> = {};
+              if (patch.title !== undefined) out.title = patch.title;
+              if (patch.status !== undefined) out.status = patch.status;
+              if (patch.priority !== undefined) out.priority = patch.priority;
+              if (patch.due_date !== undefined) out.due_date = patch.due_date;
+              if (patch.assignee_user_ids !== undefined) {
+                out.assignee_user_ids = patch.assignee_user_ids;
+                out.assignee_user_id = patch.assignee_user_ids[0] ?? null;
+              }
+              // patch.position est ignoré : les tâches d'entreprise
+              // ne s'ordonnent pas par position (tri par score).
+              void patchTache(taskId, out);
+            }}
+            onDelete={(taskId) => {
+              const t = taches.find((x) => x.id === taskId);
+              if (t) void removeTache(t);
+            }}
+            onOpenDetails={(taskId) => {
+              const t = taches.find((x) => x.id === taskId);
+              if (t) setModal(t);
+            }}
+            onMove={(taskId) => {
+              const t = taches.find((x) => x.id === taskId);
+              if (t) setMoveTask(t);
+            }}
+            onCreate={(status, name) => void createTacheInline(status, name)}
+          />
         )}
       </div>
 
@@ -666,95 +673,11 @@ function MoveTacheDialog({
   );
 }
 
-// Les pastilles de tâche (statut/priorité) sont gérées par
-// <TaskCard> qui consomme directement /lib/task-config. Plus
-// besoin de constantes locales ici.
-
-/**
- * Adaptateur autour du composant partagé <TaskCard>. Les pages
- * Pipeline (Acquisition) et Entreprise rendent la même UI ; cet
- * adaptateur fait la traduction Tache → TaskCardData et propage
- * les patches dans la shape attendue par /api/v1/entreprises/taches.
- */
-function TacheCard({
-  t,
-  users,
-  onDragStart,
-  onDragEnd,
-  onPatch,
-  onDelete,
-  onOpenDetails,
-  onMove
-}: {
-  t: Tache;
-  users: TaskUserMini[];
-  onDragStart: () => void;
-  onDragEnd: () => void;
-  onPatch: (patch: Partial<Tache>) => void;
-  onDelete: (e: React.MouseEvent) => void;
-  onOpenDetails: () => void;
-  onMove: () => void;
-}) {
-  return (
-    <TaskCard
-      task={{
-        id: t.id,
-        title: t.title,
-        status: t.status,
-        priority: t.priority || "non_assigne",
-        due_date: t.due_date,
-        assignee_user_ids: t.assignee_user_ids || [],
-        hasNote: Boolean(t.description)
-      }}
-      users={users}
-      onPatch={(patch) => {
-        // Le composant partagé envoie des patches génériques
-        // (assignee_user_ids…). On les propage tels quels et on
-        // ajuste le scalaire legacy assignee_user_id si fourni.
-        const ent: Partial<Tache> = {};
-        if (patch.title !== undefined) ent.title = patch.title;
-        if (patch.status !== undefined) ent.status = patch.status;
-        if (patch.priority !== undefined) ent.priority = patch.priority;
-        if (patch.due_date !== undefined) ent.due_date = patch.due_date;
-        if (patch.assignee_user_ids !== undefined) {
-          ent.assignee_user_ids = patch.assignee_user_ids;
-          ent.assignee_user_id = patch.assignee_user_ids[0] ?? null;
-        }
-        onPatch(ent);
-      }}
-      onDelete={onDelete}
-      onOpenDetails={onOpenDetails}
-      onMove={onMove}
-      draggable
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
-      footer={
-        t.score != null || t.recurrence || t.departement ? (
-          <div className="flex flex-wrap items-center gap-1 text-[9px] text-white/40">
-            {t.score != null ? (
-              <span
-                className="rounded-full bg-white/5 px-1.5 py-0.5"
-                title="Score = (impact × confiance / effort) × urgence"
-              >
-                ★ {t.score.toFixed(1)}
-              </span>
-            ) : null}
-            {t.recurrence ? (
-              <span className="rounded-full border border-amber-500/30 px-1.5 py-0.5 text-amber-200/80">
-                ⟲ {RECURRENCE_LABELS[t.recurrence] || t.recurrence}
-              </span>
-            ) : null}
-            {t.departement ? (
-              <span className="rounded-full border border-brand-700 px-1.5 py-0.5">
-                {t.departement}
-              </span>
-            ) : null}
-          </div>
-        ) : null
-      }
-    />
-  );
-}
+// Le rendu d'une carte de tâche est entièrement délégué au
+// composant partagé <TaskBoard> → <TaskCard>, qui consomme
+// directement /lib/task-config. Toute évolution visuelle de la
+// carte se fait dans /components/task-card.tsx (et /task-board.tsx
+// pour la mise en page du kanban).
 
 function TacheModal({
   seed,
