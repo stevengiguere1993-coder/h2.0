@@ -1248,7 +1248,10 @@ async def entreprises_health(
         await db.execute(
             select(Entreprise)
             .where(Entreprise.is_active.is_(True))
-            .order_by(Entreprise.name.asc())
+            .order_by(
+                Entreprise.position.asc(),
+                Entreprise.name.asc(),
+            )
         )
     ).scalars().all()
 

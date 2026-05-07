@@ -110,8 +110,8 @@ export function ImmeublePicker({
                 key={i.id}
                 className={
                   isModal
-                    ? "inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold text-emerald-200"
-                    : "inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-200"
+                    ? "inline-flex items-center gap-1 rounded-full bg-emerald-600 px-2 py-0.5 text-xs font-semibold text-white"
+                    : "inline-flex items-center gap-1 rounded-full bg-emerald-600 px-1.5 py-0.5 text-[9px] font-semibold text-white"
                 }
                 title={i.name}
               >
@@ -144,7 +144,7 @@ export function ImmeublePicker({
                     key={i.id}
                     type="button"
                     onClick={() => toggle(i.id)}
-                    className="flex w-full items-center gap-1.5 rounded bg-emerald-500/15 px-2 py-1 text-left text-[11px] font-semibold text-emerald-200 ring-1 ring-emerald-500/40 hover:bg-emerald-500/25"
+                    className="flex w-full items-center gap-1.5 rounded bg-emerald-600 px-2 py-1 text-left text-[11px] font-semibold text-white ring-1 ring-emerald-700 hover:bg-emerald-700"
                     title="Cliquer pour retirer"
                   >
                     <Building2 className="h-3 w-3" />
@@ -203,7 +203,7 @@ export function ManageImmeublesButton({
         onClick={() => setOpen(true)}
         title="Gérer la liste d'immeubles"
         aria-label="Gérer la liste d'immeubles"
-        className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-500/20"
+        className="inline-flex items-center gap-1 rounded-md border border-emerald-600 bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-emerald-700"
       >
         <Settings className="h-3 w-3" />
         Gérer

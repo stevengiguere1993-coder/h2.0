@@ -80,6 +80,13 @@ class EntrepriseTache(Base, TimestampUpdateMixin):
     # plus c'est haut, plus la tâche descend dans le classement.
     effort: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
+    # Ordre manuel — drag & drop dans le tableau de tâches. Par défaut
+    # 0 ; le frontend retombe sur un classement basé sur le score si
+    # toutes les tâches ont la même position.
+    position: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
     # ── Assignation ───────────────────────────────────────────────────
     assignee_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
