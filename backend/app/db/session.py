@@ -335,6 +335,22 @@ async def init_db() -> None:
         except Exception:
             pass
 
+        # Promote Philippe Meuser au rang owner (mêmes accès que
+        # Steven). Idempotent — UPDATE n'a aucun effet quand le rôle
+        # est déjà 'owner'. On vise les deux variantes de courriel
+        # qu'on a vues dans les whitelists.
+        try:
+            await conn.execute(
+                text(
+                    "UPDATE users SET role='owner', is_admin=TRUE "
+                    "WHERE LOWER(email) IN "
+                    "('philippe.meuser@immohorizon.com', "
+                    " 'pmeuser@immohorizon.com')"
+                )
+            )
+        except Exception:
+            pass
+
         # Élargit la colonne region de mtl_property_units si elle est
         # encore en VARCHAR(8) (legacy). 'mtl-island' fait 10 chars,
         # 'rive-nord' 9. ALTER COLUMN TYPE est idempotent en Postgres
