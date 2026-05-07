@@ -52,11 +52,13 @@ export function userDisplayName(u: TaskUserMini): string {
 }
 
 export function userInitials(u: TaskUserMini): string {
+  // Première lettre du prénom (style Linear / Notion). Si pas de
+  // prénom on retombe sur le nom de famille puis sur la partie locale
+  // de l'email.
   const fn = (u.first_name || "").trim();
+  if (fn) return fn[0].toUpperCase();
   const ln = (u.last_name || "").trim();
-  if (fn || ln) {
-    return `${fn[0] || ""}${ln[0] || ""}`.toUpperCase() || "?";
-  }
+  if (ln) return ln[0].toUpperCase();
   const local = u.email.split("@")[0];
   return (local[0] || "?").toUpperCase();
 }
@@ -238,7 +240,35 @@ function extractBgClass(cls: string): string {
   return m ? m[0] : "bg-slate-400";
 }
 
+// ─── UserInitialDot ───────────────────────────────────────────────
+// Cercle coloré (couleur du profil) + première lettre du prénom.
+// Style 2026 utilisé dans la pastille « Personnes » des tâches —
+// ne charge JAMAIS l'image d'avatar, garde un rendu simple et net.
+
+export function UserInitialDot({
+  user,
+  size = 16
+}: {
+  user: TaskUserMini;
+  size?: number;
+}) {
+  const dim = `${size}px`;
+  const fontSize = Math.max(8, Math.round(size * 0.55));
+  return (
+    <span
+      className={`flex flex-shrink-0 items-center justify-center rounded-full font-bold ${userPillCls(user)}`}
+      style={{ width: dim, height: dim, fontSize: `${fontSize}px` }}
+      title={userDisplayName(user)}
+    >
+      {userInitials(user)}
+    </span>
+  );
+}
+
 // ─── UserAvatarBadge ──────────────────────────────────────────────
+// Variante qui charge la photo de profil si disponible (fiche
+// profil, modal de détails). Pour les pastilles compactes des tâches
+// préférer <UserInitialDot> ci-dessus.
 
 export function UserAvatarBadge({
   user,
@@ -376,7 +406,7 @@ export function AssigneePicker({
                 className="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-2 py-0.5 text-xs text-white"
                 title={userDisplayName(u)}
               >
-                <UserAvatarBadge user={u} size={avatarSize} />
+                <UserInitialDot user={u} size={avatarSize} />
                 <span className="leading-none">
                   {userDisplayName(u)}
                 </span>
@@ -386,7 +416,7 @@ export function AssigneePicker({
         ) : assigned.length === 1 ? (
           // Carte, 1 personne : avatar + initiales.
           <span className="inline-flex items-center gap-1.5">
-            <UserAvatarBadge user={assigned[0]} size={avatarSize} />
+            <UserInitialDot user={assigned[0]} size={avatarSize} />
             <span className="leading-none">
               {userInitials(assigned[0])}
             </span>
@@ -403,7 +433,7 @@ export function AssigneePicker({
                 style={{ zIndex: assigned.length - idx }}
                 title={userDisplayName(u)}
               >
-                <UserAvatarBadge user={u} size={avatarSize} />
+                <UserInitialDot user={u} size={avatarSize} />
               </span>
             ))}
             {assigned.length > 4 ? (
@@ -429,7 +459,7 @@ export function AssigneePicker({
                   className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[11px] font-medium text-white transition hover:bg-white/5"
                   title="Cliquer pour retirer"
                 >
-                  <UserAvatarBadge user={u} size={16} />
+                  <UserInitialDot user={u} size={16} />
                   <span className="flex-1 truncate">
                     {userDisplayName(u)}
                   </span>
@@ -449,7 +479,7 @@ export function AssigneePicker({
                   onClick={() => toggle(u.id)}
                   className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[11px] font-medium text-white/70 transition hover:bg-white/5 hover:text-white"
                 >
-                  <UserAvatarBadge user={u} size={16} />
+                  <UserInitialDot user={u} size={16} />
                   <span className="truncate">
                     {userDisplayName(u)}
                   </span>
