@@ -809,7 +809,7 @@ function TacheCard({
             ariaLabel="Priorité"
           />
         </PillField>
-        <PillField label="Date butoire">
+        <PillField label="Échéance">
           <DatePill
             value={t.due_date}
             onChange={(d) => onPatch({ due_date: d })}
@@ -865,6 +865,11 @@ function TacheModal({
   const [departement, setDepartement] = useState(
     existing?.departement || ""
   );
+  // Priorité (alignée sur la pastille Priorité de la carte) :
+  // non_assigne / urgent / eleve / moyenne / faible.
+  const [priority, setPriority] = useState(
+    existing?.priority || "non_assigne"
+  );
   // Nouvelles tâches : on démarre direct dans « À faire » (a_faire) —
   // l'utilisateur veut généralement que la tâche soit déjà engagée
   // à la création. Backlog a été retiré ; todo (« À venir ») est
@@ -905,6 +910,7 @@ function TacheModal({
         description: description.trim() || null,
         departement: departement.trim() || null,
         status,
+        priority,
         impact: impact ? Number(impact) : null,
         confidence: confidence ? Number(confidence) : null,
         effort: effort ? Number(effort) : null,
@@ -989,24 +995,19 @@ function TacheModal({
               </select>
             </div>
             <div>
-              <label htmlFor="t_dept" className="label">Département</label>
-              <input
-                id="t_dept"
-                value={departement}
-                onChange={(e) => setDepartement(e.target.value)}
+              <label htmlFor="t_priority" className="label">Priorité</label>
+              <select
+                id="t_priority"
+                value={priority}
+                onChange={(e) => setPriority(e.target.value)}
                 className="input"
-                placeholder="finance, ops, rh, juridique…"
-                list="depts"
-                maxLength={32}
-              />
-              <datalist id="depts">
-                <option value="finance" />
-                <option value="operations" />
-                <option value="rh" />
-                <option value="juridique" />
-                <option value="marketing" />
-                <option value="fiscalite" />
-              </datalist>
+              >
+                <option value="non_assigne">Non-assigné</option>
+                <option value="urgent">Urgent ⚠️</option>
+                <option value="eleve">Élevé</option>
+                <option value="moyenne">Moyenne</option>
+                <option value="faible">Faible</option>
+              </select>
             </div>
             <div>
               <label htmlFor="t_due" className="label">Échéance</label>
