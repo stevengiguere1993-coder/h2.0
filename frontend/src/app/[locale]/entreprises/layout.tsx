@@ -874,11 +874,11 @@ function EntrepriseListWithFolder({
         <button
           type="button"
           onClick={() => setOpenClosed(!openClosed)}
-          className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--qg-text-soft)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
+          className="ml-3 flex w-[calc(100%-0.75rem)] items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] font-medium text-[var(--qg-text-faint)] transition hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text-muted)]"
         >
-          <span className="text-[10px]">{openClosed ? "▼" : "▶"}</span>
+          <span className="text-[8px] opacity-70">{openClosed ? "▼" : "▶"}</span>
           <span className="flex-1">Fermée</span>
-          <span className="rounded-full bg-white/10 px-1.5 text-[10px] font-bold">
+          <span className="rounded-full bg-white/5 px-1.5 text-[10px] font-bold text-[var(--qg-text-soft)]">
             {closed.length}
           </span>
         </button>
