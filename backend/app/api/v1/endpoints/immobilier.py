@@ -22,6 +22,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, select
 
 from app.core.security import decode_token
@@ -141,6 +142,67 @@ async def immeubles_picker(
     return [
         {"id": int(r[0]), "name": r[1], "address": r[2]} for r in rows
     ]
+
+
+class _ImmeublePickerCreate(BaseModel):
+    """Payload léger pour créer un immeuble depuis un picker de tâche.
+    Le but est juste d'enrichir le catalogue des immeubles disponibles
+    pour les rattacher aux tâches — pas un CRUD complet (qui reste sur
+    /immeubles avec garde de volet)."""
+
+    name: str = Field(..., min_length=1, max_length=255)
+    address: str = Field(..., min_length=1, max_length=500)
+
+
+@router.post(
+    "/immeubles/picker",
+    response_model=dict,
+    status_code=status.HTTP_201_CREATED,
+)
+async def immeubles_picker_create(
+    body: _ImmeublePickerCreate,
+    db: DBSession,
+    _: CurrentUser,
+) -> dict:
+    """Création rapide d'un immeuble depuis le picker des tâches.
+    Pas de garde de volet : tout user authentifié peut enrichir le
+    catalogue (la donnée elle-même est non-sensible : juste un nom +
+    une adresse pour qu'on puisse rattacher des tâches)."""
+    obj = Immeuble(
+        name=body.name.strip(),
+        address=body.address.strip(),
+        is_active=True,
+    )
+    obj.created_at = _now()
+    obj.updated_at = _now()
+    db.add(obj)
+    await db.flush()
+    return {"id": int(obj.id), "name": obj.name, "address": obj.address}
+
+
+@router.delete(
+    "/immeubles/picker/{immeuble_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def immeubles_picker_delete(
+    immeuble_id: int,
+    db: DBSession,
+    _: CurrentUser,
+) -> None:
+    """Retire un immeuble du catalogue (soft delete = is_active=False)
+    pour qu'il disparaisse des pickers tout en préservant l'historique
+    si jamais il est référencé ailleurs. Idempotent."""
+    obj = (
+        await db.execute(
+            select(Immeuble).where(Immeuble.id == immeuble_id)
+        )
+    ).scalar_one_or_none()
+    if obj is None:
+        # Idempotent : pas trouvé = on considère que c'est déjà supprimé.
+        return
+    obj.is_active = False
+    obj.updated_at = _now()
+    await db.flush()
 
 
 @router.get("/immeubles", response_model=List[ImmeubleListItem])

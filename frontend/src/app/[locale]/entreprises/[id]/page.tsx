@@ -22,6 +22,7 @@ import {
 import { TaskBoard, type TaskBoardItem } from "@/components/task-board";
 import {
   ImmeublePicker,
+  ManageImmeublesButton,
   type ImmeubleMini
 } from "@/components/immeuble-picker";
 import {
@@ -133,7 +134,6 @@ export default function EntrepriseDetailPage() {
   // Tâche à déplacer vers une autre entreprise. Quand c'est défini,
   // on affiche un mini dialogue qui liste les entreprises.
   const [moveTask, setMoveTask] = useState<Tache | null>(null);
-  const [tachesView, setTachesView] = useState<"kanban" | "list">("kanban");
 
   async function load() {
     setLoading(true);
@@ -181,11 +181,16 @@ export default function EntrepriseDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const empById = useMemo(() => {
-    const m = new Map<number, Employe>();
-    employes.forEach((e) => m.set(e.id, e));
-    return m;
-  }, [employes]);
+  // Re-fetch du catalogue d'immeubles après ajout/retrait via le
+  // bouton « Gérer » du picker.
+  async function reloadImmeubles() {
+    try {
+      const r = await authedFetch("/api/v1/immeubles/picker");
+      if (r.ok) setImmeubles((await r.json()) as ImmeubleMini[]);
+    } catch {
+      /* l'erreur est déjà signalée dans le dialog. */
+    }
+  }
 
   // Tache → TaskBoardItem. Le footer reprend les badges spécifiques
   // entreprise (score ICE, récurrence, département) ; pour les
@@ -263,10 +268,6 @@ export default function EntrepriseDetailPage() {
         `Suppression échouée — ${(err as Error).message || "erreur inconnue"}`
       );
     }
-  }
-
-  async function moveTache(tacheId: number, newStatus: string) {
-    await patchTache(tacheId, { status: newStatus });
   }
 
   // Création inline depuis le bouton « + Tâche » d'une colonne du
@@ -449,94 +450,41 @@ export default function EntrepriseDetailPage() {
           </p>
         ) : null}
 
-        {/* Toggle Tableau/Kanban — au-dessus du board */}
-        <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-white/50">
-              Tâches
-            </h2>
-            <button
-              type="button"
-              onClick={() => setModal({ fresh: true })}
-              className="btn-accent inline-flex items-center text-xs"
-            >
-              <Plus className="mr-1 h-3.5 w-3.5" />
-              Nouvelle tâche
-            </button>
-          </div>
-          <div className="inline-flex rounded-lg border border-brand-800 bg-brand-900 p-0.5">
-            <button
-              type="button"
-              onClick={() => setTachesView("list")}
-              className="rounded-md px-3 py-1.5 text-xs font-semibold transition"
-              style={{
-                backgroundColor:
-                  tachesView === "list" ? "#a78bfa" : "transparent",
-                color: tachesView === "list" ? "#0a0a0b" : "rgba(245,245,247,0.6)"
-              }}
-            >
-              Tableau
-            </button>
-            <button
-              type="button"
-              onClick={() => setTachesView("kanban")}
-              className="rounded-md px-3 py-1.5 text-xs font-semibold transition"
-              style={{
-                backgroundColor:
-                  tachesView === "kanban" ? "#a78bfa" : "transparent",
-                color: tachesView === "kanban" ? "#0a0a0b" : "rgba(245,245,247,0.6)"
-              }}
-            >
-              Kanban
-            </button>
-          </div>
-        </div>
-
-        {tachesView === "list" ? (
-          <TachesListView
-            taches={taches}
-            empById={empById}
-            onClickRow={() => {
-              /* Modal de modification désactivé (demande utilisateur) */
-            }}
-            onChangeStatus={(t, s) => moveTache(t.id, s)}
-          />
-        ) : (
-          <TaskBoard
-            tasks={boardItems}
-            users={users}
-            onPatch={(taskId, patch) => {
-              const out: Partial<Tache> = {};
-              if (patch.title !== undefined) out.title = patch.title;
-              if (patch.status !== undefined) out.status = patch.status;
-              if (patch.priority !== undefined) out.priority = patch.priority;
-              if (patch.due_date !== undefined) out.due_date = patch.due_date;
-              if (patch.assignee_user_ids !== undefined) {
-                out.assignee_user_ids = patch.assignee_user_ids;
-                out.assignee_user_id = patch.assignee_user_ids[0] ?? null;
-              }
-              if (patch.immeuble_ids !== undefined) {
-                out.immeuble_ids = patch.immeuble_ids;
-              }
-              // patch.position est ignoré : les tâches d'entreprise
-              // ne s'ordonnent pas par position (tri par score).
-              void patchTache(taskId, out);
-            }}
-            onDelete={(taskId) => {
-              const t = taches.find((x) => x.id === taskId);
-              if (t) void removeTache(t);
-            }}
-            onOpenDetails={(taskId) => {
-              const t = taches.find((x) => x.id === taskId);
-              if (t) setModal(t);
-            }}
-            onMove={(taskId) => {
-              const t = taches.find((x) => x.id === taskId);
-              if (t) setMoveTask(t);
-            }}
-            onCreate={(status, name) => void createTacheInline(status, name)}
-          />
-        )}
+        <TaskBoard
+          tasks={boardItems}
+          users={users}
+          onNewTask={() => setModal({ fresh: true })}
+          onPatch={(taskId, patch) => {
+            const out: Partial<Tache> = {};
+            if (patch.title !== undefined) out.title = patch.title;
+            if (patch.status !== undefined) out.status = patch.status;
+            if (patch.priority !== undefined) out.priority = patch.priority;
+            if (patch.due_date !== undefined) out.due_date = patch.due_date;
+            if (patch.assignee_user_ids !== undefined) {
+              out.assignee_user_ids = patch.assignee_user_ids;
+              out.assignee_user_id = patch.assignee_user_ids[0] ?? null;
+            }
+            if (patch.immeuble_ids !== undefined) {
+              out.immeuble_ids = patch.immeuble_ids;
+            }
+            // patch.position est ignoré : les tâches d'entreprise
+            // ne s'ordonnent pas par position (tri par score).
+            void patchTache(taskId, out);
+          }}
+          onDelete={(taskId) => {
+            const t = taches.find((x) => x.id === taskId);
+            if (t) void removeTache(t);
+          }}
+          onOpenDetails={(taskId) => {
+            const t = taches.find((x) => x.id === taskId);
+            if (t) setModal(t);
+          }}
+          onMove={(taskId) => {
+            const t = taches.find((x) => x.id === taskId);
+            if (t) setMoveTask(t);
+          }}
+          onCreate={(status, name) => void createTacheInline(status, name)}
+        />
       </div>
 
       {modal ? (
@@ -551,6 +499,7 @@ export default function EntrepriseDetailPage() {
             upsertTache(t);
             setModal(null);
           }}
+          onImmeublesChanged={() => void reloadImmeubles()}
         />
       ) : null}
 
@@ -705,7 +654,8 @@ function TacheModal({
   users,
   immeubles,
   onClose,
-  onSaved
+  onSaved,
+  onImmeublesChanged
 }: {
   seed: Tache | { fresh: true };
   entrepriseId: number;
@@ -714,6 +664,7 @@ function TacheModal({
   immeubles: ImmeubleMini[];
   onClose: () => void;
   onSaved: (t: Tache) => void;
+  onImmeublesChanged: () => void;
 }) {
   // employes (legacy) reste utilisé pour les anciens consumers de
   // la modal — on le garde dans la signature mais on s'appuie sur
@@ -974,13 +925,14 @@ function TacheModal({
               />
             </div>
             <div>
-              <div className="mb-1.5 flex items-center justify-between">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
                 <span className="block text-sm font-medium text-white">
                   Immeuble
                 </span>
-                <span className="text-[10px] text-white/40">
-                  Clique pour en sélectionner 0, 1 ou plusieurs
-                </span>
+                <ManageImmeublesButton
+                  immeubles={immeubles}
+                  onChanged={onImmeublesChanged}
+                />
               </div>
               <ImmeublePicker
                 immeubles={immeubles}
@@ -2205,122 +2157,5 @@ function LinkModal({
 
 // ─── Vue liste / tableau des tâches d'une entreprise ────────────────────
 
-function TachesListView({
-  taches,
-  empById,
-  onClickRow,
-  onChangeStatus
-}: {
-  taches: Tache[];
-  empById: Map<number, Employe>;
-  onClickRow: (t: Tache) => void;
-  onChangeStatus: (t: Tache, status: string) => void;
-}) {
-  // Trie par score décroissant (mêmes règles que le kanban) puis par
-  // colonne pour grouper visuellement.
-  const sorted = useMemo(() => {
-    return [...taches].sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
-  }, [taches]);
-
-  if (sorted.length === 0) {
-    return (
-      <div className="mt-3 rounded-xl border border-brand-800 bg-brand-900/60 px-6 py-12 text-center">
-        <p className="text-sm text-white/50">Aucune tâche</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="mt-3 overflow-hidden rounded-xl border border-brand-800 bg-brand-900/60">
-      <table className="w-full text-[13px]">
-        <thead>
-          <tr
-            className="text-[10px] uppercase tracking-wider text-white/50"
-            style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
-          >
-            <th className="px-3 py-2.5 text-right">Score</th>
-            <th className="px-4 py-2.5 text-left">Tâche</th>
-            <th className="px-3 py-2.5 text-left">Statut</th>
-            <th className="px-3 py-2.5 text-left">Département</th>
-            <th className="px-3 py-2.5 text-left">Assigné</th>
-            <th className="px-3 py-2.5 text-right">Échéance</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((t) => {
-            const col = COLUMNS.find((c) => c.id === t.status);
-            const assignee =
-              t.assignee_user_id != null
-                ? empById.get(t.assignee_user_id)
-                : null;
-            const dueLabel = t.due_date
-              ? new Date(t.due_date).toLocaleDateString("fr-CA", {
-                  day: "2-digit",
-                  month: "short"
-                })
-              : "—";
-            return (
-              <tr
-                key={t.id}
-                onClick={() => onClickRow(t)}
-                className="cursor-pointer hover:bg-white/5"
-                style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
-              >
-                <td
-                  className="px-3 py-3 text-right font-mono text-[12px] font-bold"
-                  style={{
-                    color:
-                      t.score == null ? "rgba(255,255,255,0.4)" : "#a78bfa"
-                  }}
-                >
-                  {t.score != null ? t.score.toFixed(1) : "—"}
-                </td>
-                <td className="max-w-[420px] px-4 py-3">
-                  <p className="truncate font-medium text-white">
-                    {t.title}
-                  </p>
-                  {t.description ? (
-                    <p className="mt-0.5 line-clamp-1 text-[11px] text-white/50">
-                      {t.description}
-                    </p>
-                  ) : null}
-                </td>
-                <td
-                  className="px-3 py-3"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <select
-                    value={t.status}
-                    onChange={(e) => onChangeStatus(t, e.target.value)}
-                    className="rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-[11px] text-white"
-                  >
-                    {COLUMNS.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.label}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td className="px-3 py-3 text-[11px] text-white/70">
-                  {t.departement || (
-                    <span className="text-white/30">—</span>
-                  )}
-                </td>
-                <td className="px-3 py-3 text-[11px] text-white/70">
-                  {assignee ? (
-                    assignee.full_name.split(" ")[0]
-                  ) : (
-                    <span className="text-white/30">Non assigné</span>
-                  )}
-                </td>
-                <td className="px-3 py-3 text-right text-[11px] text-white/60">
-                  {dueLabel}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
+// La vue Tableau a été extraite dans <TaskBoard /> partagé. Plus de
+// composant local nécessaire ici.

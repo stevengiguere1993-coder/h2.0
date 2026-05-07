@@ -102,6 +102,15 @@ export default function DealDetailPage() {
     void load();
   }, [load]);
 
+  async function reloadImmeubles() {
+    try {
+      const r = await authedFetch("/api/v1/immeubles/picker");
+      if (r.ok) setImmeubles((await r.json()) as ImmeubleMini[]);
+    } catch {
+      /* l'erreur est déjà signalée par le dialog. */
+    }
+  }
+
   async function patchDeal(patch: Partial<Deal>) {
     if (!deal) return;
     const prev = deal;
@@ -380,6 +389,7 @@ export default function DealDetailPage() {
                 }}
                 users={users}
                 immeubles={immeubles}
+                onImmeublesChanged={() => void reloadImmeubles()}
                 onClose={() => setDetailTaskId(null)}
                 onPatch={(patch) => {
                   const out: Partial<Task> = {};
