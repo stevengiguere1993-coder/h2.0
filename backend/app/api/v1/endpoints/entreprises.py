@@ -985,6 +985,7 @@ class EntrepriseHealth(BaseModel):
     color_accent: str
     type: str
     description: Optional[str] = None
+    is_active: bool = True
     health_score: int  # 0-100
     health_label: str  # 'good' | 'warn' | 'risk'
     taches_open: int
@@ -1001,16 +1002,19 @@ class EntrepriseHealth(BaseModel):
     summary="Santé consolidée par entreprise (tableau « État des entreprises »)",
 )
 async def entreprises_health(
-    db: DBSession, user: CurrentUser
+    db: DBSession,
+    user: CurrentUser,
+    include_archived: bool = False,
 ) -> List[EntrepriseHealth]:
     _require_volet(user)
     from app.models.qg_strategic import Summary, SummaryType
 
+    q = select(Entreprise)
+    if not include_archived:
+        q = q.where(Entreprise.is_active.is_(True))
     ents = (
         await db.execute(
-            select(Entreprise)
-            .where(Entreprise.is_active.is_(True))
-            .order_by(
+            q.order_by(
                 Entreprise.position.asc(),
                 Entreprise.name.asc(),
             )
@@ -1082,6 +1086,7 @@ async def entreprises_health(
             color_accent=e.color_accent,
             type=e.type,
             description=e.description,
+            is_active=bool(e.is_active),
             health_score=int(score),
             health_label=label,
             taches_open=int(open_t),
