@@ -5,6 +5,8 @@ import { useParams } from "next/navigation";
 import {
   ArrowLeft,
   Briefcase,
+  ChevronDown,
+  ChevronUp,
   Loader2,
   Pencil,
   Plus,
@@ -700,6 +702,9 @@ function DailyPulseCard({
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Bouton réduire / étendre — la section reste visible mais on
+  // cache le contenu détaillé pour libérer de l'espace vertical.
+  const [expanded, setExpanded] = useState(true);
 
   async function load() {
     setLoading(true);
@@ -807,10 +812,23 @@ function DailyPulseCard({
               )}
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            title={expanded ? "Réduire" : "Étendre"}
+            aria-label={expanded ? "Réduire le briefing" : "Étendre le briefing"}
+            className="rounded-md border border-brand-700 bg-brand-900 p-1 text-white/60 transition hover:text-white"
+          >
+            {expanded ? (
+              <ChevronUp className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronDown className="h-3.5 w-3.5" />
+            )}
+          </button>
         </div>
       </div>
 
-      {loading ? (
+      {!expanded ? null : loading ? (
         <p className="mt-3 text-xs text-white/40">Chargement…</p>
       ) : briefing ? (
         <div className="mt-3">

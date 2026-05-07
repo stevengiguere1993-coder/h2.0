@@ -397,30 +397,23 @@ export function AssigneePicker({
         {assigned.length === 0 ? (
           <span className={placeholderCls}>+ Personne</span>
         ) : isModal ? (
-          // Modal : on a la place pour montrer chaque personne avec
-          // son nom dans une chip subtile.
+          // Modal : juste les ronds colorés avec lettre — la lettre
+          // est dans le rond, pas besoin de chip ni de nom à côté.
+          // Le tooltip (title) affiche le nom complet au survol.
           <span className="flex flex-wrap items-center gap-1.5">
             {assigned.map((u) => (
-              <span
+              <UserInitialDot
                 key={u.id}
-                className="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-2 py-0.5 text-xs text-white"
-                title={userDisplayName(u)}
-              >
-                <UserInitialDot user={u} size={avatarSize} />
-                <span className="leading-none">
-                  {userDisplayName(u)}
-                </span>
-              </span>
+                user={u}
+                size={avatarSize}
+              />
             ))}
           </span>
         ) : assigned.length === 1 ? (
-          // Carte, 1 personne : avatar + initiales.
-          <span className="inline-flex items-center gap-1.5">
-            <UserInitialDot user={assigned[0]} size={avatarSize} />
-            <span className="leading-none">
-              {userInitials(assigned[0])}
-            </span>
-          </span>
+          // Carte, 1 personne : juste le rond coloré avec la lettre
+          // du prénom — la lettre est déjà DANS le rond, pas besoin
+          // de la doubler en texte à côté.
+          <UserInitialDot user={assigned[0]} size={avatarSize} />
         ) : (
           // Carte, plusieurs : avatars stackés (style Linear).
           <span className="flex items-center">

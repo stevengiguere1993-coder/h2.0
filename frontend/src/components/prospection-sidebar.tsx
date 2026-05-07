@@ -221,48 +221,54 @@ export function ProspectionSidebar({
     }
   }
 
-  /** Drop handler unique. Toute la logique (archive si dragué d'un
-   *  dossier, sinon réordonner) est déférée dans setTimeout(0) pour
-   *  laisser le navigateur finaliser **complètement** l'événement
-   *  dragend avant qu'on touche au state React (et donc au DOM
-   *  source). Sans ce defer, le sous-arbre React peut être muté
-   *  pendant le dragend et faire crasher la page. */
+  /** Drop handler — copie exacte du pattern Mes entreprises
+   *  (`handleDragEntreprise`) qui marche sans crash. Sync, simple,
+   *  pas de setTimeout. */
   function handleDealDrop(
     droppedOnId: number,
     target: "active" | "termine" | "abandonne"
   ) {
-    const id = dragDealId;
-    if (id == null) return;
-    const dragged = deals.find((d) => d.id === id);
-    if (!dragged) return;
-    // Snapshot des données nécessaires AVANT de défer — le state
-    // pourrait avoir bougé entre-temps.
-    const draggedPriority = dragged.priority;
-    const dealsSnapshot = deals;
-
-    setTimeout(() => {
+    if (dragDealId == null) return;
+    const dragged = deals.find((d) => d.id === dragDealId);
+    if (!dragged) {
       setDragDealId(null);
+      return;
+    }
 
-      if (target === "termine" || target === "abandonne") {
-        void patchDealPriority(id, target);
-        return;
-      }
-      if (
-        draggedPriority === "termine" ||
-        draggedPriority === "abandonne"
-      ) {
-        void patchDealPriority(id, "moyenne");
-        return;
-      }
-      if (id === droppedOnId) return;
-      const ids = dealsSnapshot.map((d) => d.id);
-      const fromIdx = ids.indexOf(id);
-      const toIdx = ids.indexOf(droppedOnId);
-      if (fromIdx < 0 || toIdx < 0) return;
-      ids.splice(fromIdx, 1);
-      ids.splice(toIdx, 0, id);
-      void reorderDeals(ids);
-    }, 0);
+    // Drop sur l'en-tête d'un dossier d'archive : patch priorité.
+    if (target === "termine" || target === "abandonne") {
+      void patchDealPriority(dragDealId, target);
+      setDragDealId(null);
+      return;
+    }
+
+    // Drop sur la liste principale, deal traîné déjà archivé →
+    // réactive.
+    if (
+      dragged.priority === "termine" ||
+      dragged.priority === "abandonne"
+    ) {
+      void patchDealPriority(dragDealId, "moyenne");
+      setDragDealId(null);
+      return;
+    }
+
+    // Drop sur un autre deal actif → réordonne.
+    if (dragDealId === droppedOnId) {
+      setDragDealId(null);
+      return;
+    }
+    const ids = deals.map((d) => d.id);
+    const fromIdx = ids.indexOf(dragDealId);
+    const toIdx = ids.indexOf(droppedOnId);
+    if (fromIdx < 0 || toIdx < 0) {
+      setDragDealId(null);
+      return;
+    }
+    ids.splice(fromIdx, 1);
+    ids.splice(toIdx, 0, dragDealId);
+    setDragDealId(null);
+    void reorderDeals(ids);
   }
 
   async function patchDealPriority(dealId: number, priority: string) {
@@ -653,11 +659,11 @@ function ArchiveFolder({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-white/50 hover:bg-brand-900 hover:text-white"
+        className="ml-3 flex w-[calc(100%-0.75rem)] items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] font-medium text-white/40 transition hover:bg-brand-900 hover:text-white/70"
       >
-        <span className="text-[10px]">{open ? "▼" : "▶"}</span>
+        <span className="text-[8px] opacity-70">{open ? "▼" : "▶"}</span>
         <span className="flex-1">{label}</span>
-        <span className="rounded-full bg-white/10 px-1.5 text-[10px] font-bold">
+        <span className="rounded-full bg-white/5 px-1.5 text-[10px] font-bold text-white/50">
           {deals.length}
         </span>
       </button>

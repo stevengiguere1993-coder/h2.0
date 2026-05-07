@@ -107,20 +107,22 @@ export function TaskCard({
         onDragStart();
       }}
       onDragEnd={onDragEnd}
-      className={`group relative overflow-hidden rounded-xl border bg-brand-950 transition ${
+      className={`group relative rounded-xl border bg-brand-950 transition ${
         dragging
           ? "border-accent-500 opacity-60"
           : "border-brand-800 hover:border-brand-700"
       }`}
     >
-      {/* Barre d'accent latérale : couleur du statut courant (À venir
-          violet, À faire bleu, En traitement ambre, Terminé emerald). */}
+      {/* Barre d'accent latérale colorée par statut. Pas
+          d'overflow-hidden sur le parent (sinon les dropdowns des
+          pickers étaient clippés). pointer-events-none pour ne pas
+          intercepter les clics. */}
       <span
         aria-hidden
-        className={`absolute inset-y-0 left-0 w-[3px] ${statusOption.dot}`}
+        className={`pointer-events-none absolute inset-y-0 left-0 w-[3px] rounded-l-xl ${statusOption.dot}`}
       />
 
-      <div className="px-3 py-2.5 pl-[14px]">
+      <div className="relative px-3 py-2.5 pl-[14px]">
         {/* Première ligne : titre + actions inline (compact, hover-révélé) */}
         <div className="flex items-start gap-1.5">
           <AutoGrowTextarea
