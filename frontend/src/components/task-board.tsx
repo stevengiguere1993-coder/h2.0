@@ -80,6 +80,17 @@ export type TaskBoardPatch = TaskCardPatch & {
   effort?: number | null;
 };
 
+export type ExtraColumnConfig = {
+  label: string;
+  width?: string;
+  render: (task: TaskBoardItem) => React.ReactNode;
+  /** Valeurs concrètes filtrables ; active le picker si présent. */
+  filterValues?: Array<{ value: string; label: string }>;
+  /** Map tâche → id de groupe (doit matcher une `filterValues.value`).
+   *  Retourne null pour les tâches sans groupe. */
+  getGroupId?: (task: TaskBoardItem) => string | null;
+};
+
 export function TaskBoard({
   tasks,
   users,
@@ -90,6 +101,7 @@ export function TaskBoard({
   onMove,
   onCreate,
   onImmeublesChanged,
+  extraColumn,
   title = "Tâches",
   newTaskLabel = "Nouvelle tâche",
   showNewTaskButton = true
@@ -116,6 +128,12 @@ export function TaskBoard({
   /** Re-fetch du catalogue d'immeubles (après ajout / retrait via le
    *  bouton « Gérer » du picker dans la modal). */
   onImmeublesChanged?: () => void;
+  /** Colonne optionnelle insérée entre « Tâche » et « Immeuble »
+   *  dans la vue Tableau. Utilisé par la vue cross-entreprise pour
+   *  afficher l'entreprise (ou le deal) propriétaire de chaque
+   *  tâche. Si `filterValues` + `getGroupId` sont fournis, un
+   *  sélecteur de filtre/tri est ajouté à la barre d'outils. */
+  extraColumn?: ExtraColumnConfig;
   title?: string;
   newTaskLabel?: string;
   showNewTaskButton?: boolean;
@@ -155,9 +173,9 @@ export function TaskBoard({
   }
 
   const sortedTasks = useMemo(() => {
-    const filtered = applyFilters(tasks, criteria);
-    return sortTasks(filtered, criteria, users, immeubles);
-  }, [tasks, criteria, users, immeubles]);
+    const filtered = applyFilters(tasks, criteria, extraColumn);
+    return sortTasks(filtered, criteria, users, immeubles, extraColumn);
+  }, [tasks, criteria, users, immeubles, extraColumn]);
 
   const sortActive = (Object.values(criteria) as CriterionState[]).some(
     (c) => c.kind === "sort"
@@ -283,6 +301,14 @@ export function TaskBoard({
           onChange={(s) => setCriterion("immeuble", s)}
           values={immeubleOptions}
         />
+        {extraColumn?.filterValues && extraColumn.filterValues.length > 0 ? (
+          <CriterionPicker
+            label={extraColumn.label}
+            state={criteria.extra}
+            onChange={(s) => setCriterion("extra", s)}
+            values={extraColumn.filterValues}
+          />
+        ) : null}
       </div>
 
       {view === "kanban" ? (
@@ -302,6 +328,7 @@ export function TaskBoard({
           users={users}
           onPatch={onPatch}
           onOpenDetails={(id) => setDetailTaskId(id)}
+          extraColumn={extraColumn}
         />
       )}
 
@@ -351,7 +378,8 @@ type CriterionKey =
   | "person"
   | "priority"
   | "due_date"
-  | "immeuble";
+  | "immeuble"
+  | "extra";
 
 type CriterionState =
   | { kind: "all" }
@@ -363,7 +391,8 @@ const DEFAULT_FILTERS: Record<CriterionKey, CriterionState> = {
   person: { kind: "all" },
   priority: { kind: "all" },
   due_date: { kind: "all" },
-  immeuble: { kind: "all" }
+  immeuble: { kind: "all" },
+  extra: { kind: "all" }
 };
 
 const PRIORITY_RANK: Record<string, number> = {
@@ -440,7 +469,8 @@ function isSameDate(a: string, b: Date): boolean {
 
 function applyFilters(
   tasks: TaskBoardItem[],
-  filters: Record<CriterionKey, CriterionState>
+  filters: Record<CriterionKey, CriterionState>,
+  extraColumn?: ExtraColumnConfig
 ): TaskBoardItem[] {
   const today = new Date();
   const inAWeek = new Date();
@@ -491,6 +521,12 @@ function applyFilters(
       if (fi.value === "none" ? ids.length > 0 : !ids.includes(Number(fi.value)))
         return false;
     }
+    // Colonne extra (ex. Entreprise / Deal en vue cross-volet)
+    const fx = filters.extra;
+    if (fx.kind === "filter" && extraColumn?.getGroupId) {
+      const id = extraColumn.getGroupId(t);
+      if (fx.value === "none" ? id != null : id !== fx.value) return false;
+    }
     return true;
   });
 }
@@ -499,7 +535,8 @@ function sortTasks(
   tasks: TaskBoardItem[],
   filters: Record<CriterionKey, CriterionState>,
   users: TaskUserMini[],
-  immeubles: ImmeubleMini[]
+  immeubles: ImmeubleMini[],
+  extraColumn?: ExtraColumnConfig
 ): TaskBoardItem[] {
   const sortKey = (Object.keys(filters) as CriterionKey[]).find(
     (k) => filters[k].kind === "sort"
@@ -544,6 +581,15 @@ function sortTasks(
     if (sortKey === "immeuble") {
       const id = (t.immeuble_ids || [])[0];
       return id != null ? immeubleName.get(id) ?? "zzz" : "zzz";
+    }
+    if (sortKey === "extra" && extraColumn?.getGroupId) {
+      const id = extraColumn.getGroupId(t);
+      if (id == null) return "zzz";
+      // Tri sur le label affiché (plus naturel pour l'utilisateur).
+      const found = (extraColumn.filterValues || []).find(
+        (v) => v.value === id
+      );
+      return (found?.label || id).toLowerCase();
     }
     return 0;
   }
@@ -736,12 +782,17 @@ function TaskListView({
   tasks,
   users,
   onPatch,
-  onOpenDetails
+  onOpenDetails,
+  extraColumn
 }: {
   tasks: TaskBoardItem[];
   users: TaskUserMini[];
   onPatch: (taskId: number, patch: TaskBoardPatch) => void;
   onOpenDetails: (taskId: number) => void;
+  /** Colonne optionnelle insérée entre « Tâche » et « Immeuble »
+   *  pour des contextes spécifiques (ex. la vue cross-entreprise
+   *  affiche le nom de l'entreprise propriétaire). */
+  extraColumn?: ExtraColumnConfig;
 }) {
   // Le parent (TaskBoard) trie déjà selon les critères choisis ; on
   // n'écrase pas l'ordre. Si aucun tri actif, l'ordre source est la
@@ -781,6 +832,16 @@ function TaskListView({
           >
             <th className="w-[88px] px-3 py-3 text-left">P · Score</th>
             <th className="px-4 py-3 text-left">Tâche</th>
+            {extraColumn ? (
+              <th
+                className="px-3 py-3 text-center"
+                style={
+                  extraColumn.width ? { width: extraColumn.width } : undefined
+                }
+              >
+                {extraColumn.label}
+              </th>
+            ) : null}
             <th className="w-[180px] px-3 py-3 text-center">Immeuble</th>
             <th className="w-[120px] px-3 py-3 text-center">Statut</th>
             <th className="w-[110px] px-3 py-3 text-center">Priorité</th>
@@ -873,6 +934,11 @@ function TaskListView({
                     <div className="mt-1">{t.footer}</div>
                   ) : null}
                 </td>
+                {extraColumn ? (
+                  <td className="px-3 py-2.5 text-center">
+                    {extraColumn.render(t)}
+                  </td>
+                ) : null}
                 <td className="px-3 py-2.5 text-center">
                   {t.immeubleLabels && t.immeubleLabels.length > 0 ? (
                     <span
