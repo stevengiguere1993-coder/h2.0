@@ -2,12 +2,13 @@
 
 Chaque deal porte une liste de tâches que les prospecteurs cochent
 au fil de l'avancement. Les tâches sont groupées par statut dans la
-carte du deal :
+carte du deal — vocabulaire **partagé** avec les tâches d'entreprise
+pour que la même UI fonctionne sur les deux volets :
 
-  À venir  → a_venir
-  À faire  → a_faire
-  En traitement → en_traitement
-  Terminé  → termine
+  À venir       → todo
+  À faire       → a_faire
+  En traitement → in_progress
+  Terminé       → done
 
 Les tâches portent leur propre priorité (urgent, eleve, moyenne,
 faible) — distincte de la priorité du deal lui-même. `position`
@@ -32,7 +33,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
 
-TASK_STATUSES = ("a_venir", "a_faire", "en_traitement", "termine")
+TASK_STATUSES = ("todo", "a_faire", "in_progress", "done")
 TASK_PRIORITIES = ("urgent", "eleve", "moyenne", "faible")
 
 
