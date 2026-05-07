@@ -23,6 +23,7 @@ import {
 } from "react";
 
 import { authedFetch } from "@/lib/auth";
+import { Calendar } from "lucide-react";
 import {
   PROFILE_COLOR_PILL,
   DEFAULT_PILL_CLASS
@@ -343,19 +344,17 @@ export function AssigneePicker({
   }
 
   const isModal = variant === "modal";
-  // Container : version compacte pour la carte (chips serrées),
-  // version « .input » pour la modal (rounded-lg, bg-brand-900,
-  // padding standard) afin de matcher les autres champs.
+  // Container : style 2026 uniforme avec les autres pastilles
+  // (Statut / Priorité / Échéance) — bordure sombre + fond brand-900,
+  // hover subtil. Plus de chips colorés — les avatars (déjà aux
+  // couleurs perso) suffisent à identifier chaque personne.
   const triggerCls = isModal
     ? "flex w-full flex-wrap items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3.5 py-2 text-sm text-white/70 shadow-sm transition hover:border-brand-600 focus:border-accent-500 focus:outline-none"
-    : "inline-flex items-center justify-center gap-1 rounded-md border border-brand-800/60 bg-brand-900 px-2 py-0.5 text-[10px] font-semibold text-white/60 hover:border-brand-700 hover:text-white/80";
-  const chipCls = isModal
-    ? "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-bold"
-    : "inline-flex items-center gap-1 rounded-full px-1 py-0.5 text-[9px] font-bold";
+    : "inline-flex items-center gap-1.5 rounded-md border border-brand-800/60 bg-brand-900 px-2 py-1 text-[10px] font-medium text-white/80 transition hover:border-brand-700 hover:text-white";
   const placeholderCls = isModal
     ? "text-sm text-white/50"
-    : "px-0.5";
-  const avatarSize = isModal ? 18 : 12;
+    : "text-white/40";
+  const avatarSize = isModal ? 18 : 14;
 
   return (
     <div ref={wrapRef} className="relative">
@@ -367,44 +366,80 @@ export function AssigneePicker({
       >
         {assigned.length === 0 ? (
           <span className={placeholderCls}>+ Personne</span>
-        ) : (
-          <span className={`flex flex-wrap items-center gap-1 ${isModal ? "justify-start" : "justify-center"}`}>
+        ) : isModal ? (
+          // Modal : on a la place pour montrer chaque personne avec
+          // son nom dans une chip subtile.
+          <span className="flex flex-wrap items-center gap-1.5">
             {assigned.map((u) => (
               <span
                 key={u.id}
-                className={`${chipCls} ${userPillCls(u)}`}
+                className="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-2 py-0.5 text-xs text-white"
                 title={userDisplayName(u)}
               >
                 <UserAvatarBadge user={u} size={avatarSize} />
-                <span className="leading-none">{userInitials(u)}</span>
+                <span className="leading-none">
+                  {userDisplayName(u)}
+                </span>
               </span>
             ))}
+          </span>
+        ) : assigned.length === 1 ? (
+          // Carte, 1 personne : avatar + initiales.
+          <span className="inline-flex items-center gap-1.5">
+            <UserAvatarBadge user={assigned[0]} size={avatarSize} />
+            <span className="leading-none">
+              {userInitials(assigned[0])}
+            </span>
+          </span>
+        ) : (
+          // Carte, plusieurs : avatars stackés (style Linear).
+          <span className="flex items-center">
+            {assigned.slice(0, 4).map((u, idx) => (
+              <span
+                key={u.id}
+                className={`relative inline-block rounded-full ring-2 ring-brand-900 ${
+                  idx > 0 ? "-ml-1.5" : ""
+                }`}
+                style={{ zIndex: assigned.length - idx }}
+                title={userDisplayName(u)}
+              >
+                <UserAvatarBadge user={u} size={avatarSize} />
+              </span>
+            ))}
+            {assigned.length > 4 ? (
+              <span
+                className="-ml-1.5 inline-flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-brand-800 px-1 text-[9px] font-bold text-white/70 ring-2 ring-brand-900"
+                title={`${assigned.length - 4} autre(s)`}
+              >
+                +{assigned.length - 4}
+              </span>
+            ) : null}
           </span>
         )}
       </button>
       {open ? (
-        <div className="absolute left-0 right-0 z-30 mt-1 max-h-72 min-w-[200px] overflow-y-auto rounded-lg border border-brand-800 bg-brand-950 p-1 shadow-lg">
+        <div className="absolute left-0 z-30 mt-1 max-h-72 min-w-[220px] overflow-y-auto rounded-lg border border-brand-800 bg-brand-950 p-1 shadow-lg">
           {assigned.length > 0 ? (
-            <div className="mb-1 space-y-1 border-b border-brand-800 pb-1">
+            <div className="mb-1 space-y-0.5 border-b border-brand-800 pb-1">
               {assigned.map((u) => (
                 <button
                   key={u.id}
                   type="button"
                   onClick={() => toggle(u.id)}
-                  className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-[10px] font-semibold ring-2 ring-white/40 ${userPillCls(u)} hover:opacity-90`}
+                  className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[11px] font-medium text-white transition hover:bg-white/5"
                   title="Cliquer pour retirer"
                 >
-                  <UserAvatarBadge user={u} size={14} />
+                  <UserAvatarBadge user={u} size={16} />
                   <span className="flex-1 truncate">
                     {userDisplayName(u)}
                   </span>
-                  <span className="text-[10px] opacity-80">×</span>
+                  <span className="text-[10px] text-white/40">✓</span>
                 </button>
               ))}
             </div>
           ) : null}
 
-          <div className="space-y-1">
+          <div className="space-y-0.5">
             {users
               .filter((u) => !values.includes(u.id))
               .map((u) => (
@@ -412,9 +447,9 @@ export function AssigneePicker({
                   key={u.id}
                   type="button"
                   onClick={() => toggle(u.id)}
-                  className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-[10px] font-semibold ${userPillCls(u)} opacity-80 hover:opacity-100`}
+                  className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[11px] font-medium text-white/70 transition hover:bg-white/5 hover:text-white"
                 >
-                  <UserAvatarBadge user={u} size={14} />
+                  <UserAvatarBadge user={u} size={16} />
                   <span className="truncate">
                     {userDisplayName(u)}
                   </span>
@@ -474,11 +509,21 @@ export function DatePill({
         aria-label="Date butoir"
         className={
           formatted
-            ? "inline-flex items-center justify-center rounded-md bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white"
-            : "inline-flex items-center justify-center rounded-md border border-dashed border-brand-700 px-2 py-0.5 text-[10px] font-semibold text-white/40 hover:border-brand-600 hover:text-white/60"
+            ? "inline-flex items-center gap-1.5 rounded-md border border-brand-800/60 bg-brand-900 px-2 py-1 text-[10px] font-medium text-white/80 transition hover:border-brand-700 hover:text-white"
+            : "inline-flex items-center gap-1.5 rounded-md border border-dashed border-brand-700 px-2 py-1 text-[10px] font-medium text-white/40 transition hover:border-brand-600 hover:text-white/60"
         }
       >
-        {formatted || "+ Date"}
+        {formatted ? (
+          <>
+            <Calendar className="h-2.5 w-2.5 flex-shrink-0 text-white/60" />
+            <span>{formatted}</span>
+          </>
+        ) : (
+          <>
+            <Calendar className="h-2.5 w-2.5 flex-shrink-0 opacity-60" />
+            <span>Date</span>
+          </>
+        )}
       </button>
       <input
         ref={inputRef}
