@@ -20,11 +20,9 @@ import { useConfirm } from "@/components/confirm-dialog";
 import {
   AssigneePicker,
   AutoGrowTextarea,
-  DatePill,
-  PillField,
-  PillPicker,
   type TaskUserMini
 } from "@/components/task-pills";
+import { TaskCard } from "@/components/task-card";
 import {
   TASK_PRIORITY_OPTIONS,
   TASK_STATUS_OPTIONS
@@ -668,22 +666,16 @@ function MoveTacheDialog({
   );
 }
 
-// Pastilles statut + priorité — importées depuis le module partagé
-// /lib/task-config pour rester synchronisées avec le Pipeline des
-// deals. Si on change la couleur d'une priorité dans task-config,
-// les deux vues se mettent à jour ensemble.
-const ENT_STATUS_PILLS = TASK_STATUS_OPTIONS.map((o) => ({
-  value: o.value,
-  label: o.label,
-  cls: o.pill
-}));
+// Les pastilles de tâche (statut/priorité) sont gérées par
+// <TaskCard> qui consomme directement /lib/task-config. Plus
+// besoin de constantes locales ici.
 
-const ENT_PRIORITY_PILLS = TASK_PRIORITY_OPTIONS.map((o) => ({
-  value: o.value,
-  label: o.label,
-  cls: o.pill
-}));
-
+/**
+ * Adaptateur autour du composant partagé <TaskCard>. Les pages
+ * Pipeline (Acquisition) et Entreprise rendent la même UI ; cet
+ * adaptateur fait la traduction Tache → TaskCardData et propage
+ * les patches dans la shape attendue par /api/v1/entreprises/taches.
+ */
 function TacheCard({
   t,
   users,
@@ -700,153 +692,67 @@ function TacheCard({
   onDragEnd: () => void;
   onPatch: (patch: Partial<Tache>) => void;
   onDelete: (e: React.MouseEvent) => void;
-  // Click sur l'icône note → ouvre le menu détaillé (modal d'édition).
   onOpenDetails: () => void;
-  // Click sur l'icône « déplacer » → demande l'entreprise cible.
   onMove: () => void;
 }) {
-
   return (
-    <div
-      draggable
-      onDragStart={(e) => {
-        const tag = (e.target as HTMLElement).tagName;
-        if (
-          tag === "INPUT" ||
-          tag === "SELECT" ||
-          tag === "TEXTAREA" ||
-          tag === "BUTTON"
-        ) {
-          e.preventDefault();
-          return;
-        }
-        e.dataTransfer.effectAllowed = "move";
-        onDragStart();
+    <TaskCard
+      task={{
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        priority: t.priority || "non_assigne",
+        due_date: t.due_date,
+        assignee_user_ids: t.assignee_user_ids || [],
+        hasNote: Boolean(t.description)
       }}
+      users={users}
+      onPatch={(patch) => {
+        // Le composant partagé envoie des patches génériques
+        // (assignee_user_ids…). On les propage tels quels et on
+        // ajuste le scalaire legacy assignee_user_id si fourni.
+        const ent: Partial<Tache> = {};
+        if (patch.title !== undefined) ent.title = patch.title;
+        if (patch.status !== undefined) ent.status = patch.status;
+        if (patch.priority !== undefined) ent.priority = patch.priority;
+        if (patch.due_date !== undefined) ent.due_date = patch.due_date;
+        if (patch.assignee_user_ids !== undefined) {
+          ent.assignee_user_ids = patch.assignee_user_ids;
+          ent.assignee_user_id = patch.assignee_user_ids[0] ?? null;
+        }
+        onPatch(ent);
+      }}
+      onDelete={onDelete}
+      onOpenDetails={onOpenDetails}
+      onMove={onMove}
+      draggable
+      onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className="group block rounded-lg border border-brand-800 bg-brand-950 p-2"
-    >
-      {/* Première ligne : nom (éditable inline) + boutons note/poubelle */}
-      <div className="flex items-start gap-1.5">
-        <AutoGrowTextarea
-          value={t.title}
-          onChange={(v) => onPatch({ title: v })}
-          onCommit={(v) => {
-            const trimmed = v.trim();
-            if (trimmed && trimmed !== t.title) onPatch({ title: trimmed });
-          }}
-          // Style « titre de tâche » comme avant : semibold, pas de
-          // bordure visible au repos, juste un focus accent au clic.
-          className="min-w-0 flex-1 resize-none rounded border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold text-white focus:border-accent-500 focus:outline-none"
-        />
-        <div className="flex flex-shrink-0 flex-col items-center gap-0.5">
-          {/* Bouton « Détails » — ouvre la modal complète où l'on
-              peut éditer la description, le score ICE, la
-              récurrence et tous les autres champs avancés. */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenDetails();
-            }}
-            className={`rounded p-1 ${
-              t.description
-                ? "text-amber-300 hover:bg-amber-500/15"
-                : "text-white/40 hover:bg-white/5"
-            }`}
-            title="Détails de la tâche"
-            aria-label="Détails"
-          >
-            <StickyNote className="h-3 w-3" />
-          </button>
-          <button
-            type="button"
-            onClick={onDelete}
-            className="rounded p-1 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
-            title="Supprimer la tâche"
-            aria-label="Supprimer"
-          >
-            <Trash2 className="h-3 w-3" />
-          </button>
-          {/* Bouton « Déplacer » — propose les autres entreprises
-              pour transférer la tâche. */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onMove();
-            }}
-            className="rounded p-1 text-white/40 hover:bg-violet-500/15 hover:text-violet-300"
-            title="Déplacer vers une autre entreprise"
-            aria-label="Déplacer"
-          >
-            <ArrowRightLeft className="h-3 w-3" />
-          </button>
-        </div>
-      </div>
-
-      {/* Pastilles : Personnes / Statut / Priorité / Date butoire */}
-      <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-        <PillField label="Personnes">
-          <AssigneePicker
-            users={users}
-            values={t.assignee_user_ids || []}
-            onChange={(ids) =>
-              onPatch({
-                assignee_user_ids: ids,
-                assignee_user_id: ids[0] ?? null
-              })
-            }
-          />
-        </PillField>
-        <PillField label="Statut">
-          <PillPicker
-            options={ENT_STATUS_PILLS}
-            value={t.status}
-            onChange={(v) => onPatch({ status: v })}
-            ariaLabel="Statut"
-          />
-        </PillField>
-        <PillField label="Priorité">
-          <PillPicker
-            options={ENT_PRIORITY_PILLS}
-            value={t.priority || "non_assigne"}
-            onChange={(v) => onPatch({ priority: v })}
-            ariaLabel="Priorité"
-          />
-        </PillField>
-        <PillField label="Échéance">
-          <DatePill
-            value={t.due_date}
-            onChange={(d) => onPatch({ due_date: d })}
-          />
-        </PillField>
-      </div>
-
-      {/* Footer subtil : score + récurrence + département */}
-      {t.score != null || t.recurrence || t.departement ? (
-        <div className="mt-2 flex flex-wrap items-center gap-1 text-[9px] text-white/40">
-          {t.score != null ? (
-            <span
-              className="rounded-full bg-white/5 px-1.5 py-0.5"
-              title="Score = (impact × confiance / effort) × urgence"
-            >
-              ★ {t.score.toFixed(1)}
-            </span>
-          ) : null}
-          {t.recurrence ? (
-            <span className="rounded-full border border-amber-500/30 px-1.5 py-0.5 text-amber-200/80">
-              ⟲ {RECURRENCE_LABELS[t.recurrence] || t.recurrence}
-            </span>
-          ) : null}
-          {t.departement ? (
-            <span className="rounded-full border border-brand-700 px-1.5 py-0.5">
-              {t.departement}
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
+      footer={
+        t.score != null || t.recurrence || t.departement ? (
+          <div className="flex flex-wrap items-center gap-1 text-[9px] text-white/40">
+            {t.score != null ? (
+              <span
+                className="rounded-full bg-white/5 px-1.5 py-0.5"
+                title="Score = (impact × confiance / effort) × urgence"
+              >
+                ★ {t.score.toFixed(1)}
+              </span>
+            ) : null}
+            {t.recurrence ? (
+              <span className="rounded-full border border-amber-500/30 px-1.5 py-0.5 text-amber-200/80">
+                ⟲ {RECURRENCE_LABELS[t.recurrence] || t.recurrence}
+              </span>
+            ) : null}
+            {t.departement ? (
+              <span className="rounded-full border border-brand-700 px-1.5 py-0.5">
+                {t.departement}
+              </span>
+            ) : null}
+          </div>
+        ) : null
+      }
+    />
   );
 }
 

@@ -7,7 +7,6 @@ import {
   ChevronUp,
   Loader2,
   Plus,
-  StickyNote,
   Trash2
 } from "lucide-react";
 
@@ -25,6 +24,8 @@ import {
   TASK_PRIORITY_PILL as TASK_PRIORITY_PILL_CONF,
   TASK_PRIORITY_RANK as TASK_PRIORITY_RANK_CONF
 } from "@/lib/task-config";
+import { TaskCard } from "@/components/task-card";
+import { TaskDetailsModal } from "@/components/task-details-modal";
 
 // ─── Priorités du DEAL (au niveau de la carte entière) ────────────
 type DealPriority =
@@ -400,6 +401,8 @@ function DealCard({
   const [dragOverStatus, setDragOverStatus] = useState<TaskStatus | null>(
     null
   );
+  // Tâche dont la fiche détaillée est ouverte (modal). null = aucune.
+  const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
   // Édition inline du nom du deal (adresse).
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState(deal.address);
@@ -650,6 +653,7 @@ function DealCard({
                         users={users}
                         onPatch={(p) => patchTask(t.id, p)}
                         onDelete={() => deleteTask(t)}
+                        onOpenDetails={() => setDetailTaskId(t.id)}
                         onDragStart={() => setDragId(t.id)}
                         onDragEnd={() => {
                           setDragId(null);
@@ -686,16 +690,65 @@ function DealCard({
           )}
         </div>
       ) : null}
+
+      {/* Modal de détails d'une tâche — ouverte par le bouton note
+          dans la carte. Identique en UX à la fiche d'une tâche
+          d'entreprise. */}
+      {detailTaskId !== null
+        ? (() => {
+            const t = tasks.find((x) => x.id === detailTaskId);
+            if (!t) return null;
+            return (
+              <TaskDetailsModal
+                task={{
+                  id: t.id,
+                  title: t.name,
+                  notes: t.notes || "",
+                  status: t.status,
+                  priority: t.priority || "non_assigne",
+                  due_date: t.due_date,
+                  assignee_user_ids: t.assignee_user_ids || []
+                }}
+                users={users}
+                onClose={() => setDetailTaskId(null)}
+                onPatch={(patch) => {
+                  const out: Partial<Task> = {};
+                  if (patch.title !== undefined) out.name = patch.title;
+                  if (patch.notes !== undefined) out.notes = patch.notes;
+                  if (patch.status !== undefined)
+                    out.status = patch.status as TaskStatus;
+                  if (patch.priority !== undefined)
+                    out.priority = patch.priority as TaskPriority;
+                  if (patch.due_date !== undefined)
+                    out.due_date = patch.due_date;
+                  if (patch.assignee_user_ids !== undefined) {
+                    out.assignee_user_ids = patch.assignee_user_ids;
+                    out.assignee_user_id =
+                      patch.assignee_user_ids[0] ?? null;
+                  }
+                  void patchTask(t.id, out);
+                }}
+              />
+            );
+          })()
+        : null}
     </div>
   );
 }
 
 // ─── Ligne d'une tâche ─────────────────────────────────────────────
+/**
+ * TaskRow Pipeline = adaptateur autour du composant partagé
+ * <TaskCard>. Mêmes pastilles, même UX que le kanban Entreprise —
+ * et le bouton « note » ouvre désormais une fiche détaillée
+ * (TaskDetailsModal) au lieu d'un simple toggle de textarea.
+ */
 function TaskRow({
   task,
   users,
   onPatch,
   onDelete,
+  onOpenDetails,
   onDragStart,
   onDragEnd,
   dragging
@@ -704,169 +757,57 @@ function TaskRow({
   users: UserMini[];
   onPatch: (p: Partial<Task>) => void;
   onDelete: () => void;
+  onOpenDetails: () => void;
   onDragStart: () => void;
   onDragEnd: () => void;
   dragging: boolean;
 }) {
-  const [showNotes, setShowNotes] = useState(false);
-  const [notesDraft, setNotesDraft] = useState(task.notes || "");
-  // Re-sync si la note change côté serveur (re-fetch).
-  useEffect(() => {
-    setNotesDraft(task.notes || "");
-  }, [task.notes]);
-
   const overdue =
     task.due_date && task.status !== "termine"
       ? new Date(task.due_date + "T23:59:59") < new Date()
       : false;
-
   return (
-    <li
-      draggable
-      onDragStart={(e) => {
-        // Empêche le drag depuis les inputs (sinon select/input
-        // déclenchent le drag sur mobile).
-        const tag = (e.target as HTMLElement).tagName;
-        if (
-          tag === "INPUT" ||
-          tag === "SELECT" ||
-          tag === "TEXTAREA" ||
-          tag === "BUTTON"
-        ) {
-          e.preventDefault();
-          return;
+    <li className="list-none">
+      <TaskCard
+        task={{
+          id: task.id,
+          title: task.name,
+          status: task.status,
+          priority: task.priority || "non_assigne",
+          due_date: task.due_date,
+          assignee_user_ids: task.assignee_user_ids || [],
+          hasNote: Boolean(task.notes)
+        }}
+        users={users}
+        onPatch={(patch) => {
+          const out: Partial<Task> = {};
+          if (patch.title !== undefined) out.name = patch.title;
+          if (patch.status !== undefined)
+            out.status = patch.status as TaskStatus;
+          if (patch.priority !== undefined)
+            out.priority = patch.priority as TaskPriority;
+          if (patch.due_date !== undefined) out.due_date = patch.due_date;
+          if (patch.assignee_user_ids !== undefined) {
+            out.assignee_user_ids = patch.assignee_user_ids;
+            out.assignee_user_id = patch.assignee_user_ids[0] ?? null;
+          }
+          onPatch(out);
+        }}
+        onDelete={onDelete}
+        onOpenDetails={onOpenDetails}
+        draggable
+        dragging={dragging}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        footer={
+          overdue ? (
+            <p className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-300">
+              <AlertTriangle className="h-3 w-3" />
+              En retard
+            </p>
+          ) : null
         }
-        e.dataTransfer.effectAllowed = "move";
-        onDragStart();
-      }}
-      onDragEnd={onDragEnd}
-      className={`rounded-md border bg-brand-950 px-2 py-1.5 ${
-        dragging
-          ? "border-accent-500 opacity-60"
-          : "border-brand-800"
-      }`}
-    >
-      {/* Première ligne : nom (éditable inline, retour à la ligne
-          auto si trop long) + boutons. textarea + auto-resize via
-          le hook ci-dessous, plutôt qu'un <input> qui truncate. */}
-      <div className="flex items-start gap-1.5">
-        <AutoGrowTextarea
-          value={task.name}
-          onChange={(v) => onPatch({ name: v })}
-          onCommit={(v) => {
-            const trimmed = v.trim();
-            if (trimmed && trimmed !== task.name) {
-              onPatch({ name: trimmed });
-            }
-          }}
-          // Bordure gris normal (slate-500/40) : assez visible pour
-          // signaler le champ éditable, sans crier comme noir plein.
-          // Hover/focus le mettent en accent-500. Léger gras
-          // (font-medium) pour bien démarquer le titre du reste.
-          // Style « titre de tâche » identique aux entreprises :
-          // semibold, pas de bordure visible au repos, focus accent.
-          className="min-w-0 flex-1 resize-none rounded border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold text-white focus:border-accent-500 focus:outline-none"
-        />
-        {/* Boutons empilés verticalement : note au-dessus, poubelle
-            en-dessous (demande utilisateur). */}
-        <div className="flex flex-shrink-0 flex-col items-center gap-0.5">
-          <button
-            type="button"
-            onClick={() => setShowNotes((v) => !v)}
-            className={`rounded p-1 ${
-              task.notes
-                ? "text-amber-300 hover:bg-amber-500/15"
-                : "text-white/40 hover:bg-white/5"
-            }`}
-            title={task.notes ? "Voir / éditer les notes" : "Ajouter une note"}
-            aria-label="Notes"
-          >
-            <StickyNote className="h-3 w-3" />
-          </button>
-          <button
-            type="button"
-            onClick={onDelete}
-            className="rounded p-1 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
-            title="Supprimer la tâche"
-            aria-label="Supprimer"
-          >
-            <Trash2 className="h-3 w-3" />
-          </button>
-        </div>
-      </div>
-
-      {/* Notes : zone repliable */}
-      {showNotes ? (
-        <div className="mt-1.5">
-          <textarea
-            value={notesDraft}
-            onChange={(e) => setNotesDraft(e.target.value)}
-            onBlur={() => {
-              if (notesDraft !== (task.notes || "")) {
-                onPatch({ notes: notesDraft || null });
-              }
-            }}
-            rows={3}
-            placeholder="Notes…"
-            className="w-full rounded border border-brand-800 bg-brand-900 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
-          />
-        </div>
-      ) : null}
-
-      {/* Pastilles style Monday : assigné(s) / statut / priorité / échéance.
-          Chaque pastille porte un petit libellé gris pâle au-dessus
-          (Personnes / Statut / Priorité / Date butoire). */}
-      <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-        <PillField label="Personnes">
-          <AssigneePicker
-            users={users}
-            values={task.assignee_user_ids || []}
-            onChange={(ids) =>
-              onPatch({
-                assignee_user_ids: ids,
-                assignee_user_id: ids[0] ?? null
-              })
-            }
-          />
-        </PillField>
-        <PillField label="Statut">
-          <PillPicker
-            options={TASK_STATUSES.map((s) => ({
-              value: s.value,
-              label: s.label,
-              cls: STATUS_STYLE[s.value].pill
-            }))}
-            value={task.status}
-            onChange={(v) => onPatch({ status: v as TaskStatus })}
-            ariaLabel="Statut"
-          />
-        </PillField>
-        <PillField label="Priorité">
-          <PillPicker
-            options={TASK_PRIORITIES.map((p) => ({
-              value: p.value,
-              label: p.label,
-              cls: TASK_PRIORITY_PILL[p.value]
-            }))}
-            value={task.priority}
-            onChange={(v) => onPatch({ priority: v as TaskPriority })}
-            ariaLabel="Priorité"
-          />
-        </PillField>
-        <PillField label="Échéance">
-          <DatePill
-            value={task.due_date}
-            onChange={(d) => onPatch({ due_date: d })}
-          />
-        </PillField>
-      </div>
-
-      {overdue ? (
-        <p className="mt-1 inline-flex items-center gap-1 text-[10px] font-semibold text-rose-300">
-          <AlertTriangle className="h-3 w-3" />
-          En retard
-        </p>
-      ) : null}
+      />
     </li>
   );
 }
