@@ -636,6 +636,58 @@ async def init_db() -> None:
             UPDATE prospection_deal_tasks SET status = 'done'
             WHERE status = 'termine'
             """,
+            # Auto-remplissage des scores ICE (impact / confiance /
+            # effort) pour toutes les tâches qui n'ont pas encore été
+            # évaluées. Idempotent — la WHERE clause ne touche que les
+            # lignes où impact IS NULL. L'impact dérive de la priorité
+            # manuelle (urgent → 9, eleve → 7, moyenne/non_assigne →
+            # 5, faible → 3), la confiance et l'effort sont initialisés
+            # à 5 (médian) — l'utilisateur peut affiner par la suite
+            # depuis la fiche détaillée.
+            """
+            UPDATE entreprise_taches
+            SET impact = CASE priority
+                  WHEN 'urgent' THEN 9
+                  WHEN 'eleve'  THEN 7
+                  WHEN 'faible' THEN 3
+                  ELSE 5
+                END,
+                confidence = COALESCE(confidence, 5),
+                effort     = COALESCE(effort, 5)
+            WHERE impact IS NULL
+            """,
+            """
+            UPDATE entreprise_taches
+            SET confidence = 5
+            WHERE confidence IS NULL
+            """,
+            """
+            UPDATE entreprise_taches
+            SET effort = 5
+            WHERE effort IS NULL
+            """,
+            """
+            UPDATE prospection_deal_tasks
+            SET impact = CASE priority
+                  WHEN 'urgent' THEN 9
+                  WHEN 'eleve'  THEN 7
+                  WHEN 'faible' THEN 3
+                  ELSE 5
+                END,
+                confidence = COALESCE(confidence, 5),
+                effort     = COALESCE(effort, 5)
+            WHERE impact IS NULL
+            """,
+            """
+            UPDATE prospection_deal_tasks
+            SET confidence = 5
+            WHERE confidence IS NULL
+            """,
+            """
+            UPDATE prospection_deal_tasks
+            SET effort = 5
+            WHERE effort IS NULL
+            """,
         ):
             try:
                 await conn.execute(text(sql))
