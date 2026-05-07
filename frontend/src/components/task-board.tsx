@@ -745,11 +745,11 @@ function TaskListView({
           >
             <th className="w-[88px] px-3 py-3 text-left">P · Score</th>
             <th className="px-4 py-3 text-left">Tâche</th>
-            <th className="w-[180px] px-3 py-3 text-left">Immeuble</th>
-            <th className="w-[120px] px-3 py-3 text-left">Statut</th>
-            <th className="w-[110px] px-3 py-3 text-left">Priorité</th>
-            <th className="w-[120px] px-3 py-3 text-left">Personnes</th>
-            <th className="w-[110px] px-3 py-3 text-right">Échéance</th>
+            <th className="w-[180px] px-3 py-3 text-center">Immeuble</th>
+            <th className="w-[120px] px-3 py-3 text-center">Statut</th>
+            <th className="w-[110px] px-3 py-3 text-center">Priorité</th>
+            <th className="w-[120px] px-3 py-3 text-center">Personnes</th>
+            <th className="w-[110px] px-3 py-3 text-center">Échéance</th>
           </tr>
         </thead>
         <tbody>
@@ -837,7 +837,7 @@ function TaskListView({
                     <div className="mt-1">{t.footer}</div>
                   ) : null}
                 </td>
-                <td className="px-3 py-2.5">
+                <td className="px-3 py-2.5 text-center">
                   {t.immeubleLabels && t.immeubleLabels.length > 0 ? (
                     <span
                       className="inline-flex max-w-full items-center gap-1 truncate text-[11px] text-white/70"
@@ -853,7 +853,7 @@ function TaskListView({
                   )}
                 </td>
                 <td
-                  className="px-3 py-2.5"
+                  className="px-3 py-2.5 text-center"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <PillPicker
@@ -868,7 +868,7 @@ function TaskListView({
                   />
                 </td>
                 <td
-                  className="px-3 py-2.5"
+                  className="px-3 py-2.5 text-center"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <PillPicker
@@ -883,7 +883,7 @@ function TaskListView({
                   />
                 </td>
                 <td
-                  className="px-3 py-2.5"
+                  className="px-3 py-2.5 text-center"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <AssigneePicker
@@ -895,7 +895,7 @@ function TaskListView({
                   />
                 </td>
                 <td
-                  className="px-3 py-2.5 text-right"
+                  className="px-3 py-2.5 text-center"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <DatePill
