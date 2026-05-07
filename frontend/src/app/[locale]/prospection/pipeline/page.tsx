@@ -876,7 +876,7 @@ function TaskRow({
             ariaLabel="Priorité"
           />
         </PillField>
-        <PillField label="Date butoire">
+        <PillField label="Échéance">
           <DatePill
             value={task.due_date}
             onChange={(d) => onPatch({ due_date: d })}
