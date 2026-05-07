@@ -163,6 +163,14 @@ export function TaskBoard({
     (c) => c.kind === "sort"
   );
 
+  const statusOptions = useMemo(
+    () =>
+      TASK_STATUS_OPTIONS.map((s) => ({
+        value: s.value,
+        label: s.label
+      })),
+    []
+  );
   const personOptions = useMemo(
     () => [
       { value: "none", label: "— Non assigné" },
@@ -245,6 +253,12 @@ export function TaskBoard({
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-brand-800 bg-brand-900/40 px-3 py-2">
+        <CriterionPicker
+          label="Statut"
+          state={criteria.status}
+          onChange={(s) => setCriterion("status", s)}
+          values={statusOptions}
+        />
         <CriterionPicker
           label="Personne"
           state={criteria.person}
@@ -332,7 +346,12 @@ export function TaskBoard({
 //   - une valeur précise → filtre la liste à cette valeur (cumulatif
 //                          avec les autres critères filtrés)
 
-type CriterionKey = "person" | "priority" | "due_date" | "immeuble";
+type CriterionKey =
+  | "status"
+  | "person"
+  | "priority"
+  | "due_date"
+  | "immeuble";
 
 type CriterionState =
   | { kind: "all" }
@@ -340,6 +359,7 @@ type CriterionState =
   | { kind: "filter"; value: string };
 
 const DEFAULT_FILTERS: Record<CriterionKey, CriterionState> = {
+  status: { kind: "all" },
   person: { kind: "all" },
   priority: { kind: "all" },
   due_date: { kind: "all" },
@@ -427,6 +447,11 @@ function applyFilters(
   inAWeek.setDate(today.getDate() + 7);
 
   return tasks.filter((t) => {
+    // Statut
+    const fs = filters.status;
+    if (fs.kind === "filter") {
+      if (t.status !== fs.value) return false;
+    }
     // Personne
     const fp = filters.person;
     if (fp.kind === "filter") {
@@ -494,7 +519,18 @@ function sortTasks(
     immeubles.map((i) => [i.id, i.name.toLowerCase()] as const)
   );
 
+  // Rang des statuts pour le tri (todo → done en flux normal).
+  const statusRank: Record<string, number> = {
+    todo: 0,
+    a_faire: 1,
+    in_progress: 2,
+    done: 3
+  };
+
   function keyOf(t: TaskBoardItem): string | number {
+    if (sortKey === "status") {
+      return statusRank[t.status] ?? 99;
+    }
     if (sortKey === "person") {
       const id = (t.assignee_user_ids || [])[0];
       return id != null ? userName.get(id) ?? "zzz" : "zzz";
