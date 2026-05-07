@@ -151,7 +151,10 @@ class _ImmeublePickerCreate(BaseModel):
     /immeubles avec garde de volet)."""
 
     name: str = Field(..., min_length=1, max_length=255)
-    address: str = Field(..., min_length=1, max_length=500)
+    # Adresse optionnelle — le picker des tâches ne la demande pas.
+    # Si elle n'est pas fournie, on retombe sur le nom comme adresse
+    # affichable (et la colonne `address` côté DB reste NOT NULL).
+    address: Optional[str] = Field(default=None, max_length=500)
 
 
 @router.post(
@@ -168,9 +171,11 @@ async def immeubles_picker_create(
     Pas de garde de volet : tout user authentifié peut enrichir le
     catalogue (la donnée elle-même est non-sensible : juste un nom +
     une adresse pour qu'on puisse rattacher des tâches)."""
+    name = body.name.strip()
+    address = (body.address or "").strip() or name
     obj = Immeuble(
-        name=body.name.strip(),
-        address=body.address.strip(),
+        name=name,
+        address=address,
         is_active=True,
     )
     obj.created_at = _now()
