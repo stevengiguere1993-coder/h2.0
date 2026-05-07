@@ -17,7 +17,7 @@ import { authedFetch } from "@/lib/auth";
  * Le composant <ManageImmeublesButton> (exporté ci-dessous) ouvre un
  * mini dialogue qui permet d'**alimenter le catalogue** (ajouter /
  * retirer des immeubles). Les changements sont propagés au parent via
- * `onChanged`, qui doit re-fetch /api/v1/immeubles/picker pour mettre
+ * `onChanged`, qui doit re-fetch /api/v1/immobilier/immeubles/picker pour mettre
  * à jour la liste affichée.
  */
 
@@ -113,7 +113,7 @@ export function ImmeublePicker({
                     ? "inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold text-emerald-200"
                     : "inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-200"
                 }
-                title={`${i.name} — ${i.address}`}
+                title={i.name}
               >
                 <Building2
                   className={isModal ? "h-3 w-3" : "h-2.5 w-2.5"}
@@ -148,12 +148,7 @@ export function ImmeublePicker({
                     title="Cliquer pour retirer"
                   >
                     <Building2 className="h-3 w-3" />
-                    <span className="flex-1 truncate">
-                      {i.name}{" "}
-                      <span className="font-normal opacity-70">
-                        — {i.address}
-                      </span>
-                    </span>
+                    <span className="flex-1 truncate">{i.name}</span>
                     <X className="h-3 w-3 opacity-80" />
                   </button>
                 ))}
@@ -171,10 +166,7 @@ export function ImmeublePicker({
                     className="flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-[11px] text-white/80 hover:bg-brand-900"
                   >
                     <Plus className="h-3 w-3 opacity-60" />
-                    <span className="flex-1 truncate">
-                      {i.name}{" "}
-                      <span className="opacity-60">— {i.address}</span>
-                    </span>
+                    <span className="flex-1 truncate">{i.name}</span>
                   </button>
                 ))}
               {filtered.length === 0 ? (
@@ -237,7 +229,6 @@ function ManageImmeublesDialog({
   onChanged: () => void;
 }) {
   const [name, setName] = useState("");
-  const [address, setAddress] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -252,20 +243,18 @@ function ManageImmeublesDialog({
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !address.trim()) return;
+    if (!name.trim()) return;
     setBusy(true);
     setErr(null);
     try {
-      const r = await authedFetch("/api/v1/immeubles/picker", {
+      const r = await authedFetch("/api/v1/immobilier/immeubles/picker", {
         method: "POST",
         body: JSON.stringify({
-          name: name.trim(),
-          address: address.trim()
+          name: name.trim()
         })
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setName("");
-      setAddress("");
       onChanged();
     } catch (e) {
       setErr((e as Error).message || "Ajout échoué.");
@@ -279,7 +268,7 @@ function ManageImmeublesDialog({
     setBusy(true);
     setErr(null);
     try {
-      const r = await authedFetch(`/api/v1/immeubles/picker/${id}`, {
+      const r = await authedFetch(`/api/v1/immobilier/immeubles/picker/${id}`, {
         method: "DELETE"
       });
       if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
@@ -321,29 +310,19 @@ function ManageImmeublesDialog({
 
         <form
           onSubmit={add}
-          className="mt-4 space-y-2 rounded-xl border border-brand-800 bg-brand-900/40 p-3"
+          className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-brand-800 bg-brand-900/40 p-3"
         >
-          <div className="grid gap-2 sm:grid-cols-2">
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Nom (ex. Triplex Salaberry)"
-              className="input text-sm"
-              required
-            />
-            <input
-              type="text"
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              placeholder="Adresse"
-              className="input text-sm"
-              required
-            />
-          </div>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Nom de l'immeuble"
+            className="input flex-1 min-w-[200px] text-sm"
+            required
+          />
           <button
             type="submit"
-            disabled={busy || !name.trim() || !address.trim()}
+            disabled={busy || !name.trim()}
             className="btn-accent inline-flex items-center text-sm disabled:opacity-50"
           >
             {busy ? (
@@ -380,9 +359,6 @@ function ManageImmeublesDialog({
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-semibold text-white">
                       {i.name}
-                    </p>
-                    <p className="truncate text-[11px] text-white/50">
-                      {i.address}
                     </p>
                   </div>
                   <button

@@ -146,7 +146,7 @@ export default function EntrepriseDetailPage() {
         authedFetch(`/api/v1/entreprises/taches?entreprise_id=${id}`),
         authedFetch("/api/v1/employes?limit=500"),
         authedFetch("/api/v1/users"),
-        authedFetch("/api/v1/immeubles/picker")
+        authedFetch("/api/v1/immobilier/immeubles/picker")
       ]);
       if (!entRes.ok) throw new Error(`HTTP ${entRes.status}`);
       const ents = (await entRes.json()) as Entreprise[];
@@ -187,7 +187,7 @@ export default function EntrepriseDetailPage() {
   // bouton « Gérer » du picker.
   async function reloadImmeubles() {
     try {
-      const r = await authedFetch("/api/v1/immeubles/picker");
+      const r = await authedFetch("/api/v1/immobilier/immeubles/picker");
       if (r.ok) setImmeubles((await r.json()) as ImmeubleMini[]);
     } catch {
       /* l'erreur est déjà signalée dans le dialog. */

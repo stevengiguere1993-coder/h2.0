@@ -75,7 +75,7 @@ export function TaskDetailsModal({
   onPatch: (patch: TaskDetailsModalPatch) => void | Promise<void>;
   /** Optionnel — appelé après ajout/retrait d'un immeuble dans le
    *  catalogue depuis le bouton « Gérer ». Le parent doit re-fetch
-   *  /api/v1/immeubles/picker pour rafraîchir la liste affichée. */
+   *  /api/v1/immobilier/immeubles/picker pour rafraîchir la liste affichée. */
   onImmeublesChanged?: () => void;
 }) {
   const [title, setTitle] = useState(task.title);

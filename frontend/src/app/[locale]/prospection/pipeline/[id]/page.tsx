@@ -79,7 +79,7 @@ export default function DealDetailPage() {
         authedFetch(`/api/v1/prospection/deals/${dealId}`),
         authedFetch(`/api/v1/prospection/deals/${dealId}/tasks`),
         authedFetch("/api/v1/users"),
-        authedFetch("/api/v1/immeubles/picker")
+        authedFetch("/api/v1/immobilier/immeubles/picker")
       ]);
       if (!dRes.ok) throw new Error("Deal introuvable");
       const d = (await dRes.json()) as Deal;
@@ -108,7 +108,7 @@ export default function DealDetailPage() {
 
   async function reloadImmeubles() {
     try {
-      const r = await authedFetch("/api/v1/immeubles/picker");
+      const r = await authedFetch("/api/v1/immobilier/immeubles/picker");
       if (r.ok) setImmeubles((await r.json()) as ImmeubleMini[]);
     } catch {
       /* l'erreur est déjà signalée par le dialog. */
