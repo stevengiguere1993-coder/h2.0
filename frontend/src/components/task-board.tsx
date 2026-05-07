@@ -10,7 +10,8 @@ import {
 } from "@/components/task-card";
 import {
   TASK_PRIORITY_OPTIONS,
-  TASK_STATUS_OPTIONS
+  TASK_STATUS_OPTIONS,
+  scoreToPTier
 } from "@/lib/task-config";
 import {
   AssigneePicker,
@@ -742,6 +743,7 @@ function TaskListView({
             className="text-[10px] uppercase tracking-wider text-white/50"
             style={{ borderBottom: "2px solid rgba(100,116,139,0.55)" }}
           >
+            <th className="px-3 py-2.5 text-left">P · Score</th>
             <th className="px-4 py-2.5 text-left">Tâche</th>
             <th className="px-3 py-2.5 text-left">Statut</th>
             <th className="px-3 py-2.5 text-left">Priorité</th>
@@ -799,6 +801,29 @@ function TaskListView({
                   borderBottom: "1px solid rgba(100,116,139,0.45)"
                 }}
               >
+                <td className="px-3 py-3">
+                  {(() => {
+                    const tier = scoreToPTier(t.score);
+                    const hasScore = t.score != null;
+                    return (
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${tier.pill}`}
+                        title={`${tier.label} — ${tier.description}${
+                          hasScore
+                            ? ` (score ${(t.score as number).toFixed(1)})`
+                            : ""
+                        }`}
+                      >
+                        {tier.label}
+                        {hasScore ? (
+                          <span className="opacity-90">
+                            · {(t.score as number).toFixed(1)}
+                          </span>
+                        ) : null}
+                      </span>
+                    );
+                  })()}
+                </td>
                 <td className="max-w-[420px] px-4 py-3">
                   <p className="truncate font-medium text-white">
                     {t.title}

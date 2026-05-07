@@ -13,7 +13,8 @@ import {
 } from "@/components/task-pills";
 import {
   TASK_PRIORITY_OPTIONS,
-  TASK_STATUS_OPTIONS
+  TASK_STATUS_OPTIONS,
+  scoreToPTier
 } from "@/lib/task-config";
 
 /**
@@ -41,6 +42,10 @@ export type TaskCardData = {
   // Libellés des immeubles liés à la tâche — affichés sous le titre
   // (laissé vide si aucun immeuble lié).
   immeubleLabels?: string[];
+  // Score ICE × urgence (calculé serveur). Affiché sous forme de
+  // pastille « P1 · 56 » colorée selon le tier (P1 → P4) en haut de
+  // la carte. Null = tâche non évaluée → P4 grise.
+  score?: number | null;
 };
 
 export type TaskCardPatch = {
@@ -104,6 +109,31 @@ export function TaskCard({
         dragging ? "border-accent-500 opacity-60" : "border-brand-800"
       }`}
     >
+      {/* Badge P-tier + score (si évalué). En haut à gauche, sépare
+          visuellement l'urgence calculée du titre. Affiché aussi en
+          mode P4 quand le score est null (== non évaluée). */}
+      {(() => {
+        const tier = scoreToPTier(task.score);
+        const hasScore = task.score != null;
+        return (
+          <div className="mb-1 flex items-center gap-1">
+            <span
+              className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-bold ${tier.pill}`}
+              title={`${tier.label} — ${tier.description}${
+                hasScore ? ` (score ${(task.score as number).toFixed(1)})` : ""
+              }`}
+            >
+              {tier.label}
+              {hasScore ? (
+                <span className="opacity-90">
+                  · {(task.score as number).toFixed(1)}
+                </span>
+              ) : null}
+            </span>
+          </div>
+        );
+      })()}
+
       {/* Première ligne : titre éditable + boutons empilés */}
       <div className="flex items-start gap-1.5">
         <AutoGrowTextarea
