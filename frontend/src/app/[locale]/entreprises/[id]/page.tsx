@@ -750,7 +750,7 @@ function DailyPulseCard({
 
   return (
     <section
-      className="mt-4 overflow-hidden rounded-2xl border bg-gradient-to-br from-brand-900 to-brand-950 p-5"
+      className="mt-4 overflow-hidden rounded-2xl border bg-brand-900 p-5"
       style={{ borderColor: lime + "44" }}
     >
       <div className="flex items-start justify-between gap-3">
