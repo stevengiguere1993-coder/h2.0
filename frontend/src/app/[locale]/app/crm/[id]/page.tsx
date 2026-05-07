@@ -4,15 +4,18 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter as useNextRouter } from "next/navigation";
 import {
   ArrowLeft,
+  Briefcase,
   Calendar,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  DollarSign,
   FileText,
   Image as ImageIcon,
   Loader2,
   Mail,
   MapPin,
+  Pencil,
   Phone,
   Ruler,
   Trash2,
@@ -21,6 +24,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { AddressInput } from "@/components/address-input";
 import { FollowUpTimeline } from "@/components/follow-up-timeline";
 import { MeasurementsPanel } from "@/components/measurements-panel";
 import { SalesTasksPanel } from "@/components/sales-tasks-panel";
@@ -208,6 +212,24 @@ export default function ProspectDetailPage() {
     } catch {
       setP(prev);
       setError("Mise à jour du statut échouée.");
+    }
+  }
+
+  async function patchProspect(patch: Partial<Prospect>) {
+    if (!p) return;
+    const prev = p;
+    setP({ ...p, ...patch });
+    try {
+      const res = await authedFetch(`/api/v1/contact/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch)
+      });
+      if (!res.ok) throw new Error();
+      const updated = (await res.json()) as Prospect;
+      setP(updated);
+    } catch {
+      setP(prev);
+      setError("Mise à jour échouée.");
     }
   }
 
@@ -460,23 +482,78 @@ export default function ProspectDetailPage() {
 
               {tab === "client" ? (
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <InfoRow icon={User} label="Nom complet" value={p.name} />
-                  <InfoRow icon={Mail} label="Courriel" value={p.email} />
-                  <InfoRow icon={Phone} label="Téléphone" value={p.phone ? formatPhone(p.phone) : "—"} />
-                  <InfoRow
+                  <EditableField
+                    icon={User}
+                    label="Nom complet"
+                    value={p.name}
+                    onSave={(v) => patchProspect({ name: v })}
+                  />
+                  <EditableField
+                    icon={Mail}
+                    label="Courriel"
+                    type="email"
+                    value={p.email}
+                    onSave={(v) => patchProspect({ email: v })}
+                  />
+                  <EditableField
+                    icon={Phone}
+                    label="Téléphone"
+                    type="tel"
+                    value={p.phone || ""}
+                    displayValue={p.phone ? formatPhone(p.phone) : "—"}
+                    onSave={(v) => patchProspect({ phone: v || null })}
+                  />
+                  <EditableAddress
                     icon={MapPin}
                     label="Adresse du projet"
-                    value={p.address || "—"}
+                    value={p.address || ""}
+                    onSave={(v) => patchProspect({ address: v || null })}
                   />
-                  <InfoRow
+                  <EditableSelect
                     icon={CheckCircle2}
                     label="Consentement marketing"
-                    value={p.marketing_consent ? "Oui" : "Non"}
+                    value={p.marketing_consent ? "true" : "false"}
+                    options={[
+                      { value: "true", label: "Oui" },
+                      { value: "false", label: "Non" }
+                    ]}
+                    onSave={(v) =>
+                      patchProspect({ marketing_consent: v === "true" })
+                    }
                   />
-                  <InfoRow
+                  <EditableSelect
                     icon={CheckCircle2}
                     label="Langue"
-                    value={p.locale === "fr" ? "Français" : "Anglais"}
+                    value={p.locale}
+                    options={[
+                      { value: "fr", label: "Français" },
+                      { value: "en", label: "Anglais" }
+                    ]}
+                    onSave={(v) => patchProspect({ locale: v })}
+                  />
+                  <EditableSelect
+                    icon={Briefcase}
+                    label="Type de projet"
+                    value={p.project_type}
+                    options={Object.entries(PROJECT_LABEL).map(
+                      ([k, v]) => ({ value: k, label: v })
+                    )}
+                    onSave={(v) => patchProspect({ project_type: v })}
+                  />
+                  <EditableSelect
+                    icon={DollarSign}
+                    label="Budget"
+                    value={p.budget_range || ""}
+                    options={[
+                      { value: "", label: "— Non précisé —" },
+                      { value: "under_10k", label: "Moins de 10 000 $" },
+                      { value: "10_25", label: "10 000 $ – 25 000 $" },
+                      { value: "25_50", label: "25 000 $ – 50 000 $" },
+                      { value: "50_100", label: "50 000 $ – 100 000 $" },
+                      { value: "over_100", label: "Plus de 100 000 $" },
+                      { value: "unsure", label: "Indéterminé" }
+                    ]}
+                    onSave={(v) => patchProspect({ budget_range: v || null })}
                   />
                   <div className="lg:col-span-3">
                     <FollowUpTimeline
@@ -543,6 +620,185 @@ function InfoRow({
         <Icon className="h-3.5 w-3.5 text-accent-500" /> {label}
       </p>
       <p className="mt-1.5 break-words text-sm text-white">{value}</p>
+    </div>
+  );
+}
+
+// Champ éditable inline : affiche la valeur + un crayon discret au
+// hover ; click → input qui prend la main, blur ou Enter pour
+// sauvegarder, Escape pour annuler.
+function EditableField({
+  icon: Icon,
+  label,
+  value,
+  displayValue,
+  type = "text",
+  onSave
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  value: string;
+  displayValue?: string;
+  type?: "text" | "email" | "tel";
+  onSave: (v: string) => void | Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  function commit() {
+    setEditing(false);
+    const trimmed = draft.trim();
+    if (trimmed !== value) onSave(trimmed);
+  }
+
+  return (
+    <div className="group rounded-lg border border-brand-800 bg-brand-900 p-4">
+      <p className="flex items-center justify-between gap-2 text-xs font-medium uppercase tracking-wider text-white/50">
+        <span className="inline-flex items-center gap-2">
+          <Icon className="h-3.5 w-3.5 text-accent-500" /> {label}
+        </span>
+        {!editing ? (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="opacity-0 transition group-hover:opacity-100 hover:text-white"
+            title="Modifier"
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+        ) : null}
+      </p>
+      {editing ? (
+        <input
+          autoFocus
+          type={type}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            if (e.key === "Escape") {
+              setDraft(value);
+              setEditing(false);
+            }
+          }}
+          className="mt-1.5 w-full rounded border border-accent-500 bg-brand-950 px-2 py-1 text-sm text-white focus:outline-none"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="mt-1.5 block w-full break-words text-left text-sm text-white"
+        >
+          {displayValue ?? value || "—"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Variante avec AddressInput (autocomplete Photon) pour le champ
+// adresse du projet.
+function EditableAddress({
+  icon: Icon,
+  label,
+  value,
+  onSave
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  value: string;
+  onSave: (v: string) => void | Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  return (
+    <div className="group rounded-lg border border-brand-800 bg-brand-900 p-4">
+      <p className="flex items-center justify-between gap-2 text-xs font-medium uppercase tracking-wider text-white/50">
+        <span className="inline-flex items-center gap-2">
+          <Icon className="h-3.5 w-3.5 text-accent-500" /> {label}
+        </span>
+        {!editing ? (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="opacity-0 transition group-hover:opacity-100 hover:text-white"
+            title="Modifier"
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setEditing(false);
+              if (draft.trim() !== value) onSave(draft.trim());
+            }}
+            className="text-[10px] text-accent-500 hover:text-accent-400"
+          >
+            Sauvegarder
+          </button>
+        )}
+      </p>
+      {editing ? (
+        <div className="mt-1.5">
+          <AddressInput value={draft} onChange={setDraft} />
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="mt-1.5 block w-full break-words text-left text-sm text-white"
+        >
+          {value || "—"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Variante avec un select pour les valeurs énumérées (langue,
+// budget, type de projet, consentement marketing).
+function EditableSelect({
+  icon: Icon,
+  label,
+  value,
+  options,
+  onSave
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onSave: (v: string) => void | Promise<void>;
+}) {
+  const current = options.find((o) => o.value === value);
+  return (
+    <div className="rounded-lg border border-brand-800 bg-brand-900 p-4">
+      <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-white/50">
+        <Icon className="h-3.5 w-3.5 text-accent-500" /> {label}
+      </p>
+      <select
+        value={value}
+        onChange={(e) => onSave(e.target.value)}
+        className="mt-1.5 w-full cursor-pointer rounded border border-transparent bg-transparent text-sm text-white hover:border-brand-700 focus:border-accent-500 focus:outline-none"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {current === undefined && value ? (
+        <p className="mt-0.5 text-[10px] text-white/40">Valeur : {value}</p>
+      ) : null}
     </div>
   );
 }

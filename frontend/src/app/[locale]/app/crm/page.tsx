@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { AddressInput } from "@/components/address-input";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -522,6 +523,7 @@ function CreateProspectModal({
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [projectType, setProjectType] = useState<string>("autre");
+  const [budgetRange, setBudgetRange] = useState<string>("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -552,6 +554,7 @@ function CreateProspectModal({
       fd.append("project_type", projectType || "autre");
       if (phone.trim()) fd.append("phone", phone.trim());
       if (address.trim()) fd.append("address", address.trim());
+      if (budgetRange) fd.append("budget_range", budgetRange);
       const res = await authedFetch("/api/v1/contact", {
         method: "POST",
         body: fd
@@ -619,26 +622,44 @@ function CreateProspectModal({
             </div>
           </div>
           <div>
-            <label className="label">Adresse</label>
-            <input
+            <label className="label">Lieu du projet</label>
+            <AddressInput
               value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              className="input"
+              onChange={setAddress}
+              placeholder="Ex. 158 Rue Maurice, Saint-Sauveur, QC"
             />
           </div>
-          <div>
-            <label className="label">Type de projet</label>
-            <select
-              value={projectType}
-              onChange={(e) => setProjectType(e.target.value)}
-              className="input"
-            >
-              {Object.entries(PROJECT_LABEL).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
-              ))}
-            </select>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Type de projet</label>
+              <select
+                value={projectType}
+                onChange={(e) => setProjectType(e.target.value)}
+                className="input"
+              >
+                {Object.entries(PROJECT_LABEL).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">Budget</label>
+              <select
+                value={budgetRange}
+                onChange={(e) => setBudgetRange(e.target.value)}
+                className="input"
+              >
+                <option value="">— Non précisé —</option>
+                <option value="under_10k">Moins de 10 000 $</option>
+                <option value="10_25">10 000 $ – 25 000 $</option>
+                <option value="25_50">25 000 $ – 50 000 $</option>
+                <option value="50_100">50 000 $ – 100 000 $</option>
+                <option value="over_100">Plus de 100 000 $</option>
+                <option value="unsure">Indéterminé</option>
+              </select>
+            </div>
           </div>
           <div>
             <label className="label">Message / notes initiales</label>

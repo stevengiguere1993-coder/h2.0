@@ -31,7 +31,8 @@ class ContactRequestCreate(BaseModel):
 
 
 class ContactRequestUpdate(BaseModel):
-    """Admin update — move the request through the pipeline."""
+    """Admin update — move the request through the pipeline ou
+    raffiner les infos client (édition inline depuis la fiche)."""
 
     status: Optional[ContactRequestStatus] = None
     internal_notes: Optional[str] = Field(default=None, max_length=10_000)
@@ -40,6 +41,10 @@ class ContactRequestUpdate(BaseModel):
     email: Optional[str] = Field(default=None, max_length=320)
     phone: Optional[str] = Field(default=None, max_length=50)
     address: Optional[str] = Field(default=None, max_length=500)
+    project_type: Optional[str] = Field(default=None, max_length=32)
+    budget_range: Optional[str] = Field(default=None, max_length=32)
+    marketing_consent: Optional[bool] = None
+    locale: Optional[str] = Field(default=None, max_length=8)
     assigned_to_user_id: Optional[int] = None
 
 
