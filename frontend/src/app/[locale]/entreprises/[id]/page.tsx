@@ -25,6 +25,10 @@ import {
   PillPicker,
   type TaskUserMini
 } from "@/components/task-pills";
+import {
+  TASK_PRIORITY_OPTIONS,
+  TASK_STATUS_OPTIONS
+} from "@/lib/task-config";
 
 type Entreprise = {
   id: number;
@@ -69,12 +73,13 @@ type Column = { id: string; label: string; dot: string };
 // (volet Prospection > Acquisition) — uniformité demandée par
 // l'utilisateur. Seuls les libellés visibles diffèrent des clés
 // DB historiques.
-const COLUMNS: Column[] = [
-  { id: "todo", label: "À venir", dot: "bg-violet-500" },
-  { id: "a_faire", label: "À faire", dot: "bg-sky-500" },
-  { id: "in_progress", label: "En traitement", dot: "bg-amber-500" },
-  { id: "done", label: "Terminé", dot: "bg-emerald-500" }
-];
+// Dérivé du module partagé /lib/task-config — les libellés et
+// pastilles bougent partout en même temps quand on les modifie là.
+const COLUMNS: Column[] = TASK_STATUS_OPTIONS.map((o) => ({
+  id: o.value,
+  label: o.label,
+  dot: o.dot
+}));
 
 const RECURRENCE_LABELS: Record<string, string> = {
   daily: "Quotidienne",
@@ -663,21 +668,21 @@ function MoveTacheDialog({
   );
 }
 
-// Pastilles statut alignées sur le Pipeline des deals.
-const ENT_STATUS_PILLS: Array<{ value: string; label: string; cls: string }> = [
-  { value: "todo", label: "À venir", cls: "bg-violet-500 text-white" },
-  { value: "a_faire", label: "À faire", cls: "bg-sky-500 text-white" },
-  { value: "in_progress", label: "En traitement", cls: "bg-amber-500 text-brand-950" },
-  { value: "done", label: "Terminé", cls: "bg-emerald-500 text-white" }
-];
+// Pastilles statut + priorité — importées depuis le module partagé
+// /lib/task-config pour rester synchronisées avec le Pipeline des
+// deals. Si on change la couleur d'une priorité dans task-config,
+// les deux vues se mettent à jour ensemble.
+const ENT_STATUS_PILLS = TASK_STATUS_OPTIONS.map((o) => ({
+  value: o.value,
+  label: o.label,
+  cls: o.pill
+}));
 
-const ENT_PRIORITY_PILLS: Array<{ value: string; label: string; cls: string }> = [
-  { value: "non_assigne", label: "Non-assigné", cls: "bg-slate-500 text-white" },
-  { value: "urgent", label: "Urgent ⚠️", cls: "bg-red-700 text-white" },
-  { value: "eleve", label: "Élevé", cls: "bg-orange-500 text-white" },
-  { value: "moyenne", label: "Moyenne", cls: "bg-yellow-400 text-brand-950" },
-  { value: "faible", label: "Faible", cls: "bg-lime-500 text-brand-950" }
-];
+const ENT_PRIORITY_PILLS = TASK_PRIORITY_OPTIONS.map((o) => ({
+  value: o.value,
+  label: o.label,
+  cls: o.pill
+}));
 
 function TacheCard({
   t,
@@ -1111,6 +1116,7 @@ function TacheModal({
                 users={users}
                 values={assigneeIds}
                 onChange={setAssigneeIds}
+                variant="modal"
               />
             </div>
             <div>

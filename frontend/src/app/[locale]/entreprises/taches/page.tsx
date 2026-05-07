@@ -12,6 +12,7 @@ import {
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { QGTopbar } from "../layout";
+import { TASK_STATUS_LABEL, TASK_STATUS_OPTIONS } from "@/lib/task-config";
 
 type TachePatch = Partial<
   Pick<Tache, "status" | "assignee_user_id" | "due_date">
@@ -44,16 +45,12 @@ type Entreprise = {
   color_accent: string;
 };
 
-// 4 statuts opérationnels — alignés sur le Pipeline des deals
-// (Prospection > Acquisition). Mêmes labels et mêmes couleurs.
-// Les statuts legacy (backlog / waiting) sont rendus via le
-// fallback ci-dessous le temps qu'ils soient reclassifiés.
-const STATUS_LABELS: Record<string, string> = {
-  todo: "À venir",
-  a_faire: "À faire",
-  in_progress: "En traitement",
-  done: "Terminé"
-};
+// 4 statuts opérationnels — labels viennent du module partagé
+// /lib/task-config. Couleurs hex équivalentes ci-dessous (le
+// module utilise des classes Tailwind alors qu'ici on a besoin
+// de variables CSS pour des inline-style). Si les classes
+// Tailwind du module changent, mettre à jour ces hex aussi.
+const STATUS_LABELS: Record<string, string> = TASK_STATUS_LABEL;
 
 const STATUS_COLORS: Record<string, string> = {
   todo: "#8b5cf6",        // violet-500
@@ -413,12 +410,10 @@ export default function MesTachesPage() {
 
 // ─── Vue Kanban ────────────────────────────────────────────────────────
 
-const KANBAN_COLUMNS = [
-  { id: "todo", label: "À venir" },
-  { id: "a_faire", label: "À faire" },
-  { id: "in_progress", label: "En traitement" },
-  { id: "done", label: "Terminé" }
-] as const;
+const KANBAN_COLUMNS = TASK_STATUS_OPTIONS.map((o) => ({
+  id: o.value,
+  label: o.label
+}));
 
 function KanbanBoard({
   taches,
