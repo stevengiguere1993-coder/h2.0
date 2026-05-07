@@ -9,6 +9,7 @@ import {
 } from "@/components/task-pills";
 import {
   ImmeublePicker,
+  ManageImmeublesButton,
   type ImmeubleMini
 } from "@/components/immeuble-picker";
 import {
@@ -53,13 +54,23 @@ export function TaskDetailsModal({
   users,
   immeubles,
   onClose,
-  onPatch
+  onPatch,
+  onImmeublesChanged,
+  extraSection
 }: {
   task: TaskDetailsModalData;
   users: TaskUserMini[];
   immeubles: ImmeubleMini[];
   onClose: () => void;
   onPatch: (patch: TaskDetailsModalPatch) => void | Promise<void>;
+  /** Optionnel — appelé après ajout/retrait d'un immeuble dans le
+   *  catalogue depuis le bouton « Gérer ». Le parent doit re-fetch
+   *  /api/v1/immeubles/picker pour rafraîchir la liste affichée. */
+  onImmeublesChanged?: () => void;
+  /** Slot rendu après les champs standards et avant les notes —
+   *  utilisé par l'entreprise pour ajouter ICE / récurrence /
+   *  département. Pipeline ne fournit rien. */
+  extraSection?: React.ReactNode;
 }) {
   const [title, setTitle] = useState(task.title);
   const [notes, setNotes] = useState(task.notes);
@@ -193,13 +204,16 @@ export function TaskDetailsModal({
           </div>
 
           <div>
-            <div className="mb-1.5 flex items-center justify-between">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
               <span className="block text-sm font-medium text-white">
                 Immeuble
               </span>
-              <span className="text-[10px] text-white/40">
-                Clique le champ pour en sélectionner 0, 1 ou plusieurs
-              </span>
+              {onImmeublesChanged ? (
+                <ManageImmeublesButton
+                  immeubles={immeubles}
+                  onChanged={onImmeublesChanged}
+                />
+              ) : null}
             </div>
             <ImmeublePicker
               immeubles={immeubles}
@@ -208,6 +222,8 @@ export function TaskDetailsModal({
               variant="modal"
             />
           </div>
+
+          {extraSection ? <div>{extraSection}</div> : null}
 
           <div>
             <label className="label">Notes</label>
