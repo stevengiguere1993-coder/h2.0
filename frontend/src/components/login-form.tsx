@@ -17,7 +17,11 @@ import { authedFetch, getMe, getToken, login, setToken } from "@/lib/auth";
 
 // Whitelist email autorisé à voir le bouton « Mode dev » sur le
 // sélecteur de portail. Centralisé pour matcher /dev/page.tsx.
-const DEV_ALLOWED_EMAILS = ["sgiguere@immohorizon.com"];
+const DEV_ALLOWED_EMAILS = [
+  "sgiguere@immohorizon.com",
+  "philippe.meuser@immohorizon.com",
+  "pmeuser@immohorizon.com"
+];
 
 /**
  * After a successful login, we show a small picker asking the user

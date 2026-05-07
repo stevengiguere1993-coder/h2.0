@@ -13,7 +13,11 @@ import { HelpRequestsSection } from "@/components/help-requests-section";
  * Centralise les outils de debugging / développement (demandes d'aide,
  * etc.) pour les retirer de l'UI publique des autres utilisateurs.
  */
-export const DEV_ALLOWED_EMAILS = ["sgiguere@immohorizon.com"];
+export const DEV_ALLOWED_EMAILS = [
+  "sgiguere@immohorizon.com",
+  "philippe.meuser@immohorizon.com",
+  "pmeuser@immohorizon.com"
+];
 
 export default function DevPage() {
   const { user, loading } = useCurrentUser();
