@@ -401,15 +401,6 @@ export default function EntrepriseDetailPage() {
           { label: "Gestion d'entreprises", href: "/entreprises" },
           { label: ent.name }
         ]}
-        rightSlot={
-          <Link
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={`/entreprises/${ent.id}/pilotage` as any}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-violet-400 px-3 py-1.5 text-xs font-semibold text-brand-950 shadow hover:bg-violet-300"
-          >
-            Pilotage
-          </Link>
-        }
       />
 
       <div className="p-4 lg:p-6">
