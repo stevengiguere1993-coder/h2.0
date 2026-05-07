@@ -234,8 +234,21 @@ export function ProspectionSidebar({
   }
 
   /** Range un deal dans un dossier d'archive ou le retire (= ramène
-   *  dans la liste principale). Patche `priority` côté serveur. */
-  async function archiveDeal(
+   *  dans la liste principale). Patche `priority` côté serveur.
+   *  Le state update est volontairement déferré dans un microtask
+   *  (`queueMicrotask`) pour éviter un crash React quand le nœud DOM
+   *  source du drag est démonté pendant que le navigateur est encore
+   *  en train de finaliser l'événement dragend. */
+  function archiveDeal(
+    dealId: number,
+    target: "termine" | "abandonne" | "active"
+  ) {
+    queueMicrotask(() => {
+      void archiveDealAsync(dealId, target);
+    });
+  }
+
+  async function archiveDealAsync(
     dealId: number,
     target: "termine" | "abandonne" | "active"
   ) {
