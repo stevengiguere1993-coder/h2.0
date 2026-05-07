@@ -82,6 +82,11 @@ export function TaskCard({
   const hasScore = task.score != null;
   const hasImmeubles =
     task.immeubleLabels && task.immeubleLabels.length > 0;
+  // Couleur de la barre d'accent latérale = couleur du statut (pas
+  // du P-tier). Le P-tier reste visible via la pastille « P · score ».
+  const statusOption =
+    TASK_STATUS_OPTIONS.find((o) => o.value === task.status) ??
+    TASK_STATUS_OPTIONS[1];
 
   return (
     <div
@@ -108,10 +113,11 @@ export function TaskCard({
           : "border-brand-800 hover:border-brand-700"
       }`}
     >
-      {/* Barre d'accent latérale : P-tier color en bordure gauche */}
+      {/* Barre d'accent latérale : couleur du statut courant (À venir
+          violet, À faire bleu, En traitement ambre, Terminé emerald). */}
       <span
         aria-hidden
-        className={`absolute inset-y-0 left-0 w-[3px] ${tier.accent}`}
+        className={`absolute inset-y-0 left-0 w-[3px] ${statusOption.dot}`}
       />
 
       <div className="px-3 py-2.5 pl-[14px]">
