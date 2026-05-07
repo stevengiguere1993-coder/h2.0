@@ -29,6 +29,8 @@ import type { ImmeubleMini } from "@/components/immeuble-picker";
  * d'une entreprise et celle d'un deal du Pipeline. Contient :
  *
  *   - Le **titre « Tâches »** + bouton « + Nouvelle tâche ».
+ *   - Le **sélecteur de tri** (personne / priorité / échéance /
+ *     immeuble).
  *   - Le **toggle Tableau / Kanban**.
  *   - La **vue Tableau** : liste plate compacte (statut / priorité /
  *     personnes / échéance éditables inline, click row → ouvre la
@@ -36,9 +38,8 @@ import type { ImmeubleMini } from "@/components/immeuble-picker";
  *   - La **vue Kanban** : 4 colonnes (todo / a_faire / in_progress /
  *     done) issues de /lib/task-config, drag-drop, création inline
  *     « + Tâche » par colonne, bouton « Déplacer » optionnel.
- *   - **La fiche détaillée** (TaskDetailsModal) pour une tâche
- *     sélectionnée. Le parent peut injecter des champs additionnels
- *     spécifiques au volet via `extraModalSection`.
+ *   - **La fiche détaillée** (TaskDetailsModal) — strictement
+ *     identique pour tous les volets, pas de slot extras.
  *
  * Toute évolution visuelle ou fonctionnelle de la section « Tâches »
  * se fait dans ce composant — propage à tous les volets qui le
@@ -72,7 +73,6 @@ export function TaskBoard({
   onMove,
   onCreate,
   onImmeublesChanged,
-  extraModalSection,
   title = "Tâches",
   newTaskLabel = "Nouvelle tâche",
   showNewTaskButton = true
@@ -97,16 +97,13 @@ export function TaskBoard({
   /** Re-fetch du catalogue d'immeubles (après ajout / retrait via le
    *  bouton « Gérer » du picker dans la modal). */
   onImmeublesChanged?: () => void;
-  /** Slot rendu à l'intérieur de la modal détaillée — utilisé par
-   *  l'entreprise pour exposer les champs ICE / récurrence /
-   *  département. La fonction reçoit la tâche courante. */
-  extraModalSection?: (task: TaskBoardItem) => React.ReactNode;
   title?: string;
   newTaskLabel?: string;
   showNewTaskButton?: boolean;
 }) {
   const [view, setView] = useState<"kanban" | "list">("kanban");
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
+  const [sortBy, setSortBy] = useState<SortKey>("default");
 
   async function handleNewTask() {
     // Crée une tâche placeholder dans la première colonne (« À faire »)
@@ -119,6 +116,11 @@ export function TaskBoard({
   async function handleColumnCreate(status: string, name: string) {
     await onCreate(status, name);
   }
+
+  const sortedTasks = useMemo(
+    () => sortTasks(tasks, sortBy, users, immeubles),
+    [tasks, sortBy, users, immeubles]
+  );
 
   const detailTask =
     detailTaskId != null
@@ -142,6 +144,7 @@ export function TaskBoard({
               {newTaskLabel}
             </button>
           ) : null}
+          <SortPicker value={sortBy} onChange={setSortBy} />
         </div>
         <div className="inline-flex rounded-lg border border-brand-800 bg-brand-900 p-0.5">
           <button
@@ -175,17 +178,18 @@ export function TaskBoard({
 
       {view === "kanban" ? (
         <KanbanView
-          tasks={tasks}
+          tasks={sortedTasks}
           users={users}
           onPatch={onPatch}
           onDelete={onDelete}
           onOpenDetails={(id) => setDetailTaskId(id)}
           onMove={onMove}
           onCreate={(s, n) => void handleColumnCreate(s, n)}
+          sorted={sortBy !== "default"}
         />
       ) : (
         <TaskListView
-          tasks={tasks}
+          tasks={sortedTasks}
           users={users}
           onPatch={onPatch}
           onOpenDetails={(id) => setDetailTaskId(id)}
@@ -211,13 +215,109 @@ export function TaskBoard({
           onPatch={(patch: TaskDetailsModalPatch) => {
             onPatch(detailTask.id, patch as TaskBoardPatch);
           }}
-          extraSection={
-            extraModalSection ? extraModalSection(detailTask) : undefined
-          }
         />
       ) : null}
     </div>
   );
+}
+
+// ─── Tri ───────────────────────────────────────────────────────────
+
+type SortKey =
+  | "default"
+  | "person"
+  | "priority"
+  | "due_date"
+  | "immeuble";
+
+const SORT_OPTIONS: Array<{ value: SortKey; label: string }> = [
+  { value: "default", label: "Aucun" },
+  { value: "person", label: "Personne" },
+  { value: "priority", label: "Priorité" },
+  { value: "due_date", label: "Échéance" },
+  { value: "immeuble", label: "Immeuble" }
+];
+
+function SortPicker({
+  value,
+  onChange
+}: {
+  value: SortKey;
+  onChange: (v: SortKey) => void;
+}) {
+  return (
+    <label className="inline-flex items-center gap-1.5 text-xs text-white/60">
+      <span>Trier&nbsp;:</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as SortKey)}
+        className="rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
+      >
+        {SORT_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+const PRIORITY_RANK: Record<string, number> = {
+  urgent: 0,
+  eleve: 1,
+  moyenne: 2,
+  faible: 3,
+  non_assigne: 4
+};
+
+function sortTasks(
+  tasks: TaskBoardItem[],
+  key: SortKey,
+  users: TaskUserMini[],
+  immeubles: ImmeubleMini[]
+): TaskBoardItem[] {
+  if (key === "default") return tasks;
+
+  const userName = new Map(
+    users.map(
+      (u) =>
+        [
+          u.id,
+          (u.last_name || u.first_name || u.email || "").toLowerCase()
+        ] as const
+    )
+  );
+  const immeubleName = new Map(
+    immeubles.map((i) => [i.id, i.name.toLowerCase()] as const)
+  );
+
+  function keyOf(t: TaskBoardItem): string | number {
+    if (key === "person") {
+      const id = (t.assignee_user_ids || [])[0];
+      return id != null ? userName.get(id) ?? "zzz" : "zzz";
+    }
+    if (key === "priority") {
+      return PRIORITY_RANK[t.priority] ?? 99;
+    }
+    if (key === "due_date") {
+      // Pas de date → en bas (chaîne lexicale max).
+      return t.due_date || "9999-99-99";
+    }
+    if (key === "immeuble") {
+      const id = (t.immeuble_ids || [])[0];
+      return id != null ? immeubleName.get(id) ?? "zzz" : "zzz";
+    }
+    return 0;
+  }
+
+  return [...tasks].sort((a, b) => {
+    const ka = keyOf(a);
+    const kb = keyOf(b);
+    if (ka < kb) return -1;
+    if (ka > kb) return 1;
+    return 0;
+  });
 }
 
 // ─── Kanban ────────────────────────────────────────────────────────
@@ -229,7 +329,8 @@ function KanbanView({
   onDelete,
   onOpenDetails,
   onMove,
-  onCreate
+  onCreate,
+  sorted
 }: {
   tasks: TaskBoardItem[];
   users: TaskUserMini[];
@@ -238,6 +339,9 @@ function KanbanView({
   onOpenDetails: (taskId: number) => void;
   onMove?: (taskId: number) => void;
   onCreate: (status: string, name: string) => void;
+  /** Si vrai, l'ordre du tableau a déjà été imposé par le parent
+   *  (tri utilisateur) — on n'écrase pas avec un tri par position. */
+  sorted: boolean;
 }) {
   const [dragId, setDragId] = useState<number | null>(null);
   const [hoverCol, setHoverCol] = useState<string | null>(null);
@@ -252,13 +356,15 @@ function KanbanView({
       const target = map[t.status] ? t.status : "a_faire";
       (map[target] ||= []).push(t);
     }
-    for (const k of Object.keys(map)) {
-      map[k].sort(
-        (a, b) => (a.position ?? 0) - (b.position ?? 0)
-      );
+    if (!sorted) {
+      for (const k of Object.keys(map)) {
+        map[k].sort(
+          (a, b) => (a.position ?? 0) - (b.position ?? 0)
+        );
+      }
     }
     return map;
-  }, [tasks]);
+  }, [tasks, sorted]);
 
   function handleDrop(targetStatus: string) {
     const id = dragId;
