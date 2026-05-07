@@ -595,6 +595,25 @@ async def init_db() -> None:
             UPDATE entreprise_taches SET status = 'todo'
             WHERE status = 'waiting'
             """,
+            # Pipeline (deals) — alignement du vocabulaire de statut sur
+            # celui des tâches d'entreprise. Le frontend partage un seul
+            # task-config (todo / a_faire / in_progress / done) ; les
+            # anciennes valeurs (a_venir / en_traitement / termine)
+            # doivent être renommées dans `prospection_deal_tasks`.
+            # Idempotent — une fois renommées, plus aucune ligne ne
+            # matche.
+            """
+            UPDATE prospection_deal_tasks SET status = 'todo'
+            WHERE status = 'a_venir'
+            """,
+            """
+            UPDATE prospection_deal_tasks SET status = 'in_progress'
+            WHERE status = 'en_traitement'
+            """,
+            """
+            UPDATE prospection_deal_tasks SET status = 'done'
+            WHERE status = 'termine'
+            """,
         ):
             try:
                 await conn.execute(text(sql))

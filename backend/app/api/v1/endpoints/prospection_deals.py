@@ -198,7 +198,7 @@ async def delete_deal(
 # Tâches d'un deal
 # ============================================================
 
-TASK_STATUS_PATTERN = r"^(a_venir|a_faire|en_traitement|termine)$"
+TASK_STATUS_PATTERN = r"^(todo|a_faire|in_progress|done)$"
 TASK_PRIORITY_PATTERN = r"^(non_assigne|urgent|eleve|moyenne|faible)$"
 
 
