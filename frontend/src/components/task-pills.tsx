@@ -266,11 +266,19 @@ export function UserAvatarBadge({
 export function AssigneePicker({
   users,
   values,
-  onChange
+  onChange,
+  variant = "card"
 }: {
   users: TaskUserMini[];
   values: number[];
   onChange: (ids: number[]) => void;
+  /**
+   * « card » (défaut) — petit rectangle compact pour les pastilles
+   * de carte de tâche dans le kanban.
+   * « modal » — taille .input (rounded-lg, bg-brand-900) pour
+   * matcher les autres champs dans une modal de modification.
+   */
+  variant?: "card" | "modal";
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -301,27 +309,40 @@ export function AssigneePicker({
     }
   }
 
+  const isModal = variant === "modal";
+  // Container : version compacte pour la carte (chips serrées),
+  // version « .input » pour la modal (rounded-lg, bg-brand-900,
+  // padding standard) afin de matcher les autres champs.
+  const triggerCls = isModal
+    ? "flex w-full flex-wrap items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3.5 py-2 text-sm text-white/70 shadow-sm transition hover:border-brand-600 focus:border-accent-500 focus:outline-none"
+    : "inline-flex w-full items-center justify-center gap-1 rounded border border-black/40 bg-brand-800 px-1.5 py-1 text-[10px] font-semibold text-white/60 hover:bg-brand-700";
+  const chipCls = isModal
+    ? "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-bold"
+    : "inline-flex items-center gap-1 rounded-full px-1 py-0.5 text-[9px] font-bold";
+  const placeholderCls = isModal
+    ? "text-sm text-white/50"
+    : "px-0.5";
+  const avatarSize = isModal ? 18 : 12;
+
   return (
     <div ref={wrapRef} className="relative">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-label="Personne(s) assignée(s)"
-        // Fin contour noir/40 pour signaler la zone, sans concurrencer
-        // les pastilles colorées des autres axes.
-        className="inline-flex w-full items-center justify-center gap-1 rounded border border-black/40 bg-brand-800 px-1.5 py-1 text-[10px] font-semibold text-white/60 hover:bg-brand-700"
+        className={triggerCls}
       >
         {assigned.length === 0 ? (
-          <span className="px-0.5">+ Personne</span>
+          <span className={placeholderCls}>+ Personne</span>
         ) : (
-          <span className="flex flex-wrap items-center justify-center gap-1">
+          <span className={`flex flex-wrap items-center gap-1 ${isModal ? "justify-start" : "justify-center"}`}>
             {assigned.map((u) => (
               <span
                 key={u.id}
-                className={`inline-flex items-center gap-1 rounded-full px-1 py-0.5 text-[9px] font-bold ${userPillCls(u)}`}
+                className={`${chipCls} ${userPillCls(u)}`}
                 title={userDisplayName(u)}
               >
-                <UserAvatarBadge user={u} size={12} />
+                <UserAvatarBadge user={u} size={avatarSize} />
                 <span className="leading-none">{userInitials(u)}</span>
               </span>
             ))}

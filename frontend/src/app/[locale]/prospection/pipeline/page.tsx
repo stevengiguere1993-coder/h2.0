@@ -19,6 +19,12 @@ import {
   PROFILE_COLOR_PILL,
   DEFAULT_PILL_CLASS
 } from "@/lib/profile-colors";
+import {
+  TASK_PRIORITY_LABEL as TASK_PRIORITY_LABEL_CONF,
+  TASK_PRIORITY_OPTIONS as TASK_PRIORITY_OPTIONS_CONF,
+  TASK_PRIORITY_PILL as TASK_PRIORITY_PILL_CONF,
+  TASK_PRIORITY_RANK as TASK_PRIORITY_RANK_CONF
+} from "@/lib/task-config";
 
 // ─── Priorités du DEAL (au niveau de la carte entière) ────────────
 type DealPriority =
@@ -127,57 +133,28 @@ const STATUS_STYLE: Record<
   }
 };
 
-const TASK_PRIORITIES: {
+// Importés depuis le module partagé /lib/task-config — synchronisés
+// avec le kanban entreprise. Modifier la couleur de « moyenne »
+// (par exemple) là-bas la met aussi à jour ici, et inversement.
+const TASK_PRIORITIES = TASK_PRIORITY_OPTIONS_CONF as Array<{
   value: TaskPriority;
   label: string;
-  emoji?: string;
-}[] = [
-  { value: "non_assigne", label: "Non-assigné" },
-  { value: "urgent", label: "Urgent ⚠️" },
-  { value: "eleve", label: "Élevé" },
-  { value: "moyenne", label: "Moyenne" },
-  { value: "faible", label: "Faible" }
-];
+}>;
 
-const TASK_PRIORITY_LABEL: Record<TaskPriority, string> = {
-  non_assigne: "Non-assigné",
-  urgent: "Urgent ⚠️",
-  eleve: "Élevé",
-  moyenne: "Moyenne",
-  faible: "Faible"
-};
+const TASK_PRIORITY_LABEL = TASK_PRIORITY_LABEL_CONF as Record<
+  TaskPriority,
+  string
+>;
 
-// Pastilles pleines style Monday — chaque axe (statut / priorité /
-// date butoir) doit avoir des teintes distinctes pour éviter qu'on
-// les confonde quand 4 pastilles s'alignent sur la même tâche.
-//
-// Statut : violet / sky / amber / emerald  (saturés)
-// Priorité : rose-700 / orange-500 / yellow-400 / lime-500
-// Date butoir : teal / yellow-200 / orange-700 / red-700
-const TASK_PRIORITY_PILL: Record<TaskPriority, string> = {
-  // non_assigne : pastille grise par défaut — affichée tant que
-  // l'utilisateur n'a pas explicitement choisi une priorité.
-  non_assigne: "bg-slate-500 text-white",
-  // urgent : rouge profond — différent du rose vif de la date « en
-  // retard » (ci-dessous) pour ne pas confondre.
-  urgent: "bg-red-700 text-white",
-  eleve: "bg-orange-500 text-white",
-  // moyenne : jaune saturé. La date 7-14 j utilise yellow-200 (pâle)
-  // pour ne pas se confondre avec.
-  moyenne: "bg-yellow-400 text-brand-950",
-  // faible : vert lime, distinct du vert emerald (statut Terminé).
-  faible: "bg-lime-500 text-brand-950"
-};
+const TASK_PRIORITY_PILL = TASK_PRIORITY_PILL_CONF as Record<
+  TaskPriority,
+  string
+>;
 
-// Rang utilisé pour trier les tâches dans un même groupe de statut :
-// urgent en haut, non-assigné en bas (= moins prioritaire que faible).
-const TASK_PRIORITY_RANK: Record<TaskPriority, number> = {
-  urgent: 0,
-  eleve: 1,
-  moyenne: 2,
-  faible: 3,
-  non_assigne: 4
-};
+const TASK_PRIORITY_RANK = TASK_PRIORITY_RANK_CONF as Record<
+  TaskPriority,
+  number
+>;
 
 type Task = {
   id: number;
