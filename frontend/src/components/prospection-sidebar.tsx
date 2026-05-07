@@ -221,46 +221,48 @@ export function ProspectionSidebar({
     }
   }
 
-  /** Drop handler unique : mirror exact de `handleDragEntreprise`
-   *  côté Mes entreprises, qui marche sans crash. Toute la logique
-   *  (archive si dragué d'un dossier, sinon réordonner) vit ici dans
-   *  le parent — pas dans les drop handlers JSX, pour éviter qu'un
-   *  setState intermédiaire pendant le dragend ne fasse crasher le
-   *  sous-arbre React. */
+  /** Drop handler unique. Toute la logique (archive si dragué d'un
+   *  dossier, sinon réordonner) est déférée dans setTimeout(0) pour
+   *  laisser le navigateur finaliser **complètement** l'événement
+   *  dragend avant qu'on touche au state React (et donc au DOM
+   *  source). Sans ce defer, le sous-arbre React peut être muté
+   *  pendant le dragend et faire crasher la page. */
   function handleDealDrop(
     droppedOnId: number,
     target: "active" | "termine" | "abandonne"
   ) {
     const id = dragDealId;
-    setDragDealId(null);
     if (id == null) return;
     const dragged = deals.find((d) => d.id === id);
     if (!dragged) return;
+    // Snapshot des données nécessaires AVANT de défer — le state
+    // pourrait avoir bougé entre-temps.
+    const draggedPriority = dragged.priority;
+    const dealsSnapshot = deals;
 
-    if (target === "termine" || target === "abandonne") {
-      // Drop sur l'en-tête du dossier d'archive : patch priorité.
-      void patchDealPriority(id, target);
-      return;
-    }
+    setTimeout(() => {
+      setDragDealId(null);
 
-    // Drop sur la liste principale ou sur un deal actif.
-    if (
-      dragged.priority === "termine" ||
-      dragged.priority === "abandonne"
-    ) {
-      // Réactivation depuis un dossier.
-      void patchDealPriority(id, "moyenne");
-      return;
-    }
-
-    if (id === droppedOnId) return;
-    const ids = deals.map((d) => d.id);
-    const fromIdx = ids.indexOf(id);
-    const toIdx = ids.indexOf(droppedOnId);
-    if (fromIdx < 0 || toIdx < 0) return;
-    ids.splice(fromIdx, 1);
-    ids.splice(toIdx, 0, id);
-    void reorderDeals(ids);
+      if (target === "termine" || target === "abandonne") {
+        void patchDealPriority(id, target);
+        return;
+      }
+      if (
+        draggedPriority === "termine" ||
+        draggedPriority === "abandonne"
+      ) {
+        void patchDealPriority(id, "moyenne");
+        return;
+      }
+      if (id === droppedOnId) return;
+      const ids = dealsSnapshot.map((d) => d.id);
+      const fromIdx = ids.indexOf(id);
+      const toIdx = ids.indexOf(droppedOnId);
+      if (fromIdx < 0 || toIdx < 0) return;
+      ids.splice(fromIdx, 1);
+      ids.splice(toIdx, 0, id);
+      void reorderDeals(ids);
+    }, 0);
   }
 
   async function patchDealPriority(dealId: number, priority: string) {
