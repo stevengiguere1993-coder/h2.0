@@ -128,9 +128,11 @@ export const TASK_PRIORITY_RANK: Record<TaskPriorityValue, number> = {
 
 export type PScoreTier = {
   label: "P1" | "P2" | "P3" | "P4";
-  // Classes Tailwind pour le bg + text de la pastille (lisibles sur
-  // fond clair comme sombre).
+  // Pastille compacte « P1 · 56 » sur les cartes / tableaux. Ton
+  // doux + ring coloré — lisible sur fond clair comme sombre.
   pill: string;
+  // Petite barre d'accent latérale sur la carte (3 px).
+  accent: string;
   description: string;
 };
 
@@ -138,34 +140,39 @@ export function scoreToPTier(score: number | null | undefined): PScoreTier {
   if (score == null) {
     return {
       label: "P4",
-      pill: "bg-slate-500 text-white",
+      pill: "bg-slate-500/15 text-slate-300 ring-1 ring-slate-500/30",
+      accent: "bg-slate-500/60",
       description: "Non évaluée"
     };
   }
   if (score >= 30) {
     return {
       label: "P1",
-      pill: "bg-rose-600 text-white",
+      pill: "bg-rose-500/15 text-rose-400 ring-1 ring-rose-500/40",
+      accent: "bg-rose-500",
       description: "Critique"
     };
   }
   if (score >= 15) {
     return {
       label: "P2",
-      pill: "bg-orange-500 text-white",
+      pill: "bg-amber-500/15 text-amber-400 ring-1 ring-amber-500/40",
+      accent: "bg-amber-500",
       description: "Haute"
     };
   }
   if (score >= 5) {
     return {
       label: "P3",
-      pill: "bg-sky-500 text-white",
+      pill: "bg-sky-500/15 text-sky-400 ring-1 ring-sky-500/40",
+      accent: "bg-sky-500",
       description: "Normale"
     };
   }
   return {
     label: "P4",
-    pill: "bg-slate-500 text-white",
+    pill: "bg-slate-500/15 text-slate-300 ring-1 ring-slate-500/30",
+    accent: "bg-slate-500/60",
     description: "Basse"
   };
 }

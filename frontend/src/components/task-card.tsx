@@ -1,13 +1,12 @@
 "use client";
 
 import { useEffect } from "react";
-import { ArrowRightLeft, StickyNote, Trash2 } from "lucide-react";
+import { ArrowRightLeft, Building2, StickyNote, Trash2 } from "lucide-react";
 
 import {
   AssigneePicker,
   AutoGrowTextarea,
   DatePill,
-  PillField,
   PillPicker,
   type TaskUserMini
 } from "@/components/task-pills";
@@ -18,16 +17,20 @@ import {
 } from "@/lib/task-config";
 
 /**
- * Carte de tâche partagée — utilisée par le Pipeline des deals
- * (Prospection > Acquisition > pipeline > deal > tâches) ET par
- * le kanban d'une entreprise (Gestion d'entreprises). Le rendu est
- * identique partout : title + boutons (note/poubelle/déplacer) +
- * 4 PillFields (Personnes / Statut / Priorité / Échéance).
+ * Carte de tâche partagée — utilisée à l'identique par le Pipeline
+ * et le kanban d'une entreprise. Esthétique 2026 :
  *
- * Les données sources peuvent avoir des shapes différents (Pipeline
- * = `name + notes`, Entreprise = `title + description`). On accepte
- * une shape neutre `TaskCardData` qui agrège les champs communs ;
- * chaque page fait l'adaptation au moment de passer la tâche.
+ *   - Barre d'accent latérale (3 px) colorée selon le P-tier (P1 →
+ *     rouge, P2 → ambre, P3 → bleu, P4 → gris) : repère visuel
+ *     instantané de l'urgence sans imposer de couleur sur tout le
+ *     fond de la carte.
+ *   - Titre prominent + ligne secondaire compacte « P · score »
+ *     suivie de l'immeuble.
+ *   - Une seule rangée de pastilles fonctionnelles (Statut · Priorité
+ *     · Personnes · Échéance), sans labels redondants — la couleur
+ *     et le contenu suffisent à les identifier.
+ *   - Actions (note / supprimer / déplacer) regroupées en haut à
+ *     droite, en hover discret.
  */
 export type TaskCardData = {
   id: number;
@@ -36,15 +39,8 @@ export type TaskCardData = {
   priority: string;
   due_date: string | null;
   assignee_user_ids: number[];
-  // True si la tâche a une note/description non vide — pour
-  // teinter l'icône note en jaune comme indicateur visuel.
   hasNote: boolean;
-  // Libellés des immeubles liés à la tâche — affichés sous le titre
-  // (laissé vide si aucun immeuble lié).
   immeubleLabels?: string[];
-  // Score ICE × urgence (calculé serveur). Affiché sous forme de
-  // pastille « P1 · 56 » colorée selon le tier (P1 → P4) en haut de
-  // la carte. Null = tâche non évaluée → P4 grise.
   score?: number | null;
 };
 
@@ -74,18 +70,19 @@ export function TaskCard({
   users: TaskUserMini[];
   onPatch: (patch: TaskCardPatch) => void;
   onDelete: (e: React.MouseEvent) => void;
-  /** Click sur l'icône bloc-note → ouvre la fiche détaillée. */
   onOpenDetails: () => void;
-  /** Optionnel — bouton « Déplacer » sous la poubelle. Affiché si
-   *  fourni (Entreprise oui, Pipeline non par défaut). */
   onMove?: () => void;
   draggable?: boolean;
   dragging?: boolean;
   onDragStart?: () => void;
   onDragEnd?: () => void;
-  /** Optionnel — petit footer ajouté en bas (score / récurrence / etc.) */
   footer?: React.ReactNode;
 }) {
+  const tier = scoreToPTier(task.score);
+  const hasScore = task.score != null;
+  const hasImmeubles =
+    task.immeubleLabels && task.immeubleLabels.length > 0;
+
   return (
     <div
       draggable={draggable}
@@ -105,119 +102,107 @@ export function TaskCard({
         onDragStart();
       }}
       onDragEnd={onDragEnd}
-      className={`group block rounded-lg border bg-brand-950 p-2 ${
-        dragging ? "border-accent-500 opacity-60" : "border-brand-800"
+      className={`group relative overflow-hidden rounded-xl border bg-brand-950 transition ${
+        dragging
+          ? "border-accent-500 opacity-60"
+          : "border-brand-800 hover:border-brand-700"
       }`}
     >
-      {/* Badge P-tier + score (si évalué). En haut à gauche, sépare
-          visuellement l'urgence calculée du titre. Affiché aussi en
-          mode P4 quand le score est null (== non évaluée). */}
-      {(() => {
-        const tier = scoreToPTier(task.score);
-        const hasScore = task.score != null;
-        return (
-          <div className="mb-1 flex items-center gap-1">
-            <span
-              className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-bold ${tier.pill}`}
-              title={`${tier.label} — ${tier.description}${
-                hasScore ? ` (score ${(task.score as number).toFixed(1)})` : ""
-              }`}
-            >
-              {tier.label}
-              {hasScore ? (
-                <span className="opacity-90">
-                  · {(task.score as number).toFixed(1)}
-                </span>
-              ) : null}
-            </span>
-          </div>
-        );
-      })()}
+      {/* Barre d'accent latérale : P-tier color en bordure gauche */}
+      <span
+        aria-hidden
+        className={`absolute inset-y-0 left-0 w-[3px] ${tier.accent}`}
+      />
 
-      {/* Première ligne : titre éditable + boutons empilés */}
-      <div className="flex items-start gap-1.5">
-        <AutoGrowTextarea
-          value={task.title}
-          onChange={(v) => onPatch({ title: v })}
-          onCommit={(v) => {
-            const trimmed = v.trim();
-            if (trimmed && trimmed !== task.title) {
-              onPatch({ title: trimmed });
-            }
-          }}
-          // Style « heading » : semibold, pas de bordure visible au
-          // repos, focus accent au clic. Identique entre Pipeline
-          // et Entreprise.
-          className="min-w-0 flex-1 resize-none rounded border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold text-white focus:border-accent-500 focus:outline-none"
-        />
-        <div className="flex flex-shrink-0 flex-col items-center gap-0.5">
-          {/* Note/Détails — ouvre la fiche complète. L'icône passe
-              en jaune si la tâche a déjà une note. */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenDetails();
+      <div className="px-3 py-2.5 pl-[14px]">
+        {/* Première ligne : titre + actions inline (compact, hover-révélé) */}
+        <div className="flex items-start gap-1.5">
+          <AutoGrowTextarea
+            value={task.title}
+            onChange={(v) => onPatch({ title: v })}
+            onCommit={(v) => {
+              const trimmed = v.trim();
+              if (trimmed && trimmed !== task.title) {
+                onPatch({ title: trimmed });
+              }
             }}
-            className={`rounded p-1 ${
-              task.hasNote
-                ? "text-amber-300 hover:bg-amber-500/15"
-                : "text-white/40 hover:bg-white/5"
-            }`}
-            title="Détails de la tâche"
-            aria-label="Détails"
-          >
-            <StickyNote className="h-3 w-3" />
-          </button>
-          <button
-            type="button"
-            onClick={onDelete}
-            className="rounded p-1 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
-            title="Supprimer la tâche"
-            aria-label="Supprimer"
-          >
-            <Trash2 className="h-3 w-3" />
-          </button>
-          {onMove ? (
+            className="min-w-0 flex-1 resize-none rounded border border-transparent bg-transparent px-0.5 py-0 text-[13px] font-semibold leading-tight text-white focus:border-accent-500 focus:outline-none"
+          />
+          <div className="flex flex-shrink-0 items-center gap-0 opacity-60 transition group-hover:opacity-100">
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                onMove();
+                onOpenDetails();
               }}
-              className="rounded p-1 text-white/40 hover:bg-violet-500/15 hover:text-violet-300"
-              title="Déplacer"
-              aria-label="Déplacer"
+              className={`rounded p-1 ${
+                task.hasNote
+                  ? "text-amber-300 hover:bg-amber-500/15"
+                  : "text-white/50 hover:bg-white/5"
+              }`}
+              title="Détails de la tâche"
+              aria-label="Détails"
             >
-              <ArrowRightLeft className="h-3 w-3" />
+              <StickyNote className="h-3 w-3" />
             </button>
+            <button
+              type="button"
+              onClick={onDelete}
+              className="rounded p-1 text-white/50 hover:bg-rose-500/15 hover:text-rose-300"
+              title="Supprimer la tâche"
+              aria-label="Supprimer"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+            {onMove ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onMove();
+                }}
+                className="rounded p-1 text-white/50 hover:bg-violet-500/15 hover:text-violet-300"
+                title="Déplacer"
+                aria-label="Déplacer"
+              >
+                <ArrowRightLeft className="h-3 w-3" />
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        {/* Métadonnée : pastille P · score + immeuble (s'il y en a) */}
+        <div className="mt-1 flex items-center gap-1.5 px-0.5">
+          <span
+            className={`inline-flex items-center gap-0.5 rounded-full px-1.5 py-0 text-[9px] font-bold leading-4 ${tier.pill}`}
+            title={`${tier.label} — ${tier.description}${
+              hasScore ? ` (score ${(task.score as number).toFixed(1)})` : ""
+            }`}
+          >
+            {tier.label}
+            {hasScore ? (
+              <span className="opacity-90">
+                · {(task.score as number).toFixed(1)}
+              </span>
+            ) : null}
+          </span>
+          {hasImmeubles ? (
+            <span
+              className="inline-flex min-w-0 items-center gap-1 truncate text-[10px] text-white/55"
+              title={(task.immeubleLabels || []).join(", ")}
+            >
+              <Building2 className="h-2.5 w-2.5 flex-shrink-0" />
+              <span className="truncate">
+                {(task.immeubleLabels || []).join(", ")}
+              </span>
+            </span>
           ) : null}
         </div>
-      </div>
 
-      {/* Immeuble(s) lié(s) — affichés en clair sous le titre, juste
-          avant les pastilles. text-white est inversé en quasi-noir
-          dans le thème portail clair (cf. globals.css), donc le texte
-          se lit naturellement dans les deux thèmes. Rien n'est rendu
-          si la tâche n'est rattachée à aucun immeuble. */}
-      {task.immeubleLabels && task.immeubleLabels.length > 0 ? (
-        <p className="mt-1 px-1 text-[11px] font-medium text-white/85">
-          {task.immeubleLabels.join(", ")}
-        </p>
-      ) : null}
-
-      {/* 4 pastilles : Personnes / Statut / Priorité / Échéance.
-          Identique partout — les options viennent du module partagé
-          /lib/task-config. */}
-      <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-        <PillField label="Personnes">
-          <AssigneePicker
-            users={users}
-            values={task.assignee_user_ids || []}
-            onChange={(ids) => onPatch({ assignee_user_ids: ids })}
-          />
-        </PillField>
-        <PillField label="Statut">
+        {/* Pastilles compactes en une seule rangée. Sans labels — la
+            couleur et le contenu désignent la nature de chaque champ.
+            Wrap auto si le contenu déborde (ex. plusieurs avatars). */}
+        <div className="mt-2 flex flex-wrap items-center gap-1">
           <PillPicker
             options={TASK_STATUS_OPTIONS.map((o) => ({
               value: o.value,
@@ -228,8 +213,6 @@ export function TaskCard({
             onChange={(v) => onPatch({ status: v })}
             ariaLabel="Statut"
           />
-        </PillField>
-        <PillField label="Priorité">
           <PillPicker
             options={TASK_PRIORITY_OPTIONS.map((o) => ({
               value: o.value,
@@ -240,16 +223,19 @@ export function TaskCard({
             onChange={(v) => onPatch({ priority: v })}
             ariaLabel="Priorité"
           />
-        </PillField>
-        <PillField label="Échéance">
+          <AssigneePicker
+            users={users}
+            values={task.assignee_user_ids || []}
+            onChange={(ids) => onPatch({ assignee_user_ids: ids })}
+          />
           <DatePill
             value={task.due_date}
             onChange={(d) => onPatch({ due_date: d })}
           />
-        </PillField>
-      </div>
+        </div>
 
-      {footer ? <div className="mt-2">{footer}</div> : null}
+        {footer ? <div className="mt-1.5">{footer}</div> : null}
+      </div>
     </div>
   );
 }
@@ -270,4 +256,3 @@ export function useClickOutside(
     return () => document.removeEventListener("mousedown", handler);
   }, [ref, onOutside]);
 }
-
