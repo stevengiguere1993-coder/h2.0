@@ -534,20 +534,27 @@ function CreateProspectModal({
     setBusy(true);
     setError(null);
     try {
+      // Le endpoint /api/v1/contact accepte du multipart/form-data
+      // (il sert aussi le formulaire public avec photos). On envoie
+      // un FormData plutôt qu'un JSON sinon FastAPI ne trouve pas
+      // les champs requis (name / email / message / gdpr_consent).
+      const fd = new FormData();
+      fd.append("name", name.trim());
+      fd.append("email", email.trim());
+      fd.append(
+        "message",
+        message.trim() || "(création manuelle depuis le CRM)"
+      );
+      fd.append("gdpr_consent", "true");
+      fd.append("marketing_consent", "false");
+      fd.append("locale", "fr");
+      fd.append("source", "manual");
+      fd.append("project_type", projectType || "autre");
+      if (phone.trim()) fd.append("phone", phone.trim());
+      if (address.trim()) fd.append("address", address.trim());
       const res = await authedFetch("/api/v1/contact", {
         method: "POST",
-        body: JSON.stringify({
-          name: name.trim(),
-          email: email.trim(),
-          phone: phone.trim() || null,
-          address: address.trim() || null,
-          project_type: projectType,
-          message: message.trim() || "(création manuelle depuis le CRM)",
-          locale: "fr",
-          source: "manual",
-          gdpr_consent: true,
-          marketing_consent: false
-        })
+        body: fd
       });
       if (!res.ok) {
         const txt = await res.text();
