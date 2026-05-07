@@ -516,6 +516,7 @@ export default function EntrepriseDetailPage() {
           seed={modal}
           entrepriseId={ent.id}
           employes={employes}
+          users={users}
           onClose={() => setModal(null)}
           onSaved={(t) => {
             upsertTache(t);
@@ -848,15 +849,21 @@ function TacheModal({
   seed,
   entrepriseId,
   employes,
+  users,
   onClose,
   onSaved
 }: {
   seed: Tache | { fresh: true };
   entrepriseId: number;
   employes: Employe[];
+  users: TaskUserMini[];
   onClose: () => void;
   onSaved: (t: Tache) => void;
 }) {
+  // employes (legacy) reste utilisé pour les anciens consumers de
+  // la modal — on le garde dans la signature mais on s'appuie sur
+  // `users` pour l'AssigneePicker multi.
+  void employes;
   const existing = "id" in seed ? seed : null;
   const [title, setTitle] = useState(existing?.title || "");
   const [description, setDescription] = useState(
@@ -884,10 +891,12 @@ function TacheModal({
   const [effort, setEffort] = useState(
     existing?.effort != null ? String(existing.effort) : ""
   );
-  const [assignee, setAssignee] = useState(
-    existing?.assignee_user_id != null
-      ? String(existing.assignee_user_id)
-      : ""
+  const [assigneeIds, setAssigneeIds] = useState<number[]>(
+    existing?.assignee_user_ids && existing.assignee_user_ids.length > 0
+      ? existing.assignee_user_ids
+      : existing?.assignee_user_id
+        ? [existing.assignee_user_id]
+        : []
   );
   const [dueDate, setDueDate] = useState(existing?.due_date || "");
   const [recurrence, setRecurrence] = useState(existing?.recurrence || "");
@@ -914,7 +923,8 @@ function TacheModal({
         impact: impact ? Number(impact) : null,
         confidence: confidence ? Number(confidence) : null,
         effort: effort ? Number(effort) : null,
-        assignee_user_id: assignee ? Number(assignee) : null,
+        assignee_user_ids: assigneeIds,
+        assignee_user_id: assigneeIds[0] ?? null,
         due_date: dueDate || null,
         recurrence: recurrence || null
       };
@@ -1083,27 +1093,25 @@ function TacheModal({
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <div className="flex items-center justify-between">
-                <label htmlFor="t_assignee" className="label">Assigné à</label>
+                <label className="label">Personnes</label>
                 {existing?.id ? (
                   <SuggestAssigneeButton
                     tacheId={existing.id}
-                    onPick={(uid) => setAssignee(String(uid))}
+                    onPick={(uid) => {
+                      // L'assigné suggéré par l'IA est ajouté à la
+                      // liste s'il n'y est pas déjà.
+                      setAssigneeIds((prev) =>
+                        prev.includes(uid) ? prev : [...prev, uid]
+                      );
+                    }}
                   />
                 ) : null}
               </div>
-              <select
-                id="t_assignee"
-                value={assignee}
-                onChange={(e) => setAssignee(e.target.value)}
-                className="input"
-              >
-                <option value="">— Personne —</option>
-                {employes.map((e) => (
-                  <option key={e.id} value={String(e.id)}>
-                    {e.full_name}
-                  </option>
-                ))}
-              </select>
+              <AssigneePicker
+                users={users}
+                values={assigneeIds}
+                onChange={setAssigneeIds}
+              />
             </div>
             <div>
               <label htmlFor="t_rec" className="label">Récurrence</label>
