@@ -38,6 +38,9 @@ export type TaskCardData = {
   // True si la tâche a une note/description non vide — pour
   // teinter l'icône note en jaune comme indicateur visuel.
   hasNote: boolean;
+  // Libellés des immeubles liés à la tâche — affichés sous le titre
+  // (laissé vide si aucun immeuble lié).
+  immeubleLabels?: string[];
 };
 
 export type TaskCardPatch = {
@@ -46,6 +49,7 @@ export type TaskCardPatch = {
   priority?: string;
   due_date?: string | null;
   assignee_user_ids?: number[];
+  immeuble_ids?: number[];
 };
 
 export function TaskCard({
@@ -160,6 +164,17 @@ export function TaskCard({
           ) : null}
         </div>
       </div>
+
+      {/* Immeuble(s) lié(s) — affichés en clair sous le titre, juste
+          avant les pastilles. text-white est inversé en quasi-noir
+          dans le thème portail clair (cf. globals.css), donc le texte
+          se lit naturellement dans les deux thèmes. Rien n'est rendu
+          si la tâche n'est rattachée à aucun immeuble. */}
+      {task.immeubleLabels && task.immeubleLabels.length > 0 ? (
+        <p className="mt-1 px-1 text-[11px] font-medium text-white/85">
+          {task.immeubleLabels.join(", ")}
+        </p>
+      ) : null}
 
       {/* 4 pastilles : Personnes / Statut / Priorité / Échéance.
           Identique partout — les options viennent du module partagé

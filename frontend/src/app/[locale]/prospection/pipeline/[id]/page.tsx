@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Loader2, MapPin, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, MapPin, Trash2 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { authedFetch } from "@/lib/auth";
@@ -13,16 +13,16 @@ import {
   AutoGrowTextarea,
   type TaskUserMini
 } from "@/components/task-pills";
-import { TaskCard } from "@/components/task-card";
+import { TaskBoard, type TaskBoardItem } from "@/components/task-board";
 import { TaskDetailsModal } from "@/components/task-details-modal";
-import { TASK_STATUS_OPTIONS } from "@/lib/task-config";
+import type { ImmeubleMini } from "@/components/immeuble-picker";
 
 /**
  * Fiche d'un Deal — analogue de /entreprises/[id]/page.tsx. Header
- * avec l'adresse éditable + tâches en kanban (4 colonnes À venir /
- * À faire / En traitement / Terminé). Mêmes composants partagés
- * (TaskCard, TaskDetailsModal) que les tâches d'entreprise — la
- * mise en page est strictement identique.
+ * avec l'adresse éditable + section Tâches rendue par le composant
+ * partagé <TaskBoard> — strictement identique à la section Tâches
+ * d'une entreprise. Toute modification de mise en page se fait dans
+ * /components/task-board.tsx et profite aux deux pages.
  */
 
 type Deal = {
@@ -44,6 +44,7 @@ type Task = {
   priority: string;
   due_date: string | null;
   position: number;
+  immeuble_ids: number[];
   created_at: string;
   updated_at: string;
 };
@@ -58,24 +59,23 @@ export default function DealDetailPage() {
   const [deal, setDeal] = useState<Deal | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [users, setUsers] = useState<TaskUserMini[]>([]);
+  const [immeubles, setImmeubles] = useState<ImmeubleMini[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState("");
-  const [adding, setAdding] = useState<string | null>(null);
-  const [newName, setNewName] = useState("");
-  const [dragId, setDragId] = useState<number | null>(null);
-  const [hoverCol, setHoverCol] = useState<string | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
+  const [moveTask, setMoveTask] = useState<Task | null>(null);
 
   const load = useCallback(async () => {
     if (!Number.isFinite(dealId) || dealId <= 0) return;
     setLoading(true);
     try {
-      const [dRes, tRes, uRes] = await Promise.all([
+      const [dRes, tRes, uRes, iRes] = await Promise.all([
         authedFetch(`/api/v1/prospection/deals/${dealId}`),
         authedFetch(`/api/v1/prospection/deals/${dealId}/tasks`),
-        authedFetch("/api/v1/users")
+        authedFetch("/api/v1/users"),
+        authedFetch("/api/v1/immeubles/picker")
       ]);
       if (!dRes.ok) throw new Error("Deal introuvable");
       const d = (await dRes.json()) as Deal;
@@ -90,6 +90,7 @@ export default function DealDetailPage() {
           all.filter((u) => (u.volets || []).includes("prospection"))
         );
       }
+      if (iRes.ok) setImmeubles((await iRes.json()) as ImmeubleMini[]);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -159,17 +160,13 @@ export default function DealDetailPage() {
     }
   }
 
-  async function createTask(status: string) {
-    if (!newName.trim()) {
-      setAdding(null);
-      return;
-    }
+  async function createTask(status: string, name: string) {
     try {
       const r = await authedFetch(
         `/api/v1/prospection/deals/${dealId}/tasks`,
         {
           method: "POST",
-          body: JSON.stringify({ name: newName.trim(), status })
+          body: JSON.stringify({ name, status })
         }
       );
       if (!r.ok) throw new Error();
@@ -177,18 +174,15 @@ export default function DealDetailPage() {
       setTasks((xs) => [...xs, created]);
     } catch {
       setError("Création de tâche échouée.");
-    } finally {
-      setNewName("");
-      setAdding(null);
     }
   }
 
-  async function deleteTask(t: Task) {
+  async function deleteTaskById(taskId: number) {
     const prev = tasks;
-    setTasks((xs) => xs.filter((x) => x.id !== t.id));
+    setTasks((xs) => xs.filter((x) => x.id !== taskId));
     try {
       const r = await authedFetch(
-        `/api/v1/prospection/deals/${dealId}/tasks/${t.id}`,
+        `/api/v1/prospection/deals/${dealId}/tasks/${taskId}`,
         { method: "DELETE" }
       );
       if (!r.ok && r.status !== 204) throw new Error();
@@ -197,33 +191,25 @@ export default function DealDetailPage() {
     }
   }
 
-  function handleColDrop(targetStatus: string) {
-    if (dragId == null) return;
-    const t = tasks.find((x) => x.id === dragId);
-    setDragId(null);
-    setHoverCol(null);
-    if (!t || t.status === targetStatus) return;
-    const sameStatus = tasks.filter((x) => x.status === targetStatus);
-    const newPos =
-      sameStatus.length > 0
-        ? Math.max(...sameStatus.map((x) => x.position)) + 1000
-        : 1000;
-    void patchTask(t.id, { status: targetStatus, position: newPos });
-  }
-
-  const tasksByStatus = useMemo(() => {
-    const map: Record<string, Task[]> = Object.fromEntries(
-      TASK_STATUS_OPTIONS.map((s) => [s.value, [] as Task[]])
-    );
-    for (const t of tasks) {
-      const target = map[t.status] ? t.status : "a_faire";
-      (map[target] ||= []).push(t);
-    }
-    for (const k of Object.keys(map)) {
-      map[k].sort((a, b) => a.position - b.position);
-    }
-    return map;
-  }, [tasks]);
+  // Adaptateur Task → TaskBoardItem. <TaskBoard> attend une shape
+  // neutre (title / hasNote) ; ici on traduit la shape native du
+  // backend Pipeline (name / notes).
+  const immeubleNameById = new Map(
+    immeubles.map((i) => [i.id, i.name] as const)
+  );
+  const boardItems: TaskBoardItem[] = tasks.map((t) => ({
+    id: t.id,
+    title: t.name,
+    status: t.status,
+    priority: t.priority || "non_assigne",
+    due_date: t.due_date,
+    assignee_user_ids: t.assignee_user_ids || [],
+    hasNote: Boolean(t.notes),
+    position: t.position,
+    immeubleLabels: (t.immeuble_ids || [])
+      .map((id) => immeubleNameById.get(id))
+      .filter((n): n is string => Boolean(n))
+  }));
 
   if (!Number.isFinite(dealId) || dealId <= 0) {
     return (
@@ -339,134 +325,40 @@ export default function DealDetailPage() {
           </p>
         ) : null}
 
-        {/* Tâches — kanban identique à celui d'une entreprise. */}
+        {/* Tâches — kanban rendu par le composant partagé <TaskBoard>.
+            Mêmes colonnes / cartes / drag-drop / création inline /
+            bouton « Déplacer » que les tâches d'entreprise. */}
         <div className="mt-6">
           <h2 className="text-sm font-semibold uppercase tracking-wider text-white/50">
             Tâches
           </h2>
-          <div className="mt-3 flex gap-3 overflow-x-auto pb-3">
-            {TASK_STATUS_OPTIONS.map((col) => {
-              const list = tasksByStatus[col.value] || [];
-              const isHover = hoverCol === col.value;
-              return (
-                <div
-                  key={col.value}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setHoverCol(col.value);
-                  }}
-                  onDragLeave={() =>
-                    setHoverCol((c) => (c === col.value ? null : c))
-                  }
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    handleColDrop(col.value);
-                  }}
-                  className={`flex w-72 flex-shrink-0 flex-col rounded-xl border bg-brand-900 ${
-                    isHover ? "border-accent-500" : "border-brand-800"
-                  }`}
-                >
-                  <div className="border-b border-brand-800 px-3 py-2">
-                    <div className="flex items-center justify-between">
-                      <h3 className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white">
-                        <span
-                          className={`h-1.5 w-1.5 rounded-full ${col.dot}`}
-                        />
-                        {col.label}
-                      </h3>
-                      <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
-                        {list.length}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="flex-1 space-y-2 p-3">
-                    {list.length === 0 && adding !== col.value ? (
-                      <p className="py-8 text-center text-xs text-white/40">
-                        Aucune tâche
-                      </p>
-                    ) : null}
-
-                    {list.map((t) => (
-                      <TaskCard
-                        key={t.id}
-                        task={{
-                          id: t.id,
-                          title: t.name,
-                          status: t.status,
-                          priority: t.priority || "non_assigne",
-                          due_date: t.due_date,
-                          assignee_user_ids: t.assignee_user_ids || [],
-                          hasNote: Boolean(t.notes)
-                        }}
-                        users={users}
-                        onPatch={(patch) => {
-                          const out: Partial<Task> = {};
-                          if (patch.title !== undefined)
-                            out.name = patch.title;
-                          if (patch.status !== undefined)
-                            out.status = patch.status;
-                          if (patch.priority !== undefined)
-                            out.priority = patch.priority;
-                          if (patch.due_date !== undefined)
-                            out.due_date = patch.due_date;
-                          if (patch.assignee_user_ids !== undefined) {
-                            out.assignee_user_ids = patch.assignee_user_ids;
-                            out.assignee_user_id =
-                              patch.assignee_user_ids[0] ?? null;
-                          }
-                          void patchTask(t.id, out);
-                        }}
-                        onDelete={(ev) => {
-                          ev.stopPropagation();
-                          ev.preventDefault();
-                          void deleteTask(t);
-                        }}
-                        onOpenDetails={() => setDetailTaskId(t.id)}
-                        draggable
-                        dragging={dragId === t.id}
-                        onDragStart={() => setDragId(t.id)}
-                        onDragEnd={() => {
-                          setDragId(null);
-                          setHoverCol(null);
-                        }}
-                      />
-                    ))}
-
-                    {adding === col.value ? (
-                      <input
-                        autoFocus
-                        type="text"
-                        value={newName}
-                        onChange={(e) => setNewName(e.target.value)}
-                        onBlur={() => createTask(col.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") createTask(col.value);
-                          if (e.key === "Escape") {
-                            setAdding(null);
-                            setNewName("");
-                          }
-                        }}
-                        placeholder="Nom de la tâche…"
-                        className="w-full rounded border border-brand-800 bg-brand-950 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAdding(col.value);
-                          setNewName("");
-                        }}
-                        className="flex w-full items-center justify-center gap-1 rounded border border-dashed border-brand-700 px-2 py-1.5 text-[11px] text-white/40 hover:border-accent-500 hover:text-accent-400"
-                      >
-                        <Plus className="h-3 w-3" /> Tâche
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <TaskBoard
+            tasks={boardItems}
+            users={users}
+            onPatch={(taskId, patch) => {
+              const out: Partial<Task> = {};
+              if (patch.title !== undefined) out.name = patch.title;
+              if (patch.status !== undefined) out.status = patch.status;
+              if (patch.priority !== undefined) out.priority = patch.priority;
+              if (patch.due_date !== undefined) out.due_date = patch.due_date;
+              if (patch.position !== undefined) out.position = patch.position;
+              if (patch.assignee_user_ids !== undefined) {
+                out.assignee_user_ids = patch.assignee_user_ids;
+                out.assignee_user_id = patch.assignee_user_ids[0] ?? null;
+              }
+              if (patch.immeuble_ids !== undefined) {
+                out.immeuble_ids = patch.immeuble_ids;
+              }
+              void patchTask(taskId, out);
+            }}
+            onDelete={(taskId) => void deleteTaskById(taskId)}
+            onOpenDetails={(taskId) => setDetailTaskId(taskId)}
+            onMove={(taskId) => {
+              const t = tasks.find((x) => x.id === taskId);
+              if (t) setMoveTask(t);
+            }}
+            onCreate={(status, name) => void createTask(status, name)}
+          />
         </div>
       </div>
 
@@ -483,9 +375,11 @@ export default function DealDetailPage() {
                   status: t.status,
                   priority: t.priority || "non_assigne",
                   due_date: t.due_date,
-                  assignee_user_ids: t.assignee_user_ids || []
+                  assignee_user_ids: t.assignee_user_ids || [],
+                  immeuble_ids: t.immeuble_ids || []
                 }}
                 users={users}
+                immeubles={immeubles}
                 onClose={() => setDetailTaskId(null)}
                 onPatch={(patch) => {
                   const out: Partial<Task> = {};
@@ -502,12 +396,148 @@ export default function DealDetailPage() {
                     out.assignee_user_id =
                       patch.assignee_user_ids[0] ?? null;
                   }
+                  if (patch.immeuble_ids !== undefined) {
+                    out.immeuble_ids = patch.immeuble_ids;
+                  }
                   void patchTask(t.id, out);
                 }}
               />
             );
           })()
         : null}
+
+      {moveTask ? (
+        <MoveTaskToDealDialog
+          task={moveTask}
+          currentDealId={dealId}
+          onClose={() => setMoveTask(null)}
+          onMoved={() => {
+            // La tâche est partie sur un autre deal — on la retire
+            // de la liste locale.
+            setTasks((xs) => xs.filter((x) => x.id !== moveTask.id));
+            setMoveTask(null);
+          }}
+        />
+      ) : null}
     </>
+  );
+}
+
+/**
+ * Dialogue qui demande le deal cible pour déplacer une tâche.
+ * Liste les autres deals (sauf le courant) et patche
+ * ProspectionDealTask.deal_id côté serveur.
+ */
+function MoveTaskToDealDialog({
+  task,
+  currentDealId,
+  onClose,
+  onMoved
+}: {
+  task: Task;
+  currentDealId: number;
+  onClose: () => void;
+  onMoved: () => void;
+}) {
+  const [list, setList] = useState<Deal[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await authedFetch("/api/v1/prospection/deals");
+        if (!res.ok) throw new Error();
+        const all = (await res.json()) as Deal[];
+        setList(all.filter((d) => d.id !== currentDealId));
+      } catch {
+        setErr("Impossible de charger la liste des deals.");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [currentDealId]);
+
+  async function move(targetId: number) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/prospection/deals/${currentDealId}/tasks/${task.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ deal_id: targetId })
+        }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      onMoved();
+    } catch (e) {
+      setErr((e as Error).message || "Déplacement échoué.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={() => (!busy ? onClose() : null)}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl border border-brand-800 bg-brand-950 p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-base font-bold text-white">
+          Déplacer « {task.name} »
+        </h3>
+        <p className="mt-1 text-xs text-white/50">
+          Choisis le deal vers lequel déplacer la tâche.
+        </p>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
+          </div>
+        ) : list.length === 0 ? (
+          <p className="mt-4 rounded-md border border-dashed border-brand-800 bg-brand-900/40 px-3 py-3 text-center text-xs text-white/50">
+            Aucun autre deal — créez-en un dans Pipeline.
+          </p>
+        ) : (
+          <ul className="mt-4 max-h-72 space-y-1 overflow-y-auto">
+            {list.map((d) => (
+              <li key={d.id}>
+                <button
+                  type="button"
+                  onClick={() => move(d.id)}
+                  disabled={busy}
+                  className="flex w-full items-center gap-2 rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-left text-sm text-white hover:border-emerald-500/50 hover:bg-emerald-500/10 disabled:opacity-50"
+                >
+                  <MapPin className="h-3.5 w-3.5 flex-shrink-0 text-emerald-400" />
+                  <span className="truncate">{d.address}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {err ? (
+          <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+            {err}
+          </p>
+        ) : null}
+
+        <div className="mt-4 flex items-center justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="btn-secondary text-sm"
+          >
+            Annuler
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
