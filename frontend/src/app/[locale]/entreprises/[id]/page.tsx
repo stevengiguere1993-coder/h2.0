@@ -130,7 +130,9 @@ export default function EntrepriseDetailPage() {
   const [immeubles, setImmeubles] = useState<ImmeubleMini[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [modal, setModal] = useState<Tache | { fresh: true } | null>(null);
+  // La modale détaillée est désormais gérée à l'intérieur du
+  // composant partagé <TaskBoard>. Plus besoin de state local pour
+  // l'ouvrir.
   // Tâche à déplacer vers une autre entreprise. Quand c'est défini,
   // on affiche un mini dialogue qui liste les entreprises.
   const [moveTask, setMoveTask] = useState<Tache | null>(null);
@@ -210,10 +212,12 @@ export default function EntrepriseDetailPage() {
         due_date: t.due_date,
         assignee_user_ids: t.assignee_user_ids || [],
         hasNote: Boolean(t.description),
+        notes: t.description,
         // Pas de position côté entreprise : on classe par score
         // décroissant en utilisant `position = -score` (les positions
         // négatives plus basses arrivent en premier).
         position: t.score != null ? -t.score : 0,
+        immeuble_ids: t.immeuble_ids || [],
         immeubleLabels: (t.immeuble_ids || [])
           .map((id) => immeubleNameById.get(id))
           .filter((n): n is string => Boolean(n)),
@@ -271,11 +275,14 @@ export default function EntrepriseDetailPage() {
   }
 
   // Création inline depuis le bouton « + Tâche » d'une colonne du
-  // kanban. Crée une tâche minimale (titre + statut) ; les autres
-  // champs (description, ICE, récurrence) restent éditables ensuite
-  // via la fiche complète.
-  async function createTacheInline(status: string, title: string) {
-    if (!ent) return;
+  // kanban (et depuis « + Nouvelle tâche » en haut de la section, qui
+  // ouvre directement la fiche détaillée pour finir de remplir).
+  // Retourne l'id créé pour que <TaskBoard> puisse ouvrir la modale.
+  async function createTacheInline(
+    status: string,
+    title: string
+  ): Promise<number | null> {
+    if (!ent) return null;
     try {
       const res = await authedFetch("/api/v1/entreprises/taches", {
         method: "POST",
@@ -288,8 +295,10 @@ export default function EntrepriseDetailPage() {
       if (!res.ok) throw new Error();
       const created = (await res.json()) as Tache;
       setTaches((xs) => [...xs, created]);
+      return created.id;
     } catch {
       setError("Création de tâche échouée.");
+      return null;
     }
   }
 
@@ -331,15 +340,6 @@ export default function EntrepriseDetailPage() {
     }
   }
 
-  function upsertTache(t: Tache) {
-    setTaches((xs) => {
-      const i = xs.findIndex((x) => x.id === t.id);
-      if (i === -1) return [...xs, t];
-      const n = xs.slice();
-      n[i] = t;
-      return n;
-    });
-  }
 
   if (loading || !ent) {
     return (
@@ -453,10 +453,12 @@ export default function EntrepriseDetailPage() {
         <TaskBoard
           tasks={boardItems}
           users={users}
-          onNewTask={() => setModal({ fresh: true })}
+          immeubles={immeubles}
+          onImmeublesChanged={() => void reloadImmeubles()}
           onPatch={(taskId, patch) => {
             const out: Partial<Tache> = {};
             if (patch.title !== undefined) out.title = patch.title;
+            if (patch.notes !== undefined) out.description = patch.notes;
             if (patch.status !== undefined) out.status = patch.status;
             if (patch.priority !== undefined) out.priority = patch.priority;
             if (patch.due_date !== undefined) out.due_date = patch.due_date;
@@ -475,33 +477,23 @@ export default function EntrepriseDetailPage() {
             const t = taches.find((x) => x.id === taskId);
             if (t) void removeTache(t);
           }}
-          onOpenDetails={(taskId) => {
-            const t = taches.find((x) => x.id === taskId);
-            if (t) setModal(t);
-          }}
           onMove={(taskId) => {
             const t = taches.find((x) => x.id === taskId);
             if (t) setMoveTask(t);
           }}
-          onCreate={(status, name) => void createTacheInline(status, name)}
+          onCreate={(status, name) => createTacheInline(status, name)}
+          extraModalSection={(item) => {
+            const t = taches.find((x) => x.id === item.id);
+            if (!t) return null;
+            return (
+              <EntrepriseTaskExtras
+                tache={t}
+                onPatch={(p) => void patchTache(t.id, p)}
+              />
+            );
+          }}
         />
       </div>
-
-      {modal ? (
-        <TacheModal
-          seed={modal}
-          entrepriseId={ent.id}
-          employes={employes}
-          users={users}
-          immeubles={immeubles}
-          onClose={() => setModal(null)}
-          onSaved={(t) => {
-            upsertTache(t);
-            setModal(null);
-          }}
-          onImmeublesChanged={() => void reloadImmeubles()}
-        />
-      ) : null}
 
       {moveTask ? (
         <MoveTacheDialog
@@ -516,6 +508,162 @@ export default function EntrepriseDetailPage() {
         />
       ) : null}
     </>
+  );
+}
+
+/**
+ * Champs spécifiques aux tâches d'entreprise injectés dans la
+ * <TaskDetailsModal> partagée via le slot extraSection : département
+ * libre, ICE (impact / confiance / effort) et récurrence. Auto-save
+ * sur blur — le parent fournit `onPatch` qui pousse les valeurs
+ * directement sur l'API entreprise.
+ */
+function EntrepriseTaskExtras({
+  tache,
+  onPatch
+}: {
+  tache: Tache;
+  onPatch: (patch: Partial<Tache>) => void;
+}) {
+  const [departement, setDepartement] = useState(tache.departement || "");
+  const [recurrence, setRecurrence] = useState(tache.recurrence || "");
+  const [impact, setImpact] = useState(
+    tache.impact != null ? String(tache.impact) : ""
+  );
+  const [confidence, setConfidence] = useState(
+    tache.confidence != null ? String(tache.confidence) : ""
+  );
+  const [effort, setEffort] = useState(
+    tache.effort != null ? String(tache.effort) : ""
+  );
+
+  // Resync si la tâche change.
+  useEffect(() => {
+    setDepartement(tache.departement || "");
+    setRecurrence(tache.recurrence || "");
+    setImpact(tache.impact != null ? String(tache.impact) : "");
+    setConfidence(tache.confidence != null ? String(tache.confidence) : "");
+    setEffort(tache.effort != null ? String(tache.effort) : "");
+  }, [tache.id, tache.departement, tache.recurrence, tache.impact, tache.confidence, tache.effort]);
+
+  function commitNumber(
+    value: string,
+    current: number | null,
+    field: "impact" | "confidence" | "effort"
+  ) {
+    const v = value.trim() === "" ? null : Number(value);
+    if (v === current) return;
+    if (v != null && (Number.isNaN(v) || v < 1 || v > 10)) return;
+    onPatch({ [field]: v } as Partial<Tache>);
+  }
+
+  return (
+    <div className="space-y-3 rounded-lg border border-brand-800 bg-brand-900/40 p-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="label">Département</label>
+          <input
+            type="text"
+            value={departement}
+            onChange={(e) => setDepartement(e.target.value)}
+            onBlur={() => {
+              const v = departement.trim();
+              if (v !== (tache.departement || ""))
+                onPatch({ departement: v || null });
+            }}
+            placeholder="finance / opérations / RH…"
+            className="input"
+          />
+        </div>
+        <div>
+          <label className="label">Récurrence</label>
+          <select
+            value={recurrence}
+            onChange={(e) => {
+              const v = e.target.value;
+              setRecurrence(v);
+              if (v !== (tache.recurrence || ""))
+                onPatch({ recurrence: v || null });
+            }}
+            className="input"
+          >
+            <option value="">— Tâche unique —</option>
+            <option value="daily">Quotidienne</option>
+            <option value="weekly">Hebdomadaire</option>
+            <option value="biweekly">Aux 2 semaines</option>
+            <option value="monthly">Mensuelle</option>
+            <option value="quarterly">Trimestrielle</option>
+            <option value="yearly">Annuelle</option>
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
+          ICE (1-10)
+        </p>
+        <p className="text-[10px] text-white/40">
+          Impact × Confiance / Effort. Score auto-calculé.
+        </p>
+        <div className="mt-1.5 grid gap-2 sm:grid-cols-3">
+          <ICEInput
+            label="Impact"
+            value={impact}
+            onChange={setImpact}
+            onCommit={() => commitNumber(impact, tache.impact, "impact")}
+          />
+          <ICEInput
+            label="Confiance"
+            value={confidence}
+            onChange={setConfidence}
+            onCommit={() =>
+              commitNumber(confidence, tache.confidence, "confidence")
+            }
+          />
+          <ICEInput
+            label="Effort"
+            value={effort}
+            onChange={setEffort}
+            onCommit={() => commitNumber(effort, tache.effort, "effort")}
+          />
+        </div>
+        {tache.score != null ? (
+          <p className="mt-1 text-[11px] text-violet-300">
+            Score : <span className="font-bold">{tache.score.toFixed(1)}</span>
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ICEInput({
+  label,
+  value,
+  onChange,
+  onCommit
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  onCommit: () => void;
+}) {
+  return (
+    <div>
+      <label className="block text-[10px] font-medium text-white/70">
+        {label}
+      </label>
+      <input
+        type="number"
+        min={1}
+        max={10}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={onCommit}
+        placeholder="—"
+        className="input mt-0.5"
+      />
+    </div>
   );
 }
 
@@ -647,386 +795,6 @@ function MoveTacheDialog({
 // carte se fait dans /components/task-card.tsx (et /task-board.tsx
 // pour la mise en page du kanban).
 
-function TacheModal({
-  seed,
-  entrepriseId,
-  employes,
-  users,
-  immeubles,
-  onClose,
-  onSaved,
-  onImmeublesChanged
-}: {
-  seed: Tache | { fresh: true };
-  entrepriseId: number;
-  employes: Employe[];
-  users: TaskUserMini[];
-  immeubles: ImmeubleMini[];
-  onClose: () => void;
-  onSaved: (t: Tache) => void;
-  onImmeublesChanged: () => void;
-}) {
-  // employes (legacy) reste utilisé pour les anciens consumers de
-  // la modal — on le garde dans la signature mais on s'appuie sur
-  // `users` pour l'AssigneePicker multi.
-  void employes;
-  const existing = "id" in seed ? seed : null;
-  const [title, setTitle] = useState(existing?.title || "");
-  const [description, setDescription] = useState(
-    existing?.description || ""
-  );
-  const [departement, setDepartement] = useState(
-    existing?.departement || ""
-  );
-  // Priorité (alignée sur la pastille Priorité de la carte) :
-  // non_assigne / urgent / eleve / moyenne / faible.
-  const [priority, setPriority] = useState(
-    existing?.priority || "non_assigne"
-  );
-  // Nouvelles tâches : on démarre direct dans « À faire » (a_faire) —
-  // l'utilisateur veut généralement que la tâche soit déjà engagée
-  // à la création. Backlog a été retiré ; todo (« À venir ») est
-  // moins pertinent comme défaut.
-  const [status, setStatus] = useState(existing?.status || "a_faire");
-  const [impact, setImpact] = useState(
-    existing?.impact != null ? String(existing.impact) : ""
-  );
-  const [confidence, setConfidence] = useState(
-    existing?.confidence != null ? String(existing.confidence) : ""
-  );
-  const [effort, setEffort] = useState(
-    existing?.effort != null ? String(existing.effort) : ""
-  );
-  const [assigneeIds, setAssigneeIds] = useState<number[]>(
-    existing?.assignee_user_ids && existing.assignee_user_ids.length > 0
-      ? existing.assignee_user_ids
-      : existing?.assignee_user_id
-        ? [existing.assignee_user_id]
-        : []
-  );
-  const [dueDate, setDueDate] = useState(existing?.due_date || "");
-  const [recurrence, setRecurrence] = useState(existing?.recurrence || "");
-  const [immeubleIds, setImmeubleIds] = useState<number[]>(
-    existing?.immeuble_ids || []
-  );
-  const [aiRationale, setAiRationale] = useState<string>("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function save(e: React.FormEvent) {
-    e.preventDefault();
-    if (!title.trim()) {
-      setErr("Le titre est requis.");
-      return;
-    }
-    setBusy(true);
-    setErr(null);
-    try {
-      const payload = {
-        entreprise_id: entrepriseId,
-        title: title.trim(),
-        description: description.trim() || null,
-        departement: departement.trim() || null,
-        status,
-        priority,
-        impact: impact ? Number(impact) : null,
-        confidence: confidence ? Number(confidence) : null,
-        effort: effort ? Number(effort) : null,
-        assignee_user_ids: assigneeIds,
-        assignee_user_id: assigneeIds[0] ?? null,
-        due_date: dueDate || null,
-        recurrence: recurrence || null,
-        immeuble_ids: immeubleIds
-      };
-      const res = await authedFetch(
-        existing
-          ? `/api/v1/entreprises/taches/${existing.id}`
-          : "/api/v1/entreprises/taches",
-        {
-          method: existing ? "PATCH" : "POST",
-          body: JSON.stringify(payload)
-        }
-      );
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
-      }
-      onSaved((await res.json()) as Tache);
-    } catch (e) {
-      setErr((e as Error).message);
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4"
-      onClick={() => (!busy ? onClose() : null)}
-    >
-      <form
-        onSubmit={save}
-        onClick={(e) => e.stopPropagation()}
-        className="mt-8 w-full max-w-2xl rounded-2xl border border-brand-800 bg-brand-950 p-6 shadow-2xl"
-      >
-        <h3 className="text-lg font-bold text-white">
-          {existing ? "Modifier la tâche" : "Nouvelle tâche"}
-        </h3>
-
-        <div className="mt-5 space-y-4">
-          <div>
-            <label htmlFor="t_title" className="label">
-              Titre <span className="text-rose-400">*</span>
-            </label>
-            <input
-              id="t_title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="input"
-              required
-              maxLength={255}
-            />
-          </div>
-
-          <div>
-            <label htmlFor="t_desc" className="label">Description</label>
-            <textarea
-              id="t_desc"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={3}
-              className="input"
-            />
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div>
-              <label htmlFor="t_status" className="label">Statut</label>
-              <select
-                id="t_status"
-                value={status}
-                onChange={(e) => setStatus(e.target.value)}
-                className="input"
-              >
-                {COLUMNS.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label htmlFor="t_priority" className="label">Priorité</label>
-              <select
-                id="t_priority"
-                value={priority}
-                onChange={(e) => setPriority(e.target.value)}
-                className="input"
-              >
-                <option value="non_assigne">Non-assigné</option>
-                <option value="urgent">Urgent ⚠️</option>
-                <option value="eleve">Élevé</option>
-                <option value="moyenne">Moyenne</option>
-                <option value="faible">Faible</option>
-              </select>
-            </div>
-            <div>
-              <label htmlFor="t_due" className="label">Échéance</label>
-              <input
-                id="t_due"
-                type="date"
-                value={dueDate}
-                onChange={(e) => setDueDate(e.target.value)}
-                className="input"
-              />
-            </div>
-          </div>
-
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <label className="label mb-0">
-                Scoring ICE — score automatique
-              </label>
-              <AISuggestButton
-                disabled={!title.trim()}
-                onSuggest={async () => {
-                  return await suggestScore({
-                    entreprise_id: entrepriseId,
-                    title: title.trim(),
-                    description: description.trim() || null,
-                    departement: departement.trim() || null,
-                    due_date: dueDate || null
-                  });
-                }}
-                onApply={(s) => {
-                  setImpact(String(s.impact));
-                  setConfidence(String(s.confidence));
-                  setEffort(String(s.effort));
-                  setAiRationale(s.rationale);
-                }}
-              />
-            </div>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <NumberPicker
-                label="Impact (1-10)"
-                value={impact}
-                onChange={setImpact}
-                hint="Effet sur revenu / risque / conformité"
-              />
-              <NumberPicker
-                label="Confiance (1-10)"
-                value={confidence}
-                onChange={setConfidence}
-                hint="À quel point on est sûr du résultat"
-              />
-              <NumberPicker
-                label="Effort (1-10)"
-                value={effort}
-                onChange={setEffort}
-                hint="Temps estimé (plus haut = score plus bas)"
-              />
-            </div>
-            {aiRationale ? (
-              <div
-                className="mt-2 rounded-md p-3 text-[11px]"
-                style={{
-                  backgroundColor: "rgba(212,255,58,0.06)",
-                  border: "1px solid rgba(212,255,58,0.25)",
-                  color: "var(--qg-accent)"
-                }}
-              >
-                <span className="font-bold">✦ Justification IA : </span>
-                <span className="text-[var(--qg-text)]/85">{aiRationale}</span>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <div className="flex items-center justify-between">
-                <label className="label">Personnes</label>
-                {existing?.id ? (
-                  <SuggestAssigneeButton
-                    tacheId={existing.id}
-                    onPick={(uid) => {
-                      // L'assigné suggéré par l'IA est ajouté à la
-                      // liste s'il n'y est pas déjà.
-                      setAssigneeIds((prev) =>
-                        prev.includes(uid) ? prev : [...prev, uid]
-                      );
-                    }}
-                  />
-                ) : null}
-              </div>
-              <AssigneePicker
-                users={users}
-                values={assigneeIds}
-                onChange={setAssigneeIds}
-                variant="modal"
-              />
-            </div>
-            <div>
-              <div className="mb-1.5 flex items-center justify-between gap-2">
-                <span className="block text-sm font-medium text-white">
-                  Immeuble
-                </span>
-                <ManageImmeublesButton
-                  immeubles={immeubles}
-                  onChanged={onImmeublesChanged}
-                />
-              </div>
-              <ImmeublePicker
-                immeubles={immeubles}
-                values={immeubleIds}
-                onChange={setImmeubleIds}
-                variant="modal"
-              />
-            </div>
-            <div>
-              <label htmlFor="t_rec" className="label">Récurrence</label>
-              <select
-                id="t_rec"
-                value={recurrence}
-                onChange={(e) => setRecurrence(e.target.value)}
-                className="input"
-              >
-                <option value="">— Tâche unique —</option>
-                <option value="daily">Quotidienne</option>
-                <option value="weekly">Hebdomadaire</option>
-                <option value="biweekly">Aux 2 semaines</option>
-                <option value="monthly">Mensuelle</option>
-                <option value="quarterly">Trimestrielle</option>
-                <option value="yearly">Annuelle</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {err ? (
-          <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-            {err}
-          </p>
-        ) : null}
-
-        <div className="mt-6 flex items-center justify-end gap-3">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="btn-secondary text-sm"
-          >
-            Annuler
-          </button>
-          <button
-            type="submit"
-            disabled={busy}
-            className="btn-accent text-sm disabled:opacity-60"
-          >
-            {busy ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Sauvegarde…
-              </>
-            ) : existing ? (
-              "Enregistrer"
-            ) : (
-              "Créer la tâche"
-            )}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-function NumberPicker({
-  label,
-  value,
-  onChange,
-  hint
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  hint: string;
-}) {
-  return (
-    <div>
-      <label className="block text-xs font-medium text-white/80">
-        {label}
-      </label>
-      <input
-        type="number"
-        min={1}
-        max={10}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="input mt-1"
-        placeholder="—"
-      />
-      <p className="mt-1 text-[10px] text-white/40">{hint}</p>
-    </div>
-  );
-}
 
 
 // ─── Daily Pulse — card briefing IA ───────────────────────────────────
@@ -1260,94 +1028,6 @@ async function suggestScore(payload: {
   return (await res.json()) as ScoreSuggestion;
 }
 
-function AISuggestButton({
-  disabled,
-  onSuggest,
-  onApply
-}: {
-  disabled?: boolean;
-  onSuggest: () => Promise<ScoreSuggestion>;
-  onApply: (s: ScoreSuggestion) => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function run() {
-    setBusy(true);
-    setErr(null);
-    try {
-      const s = await onSuggest();
-      onApply(s);
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="flex flex-col items-end gap-1">
-      <button
-        type="button"
-        onClick={run}
-        disabled={busy || disabled}
-        title={
-          disabled
-            ? "Saisis d'abord le titre de la tâche"
-            : "L'IA analyse la tâche et propose impact/confiance/effort"
-        }
-        className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-bold transition disabled:cursor-not-allowed disabled:opacity-40"
-        style={{
-          backgroundColor: "rgba(212,255,58,0.12)",
-          border: "1px solid rgba(212,255,58,0.45)",
-          color: "var(--qg-accent)"
-        }}
-      >
-        {busy ? (
-          <>
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Analyse…
-          </>
-        ) : (
-          <>✦ Suggérer avec l&apos;IA</>
-        )}
-      </button>
-      {err ? (
-        <span className="text-[10px] text-rose-300">{err}</span>
-      ) : null}
-    </div>
-  );
-}
-
-// ─── Section Immobilier ────────────────────────────────────────────────
-
-type ImmobilierImmeubleItem = {
-  immeuble_id: number;
-  name: string;
-  address: string;
-  city: string | null;
-  cover_photo_url: string | null;
-  ownership_pct: number;
-  nb_logements_actifs: number;
-  nb_logements_occupes: number;
-  revenu_mensuel_part: number;
-  valeur_part: number | null;
-  balance_hyp_part: number | null;
-};
-
-type ImmobilierSummary = {
-  entreprise_id: number;
-  nb_immeubles: number;
-  nb_logements_actifs: number;
-  nb_logements_occupes: number;
-  taux_occupation: number;
-  revenu_mensuel_part: number;
-  revenu_annuel_part: number;
-  valeur_portefeuille_part: number;
-  balance_hypothecaire_part: number;
-  equity_part: number;
-  immeubles: ImmobilierImmeubleItem[];
-};
 
 function fmtCurrencyImmo(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -1481,135 +1161,6 @@ function ImmoKpi({
   );
 }
 
-// ─── Suggest assignee dropdown ─────────────────────────────────────────
-
-type AssignSuggestion = {
-  user_id: number;
-  full_name: string;
-  email: string;
-  score: number;
-  nb_taches_open: number;
-  charge_effort: number;
-  free_hours_next_7d: number;
-  next_free_slot?: string | null;
-  reasons: string[];
-};
-
-function SuggestAssigneeButton({
-  tacheId,
-  onPick
-}: {
-  tacheId: number;
-  onPick: (userId: number) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [suggestions, setSuggestions] = useState<AssignSuggestion[]>([]);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function load() {
-    setLoading(true);
-    setErr(null);
-    try {
-      const res = await authedFetch(
-        `/api/v1/entreprises/taches/${tacheId}/suggest-assignees?top_n=3`
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setSuggestions((await res.json()) as AssignSuggestion[]);
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function toggle() {
-    if (!open) void load();
-    setOpen(!open);
-  }
-
-  return (
-    <div className="relative inline-block">
-      <button
-        type="button"
-        onClick={toggle}
-        className="inline-flex items-center gap-1 text-[10px] font-semibold text-violet-300 hover:text-violet-200"
-      >
-        ✦ Suggérer
-      </button>
-      {open ? (
-        <div className="absolute right-0 z-30 mt-1 w-72 rounded-lg border border-brand-700 bg-brand-950 p-2 shadow-2xl">
-          {loading ? (
-            <p className="px-2 py-1 text-[11px] text-white/50">
-              Calcul…
-            </p>
-          ) : err ? (
-            <p className="px-2 py-1 text-[11px] text-rose-300">{err}</p>
-          ) : suggestions.length === 0 ? (
-            <p className="px-2 py-1 text-[11px] text-white/50">
-              Aucun candidat trouvé.
-            </p>
-          ) : (
-            <ul className="space-y-1">
-              {suggestions.map((s, i) => (
-                <li key={s.user_id}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onPick(s.user_id);
-                      setOpen(false);
-                    }}
-                    className="block w-full rounded-md px-2 py-1.5 text-left hover:bg-brand-900"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-xs font-bold text-white">
-                        {i === 0 ? "★ " : ""}
-                        {s.full_name}
-                      </span>
-                      <span className="font-mono text-[10px] text-violet-300">
-                        {s.score >= 0 ? `+${s.score}` : s.score}
-                      </span>
-                    </div>
-                    <div className="mt-0.5 truncate text-[10px] text-white/50">
-                      {s.reasons.join(" · ")}
-                    </div>
-                    {s.next_free_slot ? (
-                      <div className="mt-0.5 text-[10px] text-emerald-300">
-                        ⏱ Libre à partir de{" "}
-                        {new Date(s.next_free_slot).toLocaleString("fr-CA", {
-                          weekday: "short",
-                          day: "2-digit",
-                          month: "short",
-                          hour: "2-digit",
-                          minute: "2-digit"
-                        })}
-                      </div>
-                    ) : null}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-// ─── Section Partenaires ───────────────────────────────────────────────
-
-type Partner = {
-  id: number;
-  entreprise_id: number;
-  user_id: number | null;
-  partner_name: string | null;
-  partner_email: string | null;
-  partner_notes: string | null;
-  role: string;
-  ownership_pct: number | null;
-  display_name: string;
-  display_email: string | null;
-};
 
 const PARTNER_ROLES = [
   { value: "associe", label: "Associé" },

@@ -55,7 +55,8 @@ export function TaskDetailsModal({
   immeubles,
   onClose,
   onPatch,
-  onImmeublesChanged
+  onImmeublesChanged,
+  extraSection
 }: {
   task: TaskDetailsModalData;
   users: TaskUserMini[];
@@ -66,6 +67,10 @@ export function TaskDetailsModal({
    *  catalogue depuis le bouton « Gérer ». Le parent doit re-fetch
    *  /api/v1/immeubles/picker pour rafraîchir la liste affichée. */
   onImmeublesChanged?: () => void;
+  /** Slot rendu après les champs standards et avant les notes —
+   *  utilisé par l'entreprise pour ajouter ICE / récurrence /
+   *  département. Pipeline ne fournit rien. */
+  extraSection?: React.ReactNode;
 }) {
   const [title, setTitle] = useState(task.title);
   const [notes, setNotes] = useState(task.notes);
@@ -217,6 +222,8 @@ export function TaskDetailsModal({
               variant="modal"
             />
           </div>
+
+          {extraSection ? <div>{extraSection}</div> : null}
 
           <div>
             <label className="label">Notes</label>

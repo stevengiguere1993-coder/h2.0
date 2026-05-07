@@ -14,7 +14,6 @@ import {
   type TaskUserMini
 } from "@/components/task-pills";
 import { TaskBoard, type TaskBoardItem } from "@/components/task-board";
-import { TaskDetailsModal } from "@/components/task-details-modal";
 import type { ImmeubleMini } from "@/components/immeuble-picker";
 
 /**
@@ -64,7 +63,6 @@ export default function DealDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState("");
-  const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
   const [moveTask, setMoveTask] = useState<Task | null>(null);
 
   const load = useCallback(async () => {
@@ -169,7 +167,10 @@ export default function DealDetailPage() {
     }
   }
 
-  async function createTask(status: string, name: string) {
+  async function createTask(
+    status: string,
+    name: string
+  ): Promise<number | null> {
     try {
       const r = await authedFetch(
         `/api/v1/prospection/deals/${dealId}/tasks`,
@@ -181,8 +182,10 @@ export default function DealDetailPage() {
       if (!r.ok) throw new Error();
       const created = (await r.json()) as Task;
       setTasks((xs) => [...xs, created]);
+      return created.id;
     } catch {
       setError("Création de tâche échouée.");
+      return null;
     }
   }
 
@@ -214,7 +217,9 @@ export default function DealDetailPage() {
     due_date: t.due_date,
     assignee_user_ids: t.assignee_user_ids || [],
     hasNote: Boolean(t.notes),
+    notes: t.notes,
     position: t.position,
+    immeuble_ids: t.immeuble_ids || [],
     immeubleLabels: (t.immeuble_ids || [])
       .map((id) => immeubleNameById.get(id))
       .filter((n): n is string => Boolean(n))
@@ -334,87 +339,36 @@ export default function DealDetailPage() {
           </p>
         ) : null}
 
-        {/* Tâches — kanban rendu par le composant partagé <TaskBoard>.
-            Mêmes colonnes / cartes / drag-drop / création inline /
-            bouton « Déplacer » que les tâches d'entreprise. */}
-        <div className="mt-6">
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-white/50">
-            Tâches
-          </h2>
-          <TaskBoard
-            tasks={boardItems}
-            users={users}
-            onPatch={(taskId, patch) => {
-              const out: Partial<Task> = {};
-              if (patch.title !== undefined) out.name = patch.title;
-              if (patch.status !== undefined) out.status = patch.status;
-              if (patch.priority !== undefined) out.priority = patch.priority;
-              if (patch.due_date !== undefined) out.due_date = patch.due_date;
-              if (patch.position !== undefined) out.position = patch.position;
-              if (patch.assignee_user_ids !== undefined) {
-                out.assignee_user_ids = patch.assignee_user_ids;
-                out.assignee_user_id = patch.assignee_user_ids[0] ?? null;
-              }
-              if (patch.immeuble_ids !== undefined) {
-                out.immeuble_ids = patch.immeuble_ids;
-              }
-              void patchTask(taskId, out);
-            }}
-            onDelete={(taskId) => void deleteTaskById(taskId)}
-            onOpenDetails={(taskId) => setDetailTaskId(taskId)}
-            onMove={(taskId) => {
-              const t = tasks.find((x) => x.id === taskId);
-              if (t) setMoveTask(t);
-            }}
-            onCreate={(status, name) => void createTask(status, name)}
-          />
-        </div>
+        <TaskBoard
+          tasks={boardItems}
+          users={users}
+          immeubles={immeubles}
+          onImmeublesChanged={() => void reloadImmeubles()}
+          onPatch={(taskId, patch) => {
+            const out: Partial<Task> = {};
+            if (patch.title !== undefined) out.name = patch.title;
+            if (patch.notes !== undefined) out.notes = patch.notes;
+            if (patch.status !== undefined) out.status = patch.status;
+            if (patch.priority !== undefined) out.priority = patch.priority;
+            if (patch.due_date !== undefined) out.due_date = patch.due_date;
+            if (patch.position !== undefined) out.position = patch.position;
+            if (patch.assignee_user_ids !== undefined) {
+              out.assignee_user_ids = patch.assignee_user_ids;
+              out.assignee_user_id = patch.assignee_user_ids[0] ?? null;
+            }
+            if (patch.immeuble_ids !== undefined) {
+              out.immeuble_ids = patch.immeuble_ids;
+            }
+            void patchTask(taskId, out);
+          }}
+          onDelete={(taskId) => void deleteTaskById(taskId)}
+          onMove={(taskId) => {
+            const t = tasks.find((x) => x.id === taskId);
+            if (t) setMoveTask(t);
+          }}
+          onCreate={(status, name) => createTask(status, name)}
+        />
       </div>
-
-      {detailTaskId !== null
-        ? (() => {
-            const t = tasks.find((x) => x.id === detailTaskId);
-            if (!t) return null;
-            return (
-              <TaskDetailsModal
-                task={{
-                  id: t.id,
-                  title: t.name,
-                  notes: t.notes || "",
-                  status: t.status,
-                  priority: t.priority || "non_assigne",
-                  due_date: t.due_date,
-                  assignee_user_ids: t.assignee_user_ids || [],
-                  immeuble_ids: t.immeuble_ids || []
-                }}
-                users={users}
-                immeubles={immeubles}
-                onImmeublesChanged={() => void reloadImmeubles()}
-                onClose={() => setDetailTaskId(null)}
-                onPatch={(patch) => {
-                  const out: Partial<Task> = {};
-                  if (patch.title !== undefined) out.name = patch.title;
-                  if (patch.notes !== undefined) out.notes = patch.notes;
-                  if (patch.status !== undefined)
-                    out.status = patch.status;
-                  if (patch.priority !== undefined)
-                    out.priority = patch.priority;
-                  if (patch.due_date !== undefined)
-                    out.due_date = patch.due_date;
-                  if (patch.assignee_user_ids !== undefined) {
-                    out.assignee_user_ids = patch.assignee_user_ids;
-                    out.assignee_user_id =
-                      patch.assignee_user_ids[0] ?? null;
-                  }
-                  if (patch.immeuble_ids !== undefined) {
-                    out.immeuble_ids = patch.immeuble_ids;
-                  }
-                  void patchTask(t.id, out);
-                }}
-              />
-            );
-          })()
-        : null}
 
       {moveTask ? (
         <MoveTaskToDealDialog

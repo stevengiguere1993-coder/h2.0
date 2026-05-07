@@ -12,77 +12,118 @@ import {
   TASK_PRIORITY_OPTIONS,
   TASK_STATUS_OPTIONS
 } from "@/lib/task-config";
-import type { TaskUserMini } from "@/components/task-pills";
 import {
   AssigneePicker,
   DatePill,
-  PillPicker
+  PillPicker,
+  type TaskUserMini
 } from "@/components/task-pills";
+import {
+  TaskDetailsModal,
+  type TaskDetailsModalPatch
+} from "@/components/task-details-modal";
+import type { ImmeubleMini } from "@/components/immeuble-picker";
 
 /**
  * Section « Tâches » partagée — utilisée à l'identique par la fiche
  * d'une entreprise et celle d'un deal du Pipeline. Contient :
  *
- *   - Le **titre « Tâches »** + bouton « + Nouvelle tâche » (qui
- *     délègue au parent l'ouverture de sa propre modale, le cas
- *     échéant — Entreprise a une modale riche, Pipeline pas).
- *   - Un **toggle Tableau / Kanban** pour basculer la présentation.
- *   - La **vue Tableau** : liste plate compacte (statut éditable
- *     inline, click row → ouvre la fiche).
- *   - La **vue Kanban** : 4 colonnes (todo / a_faire / in_progress
- *     / done) issues du module partagé /lib/task-config, avec
- *     drag-drop entre colonnes, création inline « + Tâche » par
- *     colonne, et bouton « Déplacer » optionnel.
+ *   - Le **titre « Tâches »** + bouton « + Nouvelle tâche ».
+ *   - Le **toggle Tableau / Kanban**.
+ *   - La **vue Tableau** : liste plate compacte (statut / priorité /
+ *     personnes / échéance éditables inline, click row → ouvre la
+ *     fiche).
+ *   - La **vue Kanban** : 4 colonnes (todo / a_faire / in_progress /
+ *     done) issues de /lib/task-config, drag-drop, création inline
+ *     « + Tâche » par colonne, bouton « Déplacer » optionnel.
+ *   - **La fiche détaillée** (TaskDetailsModal) pour une tâche
+ *     sélectionnée. Le parent peut injecter des champs additionnels
+ *     spécifiques au volet via `extraModalSection`.
  *
- * Toute évolution visuelle ou fonctionnelle se fait à un seul
- * endroit, ce qui propage l'effet à toutes les sections « Tâches »
- * de l'app.
+ * Toute évolution visuelle ou fonctionnelle de la section « Tâches »
+ * se fait dans ce composant — propage à tous les volets qui le
+ * consomment.
  */
 
 export type TaskBoardItem = TaskCardData & {
   position?: number;
-  // Footer libre rendu sous les pastilles (utilisé par l'entreprise
-  // pour les badges score / récurrence / département).
+  /** Notes / description complète — alimente la TaskDetailsModal. */
+  notes?: string | null;
+  /** Liste brute des immeubles liés à la tâche — alimente le picker
+   *  dans la TaskDetailsModal. `immeubleLabels` reste utilisé pour
+   *  l'affichage compact sur la carte. */
+  immeuble_ids?: number[];
+  /** Footer libre rendu sous les pastilles de la carte (utilisé par
+   *  l'entreprise pour les badges score / récurrence / département). */
   footer?: React.ReactNode;
+};
+
+export type TaskBoardPatch = TaskCardPatch & {
+  notes?: string | null;
+  position?: number;
 };
 
 export function TaskBoard({
   tasks,
   users,
+  immeubles,
   onPatch,
   onDelete,
-  onOpenDetails,
   onMove,
   onCreate,
-  onNewTask,
+  onImmeublesChanged,
+  extraModalSection,
   title = "Tâches",
-  newTaskLabel = "Nouvelle tâche"
+  newTaskLabel = "Nouvelle tâche",
+  showNewTaskButton = true
 }: {
   tasks: TaskBoardItem[];
   users: TaskUserMini[];
-  /** Patch générique : statut, priorité, échéance, personnes, position. */
-  onPatch: (
-    taskId: number,
-    patch: TaskCardPatch & { position?: number }
-  ) => void;
+  immeubles: ImmeubleMini[];
+  /** Patch d'une tâche — appelé pour toute édition (statut, priorité,
+   *  échéance, personnes, immeubles, position, notes, titre). */
+  onPatch: (taskId: number, patch: TaskBoardPatch) => void;
   onDelete: (taskId: number) => void;
-  onOpenDetails: (taskId: number) => void;
-  /** Bouton « Déplacer » sous la poubelle. Si non fourni, l'icône
-   *  n'apparaît pas. */
+  /** Bouton « Déplacer » sur la carte. Optionnel. */
   onMove?: (taskId: number) => void;
-  /** Création inline (titre seul). Le statut = la colonne où
-   *  l'utilisateur a cliqué « + Tâche ». */
-  onCreate: (status: string, name: string) => void;
-  /** Optionnel — bouton « + Nouvelle tâche » en haut de la section.
-   *  Le parent ouvre généralement une modale plus riche
-   *  (description, ICE, récurrence pour Entreprise). Si absent, le
-   *  bouton n'est pas rendu. */
-  onNewTask?: () => void;
-  /** Titre de la section (par défaut « Tâches »). */
+  /** Création de tâche depuis le bouton « + Nouvelle tâche » en haut
+   *  ou « + Tâche » au pied d'une colonne du kanban. La page parent
+   *  fait l'appel API et retourne l'id créé pour qu'on puisse ouvrir
+   *  immédiatement la fiche détaillée. */
+  onCreate: (
+    status: string,
+    name: string
+  ) => Promise<number | null> | number | null;
+  /** Re-fetch du catalogue d'immeubles (après ajout / retrait via le
+   *  bouton « Gérer » du picker dans la modal). */
+  onImmeublesChanged?: () => void;
+  /** Slot rendu à l'intérieur de la modal détaillée — utilisé par
+   *  l'entreprise pour exposer les champs ICE / récurrence /
+   *  département. La fonction reçoit la tâche courante. */
+  extraModalSection?: (task: TaskBoardItem) => React.ReactNode;
   title?: string;
   newTaskLabel?: string;
+  showNewTaskButton?: boolean;
 }) {
   const [view, setView] = useState<"kanban" | "list">("kanban");
+  const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
+
+  async function handleNewTask() {
+    // Crée une tâche placeholder dans la première colonne (« À faire »)
+    // puis ouvre directement sa fiche pour que l'utilisateur puisse
+    // lui donner un vrai nom + remplir les autres champs.
+    const id = await onCreate("a_faire", "Nouvelle tâche");
+    if (typeof id === "number") setDetailTaskId(id);
+  }
+
+  async function handleColumnCreate(status: string, name: string) {
+    await onCreate(status, name);
+  }
+
+  const detailTask =
+    detailTaskId != null
+      ? tasks.find((t) => t.id === detailTaskId) || null
+      : null;
 
   return (
     <div className="mt-6">
@@ -91,10 +132,10 @@ export function TaskBoard({
           <h2 className="text-sm font-semibold uppercase tracking-wider text-white/50">
             {title}
           </h2>
-          {onNewTask ? (
+          {showNewTaskButton ? (
             <button
               type="button"
-              onClick={onNewTask}
+              onClick={() => void handleNewTask()}
               className="btn-accent inline-flex items-center text-xs"
             >
               <Plus className="mr-1 h-3.5 w-3.5" />
@@ -138,18 +179,43 @@ export function TaskBoard({
           users={users}
           onPatch={onPatch}
           onDelete={onDelete}
-          onOpenDetails={onOpenDetails}
+          onOpenDetails={(id) => setDetailTaskId(id)}
           onMove={onMove}
-          onCreate={onCreate}
+          onCreate={(s, n) => void handleColumnCreate(s, n)}
         />
       ) : (
         <TaskListView
           tasks={tasks}
           users={users}
           onPatch={onPatch}
-          onOpenDetails={onOpenDetails}
+          onOpenDetails={(id) => setDetailTaskId(id)}
         />
       )}
+
+      {detailTask ? (
+        <TaskDetailsModal
+          task={{
+            id: detailTask.id,
+            title: detailTask.title,
+            notes: detailTask.notes ?? "",
+            status: detailTask.status,
+            priority: detailTask.priority || "non_assigne",
+            due_date: detailTask.due_date,
+            assignee_user_ids: detailTask.assignee_user_ids || [],
+            immeuble_ids: detailTask.immeuble_ids || []
+          }}
+          users={users}
+          immeubles={immeubles}
+          onImmeublesChanged={onImmeublesChanged}
+          onClose={() => setDetailTaskId(null)}
+          onPatch={(patch: TaskDetailsModalPatch) => {
+            onPatch(detailTask.id, patch as TaskBoardPatch);
+          }}
+          extraSection={
+            extraModalSection ? extraModalSection(detailTask) : undefined
+          }
+        />
+      ) : null}
     </div>
   );
 }
@@ -167,10 +233,7 @@ function KanbanView({
 }: {
   tasks: TaskBoardItem[];
   users: TaskUserMini[];
-  onPatch: (
-    taskId: number,
-    patch: TaskCardPatch & { position?: number }
-  ) => void;
+  onPatch: (taskId: number, patch: TaskBoardPatch) => void;
   onDelete: (taskId: number) => void;
   onOpenDetails: (taskId: number) => void;
   onMove?: (taskId: number) => void;
@@ -334,10 +397,7 @@ function TaskListView({
 }: {
   tasks: TaskBoardItem[];
   users: TaskUserMini[];
-  onPatch: (
-    taskId: number,
-    patch: TaskCardPatch & { position?: number }
-  ) => void;
+  onPatch: (taskId: number, patch: TaskBoardPatch) => void;
   onOpenDetails: (taskId: number) => void;
 }) {
   const sorted = useMemo(
@@ -450,4 +510,3 @@ function TaskListView({
     </div>
   );
 }
-
