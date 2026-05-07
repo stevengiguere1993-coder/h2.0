@@ -22,7 +22,10 @@ import {
   TaskDetailsModal,
   type TaskDetailsModalPatch
 } from "@/components/task-details-modal";
-import type { ImmeubleMini } from "@/components/immeuble-picker";
+import type {
+  ImmeubleMini,
+  ImmeubleScope
+} from "@/components/immeuble-picker";
 
 /**
  * Section « Tâches » partagée — utilisée à l'identique par la fiche
@@ -80,6 +83,7 @@ export function TaskBoard({
   tasks,
   users,
   immeubles,
+  immeubleScope,
   onPatch,
   onDelete,
   onMove,
@@ -92,6 +96,8 @@ export function TaskBoard({
   tasks: TaskBoardItem[];
   users: TaskUserMini[];
   immeubles: ImmeubleMini[];
+  /** Scope du catalogue d'immeubles : entreprise_id ou deal_id. */
+  immeubleScope?: ImmeubleScope;
   /** Patch d'une tâche — appelé pour toute édition (statut, priorité,
    *  échéance, personnes, immeubles, position, notes, titre). */
   onPatch: (taskId: number, patch: TaskBoardPatch) => void;
@@ -304,6 +310,7 @@ export function TaskBoard({
           }}
           users={users}
           immeubles={immeubles}
+          immeubleScope={immeubleScope}
           onImmeublesChanged={onImmeublesChanged}
           onClose={() => setDetailTaskId(null)}
           onPatch={(patch: TaskDetailsModalPatch) => {

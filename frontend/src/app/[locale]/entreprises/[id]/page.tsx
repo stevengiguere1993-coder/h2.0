@@ -5,7 +5,6 @@ import { useParams } from "next/navigation";
 import {
   ArrowLeft,
   Briefcase,
-  ExternalLink,
   Loader2,
   Pencil,
   Plus,
@@ -148,7 +147,7 @@ export default function EntrepriseDetailPage() {
         authedFetch(`/api/v1/entreprises/taches?entreprise_id=${id}`),
         authedFetch("/api/v1/employes?limit=500"),
         authedFetch("/api/v1/users"),
-        authedFetch("/api/v1/immobilier/immeubles/picker")
+        authedFetch(`/api/v1/immobilier/immeubles/picker?entreprise_id=${id}`)
       ]);
       if (!entRes.ok) throw new Error(`HTTP ${entRes.status}`);
       const ents = (await entRes.json()) as Entreprise[];
@@ -189,7 +188,7 @@ export default function EntrepriseDetailPage() {
   // bouton « Gérer » du picker.
   async function reloadImmeubles() {
     try {
-      const r = await authedFetch("/api/v1/immobilier/immeubles/picker");
+      const r = await authedFetch(`/api/v1/immobilier/immeubles/picker?entreprise_id=${id}`);
       if (r.ok) setImmeubles((await r.json()) as ImmeubleMini[]);
     } catch {
       /* l'erreur est déjà signalée dans le dialog. */
@@ -411,7 +410,7 @@ export default function EntrepriseDetailPage() {
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={`/entreprises/${ent.id}/pilotage` as any}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-violet-700 bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-violet-400 px-3 py-1.5 text-xs font-semibold text-brand-950 shadow hover:bg-violet-300"
           >
             Pilotage
           </Link>
@@ -442,12 +441,6 @@ export default function EntrepriseDetailPage() {
             <h1 className="text-2xl font-bold text-white">{ent.name}</h1>
             {ent.description ? (
               <p className="mt-1 text-sm text-white/60">{ent.description}</p>
-            ) : null}
-            {ent.monday_board_id ? (
-              <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-violet-500/40 bg-violet-500/10 px-2.5 py-0.5 text-[10px] font-semibold text-violet-200">
-                <ExternalLink className="h-3 w-3" />
-                Synchronisée depuis Monday : {ent.monday_board_name}
-              </p>
             ) : null}
           </div>
           {/* Compteur de tâches + petit bouton « supprimer
@@ -502,6 +495,7 @@ export default function EntrepriseDetailPage() {
           tasks={boardItems}
           users={users}
           immeubles={immeubles}
+          immeubleScope={{ entreprise_id: id }}
           onImmeublesChanged={() => void reloadImmeubles()}
           onPatch={(taskId, patch) => {
             const out: Partial<Tache> = {};
@@ -1110,7 +1104,7 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
             setEditingId(null);
             setShowAdd(true);
           }}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-violet-700 bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-violet-400 px-3 py-1.5 text-xs font-semibold text-brand-950 shadow hover:bg-violet-300"
         >
           <Plus className="h-3.5 w-3.5" /> Ajouter un partenaire
         </button>
@@ -1418,7 +1412,7 @@ function LinksSection({ entrepriseId }: { entrepriseId: number }) {
         <button
           type="button"
           onClick={() => setShowAdd(true)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-violet-700 bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-violet-400 px-3 py-1.5 text-xs font-semibold text-brand-950 shadow hover:bg-violet-300"
         >
           <Plus className="h-3.5 w-3.5" /> Ajouter un lien
         </button>

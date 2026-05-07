@@ -7,8 +7,7 @@ import {
   Loader2,
   Plus,
   Sparkles,
-  TrendingUp,
-  Upload
+  TrendingUp
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
@@ -197,14 +196,6 @@ export default function EntreprisesDashboard() {
         subtitle={subtitle}
         rightSlot={
           <>
-            <Link
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              href={"/entreprises/import-monday" as any}
-              className="hidden sm:inline-flex items-center gap-1.5 rounded-md border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-1.5 text-[12px] font-medium text-[var(--qg-text-muted)] hover:border-[var(--qg-text-faint)] hover:text-[var(--qg-text)]"
-            >
-              <Upload className="h-3.5 w-3.5" />
-              Import Monday
-            </Link>
             <CTAButton href="/entreprises/taches" variant="secondary">
               <Sparkles className="h-3.5 w-3.5" />
               Briefing complet
@@ -535,19 +526,8 @@ function EmptyEntreprises() {
   return (
     <div className="px-6 py-12 text-center">
       <p className="text-sm text-[var(--qg-text-muted)]">
-        Aucune entreprise. Lance l&apos;import depuis Monday ou crée
-        manuellement.
+        Aucune entreprise. Crée-en une depuis le menu de gauche.
       </p>
-      <div className="mt-4 inline-flex gap-2">
-        <Link
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={"/entreprises/import-monday" as any}
-          className="rounded-md border border-[var(--qg-border)] bg-[var(--qg-card-bg)] px-3 py-1.5 text-[12px] text-[var(--qg-text-muted)] hover:text-[var(--qg-text)]"
-        >
-          <Upload className="mr-1.5 inline h-3 w-3" />
-          Import Monday
-        </Link>
-      </div>
     </div>
   );
 }

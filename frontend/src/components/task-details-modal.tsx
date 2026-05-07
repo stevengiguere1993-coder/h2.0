@@ -10,7 +10,8 @@ import {
 import {
   ImmeublePicker,
   ManageImmeublesButton,
-  type ImmeubleMini
+  type ImmeubleMini,
+  type ImmeubleScope
 } from "@/components/immeuble-picker";
 import {
   TASK_PRIORITY_OPTIONS,
@@ -64,6 +65,7 @@ export function TaskDetailsModal({
   task,
   users,
   immeubles,
+  immeubleScope,
   onClose,
   onPatch,
   onImmeublesChanged
@@ -71,6 +73,8 @@ export function TaskDetailsModal({
   task: TaskDetailsModalData;
   users: TaskUserMini[];
   immeubles: ImmeubleMini[];
+  /** Scope du catalogue d'immeubles : entreprise_id ou deal_id. */
+  immeubleScope?: ImmeubleScope;
   onClose: () => void;
   onPatch: (patch: TaskDetailsModalPatch) => void | Promise<void>;
   /** Optionnel — appelé après ajout/retrait d'un immeuble dans le
@@ -218,6 +222,7 @@ export function TaskDetailsModal({
                 <ManageImmeublesButton
                   immeubles={immeubles}
                   onChanged={onImmeublesChanged}
+                  scope={immeubleScope}
                 />
               ) : null}
             </div>
