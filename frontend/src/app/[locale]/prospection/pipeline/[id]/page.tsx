@@ -44,6 +44,12 @@ type Task = {
   due_date: string | null;
   position: number;
   immeuble_ids: number[];
+  departement: string | null;
+  recurrence: string | null;
+  impact: number | null;
+  confidence: number | null;
+  effort: number | null;
+  score: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -220,6 +226,12 @@ export default function DealDetailPage() {
     notes: t.notes,
     position: t.position,
     immeuble_ids: t.immeuble_ids || [],
+    departement: t.departement,
+    recurrence: t.recurrence,
+    impact: t.impact,
+    confidence: t.confidence,
+    effort: t.effort,
+    score: t.score,
     immeubleLabels: (t.immeuble_ids || [])
       .map((id) => immeubleNameById.get(id))
       .filter((n): n is string => Boolean(n))
@@ -359,6 +371,11 @@ export default function DealDetailPage() {
             if (patch.immeuble_ids !== undefined) {
               out.immeuble_ids = patch.immeuble_ids;
             }
+            if (patch.departement !== undefined) out.departement = patch.departement;
+            if (patch.recurrence !== undefined) out.recurrence = patch.recurrence;
+            if (patch.impact !== undefined) out.impact = patch.impact;
+            if (patch.confidence !== undefined) out.confidence = patch.confidence;
+            if (patch.effort !== undefined) out.effort = patch.effort;
             void patchTask(taskId, out);
           }}
           onDelete={(taskId) => void deleteTaskById(taskId)}

@@ -320,6 +320,14 @@ async def init_db() -> None:
                 "position",
                 "INTEGER NOT NULL DEFAULT 0",
             ),
+            # Champs « riches » alignés sur EntrepriseTache pour que la
+            # fiche détaillée des tâches soit identique sur les deux
+            # volets (Pipeline et Entreprise).
+            ("prospection_deal_tasks", "departement", "VARCHAR(64)"),
+            ("prospection_deal_tasks", "recurrence", "VARCHAR(16)"),
+            ("prospection_deal_tasks", "impact", "INTEGER"),
+            ("prospection_deal_tasks", "confidence", "INTEGER"),
+            ("prospection_deal_tasks", "effort", "INTEGER"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

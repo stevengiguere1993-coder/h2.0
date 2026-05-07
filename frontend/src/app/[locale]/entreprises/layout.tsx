@@ -309,7 +309,7 @@ export default function EntreprisesLayout({
                   Aucune entreprise. Clique sur + pour en créer une.
                 </li>
               ) : null}
-                {entreprises.slice(0, 8).map((e) => {
+                {entreprises.map((e) => {
                   const dot =
                     e.health_label === "risk"
                       ? "#ff5566"
@@ -348,16 +348,6 @@ export default function EntreprisesLayout({
                     </Link>
                   );
                 })}
-                {entreprises.length > 8 ? (
-                  <Link
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    href={"/entreprises" as any}
-                    className="flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[12px] text-[var(--qg-text-soft)] hover:text-[var(--qg-text-muted)]"
-                  >
-                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--qg-text-soft)]" />
-                    + {entreprises.length - 8} autres
-                  </Link>
-                ) : null}
             </SidebarSection>
 
             <SidebarSection title="Réglages">
