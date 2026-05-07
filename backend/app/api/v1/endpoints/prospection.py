@@ -763,62 +763,6 @@ async def enrich_owner(
     )
 
 
-@router.post(
-    "/import-monday",
-    summary="Importe les leads depuis le board Monday principal "
-    "(7714284220 par défaut).",
-)
-async def import_monday(
-    _: CurrentAdmin,
-    dry_run: bool = False,
-    reset: bool = False,
-):
-    """Lance l'import du board Monday Prospection. Wraps cmd_import
-    du script scripts.import_monday_prospection. Réservé aux admins.
-
-    - dry_run=true : génère les payloads sans écrire en DB
-    - reset=true : supprime tous les leads importés depuis Monday
-      avant de re-importer (équivalent --reset du script)
-
-    L'import peut prendre 30-90s selon le nombre de leads (3 fetch
-    Monday API + JOIN par item). Render free a un timeout HTTP de
-    60s, donc ne pas attendre la response sur des gros boards —
-    poll /api/v1/prospection?limit=1 pour voir si les leads
-    apparaissent.
-    """
-    import os
-    from scripts.import_monday_prospection import cmd_import
-
-    token = (
-        os.environ.get("MONDAY_API_TOKEN")
-        or os.environ.get("monday_api_token")
-        or os.environ.get("MONDAY_TOKEN")
-        or os.environ.get("monday_token")
-    )
-    if not token:
-        raise HTTPException(
-            503,
-            "Aucun token Monday trouvé (MONDAY_API_TOKEN / monday_token). "
-            "Set la variable d'environnement et redémarre le service.",
-        )
-
-    try:
-        rc = await cmd_import(token, dry_run=dry_run, reset=reset)
-    except Exception as exc:
-        log.exception("Import Monday échoué : %s", exc)
-        raise HTTPException(500, f"Import échoué : {exc}")
-
-    return {
-        "ok": rc == 0,
-        "dry_run": dry_run,
-        "reset": reset,
-        "message": (
-            "Aperçu généré (aucune écriture DB)" if dry_run
-            else "Import terminé. Voir les leads dans /prospection."
-        ),
-    }
-
-
 @router.delete(
     "/{lead_id}", status_code=status.HTTP_204_NO_CONTENT
 )

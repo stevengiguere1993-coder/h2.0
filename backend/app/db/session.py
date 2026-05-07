@@ -335,6 +335,13 @@ async def init_db() -> None:
                 "position",
                 "INTEGER NOT NULL DEFAULT 0",
             ),
+            # Catalogue immeuble scopé par parent (entreprise OU deal).
+            # Quand on crée un immeuble depuis le picker d'une fiche de
+            # tâche, il n'apparaît que dans le catalogue de cette même
+            # fiche. Les deux sont nullables ; au plus un est rempli à
+            # la fois (immeuble appartient à une entreprise OU un deal).
+            ("imm_immeubles", "owner_entreprise_id", "INTEGER"),
+            ("imm_immeubles", "owner_deal_id", "INTEGER"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

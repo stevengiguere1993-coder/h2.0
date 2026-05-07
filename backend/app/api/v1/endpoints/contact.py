@@ -22,7 +22,6 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession, RequireManager
-from app.integrations.monday_bridge import push_contact_to_monday
 from app.models.contact_request import ContactRequestStatus, ProjectType
 from app.models.contact_request_photo import ContactRequestPhoto
 from app.schemas.contact_request import (
@@ -142,10 +141,6 @@ async def submit_contact(
         )
     if photo_payloads:
         await db.flush()
-
-    background_tasks.add_task(
-        push_contact_to_monday, record, reference, None, photo_payloads or None
-    )
 
     # Fan-out a notification to every manager+ so they see the new
     # prospect in the bell immediately.

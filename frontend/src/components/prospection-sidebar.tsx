@@ -355,9 +355,16 @@ export function ProspectionSidebar({
                           onDragStart={(ev) => {
                             // Évite que le navigateur tente de drag
                             // l'URL du <Link> enfant — on contrôle le
-                            // payload nous-mêmes.
-                            ev.dataTransfer.setData("text/plain", String(d.id));
-                            ev.dataTransfer.effectAllowed = "move";
+                            // payload nous-mêmes. Wrap try/catch parce
+                            // que certaines combinaisons navigateur /
+                            // extension peuvent throw sur dataTransfer.
+                            try {
+                              ev.dataTransfer.setData("text/plain", String(d.id));
+                              ev.dataTransfer.effectAllowed = "move";
+                            } catch {
+                              /* on garde la state update pour que le
+                                 drop fonctionne même sans dataTransfer. */
+                            }
                             setDragDealId(d.id);
                           }}
                           onDragEnd={() => setDragDealId(null)}

@@ -187,13 +187,23 @@ export function ImmeublePicker({
  * d'immeubles (CRUD léger). Appelé en placement libre par les modales
  * de tâche, juste à côté du titre « Immeuble ».
  */
+/** Scope du catalogue : un immeuble créé est visible uniquement dans
+ *  le contexte indiqué (entreprise OU deal). Si rien n'est fourni →
+ *  catalogue global. */
+export type ImmeubleScope = {
+  entreprise_id?: number;
+  deal_id?: number;
+};
+
 export function ManageImmeublesButton({
   immeubles,
-  onChanged
+  onChanged,
+  scope
 }: {
   immeubles: ImmeubleMini[];
   /** Re-fetch la liste après ajout / suppression. */
   onChanged: () => void;
+  scope?: ImmeubleScope;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -213,6 +223,7 @@ export function ManageImmeublesButton({
           immeubles={immeubles}
           onClose={() => setOpen(false)}
           onChanged={onChanged}
+          scope={scope}
         />
       ) : null}
     </>
@@ -222,11 +233,13 @@ export function ManageImmeublesButton({
 function ManageImmeublesDialog({
   immeubles,
   onClose,
-  onChanged
+  onChanged,
+  scope
 }: {
   immeubles: ImmeubleMini[];
   onClose: () => void;
   onChanged: () => void;
+  scope?: ImmeubleScope;
 }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -250,7 +263,11 @@ function ManageImmeublesDialog({
       const r = await authedFetch("/api/v1/immobilier/immeubles/picker", {
         method: "POST",
         body: JSON.stringify({
-          name: name.trim()
+          name: name.trim(),
+          ...(scope?.entreprise_id != null
+            ? { entreprise_id: scope.entreprise_id }
+            : {}),
+          ...(scope?.deal_id != null ? { deal_id: scope.deal_id } : {})
         })
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);

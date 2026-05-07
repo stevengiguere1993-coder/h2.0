@@ -240,14 +240,7 @@ export default function ReglagesEntreprisesPage() {
           </div>
         ) : sorted.length === 0 ? (
           <p className="rounded-lg border border-brand-800 bg-brand-900 px-4 py-3 text-sm text-white/60">
-            Aucune entreprise. Crées-en une ou{" "}
-            <Link
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              href={"/entreprises/reglages/integration" as any}
-              className="font-semibold text-violet-300 hover:text-violet-200"
-            >
-              importes-les depuis Monday →
-            </Link>
+            Aucune entreprise. Crées-en une depuis le menu de gauche.
           </p>
         ) : (
           <ul className="space-y-2">
@@ -283,11 +276,6 @@ export default function ReglagesEntreprisesPage() {
                       </span>
                       {e.neq ? (
                         <span className="font-mono">NEQ {e.neq}</span>
-                      ) : null}
-                      {e.monday_board_name ? (
-                        <span className="truncate">
-                          · Monday : {e.monday_board_name}
-                        </span>
                       ) : null}
                     </div>
                   </div>

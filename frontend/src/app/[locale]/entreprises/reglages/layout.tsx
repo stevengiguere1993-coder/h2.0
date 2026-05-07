@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { Plug, Building2, Calendar, Users } from "lucide-react";
+import { Building2, Calendar, Users } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { EntreprisesTopbar } from "../layout";
@@ -13,7 +13,6 @@ type Tab = {
 };
 
 const TABS: Tab[] = [
-  { href: "/entreprises/reglages/integration", label: "Intégrations", icon: Plug },
   { href: "/entreprises/reglages/entreprises", label: "Entreprises", icon: Building2 },
   { href: "/entreprises/reglages/calendriers", label: "Calendriers", icon: Calendar },
   { href: "/entreprises/reglages/equipe", label: "Équipe", icon: Users }

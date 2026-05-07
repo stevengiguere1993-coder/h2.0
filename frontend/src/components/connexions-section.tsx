@@ -68,16 +68,6 @@ const CONNECTIONS: ConnectionDef[] = [
     href: "/app/parametres"
   },
   {
-    id: "monday",
-    scope: "construction",
-    group: "compta",
-    icon: FileSpreadsheet,
-    name: "Monday.com (Construction)",
-    description:
-      "Import unique (clients, devis, projets, soumissions). Effectué.",
-    external: false
-  },
-  {
     id: "calendar_ics",
     scope: "construction",
     group: "communication",
@@ -88,16 +78,6 @@ const CONNECTIONS: ConnectionDef[] = [
     href: "/app/parametres"
   },
   // ─── PROSPECTION ───
-  {
-    id: "monday_prospection",
-    scope: "prospection",
-    group: "compta",
-    icon: FileSpreadsheet,
-    name: "Monday.com — CRM Prospection",
-    description:
-      "Import du board 7714284220. Lance le script depuis Render Shell.",
-    external: false
-  },
   {
     id: "mtl_roles",
     scope: "prospection",
@@ -256,8 +236,6 @@ export function ConnexionsSection({
     }
     if (id === "mtl_roles" || id === "req" || id === "cmhc") return "manual";
     if (id === "calendar_ics") return "manual"; // Per-user, faut connecter
-    if (id === "monday") return "connected"; // One-shot done
-    if (id === "monday_prospection") return "manual"; // À lancer
     // Le reste est automatique — pas de config user
     return "automatic";
   }
