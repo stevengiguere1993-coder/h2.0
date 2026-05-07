@@ -27,6 +27,9 @@ from app.models.prospection_deal_task import (
 from app.models.prospection_deal_task_assignee import (
     ProspectionDealTaskAssignee,
 )
+from app.models.prospection_deal_task_immeuble import (
+    ProspectionDealTaskImmeuble,
+)
 from sqlalchemy import delete
 
 
@@ -217,6 +220,8 @@ class TaskCreate(BaseModel):
     # explicitement choisi une priorité, on ne suppose rien.
     priority: str = Field(default="non_assigne", pattern=TASK_PRIORITY_PATTERN)
     due_date: Optional[date] = None
+    # Immeubles concernés par la tâche (multi-select dans la fiche).
+    immeuble_ids: Optional[List[int]] = None
 
 
 class TaskUpdate(BaseModel):
@@ -233,6 +238,7 @@ class TaskUpdate(BaseModel):
     # Permet de déplacer une tâche vers un autre deal (bouton
     # « Déplacer » du kanban). Le deal cible doit exister.
     deal_id: Optional[int] = Field(default=None, gt=0)
+    immeuble_ids: Optional[List[int]] = None
 
 
 class TaskRead(BaseModel):
@@ -250,6 +256,8 @@ class TaskRead(BaseModel):
     priority: str
     due_date: Optional[date]
     position: int
+    # Immeubles liés à la tâche.
+    immeuble_ids: List[int] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -324,8 +332,54 @@ async def _replace_assignees(
     task.assignee_user_id = user_ids[0] if user_ids else None
 
 
+async def _load_task_immeubles(
+    db, task_ids: List[int]
+) -> dict[int, List[int]]:
+    """Retourne {task_id: [immeuble_id, …]} pour les tâches données."""
+    if not task_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(
+                ProspectionDealTaskImmeuble.task_id,
+                ProspectionDealTaskImmeuble.immeuble_id,
+            ).where(ProspectionDealTaskImmeuble.task_id.in_(task_ids))
+        )
+    ).all()
+    out: dict[int, List[int]] = {tid: [] for tid in task_ids}
+    for tid, iid in rows:
+        out[int(tid)].append(int(iid))
+    for k in out:
+        out[k].sort()
+    return out
+
+
+async def _replace_immeubles(
+    db, task: ProspectionDealTask, immeuble_ids: Optional[List[int]]
+) -> None:
+    """Remplace les liens immeuble de la tâche. None = on ne touche pas."""
+    if immeuble_ids is None:
+        return
+    await db.execute(
+        delete(ProspectionDealTaskImmeuble).where(
+            ProspectionDealTaskImmeuble.task_id == task.id
+        )
+    )
+    seen: set[int] = set()
+    for iid in immeuble_ids:
+        if iid and iid not in seen:
+            seen.add(iid)
+            db.add(
+                ProspectionDealTaskImmeuble(
+                    task_id=task.id, immeuble_id=iid
+                )
+            )
+
+
 def _task_to_read(
-    task: ProspectionDealTask, assignee_ids: List[int]
+    task: ProspectionDealTask,
+    assignee_ids: List[int],
+    immeuble_ids: List[int],
 ) -> TaskRead:
     return TaskRead(
         id=task.id,
@@ -338,6 +392,7 @@ def _task_to_read(
         priority=task.priority,
         due_date=task.due_date,
         position=task.position,
+        immeuble_ids=immeuble_ids,
         created_at=task.created_at,
         updated_at=task.updated_at,
     )
@@ -361,8 +416,15 @@ async def list_tasks(
             )
         )
     ).scalars().all()
-    assignees = await _load_task_assignees(db, [t.id for t in rows])
-    return [_task_to_read(t, assignees.get(t.id, [])) for t in rows]
+    task_ids = [t.id for t in rows]
+    assignees = await _load_task_assignees(db, task_ids)
+    immeubles = await _load_task_immeubles(db, task_ids)
+    return [
+        _task_to_read(
+            t, assignees.get(t.id, []), immeubles.get(t.id, [])
+        )
+        for t in rows
+    ]
 
 
 @router.post(
@@ -411,10 +473,15 @@ async def create_task(
     await db.flush()
     if uids is not None:
         await _replace_assignees(db, task, uids)
+    if data.immeuble_ids is not None:
+        await _replace_immeubles(db, task, data.immeuble_ids)
     await db.flush()
     await db.refresh(task)
-    final = await _load_task_assignees(db, [task.id])
-    return _task_to_read(task, final.get(task.id, []))
+    final_a = await _load_task_assignees(db, [task.id])
+    final_i = await _load_task_immeubles(db, [task.id])
+    return _task_to_read(
+        task, final_a.get(task.id, []), final_i.get(task.id, [])
+    )
 
 
 @router.patch("/{deal_id}/tasks/{task_id}", response_model=TaskRead)
@@ -444,6 +511,11 @@ async def update_task(
     list_uids_set = "assignee_user_ids" in data.model_fields_set
     legacy_uid = fields.pop("assignee_user_id", None)
 
+    # Idem pour les immeubles : on les retire des `fields` génériques
+    # pour les remplacer via _replace_immeubles.
+    fields.pop("immeuble_ids", None)
+    imm_set = "immeuble_ids" in data.model_fields_set
+
     # Déplacement vers un autre deal — valider que la cible existe
     # avant d'écraser deal_id.
     target_deal_id = fields.get("deal_id")
@@ -464,9 +536,16 @@ async def update_task(
         await _replace_assignees(db, task, uids)
         await db.flush()
 
+    if imm_set:
+        await _replace_immeubles(db, task, data.immeuble_ids)
+        await db.flush()
+
     await db.refresh(task)
-    final = await _load_task_assignees(db, [task.id])
-    return _task_to_read(task, final.get(task.id, []))
+    final_a = await _load_task_assignees(db, [task.id])
+    final_i = await _load_task_immeubles(db, [task.id])
+    return _task_to_read(
+        task, final_a.get(task.id, []), final_i.get(task.id, [])
+    )
 
 
 @router.delete(

@@ -122,6 +122,27 @@ def _immeuble_to_read(obj: Immeuble) -> ImmeubleRead:
 # ── Immeubles : liste + KPIs agrégés ────────────────────────────────────
 
 
+@router.get("/immeubles/picker", response_model=List[dict])
+async def immeubles_picker(
+    db: DBSession,
+    _: CurrentUser,
+) -> List[dict]:
+    """Liste minimale des immeubles actifs pour les pickers (tâches,
+    sélecteurs, etc.). Pas de garde de volet — uniquement id + nom +
+    adresse, donc pas d'info sensible exposée. Distinct du /immeubles
+    complet qui reste réservé au volet immobilier."""
+    rows = (
+        await db.execute(
+            select(Immeuble.id, Immeuble.name, Immeuble.address)
+            .where(Immeuble.is_active.is_(True))
+            .order_by(Immeuble.name.asc())
+        )
+    ).all()
+    return [
+        {"id": int(r[0]), "name": r[1], "address": r[2]} for r in rows
+    ]
+
+
 @router.get("/immeubles", response_model=List[ImmeubleListItem])
 async def list_immeubles(
     db: DBSession,

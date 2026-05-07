@@ -8,6 +8,10 @@ import {
   type TaskUserMini
 } from "@/components/task-pills";
 import {
+  ImmeublePicker,
+  type ImmeubleMini
+} from "@/components/immeuble-picker";
+import {
   TASK_PRIORITY_OPTIONS,
   TASK_STATUS_OPTIONS
 } from "@/lib/task-config";
@@ -31,6 +35,7 @@ export type TaskDetailsModalData = {
   priority: string;
   due_date: string | null;
   assignee_user_ids: number[];
+  immeuble_ids: number[];
 };
 
 export type TaskDetailsModalPatch = {
@@ -40,16 +45,19 @@ export type TaskDetailsModalPatch = {
   priority?: string;
   due_date?: string | null;
   assignee_user_ids?: number[];
+  immeuble_ids?: number[];
 };
 
 export function TaskDetailsModal({
   task,
   users,
+  immeubles,
   onClose,
   onPatch
 }: {
   task: TaskDetailsModalData;
   users: TaskUserMini[];
+  immeubles: ImmeubleMini[];
   onClose: () => void;
   onPatch: (patch: TaskDetailsModalPatch) => void | Promise<void>;
 }) {
@@ -182,6 +190,23 @@ export function TaskDetailsModal({
                 className="input"
               />
             </div>
+          </div>
+
+          <div>
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="block text-sm font-medium text-white">
+                Immeuble
+              </span>
+              <span className="text-[10px] text-white/40">
+                Clique le champ pour en sélectionner 0, 1 ou plusieurs
+              </span>
+            </div>
+            <ImmeublePicker
+              immeubles={immeubles}
+              values={task.immeuble_ids}
+              onChange={(ids) => onPatch({ immeuble_ids: ids })}
+              variant="modal"
+            />
           </div>
 
           <div>

@@ -15,6 +15,7 @@ import {
 } from "@/components/task-pills";
 import { TaskBoard, type TaskBoardItem } from "@/components/task-board";
 import { TaskDetailsModal } from "@/components/task-details-modal";
+import type { ImmeubleMini } from "@/components/immeuble-picker";
 
 /**
  * Fiche d'un Deal — analogue de /entreprises/[id]/page.tsx. Header
@@ -43,6 +44,7 @@ type Task = {
   priority: string;
   due_date: string | null;
   position: number;
+  immeuble_ids: number[];
   created_at: string;
   updated_at: string;
 };
@@ -57,6 +59,7 @@ export default function DealDetailPage() {
   const [deal, setDeal] = useState<Deal | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [users, setUsers] = useState<TaskUserMini[]>([]);
+  const [immeubles, setImmeubles] = useState<ImmeubleMini[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
@@ -68,10 +71,11 @@ export default function DealDetailPage() {
     if (!Number.isFinite(dealId) || dealId <= 0) return;
     setLoading(true);
     try {
-      const [dRes, tRes, uRes] = await Promise.all([
+      const [dRes, tRes, uRes, iRes] = await Promise.all([
         authedFetch(`/api/v1/prospection/deals/${dealId}`),
         authedFetch(`/api/v1/prospection/deals/${dealId}/tasks`),
-        authedFetch("/api/v1/users")
+        authedFetch("/api/v1/users"),
+        authedFetch("/api/v1/immeubles/picker")
       ]);
       if (!dRes.ok) throw new Error("Deal introuvable");
       const d = (await dRes.json()) as Deal;
@@ -86,6 +90,7 @@ export default function DealDetailPage() {
           all.filter((u) => (u.volets || []).includes("prospection"))
         );
       }
+      if (iRes.ok) setImmeubles((await iRes.json()) as ImmeubleMini[]);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -189,6 +194,9 @@ export default function DealDetailPage() {
   // Adaptateur Task → TaskBoardItem. <TaskBoard> attend une shape
   // neutre (title / hasNote) ; ici on traduit la shape native du
   // backend Pipeline (name / notes).
+  const immeubleNameById = new Map(
+    immeubles.map((i) => [i.id, i.name] as const)
+  );
   const boardItems: TaskBoardItem[] = tasks.map((t) => ({
     id: t.id,
     title: t.name,
@@ -197,7 +205,10 @@ export default function DealDetailPage() {
     due_date: t.due_date,
     assignee_user_ids: t.assignee_user_ids || [],
     hasNote: Boolean(t.notes),
-    position: t.position
+    position: t.position,
+    immeubleLabels: (t.immeuble_ids || [])
+      .map((id) => immeubleNameById.get(id))
+      .filter((n): n is string => Boolean(n))
   }));
 
   if (!Number.isFinite(dealId) || dealId <= 0) {
@@ -335,6 +346,9 @@ export default function DealDetailPage() {
                 out.assignee_user_ids = patch.assignee_user_ids;
                 out.assignee_user_id = patch.assignee_user_ids[0] ?? null;
               }
+              if (patch.immeuble_ids !== undefined) {
+                out.immeuble_ids = patch.immeuble_ids;
+              }
               void patchTask(taskId, out);
             }}
             onDelete={(taskId) => void deleteTaskById(taskId)}
@@ -361,9 +375,11 @@ export default function DealDetailPage() {
                   status: t.status,
                   priority: t.priority || "non_assigne",
                   due_date: t.due_date,
-                  assignee_user_ids: t.assignee_user_ids || []
+                  assignee_user_ids: t.assignee_user_ids || [],
+                  immeuble_ids: t.immeuble_ids || []
                 }}
                 users={users}
+                immeubles={immeubles}
                 onClose={() => setDetailTaskId(null)}
                 onPatch={(patch) => {
                   const out: Partial<Task> = {};
@@ -379,6 +395,9 @@ export default function DealDetailPage() {
                     out.assignee_user_ids = patch.assignee_user_ids;
                     out.assignee_user_id =
                       patch.assignee_user_ids[0] ?? null;
+                  }
+                  if (patch.immeuble_ids !== undefined) {
+                    out.immeuble_ids = patch.immeuble_ids;
                   }
                   void patchTask(t.id, out);
                 }}

@@ -21,6 +21,10 @@ import {
 } from "@/components/task-pills";
 import { TaskBoard, type TaskBoardItem } from "@/components/task-board";
 import {
+  ImmeublePicker,
+  type ImmeubleMini
+} from "@/components/immeuble-picker";
+import {
   TASK_PRIORITY_OPTIONS,
   TASK_STATUS_OPTIONS
 } from "@/lib/task-config";
@@ -58,6 +62,7 @@ type Tache = {
   monday_item_id: string | null;
   monday_group_title: string | null;
   score: number | null;
+  immeuble_ids: number[];
 };
 
 type Employe = { id: number; full_name: string; email: string | null };
@@ -121,6 +126,7 @@ export default function EntrepriseDetailPage() {
   // Liste des users (avec leur profil enrichi : prénom/nom/couleur/avatar)
   // pour alimenter l'AssigneePicker des cartes de tâche.
   const [users, setUsers] = useState<TaskUserMini[]>([]);
+  const [immeubles, setImmeubles] = useState<ImmeubleMini[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<Tache | { fresh: true } | null>(null);
@@ -133,11 +139,12 @@ export default function EntrepriseDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const [entRes, tachesRes, empRes, usersRes] = await Promise.all([
+      const [entRes, tachesRes, empRes, usersRes, immRes] = await Promise.all([
         authedFetch(`/api/v1/entreprises`),
         authedFetch(`/api/v1/entreprises/taches?entreprise_id=${id}`),
         authedFetch("/api/v1/employes?limit=500"),
-        authedFetch("/api/v1/users")
+        authedFetch("/api/v1/users"),
+        authedFetch("/api/v1/immeubles/picker")
       ]);
       if (!entRes.ok) throw new Error(`HTTP ${entRes.status}`);
       const ents = (await entRes.json()) as Entreprise[];
@@ -154,6 +161,7 @@ export default function EntrepriseDetailPage() {
           all.filter((u) => (u.volets || []).includes("entreprises"))
         );
       }
+      if (immRes.ok) setImmeubles((await immRes.json()) as ImmeubleMini[]);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -183,6 +191,10 @@ export default function EntrepriseDetailPage() {
   // entreprise (score ICE, récurrence, département) ; pour les
   // tâches Pipeline ces métadonnées n'existent pas, donc le footer
   // y est laissé vide.
+  const immeubleNameById = useMemo(
+    () => new Map(immeubles.map((i) => [i.id, i.name] as const)),
+    [immeubles]
+  );
   const boardItems: TaskBoardItem[] = useMemo(
     () =>
       taches.map((t) => ({
@@ -197,6 +209,9 @@ export default function EntrepriseDetailPage() {
         // décroissant en utilisant `position = -score` (les positions
         // négatives plus basses arrivent en premier).
         position: t.score != null ? -t.score : 0,
+        immeubleLabels: (t.immeuble_ids || [])
+          .map((id) => immeubleNameById.get(id))
+          .filter((n): n is string => Boolean(n)),
         footer:
           t.score != null || t.recurrence || t.departement ? (
             <div className="flex flex-wrap items-center gap-1 text-[9px] text-white/40">
@@ -221,7 +236,7 @@ export default function EntrepriseDetailPage() {
             </div>
           ) : null
       })),
-    [taches]
+    [taches, immeubleNameById]
   );
 
   async function removeEntreprise() {
@@ -500,6 +515,9 @@ export default function EntrepriseDetailPage() {
                 out.assignee_user_ids = patch.assignee_user_ids;
                 out.assignee_user_id = patch.assignee_user_ids[0] ?? null;
               }
+              if (patch.immeuble_ids !== undefined) {
+                out.immeuble_ids = patch.immeuble_ids;
+              }
               // patch.position est ignoré : les tâches d'entreprise
               // ne s'ordonnent pas par position (tri par score).
               void patchTache(taskId, out);
@@ -527,6 +545,7 @@ export default function EntrepriseDetailPage() {
           entrepriseId={ent.id}
           employes={employes}
           users={users}
+          immeubles={immeubles}
           onClose={() => setModal(null)}
           onSaved={(t) => {
             upsertTache(t);
@@ -684,6 +703,7 @@ function TacheModal({
   entrepriseId,
   employes,
   users,
+  immeubles,
   onClose,
   onSaved
 }: {
@@ -691,6 +711,7 @@ function TacheModal({
   entrepriseId: number;
   employes: Employe[];
   users: TaskUserMini[];
+  immeubles: ImmeubleMini[];
   onClose: () => void;
   onSaved: (t: Tache) => void;
 }) {
@@ -734,6 +755,9 @@ function TacheModal({
   );
   const [dueDate, setDueDate] = useState(existing?.due_date || "");
   const [recurrence, setRecurrence] = useState(existing?.recurrence || "");
+  const [immeubleIds, setImmeubleIds] = useState<number[]>(
+    existing?.immeuble_ids || []
+  );
   const [aiRationale, setAiRationale] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -760,7 +784,8 @@ function TacheModal({
         assignee_user_ids: assigneeIds,
         assignee_user_id: assigneeIds[0] ?? null,
         due_date: dueDate || null,
-        recurrence: recurrence || null
+        recurrence: recurrence || null,
+        immeuble_ids: immeubleIds
       };
       const res = await authedFetch(
         existing
@@ -945,6 +970,22 @@ function TacheModal({
                 users={users}
                 values={assigneeIds}
                 onChange={setAssigneeIds}
+                variant="modal"
+              />
+            </div>
+            <div>
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="block text-sm font-medium text-white">
+                  Immeuble
+                </span>
+                <span className="text-[10px] text-white/40">
+                  Clique pour en sélectionner 0, 1 ou plusieurs
+                </span>
+              </div>
+              <ImmeublePicker
+                immeubles={immeubles}
+                values={immeubleIds}
+                onChange={setImmeubleIds}
                 variant="modal"
               />
             </div>

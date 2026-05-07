@@ -74,6 +74,8 @@ class EntrepriseTacheBase(BaseModel):
     due_date: Optional[date] = None
     recurrence: Optional[str] = Field(default=None, max_length=16)
     tags_json: Optional[str] = None
+    # Immeubles concernés par la tâche (multi-select dans la fiche).
+    immeuble_ids: Optional[List[int]] = None
 
 
 class EntrepriseTacheCreate(EntrepriseTacheBase):
@@ -100,6 +102,7 @@ class EntrepriseTacheUpdate(BaseModel):
     # Permet de déplacer une tâche d'une entreprise vers une autre
     # via le bouton « Déplacer » dans la carte.
     entreprise_id: Optional[int] = Field(default=None, gt=0)
+    immeuble_ids: Optional[List[int]] = None
 
 
 class EntrepriseTacheRead(BaseModel):
@@ -119,6 +122,8 @@ class EntrepriseTacheRead(BaseModel):
     assignee_user_id: Optional[int] = None
     # Source de vérité — liste d'utilisateurs assignés.
     assignee_user_ids: List[int] = Field(default_factory=list)
+    # Immeubles liés à la tâche.
+    immeuble_ids: List[int] = Field(default_factory=list)
     due_date: Optional[date] = None
     completed_at: Optional[datetime] = None
     recurrence: Optional[str] = None

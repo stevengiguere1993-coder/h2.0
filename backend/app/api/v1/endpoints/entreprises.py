@@ -77,6 +77,7 @@ def _compute_score(t: EntrepriseTache) -> Optional[float]:
 def _to_tache_read(
     t: EntrepriseTache,
     assignee_user_ids: Optional[List[int]] = None,
+    immeuble_ids: Optional[List[int]] = None,
 ) -> EntrepriseTacheRead:
     out = EntrepriseTacheRead.model_validate(t)
     out.score = _compute_score(t)
@@ -87,6 +88,7 @@ def _to_tache_read(
         out.assignee_user_ids = [t.assignee_user_id]
     else:
         out.assignee_user_ids = []
+    out.immeuble_ids = list(immeuble_ids or [])
     return out
 
 
@@ -147,6 +149,55 @@ async def _replace_tache_assignees(
     for uid in user_ids:
         db.add(EntrepriseTacheAssignee(tache_id=tache.id, user_id=uid))
     tache.assignee_user_id = user_ids[0] if user_ids else None
+
+
+async def _load_tache_immeubles(
+    db, tache_ids: List[int]
+) -> dict[int, List[int]]:
+    """Retourne {tache_id: [immeuble_id, ...]} pour les tâches données."""
+    if not tache_ids:
+        return {}
+    from app.models.entreprise_tache_immeuble import (
+        EntrepriseTacheImmeuble,
+    )
+    rows = (
+        await db.execute(
+            select(
+                EntrepriseTacheImmeuble.tache_id,
+                EntrepriseTacheImmeuble.immeuble_id,
+            ).where(EntrepriseTacheImmeuble.tache_id.in_(tache_ids))
+        )
+    ).all()
+    out: dict[int, List[int]] = {tid: [] for tid in tache_ids}
+    for tid, iid in rows:
+        out[int(tid)].append(int(iid))
+    for k in out:
+        out[k].sort()
+    return out
+
+
+async def _replace_tache_immeubles(
+    db, tache: EntrepriseTache, immeuble_ids: Optional[List[int]]
+) -> None:
+    """Remplace les liens immeuble en bloc. None = on ne touche pas."""
+    if immeuble_ids is None:
+        return
+    from app.models.entreprise_tache_immeuble import (
+        EntrepriseTacheImmeuble,
+    )
+    from sqlalchemy import delete as _delete
+    await db.execute(
+        _delete(EntrepriseTacheImmeuble).where(
+            EntrepriseTacheImmeuble.tache_id == tache.id
+        )
+    )
+    seen: set[int] = set()
+    for iid in immeuble_ids:
+        if iid and iid not in seen:
+            seen.add(iid)
+            db.add(
+                EntrepriseTacheImmeuble(tache_id=tache.id, immeuble_id=iid)
+            )
 
 
 # ── Entreprises CRUD ────────────────────────────────────────────────────
@@ -306,9 +357,13 @@ async def list_taches(
         EntrepriseTache.id.desc(),
     )
     rows = (await db.execute(stmt)).scalars().all()
-    assignees = await _load_tache_assignees(db, [r.id for r in rows])
+    tache_ids = [r.id for r in rows]
+    assignees = await _load_tache_assignees(db, tache_ids)
+    immeubles = await _load_tache_immeubles(db, tache_ids)
     return [
-        _to_tache_read(t, assignees.get(t.id, []))
+        _to_tache_read(
+            t, assignees.get(t.id, []), immeubles.get(t.id, [])
+        )
         for t in rows
     ]
 
@@ -391,6 +446,7 @@ async def create_tache(
     # Sépare les assignés de la création principale.
     legacy_uid = payload.pop("assignee_user_id", None)
     list_uids = payload.pop("assignee_user_ids", None)
+    immeuble_ids = payload.pop("immeuble_ids", None)
     uids = _resolve_tache_assignee_ids(legacy_uid, list_uids)
     primary = uids[0] if uids else None
 
@@ -399,10 +455,15 @@ async def create_tache(
     await db.flush()
     if uids is not None:
         await _replace_tache_assignees(db, t, uids)
+    if immeuble_ids is not None:
+        await _replace_tache_immeubles(db, t, immeuble_ids)
     await db.flush()
     await db.refresh(t)
-    final = await _load_tache_assignees(db, [t.id])
-    return _to_tache_read(t, final.get(t.id, []))
+    final_a = await _load_tache_assignees(db, [t.id])
+    final_i = await _load_tache_immeubles(db, [t.id])
+    return _to_tache_read(
+        t, final_a.get(t.id, []), final_i.get(t.id, [])
+    )
 
 
 @router.patch("/taches/{tache_id}", response_model=EntrepriseTacheRead)
@@ -435,6 +496,10 @@ async def update_tache(
     legacy_uid = payload.pop("assignee_user_id", None)
     payload.pop("assignee_user_ids", None)
 
+    # Idem pour les immeubles — table de jointure dédiée.
+    imm_set = "immeuble_ids" in body.model_fields_set
+    payload.pop("immeuble_ids", None)
+
     for k, v in payload.items():
         setattr(t, k, v)
     await db.flush()
@@ -447,9 +512,16 @@ async def update_tache(
         await _replace_tache_assignees(db, t, uids)
         await db.flush()
 
+    if imm_set:
+        await _replace_tache_immeubles(db, t, body.immeuble_ids)
+        await db.flush()
+
     await db.refresh(t)
-    final = await _load_tache_assignees(db, [t.id])
-    return _to_tache_read(t, final.get(t.id, []))
+    final_a = await _load_tache_assignees(db, [t.id])
+    final_i = await _load_tache_immeubles(db, [t.id])
+    return _to_tache_read(
+        t, final_a.get(t.id, []), final_i.get(t.id, [])
+    )
 
 
 @router.delete(
