@@ -97,6 +97,9 @@ class EntrepriseTacheUpdate(BaseModel):
     recurrence: Optional[str] = Field(default=None, max_length=16)
     tags_json: Optional[str] = None
     completed_at: Optional[datetime] = None
+    # Permet de déplacer une tâche d'une entreprise vers une autre
+    # via le bouton « Déplacer » dans la carte.
+    entreprise_id: Optional[int] = Field(default=None, gt=0)
 
 
 class EntrepriseTacheRead(BaseModel):

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   ArrowLeft,
+  ArrowRightLeft,
   Briefcase,
   ExternalLink,
   Loader2,
@@ -123,6 +124,9 @@ export default function EntrepriseDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<Tache | { fresh: true } | null>(null);
+  // Tâche à déplacer vers une autre entreprise. Quand c'est défini,
+  // on affiche un mini dialogue qui liste les entreprises.
+  const [moveTask, setMoveTask] = useState<Tache | null>(null);
   const [dragging, setDragging] = useState<number | null>(null);
   const [hoverCol, setHoverCol] = useState<string | null>(null);
   const [tachesView, setTachesView] = useState<"kanban" | "list">("kanban");
@@ -494,6 +498,8 @@ export default function EntrepriseDetailPage() {
                           ev.preventDefault();
                           void removeTache(t);
                         }}
+                        onOpenDetails={() => setModal(t)}
+                        onMove={() => setMoveTask(t)}
                       />
                     ))
                   )}
@@ -517,7 +523,142 @@ export default function EntrepriseDetailPage() {
           }}
         />
       ) : null}
+
+      {moveTask ? (
+        <MoveTacheDialog
+          task={moveTask}
+          currentEntId={ent.id}
+          onClose={() => setMoveTask(null)}
+          onMoved={() => {
+            // Tâche partie ailleurs : on l'enlève de la liste locale.
+            setTaches((xs) => xs.filter((x) => x.id !== moveTask.id));
+            setMoveTask(null);
+          }}
+        />
+      ) : null}
     </>
+  );
+}
+
+/**
+ * Dialogue qui demande l'entreprise cible pour déplacer une tâche.
+ * Liste les entreprises actives (sauf la courante) et patche
+ * EntrepriseTache.entreprise_id côté serveur.
+ */
+function MoveTacheDialog({
+  task,
+  currentEntId,
+  onClose,
+  onMoved
+}: {
+  task: Tache;
+  currentEntId: number;
+  onClose: () => void;
+  onMoved: () => void;
+}) {
+  const [list, setList] = useState<Entreprise[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await authedFetch("/api/v1/entreprises");
+        if (!res.ok) throw new Error();
+        const all = (await res.json()) as Entreprise[];
+        setList(all.filter((e) => e.id !== currentEntId));
+      } catch {
+        setErr("Impossible de charger la liste des entreprises.");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [currentEntId]);
+
+  async function move(targetId: number) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/entreprises/taches/${task.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ entreprise_id: targetId })
+        }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      onMoved();
+    } catch (e) {
+      setErr((e as Error).message || "Déplacement échoué.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={() => (!busy ? onClose() : null)}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl border border-brand-800 bg-brand-950 p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-base font-bold text-white">
+          Déplacer « {task.title} »
+        </h3>
+        <p className="mt-1 text-xs text-white/50">
+          Choisis l&apos;entreprise vers laquelle déplacer la tâche.
+        </p>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-5 w-5 animate-spin text-accent-500" />
+          </div>
+        ) : list.length === 0 ? (
+          <p className="mt-4 rounded-md border border-dashed border-brand-800 bg-brand-900/40 px-3 py-3 text-center text-xs text-white/50">
+            Aucune autre entreprise — créez-en une dans Mes entreprises.
+          </p>
+        ) : (
+          <ul className="mt-4 max-h-72 space-y-1 overflow-y-auto">
+            {list.map((e) => (
+              <li key={e.id}>
+                <button
+                  type="button"
+                  onClick={() => move(e.id)}
+                  disabled={busy}
+                  className="flex w-full items-center gap-2 rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-left text-sm text-white hover:border-violet-500/50 hover:bg-violet-500/10 disabled:opacity-50"
+                >
+                  <span
+                    className="h-2 w-2 flex-shrink-0 rounded-full"
+                    style={{ backgroundColor: e.color_accent }}
+                  />
+                  <span className="truncate">{e.name}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {err ? (
+          <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+            {err}
+          </p>
+        ) : null}
+
+        <div className="mt-4 flex items-center justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="btn-secondary text-sm"
+          >
+            Annuler
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -543,7 +684,9 @@ function TacheCard({
   onDragStart,
   onDragEnd,
   onPatch,
-  onDelete
+  onDelete,
+  onOpenDetails,
+  onMove
 }: {
   t: Tache;
   users: TaskUserMini[];
@@ -551,12 +694,11 @@ function TacheCard({
   onDragEnd: () => void;
   onPatch: (patch: Partial<Tache>) => void;
   onDelete: (e: React.MouseEvent) => void;
+  // Click sur l'icône note → ouvre le menu détaillé (modal d'édition).
+  onOpenDetails: () => void;
+  // Click sur l'icône « déplacer » → demande l'entreprise cible.
+  onMove: () => void;
 }) {
-  const [showNotes, setShowNotes] = useState(false);
-  const [notesDraft, setNotesDraft] = useState(t.description || "");
-  useEffect(() => {
-    setNotesDraft(t.description || "");
-  }, [t.description]);
 
   return (
     <div
@@ -592,19 +734,22 @@ function TacheCard({
           className="min-w-0 flex-1 resize-none rounded border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold text-white focus:border-accent-500 focus:outline-none"
         />
         <div className="flex flex-shrink-0 flex-col items-center gap-0.5">
+          {/* Bouton « Détails » — ouvre la modal complète où l'on
+              peut éditer la description, le score ICE, la
+              récurrence et tous les autres champs avancés. */}
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              setShowNotes((v) => !v);
+              onOpenDetails();
             }}
             className={`rounded p-1 ${
               t.description
                 ? "text-amber-300 hover:bg-amber-500/15"
                 : "text-white/40 hover:bg-white/5"
             }`}
-            title={t.description ? "Voir / éditer les notes" : "Ajouter une note"}
-            aria-label="Notes"
+            title="Détails de la tâche"
+            aria-label="Détails"
           >
             <StickyNote className="h-3 w-3" />
           </button>
@@ -617,27 +762,22 @@ function TacheCard({
           >
             <Trash2 className="h-3 w-3" />
           </button>
+          {/* Bouton « Déplacer » — propose les autres entreprises
+              pour transférer la tâche. */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onMove();
+            }}
+            className="rounded p-1 text-white/40 hover:bg-violet-500/15 hover:text-violet-300"
+            title="Déplacer vers une autre entreprise"
+            aria-label="Déplacer"
+          >
+            <ArrowRightLeft className="h-3 w-3" />
+          </button>
         </div>
       </div>
-
-      {/* Notes : zone repliable */}
-      {showNotes ? (
-        <div className="mt-1.5">
-          <textarea
-            value={notesDraft}
-            onChange={(e) => setNotesDraft(e.target.value)}
-            onBlur={() => {
-              if (notesDraft !== (t.description || "")) {
-                onPatch({ description: notesDraft || null });
-              }
-            }}
-            onClick={(e) => e.stopPropagation()}
-            rows={3}
-            placeholder="Notes…"
-            className="w-full rounded border border-brand-800 bg-brand-900 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
-          />
-        </div>
-      ) : null}
 
       {/* Pastilles : Personnes / Statut / Priorité / Date butoire */}
       <div className="mt-1.5 grid grid-cols-2 gap-1.5">
