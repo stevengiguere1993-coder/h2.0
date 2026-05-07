@@ -345,31 +345,47 @@ export function ProspectionSidebar({
                   ) : null}
                   {deals.map((d) => {
                     const dragging = dragDealId === d.id;
+                    const onPath = pathname.includes(
+                      `/prospection/pipeline/${d.id}`
+                    );
                     return (
                       <li key={d.id}>
-                        <Link
-                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                          href={`/prospection/pipeline/${d.id}` as any}
-                          onClick={onClose}
+                        <div
                           draggable
-                          onDragStart={() => setDragDealId(d.id)}
+                          onDragStart={(ev) => {
+                            // Évite que le navigateur tente de drag
+                            // l'URL du <Link> enfant — on contrôle le
+                            // payload nous-mêmes.
+                            ev.dataTransfer.setData("text/plain", String(d.id));
+                            ev.dataTransfer.effectAllowed = "move";
+                            setDragDealId(d.id);
+                          }}
                           onDragEnd={() => setDragDealId(null)}
-                          onDragOver={(ev) => ev.preventDefault()}
+                          onDragOver={(ev) => {
+                            if (dragDealId != null) ev.preventDefault();
+                          }}
                           onDrop={(ev) => {
                             ev.preventDefault();
+                            ev.stopPropagation();
                             handleDealDrop(d.id);
                           }}
-                          className={`flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] transition ${
-                            pathname.includes(
-                              `/prospection/pipeline/${d.id}`
-                            )
-                              ? "bg-emerald-500/15 text-emerald-300"
-                              : "text-white/70 hover:bg-brand-900 hover:text-white"
-                          } ${dragging ? "opacity-50" : ""}`}
+                          className={dragging ? "opacity-50" : ""}
                         >
-                          <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-400/80" />
-                          <span className="truncate">{d.address}</span>
-                        </Link>
+                          <Link
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            href={`/prospection/pipeline/${d.id}` as any}
+                            onClick={onClose}
+                            draggable={false}
+                            className={`flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] transition ${
+                              onPath
+                                ? "bg-emerald-500/15 text-emerald-300"
+                                : "text-white/70 hover:bg-brand-900 hover:text-white"
+                            }`}
+                          >
+                            <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-400/80" />
+                            <span className="truncate">{d.address}</span>
+                          </Link>
+                        </div>
                       </li>
                     );
                   })}

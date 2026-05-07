@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Loader2, MapPin, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, MapPin, Pencil, Trash2 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { authedFetch } from "@/lib/auth";
@@ -129,6 +129,19 @@ export default function DealDetailPage() {
       setDeal(prev);
       setError("Mise à jour échouée.");
     }
+  }
+
+  async function renameDeal() {
+    if (!deal) return;
+    const next = window.prompt(
+      "Nouvelle adresse du deal :",
+      deal.address
+    );
+    if (next == null) return;
+    const v = next.trim();
+    if (!v || v === deal.address) return;
+    await patchDeal({ address: v });
+    setDraftName(v);
   }
 
   async function removeDeal() {
@@ -333,15 +346,26 @@ export default function DealDetailPage() {
               <span className="text-white/50">Tâches </span>
               <span className="font-bold text-white">{tasks.length}</span>
             </div>
-            <button
-              type="button"
-              onClick={removeDeal}
-              title="Supprimer ce deal"
-              aria-label="Supprimer le deal"
-              className="rounded-md p-1.5 text-white/40 transition hover:bg-rose-500/15 hover:text-rose-300"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={renameDeal}
+                title="Renommer le deal"
+                aria-label="Renommer le deal"
+                className="rounded-md p-1.5 text-white/40 transition hover:bg-violet-500/15 hover:text-violet-300"
+              >
+                <Pencil className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={removeDeal}
+                title="Supprimer ce deal"
+                aria-label="Supprimer le deal"
+                className="rounded-md p-1.5 text-white/40 transition hover:bg-rose-500/15 hover:text-rose-300"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </header>
 

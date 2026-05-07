@@ -7,6 +7,7 @@ import {
   Briefcase,
   ExternalLink,
   Loader2,
+  Pencil,
   Plus,
   Trash2
 } from "lucide-react";
@@ -261,6 +262,29 @@ export default function EntrepriseDetailPage() {
     [taches, immeubleNameById]
   );
 
+  async function renameEntreprise() {
+    if (!ent) return;
+    const next = window.prompt(
+      "Nouveau nom de l'entreprise :",
+      ent.name
+    );
+    if (next == null) return;
+    const v = next.trim();
+    if (!v || v === ent.name) return;
+    const prev = ent;
+    setEnt({ ...ent, name: v });
+    try {
+      const r = await authedFetch(`/api/v1/entreprises/${ent.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: v })
+      });
+      if (!r.ok) throw new Error();
+    } catch {
+      setEnt(prev);
+      setError("Renommage échoué.");
+    }
+  }
+
   async function removeEntreprise() {
     if (!ent) return;
     const ok = await confirm({
@@ -387,7 +411,7 @@ export default function EntrepriseDetailPage() {
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={`/entreprises/${ent.id}/pilotage` as any}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-200 hover:bg-violet-500/20"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-violet-700 bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700"
           >
             Pilotage
           </Link>
@@ -433,15 +457,26 @@ export default function EntrepriseDetailPage() {
               <span className="text-white/50">Tâches </span>
               <span className="font-bold text-white">{taches.length}</span>
             </div>
-            <button
-              type="button"
-              onClick={removeEntreprise}
-              title="Supprimer cette entreprise"
-              aria-label="Supprimer l'entreprise"
-              className="rounded-md p-1.5 text-white/40 transition hover:bg-rose-500/15 hover:text-rose-300"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={renameEntreprise}
+                title="Renommer l'entreprise"
+                aria-label="Renommer l'entreprise"
+                className="rounded-md p-1.5 text-white/40 transition hover:bg-violet-500/15 hover:text-violet-300"
+              >
+                <Pencil className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={removeEntreprise}
+                title="Supprimer cette entreprise"
+                aria-label="Supprimer l'entreprise"
+                className="rounded-md p-1.5 text-white/40 transition hover:bg-rose-500/15 hover:text-rose-300"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </header>
 
@@ -1075,7 +1110,7 @@ function PartnersSection({ entrepriseId }: { entrepriseId: number }) {
             setEditingId(null);
             setShowAdd(true);
           }}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-200 hover:bg-violet-500/20"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-violet-700 bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700"
         >
           <Plus className="h-3.5 w-3.5" /> Ajouter un partenaire
         </button>
@@ -1383,7 +1418,7 @@ function LinksSection({ entrepriseId }: { entrepriseId: number }) {
         <button
           type="button"
           onClick={() => setShowAdd(true)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-200 hover:bg-violet-500/20"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-violet-700 bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700"
         >
           <Plus className="h-3.5 w-3.5" /> Ajouter un lien
         </button>

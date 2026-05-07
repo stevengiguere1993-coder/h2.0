@@ -318,34 +318,43 @@ export default function EntreprisesLayout({
                       : "#4ade80";
                   const dragging = dragId === e.id;
                   return (
-                    <Link
+                    <div
                       key={e.id}
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                      href={`/entreprises/${e.id}` as any}
-                      onClick={() => setSidebarOpen(false)}
                       draggable
-                      onDragStart={() => setDragId(e.id)}
+                      onDragStart={(ev) => {
+                        ev.dataTransfer.setData("text/plain", String(e.id));
+                        ev.dataTransfer.effectAllowed = "move";
+                        setDragId(e.id);
+                      }}
                       onDragEnd={() => setDragId(null)}
                       onDragOver={(ev) => {
-                        // Permet le drop sur cet item.
-                        ev.preventDefault();
+                        if (dragId != null) ev.preventDefault();
                       }}
                       onDrop={(ev) => {
                         ev.preventDefault();
+                        ev.stopPropagation();
                         handleDragEntreprise(e.id);
                       }}
-                      className={`flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition ${
-                        pathname.includes(`/entreprises/${e.id}`)
-                          ? "bg-[var(--qg-bg-alt)] text-[var(--qg-text)]"
-                          : "text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
-                      } ${dragging ? "opacity-50" : ""}`}
+                      className={dragging ? "opacity-50" : ""}
                     >
-                      <span
-                        className="h-1.5 w-1.5 rounded-full flex-shrink-0"
-                        style={{ backgroundColor: dot }}
-                      />
-                      <span className="truncate">{e.name}</span>
-                    </Link>
+                      <Link
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        href={`/entreprises/${e.id}` as any}
+                        onClick={() => setSidebarOpen(false)}
+                        draggable={false}
+                        className={`flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition ${
+                          pathname.includes(`/entreprises/${e.id}`)
+                            ? "bg-[var(--qg-bg-alt)] text-[var(--qg-text)]"
+                            : "text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
+                        }`}
+                      >
+                        <span
+                          className="h-1.5 w-1.5 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: dot }}
+                        />
+                        <span className="truncate">{e.name}</span>
+                      </Link>
+                    </div>
                   );
                 })}
             </SidebarSection>
