@@ -415,15 +415,15 @@ export function AssigneePicker({
           // de la doubler en texte à côté.
           <UserInitialDot user={assigned[0]} size={avatarSize} />
         ) : (
-          // Carte, plusieurs : avatars stackés (style Linear).
-          <span className="flex items-center">
-            {assigned.slice(0, 4).map((u, idx) => (
+          // Carte, plusieurs : avatars stackés (style Linear). Pas
+          // de contour : on garde l'apparence du cas mono-personne,
+          // les ronds sont simplement chevauchés via la marge
+          // négative.
+          <span className="flex items-center gap-0.5">
+            {assigned.slice(0, 4).map((u) => (
               <span
                 key={u.id}
-                className={`relative inline-block rounded-full ring-2 ring-brand-900 ${
-                  idx > 0 ? "-ml-1.5" : ""
-                }`}
-                style={{ zIndex: assigned.length - idx }}
+                className="relative inline-block"
                 title={userDisplayName(u)}
               >
                 <UserInitialDot user={u} size={avatarSize} />
@@ -431,7 +431,7 @@ export function AssigneePicker({
             ))}
             {assigned.length > 4 ? (
               <span
-                className="-ml-1.5 inline-flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-brand-800 px-1 text-[9px] font-bold text-white/70 ring-2 ring-brand-900"
+                className="inline-flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-brand-800 px-1 text-[9px] font-bold text-white/70"
                 title={`${assigned.length - 4} autre(s)`}
               >
                 +{assigned.length - 4}
