@@ -313,6 +313,13 @@ async def init_db() -> None:
                 "position",
                 "INTEGER NOT NULL DEFAULT 0",
             ),
+            # Ordre d'affichage des deals (Pipeline) dans la sidebar
+            # Prospection — drag & drop similaire à Mes entreprises.
+            (
+                "prospection_deals",
+                "position",
+                "INTEGER NOT NULL DEFAULT 0",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import {
   BarChart3,
@@ -12,6 +12,7 @@ import {
   LogOut,
   Map,
   MapPin,
+  Plus,
   Settings,
   Smartphone,
   Sun,
@@ -21,9 +22,11 @@ import {
 } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
-import { type UserRole } from "@/lib/auth";
+import { authedFetch, type UserRole } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { AccountBadge } from "@/components/account-badge";
+
+type DealLite = { id: number; address: string };
 
 type NavItem = {
   href: string;
@@ -99,16 +102,14 @@ const PROSPECTION_SECTIONS: NavSection[] = [
       }
     ]
   },
+  // Section « Pipeline » — la liste des deals est rendue
+  // dynamiquement dans le composant, comme la section « Mes
+  // entreprises » du volet Gestion d'entreprises. Cette entrée
+  // statique n'est qu'un fallback / lien header. La logique de
+  // rendu est dans <ProspectionSidebar> directement.
   {
-    label: "Acquisition",
-    items: [
-      {
-        href: "/prospection/pipeline",
-        label: "Pipeline des deals",
-        icon: Trello,
-        minRole: "employee"
-      }
-    ]
+    label: "Pipeline",
+    items: []
   },
   {
     label: "Ressources",
@@ -148,12 +149,98 @@ export function ProspectionSidebar({
   const pathname = usePathname();
   const { user } = useCurrentUser();
   const role = (user?.role as UserRole | undefined) || "employee";
-  // Filtre chaque section selon les rôles, et ne garde que les
-  // sections qui contiennent au moins un item visible.
+  // Filtre chaque section selon les rôles. La section « Pipeline »
+  // est conservée même si vide (la liste de deals est dynamique).
   const visibleSections = PROSPECTION_SECTIONS.map((s) => ({
     ...s,
     items: s.items.filter((i) => canSee(role, i.minRole))
-  })).filter((s) => s.items.length > 0);
+  })).filter(
+    (s) => s.items.length > 0 || s.label === "Pipeline"
+  );
+
+  // Liste des deals — fetchée pour alimenter la section Pipeline
+  // (analogue de « Mes entreprises » dans la sidebar Entreprises).
+  const [deals, setDeals] = useState<DealLite[]>([]);
+  // ID en cours de drag pour la réorganisation de l'ordre.
+  const [dragDealId, setDragDealId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authedFetch("/api/v1/prospection/deals");
+        if (!r.ok) return;
+        const arr = (await r.json()) as Array<{
+          id: number;
+          address: string;
+        }>;
+        if (!cancelled)
+          setDeals(arr.map((d) => ({ id: d.id, address: d.address })));
+      } catch {
+        /* ignore — affiche simplement 0 deal */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname]);
+
+  async function reorderDeals(ids: number[]) {
+    setDeals((prev) => {
+      const byId = new Map(prev.map((d) => [d.id, d]));
+      const sorted = ids
+        .map((id) => byId.get(id))
+        .filter((d): d is DealLite => Boolean(d));
+      for (const d of prev) {
+        if (!ids.includes(d.id)) sorted.push(d);
+      }
+      return sorted;
+    });
+    try {
+      await authedFetch("/api/v1/prospection/deals/reorder", {
+        method: "POST",
+        body: JSON.stringify({ ids })
+      });
+    } catch {
+      /* ignore — l'UI montrera le bon ordre au prochain reload */
+    }
+  }
+
+  function handleDealDrop(droppedOnId: number) {
+    if (dragDealId == null || dragDealId === droppedOnId) return;
+    const ids = deals.map((d) => d.id);
+    const fromIdx = ids.indexOf(dragDealId);
+    const toIdx = ids.indexOf(droppedOnId);
+    if (fromIdx < 0 || toIdx < 0) return;
+    ids.splice(fromIdx, 1);
+    ids.splice(toIdx, 0, dragDealId);
+    setDragDealId(null);
+    void reorderDeals(ids);
+  }
+
+  async function createDeal() {
+    const address = window.prompt(
+      "Adresse du nouveau deal (ex. 5640 Salaberry) ?"
+    );
+    if (!address || !address.trim()) return;
+    try {
+      const r = await authedFetch("/api/v1/prospection/deals", {
+        method: "POST",
+        body: JSON.stringify({
+          address: address.trim(),
+          priority: "moyenne"
+        })
+      });
+      if (!r.ok) return;
+      const created = (await r.json()) as { id: number; address: string };
+      setDeals((xs) => [
+        ...xs,
+        { id: created.id, address: created.address }
+      ]);
+    } catch {
+      /* ignore */
+    }
+  }
 
   function isActive(href: string) {
     if (href === "/prospection") {
@@ -209,9 +296,21 @@ export function ProspectionSidebar({
         <nav className="flex-1 overflow-y-auto px-2 py-3">
           {visibleSections.map((section, idx) => (
             <div key={section.label} className={idx === 0 ? "" : "mt-4"}>
-              <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-500/80">
-                {section.label}
-              </p>
+              <div className="flex items-center justify-between px-2 py-1">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/80">
+                  {section.label}
+                </p>
+                {section.label === "Pipeline" ? (
+                  <button
+                    type="button"
+                    onClick={createDeal}
+                    title="Ajouter un deal"
+                    className="rounded p-0.5 text-white/40 hover:bg-brand-900 hover:text-white"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                ) : null}
+              </div>
               <ul className="space-y-0.5">
                 {section.items.map((it) => {
                   const Icon = it.icon;
@@ -235,6 +334,47 @@ export function ProspectionSidebar({
                   );
                 })}
               </ul>
+
+              {/* Liste dynamique des deals sous la section Pipeline. */}
+              {section.label === "Pipeline" ? (
+                <ul className="mt-0.5 space-y-0.5">
+                  {deals.length === 0 ? (
+                    <li className="px-2.5 py-1.5 text-[11px] text-white/40">
+                      Aucun deal — clique sur + pour en créer un.
+                    </li>
+                  ) : null}
+                  {deals.map((d) => {
+                    const dragging = dragDealId === d.id;
+                    return (
+                      <li key={d.id}>
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={`/prospection/pipeline/${d.id}` as any}
+                          onClick={onClose}
+                          draggable
+                          onDragStart={() => setDragDealId(d.id)}
+                          onDragEnd={() => setDragDealId(null)}
+                          onDragOver={(ev) => ev.preventDefault()}
+                          onDrop={(ev) => {
+                            ev.preventDefault();
+                            handleDealDrop(d.id);
+                          }}
+                          className={`flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] transition ${
+                            pathname.includes(
+                              `/prospection/pipeline/${d.id}`
+                            )
+                              ? "bg-emerald-500/15 text-emerald-300"
+                              : "text-white/70 hover:bg-brand-900 hover:text-white"
+                          } ${dragging ? "opacity-50" : ""}`}
+                        >
+                          <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-400/80" />
+                          <span className="truncate">{d.address}</span>
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
             </div>
           ))}
 

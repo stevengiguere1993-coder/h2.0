@@ -69,15 +69,73 @@ async def list_deals(
     db: DBSession,
     _: CurrentUser,
 ) -> List[DealRead]:
+    # Tri par `position` d'abord (modifiable via drag & drop dans la
+    # sidebar Pipeline), puis adresse pour les deals jamais
+    # repositionnés. La priorité legacy n'est plus utilisée pour le
+    # tri — chaque deal a sa fiche maintenant, comme les entreprises.
     rows = (
         await db.execute(
             select(ProspectionDeal).order_by(
-                _priority_rank_expr(),
-                ProspectionDeal.created_at.desc(),
+                ProspectionDeal.position.asc(),
+                ProspectionDeal.address.asc(),
             )
         )
     ).scalars().all()
     return [DealRead.model_validate(r) for r in rows]
+
+
+class ReorderDeals(BaseModel):
+    """Liste ordonnée d'IDs de deals — détermine leur ordre dans
+    la sidebar Pipeline."""
+    ids: List[int]
+
+
+@router.post(
+    "/reorder",
+    response_model=List[DealRead],
+    summary="Réordonner les deals (drag & drop)",
+)
+async def reorder_deals(
+    body: ReorderDeals,
+    db: DBSession,
+    _: CurrentUser,
+) -> List[DealRead]:
+    rows = (
+        await db.execute(
+            select(ProspectionDeal).where(ProspectionDeal.id.in_(body.ids))
+        )
+    ).scalars().all()
+    by_id = {d.id: d for d in rows}
+    for pos, did in enumerate(body.ids):
+        d = by_id.get(did)
+        if d is not None:
+            d.position = (pos + 1) * 1000
+    await db.flush()
+    rows2 = (
+        await db.execute(
+            select(ProspectionDeal).order_by(
+                ProspectionDeal.position.asc(),
+                ProspectionDeal.address.asc(),
+            )
+        )
+    ).scalars().all()
+    return [DealRead.model_validate(d) for d in rows2]
+
+
+@router.get("/{deal_id}", response_model=DealRead)
+async def get_deal(
+    deal_id: int,
+    db: DBSession,
+    _: CurrentUser,
+) -> DealRead:
+    deal = (
+        await db.execute(
+            select(ProspectionDeal).where(ProspectionDeal.id == deal_id)
+        )
+    ).scalar_one_or_none()
+    if deal is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Deal introuvable.")
+    return DealRead.model_validate(deal)
 
 
 @router.post("", response_model=DealRead, status_code=status.HTTP_201_CREATED)

@@ -12,15 +12,16 @@ urgent → eleve → moyenne → en_attente → a_venir.
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, String, func
+from sqlalchemy import DateTime, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
 
-# Ordre canonique des priorités. Le champ stocke la valeur textuelle
-# pour rester lisible en SQL ; le tri côté API/frontend mappe vers
-# un rang numérique.
+# Ordre canonique des priorités. Conservé pour la compat des données
+# existantes (anciennes pastilles urgent/élevé/etc.) ; l'UI ne les
+# expose plus depuis qu'on aligne les Deals sur la mise en page
+# entreprise (chaque Deal = sa propre fiche + ses tâches).
 PRIORITY_ORDER = (
     "urgent",
     "eleve",
@@ -42,6 +43,11 @@ class ProspectionDeal(Base):
         default="moyenne",
         server_default="moyenne",
         index=True,
+    )
+    # Ordre d'affichage dans la sidebar Pipeline. Modifiable par
+    # drag & drop (même mécanisme que `entreprises.position`).
+    position: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", index=True
     )
 
     created_at: Mapped[datetime] = mapped_column(
