@@ -281,6 +281,13 @@ class TaskRead(BaseModel):
     updated_at: datetime
 
 
+def _default_impact_from_priority(priority: str) -> int:
+    """Mappe la priorité manuelle sur un impact ICE par défaut, pour
+    les tâches créées sans valeur explicite. Le score reste éditable
+    par l'utilisateur dans la fiche détaillée."""
+    return {"urgent": 9, "eleve": 7, "faible": 3}.get(priority, 5)
+
+
 def _compute_task_score(task: ProspectionDealTask) -> Optional[float]:
     """Même formule que les tâches d'entreprise : ICE × urgence."""
     if task.impact is None or task.confidence is None or task.effort is None:
@@ -506,6 +513,14 @@ async def create_task(
     )
     primary = uids[0] if uids else None
 
+    # Auto-remplit l'ICE si manquant : l'impact dérive de la priorité
+    # manuelle (urgent=9, eleve=7, faible=3, autres=5), confiance et
+    # effort = 5 par défaut. Garantit que toute nouvelle tâche a un
+    # score (donc une pastille P1-P4) dès la création.
+    auto_impact = data.impact if data.impact is not None else _default_impact_from_priority(data.priority)
+    auto_conf = data.confidence if data.confidence is not None else 5
+    auto_effort = data.effort if data.effort is not None else 5
+
     task = ProspectionDealTask(
         deal_id=deal_id,
         name=data.name.strip(),
@@ -517,9 +532,9 @@ async def create_task(
         position=next_pos,
         departement=data.departement,
         recurrence=data.recurrence,
-        impact=data.impact,
-        confidence=data.confidence,
-        effort=data.effort,
+        impact=auto_impact,
+        confidence=auto_conf,
+        effort=auto_effort,
     )
     db.add(task)
     await db.flush()

@@ -449,6 +449,22 @@ async def create_tache(
     uids = _resolve_tache_assignee_ids(legacy_uid, list_uids)
     primary = uids[0] if uids else None
 
+    # Auto-remplit l'ICE si manquant : l'impact dérive de la priorité
+    # manuelle (urgent=9, eleve=7, faible=3, autres=5), confiance et
+    # effort = 5. Toute nouvelle tâche a donc un score / pastille
+    # P1-P4 dès la création.
+    if payload.get("impact") is None:
+        prio = payload.get("priority") or "non_assigne"
+        payload["impact"] = {
+            "urgent": 9,
+            "eleve": 7,
+            "faible": 3,
+        }.get(prio, 5)
+    if payload.get("confidence") is None:
+        payload["confidence"] = 5
+    if payload.get("effort") is None:
+        payload["effort"] = 5
+
     t = EntrepriseTache(**payload, assignee_user_id=primary)
     db.add(t)
     await db.flush()
