@@ -745,6 +745,7 @@ function TaskListView({
           >
             <th className="w-[88px] px-3 py-3 text-left">P · Score</th>
             <th className="px-4 py-3 text-left">Tâche</th>
+            <th className="w-[180px] px-3 py-3 text-left">Immeuble</th>
             <th className="w-[120px] px-3 py-3 text-left">Statut</th>
             <th className="w-[110px] px-3 py-3 text-left">Priorité</th>
             <th className="w-[120px] px-3 py-3 text-left">Personnes</th>
@@ -832,17 +833,24 @@ function TaskListView({
                   <p className="truncate font-medium leading-tight text-white">
                     {t.title}
                   </p>
-                  {t.immeubleLabels && t.immeubleLabels.length > 0 ? (
-                    <p className="mt-0.5 inline-flex items-center gap-1 truncate text-[10px] text-white/55">
-                      <Building2 className="h-2.5 w-2.5 flex-shrink-0" />
-                      <span className="truncate">
-                        {t.immeubleLabels.join(", ")}
-                      </span>
-                    </p>
-                  ) : null}
                   {t.footer ? (
                     <div className="mt-1">{t.footer}</div>
                   ) : null}
+                </td>
+                <td className="px-3 py-2.5">
+                  {t.immeubleLabels && t.immeubleLabels.length > 0 ? (
+                    <span
+                      className="inline-flex max-w-full items-center gap-1 truncate text-[11px] text-white/70"
+                      title={t.immeubleLabels.join(", ")}
+                    >
+                      <Building2 className="h-3 w-3 flex-shrink-0 text-emerald-400/80" />
+                      <span className="truncate">
+                        {t.immeubleLabels.join(", ")}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-white/25">—</span>
+                  )}
                 </td>
                 <td
                   className="px-3 py-2.5"

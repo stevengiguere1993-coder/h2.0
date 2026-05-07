@@ -234,17 +234,12 @@ export default function EntrepriseDetailPage() {
         immeubleLabels: (t.immeuble_ids || [])
           .map((id) => immeubleNameById.get(id))
           .filter((n): n is string => Boolean(n)),
+        // Footer : récurrence + département (si applicable). Le score
+        // est déjà affiché dans la pastille « P · score » de la carte
+        // — pas besoin de le doubler sous le titre.
         footer:
-          t.score != null || t.recurrence || t.departement ? (
+          t.recurrence || t.departement ? (
             <div className="flex flex-wrap items-center gap-1 text-[9px] text-white/40">
-              {t.score != null ? (
-                <span
-                  className="rounded-full bg-white/5 px-1.5 py-0.5"
-                  title="Score = (impact × confiance / effort) × urgence"
-                >
-                  ★ {t.score.toFixed(1)}
-                </span>
-              ) : null}
               {t.recurrence ? (
                 <span className="rounded-full border border-amber-500/30 px-1.5 py-0.5 text-amber-200/80">
                   ⟲ {RECURRENCE_LABELS[t.recurrence] || t.recurrence}
