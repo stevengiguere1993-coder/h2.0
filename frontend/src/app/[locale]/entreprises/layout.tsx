@@ -8,6 +8,7 @@ import {
 } from "react";
 import { usePathname } from "next/navigation";
 import {
+  ArrowDownAZ,
   BarChart3,
   Briefcase,
   ChevronDown,
@@ -73,6 +74,9 @@ export default function EntreprisesLayout({
   const [entreprises, setEntreprises] = useState<EntrepriseLite[]>([]);
   const [openTasksCount, setOpenTasksCount] = useState<number>(0);
   const [addEntOpen, setAddEntOpen] = useState(false);
+  // Toggle « tri alphabétique » dans la sidebar — purement visuel,
+  // n'écrase pas les positions sauvegardées en DB.
+  const [alphaSort, setAlphaSort] = useState(false);
   const [newEntName, setNewEntName] = useState("");
   const [newEntBusy, setNewEntBusy] = useState(false);
   const [newEntErr, setNewEntErr] = useState<string | null>(null);
@@ -332,18 +336,38 @@ export default function EntreprisesLayout({
             <SidebarSection
               title="Mes entreprises"
               action={
-                <button
-                  type="button"
-                  onClick={() => setAddEntOpen(true)}
-                  title="Ajouter une entreprise"
-                  className="rounded p-0.5 text-[var(--qg-text-soft)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                </button>
+                <div className="flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setAlphaSort((v) => !v)}
+                    title={
+                      alphaSort
+                        ? "Retour à l'ordre manuel"
+                        : "Trier par ordre alphabétique"
+                    }
+                    aria-label="Trier par ordre alphabétique"
+                    className={`rounded p-0.5 transition ${
+                      alphaSort
+                        ? "bg-[var(--qg-bg-alt)] text-[var(--qg-accent)]"
+                        : "text-[var(--qg-text-soft)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
+                    }`}
+                  >
+                    <ArrowDownAZ className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAddEntOpen(true)}
+                    title="Ajouter une entreprise"
+                    className="rounded p-0.5 text-[var(--qg-text-soft)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               }
             >
               <EntrepriseListWithFolder
                 entreprises={entreprises}
+                alphaSort={alphaSort}
                 pathname={pathname}
                 onClose={() => setSidebarOpen(false)}
                 dragId={dragId}
@@ -740,6 +764,7 @@ export function EntreprisesTopbar({
  */
 function EntrepriseListWithFolder({
   entreprises,
+  alphaSort,
   pathname,
   onClose,
   dragId,
@@ -748,6 +773,9 @@ function EntrepriseListWithFolder({
   onArchive
 }: {
   entreprises: EntrepriseLite[];
+  /** Si `true`, la liste active est triée alphabétiquement à
+   *  l'affichage (l'ordre manuel reste préservé en DB). */
+  alphaSort: boolean;
   pathname: string;
   onClose: () => void;
   dragId: number | null;
@@ -756,7 +784,12 @@ function EntrepriseListWithFolder({
   onArchive: (id: number, target: "fermee" | "active") => void;
 }) {
   const [openClosed, setOpenClosed] = useState(false);
-  const active = entreprises.filter((e) => e.is_active);
+  const active = (() => {
+    const arr = entreprises.filter((e) => e.is_active);
+    return alphaSort
+      ? [...arr].sort((a, b) => a.name.localeCompare(b.name, "fr-CA"))
+      : arr;
+  })();
   const closed = [...entreprises.filter((e) => !e.is_active)].sort(
     (a, b) => a.name.localeCompare(b.name, "fr-CA")
   );
