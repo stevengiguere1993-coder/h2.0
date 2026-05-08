@@ -19,6 +19,7 @@ from sqlalchemy import func, select
 from app.api.deps import CurrentUser, DBSession, RequireManager
 from app.models.employe import Employe
 from app.models.punch import Punch
+from app.services.project_auto_status import bump_to_in_progress_if_needed
 
 
 router = APIRouter(prefix="/punch", tags=["punch"])
@@ -194,6 +195,11 @@ async def clock_in(
         notes=(data.notes.strip() if data.notes else None),
     )
     db.add(p)
+    await db.flush()
+    # Auto-bump : tout punch ouvert sur un projet le bascule en
+    # « En cours » s'il ne l'est pas déjà (et qu'il n'est pas
+    # « Livré »).
+    await bump_to_in_progress_if_needed(db, p.project_id)
     await db.flush()
     await db.refresh(p)
     return PunchRead.model_validate(p)

@@ -110,6 +110,17 @@ def make_crud_router(
             from app.api.v1.endpoints.achat_qbo import autopush_achat
 
             asyncio.create_task(autopush_achat(int(obj.id)))
+        # Auto-bump : tout Punch créé sur un projet bascule celui-ci
+        # en « En cours » s'il ne l'est pas déjà.
+        if model is Punch:
+            from app.services.project_auto_status import (
+                bump_to_in_progress_if_needed,
+            )
+
+            await bump_to_in_progress_if_needed(
+                db, getattr(obj, "project_id", None)
+            )
+            await db.flush()
         return read_schema.model_validate(obj)
 
     @router.get("", response_model=List[read_schema])  # type: ignore[valid-type]
@@ -142,6 +153,12 @@ def make_crud_router(
         prev_status = (
             getattr(obj, "status", None) if model is Achat else None
         )
+        # Capture pre-update project_id du Punch — si on rattache un
+        # punch existant à un projet (ou on le change de projet), on
+        # bumpera aussi ce projet.
+        prev_project_id = (
+            getattr(obj, "project_id", None) if model is Punch else None
+        )
         obj = await crud.update(obj, data)
         if model is Achat:
             new_status = getattr(obj, "status", None)
@@ -151,6 +168,15 @@ def make_crud_router(
                 from app.api.v1.endpoints.achat_qbo import autopush_achat
 
                 asyncio.create_task(autopush_achat(int(obj.id)))
+        if model is Punch:
+            new_project_id = getattr(obj, "project_id", None)
+            if new_project_id is not None and new_project_id != prev_project_id:
+                from app.services.project_auto_status import (
+                    bump_to_in_progress_if_needed,
+                )
+
+                await bump_to_in_progress_if_needed(db, new_project_id)
+                await db.flush()
         return read_schema.model_validate(obj)
 
     @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
