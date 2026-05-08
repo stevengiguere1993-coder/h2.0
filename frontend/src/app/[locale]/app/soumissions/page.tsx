@@ -63,6 +63,15 @@ export default function SoumissionsPage() {
   // recalcul du total). Peuplé en 1 batch après le chargement de la
   // liste.
   const [itemsTotals, setItemsTotals] = useState<Record<number, number>>({});
+  // Map client_id → name + map soumission_id → adresse projet
+  // (projet créé à partir de la soumission). Permet d'afficher
+  // l'adresse du projet sur la carte au lieu du juste-titre.
+  const [clientNames, setClientNames] = useState<Map<number, string>>(
+    new Map()
+  );
+  const [projectAddrBySoumission, setProjectAddrBySoumission] = useState<
+    Map<number, string>
+  >(new Map());
 
   useEffect(() => {
     let cancelled = false;
@@ -70,11 +79,39 @@ export default function SoumissionsPage() {
       setLoading(true);
       setError(null);
       try {
-        const res = await authedFetch("/api/v1/soumissions?limit=200");
+        const [res, clientsRes, projectsRes] = await Promise.all([
+          authedFetch("/api/v1/soumissions?limit=200"),
+          authedFetch("/api/v1/clients?limit=500"),
+          authedFetch("/api/v1/projects?limit=500")
+        ]);
         if (!res.ok) throw new Error(`http_${res.status}`);
         const data = (await res.json()) as Soumission[];
         if (cancelled) return;
         setItems(data);
+
+        if (clientsRes.ok) {
+          const cs = (await clientsRes.json()) as Array<{
+            id: number;
+            name: string;
+          }>;
+          if (!cancelled) {
+            setClientNames(new Map(cs.map((c) => [c.id, c.name])));
+          }
+        }
+        if (projectsRes.ok) {
+          const ps = (await projectsRes.json()) as Array<{
+            id: number;
+            address: string | null;
+            soumission_id: number | null;
+          }>;
+          if (!cancelled) {
+            const m = new Map<number, string>();
+            for (const p of ps) {
+              if (p.soumission_id && p.address) m.set(p.soumission_id, p.address);
+            }
+            setProjectAddrBySoumission(m);
+          }
+        }
 
         const ids = data
           .filter(
@@ -277,6 +314,14 @@ export default function SoumissionsPage() {
                           key={s.id}
                           soumission={s}
                           amount={amountFor(s)}
+                          clientName={
+                            s.client_id
+                              ? clientNames.get(s.client_id) ?? null
+                              : null
+                          }
+                          projectAddress={
+                            projectAddrBySoumission.get(s.id) ?? null
+                          }
                           dragging={dragging === s.id}
                           onDragStart={() => setDragging(s.id)}
                           onDragEnd={() => {
@@ -301,6 +346,8 @@ export default function SoumissionsPage() {
 function SoumissionCard({
   soumission: s,
   amount,
+  clientName,
+  projectAddress,
   dragging,
   onDragStart,
   onDragEnd,
@@ -308,6 +355,8 @@ function SoumissionCard({
 }: {
   soumission: Soumission;
   amount: number | null;
+  clientName: string | null;
+  projectAddress: string | null;
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -340,15 +389,25 @@ function SoumissionCard({
         href={`/app/soumissions/${s.id}` as any}
         className="block pr-6"
       >
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-          {s.reference}
+        {/* Adresse du projet (top) — fallback au titre si la
+            soumission n'a pas encore été convertie en projet. */}
+        <p className="line-clamp-2 text-sm font-semibold text-white">
+          {projectAddress || s.title}
         </p>
-        <p className="mt-1 line-clamp-2 text-sm font-semibold text-white">
-          {s.title}
+        {/* Nom du client (sous-titre). */}
+        {clientName ? (
+          <p className="mt-0.5 truncate text-[11px] text-white/60">
+            {clientName}
+          </p>
+        ) : null}
+        {/* Montant du budget (= total soumission). */}
+        <p className="mt-2 text-sm font-bold text-white">
+          {fmtMoney(amount)}
         </p>
-        <div className="mt-3 flex items-center justify-between">
-          <span className="text-sm font-bold text-white">
-            {fmtMoney(amount)}
+        {/* Numéro de la soumission, en bas. */}
+        <div className="mt-1 flex items-center justify-between">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+            {s.reference}
           </span>
           <span className="text-[10px] text-white/40">
             {new Date(s.created_at).toLocaleDateString("fr-CA", {

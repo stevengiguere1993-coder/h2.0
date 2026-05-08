@@ -68,6 +68,9 @@ export default function ProjectsPage() {
   const { onOpenSidebar } = useAppLayout();
   const confirm = useConfirm();
   const [items, setItems] = useState<Project[]>([]);
+  const [clientNames, setClientNames] = useState<Map<number, string>>(
+    new Map()
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -80,10 +83,22 @@ export default function ProjectsPage() {
       setLoading(true);
       setError(null);
       try {
-        const res = await authedFetch("/api/v1/projects?limit=200");
-        if (!res.ok) throw new Error(`http_${res.status}`);
-        const data = (await res.json()) as Project[];
+        const [projRes, clientsRes] = await Promise.all([
+          authedFetch("/api/v1/projects?limit=200"),
+          authedFetch("/api/v1/clients?limit=500")
+        ]);
+        if (!projRes.ok) throw new Error(`http_${projRes.status}`);
+        const data = (await projRes.json()) as Project[];
         if (!cancelled) setItems(data);
+        if (clientsRes.ok) {
+          const cs = (await clientsRes.json()) as Array<{
+            id: number;
+            name: string;
+          }>;
+          if (!cancelled) {
+            setClientNames(new Map(cs.map((c) => [c.id, c.name])));
+          }
+        }
       } catch {
         if (!cancelled) setError("Impossible de charger les projets.");
       } finally {
@@ -237,6 +252,11 @@ export default function ProjectsPage() {
                         <ProjectCard
                           key={p.id}
                           project={p}
+                          clientName={
+                            p.client_id
+                              ? clientNames.get(p.client_id) ?? null
+                              : null
+                          }
                           dragging={dragging === p.id}
                           onDragStart={() => setDragging(p.id)}
                           onDragEnd={() => {
@@ -260,12 +280,14 @@ export default function ProjectsPage() {
 
 function ProjectCard({
   project: p,
+  clientName,
   dragging,
   onDragStart,
   onDragEnd,
   onDelete
 }: {
   project: Project;
+  clientName: string | null;
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -297,18 +319,28 @@ function ProjectCard({
       >
         <Trash2 className="h-3.5 w-3.5" />
       </button>
-      <h3 className="pr-6 text-sm font-semibold text-white">{p.name}</h3>
-      {p.address ? (
-        <p className="mt-1 flex items-center gap-1 text-xs text-white/60">
-          <MapPin className="h-3 w-3 flex-shrink-0" />
-          <span className="truncate">{p.address}</span>
-        </p>
+      {/* Top : adresse du projet (titre principal) ; fallback au
+          nom interne si aucune adresse n'a encore été saisie. */}
+      <h3 className="flex items-start gap-1 pr-6 text-sm font-semibold text-white">
+        {p.address ? (
+          <>
+            <MapPin className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-white/60" />
+            <span className="truncate">{p.address}</span>
+          </>
+        ) : (
+          <span className="truncate">{p.name}</span>
+        )}
+      </h3>
+      {/* Nom du client (sous-titre). */}
+      {clientName ? (
+        <p className="mt-1 truncate text-xs text-white/60">{clientName}</p>
       ) : null}
       <div className="mt-2 flex items-center justify-between text-xs">
         <span className="text-white/50">
           {fmtDate(p.start_date)}
           {p.end_date ? ` → ${fmtDate(p.end_date)}` : ""}
         </span>
+        {/* Montant de la soumission acceptée (fallback budget). */}
         <span className="font-semibold text-white">
           {fmtMoney(p.budget, p.soumission_total)}
         </span>

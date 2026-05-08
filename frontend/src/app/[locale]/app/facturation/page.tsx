@@ -87,12 +87,21 @@ export default function FacturationPage() {
           ? ((await cRes.json()) as Array<{ id: number; name: string }>)
           : [];
         const ps = pRes.ok
-          ? ((await pRes.json()) as Array<{ id: number; name: string }>)
+          ? ((await pRes.json()) as Array<{
+              id: number;
+              name: string;
+              address: string | null;
+            }>)
           : [];
         if (!cancelled) {
           setItems(data);
           setClientNames(new Map(cs.map((c) => [c.id, c.name])));
-          setProjectNames(new Map(ps.map((p) => [p.id, p.name])));
+          // On stocke l'adresse comme « nom » du projet — c'est ce
+          // qu'on veut afficher en tête des cartes (fallback : nom
+          // interne si l'adresse n'est pas renseignée).
+          setProjectNames(
+            new Map(ps.map((p) => [p.id, p.address || p.name]))
+          );
         }
       } catch {
         if (!cancelled) setError("Impossible de charger les factures.");
@@ -282,22 +291,27 @@ function Card({
           : "border-brand-800 hover:border-accent-500"
       }`}
     >
+      {/* Adresse du projet (top). Fallback sur la référence
+          de la facture si pas de projet lié — pour ne jamais
+          afficher une carte vide. */}
       <h3 className="truncate text-sm font-semibold text-white">
-        {fa.reference}
+        {projectName || fa.reference}
       </h3>
-      {clientName || projectName ? (
+      {clientName ? (
         <p className="mt-0.5 truncate text-[11px] text-white/60">
-          {clientName ? clientName : ""}
-          {clientName && projectName ? " · " : ""}
-          {projectName ? projectName : ""}
+          {clientName}
         </p>
       ) : null}
-      <div className="mt-1 flex items-center justify-between text-xs">
-        <span className="text-white/50">
-          {fa.due_at ? `Échéance ${fmtDate(fa.due_at)}` : fmtDate(fa.created_at)}
+      {/* Numéro de facture + montant. */}
+      <div className="mt-2 flex items-center justify-between text-xs">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+          {fa.reference}
         </span>
-        <span className="font-semibold text-white">{fmtMoney(fa.total)}</span>
+        <span className="font-bold text-white">{fmtMoney(fa.total)}</span>
       </div>
+      <p className="mt-1 text-[10px] text-white/40">
+        {fa.due_at ? `Échéance ${fmtDate(fa.due_at)}` : fmtDate(fa.created_at)}
+      </p>
       {fa.qbo_invoice_id ? (
         <p className="mt-2 text-[10px] text-emerald-400">
           QBO Invoice #{fa.qbo_doc_number || fa.qbo_invoice_id}
