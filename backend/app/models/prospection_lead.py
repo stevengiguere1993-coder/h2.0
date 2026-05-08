@@ -52,6 +52,7 @@ class ProspectionLeadStatus(str, Enum):
     VISITE = "visite"  # visite drive-by faite
     A_CONTACTER = "a_contacter"  # proprio identifié, à contacter
     CONTACTE = "contacte"  # contact initial fait
+    HOT_LEAD = "hot_lead"  # lead très chaud — notification équipe
     SOUMISSIONNE = "soumissionne"  # OFFRE SOUMISE (renamed in UI)
     OFFRE_ACCEPTEE = "offre_acceptee"  # promesse d'achat acceptée
     EN_INSPECTION = "en_inspection"  # inspection en cours (path keep)

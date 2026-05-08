@@ -123,6 +123,7 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "visite", label: "Visité (drive-by)" },
   { value: "a_contacter", label: "À contacter" },
   { value: "contacte", label: "Contacté" },
+  { value: "hot_lead", label: "🔥 Hot Lead" },
   { value: "soumissionne", label: "Offre soumise" },
   { value: "offre_acceptee", label: "Offre acceptée" },
   { value: "en_inspection", label: "Inspection" },
