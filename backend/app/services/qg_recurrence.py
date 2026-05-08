@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entreprise_recurrence import FrequenceUnit, TacheTemplate
 from app.models.entreprise_tache import EntrepriseTache, TacheStatus
+from app.models.entreprise_tache_immeuble import EntrepriseTacheImmeuble
 
 
 log = logging.getLogger(__name__)
@@ -114,12 +115,20 @@ async def materialize_due_templates(
         try:
             if not await _has_existing_instance(db, tpl.id, tpl.next_due):
                 tags = [f"tpl:{tpl.id}", "auto-recurrence"]
+                # Statut par défaut hérité du template (peut être
+                # « a_venir » pour réception en colonne d'attente
+                # ou directement « a_faire ») — fallback BACKLOG si
+                # le rows DB est ancien et n'a pas la colonne.
+                status_val = (
+                    getattr(tpl, "default_status", None)
+                    or TacheStatus.BACKLOG.value
+                )
                 tache = EntrepriseTache(
                     entreprise_id=tpl.entreprise_id,
                     title=tpl.title,
                     description=tpl.description,
                     departement=tpl.departement,
-                    status=TacheStatus.BACKLOG.value,
+                    status=status_val,
                     impact=tpl.impact,
                     confidence=tpl.confidence,
                     effort=tpl.effort,
@@ -132,6 +141,23 @@ async def materialize_due_templates(
                 tache.created_at = now
                 tache.updated_at = now
                 db.add(tache)
+                # Flush pour avoir l'id avant les liens immeubles.
+                await db.flush()
+                # Attache les immeubles définis sur le template (multi).
+                imm_raw = getattr(tpl, "immeuble_ids_json", None)
+                if imm_raw:
+                    try:
+                        imm_ids = json.loads(imm_raw) or []
+                    except Exception:  # noqa: BLE001
+                        imm_ids = []
+                    for imm_id in imm_ids:
+                        if not isinstance(imm_id, int):
+                            continue
+                        db.add(
+                            EntrepriseTacheImmeuble(
+                                tache_id=tache.id, immeuble_id=imm_id
+                            )
+                        )
                 created += 1
 
             # Avance le template peu importe (idempotent + évite boucle)

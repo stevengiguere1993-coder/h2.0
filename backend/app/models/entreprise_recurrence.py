@@ -60,10 +60,26 @@ class TacheTemplate(Base, TimestampUpdateMixin):
         String(32), nullable=True
     )
 
-    # ICE par défaut hérité par chaque instance créée.
+    # Statut par défaut de la tâche matérialisée (À venir, À faire, etc.).
+    # Permet par exemple à un modèle de créer directement la tâche en
+    # « À faire » (skip de la colonne « À venir »). Défaut « a_venir ».
+    default_status: Mapped[str] = mapped_column(
+        String(16), nullable=False,
+        default="todo", server_default="todo",
+    )
+
+    # ICE — désormais obligatoire côté UI (1-10). En DB on garde
+    # nullable pour ne pas casser les anciens rows ; les nouveaux
+    # passent toujours par le schéma Pydantic qui exige la valeur.
     impact: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     confidence: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     effort: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # IDs des immeubles à attacher automatiquement à la tâche
+    # matérialisée. Stocké en JSON list (ex. "[3, 12]"). NULL = aucun.
+    immeuble_ids_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
 
     assignee_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),

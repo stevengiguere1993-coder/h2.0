@@ -846,17 +846,20 @@ function TaskListView({
 
   return (
     <div className="overflow-x-auto rounded-xl border border-brand-800 bg-brand-900/40">
-      <table className="w-full min-w-[480px] text-[13px]">
+      {/* min-w-[1080px] : sur mobile la table déborde, le wrapper
+          permet le scroll horizontal pour voir toutes les colonnes
+          (même UX que la version web). */}
+      <table className="w-full min-w-[1080px] text-[13px]">
         <thead>
           <tr
             className="text-[10px] font-semibold uppercase tracking-wider text-white/40"
             style={{ borderBottom: "1px solid rgba(100,116,139,0.35)" }}
           >
-            <th className="w-[80px] px-2 py-3 text-left sm:w-[88px] sm:px-3">P · Score</th>
-            <th className="px-3 py-3 text-left sm:px-4">Tâche</th>
+            <th className="w-[88px] px-3 py-3 text-left">P · Score</th>
+            <th className="px-4 py-3 text-left">Tâche</th>
             {extraColumn ? (
               <th
-                className="hidden px-3 py-3 text-center sm:table-cell"
+                className="px-3 py-3 text-center"
                 style={
                   extraColumn.width ? { width: extraColumn.width } : undefined
                 }
@@ -864,11 +867,11 @@ function TaskListView({
                 {extraColumn.label}
               </th>
             ) : null}
-            <th className="hidden w-[180px] px-3 py-3 text-center md:table-cell">Immeuble</th>
-            <th className="w-[110px] px-2 py-3 text-center sm:w-[120px] sm:px-3">Statut</th>
-            <th className="hidden w-[110px] px-3 py-3 text-center md:table-cell">Priorité</th>
-            <th className="hidden w-[120px] px-3 py-3 text-center md:table-cell">Personnes</th>
-            <th className="hidden w-[110px] px-3 py-3 text-center sm:table-cell">Échéance</th>
+            <th className="w-[180px] px-3 py-3 text-center">Immeuble</th>
+            <th className="w-[120px] px-3 py-3 text-center">Statut</th>
+            <th className="w-[110px] px-3 py-3 text-center">Priorité</th>
+            <th className="w-[120px] px-3 py-3 text-center">Personnes</th>
+            <th className="w-[110px] px-3 py-3 text-center">Échéance</th>
           </tr>
         </thead>
         <tbody>
@@ -957,11 +960,11 @@ function TaskListView({
                   ) : null}
                 </td>
                 {extraColumn ? (
-                  <td className="hidden px-3 py-2.5 text-center sm:table-cell">
+                  <td className="px-3 py-2.5 text-center">
                     {extraColumn.render(t)}
                   </td>
                 ) : null}
-                <td className="hidden px-3 py-2.5 text-center md:table-cell">
+                <td className="px-3 py-2.5 text-center">
                   {t.immeubleLabels && t.immeubleLabels.length > 0 ? (
                     <span
                       className="inline-flex max-w-full items-center gap-1 truncate text-[11px] text-white/70"
@@ -977,7 +980,7 @@ function TaskListView({
                   )}
                 </td>
                 <td
-                  className="px-2 py-2.5 text-center sm:px-3"
+                  className="px-3 py-2.5 text-center"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <PillPicker
@@ -992,7 +995,7 @@ function TaskListView({
                   />
                 </td>
                 <td
-                  className="hidden px-3 py-2.5 text-center md:table-cell"
+                  className="px-3 py-2.5 text-center"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <PillPicker
@@ -1007,7 +1010,7 @@ function TaskListView({
                   />
                 </td>
                 <td
-                  className="hidden px-3 py-2.5 text-center md:table-cell"
+                  className="px-3 py-2.5 text-center"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <AssigneePicker
@@ -1019,7 +1022,7 @@ function TaskListView({
                   />
                 </td>
                 <td
-                  className="hidden px-3 py-2.5 text-center sm:table-cell"
+                  className="px-3 py-2.5 text-center"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <DatePill

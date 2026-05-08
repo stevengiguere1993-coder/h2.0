@@ -20,6 +20,7 @@ import {
   LogOut,
   Menu,
   Plus,
+  Repeat,
   Settings,
   Sparkles,
   Target,
@@ -41,6 +42,8 @@ type NavItem = {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   badge?: string | number;
+  // Décalage visuel en sous-item (« Tâches récurrentes » sous « Tâches »).
+  indent?: boolean;
 };
 
 type EntrepriseLite = {
@@ -247,6 +250,12 @@ export default function EntreprisesLayout({
       label: "Tâches",
       icon: Target,
       badge: openTasksCount || undefined
+    },
+    {
+      href: "/entreprises/taches/recurrentes",
+      label: "Tâches récurrentes",
+      icon: Repeat,
+      indent: true
     },
     { href: "/entreprises/resumes", label: "Résumés IA", icon: Sparkles },
     { href: "/entreprises/vision", label: "Vision & Stratégie", icon: BarChart3 },
@@ -559,7 +568,9 @@ function SidebarLink({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         href={item.href as any}
         onClick={onClick}
-        className={`flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] font-medium transition ${
+        className={`flex items-center gap-2.5 rounded-md py-1.5 text-[13px] font-medium transition ${
+          item.indent ? "pl-8 pr-3 text-[12px]" : "px-3"
+        } ${
           active
             ? "bg-[var(--qg-bg-alt)] text-[var(--qg-text)]"
             : "text-[var(--qg-text-muted)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
