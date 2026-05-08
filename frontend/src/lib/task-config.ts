@@ -14,6 +14,7 @@ export type TaskStatusValue =
   | "todo"           // À venir
   | "a_faire"        // À faire
   | "in_progress"    // En traitement
+  | "waiting"        // En attente
   | "done";          // Terminé
 
 export const TASK_STATUS_OPTIONS: Array<{
@@ -43,6 +44,12 @@ export const TASK_STATUS_OPTIONS: Array<{
     label: "En traitement",
     pill: "bg-amber-500 text-brand-950",
     dot: "bg-amber-500"
+  },
+  {
+    value: "waiting",
+    label: "En attente",
+    pill: "bg-fuchsia-500 text-white",
+    dot: "bg-fuchsia-500"
   },
   {
     value: "done",

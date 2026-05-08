@@ -26,7 +26,7 @@ class TacheStatus(str, Enum):
     TODO = "todo"                  # « À venir » — leftmost, à classer
     A_FAIRE = "a_faire"            # « À faire » — engagée, à exécuter
     IN_PROGRESS = "in_progress"    # « En traitement » — actif
-    WAITING = "waiting"            # legacy, migré vers todo au boot
+    WAITING = "waiting"            # « En attente » — bloquée / en attente
     DONE = "done"                  # « Terminé »
 
 

@@ -201,7 +201,7 @@ async def delete_deal(
 # Tâches d'un deal
 # ============================================================
 
-TASK_STATUS_PATTERN = r"^(todo|a_faire|in_progress|done)$"
+TASK_STATUS_PATTERN = r"^(todo|a_faire|in_progress|waiting|done)$"
 TASK_PRIORITY_PATTERN = r"^(non_assigne|urgent|eleve|moyenne|faible)$"
 
 
@@ -513,14 +513,8 @@ async def create_task(
     )
     primary = uids[0] if uids else None
 
-    # Auto-remplit l'ICE si manquant : l'impact dérive de la priorité
-    # manuelle (urgent=9, eleve=7, faible=3, autres=5), confiance et
-    # effort = 5 par défaut. Garantit que toute nouvelle tâche a un
-    # score (donc une pastille P1-P4) dès la création.
-    auto_impact = data.impact if data.impact is not None else _default_impact_from_priority(data.priority)
-    auto_conf = data.confidence if data.confidence is not None else 5
-    auto_effort = data.effort if data.effort is not None else 5
-
+    # Pas d'auto-fill ICE — la tâche démarre P4 « Non évaluée »
+    # puis l'IA en background remplit impact/confidence/effort.
     task = ProspectionDealTask(
         deal_id=deal_id,
         name=data.name.strip(),
@@ -532,9 +526,9 @@ async def create_task(
         position=next_pos,
         departement=data.departement,
         recurrence=data.recurrence,
-        impact=auto_impact,
-        confidence=auto_conf,
-        effort=auto_effort,
+        impact=data.impact,
+        confidence=data.confidence,
+        effort=data.effort,
     )
     db.add(task)
     await db.flush()
@@ -544,6 +538,16 @@ async def create_task(
         await _replace_immeubles(db, task, data.immeuble_ids)
     await db.flush()
     await db.refresh(task)
+    if (
+        task.impact is None
+        and task.confidence is None
+        and task.effort is None
+    ):
+        import asyncio
+
+        from app.services.task_auto_score import autoscore_deal_task
+
+        asyncio.create_task(autoscore_deal_task(int(task.id)))
     final_a = await _load_task_assignees(db, [task.id])
     final_i = await _load_task_immeubles(db, [task.id])
     return _task_to_read(
