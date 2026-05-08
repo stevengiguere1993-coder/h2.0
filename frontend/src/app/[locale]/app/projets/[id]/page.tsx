@@ -1543,7 +1543,12 @@ function FinancesTab({ projectId }: { projectId: number }) {
         authedFetch(`/api/v1/projects/${projectId}/finances`),
         authedFetch(`/api/v1/projects/${projectId}`)
       ]);
-      if (!finRes.ok) throw new Error();
+      if (!finRes.ok) {
+        const txt = await finRes.text().catch(() => "");
+        throw new Error(
+          `HTTP ${finRes.status}${txt ? ` — ${txt.slice(0, 240)}` : ""}`
+        );
+      }
       setData((await finRes.json()) as Finances);
       if (projRes.ok) {
         const p = (await projRes.json()) as {
@@ -1556,8 +1561,8 @@ function FinancesTab({ projectId }: { projectId: number }) {
         setOverrideHours(v);
         setOverrideOriginal(v);
       }
-    } catch {
-      setErr("Chargement des finances échoué.");
+    } catch (e) {
+      setErr(`Chargement des finances échoué : ${(e as Error).message}`);
     } finally {
       setLoading(false);
     }
@@ -1594,7 +1599,12 @@ function FinancesTab({ projectId }: { projectId: number }) {
           authedFetch(`/api/v1/projects/${projectId}/finances`),
           authedFetch(`/api/v1/projects/${projectId}`)
         ]);
-        if (!finRes.ok) throw new Error();
+        if (!finRes.ok) {
+          const txt = await finRes.text().catch(() => "");
+          throw new Error(
+            `HTTP ${finRes.status}${txt ? ` — ${txt.slice(0, 240)}` : ""}`
+          );
+        }
         if (!cancelled) setData((await finRes.json()) as Finances);
         if (projRes.ok && !cancelled) {
           const p = (await projRes.json()) as {
@@ -1607,8 +1617,11 @@ function FinancesTab({ projectId }: { projectId: number }) {
           setOverrideHours(v);
           setOverrideOriginal(v);
         }
-      } catch {
-        if (!cancelled) setErr("Chargement des finances échoué.");
+      } catch (e) {
+        if (!cancelled)
+          setErr(
+            `Chargement des finances échoué : ${(e as Error).message}`
+          );
       } finally {
         if (!cancelled) setLoading(false);
       }
