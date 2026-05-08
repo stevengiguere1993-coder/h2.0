@@ -1514,8 +1514,8 @@ type Finances = {
   actual_labour_cost: number;
   actual_labour_hours: number;
   actual_total_cost: number;
-  actual_profit: number | null;
-  actual_margin_pct: number | null;
+  actual_profit: number;
+  actual_margin_pct: number;
   service_lines: { label: string; quantity: number; unit_cost: number; total: number }[];
   material_lines: { label: string; quantity: number; unit_cost: number; total: number }[];
   invoiced_amount: number;
@@ -1673,23 +1673,9 @@ function FinancesTab({ projectId }: { projectId: number }) {
         />
         <FinanceKpi
           label="Profit réel"
-          value={
-            data.actual_profit == null
-              ? "—"
-              : fmtMoney(data.actual_profit)
-          }
-          sub={
-            data.actual_margin_pct == null
-              ? "Aucun paiement encaissé"
-              : `${data.actual_margin_pct.toFixed(1)} % marge`
-          }
-          tone={
-            data.actual_profit == null
-              ? "white"
-              : data.actual_profit >= 0
-              ? "emerald"
-              : "rose"
-          }
+          value={fmtMoney(data.actual_profit)}
+          sub={`${data.actual_margin_pct.toFixed(1)} % marge`}
+          tone={data.actual_profit >= 0 ? "emerald" : "rose"}
         />
       </div>
 
