@@ -74,6 +74,7 @@ type Entreprise = {
   id: number;
   name: string;
   color_accent: string;
+  is_active?: boolean;
 };
 
 type Deal = {
@@ -137,9 +138,22 @@ export default function MesTachesPage() {
         ]);
         if (cancelled) return;
         if (!tRes.ok) throw new Error(`HTTP ${tRes.status}`);
-        if (eRes.ok) setEntreprises((await eRes.json()) as Entreprise[]);
-        const dealsList = dRes.ok ? ((await dRes.json()) as Deal[]) : [];
-        if (!cancelled) setDeals(dealsList);
+        // Exclut les entreprises fermées (is_active=false) et les
+        // deals archivés (priority termine/abandonne) — leurs
+        // tâches n'apparaissent pas dans la vue agrégée.
+        const allEntreprises = eRes.ok
+          ? ((await eRes.json()) as Entreprise[])
+          : [];
+        const activeEntreprises = allEntreprises.filter(
+          (e) => e.is_active !== false
+        );
+        const activeEntIds = new Set(activeEntreprises.map((e) => e.id));
+        setEntreprises(activeEntreprises);
+        const allDeals = dRes.ok ? ((await dRes.json()) as Deal[]) : [];
+        const activeDeals = allDeals.filter(
+          (d) => d.priority !== "termine" && d.priority !== "abandonne"
+        );
+        if (!cancelled) setDeals(activeDeals);
         if (uRes.ok) {
           const all = (await uRes.json()) as Array<
             TaskUserMini & { volets?: string[] }
@@ -148,13 +162,16 @@ export default function MesTachesPage() {
           setUsers(all);
         }
         if (iRes.ok) setImmeubles((await iRes.json()) as ImmeubleMini[]);
-        setTachesEnt((await tRes.json()) as TacheEnt[]);
+        const allTachesEnt = (await tRes.json()) as TacheEnt[];
+        setTachesEnt(
+          allTachesEnt.filter((t) => activeEntIds.has(t.entreprise_id))
+        );
 
         // Tâches des deals — pas d'endpoint global, on agrège par
-        // deal en parallèle. `mine=true` n'est pas supporté côté
-        // deal : on filtre client-side ci-dessous.
+        // deal actif en parallèle. Les deals archivés
+        // (Terminé/Abandonné) ne sont pas interrogés.
         const dealTaskLists = await Promise.all(
-          dealsList.map(async (d) => {
+          activeDeals.map(async (d) => {
             try {
               const r = await authedFetch(
                 `/api/v1/prospection/deals/${d.id}/tasks`
