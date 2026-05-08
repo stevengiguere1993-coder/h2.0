@@ -16,19 +16,54 @@ class TacheTemplateBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     departement: Optional[str] = Field(default=None, max_length=32)
-    impact: Optional[int] = Field(default=None, ge=1, le=10)
-    confidence: Optional[int] = Field(default=None, ge=1, le=10)
-    effort: Optional[int] = Field(default=None, ge=1, le=10)
+    # ICE obligatoire côté création (matérialise des tâches scoreables).
+    impact: int = Field(..., ge=1, le=10)
+    confidence: int = Field(..., ge=1, le=10)
+    effort: int = Field(..., ge=1, le=10)
     assignee_user_id: Optional[int] = None
     every_n: int = Field(default=1, ge=1, le=365)
     unit: str = Field(default="mois", max_length=16)
-    lead_days: int = Field(default=7, ge=0, le=90)
+    lead_days: int = Field(..., ge=0, le=365)
     next_due: date
+    # Statut donné à la tâche matérialisée — par défaut « À venir ».
+    default_status: str = Field(default="todo", max_length=16)
+    # IDs des immeubles à attacher (multi-select, optionnel).
+    immeuble_ids: List[int] = Field(default_factory=list)
     is_active: bool = True
 
 
 class TacheTemplateCreate(TacheTemplateBase):
     pass
+
+
+class TacheTemplateBulkCreate(BaseModel):
+    """Création d'un même modèle pour plusieurs entreprises d'un coup.
+
+    Le frontend envoie la liste d'entreprises sélectionnées + les
+    autres champs (sans `entreprise_id` — il sera dupliqué). Le
+    backend crée N modèles — un par entreprise — dans une seule
+    transaction. Idempotent par titre + entreprise (skip si déjà là).
+    """
+    entreprise_ids: List[int] = Field(..., min_length=1)
+    title: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    departement: Optional[str] = Field(default=None, max_length=32)
+    impact: int = Field(..., ge=1, le=10)
+    confidence: int = Field(..., ge=1, le=10)
+    effort: int = Field(..., ge=1, le=10)
+    assignee_user_id: Optional[int] = None
+    every_n: int = Field(..., ge=1, le=365)
+    unit: str = Field(..., max_length=16)
+    lead_days: int = Field(..., ge=0, le=365)
+    next_due: date
+    default_status: str = Field(default="todo", max_length=16)
+    immeuble_ids: List[int] = Field(default_factory=list)
+    is_active: bool = True
+
+
+class TacheTemplateBulkResult(BaseModel):
+    created: int = 0
+    skipped_entreprise_ids: List[int] = Field(default_factory=list)
 
 
 class TacheTemplateUpdate(BaseModel):
@@ -41,14 +76,34 @@ class TacheTemplateUpdate(BaseModel):
     assignee_user_id: Optional[int] = None
     every_n: Optional[int] = Field(default=None, ge=1, le=365)
     unit: Optional[str] = Field(default=None, max_length=16)
-    lead_days: Optional[int] = Field(default=None, ge=0, le=90)
+    lead_days: Optional[int] = Field(default=None, ge=0, le=365)
     next_due: Optional[date] = None
+    default_status: Optional[str] = Field(default=None, max_length=16)
+    immeuble_ids: Optional[List[int]] = None
     is_active: Optional[bool] = None
 
 
-class TacheTemplateRead(TacheTemplateBase):
+class TacheTemplateRead(BaseModel):
+    """Lecture d'un modèle. On ne dérive pas de TacheTemplateBase
+    pour pouvoir relâcher les contraintes ge/le sur impact (anciens
+    rows en DB ont peut-être impact=None)."""
     model_config = ConfigDict(from_attributes=True)
     id: int
+    entreprise_id: int
+    title: str
+    description: Optional[str] = None
+    departement: Optional[str] = None
+    impact: Optional[int] = None
+    confidence: Optional[int] = None
+    effort: Optional[int] = None
+    assignee_user_id: Optional[int] = None
+    every_n: int
+    unit: str
+    lead_days: int
+    next_due: date
+    default_status: str = "todo"
+    immeuble_ids: List[int] = Field(default_factory=list)
+    is_active: bool
     nb_materialized: int
     last_materialized_at: Optional[datetime] = None
     created_at: datetime

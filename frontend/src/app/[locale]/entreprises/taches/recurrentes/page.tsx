@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Loader2,
   Pause,
+  Pencil,
   Play,
   Plus,
   Repeat,
@@ -17,29 +18,65 @@ import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { QGTopbar, useEntreprisesLayout } from "../../layout";
 import { Link } from "@/i18n/navigation";
+import {
+  TASK_PRIORITY_OPTIONS,
+  TASK_STATUS_OPTIONS,
+  type TaskStatusValue
+} from "@/lib/task-config";
+import {
+  ImmeublePicker,
+  type ImmeubleMini
+} from "@/components/immeuble-picker";
 
 /**
- * Page globale `/entreprises/taches/recurrentes` — liste tous les
- * modèles de tâches récurrentes de TOUTES les entreprises, groupés
- * par entreprise. Création directe avec sélecteur d'entreprise, et
- * bouton « Matérialiser maintenant » global pour tester le cron.
+ * Page globale `/entreprises/taches/recurrentes` — refonte complète.
+ *
+ * - Liste cross-entreprise avec filtres (recherche, statut par
+ *   défaut, fréquence, actifs seulement, entreprise).
+ * - Création complète façon « tâche normale » :
+ *     · multi-select entreprise (≥1, obligatoire)
+ *     · titre, statut par défaut, lead_days, récurrence
+ *       (jour/semaine/mois/année/custom), 1ère échéance — TOUS
+ *       obligatoires
+ *     · ICE (impact/confidence/effort) — obligatoires
+ *     · immeuble (multi), département, notes — optionnels
  */
 
-type TacheTemplateGlobal = {
+type TacheTemplate = {
   id: number;
   entreprise_id: number;
   entreprise_name: string;
   title: string;
   description?: string | null;
   departement?: string | null;
+  impact?: number | null;
+  confidence?: number | null;
+  effort?: number | null;
   every_n: number;
   unit: string;
   lead_days: number;
   next_due: string;
+  default_status: string;
+  immeuble_ids: number[];
   is_active: boolean;
   nb_materialized: number;
   last_materialized_at?: string | null;
 };
+
+const FREQ_PRESETS: Array<{
+  key: string;
+  label: string;
+  every_n: number;
+  unit: string;
+}> = [
+  { key: "daily", label: "Quotidienne", every_n: 1, unit: "jour" },
+  { key: "weekly", label: "Hebdomadaire", every_n: 1, unit: "semaine" },
+  { key: "biweekly", label: "Aux 2 semaines", every_n: 2, unit: "semaine" },
+  { key: "monthly", label: "Mensuelle", every_n: 1, unit: "mois" },
+  { key: "quarterly", label: "Trimestrielle", every_n: 3, unit: "mois" },
+  { key: "yearly", label: "Annuelle", every_n: 1, unit: "annee" },
+  { key: "custom", label: "Personnalisée", every_n: 1, unit: "mois" }
+];
 
 const FREQ_UNITS = [
   { value: "jour", label: "jour(s)" },
@@ -54,14 +91,30 @@ function todayPlusDays(n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+function formatFreq(every_n: number, unit: string): string {
+  // Match d'un preset si possible (sinon affichage brut « tous les N <unit> »).
+  for (const p of FREQ_PRESETS) {
+    if (p.key === "custom") continue;
+    if (p.every_n === every_n && p.unit === unit) return p.label;
+  }
+  return `Tous les ${every_n} ${unit}`;
+}
+
 export default function TachesRecurrentesPage() {
-  const [list, setList] = useState<TacheTemplateGlobal[] | null>(null);
+  const [list, setList] = useState<TacheTemplate[] | null>(null);
   const [running, setRunning] = useState(false);
   const [runMsg, setRunMsg] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  const [search, setSearch] = useState("");
-  const [activeOnly, setActiveOnly] = useState(false);
+  const [editing, setEditing] = useState<TacheTemplate | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Filtres (style tableau de tâches normal).
+  const [search, setSearch] = useState("");
+  const [filterStatus, setFilterStatus] = useState<string>("");
+  const [filterFreq, setFilterFreq] = useState<string>("");
+  const [filterEntreprise, setFilterEntreprise] = useState<string>("");
+  const [activeOnly, setActiveOnly] = useState(false);
+
   const confirm = useConfirm();
 
   async function reload() {
@@ -70,7 +123,7 @@ export default function TachesRecurrentesPage() {
         "/api/v1/entreprises/tache-templates/all"
       );
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setList((await r.json()) as TacheTemplateGlobal[]);
+      setList((await r.json()) as TacheTemplate[]);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -103,7 +156,7 @@ export default function TachesRecurrentesPage() {
     }
   }
 
-  async function toggleActive(t: TacheTemplateGlobal) {
+  async function toggleActive(t: TacheTemplate) {
     await authedFetch(`/api/v1/entreprises/tache-templates/${t.id}`, {
       method: "PATCH",
       body: JSON.stringify({ is_active: !t.is_active })
@@ -111,10 +164,10 @@ export default function TachesRecurrentesPage() {
     void reload();
   }
 
-  async function remove(t: TacheTemplateGlobal) {
+  async function remove(t: TacheTemplate) {
     const ok = await confirm({
       title: `Supprimer le modèle « ${t.title} » ?`,
-      description: `Modèle de l'entreprise « ${t.entreprise_name} ». Les tâches déjà créées ne sont pas supprimées.`,
+      description: `Modèle de « ${t.entreprise_name} ». Les tâches déjà créées ne sont pas supprimées.`,
       confirmLabel: "Supprimer",
       destructive: true
     });
@@ -125,40 +178,49 @@ export default function TachesRecurrentesPage() {
     void reload();
   }
 
-  // Filtrage côté client : recherche par titre ou entreprise, et
-  // option « actifs seulement ».
+  // Filtrage côté client.
   const filtered = useMemo(() => {
     if (!list) return null;
     const q = search.trim().toLowerCase();
     return list.filter((t) => {
       if (activeOnly && !t.is_active) return false;
+      if (filterStatus && t.default_status !== filterStatus) return false;
+      if (filterEntreprise && String(t.entreprise_id) !== filterEntreprise)
+        return false;
+      if (filterFreq) {
+        const preset = FREQ_PRESETS.find((p) => p.key === filterFreq);
+        if (preset && preset.key !== "custom") {
+          if (t.every_n !== preset.every_n || t.unit !== preset.unit)
+            return false;
+        }
+      }
       if (!q) return true;
       return (
         t.title.toLowerCase().includes(q) ||
         t.entreprise_name.toLowerCase().includes(q) ||
-        (t.description || "").toLowerCase().includes(q)
+        (t.description || "").toLowerCase().includes(q) ||
+        (t.departement || "").toLowerCase().includes(q)
       );
     });
-  }, [list, search, activeOnly]);
-
-  // Groupe par entreprise pour rendu en sections.
-  const grouped = useMemo(() => {
-    if (!filtered) return null;
-    const map = new Map<number, { name: string; items: TacheTemplateGlobal[] }>();
-    for (const t of filtered) {
-      const cur = map.get(t.entreprise_id);
-      if (cur) cur.items.push(t);
-      else map.set(t.entreprise_id, { name: t.entreprise_name, items: [t] });
-    }
-    return Array.from(map.entries()).sort((a, b) =>
-      a[1].name.localeCompare(b[1].name, "fr")
-    );
-  }, [filtered]);
+  }, [list, search, activeOnly, filterStatus, filterFreq, filterEntreprise]);
 
   return (
     <>
       <QGTopbar
-        greeting="Tâches récurrentes"
+        greeting={
+          <>
+            Tâches{" "}
+            <span
+              className="italic"
+              style={{
+                color: "var(--qg-accent)",
+                fontFamily: "var(--font-fraunces, Georgia, serif)"
+              }}
+            >
+              récurrentes
+            </span>
+          </>
+        }
         subtitle="Modèles cross-entreprise · matérialisés automatiquement par le cron"
         rightSlot={
           <Link
@@ -171,29 +233,9 @@ export default function TachesRecurrentesPage() {
         }
       />
 
-      <div className="mx-auto max-w-6xl px-5 py-6 lg:px-8">
-        {/* Toolbar */}
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/40" />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Rechercher (titre, entreprise…)"
-                className="w-72 rounded-lg border border-brand-800 bg-brand-900 py-1.5 pl-8 pr-2 text-xs text-white placeholder:text-white/30 focus:border-accent-500 focus:outline-none"
-              />
-            </div>
-            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-white/70">
-              <input
-                type="checkbox"
-                checked={activeOnly}
-                onChange={(e) => setActiveOnly(e.target.checked)}
-                className="h-3.5 w-3.5 accent-accent-500"
-              />
-              Actifs seulement
-            </label>
-          </div>
+      <div className="px-5 py-6 lg:px-8">
+        {/* Toolbar : actions + filtres */}
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -224,6 +266,19 @@ export default function TachesRecurrentesPage() {
           </div>
         </div>
 
+        <FiltersBar
+          search={search}
+          setSearch={setSearch}
+          filterStatus={filterStatus}
+          setFilterStatus={setFilterStatus}
+          filterFreq={filterFreq}
+          setFilterFreq={setFilterFreq}
+          filterEntreprise={filterEntreprise}
+          setFilterEntreprise={setFilterEntreprise}
+          activeOnly={activeOnly}
+          setActiveOnly={setActiveOnly}
+        />
+
         {error ? (
           <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
             {error}
@@ -237,56 +292,48 @@ export default function TachesRecurrentesPage() {
           </p>
         ) : null}
 
-        {grouped === null ? (
+        {filtered === null ? (
           <p className="py-12 text-center text-sm text-white/40">Chargement…</p>
-        ) : grouped.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <div className="rounded-xl border border-brand-800 bg-brand-900/40 px-6 py-12 text-center">
             <Repeat className="mx-auto mb-3 h-8 w-8 text-white/30" />
             <p className="text-sm text-white/60">
-              Aucun modèle récurrent pour l&apos;instant.
-            </p>
-            <p className="mt-1 text-xs text-white/40">
-              Crée-en un pour automatiser TPS/TVQ, rapprochement bancaire,
-              etc.
+              Aucun modèle pour ces filtres.
             </p>
           </div>
         ) : (
-          <div className="space-y-6">
-            {grouped.map(([entId, group]) => (
-              <section key={entId}>
-                <header className="mb-2 flex items-baseline justify-between">
-                  <Link
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    href={`/entreprises/${entId}` as any}
-                    className="text-sm font-bold text-white hover:text-accent-500"
-                  >
-                    {group.name}
-                  </Link>
-                  <span className="text-[10px] uppercase tracking-wider text-white/40">
-                    {group.items.length} modèle{group.items.length > 1 ? "s" : ""}
-                  </span>
-                </header>
-                <ul className="space-y-2">
-                  {group.items.map((t) => (
-                    <TemplateRow
-                      key={t.id}
-                      t={t}
-                      onToggle={() => toggleActive(t)}
-                      onDelete={() => remove(t)}
-                    />
-                  ))}
-                </ul>
-              </section>
+          <ul className="space-y-2">
+            {filtered.map((t) => (
+              <TemplateRow
+                key={t.id}
+                t={t}
+                onToggle={() => toggleActive(t)}
+                onDelete={() => remove(t)}
+                onEdit={() => setEditing(t)}
+              />
             ))}
-          </div>
+          </ul>
         )}
       </div>
 
       {showCreate ? (
-        <CreateTemplateModal
+        <TemplateFormModal
+          mode="create"
           onClose={() => setShowCreate(false)}
           onSaved={() => {
             setShowCreate(false);
+            void reload();
+          }}
+        />
+      ) : null}
+
+      {editing ? (
+        <TemplateFormModal
+          mode="edit"
+          existing={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
             void reload();
           }}
         />
@@ -295,21 +342,112 @@ export default function TachesRecurrentesPage() {
   );
 }
 
-// ── Sous-composants ────────────────────────────────────────────────
+// ─── Filtres ───────────────────────────────────────────────────────
+
+function FiltersBar({
+  search,
+  setSearch,
+  filterStatus,
+  setFilterStatus,
+  filterFreq,
+  setFilterFreq,
+  filterEntreprise,
+  setFilterEntreprise,
+  activeOnly,
+  setActiveOnly
+}: {
+  search: string;
+  setSearch: (v: string) => void;
+  filterStatus: string;
+  setFilterStatus: (v: string) => void;
+  filterFreq: string;
+  setFilterFreq: (v: string) => void;
+  filterEntreprise: string;
+  setFilterEntreprise: (v: string) => void;
+  activeOnly: boolean;
+  setActiveOnly: (v: boolean) => void;
+}) {
+  const { entreprises } = useEntreprisesLayout();
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-brand-800 bg-brand-900/40 p-3">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/40" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Rechercher (titre, entreprise, département…)"
+          className="w-72 rounded-lg border border-brand-800 bg-brand-900 py-1.5 pl-8 pr-2 text-xs text-white placeholder:text-white/30 focus:border-accent-500 focus:outline-none"
+        />
+      </div>
+      <select
+        value={filterStatus}
+        onChange={(e) => setFilterStatus(e.target.value)}
+        className="rounded-lg border border-brand-800 bg-brand-900 px-2 py-1.5 text-xs text-white focus:border-accent-500 focus:outline-none"
+      >
+        <option value="">Tous statuts</option>
+        {TASK_STATUS_OPTIONS.map((s) => (
+          <option key={s.value} value={s.value}>
+            {s.label}
+          </option>
+        ))}
+      </select>
+      <select
+        value={filterFreq}
+        onChange={(e) => setFilterFreq(e.target.value)}
+        className="rounded-lg border border-brand-800 bg-brand-900 px-2 py-1.5 text-xs text-white focus:border-accent-500 focus:outline-none"
+      >
+        <option value="">Toutes fréquences</option>
+        {FREQ_PRESETS.filter((p) => p.key !== "custom").map((p) => (
+          <option key={p.key} value={p.key}>
+            {p.label}
+          </option>
+        ))}
+      </select>
+      <select
+        value={filterEntreprise}
+        onChange={(e) => setFilterEntreprise(e.target.value)}
+        className="rounded-lg border border-brand-800 bg-brand-900 px-2 py-1.5 text-xs text-white focus:border-accent-500 focus:outline-none"
+      >
+        <option value="">Toutes entreprises</option>
+        {entreprises.map((e) => (
+          <option key={e.id} value={e.id}>
+            {e.name}
+          </option>
+        ))}
+      </select>
+      <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-xs text-white/70">
+        <input
+          type="checkbox"
+          checked={activeOnly}
+          onChange={(e) => setActiveOnly(e.target.checked)}
+          className="h-3.5 w-3.5 accent-accent-500"
+        />
+        Actifs seulement
+      </label>
+    </div>
+  );
+}
+
+// ─── Liste ─────────────────────────────────────────────────────────
 
 function TemplateRow({
   t,
   onToggle,
-  onDelete
+  onDelete,
+  onEdit
 }: {
-  t: TacheTemplateGlobal;
+  t: TacheTemplate;
   onToggle: () => void;
   onDelete: () => void;
+  onEdit: () => void;
 }) {
+  const statusOpt = TASK_STATUS_OPTIONS.find(
+    (s) => s.value === t.default_status
+  );
   return (
     <li className="rounded-xl border border-brand-800 bg-brand-900 p-4">
       <div className="flex items-start gap-3">
-        <span className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-violet-500/15 text-violet-300">
+        <span className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-violet-500/15 text-violet-300">
           <Repeat className="h-4 w-4" />
         </span>
         <div className="min-w-0 flex-1">
@@ -317,24 +455,39 @@ function TemplateRow({
             <h3 className="truncate text-sm font-bold text-white">
               {t.title}
             </h3>
+            <span className="rounded-full border border-white/10 bg-brand-950 px-1.5 py-0.5 text-[10px] text-white/70">
+              {t.entreprise_name}
+            </span>
+            {statusOpt ? (
+              <span
+                className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${statusOpt.pill}`}
+              >
+                {statusOpt.label}
+              </span>
+            ) : null}
             {!t.is_active ? (
               <span className="rounded-full border border-white/15 px-1.5 py-0.5 text-[10px] uppercase text-white/50">
                 Désactivé
               </span>
             ) : null}
           </div>
-          <p className="mt-0.5 text-[11px] text-white/50">
-            Tous les {t.every_n} {t.unit}
+          <p className="mt-1 text-[11px] text-white/50">
+            {formatFreq(t.every_n, t.unit)}
             {t.departement ? ` · ${t.departement}` : ""}
             {" · prochain "}
             <span className="font-mono text-white/70">{t.next_due}</span>
             {" · lead "}
             <span className="font-mono">{t.lead_days}j</span>
+            {t.impact && t.confidence && t.effort
+              ? ` · ICE ${t.impact}/${t.confidence}/${t.effort}`
+              : ""}
           </p>
           {t.description ? (
-            <p className="mt-1 text-xs text-white/60">{t.description}</p>
+            <p className="mt-1 line-clamp-2 text-xs text-white/60">
+              {t.description}
+            </p>
           ) : null}
-          <p className="mt-2 text-[10px] text-white/40">
+          <p className="mt-1.5 text-[10px] text-white/40">
             {t.nb_materialized} matérialisation
             {t.nb_materialized > 1 ? "s" : ""}
             {t.last_materialized_at
@@ -345,6 +498,15 @@ function TemplateRow({
           </p>
         </div>
         <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onEdit}
+            className="rounded-lg border border-white/15 bg-brand-950 p-1.5 text-white/60 hover:text-white"
+            title="Modifier"
+            aria-label="Modifier"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
           <button
             type="button"
             onClick={onToggle}
@@ -377,65 +539,227 @@ function TemplateRow({
   );
 }
 
-function CreateTemplateModal({
+// ─── Form Modal (create + edit) ────────────────────────────────────
+
+type FormState = {
+  // Création multi-entreprise. En édition, un seul id pré-rempli.
+  entrepriseIds: number[];
+  title: string;
+  description: string;
+  departement: string;
+  default_status: TaskStatusValue;
+  freqPreset: string;
+  every_n: string;
+  unit: string;
+  lead_days: string;
+  next_due: string;
+  impact: string;
+  confidence: string;
+  effort: string;
+  immeuble_ids: number[];
+};
+
+function TemplateFormModal({
+  mode,
+  existing,
   onClose,
   onSaved
 }: {
+  mode: "create" | "edit";
+  existing?: TacheTemplate;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const { entreprises } = useEntreprisesLayout();
-  const [form, setForm] = useState({
-    entrepriseId: "",
-    title: "",
-    description: "",
-    departement: "",
-    every_n: "1",
-    unit: "mois",
-    lead_days: "7",
-    next_due: todayPlusDays(7)
+  const [form, setForm] = useState<FormState>(() => {
+    if (existing) {
+      // Match preset si possible.
+      const preset =
+        FREQ_PRESETS.find(
+          (p) =>
+            p.key !== "custom" &&
+            p.every_n === existing.every_n &&
+            p.unit === existing.unit
+        )?.key || "custom";
+      return {
+        entrepriseIds: [existing.entreprise_id],
+        title: existing.title,
+        description: existing.description || "",
+        departement: existing.departement || "",
+        default_status: (existing.default_status || "todo") as TaskStatusValue,
+        freqPreset: preset,
+        every_n: String(existing.every_n),
+        unit: existing.unit,
+        lead_days: String(existing.lead_days),
+        next_due: existing.next_due,
+        impact: existing.impact ? String(existing.impact) : "",
+        confidence: existing.confidence ? String(existing.confidence) : "",
+        effort: existing.effort ? String(existing.effort) : "",
+        immeuble_ids: existing.immeuble_ids || []
+      };
+    }
+    return {
+      entrepriseIds: [],
+      title: "",
+      description: "",
+      departement: "",
+      default_status: "todo" as TaskStatusValue,
+      freqPreset: "monthly",
+      every_n: "1",
+      unit: "mois",
+      lead_days: "7",
+      next_due: todayPlusDays(7),
+      impact: "",
+      confidence: "",
+      effort: "",
+      immeuble_ids: []
+    };
   });
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Présélectionne la 1ère entreprise active dès qu'elles sont chargées.
+  // Catalogue d'immeubles : filtré par entreprise(s) sélectionnée(s).
+  // En création, agrégé sur les N entreprises ; en édition, sur la seule.
+  const [immeubles, setImmeubles] = useState<ImmeubleMini[]>([]);
   useEffect(() => {
-    if (form.entrepriseId) return;
-    const first = entreprises.find((e) => e.is_active) || entreprises[0];
-    if (first) setForm((f) => ({ ...f, entrepriseId: String(first.id) }));
+    let cancelled = false;
+    async function load() {
+      const ids = form.entrepriseIds;
+      if (ids.length === 0) {
+        setImmeubles([]);
+        return;
+      }
+      try {
+        const results = await Promise.all(
+          ids.map((eid) =>
+            authedFetch(`/api/v1/imm/immeubles?entreprise_id=${eid}`).then(
+              (r) => (r.ok ? r.json() : [])
+            )
+          )
+        );
+        if (cancelled) return;
+        const merged = new Map<number, ImmeubleMini>();
+        for (const list of results) {
+          for (const i of list as ImmeubleMini[]) {
+            if (!merged.has(i.id)) merged.set(i.id, i);
+          }
+        }
+        setImmeubles(Array.from(merged.values()));
+      } catch {
+        /* silent */
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entreprises]);
+  }, [form.entrepriseIds.join(",")]);
+
+  function setPreset(presetKey: string) {
+    const p = FREQ_PRESETS.find((x) => x.key === presetKey);
+    if (!p) return;
+    if (presetKey === "custom") {
+      setForm((f) => ({ ...f, freqPreset: presetKey }));
+    } else {
+      setForm((f) => ({
+        ...f,
+        freqPreset: presetKey,
+        every_n: String(p.every_n),
+        unit: p.unit
+      }));
+    }
+  }
+
+  function toggleEntreprise(id: number) {
+    setForm((f) => {
+      const has = f.entrepriseIds.includes(id);
+      return {
+        ...f,
+        entrepriseIds: has
+          ? f.entrepriseIds.filter((x) => x !== id)
+          : [...f.entrepriseIds, id]
+      };
+    });
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.entrepriseId) {
-      setErr("Choisis une entreprise.");
+    if (form.entrepriseIds.length === 0) {
+      setErr("Choisis au moins une entreprise.");
       return;
     }
+    if (!form.title.trim()) {
+      setErr("Le titre est obligatoire.");
+      return;
+    }
+    const ice = [
+      Number(form.impact),
+      Number(form.confidence),
+      Number(form.effort)
+    ];
+    if (ice.some((v) => !Number.isFinite(v) || v < 1 || v > 10)) {
+      setErr("Le score ICE est obligatoire (impact, confiance, effort de 1 à 10).");
+      return;
+    }
+    const every_n = Number(form.every_n);
+    if (!Number.isFinite(every_n) || every_n < 1) {
+      setErr("La fréquence doit être un nombre ≥ 1.");
+      return;
+    }
+    const lead_days = Number(form.lead_days);
+    if (!Number.isFinite(lead_days) || lead_days < 0) {
+      setErr("Le délai (lead) doit être un nombre ≥ 0.");
+      return;
+    }
+    if (!form.next_due) {
+      setErr("La 1ère date d'échéance est obligatoire.");
+      return;
+    }
+
+    const payloadBase = {
+      title: form.title.trim(),
+      description: form.description.trim() || null,
+      departement: form.departement.trim() || null,
+      default_status: form.default_status,
+      every_n,
+      unit: form.unit,
+      lead_days,
+      next_due: form.next_due,
+      impact: ice[0],
+      confidence: ice[1],
+      effort: ice[2],
+      immeuble_ids: form.immeuble_ids,
+      is_active: true
+    };
+
     setSaving(true);
     setErr(null);
     try {
-      const body: Record<string, unknown> = {
-        entreprise_id: Number(form.entrepriseId),
-        title: form.title.trim(),
-        every_n: Number(form.every_n) || 1,
-        unit: form.unit,
-        lead_days: Number(form.lead_days) || 0,
-        next_due: form.next_due,
-        is_active: true
-      };
-      if (form.description.trim()) body.description = form.description.trim();
-      if (form.departement.trim()) body.departement = form.departement.trim();
-      const res = await authedFetch(
-        "/api/v1/entreprises/tache-templates",
-        {
-          method: "POST",
-          body: JSON.stringify(body)
+      if (mode === "edit" && existing) {
+        const res = await authedFetch(
+          `/api/v1/entreprises/tache-templates/${existing.id}`,
+          { method: "PATCH", body: JSON.stringify(payloadBase) }
+        );
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
         }
-      );
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      } else {
+        const res = await authedFetch(
+          "/api/v1/entreprises/tache-templates/bulk",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              entreprise_ids: form.entrepriseIds,
+              ...payloadBase
+            })
+          }
+        );
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+        }
       }
       onSaved();
     } catch (e2) {
@@ -445,156 +769,20 @@ function CreateTemplateModal({
     }
   }
 
-  return (
-    <ModalShell title="Nouveau modèle récurrent" onClose={onClose}>
-      <form onSubmit={submit} className="grid gap-4">
-        <div>
-          <label className="label">Entreprise</label>
-          <select
-            required
-            value={form.entrepriseId}
-            onChange={(e) =>
-              setForm({ ...form, entrepriseId: e.target.value })
-            }
-            className="input"
-          >
-            <option value="" disabled>
-              — Choisis une entreprise —
-            </option>
-            {entreprises.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.name}
-                {!e.is_active ? " (inactive)" : ""}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="label">Titre</label>
-          <input
-            required
-            value={form.title}
-            onChange={(e) => setForm({ ...form, title: e.target.value })}
-            className="input"
-            placeholder="ex. Faire la TPS/TVQ trimestrielle"
-          />
-        </div>
-        <div>
-          <label className="label">Description (optionnel)</label>
-          <textarea
-            value={form.description}
-            onChange={(e) =>
-              setForm({ ...form, description: e.target.value })
-            }
-            rows={2}
-            className="input"
-            placeholder="Comment exécuter la tâche, liens utiles…"
-          />
-        </div>
-        <div>
-          <label className="label">Département (optionnel)</label>
-          <input
-            value={form.departement}
-            onChange={(e) =>
-              setForm({ ...form, departement: e.target.value })
-            }
-            className="input"
-            placeholder="ex. Compta, RH, Marketing"
-          />
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          <div>
-            <label className="label">Tous les</label>
-            <input
-              type="number"
-              min={1}
-              value={form.every_n}
-              onChange={(e) => setForm({ ...form, every_n: e.target.value })}
-              className="input font-mono"
-            />
-          </div>
-          <div>
-            <label className="label">Unité</label>
-            <select
-              value={form.unit}
-              onChange={(e) => setForm({ ...form, unit: e.target.value })}
-              className="input"
-            >
-              {FREQ_UNITS.map((u) => (
-                <option key={u.value} value={u.value}>
-                  {u.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label">Lead (jours)</label>
-            <input
-              type="number"
-              min={0}
-              value={form.lead_days}
-              onChange={(e) =>
-                setForm({ ...form, lead_days: e.target.value })
-              }
-              className="input font-mono"
-            />
-          </div>
-        </div>
-        <div>
-          <label className="label">Prochaine échéance</label>
-          <input
-            required
-            type="date"
-            value={form.next_due}
-            onChange={(e) => setForm({ ...form, next_due: e.target.value })}
-            className="input"
-          />
-        </div>
+  const isCustom = form.freqPreset === "custom";
 
-        {err ? (
-          <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-            {err}
-          </p>
-        ) : null}
-
-        <div className="flex justify-end gap-2 pt-1">
-          <button type="button" onClick={onClose} className="btn-secondary">
-            Annuler
-          </button>
-          <button
-            type="submit"
-            disabled={saving || !form.title.trim() || !form.entrepriseId}
-            className="btn-accent disabled:opacity-60"
-          >
-            {saving ? (
-              <>
-                <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />
-                Création…
-              </>
-            ) : (
-              "Créer"
-            )}
-          </button>
-        </div>
-      </form>
-    </ModalShell>
-  );
-}
-
-function ModalShell({
-  title,
-  onClose,
-  children
-}: {
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 px-2 py-4 sm:items-center">
-      <div className="w-full max-w-xl rounded-2xl border border-brand-800 bg-brand-900 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-brand-800 p-4">
-          <h2 className="text-base font-bold text-white">{title}</h2>
+      <div
+        className="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-brand-800 bg-brand-900 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex flex-shrink-0 items-center justify-between border-b border-brand-800 px-5 py-4">
+          <h2 className="text-base font-bold text-white">
+            {mode === "edit"
+              ? "Modifier le modèle récurrent"
+              : "Nouveau modèle récurrent"}
+          </h2>
           <button
             type="button"
             onClick={onClose}
@@ -604,8 +792,332 @@ function ModalShell({
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="max-h-[80vh] overflow-y-auto p-4">{children}</div>
+
+        <form
+          id="template-form"
+          onSubmit={submit}
+          className="flex-1 overflow-y-auto px-5 py-4"
+        >
+          <div className="grid gap-4">
+            {/* Multi-select entreprise (création) ou disabled (édition) */}
+            <div>
+              <label className="label">
+                Entreprise{mode === "create" ? "(s)" : ""}{" "}
+                <span className="text-rose-400">*</span>
+              </label>
+              {mode === "edit" ? (
+                <p className="rounded-lg border border-white/10 bg-brand-950 px-3 py-2 text-xs text-white/70">
+                  {existing?.entreprise_name || "—"}
+                </p>
+              ) : (
+                <div className="max-h-40 overflow-y-auto rounded-lg border border-brand-800 bg-brand-950 p-2">
+                  {entreprises.length === 0 ? (
+                    <p className="text-xs text-white/40">
+                      Aucune entreprise.
+                    </p>
+                  ) : (
+                    <ul className="space-y-1">
+                      {entreprises.map((e) => (
+                        <li key={e.id}>
+                          <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-brand-900">
+                            <input
+                              type="checkbox"
+                              checked={form.entrepriseIds.includes(e.id)}
+                              onChange={() => toggleEntreprise(e.id)}
+                              className="h-3.5 w-3.5 accent-accent-500"
+                            />
+                            <span className="text-xs text-white/80">
+                              {e.name}
+                              {!e.is_active ? (
+                                <span className="ml-1 text-white/40">
+                                  (inactive)
+                                </span>
+                              ) : null}
+                            </span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="mt-1 text-[10px] text-white/40">
+                    {form.entrepriseIds.length} sélectionnée
+                    {form.entrepriseIds.length > 1 ? "s" : ""}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Titre */}
+            <div>
+              <label className="label">
+                Titre <span className="text-rose-400">*</span>
+              </label>
+              <input
+                required
+                value={form.title}
+                onChange={(e) => setForm({ ...form, title: e.target.value })}
+                className="input"
+                placeholder="ex. Faire la TPS/TVQ trimestrielle"
+              />
+            </div>
+
+            {/* Statut + Lead days */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">
+                  Statut au démarrage{" "}
+                  <span className="text-rose-400">*</span>
+                </label>
+                <select
+                  required
+                  value={form.default_status}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      default_status: e.target.value as TaskStatusValue
+                    })
+                  }
+                  className="input"
+                >
+                  {TASK_STATUS_OPTIONS.map((s) => (
+                    <option key={s.value} value={s.value}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">
+                  Délai avant échéance (jours){" "}
+                  <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  required
+                  type="number"
+                  min={0}
+                  value={form.lead_days}
+                  onChange={(e) =>
+                    setForm({ ...form, lead_days: e.target.value })
+                  }
+                  className="input font-mono"
+                />
+                <p className="mt-1 text-[10px] text-white/40">
+                  Ex. 7 = la tâche apparaît 7 jours avant l&apos;échéance.
+                </p>
+              </div>
+            </div>
+
+            {/* Récurrence */}
+            <div>
+              <label className="label">
+                Récurrence <span className="text-rose-400">*</span>
+              </label>
+              <select
+                required
+                value={form.freqPreset}
+                onChange={(e) => setPreset(e.target.value)}
+                className="input"
+              >
+                {FREQ_PRESETS.map((p) => (
+                  <option key={p.key} value={p.key}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+              {isCustom ? (
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="label text-[10px]">Tous les</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={form.every_n}
+                      onChange={(e) =>
+                        setForm({ ...form, every_n: e.target.value })
+                      }
+                      className="input font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Unité</label>
+                    <select
+                      value={form.unit}
+                      onChange={(e) =>
+                        setForm({ ...form, unit: e.target.value })
+                      }
+                      className="input"
+                    >
+                      {FREQ_UNITS.map((u) => (
+                        <option key={u.value} value={u.value}>
+                          {u.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            {/* 1ère échéance */}
+            <div>
+              <label className="label">
+                1ère date d&apos;échéance{" "}
+                <span className="text-rose-400">*</span>
+              </label>
+              <input
+                required
+                type="date"
+                value={form.next_due}
+                onChange={(e) =>
+                  setForm({ ...form, next_due: e.target.value })
+                }
+                className="input"
+              />
+              <p className="mt-1 text-[10px] text-white/40">
+                Les récurrences suivantes se calculent à partir de cette date.
+              </p>
+            </div>
+
+            {/* ICE */}
+            <div>
+              <label className="label">
+                Score ICE <span className="text-rose-400">*</span>
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                <ICEInput
+                  label="Impact"
+                  value={form.impact}
+                  onChange={(v) => setForm({ ...form, impact: v })}
+                />
+                <ICEInput
+                  label="Confiance"
+                  value={form.confidence}
+                  onChange={(v) => setForm({ ...form, confidence: v })}
+                />
+                <ICEInput
+                  label="Effort"
+                  value={form.effort}
+                  onChange={(v) => setForm({ ...form, effort: v })}
+                />
+              </div>
+              <p className="mt-1 text-[10px] text-white/40">
+                Tous trois entre 1 et 10. Détermine le score automatique
+                des tâches matérialisées.
+              </p>
+            </div>
+
+            <div className="my-2 border-t border-brand-800 pt-2">
+              <p className="text-[10px] uppercase tracking-wider text-white/40">
+                Optionnel
+              </p>
+            </div>
+
+            {/* Immeubles */}
+            <div>
+              <label className="label">Immeubles (multi)</label>
+              {form.entrepriseIds.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-brand-800 px-3 py-2 text-xs text-white/40">
+                  Sélectionne au moins une entreprise pour voir ses immeubles.
+                </p>
+              ) : (
+                <ImmeublePicker
+                  immeubles={immeubles}
+                  values={form.immeuble_ids}
+                  onChange={(ids) =>
+                    setForm({ ...form, immeuble_ids: ids })
+                  }
+                  variant="modal"
+                />
+              )}
+            </div>
+
+            {/* Département */}
+            <div>
+              <label className="label">Département</label>
+              <input
+                value={form.departement}
+                onChange={(e) =>
+                  setForm({ ...form, departement: e.target.value })
+                }
+                className="input"
+                placeholder="ex. Compta, RH, Marketing"
+              />
+            </div>
+
+            {/* Notes */}
+            <div>
+              <label className="label">Notes</label>
+              <textarea
+                value={form.description}
+                onChange={(e) =>
+                  setForm({ ...form, description: e.target.value })
+                }
+                rows={3}
+                className="input"
+                placeholder="Comment exécuter la tâche, liens utiles…"
+              />
+            </div>
+
+            {err ? (
+              <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                {err}
+              </p>
+            ) : null}
+          </div>
+        </form>
+
+        <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-brand-800 px-5 py-3">
+          <button type="button" onClick={onClose} className="btn-secondary text-xs">
+            Annuler
+          </button>
+          <button
+            type="submit"
+            form="template-form"
+            disabled={saving}
+            className="btn-accent text-xs disabled:opacity-60"
+          >
+            {saving ? (
+              <>
+                <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />
+                Enregistrement…
+              </>
+            ) : mode === "edit" ? (
+              "Enregistrer"
+            ) : (
+              `Créer (${form.entrepriseIds.length || 0} entreprise${
+                form.entrepriseIds.length > 1 ? "s" : ""
+              })`
+            )}
+          </button>
+        </div>
       </div>
+    </div>
+  );
+}
+
+function ICEInput({
+  label,
+  value,
+  onChange
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div>
+      <label className="block text-[10px] font-medium text-white/70">
+        {label}
+      </label>
+      <input
+        type="number"
+        min={1}
+        max={10}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="1-10"
+        className="input font-mono"
+      />
     </div>
   );
 }

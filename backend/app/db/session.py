@@ -348,6 +348,14 @@ async def init_db() -> None:
             ("entreprises", "drive_folder_url", "VARCHAR(1024)"),
             ("prospection_leads", "drive_folder_url", "VARCHAR(1024)"),
             ("prospection_deals", "drive_folder_url", "VARCHAR(1024)"),
+            # Modèles de tâches récurrentes : statut par défaut +
+            # immeubles à attacher à chaque tâche matérialisée.
+            (
+                "entreprise_tache_templates",
+                "default_status",
+                "VARCHAR(16) NOT NULL DEFAULT 'todo'",
+            ),
+            ("entreprise_tache_templates", "immeuble_ids_json", "TEXT"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

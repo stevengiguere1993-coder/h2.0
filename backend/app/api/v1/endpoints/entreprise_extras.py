@@ -37,6 +37,8 @@ from app.schemas.entreprise_extras import (
     FinanceSnapshotUpdate,
     FinanceTimeseries,
     MaterializeResult,
+    TacheTemplateBulkCreate,
+    TacheTemplateBulkResult,
     TacheTemplateCreate,
     TacheTemplateGlobalRead,
     TacheTemplateRead,
@@ -126,7 +128,85 @@ async def list_templates(
             .order_by(TacheTemplate.next_due.asc())
         )
     ).scalars().all()
-    return [TacheTemplateRead.model_validate(r) for r in rows]
+    return [
+        TacheTemplateRead.model_validate(_serialize_template_for_read(r))
+        for r in rows
+    ]
+
+
+@router.get(
+    "/tache-templates/all",
+    response_model=List[TacheTemplateGlobalRead],
+    summary="Liste cross-entreprise de tous les templates récurrents.",
+)
+async def list_templates_all(
+    db: DBSession, user: CurrentUser
+) -> List[TacheTemplateGlobalRead]:
+    """Page globale `/taches/recurrentes` — joint le nom de
+    l'entreprise pour éviter N+1 côté front. Tri par next_due
+    croissant (les modèles dus en premier)."""
+    _require_volet(user)
+    stmt = (
+        select(TacheTemplate, Entreprise.name)
+        .join(Entreprise, Entreprise.id == TacheTemplate.entreprise_id)
+        .order_by(TacheTemplate.next_due.asc())
+    )
+    out: List[TacheTemplateGlobalRead] = []
+    for tpl, ent_name in (await db.execute(stmt)).all():
+        data = _serialize_template_for_read(tpl)
+        data["entreprise_name"] = ent_name
+        out.append(TacheTemplateGlobalRead.model_validate(data))
+    return out
+
+
+def _serialize_template_for_read(obj: TacheTemplate) -> dict:
+    """Convertit un row TacheTemplate en dict prêt pour TacheTemplateRead.
+
+    `immeuble_ids` est exposé comme List[int] côté front mais stocké
+    en TEXT JSON côté DB (`immeuble_ids_json`). On désérialise ici."""
+    raw = getattr(obj, "immeuble_ids_json", None)
+    imm_ids: List[int] = []
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                imm_ids = [int(x) for x in parsed if isinstance(x, int)]
+        except Exception:  # noqa: BLE001
+            imm_ids = []
+    return {
+        "id": obj.id,
+        "entreprise_id": obj.entreprise_id,
+        "title": obj.title,
+        "description": obj.description,
+        "departement": obj.departement,
+        "impact": obj.impact,
+        "confidence": obj.confidence,
+        "effort": obj.effort,
+        "assignee_user_id": obj.assignee_user_id,
+        "every_n": obj.every_n,
+        "unit": obj.unit,
+        "lead_days": obj.lead_days,
+        "next_due": obj.next_due,
+        "default_status": getattr(obj, "default_status", "todo") or "todo",
+        "immeuble_ids": imm_ids,
+        "is_active": obj.is_active,
+        "nb_materialized": obj.nb_materialized,
+        "last_materialized_at": obj.last_materialized_at,
+        "created_at": obj.created_at,
+        "updated_at": obj.updated_at,
+    }
+
+
+def _build_template_kwargs(payload_dump: dict) -> dict:
+    """Convertit le dump Pydantic d'un TemplateCreate/Bulk en kwargs
+    prêts pour TacheTemplate(...). `immeuble_ids` (List[int]) →
+    `immeuble_ids_json` (str JSON ou None)."""
+    out = dict(payload_dump)
+    imm_ids = out.pop("immeuble_ids", None) or []
+    out["immeuble_ids_json"] = (
+        json.dumps([int(x) for x in imm_ids]) if imm_ids else None
+    )
+    return out
 
 
 @router.get(
@@ -168,13 +248,76 @@ async def create_template(
     ent = await db.get(Entreprise, payload.entreprise_id)
     if ent is None:
         raise HTTPException(status_code=404, detail="Entreprise introuvable.")
-    obj = TacheTemplate(**payload.model_dump())
+    obj = TacheTemplate(**_build_template_kwargs(payload.model_dump()))
     obj.created_at = _now()
     obj.updated_at = _now()
     db.add(obj)
     await db.commit()
     await db.refresh(obj)
-    return TacheTemplateRead.model_validate(obj)
+    return TacheTemplateRead.model_validate(_serialize_template_for_read(obj))
+
+
+@router.post(
+    "/tache-templates/bulk",
+    response_model=TacheTemplateBulkResult,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crée un même modèle pour plusieurs entreprises (multi-select).",
+)
+async def create_template_bulk(
+    payload: TacheTemplateBulkCreate, db: DBSession, user: CurrentUser
+) -> TacheTemplateBulkResult:
+    """Crée un modèle identique pour chaque entreprise demandée.
+    Idempotent par (entreprise_id, title) : si un template existe
+    déjà avec le même titre dans une entreprise, on l'ignore et on
+    le note dans `skipped_entreprise_ids`."""
+    _require_volet(user)
+    base = payload.model_dump()
+    entreprise_ids = base.pop("entreprise_ids")
+
+    # Vérifie que toutes les entreprises existent en un seul round-trip.
+    existing_ids = set(
+        (
+            await db.execute(
+                select(Entreprise.id).where(Entreprise.id.in_(entreprise_ids))
+            )
+        ).scalars().all()
+    )
+    missing = [eid for eid in entreprise_ids if eid not in existing_ids]
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Entreprise(s) introuvable(s) : {missing}",
+        )
+
+    # Pour idempotence : récupère les titres déjà présents.
+    existing_titles = (
+        await db.execute(
+            select(
+                TacheTemplate.entreprise_id, TacheTemplate.title
+            ).where(TacheTemplate.entreprise_id.in_(entreprise_ids))
+        )
+    ).all()
+    seen: set[tuple[int, str]] = {(eid, t) for eid, t in existing_titles}
+
+    created = 0
+    skipped: List[int] = []
+    for eid in entreprise_ids:
+        key = (eid, base["title"])
+        if key in seen:
+            skipped.append(eid)
+            continue
+        kwargs = _build_template_kwargs({**base, "entreprise_id": eid})
+        obj = TacheTemplate(**kwargs)
+        obj.created_at = _now()
+        obj.updated_at = _now()
+        db.add(obj)
+        created += 1
+
+    if created:
+        await db.commit()
+    return TacheTemplateBulkResult(
+        created=created, skipped_entreprise_ids=skipped
+    )
 
 
 @router.patch(
@@ -192,11 +335,16 @@ async def update_template(
     if obj is None:
         raise HTTPException(status_code=404, detail="Template introuvable.")
     for k, v in payload.model_dump(exclude_unset=True).items():
+        if k == "immeuble_ids":
+            obj.immeuble_ids_json = (
+                json.dumps([int(x) for x in (v or [])]) if v else None
+            )
+            continue
         setattr(obj, k, v)
     obj.updated_at = _now()
     await db.commit()
     await db.refresh(obj)
-    return TacheTemplateRead.model_validate(obj)
+    return TacheTemplateRead.model_validate(_serialize_template_for_read(obj))
 
 
 @router.delete(
