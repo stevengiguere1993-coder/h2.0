@@ -311,12 +311,18 @@ async def list_properties(
             from app.integrations.roles_evaluation.quebec_distances import (
                 MTL_ISLAND_CITIES,
             )
+            # Défensif : inclut aussi tout row dont `arrondissement`
+            # est non-null. Couvre le cas où l'import provincial a
+            # écrit le nom de l'arrondissement dans `municipalite`
+            # (ex. « Le Plateau-Mont-Royal » plutôt que « Montréal »)
+            # — autrement Montréal proper « disparaît » de la liste.
             filters.append(
                 or_(
                     MontrealPropertyUnit.region == "mtl-island",
                     func.lower(MontrealPropertyUnit.municipalite).in_(
                         list(MTL_ISLAND_CITIES)
                     ),
+                    MontrealPropertyUnit.arrondissement.is_not(None),
                 )
             )
         else:
@@ -336,9 +342,13 @@ async def list_properties(
             # taggées 'mtl-island' (cas legacy : MTL importé avant
             # qu'on ne propage la région ou avec un nom de
             # municipalité = arrondissement non encore ajouté au dict).
+            # Et : tout row avec `arrondissement` non null = MTL proper.
             if distance_band == "under_30":
                 band_filters.append(
                     MontrealPropertyUnit.region == "mtl-island"
+                )
+                band_filters.append(
+                    MontrealPropertyUnit.arrondissement.is_not(None)
                 )
             if band_filters:
                 filters.append(or_(*band_filters))
@@ -1157,4 +1167,105 @@ async def backfill_leads_from_mtl(
         ambiguous=ambiguous,
         no_match=no_match,
         sample_unmatched=unmatched_sample,
+    )
+
+
+# ── Diagnostic : que contient la DB ? ────────────────────────────
+
+
+class DiagBucket(BaseModel):
+    municipalite: Optional[str]
+    region: Optional[str]
+    count: int
+
+
+class DiagArrondBucket(BaseModel):
+    arrondissement: Optional[str]
+    count: int
+
+
+class MtlDiagnostics(BaseModel):
+    """Que contient actuellement la table `mtl_property_units` ?
+
+    Utile quand l'utilisateur ne voit plus de données pour une ville
+    (ex. Montréal proper). Affiche :
+      - total cumul
+      - répartition par `region`
+      - top 30 municipalités (sorted desc)
+      - répartition par arrondissement pour Montréal proper
+    """
+    total: int
+    by_region: List[DiagBucket]
+    top_municipalites: List[DiagBucket]
+    montreal_arrondissements: List[DiagArrondBucket]
+
+
+@router.get(
+    "/diagnostics",
+    response_model=MtlDiagnostics,
+    summary="État de la table mtl_property_units (admin).",
+)
+async def mtl_diagnostics(
+    db: DBSession, _: CurrentAdmin
+) -> MtlDiagnostics:
+    """Retourne un état détaillé de ce qui est en DB. Utiliser
+    pour vérifier si Montréal proper / les villes liées sont bien
+    importées."""
+    total = (
+        await db.execute(select(func.count(MontrealPropertyUnit.id)))
+    ).scalar_one()
+
+    by_region_rows = (
+        await db.execute(
+            select(
+                MontrealPropertyUnit.region,
+                func.count(MontrealPropertyUnit.id),
+            ).group_by(MontrealPropertyUnit.region)
+        )
+    ).all()
+
+    top_muni_rows = (
+        await db.execute(
+            select(
+                MontrealPropertyUnit.municipalite,
+                MontrealPropertyUnit.region,
+                func.count(MontrealPropertyUnit.id).label("c"),
+            )
+            .group_by(
+                MontrealPropertyUnit.municipalite,
+                MontrealPropertyUnit.region,
+            )
+            .order_by(func.count(MontrealPropertyUnit.id).desc())
+            .limit(30)
+        )
+    ).all()
+
+    arrond_rows = (
+        await db.execute(
+            select(
+                MontrealPropertyUnit.arrondissement,
+                func.count(MontrealPropertyUnit.id),
+            )
+            .where(
+                func.lower(MontrealPropertyUnit.municipalite) == "montréal"
+            )
+            .group_by(MontrealPropertyUnit.arrondissement)
+            .order_by(func.count(MontrealPropertyUnit.id).desc())
+        )
+    ).all()
+
+    return MtlDiagnostics(
+        total=int(total or 0),
+        by_region=[
+            DiagBucket(municipalite=None, region=r, count=int(c))
+            for r, c in by_region_rows
+        ],
+        top_municipalites=[
+            DiagBucket(municipalite=m, region=r, count=int(c))
+            for m, r, c in top_muni_rows
+        ],
+        montreal_arrondissements=[
+            DiagArrondBucket(arrondissement=a, count=int(c))
+            for a, c in arrond_rows
+        ],
     )
