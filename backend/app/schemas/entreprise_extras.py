@@ -221,6 +221,64 @@ class EntrepriseFinanceSummary(BaseModel):
     progress_pct: Optional[float] = None      # 0..100 vers target
 
 
+# ─── Tableau de bord exécutif ──────────────────────────────────────
+
+
+class DashKPI(BaseModel):
+    """Une tuile KPI avec valeur courante + delta vs période précédente."""
+    label: str
+    value: float
+    previous: Optional[float] = None  # période précédente pour delta
+    unit: str = "$"                   # "$", "%", "" (count), etc.
+    format: str = "currency"          # "currency" | "count" | "percent"
+
+
+class DashAlert(BaseModel):
+    """Alerte actionnable affichée en haut du dashboard."""
+    severity: str                   # "high" | "medium" | "low"
+    icon: str                       # nom lucide-react ex. "AlertTriangle"
+    title: str
+    detail: Optional[str] = None
+    entreprise_id: Optional[int] = None
+    entreprise_name: Optional[str] = None
+    href: Optional[str] = None      # lien d'action côté front
+
+
+class DashHeatmapCell(BaseModel):
+    year_month: str                 # "YYYY-MM"
+    revenu: Optional[float] = None
+    ebitda: Optional[float] = None
+
+
+class DashHeatmapRow(BaseModel):
+    entreprise_id: int
+    name: str
+    color_accent: str
+    cells: List[DashHeatmapCell]
+
+
+class DashHealthBucket(BaseModel):
+    label: str                      # "good" | "warn" | "risk"
+    count: int
+
+
+class DashVelocityPoint(BaseModel):
+    date: str                       # "YYYY-MM-DD"
+    created: int
+    completed: int
+
+
+class DashboardExec(BaseModel):
+    """Payload complet du tableau de bord exécutif (cross-entreprise)."""
+    generated_at: datetime
+    kpis: List[DashKPI]
+    alerts: List[DashAlert]
+    heatmap_months: List[str]       # 12 month labels "YYYY-MM" (oldest first)
+    heatmap_rows: List[DashHeatmapRow]
+    health_buckets: List[DashHealthBucket]
+    velocity: List[DashVelocityPoint]  # 30 derniers jours
+
+
 # ─── Value plan + milestones ───────────────────────────────────────────
 
 

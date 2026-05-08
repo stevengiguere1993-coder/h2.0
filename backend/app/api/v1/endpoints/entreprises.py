@@ -6,7 +6,7 @@ Restreint au volet `entreprises` (whitelist côté User.volets).
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, status
@@ -1034,6 +1034,10 @@ async def entreprises_health(
     ).scalars().all()
 
     today = date.today()
+    # Borne de fenêtre pour la vélocité (tâches terminées récemment).
+    velocity_window_days = 30
+    velocity_floor = today - timedelta(days=velocity_window_days)
+
     out: List[EntrepriseHealth] = []
     for e in ents:
         all_taches = (
@@ -1060,17 +1064,43 @@ async def entreprises_health(
             and t.due_date is not None
             and 0 <= (t.due_date - today).days <= 7
         )
+        # Tâches terminées dans les `velocity_window_days` jours.
+        # Donne une indication de vélocité actuelle, indépendante de
+        # l'historique cumulé. `completed_at` peut être None pour les
+        # vieux rows ; on tombe alors sur `updated_at` au pire.
+        recent_done = sum(
+            1 for t in all_taches
+            if t.status == TacheStatus.DONE.value
+            and (
+                (t.completed_at is not None
+                 and t.completed_at.date() >= velocity_floor)
+                or (t.completed_at is None
+                    and t.updated_at is not None
+                    and t.updated_at.date() >= velocity_floor)
+            )
+        )
 
-        # Score 0-100 :
-        # - 100 = aucune tâche, ou toutes faites à temps
-        # - pénalités : -8 par overdue, -3 par urgent, plafonné à -60
-        # - bonus si haut taux done/total
-        if total == 0:
+        # Score 0-100 — formule forward-looking :
+        #   - Base : 100 si rien d'ouvert. Sinon dépend du ratio
+        #     d'overdue parmi les ouvertes (pas du done_ratio cumulé,
+        #     qui devient artificiellement haut au fil du temps —
+        #     les tâches done s'accumulent en historique).
+        #   - Pénalité de charge : > 30 ouvertes = pénalité douce.
+        #   - Pénalité urgent : tâches dues dans les 7j.
+        #   - Bonus vélocité : avoir terminé des tâches récemment
+        #     compense légèrement les pénalités (témoigne d'activité).
+        if open_t == 0:
             score = 100
         else:
-            done_ratio = done / total
-            penalty = min(60, 8 * overdue + 3 * urgent)
-            score = max(20, int(100 * done_ratio + (1 - done_ratio) * 70 - penalty))
+            overdue_ratio = overdue / open_t
+            base = 100 - 50 * overdue_ratio
+            charge_penalty = max(0, (open_t - 30) * 0.5)
+            urgent_penalty = min(15, urgent * 2)
+            velocity_bonus = min(10, recent_done * 0.5)
+            score = max(
+                20,
+                int(base - charge_penalty - urgent_penalty + velocity_bonus),
+            )
 
         if score >= 80:
             label = "good"
