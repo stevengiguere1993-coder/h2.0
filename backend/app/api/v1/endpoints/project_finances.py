@@ -67,8 +67,8 @@ class FinancesResponse(BaseModel):
     actual_labour_cost: float
     actual_labour_hours: float
     actual_total_cost: float
-    actual_profit: Optional[float]  # null while no facture is paid yet
-    actual_margin_pct: Optional[float]
+    actual_profit: float
+    actual_margin_pct: float
 
     service_lines: List[CostLine]   # from soumission items
     material_lines: List[CostLine]  # from achats
@@ -419,14 +419,13 @@ async def _compute_finances(
 
     balance = max(0.0, invoiced - paid_sum)
 
-    # Actual profit = paid revenue - costs (only meaningful once paid)
-    actual_profit: Optional[float] = None
-    actual_margin_pct: Optional[float] = None
-    if paid_sum > 0:
-        actual_profit = round(paid_sum - actual_total_cost, 2)
-        actual_margin_pct = (
-            round(actual_profit / paid_sum * 100, 1) if paid_sum > 0 else 0.0
-        )
+    # Actual profit = paid revenue - costs. Tant que rien n'est payé,
+    # paid_sum = 0 → profit = -coûts engagés (potentiellement négatif),
+    # marge = 0 (division par zéro neutralisée).
+    actual_profit = round(paid_sum - actual_total_cost, 2)
+    actual_margin_pct = (
+        round(actual_profit / paid_sum * 100, 1) if paid_sum > 0 else 0.0
+    )
 
     return FinancesResponse(
         projected_revenue=round(projected_revenue, 2),
