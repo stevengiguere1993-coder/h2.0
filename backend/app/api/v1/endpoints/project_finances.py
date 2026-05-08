@@ -128,7 +128,7 @@ async def _compute_finances(
         for it in items:
             service_lines.append(
                 CostLine(
-                    label=it.description,
+                    label=(it.description or f"Item #{it.id}"),
                     quantity=float(it.quantity),
                     unit_cost=float(it.unit_price),
                     total=float(it.total),
@@ -327,7 +327,7 @@ async def _compute_finances(
     achats = (await db.execute(achats_stmt)).scalars().all()
     material_lines = [
         CostLine(
-            label=a.description or a.reference,
+            label=(a.description or a.reference or f"Achat #{a.id}"),
             quantity=1,
             unit_cost=float(a.amount or 0),
             total=float(a.amount or 0),
