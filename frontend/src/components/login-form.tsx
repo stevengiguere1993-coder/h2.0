@@ -355,6 +355,13 @@ export function LoginForm() {
           Astuce : sur mobile, tape « Ajouter à l&apos;écran d&apos;accueil »
           après avoir choisi l&apos;app pour l&apos;installer.
         </p>
+
+        {/* Audit IA — visible owner / admin uniquement. Résume les
+            PRs mergés pour qu'un partner reprenant le développement
+            voit en un coup d'œil ce qui a été ajouté / modifié. */}
+        {(userRole === "owner" || userRole === "admin") ? (
+          <ChangelogAudit />
+        ) : null}
       </div>
     );
   }
@@ -389,5 +396,204 @@ export function LoginForm() {
         )}
       </button>
     </form>
+  );
+}
+
+// ─── Audit IA des changements ────────────────────────────────────
+//
+// Lit /api/v1/audit/changes (cache backend 30 min). Affiche un
+// résumé thématique des PRs mergés sur la fenêtre choisie. Visible
+// owner / admin uniquement (la garde est déjà dans <LoginForm>).
+
+type ChangesTheme = { title: string; bullets: string[] };
+type ChangesPR = {
+  number: number;
+  title: string;
+  merged_at: string;
+  url: string;
+};
+type ChangesAudit = {
+  window: string;
+  period_start: string;
+  period_end: string;
+  pr_count: number;
+  headline: string;
+  themes: ChangesTheme[];
+  prs: ChangesPR[];
+  model_used: string | null;
+  provider: string | null;
+  generated_at: string;
+  restricted?: boolean;
+};
+
+const WINDOW_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "24h", label: "24 h" },
+  { value: "48h", label: "48 h" },
+  { value: "7d", label: "7 jours" },
+  { value: "30d", label: "30 jours" },
+  { value: "90d", label: "90 jours" }
+];
+
+function ChangelogAudit() {
+  const [auditWindow, setAuditWindow] = useState("7d");
+  const [data, setData] = useState<ChangesAudit | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+
+  async function load(force: boolean) {
+    setLoading(true);
+    setError(null);
+    try {
+      const url = `/api/v1/audit/changes?window=${encodeURIComponent(auditWindow)}${force ? "&force=true" : ""}`;
+      const r = await authedFetch(url);
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(`HTTP ${r.status}${t ? ` — ${t.slice(0, 200)}` : ""}`);
+      }
+      setData((await r.json()) as ChangesAudit);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    void load(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, auditWindow]);
+
+  if (data?.restricted) return null;
+
+  return (
+    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900/40 p-4">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between text-left"
+      >
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+            ✦ Audit IA — modifications du code
+          </p>
+          <p className="mt-1 text-xs text-white/60">
+            Résumé des PRs mergés pour reprise de développement.
+          </p>
+        </div>
+        <span className="ml-3 text-white/60">{open ? "▾" : "▸"}</span>
+      </button>
+
+      {open ? (
+        <div className="mt-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-[11px] text-white/60">Fenêtre :</label>
+            <select
+              value={auditWindow}
+              onChange={(e) => setAuditWindow(e.target.value)}
+              className="rounded-md border border-brand-700 bg-brand-900 px-2 py-1 text-[11px] text-white focus:border-accent-500 focus:outline-none"
+            >
+              {WINDOW_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => void load(true)}
+              disabled={loading}
+              className="rounded-md border border-brand-700 bg-brand-900 px-2 py-1 text-[10px] font-semibold text-white/60 hover:text-white disabled:opacity-50"
+              title="Regénérer (vide le cache 30 min)"
+            >
+              {loading ? "…" : "Regénérer"}
+            </button>
+          </div>
+
+          {error ? (
+            <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300">
+              {error}
+            </p>
+          ) : null}
+
+          {loading && !data ? (
+            <p className="mt-3 text-xs text-white/50">Chargement…</p>
+          ) : data ? (
+            <div className="mt-3 space-y-3">
+              <div>
+                <p className="text-sm font-bold text-white">
+                  {data.headline}
+                </p>
+                <p className="mt-0.5 text-[10px] text-white/40">
+                  {data.pr_count} PR(s) mergé(s)
+                  {data.provider ? ` · ${data.provider}` : ""}
+                  {data.model_used ? ` · ${data.model_used}` : ""}
+                  {data.generated_at
+                    ? ` · ${new Date(data.generated_at).toLocaleString("fr-CA", {
+                        dateStyle: "short",
+                        timeStyle: "short"
+                      })}`
+                    : ""}
+                </p>
+              </div>
+
+              {data.themes.length > 0 ? (
+                <ul className="space-y-3">
+                  {data.themes.map((th, i) => (
+                    <li key={i}>
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-white/70">
+                        {th.title}
+                      </p>
+                      <ul className="mt-1 space-y-1">
+                        {th.bullets.map((b, j) => (
+                          <li
+                            key={j}
+                            className="flex items-start gap-2 text-[12px] text-white/75"
+                          >
+                            <span className="text-accent-500">•</span>
+                            <span>{b}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-white/50">
+                  Aucun changement sur cette période.
+                </p>
+              )}
+
+              {data.prs.length > 0 ? (
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-[10px] text-white/40 hover:text-white/70">
+                    Voir les PRs bruts ({data.prs.length})
+                  </summary>
+                  <ul className="mt-2 space-y-1">
+                    {data.prs.slice(0, 30).map((p) => (
+                      <li
+                        key={p.number}
+                        className="text-[11px] text-white/55"
+                      >
+                        <a
+                          href={p.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:text-accent-500"
+                        >
+                          #{p.number}
+                        </a>{" "}
+                        {p.title}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
   );
 }

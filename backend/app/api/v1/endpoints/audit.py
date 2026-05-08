@@ -2,9 +2,10 @@
 
     GET /api/v1/audit?entity_type=soumission&entity_id=42
     GET /api/v1/audit?action=facture.sent&limit=50
+    GET /api/v1/audit/changes?window=7d  (résumé IA des PRs mergés)
 
-Les écritures se font via `app.services.audit.log_action(...)` depuis
-le code applicatif.
+Les écritures de l'audit DB se font via `app.services.audit.log_action`
+depuis le code applicatif. Le `/changes` lit GitHub + IA — pas la DB.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
-from app.api.deps import DBSession, RequireAdminRole
+from app.api.deps import CurrentUser, DBSession, RequireAdminRole
 from app.models.audit_log import AuditLog
 
 
@@ -57,3 +58,88 @@ async def list_audit(
     stmt = stmt.order_by(AuditLog.created_at.desc()).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
     return [AuditRead.model_validate(r) for r in rows]
+
+
+# ── Audit IA des changements de code (PRs mergés) ──────────────────
+
+
+class ChangesTheme(BaseModel):
+    title: str
+    bullets: List[str]
+
+
+class ChangesPR(BaseModel):
+    number: int
+    title: str
+    merged_at: str
+    url: str
+
+
+class ChangesOut(BaseModel):
+    window: str
+    period_start: str
+    period_end: str
+    pr_count: int
+    headline: str
+    themes: List[ChangesTheme]
+    prs: List[ChangesPR]
+    model_used: Optional[str] = None
+    provider: Optional[str] = None
+    generated_at: str
+    restricted: bool = False
+
+
+@router.get(
+    "/changes",
+    response_model=ChangesOut,
+    summary="Audit IA des PRs mergés (owner / admin)",
+)
+async def get_changes(
+    user: CurrentUser,
+    window: str = Query(
+        default="7d",
+        pattern=r"^(24h|48h|7d|30d|90d)$",
+        description="Fenêtre temporelle",
+    ),
+    force: bool = False,
+) -> ChangesOut:
+    role = (getattr(user, "role", None) or "").lower()
+    if role not in ("owner", "admin"):
+        return ChangesOut(
+            window=window,
+            period_start="",
+            period_end="",
+            pr_count=0,
+            headline="Accès restreint.",
+            themes=[],
+            prs=[],
+            generated_at="",
+            restricted=True,
+        )
+
+    from app.services.changelog_audit import get_audit
+
+    audit = await get_audit(window, force=force)
+    return ChangesOut(
+        window=audit.window,
+        period_start=audit.period_start,
+        period_end=audit.period_end,
+        pr_count=audit.pr_count,
+        headline=audit.headline,
+        themes=[
+            ChangesTheme(title=t.title, bullets=t.bullets)
+            for t in audit.themes
+        ],
+        prs=[
+            ChangesPR(
+                number=p.number,
+                title=p.title,
+                merged_at=p.merged_at,
+                url=p.url,
+            )
+            for p in audit.raw_prs
+        ],
+        model_used=audit.model_used,
+        provider=audit.provider,
+        generated_at=audit.generated_at,
+    )
