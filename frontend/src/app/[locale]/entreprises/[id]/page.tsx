@@ -434,6 +434,15 @@ export default function EntrepriseDetailPage() {
                   setEnt({ ...ent, drive_folder_url: newUrl || null });
                 }}
               />
+              <Link
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={"/entreprises/taches/recurrentes" as any}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/30 bg-violet-500/10 px-2.5 py-1.5 text-xs font-semibold text-violet-200 hover:bg-violet-500/20"
+                title="Gérer les modèles de tâches récurrentes (cross-entreprise)"
+              >
+                <Repeat className="h-3.5 w-3.5" />
+                Modèles récurrents
+              </Link>
             </div>
             {ent.description ? (
               <p className="mt-1 text-sm text-white/60">{ent.description}</p>
@@ -480,20 +489,6 @@ export default function EntrepriseDetailPage() {
 
         {/* Liens documentation (Drive, SharePoint…) */}
         <LinksSection entrepriseId={ent.id} />
-
-        {/* Bouton vers la page globale des modèles récurrents (la
-            gestion se fait là-bas, multi-entreprise). */}
-        <section className="mt-6">
-          <Link
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/entreprises/taches/recurrentes" as any}
-            className="inline-flex items-center gap-2 rounded-xl border border-violet-400/30 bg-violet-500/10 px-4 py-2.5 text-sm text-violet-200 transition hover:bg-violet-500/20"
-          >
-            <Repeat className="h-4 w-4" />
-            Modèles de tâches récurrentes
-            <span className="text-violet-300/60">→</span>
-          </Link>
-        </section>
 
         {error ? (
           <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">

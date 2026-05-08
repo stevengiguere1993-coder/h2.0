@@ -234,36 +234,35 @@ export default function TachesRecurrentesPage() {
       />
 
       <div className="px-5 py-6 lg:px-8">
-        {/* Toolbar : actions + filtres */}
+        {/* Toolbar : « Nouveau modèle » à gauche, « Matérialiser
+            maintenant » poussé tout à droite. */}
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={runMaterialize}
-              disabled={running}
-              className="btn-secondary inline-flex items-center text-xs disabled:opacity-60"
-            >
-              {running ? (
-                <>
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                  Exécution…
-                </>
-              ) : (
-                <>
-                  <Play className="mr-1.5 h-3.5 w-3.5" />
-                  Matérialiser maintenant
-                </>
-              )}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowCreate(true)}
-              className="btn-accent inline-flex items-center text-xs"
-            >
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              Nouveau modèle
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setShowCreate(true)}
+            className="btn-accent inline-flex items-center text-xs"
+          >
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
+            Nouveau modèle
+          </button>
+          <button
+            type="button"
+            onClick={runMaterialize}
+            disabled={running}
+            className="btn-secondary inline-flex items-center text-xs disabled:opacity-60"
+          >
+            {running ? (
+              <>
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                Exécution…
+              </>
+            ) : (
+              <>
+                <Play className="mr-1.5 h-3.5 w-3.5" />
+                Matérialiser maintenant
+              </>
+            )}
+          </button>
         </div>
 
         <FiltersBar
@@ -343,6 +342,12 @@ export default function TachesRecurrentesPage() {
 }
 
 // ─── Filtres ───────────────────────────────────────────────────────
+//
+// Style harmonisé avec la barre de filtres du <TaskBoard> : même
+// fond, même hauteur de pickers, même pattern « <Label> : <select> »
+// avec « Tous » en première option. La barre de recherche reste la
+// première — comportement identique aux task-boards depuis qu'on l'y
+// a ajoutée.
 
 function FiltersBar({
   search,
@@ -369,52 +374,35 @@ function FiltersBar({
 }) {
   const { entreprises } = useEntreprisesLayout();
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-brand-800 bg-brand-900/40 p-3">
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/40" />
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Rechercher (titre, entreprise, département…)"
-          className="w-72 rounded-lg border border-brand-800 bg-brand-900 py-1.5 pl-8 pr-2 text-xs text-white placeholder:text-white/30 focus:border-accent-500 focus:outline-none"
-        />
-      </div>
-      <select
+    <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-brand-800 bg-brand-900/40 px-3 py-2">
+      <SearchInput value={search} onChange={setSearch} />
+      <FilterPicker
+        label="Statut"
         value={filterStatus}
-        onChange={(e) => setFilterStatus(e.target.value)}
-        className="rounded-lg border border-brand-800 bg-brand-900 px-2 py-1.5 text-xs text-white focus:border-accent-500 focus:outline-none"
-      >
-        <option value="">Tous statuts</option>
-        {TASK_STATUS_OPTIONS.map((s) => (
-          <option key={s.value} value={s.value}>
-            {s.label}
-          </option>
-        ))}
-      </select>
-      <select
+        onChange={setFilterStatus}
+        options={TASK_STATUS_OPTIONS.map((s) => ({
+          value: s.value,
+          label: s.label
+        }))}
+      />
+      <FilterPicker
+        label="Fréquence"
         value={filterFreq}
-        onChange={(e) => setFilterFreq(e.target.value)}
-        className="rounded-lg border border-brand-800 bg-brand-900 px-2 py-1.5 text-xs text-white focus:border-accent-500 focus:outline-none"
-      >
-        <option value="">Toutes fréquences</option>
-        {FREQ_PRESETS.filter((p) => p.key !== "custom").map((p) => (
-          <option key={p.key} value={p.key}>
-            {p.label}
-          </option>
-        ))}
-      </select>
-      <select
+        onChange={setFilterFreq}
+        options={FREQ_PRESETS.filter((p) => p.key !== "custom").map((p) => ({
+          value: p.key,
+          label: p.label
+        }))}
+      />
+      <FilterPicker
+        label="Entreprise"
         value={filterEntreprise}
-        onChange={(e) => setFilterEntreprise(e.target.value)}
-        className="rounded-lg border border-brand-800 bg-brand-900 px-2 py-1.5 text-xs text-white focus:border-accent-500 focus:outline-none"
-      >
-        <option value="">Toutes entreprises</option>
-        {entreprises.map((e) => (
-          <option key={e.id} value={e.id}>
-            {e.name}
-          </option>
-        ))}
-      </select>
+        onChange={setFilterEntreprise}
+        options={entreprises.map((e) => ({
+          value: String(e.id),
+          label: e.name
+        }))}
+      />
       <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-xs text-white/70">
         <input
           type="checkbox"
@@ -425,6 +413,56 @@ function FiltersBar({
         Actifs seulement
       </label>
     </div>
+  );
+}
+
+function SearchInput({
+  value,
+  onChange
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="relative inline-flex items-center">
+      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/40" />
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Rechercher…"
+        className="w-56 rounded-md border border-brand-800 bg-brand-900 py-1 pl-8 pr-2 text-xs text-white placeholder:text-white/30 focus:border-accent-500 focus:outline-none"
+      />
+    </label>
+  );
+}
+
+function FilterPicker({
+  label,
+  value,
+  onChange,
+  options
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<{ value: string; label: string }>;
+}) {
+  return (
+    <label className="inline-flex items-center gap-1.5 text-xs text-white/60">
+      <span>{label}&nbsp;:</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-xs text-white focus:border-accent-500 focus:outline-none"
+      >
+        <option value="">Tous</option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
