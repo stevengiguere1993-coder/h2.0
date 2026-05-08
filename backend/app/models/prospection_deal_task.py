@@ -8,6 +8,7 @@ pour que la même UI fonctionne sur les deux volets :
   À venir       → todo
   À faire       → a_faire
   En traitement → in_progress
+  En attente    → waiting
   Terminé       → done
 
 Les tâches portent leur propre priorité (urgent, eleve, moyenne,
@@ -33,7 +34,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
 
-TASK_STATUSES = ("todo", "a_faire", "in_progress", "done")
+TASK_STATUSES = ("todo", "a_faire", "in_progress", "waiting", "done")
 TASK_PRIORITIES = ("urgent", "eleve", "moyenne", "faible")
 
 

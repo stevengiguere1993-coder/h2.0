@@ -449,22 +449,10 @@ async def create_tache(
     uids = _resolve_tache_assignee_ids(legacy_uid, list_uids)
     primary = uids[0] if uids else None
 
-    # Auto-remplit l'ICE si manquant : l'impact dérive de la priorité
-    # manuelle (urgent=9, eleve=7, faible=3, autres=5), confiance et
-    # effort = 5. Toute nouvelle tâche a donc un score / pastille
-    # P1-P4 dès la création.
-    if payload.get("impact") is None:
-        prio = payload.get("priority") or "non_assigne"
-        payload["impact"] = {
-            "urgent": 9,
-            "eleve": 7,
-            "faible": 3,
-        }.get(prio, 5)
-    if payload.get("confidence") is None:
-        payload["confidence"] = 5
-    if payload.get("effort") is None:
-        payload["effort"] = 5
-
+    # Pas d'auto-remplissage des ICE à la création — la tâche
+    # démarre en P4 « Non évaluée » côté UI, puis l'IA en
+    # background remplit les valeurs et la pastille se met à jour
+    # au prochain refetch.
     t = EntrepriseTache(**payload, assignee_user_id=primary)
     db.add(t)
     await db.flush()
@@ -474,6 +462,14 @@ async def create_tache(
         await _replace_tache_immeubles(db, t, immeuble_ids)
     await db.flush()
     await db.refresh(t)
+    # Fire-and-forget : scoring IA asynchrone. N'attend pas la
+    # réponse pour ne pas ralentir la création côté UI.
+    if t.impact is None and t.confidence is None and t.effort is None:
+        import asyncio
+
+        from app.services.task_auto_score import autoscore_entreprise_tache
+
+        asyncio.create_task(autoscore_entreprise_tache(int(t.id)))
     final_a = await _load_tache_assignees(db, [t.id])
     final_i = await _load_tache_immeubles(db, [t.id])
     return _to_tache_read(

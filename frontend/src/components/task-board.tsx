@@ -39,8 +39,8 @@ import type {
  *   - La **vue Tableau** : liste plate compacte (statut / priorité /
  *     personnes / échéance éditables inline, click row → ouvre la
  *     fiche).
- *   - La **vue Kanban** : 4 colonnes (todo / a_faire / in_progress /
- *     done) issues de /lib/task-config, drag-drop, création inline
+ *   - La **vue Kanban** : 5 colonnes (todo / a_faire / in_progress /
+ *     waiting / done) issues de /lib/task-config, drag-drop, création inline
  *     « + Tâche » par colonne, bouton « Déplacer » optionnel.
  *   - **La fiche détaillée** (TaskDetailsModal) — strictement
  *     identique pour tous les volets, pas de slot extras.
@@ -561,7 +561,8 @@ function sortTasks(
     todo: 0,
     a_faire: 1,
     in_progress: 2,
-    done: 3
+    waiting: 3,
+    done: 4
   };
 
   function keyOf(t: TaskBoardItem): string | number {

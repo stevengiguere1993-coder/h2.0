@@ -609,14 +609,11 @@ async def init_db() -> None:
             WHERE status = 'backlog'
               AND monday_item_id IS NOT NULL
             """,
-            # Les tâches en « waiting » sont rapatriées dans « todo »
-            # (À venir) — on a retiré la colonne « En attente » de
-            # l'UI pour aligner sur le Pipeline des deals. Idempotent :
-            # une fois passées à todo, elles n'y reviennent plus.
-            """
-            UPDATE entreprise_taches SET status = 'todo'
-            WHERE status = 'waiting'
-            """,
+            # NOTE : la migration « waiting → todo » a été retirée
+            # car la colonne « En attente » est maintenant un statut
+            # actif de l'UI (entre « En traitement » et « Terminé »).
+            # Toute valeur historique en `waiting` reprend donc sa
+            # signification correcte sans rien faire.
             # Pipeline (deals) — alignement du vocabulaire de statut sur
             # celui des tâches d'entreprise. Le frontend partage un seul
             # task-config (todo / a_faire / in_progress / done) ; les
