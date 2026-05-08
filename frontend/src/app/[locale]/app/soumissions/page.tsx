@@ -394,9 +394,10 @@ function SoumissionCard({
         <p className="line-clamp-2 text-sm font-semibold text-white">
           {projectAddress || s.title}
         </p>
-        {/* Nom du client (sous-titre). */}
+        {/* Nom du client (sous-titre) — taille bumpée pour
+            lecture plus rapide. */}
         {clientName ? (
-          <p className="mt-0.5 truncate text-[11px] text-white/60">
+          <p className="mt-1 truncate text-xs font-medium text-white/75">
             {clientName}
           </p>
         ) : null}
@@ -404,9 +405,10 @@ function SoumissionCard({
         <p className="mt-2 text-sm font-bold text-white">
           {fmtMoney(amount)}
         </p>
-        {/* Numéro de la soumission, en bas. */}
-        <div className="mt-1 flex items-center justify-between">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+        {/* Numéro de la soumission, en bas — bumpé en text-xs pour
+            la lisibilité. */}
+        <div className="mt-1.5 flex items-center justify-between">
+          <span className="text-xs font-semibold uppercase tracking-wider text-accent-500">
             {s.reference}
           </span>
           <span className="text-[10px] text-white/40">

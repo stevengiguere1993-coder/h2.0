@@ -79,6 +79,13 @@ function ownerViewHref(lead: {
   return null;
 }
 
+const LEAD_KIND_LABEL: Record<string, string> = {
+  multilogement: "Multilogement",
+  terrain: "Terrain",
+  semi_commercial: "Semi-commercial",
+  autre: "Autre"
+};
+
 const STATUS_LABEL: Record<string, string> = {
   a_visiter: "Repéré",
   visite: "Visité (drive-by)",
@@ -1248,13 +1255,21 @@ function KanbanBoard({
                         dragId === l.id ? "opacity-50" : ""
                       }`}
                     >
+                      {/* Top : adresse, ville (titre principal). On
+                          tombe sur `name` si pas d'adresse encore
+                          renseignée. */}
                       <div className="flex items-start justify-between gap-1">
                         <Link
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           href={`/prospection/${l.id}` as any}
                           className="min-w-0 flex-1 truncate font-medium text-white hover:text-emerald-300"
                         >
-                          {l.name}
+                          {l.address || l.name}
+                          {l.city ? (
+                            <span className="text-white/50">
+                              , {l.city}
+                            </span>
+                          ) : null}
                         </Link>
                         <span
                           className={`shrink-0 rounded text-[10px] font-bold tabular-nums ${scoreBadgeClass(
@@ -1264,21 +1279,30 @@ function KanbanBoard({
                           {l.score}
                         </span>
                       </div>
-                      {l.address ? (
-                        <p className="mt-0.5 truncate text-[10px] text-white/50">
-                          {l.address}
+
+                      {/* Sous-section : propriétaire. */}
+                      {l.owner_name ? (
+                        <p className="mt-1 truncate text-[10px] text-white/60">
+                          <span className="text-white/40">Propr. </span>
+                          {l.owner_name}
                         </p>
                       ) : null}
-                      <div className="mt-1 flex items-center justify-between text-[10px] text-white/60">
-                        <span>
-                          {l.nb_logements != null
-                            ? `${l.nb_logements} log.`
-                            : "—"}
+
+                      {/* Type d'immeuble + nombre d'unités. */}
+                      <p className="mt-0.5 truncate text-[10px] text-white/60">
+                        <span className="capitalize">
+                          {LEAD_KIND_LABEL[l.kind] || l.kind || "—"}
                         </span>
-                        <span className="tabular-nums">
-                          {fmtMoneyShort(l.valeur_fonciere)}
-                        </span>
+                        {l.nb_logements != null ? (
+                          <span> · {l.nb_logements} unité{l.nb_logements > 1 ? "s" : ""}</span>
+                        ) : null}
+                      </p>
+
+                      {/* Valeur foncière à droite (légère, en bas). */}
+                      <div className="mt-1 flex items-center justify-end text-[10px] text-white/40 tabular-nums">
+                        {fmtMoneyShort(l.valeur_fonciere)}
                       </div>
+
                       {l.owner_phone ? (
                         <a
                           href={`tel:${l.owner_phone}`}
