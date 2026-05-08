@@ -8,7 +8,9 @@ import {
   ChevronDown,
   ChevronUp,
   Loader2,
+  Pause,
   Pencil,
+  Play,
   Plus,
   Repeat,
   Trash2
