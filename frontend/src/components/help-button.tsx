@@ -39,6 +39,8 @@ export function HelpButton({
   const [bugLoading, setBugLoading] = useState(false);
   const [bugSent, setBugSent] = useState(false);
   const [bugError, setBugError] = useState<string | null>(null);
+  const [bugPhoto, setBugPhoto] = useState<File | null>(null);
+  const [bugPhotoPreview, setBugPhotoPreview] = useState<string | null>(null);
 
   const pathname = usePathname() || "";
   // Référence sur le bloc « Réponse » pour scroller dessus dès qu'elle
@@ -103,6 +105,14 @@ export function HelpButton({
     }
   }
 
+  function onPickPhoto(file: File | null) {
+    setBugPhoto(file);
+    if (bugPhotoPreview) {
+      URL.revokeObjectURL(bugPhotoPreview);
+    }
+    setBugPhotoPreview(file ? URL.createObjectURL(file) : null);
+  }
+
   async function onSendBug() {
     if (bugMsg.trim().length < 2) return;
     setBugLoading(true);
@@ -113,13 +123,16 @@ export function HelpButton({
         typeof navigator !== "undefined"
           ? navigator.userAgent.slice(0, 500)
           : null;
+      // multipart pour permettre l'attachement d'une photo
+      // optionnelle. Le backend accepte les 2 formats.
+      const form = new FormData();
+      form.append("message", bugMsg.trim());
+      form.append("context_url", pathname.slice(0, 500));
+      if (ua) form.append("user_agent", ua);
+      if (bugPhoto) form.append("screenshot", bugPhoto);
       const res = await authedFetch("/api/v1/help/reports", {
         method: "POST",
-        body: JSON.stringify({
-          message: bugMsg.trim(),
-          context_url: pathname.slice(0, 500),
-          user_agent: ua
-        })
+        body: form
       });
       if (!res.ok) {
         // Surface du détail réel : on essaie d'extraire le `detail`
@@ -136,6 +149,7 @@ export function HelpButton({
         throw new Error(`HTTP ${res.status} — ${txt.slice(0, 200)}`);
       }
       setBugMsg("");
+      onPickPhoto(null);
       setBugSent(true);
     } catch (err) {
       setBugError((err as Error).message || "Erreur");
@@ -289,6 +303,46 @@ export function HelpButton({
                     placeholder="Ex. Quand je clique sur convertir un PO en achat, ça ne fait rien."
                     className="w-full rounded-md border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white placeholder:text-white/40 focus:border-accent-500 focus:outline-none"
                   />
+
+                  {/* Capture d'écran optionnelle. Format accepté :
+                      JPEG / PNG / WebP / HEIC / GIF, max 4 MB. */}
+                  <div>
+                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-white/50">
+                      Capture d&apos;écran (optionnel)
+                    </label>
+                    {bugPhotoPreview ? (
+                      <div className="relative inline-block">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={bugPhotoPreview}
+                          alt="aperçu"
+                          className="max-h-40 rounded-md border border-brand-800 object-contain"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => onPickPhoto(null)}
+                          className="absolute -right-2 -top-2 rounded-full bg-rose-500 p-1 text-white shadow"
+                          title="Retirer la photo"
+                          aria-label="Retirer la photo"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-dashed border-brand-700 bg-brand-900 px-3 py-2 text-xs text-white/60 hover:border-accent-500 hover:text-white">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) =>
+                            onPickPhoto(e.target.files?.[0] ?? null)
+                          }
+                        />
+                        + Ajouter une photo
+                      </label>
+                    )}
+                  </div>
+
                   <p className="text-[10px] text-white/40">
                     Page courante : <span className="font-mono">{pathname}</span>
                   </p>

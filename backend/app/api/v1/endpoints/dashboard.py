@@ -184,15 +184,24 @@ async def get_kpis(
         await db.execute(sent_sum_stmt)
     ).one()
 
-    # Ventes = soumissions accepted in period
+    # Ventes = soumissions accepted in period.
+    # `accepted_at` peut être null pour les anciens rows (imports
+    # externes, statut posé via PATCH générique, etc.) — dans ce
+    # cas on retombe sur `updated_at` puis `created_at` pour ne
+    # PAS perdre la vente. Sinon Beaudoin & co disparaissent du
+    # KPI alors qu'ils sont bien dans la colonne « Acceptées ».
+    accepted_ts = func.coalesce(
+        Soumission.accepted_at,
+        Soumission.updated_at,
+        Soumission.created_at,
+    )
     ventes_sum_stmt = select(
         func.coalesce(func.sum(Soumission.total), 0),
         func.count(Soumission.id),
     ).where(
         Soumission.status == SoumissionStatus.ACCEPTED.value,
-        Soumission.accepted_at.is_not(None),
-        Soumission.accepted_at >= p_start_dt,
-        Soumission.accepted_at <= p_end_dt,
+        accepted_ts >= p_start_dt,
+        accepted_ts <= p_end_dt,
     )
     ventes_total, ventes_count = (await db.execute(ventes_sum_stmt)).one()
 
@@ -212,7 +221,7 @@ async def get_kpis(
             func.avg(
                 func.extract(
                     "epoch",
-                    Soumission.accepted_at - ContactRequest.created_at,
+                    accepted_ts - ContactRequest.created_at,
                 )
                 / 86400.0
             )
@@ -225,9 +234,8 @@ async def get_kpis(
         )
         .where(
             Soumission.status == SoumissionStatus.ACCEPTED.value,
-            Soumission.accepted_at.is_not(None),
-            Soumission.accepted_at >= p_start_dt,
-            Soumission.accepted_at <= p_end_dt,
+            accepted_ts >= p_start_dt,
+            accepted_ts <= p_end_dt,
         )
     )
     time_to_sale = (await db.execute(tts_stmt)).scalar_one()
@@ -279,16 +287,15 @@ async def get_kpis(
     )
     ts_ventes_stmt = (
         select(
-            cast(Soumission.accepted_at, Date).label("d"),
+            cast(accepted_ts, Date).label("d"),
             func.coalesce(func.sum(Soumission.total), 0).label("v"),
         )
         .where(
             Soumission.status == SoumissionStatus.ACCEPTED.value,
-            Soumission.accepted_at.is_not(None),
-            Soumission.accepted_at >= p_start_dt,
-            Soumission.accepted_at <= p_end_dt,
+            accepted_ts >= p_start_dt,
+            accepted_ts <= p_end_dt,
         )
-        .group_by(cast(Soumission.accepted_at, Date))
+        .group_by(cast(accepted_ts, Date))
     )
     soum_rows = {r.d: float(r.s or 0) for r in (await db.execute(ts_soum_stmt)).all()}
     ventes_rows = {r.d: float(r.v or 0) for r in (await db.execute(ts_ventes_stmt)).all()}

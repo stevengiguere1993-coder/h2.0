@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
 
@@ -59,10 +59,13 @@ class ReportOut(BaseModel):
     created_at: datetime
     accepted_at: Optional[datetime]
     resolved_at: Optional[datetime]
+    has_screenshot: bool = False
+    resolution_notes: Optional[str] = None
 
 
 class ReportPatch(BaseModel):
-    status: str  # accepted | rejected | resolved
+    status: Optional[str] = None  # accepted | rejected | resolved
+    resolution_notes: Optional[str] = None
 
 
 class BulkAction(BaseModel):
@@ -169,30 +172,113 @@ async def ask(
 # ------------------------------ Bug reports ------------------------------
 
 
+def _serialize_report(rec: HelpRequest) -> ReportOut:
+    """ReportOut + flag `has_screenshot` calculé à la volée (le
+    blob lui-même n'est jamais inclus — accessible via l'endpoint
+    dédié `/reports/{id}/screenshot`)."""
+    return ReportOut(
+        id=rec.id,
+        user_email=rec.user_email,
+        kind=rec.kind,
+        status=rec.status,
+        message=rec.message,
+        ai_response=rec.ai_response,
+        context_url=rec.context_url,
+        user_agent=rec.user_agent,
+        created_at=rec.created_at,
+        accepted_at=rec.accepted_at,
+        resolved_at=rec.resolved_at,
+        has_screenshot=rec.screenshot_blob is not None,
+        resolution_notes=getattr(rec, "resolution_notes", None),
+    )
+
+
+_ALLOWED_SCREENSHOT_TYPES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+    "image/gif",
+}
+_MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024  # 4 MB
+
+
 @router.post(
     "/reports",
     response_model=ReportOut,
     status_code=status.HTTP_201_CREATED,
-    summary="Signaler un bug ou une demande",
+    summary="Signaler un bug ou une demande (avec capture optionnelle)",
 )
 async def create_report(
-    body: ReportIn,
     db: DBSession,
     user: CurrentUser,
+    message: str = Form(..., min_length=2, max_length=4000),
+    context_url: Optional[str] = Form(default=None, max_length=500),
+    user_agent: Optional[str] = Form(default=None, max_length=500),
+    screenshot: Optional[UploadFile] = File(default=None),
 ) -> ReportOut:
+    """Endpoint multipart pour permettre l'attachement d'une
+    capture d'écran. Les anciens clients qui envoyaient du JSON
+    sont aussi compatibles : FastAPI accepte les formes mixtes
+    quand les Form/File sont optionnels (tant que `Content-Type`
+    est multipart/form-data côté client)."""
+    blob: Optional[bytes] = None
+    content_type: Optional[str] = None
+    if screenshot is not None and screenshot.filename:
+        ct = (screenshot.content_type or "").lower()
+        if ct not in _ALLOWED_SCREENSHOT_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Format d'image non supporté ({ct or 'inconnu'}). "
+                    "Formats acceptés : JPEG, PNG, WebP, HEIC, GIF."
+                ),
+            )
+        data = await screenshot.read()
+        if len(data) > _MAX_SCREENSHOT_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Image trop lourde (max 4 MB).",
+            )
+        blob = data
+        content_type = ct
     rec = HelpRequest(
         user_id=user.id,
         user_email=user.email,
         kind=HelpRequestKind.BUG.value,
         status=HelpRequestStatus.PENDING.value,
-        message=body.message,
-        context_url=body.context_url,
-        user_agent=body.user_agent,
+        message=message,
+        context_url=context_url,
+        user_agent=user_agent,
+        screenshot_blob=blob,
+        screenshot_content_type=content_type,
     )
     db.add(rec)
     await db.commit()
     await db.refresh(rec)
-    return ReportOut.model_validate(rec)
+    return _serialize_report(rec)
+
+
+@router.get(
+    "/reports/{report_id}/screenshot",
+    summary="Télécharger la capture d'écran d'un signalement",
+)
+async def get_report_screenshot(
+    report_id: int, db: DBSession, _: RequireOwner
+):
+    rec = await db.get(HelpRequest, report_id)
+    if rec is None or not rec.screenshot_blob:
+        raise HTTPException(
+            status_code=404, detail="Capture introuvable."
+        )
+    from fastapi.responses import Response
+
+    return Response(
+        content=rec.screenshot_blob,
+        media_type=rec.screenshot_content_type or "image/png",
+    )
 
 
 @router.get(
@@ -214,7 +300,7 @@ async def list_reports(
     if status_filter:
         stmt = stmt.where(HelpRequest.status == status_filter)
     rows = (await db.execute(stmt)).scalars().all()
-    return [ReportOut.model_validate(r) for r in rows]
+    return [_serialize_report(r) for r in rows]
 
 
 @router.patch(
@@ -236,24 +322,31 @@ async def patch_report(
     if rec is None or rec.kind != HelpRequestKind.BUG.value:
         raise HTTPException(status_code=404, detail="Bug introuvable")
 
-    new_status = body.status.lower().strip()
-    if new_status not in (
-        HelpRequestStatus.ACCEPTED.value,
-        HelpRequestStatus.REJECTED.value,
-        HelpRequestStatus.RESOLVED.value,
-        HelpRequestStatus.PENDING.value,
-    ):
-        raise HTTPException(status_code=400, detail="Statut invalide")
-
     now = datetime.now(timezone.utc)
-    rec.status = new_status
-    if new_status == HelpRequestStatus.ACCEPTED.value and rec.accepted_at is None:
-        rec.accepted_at = now
-    if new_status == HelpRequestStatus.RESOLVED.value:
-        rec.resolved_at = now
+
+    if body.status is not None:
+        new_status = body.status.lower().strip()
+        if new_status not in (
+            HelpRequestStatus.ACCEPTED.value,
+            HelpRequestStatus.REJECTED.value,
+            HelpRequestStatus.RESOLVED.value,
+            HelpRequestStatus.PENDING.value,
+        ):
+            raise HTTPException(status_code=400, detail="Statut invalide")
+
+        rec.status = new_status
+        if new_status == HelpRequestStatus.ACCEPTED.value and rec.accepted_at is None:
+            rec.accepted_at = now
+        if new_status == HelpRequestStatus.RESOLVED.value:
+            rec.resolved_at = now
+
+    if body.resolution_notes is not None:
+        # Vide → null (effacement)
+        rec.resolution_notes = body.resolution_notes.strip() or None
+
     await db.commit()
     await db.refresh(rec)
-    return ReportOut.model_validate(rec)
+    return _serialize_report(rec)
 
 
 @router.post(
@@ -318,4 +411,4 @@ async def accepted_reports(
             .order_by(HelpRequest.accepted_at.asc().nulls_last())
         )
     ).scalars().all()
-    return [ReportOut.model_validate(r) for r in rows]
+    return [_serialize_report(r) for r in rows]

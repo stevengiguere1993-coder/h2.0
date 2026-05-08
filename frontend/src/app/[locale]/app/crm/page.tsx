@@ -60,6 +60,29 @@ const DOTS = [
   "bg-teal-400"
 ];
 
+/** Convertit un texte d'erreur Pydantic / FastAPI en message court
+ *  français pour l'UI. Si on ne reconnaît pas le contenu, on tombe
+ *  sur un message générique avec le code HTTP. */
+function translateBackendError(raw: string, status: number): string {
+  const lower = raw.toLowerCase();
+  if (lower.includes("not a valid email") || lower.includes("email_address")) {
+    return "Le courriel n'est pas valide.";
+  }
+  if (lower.includes("at least 10 characters")) {
+    return "Le message doit faire au moins 10 caractères.";
+  }
+  if (lower.includes("at least") && lower.includes("character")) {
+    return "Un champ obligatoire est trop court.";
+  }
+  if (lower.includes("field required") || lower.includes("missing")) {
+    return "Un champ obligatoire est manquant.";
+  }
+  if (status === 401 || status === 403) {
+    return "Action non autorisée. Vérifie ta connexion.";
+  }
+  return `Création échouée (HTTP ${status}).`;
+}
+
 const PROJECT_LABEL: Record<string, string> = {
   salle_bain: "Salle de bain",
   cuisine: "Cuisine",
@@ -529,8 +552,20 @@ function CreateProspectModal({
   const [error, setError] = useState<string | null>(null);
 
   async function submit() {
-    if (!name.trim() || !email.trim()) {
-      setError("Nom et courriel requis.");
+    // Validation côté client en français — on accepte courriel
+    // OU téléphone (au moins l'un des deux).
+    if (!name.trim()) {
+      setError("Le nom complet est obligatoire.");
+      return;
+    }
+    const cleanEmail = email.trim();
+    const cleanPhone = phone.trim();
+    if (!cleanEmail && !cleanPhone) {
+      setError("Au moins un courriel ou un téléphone est requis.");
+      return;
+    }
+    if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setError("Le courriel n'est pas valide (ex. nom@exemple.com).");
       return;
     }
     setBusy(true);
@@ -542,7 +577,14 @@ function CreateProspectModal({
       // les champs requis (name / email / message / gdpr_consent).
       const fd = new FormData();
       fd.append("name", name.trim());
-      fd.append("email", email.trim());
+      // Email vide : on envoie un placeholder calme côté backend
+      // si seul le téléphone est fourni (le schéma actuel exige
+      // un email côté pydantic). On utilise un domaine sentinel
+      // qu'on pourra filtrer plus tard.
+      fd.append(
+        "email",
+        cleanEmail || `no-email+${Date.now()}@horizon.placeholder`
+      );
       fd.append(
         "message",
         message.trim() || "(création manuelle depuis le CRM)"
@@ -552,7 +594,7 @@ function CreateProspectModal({
       fd.append("locale", "fr");
       fd.append("source", "manual");
       fd.append("project_type", projectType || "autre");
-      if (phone.trim()) fd.append("phone", phone.trim());
+      if (cleanPhone) fd.append("phone", cleanPhone);
       if (address.trim()) fd.append("address", address.trim());
       if (budgetRange) fd.append("budget_range", budgetRange);
       const res = await authedFetch("/api/v1/contact", {
@@ -560,8 +602,10 @@ function CreateProspectModal({
         body: fd
       });
       if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt.slice(0, 240) || `http_${res.status}`);
+        // Traduit les erreurs Pydantic anglaises en messages
+        // français courts compréhensibles côté UI.
+        const txt = await res.text().catch(() => "");
+        throw new Error(translateBackendError(txt, res.status));
       }
       // Public ack endpoint returns { ok, reference }; refetch the full row.
       const listRes = await authedFetch(
@@ -602,14 +646,19 @@ function CreateProspectModal({
               autoFocus
             />
           </div>
+          <p className="text-[11px] text-white/50">
+            Courriel <strong>ou</strong> téléphone — au moins l&apos;un
+            des deux est requis.
+          </p>
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
-              <label className="label">Courriel *</label>
+              <label className="label">Courriel</label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="input"
+                placeholder="nom@exemple.com"
               />
             </div>
             <div>
@@ -618,6 +667,7 @@ function CreateProspectModal({
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 className="input"
+                placeholder="(514) 555-1234"
               />
             </div>
           </div>
