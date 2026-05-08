@@ -1,9 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Loader2, Target, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+  Repeat,
+  Target,
+  X
+} from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { Link } from "@/i18n/navigation";
 import { QGTopbar } from "../layout";
 import {
   TaskBoard,
@@ -538,6 +546,16 @@ export default function MesTachesPage() {
           </>
         }
         subtitle={subtitle}
+        rightSlot={
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/entreprises/taches/recurrentes" as any}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-bg-alt)] px-3 py-1.5 text-xs text-[var(--qg-text)] hover:bg-[var(--qg-bg)]"
+          >
+            <Repeat className="h-3.5 w-3.5" />
+            Modèles récurrents
+          </Link>
+        }
       />
 
       <div className="px-5 py-6 lg:px-8">
@@ -610,8 +628,6 @@ export default function MesTachesPage() {
                   out.immeuble_ids = patch.immeuble_ids;
                 if (patch.departement !== undefined)
                   out.departement = patch.departement;
-                if (patch.recurrence !== undefined)
-                  out.recurrence = patch.recurrence;
                 if (patch.impact !== undefined) out.impact = patch.impact;
                 if (patch.confidence !== undefined)
                   out.confidence = patch.confidence;
@@ -636,8 +652,6 @@ export default function MesTachesPage() {
                   out.immeuble_ids = patch.immeuble_ids;
                 if (patch.departement !== undefined)
                   out.departement = patch.departement;
-                if (patch.recurrence !== undefined)
-                  out.recurrence = patch.recurrence;
                 if (patch.impact !== undefined) out.impact = patch.impact;
                 if (patch.confidence !== undefined)
                   out.confidence = patch.confidence;

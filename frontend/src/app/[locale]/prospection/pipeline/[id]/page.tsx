@@ -397,7 +397,6 @@ export default function DealDetailPage() {
               out.immeuble_ids = patch.immeuble_ids;
             }
             if (patch.departement !== undefined) out.departement = patch.departement;
-            if (patch.recurrence !== undefined) out.recurrence = patch.recurrence;
             if (patch.impact !== undefined) out.impact = patch.impact;
             if (patch.confidence !== undefined) out.confidence = patch.confidence;
             if (patch.effort !== undefined) out.effort = patch.effort;

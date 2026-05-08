@@ -234,37 +234,17 @@ export function TaskDetailsModal({
             />
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label className="label">Département</label>
-              <input
-                type="text"
-                value={task.departement || ""}
-                onChange={(e) =>
-                  onPatch({ departement: e.target.value || null })
-                }
-                placeholder="finance / opérations / RH…"
-                className="input"
-              />
-            </div>
-            <div>
-              <label className="label">Récurrence</label>
-              <select
-                value={task.recurrence || ""}
-                onChange={(e) =>
-                  onPatch({ recurrence: e.target.value || null })
-                }
-                className="input"
-              >
-                <option value="">— Tâche unique —</option>
-                <option value="daily">Quotidienne</option>
-                <option value="weekly">Hebdomadaire</option>
-                <option value="biweekly">Aux 2 semaines</option>
-                <option value="monthly">Mensuelle</option>
-                <option value="quarterly">Trimestrielle</option>
-                <option value="yearly">Annuelle</option>
-              </select>
-            </div>
+          <div>
+            <label className="label">Département</label>
+            <input
+              type="text"
+              value={task.departement || ""}
+              onChange={(e) =>
+                onPatch({ departement: e.target.value || null })
+              }
+              placeholder="finance / opérations / RH…"
+              className="input"
+            />
           </div>
 
           <div>
