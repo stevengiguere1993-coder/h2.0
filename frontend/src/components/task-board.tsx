@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Building2, Plus } from "lucide-react";
+import { Building2, Plus, Search } from "lucide-react";
 
 import {
   TaskCard,
@@ -141,6 +141,9 @@ export function TaskBoard({
 }) {
   const [view, setView] = useState<"kanban" | "list">("kanban");
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
+  // Recherche libre (titre / notes / immeuble / département) — filtre
+  // textuel additif aux pickers.
+  const [search, setSearch] = useState("");
   const [criteria, setCriteria] = useState<
     Record<CriterionKey, CriterionState>
   >(DEFAULT_FILTERS);
@@ -194,9 +197,22 @@ export function TaskBoard({
   }
 
   const sortedTasks = useMemo(() => {
-    const filtered = applyFilters(tasks, criteria, extraColumn);
+    let filtered = applyFilters(tasks, criteria, extraColumn);
+    const q = search.trim().toLowerCase();
+    if (q) {
+      filtered = filtered.filter((t) => {
+        return (
+          t.title.toLowerCase().includes(q) ||
+          (t.notes || "").toLowerCase().includes(q) ||
+          (t.departement || "").toLowerCase().includes(q) ||
+          (t.immeubleLabels || []).some((l) =>
+            l.toLowerCase().includes(q)
+          )
+        );
+      });
+    }
     return sortTasks(filtered, criteria, users, immeubles, extraColumn);
-  }, [tasks, criteria, users, immeubles, extraColumn]);
+  }, [tasks, criteria, users, immeubles, extraColumn, search]);
 
   const sortActive = (Object.values(criteria) as CriterionState[]).some(
     (c) => c.kind === "sort"
@@ -292,6 +308,15 @@ export function TaskBoard({
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-brand-800 bg-brand-900/40 px-3 py-2">
+        <label className="relative inline-flex items-center">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/40" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Rechercher…"
+            className="w-56 rounded-md border border-brand-800 bg-brand-900 py-1 pl-8 pr-2 text-xs text-white placeholder:text-white/30 focus:border-accent-500 focus:outline-none"
+          />
+        </label>
         <CriterionPicker
           label="Statut"
           state={criteria.status}
