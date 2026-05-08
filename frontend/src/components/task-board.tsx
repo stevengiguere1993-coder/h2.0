@@ -8,6 +8,7 @@ import {
   type TaskCardData,
   type TaskCardPatch
 } from "@/components/task-card";
+import { useConfirm } from "@/components/confirm-dialog";
 import {
   TASK_PRIORITY_OPTIONS,
   TASK_STATUS_OPTIONS,
@@ -158,6 +159,26 @@ export function TaskBoard({
       }
       return next;
     });
+  }
+
+  const confirm = useConfirm();
+  // Demande une confirmation avant toute suppression de tâche
+  // (kanban + tableau). Centralisé ici pour que tous les parents
+  // (entreprises, prospection, vue cross-volet) en bénéficient
+  // sans dupliquer la logique. Retient le titre pour l'afficher.
+  async function handleDeleteWithConfirm(taskId: number) {
+    const t = tasks.find((x) => x.id === taskId);
+    const title = t?.title?.trim();
+    const ok = await confirm({
+      title: title
+        ? `Supprimer la tâche « ${title} » ?`
+        : "Supprimer cette tâche ?",
+      description: "Cette action est définitive.",
+      confirmLabel: "Supprimer",
+      destructive: true
+    });
+    if (!ok) return;
+    onDelete(taskId);
   }
 
   async function handleNewTask() {
@@ -316,7 +337,7 @@ export function TaskBoard({
           tasks={sortedTasks}
           users={users}
           onPatch={onPatch}
-          onDelete={onDelete}
+          onDelete={(id) => void handleDeleteWithConfirm(id)}
           onOpenDetails={(id) => setDetailTaskId(id)}
           onMove={onMove}
           onCreate={(s, n) => void handleColumnCreate(s, n)}
