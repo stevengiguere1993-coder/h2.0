@@ -1649,16 +1649,11 @@ function FinancesTab({ projectId }: { projectId: number }) {
 
   return (
     <div className="space-y-5">
-      {/* KPIs */}
+      {/* KPIs : projection vs réel — coût et profit côte à côte
+          pour comparer ce qui était prévu et ce qui se matérialise. */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <FinanceKpi
-          label="Revenu des services"
-          value={fmtMoney(data.projected_revenue)}
-          sub="Soumission client"
-          tone="accent"
-        />
-        <FinanceKpi
-          label="Coût total"
+          label="Coût projeté"
           value={fmtMoney(data.projected_total_cost)}
           sub={`Services ${fmtMoney(
             data.projected_service_cost
@@ -1668,13 +1663,21 @@ function FinancesTab({ projectId }: { projectId: number }) {
         <FinanceKpi
           label="Profit projeté"
           value={fmtMoney(data.projected_profit)}
-          sub={`${data.projected_margin_pct.toFixed(1)} % marge`}
+          sub={`${data.projected_margin_pct.toFixed(1)} % marge · Revenu ${fmtMoney(data.projected_revenue)}`}
           tone={data.projected_profit >= 0 ? "emerald" : "rose"}
+        />
+        <FinanceKpi
+          label="Coût actuel"
+          value={fmtMoney(data.actual_total_cost)}
+          sub={`Matériaux ${fmtMoney(
+            data.actual_material_cost
+          )} · Main-d'œuvre ${fmtMoney(data.actual_labour_cost)}`}
+          tone="white"
         />
         <FinanceKpi
           label="Profit réel"
           value={fmtMoney(data.actual_profit)}
-          sub={`${data.actual_margin_pct.toFixed(1)} % marge`}
+          sub={`${data.actual_margin_pct.toFixed(1)} % marge · Encaissé ${fmtMoney(data.paid_amount)}`}
           tone={data.actual_profit >= 0 ? "emerald" : "rose"}
         />
       </div>
