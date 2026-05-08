@@ -1212,11 +1212,22 @@ function KanbanBoard({
               className={`flex w-72 shrink-0 flex-col rounded-xl border bg-brand-900 transition ${
                 isHover
                   ? "border-emerald-500/60 bg-emerald-500/5"
-                  : "border-brand-800"
+                  : col.key === "hot_lead"
+                    ? "hot-lead-column border-orange-400/60"
+                    : "border-brand-800"
               }`}
             >
               <header className="sticky top-0 z-10 flex items-center justify-between rounded-t-xl border-b border-brand-800 bg-brand-900 px-3 py-2 text-xs font-semibold uppercase tracking-wider">
-                <span className="text-white/80">{col.label}</span>
+                <span className="text-white/80">
+                  {col.key === "hot_lead" ? (
+                    <>
+                      <span className="hot-lead-flame mr-1">🔥</span>
+                      <span className="text-orange-300">Hot Lead</span>
+                    </>
+                  ) : (
+                    col.label
+                  )}
+                </span>
                 <span className="rounded-full bg-brand-800 px-1.5 py-0.5 text-[10px] tabular-nums text-white/60">
                   {items.length}
                 </span>
