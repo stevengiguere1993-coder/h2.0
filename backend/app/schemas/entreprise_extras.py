@@ -16,10 +16,12 @@ class TacheTemplateBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     departement: Optional[str] = Field(default=None, max_length=32)
-    # ICE obligatoire côté création (matérialise des tâches scoreables).
-    impact: int = Field(..., ge=1, le=10)
-    confidence: int = Field(..., ge=1, le=10)
-    effort: int = Field(..., ge=1, le=10)
+    # ICE optionnel — peut rester null si l'utilisateur n'a pas
+    # encore décidé du scoring. La tâche matérialisée n'aura simplement
+    # pas de score (comme une tâche normale créée sans ICE).
+    impact: Optional[int] = Field(default=None, ge=1, le=10)
+    confidence: Optional[int] = Field(default=None, ge=1, le=10)
+    effort: Optional[int] = Field(default=None, ge=1, le=10)
     assignee_user_id: Optional[int] = None
     every_n: int = Field(default=1, ge=1, le=365)
     unit: str = Field(default="mois", max_length=16)
@@ -48,9 +50,9 @@ class TacheTemplateBulkCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     departement: Optional[str] = Field(default=None, max_length=32)
-    impact: int = Field(..., ge=1, le=10)
-    confidence: int = Field(..., ge=1, le=10)
-    effort: int = Field(..., ge=1, le=10)
+    impact: Optional[int] = Field(default=None, ge=1, le=10)
+    confidence: Optional[int] = Field(default=None, ge=1, le=10)
+    effort: Optional[int] = Field(default=None, ge=1, le=10)
     assignee_user_id: Optional[int] = None
     every_n: int = Field(..., ge=1, le=365)
     unit: str = Field(..., max_length=16)

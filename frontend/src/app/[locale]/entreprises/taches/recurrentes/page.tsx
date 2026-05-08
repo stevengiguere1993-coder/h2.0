@@ -731,14 +731,28 @@ function TemplateFormModal({
       setErr("Le titre est obligatoire.");
       return;
     }
-    const ice = [
-      Number(form.impact),
-      Number(form.confidence),
-      Number(form.effort)
-    ];
-    if (ice.some((v) => !Number.isFinite(v) || v < 1 || v > 10)) {
-      setErr("Le score ICE est obligatoire (impact, confiance, effort de 1 à 10).");
+    // ICE optionnel : on accepte vide. Si l'utilisateur a saisi
+    // une valeur partielle (ex. impact mais pas effort), on
+    // refuse — soit les 3 sont remplis, soit aucun.
+    const iceFilled = [form.impact, form.confidence, form.effort].filter(
+      (v) => v.trim() !== ""
+    );
+    if (iceFilled.length > 0 && iceFilled.length < 3) {
+      setErr(
+        "Pour le score ICE, remplis les 3 champs (impact, confiance, effort) ou laisse-les tous vides."
+      );
       return;
+    }
+    if (iceFilled.length === 3) {
+      const ice = [
+        Number(form.impact),
+        Number(form.confidence),
+        Number(form.effort)
+      ];
+      if (ice.some((v) => !Number.isFinite(v) || v < 1 || v > 10)) {
+        setErr("Le score ICE doit être entre 1 et 10 pour chacun des 3 champs.");
+        return;
+      }
     }
     const every_n = Number(form.every_n);
     if (!Number.isFinite(every_n) || every_n < 1) {
@@ -764,9 +778,9 @@ function TemplateFormModal({
       unit: form.unit,
       lead_days,
       next_due: form.next_due,
-      impact: ice[0],
-      confidence: ice[1],
-      effort: ice[2],
+      impact: iceFilled.length === 3 ? Number(form.impact) : null,
+      confidence: iceFilled.length === 3 ? Number(form.confidence) : null,
+      effort: iceFilled.length === 3 ? Number(form.effort) : null,
       immeuble_ids: form.immeuble_ids,
       is_active: true
     };
@@ -1019,7 +1033,10 @@ function TemplateFormModal({
             {/* ICE */}
             <div>
               <label className="label">
-                Score ICE <span className="text-rose-400">*</span>
+                Score ICE
+                <span className="ml-1 text-[10px] font-normal text-white/40">
+                  (optionnel)
+                </span>
               </label>
               <div className="grid grid-cols-3 gap-2">
                 <ICEInput
@@ -1039,8 +1056,8 @@ function TemplateFormModal({
                 />
               </div>
               <p className="mt-1 text-[10px] text-white/40">
-                Tous trois entre 1 et 10. Détermine le score automatique
-                des tâches matérialisées.
+                Soit les 3 champs remplis (1-10) — la tâche aura un score
+                automatique — soit les 3 vides : tâche sans score.
               </p>
             </div>
 
