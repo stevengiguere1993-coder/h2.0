@@ -13,7 +13,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, LargeBinary, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -55,6 +55,24 @@ class HelpRequest(Base):
     # Contexte capturé automatiquement pour faciliter le debug
     context_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     user_agent: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    # Capture d'écran optionnelle attachée au signalement.
+    # Stocké en BYTEA pour rester self-hosted (pas de S3 ici).
+    # Limite côté API à ~4 MB pour éviter les abus.
+    screenshot_blob: Mapped[Optional[bytes]] = mapped_column(
+        LargeBinary, nullable=True
+    )
+    screenshot_content_type: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+
+    # Notes de résolution — saisies par l'admin/owner après avoir
+    # traité le bug (« qu'est-ce qui causait ça, qu'est-ce qu'on a
+    # fait pour régler »). Devient une référence pour la base de
+    # connaissances. Visible seulement dans le panneau admin.
+    resolution_notes: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True

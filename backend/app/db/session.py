@@ -356,6 +356,10 @@ async def init_db() -> None:
                 "VARCHAR(16) NOT NULL DEFAULT 'todo'",
             ),
             ("entreprise_tache_templates", "immeuble_ids_json", "TEXT"),
+            # Capture d'écran optionnelle sur les signalements de bug.
+            ("help_requests", "screenshot_blob", "BYTEA"),
+            ("help_requests", "screenshot_content_type", "VARCHAR(64)"),
+            ("help_requests", "resolution_notes", "TEXT"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
@@ -698,6 +702,17 @@ async def init_db() -> None:
             UPDATE prospection_deal_tasks
             SET effort = 5
             WHERE effort IS NULL
+            """,
+            # Backfill des soumissions acceptées sans `accepted_at`.
+            # Cas typique : statut posé via PATCH générique ou import
+            # externe sans timestamp. Sans ce timestamp, le KPI
+            # « Ventes » du dashboard les ignore — on retombe donc
+            # sur `updated_at` (heure de la dernière modif, qui
+            # correspond ~ à la transition vers ACCEPTED).
+            """
+            UPDATE soumissions
+            SET accepted_at = updated_at
+            WHERE status = 'accepted' AND accepted_at IS NULL
             """,
         ):
             try:

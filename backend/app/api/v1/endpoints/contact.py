@@ -80,6 +80,18 @@ async def submit_contact(
         )
 
     try:
+        # Normalisation : padding pour atteindre le min_length=10
+        # de Pydantic dans le cas des créations manuelles depuis
+        # le CRM (où on accepte un message court ou vide). Le
+        # placeholder reste explicite pour qu'on sache que le
+        # message a été enrichi côté serveur.
+        msg_clean = (message or "").strip()
+        if len(msg_clean) < 10:
+            msg_clean = (
+                f"{msg_clean} — (note courte, source: {source or 'inconnu'})"
+                if msg_clean
+                else "(création manuelle, sans note)"
+            )
         data = ContactRequestCreate(
             name=name,
             email=email,
@@ -87,7 +99,7 @@ async def submit_contact(
             address=address or None,
             project_type=ProjectType(project_type) if project_type else ProjectType.AUTRE,
             budget_range=budget_range or None,
-            message=message,
+            message=msg_clean,
             locale=locale if locale in ("fr", "en") else "fr",
             source=source or None,
             gdpr_consent=gdpr_consent,

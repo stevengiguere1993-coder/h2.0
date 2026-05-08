@@ -29,6 +29,8 @@ type HelpReport = {
   created_at: string;
   accepted_at: string | null;
   resolved_at: string | null;
+  has_screenshot?: boolean;
+  resolution_notes?: string | null;
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -107,6 +109,15 @@ export function HelpRequestsSection() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function onNotesUpdated(reportId: number, notes: string) {
+    // Mise à jour locale après save d'une note de résolution.
+    setItems((prev) =>
+      prev.map((r) =>
+        r.id === reportId ? { ...r, resolution_notes: notes || null } : r
+      )
+    );
   }
 
   async function singleAct(
@@ -293,6 +304,26 @@ export function HelpRequestsSection() {
                         <span className="font-mono">{r.context_url}</span>
                       </p>
                     ) : null}
+                    {r.has_screenshot ? (
+                      <a
+                        href={`/api/v1/help/reports/${r.id}/screenshot`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-2 inline-block"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={`/api/v1/help/reports/${r.id}/screenshot`}
+                          alt="Capture jointe"
+                          className="max-h-48 rounded-md border border-brand-800 object-contain"
+                        />
+                      </a>
+                    ) : null}
+                    <ResolutionNoteEditor
+                      reportId={r.id}
+                      initial={r.resolution_notes || ""}
+                      onSaved={(notes) => onNotesUpdated(r.id, notes)}
+                    />
                     <div className="mt-2 flex flex-wrap gap-2">
                       <CopyReportButton report={r} />
                       {r.status === "pending" ? (
@@ -401,5 +432,75 @@ function CopyReportButton({ report }: { report: HelpReport }) {
         </>
       )}
     </button>
+  );
+}
+
+// ─── Notes de résolution (admin) ──────────────────────────────────
+//
+// Permet à Steven (ou tout owner) d'écrire ce qui causait le bug
+// et ce qu'on a fait pour régler. Devient une référence pour la
+// base de connaissances et pour Claude à la prochaine occurrence.
+
+function ResolutionNoteEditor({
+  reportId,
+  initial,
+  onSaved
+}: {
+  reportId: number;
+  initial: string;
+  onSaved: (notes: string) => void;
+}) {
+  const [val, setVal] = useState(initial);
+  const [saving, setSaving] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  const dirty = (val.trim() || null) !== (initial.trim() || null);
+
+  async function save() {
+    setSaving(true);
+    try {
+      const r = await authedFetch(`/api/v1/help/reports/${reportId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ resolution_notes: val })
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      onSaved(val);
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 1500);
+    } catch {
+      /* silent — l'utilisateur reverra dirty=true */
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-md border border-brand-800 bg-brand-950/40 p-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
+          Notes de résolution
+        </span>
+        {savedFlash ? (
+          <span className="text-[10px] text-emerald-400">Enregistré ✓</span>
+        ) : null}
+      </div>
+      <textarea
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        rows={2}
+        placeholder="Ce qui causait le bug, ce qu'on a fait pour régler…"
+        className="mt-1 w-full rounded-md border border-brand-800 bg-brand-900 px-2 py-1.5 text-xs text-white placeholder:text-white/30 focus:border-accent-500 focus:outline-none"
+      />
+      {dirty ? (
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving}
+          className="mt-1 rounded border border-accent-500/40 bg-accent-500/10 px-2 py-0.5 text-[10px] font-semibold text-accent-300 hover:bg-accent-500/20 disabled:opacity-50"
+        >
+          {saving ? "Enregistrement…" : "Enregistrer"}
+        </button>
+      ) : null}
+    </div>
   );
 }
