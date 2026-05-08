@@ -226,3 +226,50 @@ html[data-portal-theme="light"] .pill-date-invert {
   background-color: #000000 !important;
   color: #ffffff !important;
 }
+
+/* ───────────────────────────────────────────────────────────────
+ * HOT LEAD — colonne en feu (volet Prospection > Suivi)
+ *
+ * Glow orange-rouge pulsé + bordure animée pour signaler
+ * visuellement que ce lead est très chaud. La flamme du header
+ * a aussi une animation de scintillement subtil.
+ * ─────────────────────────────────────────────────────────────── */
+@keyframes hot-lead-glow {
+  0%, 100% {
+    box-shadow:
+      0 0 8px rgba(251, 146, 60, 0.35),
+      0 0 16px rgba(239, 68, 68, 0.18),
+      inset 0 0 12px rgba(251, 146, 60, 0.08);
+    border-color: rgba(251, 146, 60, 0.55);
+  }
+  50% {
+    box-shadow:
+      0 0 16px rgba(251, 146, 60, 0.65),
+      0 0 28px rgba(239, 68, 68, 0.35),
+      inset 0 0 18px rgba(251, 146, 60, 0.16);
+    border-color: rgba(239, 68, 68, 0.85);
+  }
+}
+
+@keyframes hot-lead-flicker {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  25% { opacity: 0.85; transform: scale(1.08); }
+  50% { opacity: 1; transform: scale(1.04) rotate(-2deg); }
+  75% { opacity: 0.92; transform: scale(1.06) rotate(2deg); }
+}
+
+.hot-lead-column {
+  animation: hot-lead-glow 2.4s ease-in-out infinite;
+  background-image:
+    linear-gradient(
+      180deg,
+      rgba(251, 146, 60, 0.08) 0%,
+      rgba(239, 68, 68, 0.04) 40%,
+      transparent 100%
+    );
+}
+.hot-lead-column .hot-lead-flame {
+  display: inline-block;
+  animation: hot-lead-flicker 1.6s ease-in-out infinite;
+  filter: drop-shadow(0 0 4px rgba(251, 146, 60, 0.6));
+}
