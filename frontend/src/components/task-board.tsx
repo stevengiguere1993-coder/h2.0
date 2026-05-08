@@ -105,7 +105,8 @@ export function TaskBoard({
   extraColumn,
   title = "Tâches",
   newTaskLabel = "Nouvelle tâche",
-  showNewTaskButton = true
+  showNewTaskButton = true,
+  headerSlot
 }: {
   tasks: TaskBoardItem[];
   users: TaskUserMini[];
@@ -138,6 +139,10 @@ export function TaskBoard({
   title?: string;
   newTaskLabel?: string;
   showNewTaskButton?: boolean;
+  /** Bouton(s) custom rendus à droite de « Nouvelle tâche » dans
+   *  le header de la section. Utilisé par la fiche entreprise pour
+   *  afficher un raccourci vers les modèles récurrents. */
+  headerSlot?: React.ReactNode;
 }) {
   const [view, setView] = useState<"kanban" | "list">("kanban");
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
@@ -280,6 +285,7 @@ export function TaskBoard({
               {newTaskLabel}
             </button>
           ) : null}
+          {headerSlot}
         </div>
         <div className="inline-flex rounded-lg border border-brand-800 bg-brand-900 p-0.5">
           <button
