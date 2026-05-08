@@ -21,6 +21,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.entreprise import Entreprise
+from app.models.entreprise_tache import EntrepriseTache, TacheStatus
 from app.models.entreprise_finance import (
     EntrepriseFinanceSnapshot,
     EntrepriseValueMilestone,
@@ -37,6 +38,13 @@ from app.schemas.entreprise_extras import (
     FinanceSnapshotUpdate,
     FinanceTimeseries,
     MaterializeResult,
+    DashAlert,
+    DashboardExec,
+    DashHealthBucket,
+    DashHeatmapCell,
+    DashHeatmapRow,
+    DashKPI,
+    DashVelocityPoint,
     TacheTemplateBulkCreate,
     TacheTemplateBulkResult,
     TacheTemplateCreate,
@@ -206,33 +214,6 @@ def _build_template_kwargs(payload_dump: dict) -> dict:
     out["immeuble_ids_json"] = (
         json.dumps([int(x) for x in imm_ids]) if imm_ids else None
     )
-    return out
-
-
-@router.get(
-    "/tache-templates/all",
-    response_model=List[TacheTemplateGlobalRead],
-    summary="Liste cross-entreprise de tous les templates récurrents.",
-)
-async def list_templates_all(
-    db: DBSession, user: CurrentUser
-) -> List[TacheTemplateGlobalRead]:
-    """Page globale `/taches/recurrentes` — joint le nom de
-    l'entreprise pour éviter N+1 côté front. Tri par next_due
-    croissant (les modèles dus en premier)."""
-    _require_volet(user)
-    stmt = (
-        select(TacheTemplate, Entreprise.name)
-        .join(Entreprise, Entreprise.id == TacheTemplate.entreprise_id)
-        .order_by(TacheTemplate.next_due.asc())
-    )
-    out: List[TacheTemplateGlobalRead] = []
-    for tpl, ent_name in (await db.execute(stmt)).all():
-        out.append(
-            TacheTemplateGlobalRead.model_validate(
-                {**tpl.__dict__, "entreprise_name": ent_name}
-            )
-        )
     return out
 
 
@@ -942,3 +923,396 @@ async def delete_milestone(
         raise HTTPException(status_code=404, detail="Milestone introuvable.")
     await db.delete(obj)
     await db.commit()
+
+
+# ── Tableau de bord exécutif ───────────────────────────────────────
+
+
+def _add_months(d: date, n: int) -> date:
+    """Avance au 1er du mois +N."""
+    m = d.month - 1 + n
+    y = d.year + m // 12
+    m = m % 12 + 1
+    try:
+        return d.replace(year=y, month=m, day=1)
+    except ValueError:
+        return d.replace(year=y, month=m, day=1)
+
+
+def _safe_float(x) -> Optional[float]:
+    try:
+        return float(x) if x is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@router.get(
+    "/dashboard/exec",
+    response_model=DashboardExec,
+    summary="Cockpit exécutif cross-entreprise (KPIs + alertes + heatmap).",
+)
+async def dashboard_exec(
+    db: DBSession, user: CurrentUser
+) -> DashboardExec:
+    _require_volet(user)
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    current_month = _normalize_year_month(today)
+    prev_month = _add_months(current_month, -1)
+
+    # Toutes les entreprises actives.
+    ents = (
+        await db.execute(
+            select(Entreprise)
+            .where(Entreprise.is_active.is_(True))
+            .order_by(Entreprise.name.asc())
+        )
+    ).scalars().all()
+
+    # ── KPIs financiers (mois courant vs précédent) ────────────────
+    cur_row = (
+        await db.execute(
+            select(
+                func.coalesce(func.sum(EntrepriseFinanceSnapshot.revenu), 0),
+                func.coalesce(func.sum(EntrepriseFinanceSnapshot.ebitda), 0),
+                func.coalesce(
+                    func.sum(EntrepriseFinanceSnapshot.tresorerie), 0
+                ),
+            ).where(
+                EntrepriseFinanceSnapshot.year_month == current_month
+            )
+        )
+    ).one()
+    prev_row = (
+        await db.execute(
+            select(
+                func.coalesce(func.sum(EntrepriseFinanceSnapshot.revenu), 0),
+                func.coalesce(func.sum(EntrepriseFinanceSnapshot.ebitda), 0),
+                func.coalesce(
+                    func.sum(EntrepriseFinanceSnapshot.tresorerie), 0
+                ),
+            ).where(EntrepriseFinanceSnapshot.year_month == prev_month)
+        )
+    ).one()
+
+    kpis: List[DashKPI] = [
+        DashKPI(
+            label="Revenus du mois",
+            value=float(cur_row[0] or 0),
+            previous=float(prev_row[0] or 0),
+            unit="$",
+            format="currency",
+        ),
+        DashKPI(
+            label="EBITDA du mois",
+            value=float(cur_row[1] or 0),
+            previous=float(prev_row[1] or 0),
+            unit="$",
+            format="currency",
+        ),
+        DashKPI(
+            label="Trésorerie consolidée",
+            value=float(cur_row[2] or 0),
+            previous=float(prev_row[2] or 0),
+            unit="$",
+            format="currency",
+        ),
+    ]
+
+    # ── Tâches : KPI ouvertes + 30j vélocité ───────────────────────
+    open_count = (
+        await db.execute(
+            select(func.count(EntrepriseTache.id)).where(
+                EntrepriseTache.status != TacheStatus.DONE.value
+            )
+        )
+    ).scalar() or 0
+    overdue_count = (
+        await db.execute(
+            select(func.count(EntrepriseTache.id)).where(
+                and_(
+                    EntrepriseTache.status != TacheStatus.DONE.value,
+                    EntrepriseTache.due_date.is_not(None),
+                    EntrepriseTache.due_date < today,
+                )
+            )
+        )
+    ).scalar() or 0
+    velocity_floor = today - timedelta(days=30)
+    done_30d = (
+        await db.execute(
+            select(func.count(EntrepriseTache.id)).where(
+                and_(
+                    EntrepriseTache.status == TacheStatus.DONE.value,
+                    EntrepriseTache.completed_at.is_not(None),
+                    func.date(EntrepriseTache.completed_at) >= velocity_floor,
+                )
+            )
+        )
+    ).scalar() or 0
+    open_prev_window = (
+        await db.execute(
+            select(func.count(EntrepriseTache.id)).where(
+                and_(
+                    EntrepriseTache.status != TacheStatus.DONE.value,
+                    func.date(EntrepriseTache.created_at)
+                    < (today - timedelta(days=7)),
+                )
+            )
+        )
+    ).scalar() or 0
+
+    kpis.append(
+        DashKPI(
+            label="Tâches ouvertes",
+            value=float(open_count),
+            previous=float(open_prev_window),
+            unit="",
+            format="count",
+        )
+    )
+    kpis.append(
+        DashKPI(
+            label="Tâches terminées (30j)",
+            value=float(done_30d),
+            previous=None,
+            unit="",
+            format="count",
+        )
+    )
+
+    # ── Alertes ────────────────────────────────────────────────────
+    alerts: List[DashAlert] = []
+
+    # 1. Modèles récurrents en retard (next_due dépassé)
+    overdue_templates = (
+        await db.execute(
+            select(TacheTemplate, Entreprise)
+            .join(Entreprise, Entreprise.id == TacheTemplate.entreprise_id)
+            .where(
+                and_(
+                    TacheTemplate.is_active.is_(True),
+                    TacheTemplate.next_due < today,
+                )
+            )
+            .limit(5)
+        )
+    ).all()
+    for tpl, ent in overdue_templates:
+        delta = (today - tpl.next_due).days
+        alerts.append(
+            DashAlert(
+                severity="high" if delta > 7 else "medium",
+                icon="AlarmClock",
+                title=f"Modèle récurrent en retard ({delta}j)",
+                detail=tpl.title,
+                entreprise_id=ent.id,
+                entreprise_name=ent.name,
+                href="/entreprises/taches/recurrentes",
+            )
+        )
+
+    # 2. Tâches très en retard (>14j) — top 5 par ancienneté
+    very_overdue = (
+        await db.execute(
+            select(EntrepriseTache, Entreprise)
+            .join(Entreprise, Entreprise.id == EntrepriseTache.entreprise_id)
+            .where(
+                and_(
+                    EntrepriseTache.status != TacheStatus.DONE.value,
+                    EntrepriseTache.due_date.is_not(None),
+                    EntrepriseTache.due_date < (today - timedelta(days=14)),
+                )
+            )
+            .order_by(EntrepriseTache.due_date.asc())
+            .limit(5)
+        )
+    ).all()
+    for tache, ent in very_overdue:
+        delta = (today - tache.due_date).days
+        alerts.append(
+            DashAlert(
+                severity="high",
+                icon="AlertTriangle",
+                title=f"Tâche en retard de {delta}j",
+                detail=tache.title,
+                entreprise_id=ent.id,
+                entreprise_name=ent.name,
+                href=f"/entreprises/{ent.id}",
+            )
+        )
+
+    # 3. Entreprises sans snapshot finance pour le mois courant
+    ents_with_snap_this_month = (
+        await db.execute(
+            select(EntrepriseFinanceSnapshot.entreprise_id).where(
+                EntrepriseFinanceSnapshot.year_month == current_month
+            )
+        )
+    ).scalars().all()
+    has_snap = set(ents_with_snap_this_month)
+    missing = [e for e in ents if e.id not in has_snap][:3]
+    for ent in missing:
+        alerts.append(
+            DashAlert(
+                severity="low",
+                icon="FileWarning",
+                title="Snapshot finance manquant ce mois-ci",
+                detail=ent.name,
+                entreprise_id=ent.id,
+                entreprise_name=ent.name,
+                href=f"/entreprises/{ent.id}/pilotage",
+            )
+        )
+
+    # ── Heatmap revenu : 12 derniers mois × entreprise ─────────────
+    months: List[date] = []
+    cursor = current_month
+    for _ in range(12):
+        months.insert(0, cursor)
+        cursor = _add_months(cursor, -1)
+    months_labels = [m.strftime("%Y-%m") for m in months]
+
+    snap_rows = (
+        await db.execute(
+            select(
+                EntrepriseFinanceSnapshot.entreprise_id,
+                EntrepriseFinanceSnapshot.year_month,
+                EntrepriseFinanceSnapshot.revenu,
+                EntrepriseFinanceSnapshot.ebitda,
+            ).where(
+                EntrepriseFinanceSnapshot.year_month >= months[0]
+            )
+        )
+    ).all()
+    by_ent: dict[int, dict[str, dict]] = {}
+    for ent_id, ym, rev, ebi in snap_rows:
+        by_ent.setdefault(ent_id, {})[ym.strftime("%Y-%m")] = {
+            "revenu": _safe_float(rev),
+            "ebitda": _safe_float(ebi),
+        }
+
+    heatmap_rows: List[DashHeatmapRow] = []
+    for ent in ents:
+        cells: List[DashHeatmapCell] = []
+        ent_data = by_ent.get(ent.id, {})
+        for label in months_labels:
+            cell = ent_data.get(label, {})
+            cells.append(
+                DashHeatmapCell(
+                    year_month=label,
+                    revenu=cell.get("revenu"),
+                    ebitda=cell.get("ebitda"),
+                )
+            )
+        heatmap_rows.append(
+            DashHeatmapRow(
+                entreprise_id=ent.id,
+                name=ent.name,
+                color_accent=ent.color_accent,
+                cells=cells,
+            )
+        )
+
+    # ── Health buckets (réutilise la logique du /health en simplifié) ──
+    buckets = {"good": 0, "warn": 0, "risk": 0}
+    for ent in ents:
+        all_taches = (
+            await db.execute(
+                select(EntrepriseTache).where(
+                    EntrepriseTache.entreprise_id == ent.id
+                )
+            )
+        ).scalars().all()
+        open_t = sum(
+            1 for t in all_taches if t.status != TacheStatus.DONE.value
+        )
+        if open_t == 0:
+            buckets["good"] += 1
+            continue
+        overdue = sum(
+            1 for t in all_taches
+            if t.status != TacheStatus.DONE.value
+            and t.due_date is not None
+            and t.due_date < today
+        )
+        urgent = sum(
+            1 for t in all_taches
+            if t.status != TacheStatus.DONE.value
+            and t.due_date is not None
+            and 0 <= (t.due_date - today).days <= 7
+        )
+        recent_done = sum(
+            1 for t in all_taches
+            if t.status == TacheStatus.DONE.value
+            and t.completed_at is not None
+            and t.completed_at.date() >= velocity_floor
+        )
+        overdue_ratio = overdue / open_t
+        base = 100 - 50 * overdue_ratio
+        charge_penalty = max(0, (open_t - 30) * 0.5)
+        urgent_penalty = min(15, urgent * 2)
+        velocity_bonus = min(10, recent_done * 0.5)
+        score = max(
+            20,
+            int(base - charge_penalty - urgent_penalty + velocity_bonus),
+        )
+        if score >= 80:
+            buckets["good"] += 1
+        elif score >= 55:
+            buckets["warn"] += 1
+        else:
+            buckets["risk"] += 1
+
+    health_buckets = [
+        DashHealthBucket(label=k, count=v) for k, v in buckets.items()
+    ]
+
+    # ── Vélocité 30j : tâches créées + terminées par jour ──────────
+    created_rows = (
+        await db.execute(
+            select(
+                func.date(EntrepriseTache.created_at),
+                func.count(EntrepriseTache.id),
+            )
+            .where(func.date(EntrepriseTache.created_at) >= velocity_floor)
+            .group_by(func.date(EntrepriseTache.created_at))
+        )
+    ).all()
+    completed_rows = (
+        await db.execute(
+            select(
+                func.date(EntrepriseTache.completed_at),
+                func.count(EntrepriseTache.id),
+            )
+            .where(
+                and_(
+                    EntrepriseTache.completed_at.is_not(None),
+                    func.date(EntrepriseTache.completed_at) >= velocity_floor,
+                )
+            )
+            .group_by(func.date(EntrepriseTache.completed_at))
+        )
+    ).all()
+    created_map = {str(d): int(n) for d, n in created_rows}
+    done_map = {str(d): int(n) for d, n in completed_rows}
+    velocity: List[DashVelocityPoint] = []
+    for i in range(30, -1, -1):
+        d = (today - timedelta(days=i)).isoformat()
+        velocity.append(
+            DashVelocityPoint(
+                date=d,
+                created=created_map.get(d, 0),
+                completed=done_map.get(d, 0),
+            )
+        )
+
+    return DashboardExec(
+        generated_at=now,
+        kpis=kpis,
+        alerts=alerts,
+        heatmap_months=months_labels,
+        heatmap_rows=heatmap_rows,
+        health_buckets=health_buckets,
+        velocity=velocity,
+    )
