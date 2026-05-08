@@ -172,8 +172,23 @@ async def get_kpis(
     ).scalar_one()
 
     # Soumissions sent in period
+    # Cascade pour le montant : `total` peut être null ou 0 si la
+    # soumission a été créée sans recalcul du total (sync QBO,
+    # import externe, items ajoutés sans rerun de la totalisation).
+    # On retombe sur subtotal+tps+tvq, puis sur subtotal seul, pour
+    # ne PAS sous-évaluer ni les soumissions envoyées ni les ventes.
+    # Même cascade que le front `amountFor()` côté `/app/facturation`.
+    total_expr = func.coalesce(
+        func.nullif(Soumission.total, 0),
+        Soumission.subtotal
+        + func.coalesce(Soumission.tps, 0)
+        + func.coalesce(Soumission.tvq, 0),
+        Soumission.subtotal,
+        0,
+    )
+
     sent_sum_stmt = select(
-        func.coalesce(func.sum(Soumission.total), 0),
+        func.coalesce(func.sum(total_expr), 0),
         func.count(Soumission.id),
     ).where(
         Soumission.sent_at.is_not(None),
@@ -187,16 +202,14 @@ async def get_kpis(
     # Ventes = soumissions accepted in period.
     # `accepted_at` peut être null pour les anciens rows (imports
     # externes, statut posé via PATCH générique, etc.) — dans ce
-    # cas on retombe sur `updated_at` puis `created_at` pour ne
-    # PAS perdre la vente. Sinon Beaudoin & co disparaissent du
-    # KPI alors qu'ils sont bien dans la colonne « Acceptées ».
+    # cas on retombe sur `updated_at` puis `created_at`.
     accepted_ts = func.coalesce(
         Soumission.accepted_at,
         Soumission.updated_at,
         Soumission.created_at,
     )
     ventes_sum_stmt = select(
-        func.coalesce(func.sum(Soumission.total), 0),
+        func.coalesce(func.sum(total_expr), 0),
         func.count(Soumission.id),
     ).where(
         Soumission.status == SoumissionStatus.ACCEPTED.value,
@@ -267,7 +280,7 @@ async def get_kpis(
 
     # Soumissions in the pipeline (sent but not yet accepted/rejected)
     open_soumissions_stmt = select(
-        func.coalesce(func.sum(Soumission.total), 0),
+        func.coalesce(func.sum(total_expr), 0),
         func.count(Soumission.id),
     ).where(Soumission.status == SoumissionStatus.SENT.value)
     open_total, open_count = (await db.execute(open_soumissions_stmt)).one()
@@ -276,7 +289,7 @@ async def get_kpis(
     ts_soum_stmt = (
         select(
             cast(Soumission.sent_at, Date).label("d"),
-            func.coalesce(func.sum(Soumission.total), 0).label("s"),
+            func.coalesce(func.sum(total_expr), 0).label("s"),
         )
         .where(
             Soumission.sent_at.is_not(None),
@@ -288,7 +301,7 @@ async def get_kpis(
     ts_ventes_stmt = (
         select(
             cast(accepted_ts, Date).label("d"),
-            func.coalesce(func.sum(Soumission.total), 0).label("v"),
+            func.coalesce(func.sum(total_expr), 0).label("v"),
         )
         .where(
             Soumission.status == SoumissionStatus.ACCEPTED.value,
