@@ -6,13 +6,13 @@ business in a single response. Accepts optional `start_date` / `end_date`
 """
 
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from sqlalchemy import cast, Date, func, select
 
-from app.api.deps import CurrentUser, DBSession
+from app.api.deps import CurrentAdmin, CurrentUser, DBSession
 from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.models.facture import Facture, FactureStatus
 from app.models.project import Project, ProjectStatus
@@ -349,4 +349,112 @@ async def get_kpis(
         open_soumissions_count=int(open_count or 0),
         open_soumissions_total=float(open_total or 0),
         timeseries=days,
+    )
+
+
+# ── Diagnostic Ventes ──────────────────────────────────────────────
+
+
+class VentesDiagRow(BaseModel):
+    id: int
+    reference: str
+    title: str
+    status: str
+    total: Optional[float] = None
+    subtotal: Optional[float] = None
+    tps: Optional[float] = None
+    tvq: Optional[float] = None
+    accepted_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    sent_at: Optional[datetime] = None
+    in_period: bool
+    counted_total: float
+    accepted_ts_used: Optional[datetime] = None
+
+
+class VentesDiag(BaseModel):
+    period_start: datetime
+    period_end: datetime
+    accepted_count_in_period: int
+    accepted_total_in_period: float
+    rows: List[VentesDiagRow]
+
+
+@router.get(
+    "/diagnose-ventes",
+    response_model=VentesDiag,
+    summary="Diag détaillé : quelles soumissions sont comptées comme ventes (admin).",
+)
+async def diagnose_ventes(
+    db: DBSession,
+    _: CurrentAdmin,
+    start_date: Optional[str] = Query(default=None),
+    end_date: Optional[str] = Query(default=None),
+) -> VentesDiag:
+    """Liste TOUTES les soumissions ACCEPTED avec les champs qui
+    influencent le KPI Ventes. Permet de voir directement pourquoi
+    une row est incluse/exclue."""
+    today = datetime.now(timezone.utc).date()
+    p_start = _parse_date(start_date, today.replace(day=1))
+    p_end = _parse_date(end_date, today)
+    p_start_dt = datetime.combine(
+        p_start, datetime.min.time(), tzinfo=timezone.utc
+    )
+    p_end_dt = datetime.combine(
+        p_end, datetime.max.time(), tzinfo=timezone.utc
+    )
+
+    rows = (
+        await db.execute(
+            select(Soumission).where(
+                Soumission.status == SoumissionStatus.ACCEPTED.value
+            )
+        )
+    ).scalars().all()
+
+    out: List[VentesDiagRow] = []
+    counted = 0
+    counted_total = 0.0
+    for r in rows:
+        ts = r.accepted_at or r.updated_at or r.created_at
+        in_period = (
+            ts is not None and p_start_dt <= ts <= p_end_dt
+        )
+        # Cascade total comme dans la query principale.
+        total_v = float(r.total) if r.total is not None and float(r.total) > 0 else None
+        if total_v is None:
+            sub = float(r.subtotal) if r.subtotal is not None else 0.0
+            tps_v = float(r.tps) if r.tps is not None else 0.0
+            tvq_v = float(r.tvq) if r.tvq is not None else 0.0
+            total_v = sub + tps_v + tvq_v if sub > 0 else 0.0
+        if in_period:
+            counted += 1
+            counted_total += total_v
+        out.append(
+            VentesDiagRow(
+                id=r.id,
+                reference=r.reference or "",
+                title=r.title or "",
+                status=r.status,
+                total=float(r.total) if r.total is not None else None,
+                subtotal=float(r.subtotal) if r.subtotal is not None else None,
+                tps=float(r.tps) if r.tps is not None else None,
+                tvq=float(r.tvq) if r.tvq is not None else None,
+                accepted_at=r.accepted_at,
+                updated_at=r.updated_at,
+                created_at=r.created_at,
+                sent_at=r.sent_at,
+                in_period=in_period,
+                counted_total=total_v,
+                accepted_ts_used=ts,
+            )
+        )
+
+    return VentesDiag(
+        period_start=p_start_dt,
+        period_end=p_end_dt,
+        accepted_count_in_period=counted,
+        accepted_total_in_period=counted_total,
+        rows=out,
     )
