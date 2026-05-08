@@ -4,12 +4,15 @@
     GET /api/v1/projects/{project_id}/finances
 """
 
+import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
+
+log = logging.getLogger(__name__)
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.achat import Achat
@@ -85,6 +88,26 @@ async def get_finances(
     db: DBSession,
     _: CurrentUser,
 ) -> FinancesResponse:
+    try:
+        return await _compute_finances(project_id, db)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Surface l'erreur côté Render logs avec traceback complet
+        # pour le diagnostic (le front voit déjà le message via le
+        # détail HTTP).
+        log.exception(
+            "GET /projects/%s/finances failed: %s", project_id, exc
+        )
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"finances_failed: {type(exc).__name__}: {exc}",
+        )
+
+
+async def _compute_finances(
+    project_id: int, db
+) -> "FinancesResponse":
     proj = (
         await db.execute(select(Project).where(Project.id == project_id))
     ).scalar_one_or_none()
