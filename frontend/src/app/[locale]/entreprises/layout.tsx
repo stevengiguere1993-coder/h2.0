@@ -20,7 +20,6 @@ import {
   LogOut,
   Menu,
   Plus,
-  Repeat,
   Settings,
   Sparkles,
   Target,
@@ -250,12 +249,6 @@ export default function EntreprisesLayout({
       label: "Tâches",
       icon: Target,
       badge: openTasksCount || undefined
-    },
-    {
-      href: "/entreprises/taches/recurrentes",
-      label: "Tâches récurrentes",
-      icon: Repeat,
-      indent: true
     },
     { href: "/entreprises/resumes", label: "Résumés IA", icon: Sparkles },
     { href: "/entreprises/vision", label: "Vision & Stratégie", icon: BarChart3 },
