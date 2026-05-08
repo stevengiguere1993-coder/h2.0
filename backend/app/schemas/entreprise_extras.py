@@ -55,6 +55,16 @@ class TacheTemplateRead(TacheTemplateBase):
     updated_at: datetime
 
 
+class TacheTemplateGlobalRead(TacheTemplateRead):
+    """Variante de `TacheTemplateRead` enrichie du nom de l'entreprise.
+
+    Utilisée par la page globale `/taches/recurrentes` qui liste tous
+    les templates cross-entreprise. Évite N+1 côté front.
+    """
+
+    entreprise_name: str
+
+
 class MaterializeResult(BaseModel):
     """Résultat du cron de matérialisation."""
     templates_scanned: int = 0

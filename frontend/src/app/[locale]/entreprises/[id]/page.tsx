@@ -8,8 +8,11 @@ import {
   ChevronDown,
   ChevronUp,
   Loader2,
+  Pause,
   Pencil,
+  Play,
   Plus,
+  Repeat,
   Trash2
 } from "lucide-react";
 
@@ -17,6 +20,7 @@ import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { EntreprisesTopbar } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
+import { DriveButton } from "@/components/drive-button";
 import {
   AssigneePicker,
   type TaskUserMini
@@ -38,6 +42,7 @@ type Entreprise = {
   type: string;
   color_accent: string;
   description: string | null;
+  drive_folder_url: string | null;
   monday_board_id: string | null;
   monday_board_name: string | null;
 };
@@ -84,15 +89,6 @@ const COLUMNS: Column[] = TASK_STATUS_OPTIONS.map((o) => ({
   label: o.label,
   dot: o.dot
 }));
-
-const RECURRENCE_LABELS: Record<string, string> = {
-  daily: "Quotidienne",
-  weekly: "Hebdomadaire",
-  biweekly: "Aux 2 semaines",
-  monthly: "Mensuelle",
-  quarterly: "Trimestrielle",
-  yearly: "Annuelle"
-};
 
 function fmtDate(s: string | null): string {
   if (!s) return "—";
@@ -236,17 +232,13 @@ export default function EntrepriseDetailPage() {
         immeubleLabels: (t.immeuble_ids || [])
           .map((id) => immeubleNameById.get(id))
           .filter((n): n is string => Boolean(n)),
-        // Footer : récurrence + département (si applicable). Le score
-        // est déjà affiché dans la pastille « P · score » de la carte
-        // — pas besoin de le doubler sous le titre.
+        // Footer : département (si applicable). La récurrence n'est
+        // plus inline sur la tâche — gérée par les modèles récurrents
+        // (voir section dédiée et /entreprises/taches/recurrentes).
+        // Le score est déjà affiché dans la pastille « P · score ».
         footer:
-          t.recurrence || t.departement ? (
+          t.departement ? (
             <div className="flex flex-wrap items-center gap-1 text-[9px] text-white/40">
-              {t.recurrence ? (
-                <span className="rounded-full border border-amber-500/30 px-1.5 py-0.5 text-amber-200/80">
-                  ⟲ {RECURRENCE_LABELS[t.recurrence] || t.recurrence}
-                </span>
-              ) : null}
               {t.departement ? (
                 <span className="rounded-full border border-brand-700 px-1.5 py-0.5">
                   {t.departement}
@@ -426,7 +418,23 @@ export default function EntrepriseDetailPage() {
             <Briefcase className="h-5 w-5" />
           </span>
           <div className="flex-1">
-            <h1 className="text-2xl font-bold text-white">{ent.name}</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-2xl font-bold text-white">{ent.name}</h1>
+              <DriveButton
+                url={ent.drive_folder_url}
+                onSave={async (newUrl) => {
+                  const r = await authedFetch(
+                    `/api/v1/entreprises/${ent.id}`,
+                    {
+                      method: "PATCH",
+                      body: JSON.stringify({ drive_folder_url: newUrl })
+                    }
+                  );
+                  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                  setEnt({ ...ent, drive_folder_url: newUrl || null });
+                }}
+              />
+            </div>
             {ent.description ? (
               <p className="mt-1 text-sm text-white/60">{ent.description}</p>
             ) : null}
@@ -473,6 +481,11 @@ export default function EntrepriseDetailPage() {
         {/* Liens documentation (Drive, SharePoint…) */}
         <LinksSection entrepriseId={ent.id} />
 
+        {/* Modèles de tâches récurrentes pour CETTE entreprise. La
+            page globale `/entreprises/taches/recurrentes` regroupe
+            tous les modèles cross-entreprise. */}
+        <RecurringTemplatesSection entrepriseId={ent.id} />
+
         {error ? (
           <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {error}
@@ -500,7 +513,6 @@ export default function EntrepriseDetailPage() {
               out.immeuble_ids = patch.immeuble_ids;
             }
             if (patch.departement !== undefined) out.departement = patch.departement;
-            if (patch.recurrence !== undefined) out.recurrence = patch.recurrence;
             if (patch.impact !== undefined) out.impact = patch.impact;
             if (patch.confidence !== undefined) out.confidence = patch.confidence;
             if (patch.effort !== undefined) out.effort = patch.effort;
@@ -1594,3 +1606,409 @@ function LinkModal({
 
 // La vue Tableau a été extraite dans <TaskBoard /> partagé. Plus de
 // composant local nécessaire ici.
+
+// ─── Modèles de tâches récurrentes ──────────────────────────────────────
+
+type TacheTemplateLite = {
+  id: number;
+  title: string;
+  description?: string | null;
+  departement?: string | null;
+  every_n: number;
+  unit: string;
+  lead_days: number;
+  next_due: string;
+  is_active: boolean;
+  nb_materialized: number;
+  last_materialized_at?: string | null;
+};
+
+const FREQ_UNITS_LITE = [
+  { value: "jour", label: "jour(s)" },
+  { value: "semaine", label: "semaine(s)" },
+  { value: "mois", label: "mois" },
+  { value: "annee", label: "année(s)" }
+];
+
+function todayPlusDaysLite(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Section des modèles récurrents propres à cette entreprise. Liste
+ * + ajouter un modèle. Pour la vue cross-entreprise, voir la page
+ * globale `/entreprises/taches/recurrentes`.
+ */
+function RecurringTemplatesSection({
+  entrepriseId
+}: {
+  entrepriseId: number;
+}) {
+  const [list, setList] = useState<TacheTemplateLite[] | null>(null);
+  const [open, setOpen] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const confirm = useConfirm();
+
+  async function reload() {
+    const r = await authedFetch(
+      `/api/v1/entreprises/${entrepriseId}/tache-templates`
+    );
+    if (r.ok) setList((await r.json()) as TacheTemplateLite[]);
+  }
+
+  useEffect(() => {
+    if (!open || list !== null) return;
+    void reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, entrepriseId]);
+
+  async function toggleActive(t: TacheTemplateLite) {
+    await authedFetch(`/api/v1/entreprises/tache-templates/${t.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_active: !t.is_active })
+    });
+    void reload();
+  }
+
+  async function remove(t: TacheTemplateLite) {
+    const ok = await confirm({
+      title: `Supprimer le modèle « ${t.title} » ?`,
+      description: "Les tâches déjà créées ne sont pas supprimées.",
+      confirmLabel: "Supprimer",
+      destructive: true
+    });
+    if (!ok) return;
+    await authedFetch(`/api/v1/entreprises/tache-templates/${t.id}`, {
+      method: "DELETE"
+    });
+    void reload();
+  }
+
+  const count = list?.length ?? null;
+
+  return (
+    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between text-left"
+      >
+        <div className="flex items-center gap-2">
+          <Repeat className="h-4 w-4 text-violet-300" />
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+            Modèles récurrents
+          </h2>
+          {count !== null ? (
+            <span className="rounded-full border border-white/15 px-1.5 py-0.5 text-[10px] text-white/50">
+              {count}
+            </span>
+          ) : null}
+        </div>
+        <span className="text-white/60">
+          {open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </span>
+      </button>
+
+      {open ? (
+        <div className="mt-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-white/50">
+              Tâches qui se créent automatiquement (ex. TPS/TVQ
+              trimestrielle, rapprochement mensuel).
+            </p>
+            <div className="flex items-center gap-2">
+              <Link
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={"/entreprises/taches/recurrentes" as any}
+                className="text-[11px] text-white/50 hover:text-accent-500"
+              >
+                Voir tous (cross-entreprise) →
+              </Link>
+              <button
+                type="button"
+                onClick={() => setShowCreate(true)}
+                className="btn-accent inline-flex items-center text-xs"
+              >
+                <Plus className="mr-1.5 h-3.5 w-3.5" />
+                Nouveau modèle
+              </button>
+            </div>
+          </div>
+
+          {list === null ? (
+            <p className="text-xs text-white/40">Chargement…</p>
+          ) : list.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-brand-800 px-3 py-4 text-center text-xs text-white/40">
+              Aucun modèle. Crée-en un pour automatiser les tâches
+              récurrentes de cette entreprise.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {list.map((t) => (
+                <li
+                  key={t.id}
+                  className="rounded-lg border border-brand-800 bg-brand-950/40 p-3"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="truncate text-sm font-bold text-white">
+                          {t.title}
+                        </h3>
+                        {!t.is_active ? (
+                          <span className="rounded-full border border-white/15 px-1.5 py-0.5 text-[10px] uppercase text-white/50">
+                            Désactivé
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="mt-0.5 text-[11px] text-white/50">
+                        Tous les {t.every_n} {t.unit}
+                        {t.departement ? ` · ${t.departement}` : ""}
+                        {" · prochain "}
+                        <span className="font-mono text-white/70">
+                          {t.next_due}
+                        </span>
+                      </p>
+                      {t.description ? (
+                        <p className="mt-1 text-xs text-white/60">
+                          {t.description}
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => toggleActive(t)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-white/15 bg-brand-950 px-2 py-1 text-[10px] text-white/70 hover:text-white"
+                        title={t.is_active ? "Désactiver" : "Activer"}
+                      >
+                        {t.is_active ? (
+                          <>
+                            <Pause className="h-3 w-3" />
+                            Pause
+                          </>
+                        ) : (
+                          <>
+                            <Play className="h-3 w-3" />
+                            Activer
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => remove(t)}
+                        className="rounded-lg border border-white/15 bg-brand-950 p-1.5 text-white/40 hover:border-rose-400/50 hover:text-rose-300"
+                        title="Supprimer"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
+
+      {showCreate ? (
+        <RecurringTemplateInlineModal
+          entrepriseId={entrepriseId}
+          onClose={() => setShowCreate(false)}
+          onSaved={() => {
+            setShowCreate(false);
+            void reload();
+          }}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function RecurringTemplateInlineModal({
+  entrepriseId,
+  onClose,
+  onSaved
+}: {
+  entrepriseId: number;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState({
+    title: "",
+    description: "",
+    departement: "",
+    every_n: "1",
+    unit: "mois",
+    lead_days: "7",
+    next_due: todayPlusDaysLite(7)
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setErr(null);
+    try {
+      const body: Record<string, unknown> = {
+        entreprise_id: entrepriseId,
+        title: form.title.trim(),
+        every_n: Number(form.every_n) || 1,
+        unit: form.unit,
+        lead_days: Number(form.lead_days) || 0,
+        next_due: form.next_due,
+        is_active: true
+      };
+      if (form.description.trim()) body.description = form.description.trim();
+      if (form.departement.trim()) body.departement = form.departement.trim();
+      const res = await authedFetch(
+        "/api/v1/entreprises/tache-templates",
+        {
+          method: "POST",
+          body: JSON.stringify(body)
+        }
+      );
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      onSaved();
+    } catch (e2) {
+      setErr((e2 as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 px-2 py-4 sm:items-center">
+      <div className="w-full max-w-xl rounded-2xl border border-brand-800 bg-brand-900 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-brand-800 p-4">
+          <h2 className="text-base font-bold text-white">
+            Nouveau modèle récurrent
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Fermer"
+            className="rounded-md p-1 text-white/60 hover:bg-white/5 hover:text-white"
+          >
+            ×
+          </button>
+        </div>
+        <form onSubmit={submit} className="grid gap-4 p-4">
+          <div>
+            <label className="label">Titre</label>
+            <input
+              required
+              value={form.title}
+              onChange={(e) => setForm({ ...form, title: e.target.value })}
+              className="input"
+              placeholder="ex. Faire la TPS/TVQ trimestrielle"
+            />
+          </div>
+          <div>
+            <label className="label">Description (optionnel)</label>
+            <textarea
+              value={form.description}
+              onChange={(e) =>
+                setForm({ ...form, description: e.target.value })
+              }
+              rows={2}
+              className="input"
+            />
+          </div>
+          <div>
+            <label className="label">Département (optionnel)</label>
+            <input
+              value={form.departement}
+              onChange={(e) =>
+                setForm({ ...form, departement: e.target.value })
+              }
+              className="input"
+            />
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="label">Tous les</label>
+              <input
+                type="number"
+                min={1}
+                value={form.every_n}
+                onChange={(e) =>
+                  setForm({ ...form, every_n: e.target.value })
+                }
+                className="input font-mono"
+              />
+            </div>
+            <div>
+              <label className="label">Unité</label>
+              <select
+                value={form.unit}
+                onChange={(e) => setForm({ ...form, unit: e.target.value })}
+                className="input"
+              >
+                {FREQ_UNITS_LITE.map((u) => (
+                  <option key={u.value} value={u.value}>
+                    {u.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">Lead (jours)</label>
+              <input
+                type="number"
+                min={0}
+                value={form.lead_days}
+                onChange={(e) =>
+                  setForm({ ...form, lead_days: e.target.value })
+                }
+                className="input font-mono"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="label">Prochaine échéance</label>
+            <input
+              required
+              type="date"
+              value={form.next_due}
+              onChange={(e) => setForm({ ...form, next_due: e.target.value })}
+              className="input"
+            />
+          </div>
+
+          {err ? (
+            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              {err}
+            </p>
+          ) : null}
+
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" onClick={onClose} className="btn-secondary">
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={saving || !form.title.trim()}
+              className="btn-accent disabled:opacity-60"
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />
+                  Création…
+                </>
+              ) : (
+                "Créer"
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}

@@ -102,6 +102,8 @@ class LeadRead(BaseModel):
     assignment_price: Optional[float] = None
     # Profit estimé en cas de flip (assignment - offer)
     estimated_flip_profit: Optional[float] = None
+    # URL du dossier Google Drive du lead.
+    drive_folder_url: Optional[str] = None
 
 
 class LeadUpdate(BaseModel):
@@ -142,6 +144,8 @@ class LeadUpdate(BaseModel):
     )
     offer_amount: Optional[float] = Field(default=None, ge=0)
     assignment_price: Optional[float] = Field(default=None, ge=0)
+    # Drive : URL du dossier Google Drive du lead.
+    drive_folder_url: Optional[str] = Field(default=None, max_length=1024)
 
 
 _ALLOWED_PHOTO_CONTENT = {
@@ -257,6 +261,7 @@ def _serialize(
             else None
         ),
         "mailing_address": _safe_attr(lead, "mailing_address"),
+        "drive_folder_url": _safe_attr(lead, "drive_folder_url"),
         "estimated_equity": None,
         "estimated_equity_pct": None,
         "multi_properties_count": multi_properties_count,

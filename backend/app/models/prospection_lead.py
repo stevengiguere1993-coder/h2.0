@@ -255,3 +255,9 @@ class ProspectionLead(Base, TimestampUpdateMixin):
     monday_item_id: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True, index=True
     )
+
+    # URL du dossier Google Drive du lead. Bouton « Drive » dans le
+    # header de la fiche y mène. NULL = pas configuré.
+    drive_folder_url: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )

@@ -44,11 +44,13 @@ PRIORITY_PATTERN = r"^(urgent|eleve|moyenne|a_venir|termine|abandonne)$"
 class DealCreate(BaseModel):
     address: str = Field(..., min_length=1, max_length=500)
     priority: str = Field(default="moyenne", pattern=PRIORITY_PATTERN)
+    drive_folder_url: Optional[str] = Field(default=None, max_length=1024)
 
 
 class DealUpdate(BaseModel):
     address: Optional[str] = Field(default=None, min_length=1, max_length=500)
     priority: Optional[str] = Field(default=None, pattern=PRIORITY_PATTERN)
+    drive_folder_url: Optional[str] = Field(default=None, max_length=1024)
 
 
 class DealRead(BaseModel):
@@ -56,6 +58,7 @@ class DealRead(BaseModel):
     id: int
     address: str
     priority: str
+    drive_folder_url: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -150,6 +153,7 @@ async def create_deal(
     deal = ProspectionDeal(
         address=data.address.strip(),
         priority=data.priority,
+        drive_folder_url=(data.drive_folder_url or "").strip() or None,
     )
     db.add(deal)
     await db.flush()
@@ -175,6 +179,9 @@ async def update_deal(
         deal.address = data.address.strip()
     if data.priority is not None:
         deal.priority = data.priority
+    if data.drive_folder_url is not None:
+        # Chaîne vide = effacer (NULL en DB).
+        deal.drive_folder_url = data.drive_folder_url.strip() or None
     await db.flush()
     await db.refresh(deal)
     return DealRead.model_validate(deal)

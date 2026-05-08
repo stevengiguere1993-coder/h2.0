@@ -66,6 +66,13 @@ class Entreprise(Base, TimestampUpdateMixin):
         Boolean, nullable=False, default=True, server_default="true"
     )
 
+    # URL du dossier Google Drive lié à cette entreprise. Le bouton
+    # « Drive » du header de la fiche y mène. NULL = pas configuré
+    # encore (le bouton propose alors de coller l'URL).
+    drive_folder_url: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+
     # Ordre d'affichage dans la sidebar « Mes entreprises ». Modifiable
     # par drag & drop côté frontend. On alloue par pas de 1000 à la
     # création pour pouvoir insérer entre deux items sans renuméroter

@@ -38,6 +38,7 @@ from app.schemas.entreprise_extras import (
     FinanceTimeseries,
     MaterializeResult,
     TacheTemplateCreate,
+    TacheTemplateGlobalRead,
     TacheTemplateRead,
     TacheTemplateUpdate,
     ValueMilestoneCreate,
@@ -126,6 +127,33 @@ async def list_templates(
         )
     ).scalars().all()
     return [TacheTemplateRead.model_validate(r) for r in rows]
+
+
+@router.get(
+    "/tache-templates/all",
+    response_model=List[TacheTemplateGlobalRead],
+    summary="Liste cross-entreprise de tous les templates récurrents.",
+)
+async def list_templates_all(
+    db: DBSession, user: CurrentUser
+) -> List[TacheTemplateGlobalRead]:
+    """Page globale `/taches/recurrentes` — joint le nom de
+    l'entreprise pour éviter N+1 côté front. Tri par next_due
+    croissant (les modèles dus en premier)."""
+    _require_volet(user)
+    stmt = (
+        select(TacheTemplate, Entreprise.name)
+        .join(Entreprise, Entreprise.id == TacheTemplate.entreprise_id)
+        .order_by(TacheTemplate.next_due.asc())
+    )
+    out: List[TacheTemplateGlobalRead] = []
+    for tpl, ent_name in (await db.execute(stmt)).all():
+        out.append(
+            TacheTemplateGlobalRead.model_validate(
+                {**tpl.__dict__, "entreprise_name": ent_name}
+            )
+        )
+    return out
 
 
 @router.post(

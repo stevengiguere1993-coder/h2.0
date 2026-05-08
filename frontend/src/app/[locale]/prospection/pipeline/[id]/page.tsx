@@ -8,6 +8,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { authedFetch } from "@/lib/auth";
 import { Link, useRouter } from "@/i18n/navigation";
 import { useConfirm } from "@/components/confirm-dialog";
+import { DriveButton } from "@/components/drive-button";
 import { useProspectionLayout } from "../../layout";
 import {
   AutoGrowTextarea,
@@ -28,6 +29,7 @@ type Deal = {
   id: number;
   address: string;
   priority: string;
+  drive_folder_url: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -340,6 +342,22 @@ export default function DealDetailPage() {
                 year: "numeric"
               })}
             </p>
+            <div className="mt-2">
+              <DriveButton
+                url={deal.drive_folder_url}
+                onSave={async (newUrl) => {
+                  const r = await authedFetch(
+                    `/api/v1/prospection/deals/${deal.id}`,
+                    {
+                      method: "PATCH",
+                      body: JSON.stringify({ drive_folder_url: newUrl })
+                    }
+                  );
+                  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                  setDeal({ ...deal, drive_folder_url: newUrl || null });
+                }}
+              />
+            </div>
           </div>
           <div className="flex flex-col items-end gap-1.5">
             <div className="rounded-md bg-brand-900 px-3 py-2 text-sm">
@@ -397,7 +415,6 @@ export default function DealDetailPage() {
               out.immeuble_ids = patch.immeuble_ids;
             }
             if (patch.departement !== undefined) out.departement = patch.departement;
-            if (patch.recurrence !== undefined) out.recurrence = patch.recurrence;
             if (patch.impact !== undefined) out.impact = patch.impact;
             if (patch.confidence !== undefined) out.confidence = patch.confidence;
             if (patch.effort !== undefined) out.effort = patch.effort;
