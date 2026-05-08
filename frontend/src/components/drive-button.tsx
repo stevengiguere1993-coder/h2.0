@@ -23,19 +23,14 @@ export function DriveButton({
   onSave: (newUrl: string) => Promise<void> | void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(url || "");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  function open() {
-    setDraft(url || "");
-    setErr(null);
-    setEditing(true);
-  }
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    const v = draft.trim();
+  // Valeur transmise *directement* par la modale au moment du submit
+  // — on n'utilise pas un state intermédiaire `draft` qui serait
+  // stale au moment où submit est appelé.
+  async function performSave(rawValue: string) {
+    const v = rawValue.trim();
     if (v && !/^https?:\/\//i.test(v)) {
       setErr("L'URL doit commencer par http:// ou https://");
       return;
@@ -52,12 +47,17 @@ export function DriveButton({
     }
   }
 
+  function openEditor() {
+    setErr(null);
+    setEditing(true);
+  }
+
   if (!url) {
     return (
       <>
         <button
           type="button"
-          onClick={open}
+          onClick={openEditor}
           className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-white/20 bg-transparent px-2.5 py-1.5 text-xs text-white/50 hover:border-emerald-400/50 hover:text-emerald-300"
           title="Configurer le dossier Google Drive"
         >
@@ -66,13 +66,8 @@ export function DriveButton({
         </button>
         {editing ? (
           <DriveUrlModal
-            initial={draft}
-            onSubmit={(v) => {
-              setDraft(v);
-              return submit({
-                preventDefault: () => {}
-              } as React.FormEvent);
-            }}
+            initial=""
+            onSubmit={performSave}
             onCancel={() => setEditing(false)}
             saving={saving}
             error={err}
@@ -90,7 +85,7 @@ export function DriveButton({
           target="_blank"
           rel="noopener noreferrer"
           className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/20"
-          title="Ouvrir le dossier Google Drive"
+          title={url}
         >
           <FolderOpen className="h-3.5 w-3.5" />
           Drive
@@ -98,7 +93,7 @@ export function DriveButton({
         </a>
         <button
           type="button"
-          onClick={open}
+          onClick={openEditor}
           className="border-l border-emerald-400/30 px-1.5 py-1.5 text-emerald-200/60 hover:bg-emerald-500/20 hover:text-emerald-200"
           title="Modifier l'URL"
           aria-label="Modifier"
@@ -108,13 +103,8 @@ export function DriveButton({
       </span>
       {editing ? (
         <DriveUrlModal
-          initial={draft}
-          onSubmit={(v) => {
-            setDraft(v);
-            return submit({
-              preventDefault: () => {}
-            } as React.FormEvent);
-          }}
+          initial={url}
+          onSubmit={performSave}
           onCancel={() => setEditing(false)}
           saving={saving}
           error={err}
@@ -132,7 +122,7 @@ function DriveUrlModal({
   error
 }: {
   initial: string;
-  onSubmit: (url: string) => void;
+  onSubmit: (url: string) => void | Promise<void>;
   onCancel: () => void;
   saving: boolean;
   error: string | null;
@@ -141,7 +131,10 @@ function DriveUrlModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 px-2 py-4 sm:items-center">
-      <div className="w-full max-w-md rounded-2xl border border-brand-800 bg-brand-900 shadow-2xl">
+      <div
+        className="w-full max-w-md rounded-2xl border border-brand-800 bg-brand-900 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between border-b border-brand-800 p-4">
           <h2 className="text-sm font-bold text-white">
             Dossier Google Drive
@@ -158,7 +151,7 @@ function DriveUrlModal({
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            onSubmit(val);
+            void onSubmit(val);
           }}
           className="grid gap-3 p-4"
         >
@@ -183,7 +176,7 @@ function DriveUrlModal({
             {initial ? (
               <button
                 type="button"
-                onClick={() => onSubmit("")}
+                onClick={() => void onSubmit("")}
                 className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-rose-300 hover:bg-rose-500/10"
               >
                 Effacer
