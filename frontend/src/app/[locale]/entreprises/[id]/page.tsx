@@ -434,15 +434,6 @@ export default function EntrepriseDetailPage() {
                   setEnt({ ...ent, drive_folder_url: newUrl || null });
                 }}
               />
-              <Link
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                href={"/entreprises/taches/recurrentes" as any}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/30 bg-violet-500/10 px-2.5 py-1.5 text-xs font-semibold text-violet-200 hover:bg-violet-500/20"
-                title="Gérer les modèles de tâches récurrentes (cross-entreprise)"
-              >
-                <Repeat className="h-3.5 w-3.5" />
-                Modèles récurrents
-              </Link>
             </div>
             {ent.description ? (
               <p className="mt-1 text-sm text-white/60">{ent.description}</p>
@@ -502,6 +493,17 @@ export default function EntrepriseDetailPage() {
           immeubles={immeubles}
           immeubleScope={{ entreprise_id: id }}
           onImmeublesChanged={() => void reloadImmeubles()}
+          headerSlot={
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/entreprises/taches/recurrentes" as any}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-violet-400 px-3 py-1.5 text-xs font-semibold text-brand-950 shadow hover:bg-violet-300"
+              title="Gérer les modèles de tâches récurrentes (cross-entreprise)"
+            >
+              <Repeat className="h-3.5 w-3.5" />
+              Modèles récurrents
+            </Link>
+          }
           onPatch={(taskId, patch) => {
             const out: Partial<Tache> = {};
             if (patch.title !== undefined) out.title = patch.title;
