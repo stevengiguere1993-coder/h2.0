@@ -831,11 +831,11 @@ function TaskListView({
             className="text-[10px] font-semibold uppercase tracking-wider text-white/40"
             style={{ borderBottom: "1px solid rgba(100,116,139,0.35)" }}
           >
-            <th className="w-[88px] px-3 py-3 text-left">P · Score</th>
-            <th className="px-4 py-3 text-left">Tâche</th>
+            <th className="w-[80px] px-2 py-3 text-left sm:w-[88px] sm:px-3">P · Score</th>
+            <th className="px-3 py-3 text-left sm:px-4">Tâche</th>
             {extraColumn ? (
               <th
-                className="px-3 py-3 text-center"
+                className="hidden px-3 py-3 text-center sm:table-cell"
                 style={
                   extraColumn.width ? { width: extraColumn.width } : undefined
                 }
@@ -843,11 +843,11 @@ function TaskListView({
                 {extraColumn.label}
               </th>
             ) : null}
-            <th className="w-[180px] px-3 py-3 text-center">Immeuble</th>
-            <th className="w-[120px] px-3 py-3 text-center">Statut</th>
-            <th className="w-[110px] px-3 py-3 text-center">Priorité</th>
-            <th className="w-[120px] px-3 py-3 text-center">Personnes</th>
-            <th className="w-[110px] px-3 py-3 text-center">Échéance</th>
+            <th className="hidden w-[180px] px-3 py-3 text-center md:table-cell">Immeuble</th>
+            <th className="w-[110px] px-2 py-3 text-center sm:w-[120px] sm:px-3">Statut</th>
+            <th className="hidden w-[110px] px-3 py-3 text-center md:table-cell">Priorité</th>
+            <th className="hidden w-[120px] px-3 py-3 text-center md:table-cell">Personnes</th>
+            <th className="hidden w-[110px] px-3 py-3 text-center sm:table-cell">Échéance</th>
           </tr>
         </thead>
         <tbody>
@@ -900,7 +900,7 @@ function TaskListView({
                   borderBottom: "1px solid rgba(100,116,139,0.18)"
                 }}
               >
-                <td className="px-3 py-2.5">
+                <td className="px-2 py-2.5 sm:px-3">
                   {(() => {
                     const tier = scoreToPTier(t.score);
                     const hasScore = t.score != null;
@@ -927,7 +927,7 @@ function TaskListView({
                     );
                   })()}
                 </td>
-                <td className="max-w-[420px] px-4 py-2.5">
+                <td className="max-w-[420px] px-3 py-2.5 sm:px-4">
                   <p className="truncate font-medium leading-tight text-white">
                     {t.title}
                   </p>
@@ -936,11 +936,11 @@ function TaskListView({
                   ) : null}
                 </td>
                 {extraColumn ? (
-                  <td className="px-3 py-2.5 text-center">
+                  <td className="hidden px-3 py-2.5 text-center sm:table-cell">
                     {extraColumn.render(t)}
                   </td>
                 ) : null}
-                <td className="px-3 py-2.5 text-center">
+                <td className="hidden px-3 py-2.5 text-center md:table-cell">
                   {t.immeubleLabels && t.immeubleLabels.length > 0 ? (
                     <span
                       className="inline-flex max-w-full items-center gap-1 truncate text-[11px] text-white/70"
@@ -956,7 +956,7 @@ function TaskListView({
                   )}
                 </td>
                 <td
-                  className="px-3 py-2.5 text-center"
+                  className="px-2 py-2.5 text-center sm:px-3"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <PillPicker
@@ -971,7 +971,7 @@ function TaskListView({
                   />
                 </td>
                 <td
-                  className="px-3 py-2.5 text-center"
+                  className="hidden px-3 py-2.5 text-center md:table-cell"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <PillPicker
@@ -986,7 +986,7 @@ function TaskListView({
                   />
                 </td>
                 <td
-                  className="px-3 py-2.5 text-center"
+                  className="hidden px-3 py-2.5 text-center md:table-cell"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <AssigneePicker
@@ -998,7 +998,7 @@ function TaskListView({
                   />
                 </td>
                 <td
-                  className="px-3 py-2.5 text-center"
+                  className="hidden px-3 py-2.5 text-center sm:table-cell"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <DatePill
