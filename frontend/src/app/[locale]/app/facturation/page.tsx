@@ -40,11 +40,33 @@ const COLUMNS: Column[] = [
 function fmtMoney(n: number | string | null): string {
   if (n == null || n === "") return "—";
   const num = typeof n === "string" ? Number(n) : n;
+  if (!Number.isFinite(num)) return "—";
   return new Intl.NumberFormat("fr-CA", {
     style: "currency",
     currency: "CAD",
     maximumFractionDigits: 0
   }).format(num);
+}
+
+/** Cascade pour récupérer un montant à afficher sur la carte :
+ *  - `total` persisté (cas normal)
+ *  - sinon `subtotal + tps + tvq` (cas legacy où total n'a pas été
+ *    recalculé après ajout/édition d'items)
+ *  - sinon `subtotal` seul (au moins quelque chose à montrer)
+ *  - sinon null → fmtMoney affichera « — » */
+function amountFor(fa: Facture): number | null {
+  const num = (v: number | string | null | undefined): number | null => {
+    if (v == null || v === "") return null;
+    const x = typeof v === "string" ? Number(v) : v;
+    return Number.isFinite(x) ? x : null;
+  };
+  const total = num(fa.total);
+  if (total != null && total > 0) return total;
+  const subtotal = num(fa.subtotal);
+  const tps = num(fa.tps) || 0;
+  const tvq = num(fa.tvq) || 0;
+  if (subtotal != null) return subtotal + tps + tvq;
+  return null;
 }
 
 function fmtDate(iso: string | null): string {
@@ -302,12 +324,16 @@ function Card({
           {clientName}
         </p>
       ) : null}
-      {/* Numéro de facture + montant. */}
-      <div className="mt-2 flex items-center justify-between text-xs">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+      {/* Numéro de facture + montant. Si `total` n'est pas en
+          DB (cas legacy / sync QBO partielle), on retombe sur la
+          somme subtotal+tps+tvq, puis sur subtotal seul. */}
+      <div className="mt-2 flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wider text-accent-500">
           {fa.reference}
         </span>
-        <span className="font-bold text-white">{fmtMoney(fa.total)}</span>
+        <span className="text-sm font-bold text-white">
+          {fmtMoney(amountFor(fa))}
+        </span>
       </div>
       <p className="mt-1 text-[10px] text-white/40">
         {fa.due_at ? `Échéance ${fmtDate(fa.due_at)}` : fmtDate(fa.created_at)}
