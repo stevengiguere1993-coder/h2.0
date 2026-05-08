@@ -10,7 +10,7 @@ import {
   Home,
   Layers,
   LogOut,
-  Map,
+  Map as MapIcon,
   MapPin,
   Plus,
   Settings,
@@ -75,7 +75,7 @@ const PROSPECTION_SECTIONS: NavSection[] = [
       {
         href: "/prospection",
         label: "Carte",
-        icon: Map,
+        icon: MapIcon,
         minRole: "employee"
       },
       {
