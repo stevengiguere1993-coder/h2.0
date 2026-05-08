@@ -546,16 +546,6 @@ export default function MesTachesPage() {
           </>
         }
         subtitle={subtitle}
-        rightSlot={
-          <Link
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/entreprises/taches/recurrentes" as any}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--qg-border)] bg-[var(--qg-bg-alt)] px-3 py-1.5 text-xs text-[var(--qg-text)] hover:bg-[var(--qg-bg)]"
-          >
-            <Repeat className="h-3.5 w-3.5" />
-            Modèles récurrents
-          </Link>
-        }
       />
 
       <div className="px-5 py-6 lg:px-8">
@@ -608,6 +598,17 @@ export default function MesTachesPage() {
             newTaskLabel="+ Nouvelle tâche"
             title="Toutes les tâches"
             extraColumn={extraColumn}
+            headerSlot={
+              <Link
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={"/entreprises/taches/recurrentes" as any}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-violet-400 px-3 py-1.5 text-xs font-semibold text-brand-950 shadow hover:bg-violet-300"
+                title="Gérer les modèles de tâches récurrentes"
+              >
+                <Repeat className="h-3.5 w-3.5" />
+                Modèles récurrents
+              </Link>
+            }
             onPatch={(boardId, patch) => {
               const owner = ownerByBoardId.get(boardId);
               if (!owner) return;
