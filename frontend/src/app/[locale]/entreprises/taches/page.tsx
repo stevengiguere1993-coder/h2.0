@@ -559,8 +559,10 @@ export default function MesTachesPage() {
       />
 
       <div className="px-5 py-6 lg:px-8">
-        {/* Briefing IA — agrégé sur toutes les entreprises. */}
-        <GlobalBriefingCard entreprises={entreprises} />
+        {/* Briefing IA — bascule entre vue globale (toutes entreprises)
+            et vue scopée à l'utilisateur connecté selon le toggle
+            « Toutes / Mes tâches » ci-dessous. */}
+        <GlobalBriefingCard entreprises={entreprises} scope={scope} />
 
         {/* Bandeau filtres niveau page : portée. Le filtre par
             entreprise/deal est dans la barre d'outils du TaskBoard. */}
@@ -737,12 +739,15 @@ function ScopeButton({
 // look que <DailyPulseCard> de la fiche entreprise.
 
 function GlobalBriefingCard({
-  entreprises
+  entreprises,
+  scope
 }: {
   entreprises: Entreprise[];
+  scope: "all" | "mine";
 }) {
-  // Briefing global cross-entreprise — un seul résumé pour tout le
-  // périmètre, généré côté backend (cache journée).
+  // Briefing — soit global cross-entreprise, soit filtré aux
+  // tâches assignées à l'utilisateur connecté (scope="mine").
+  // Cache backend distinct par scope.
   const [brief, setBrief] = useState<DailyBriefing | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -759,9 +764,10 @@ function GlobalBriefingCard({
     else setLoading(true);
     setError(null);
     try {
-      const url = force
-        ? "/api/v1/entreprises/global-pulse?force=true"
-        : "/api/v1/entreprises/global-pulse";
+      const params = new URLSearchParams();
+      params.set("scope", scope);
+      if (force) params.set("force", "true");
+      const url = `/api/v1/entreprises/global-pulse?${params.toString()}`;
       const r = await authedFetch(url);
       if (!r.ok) {
         const txt = await r.text().catch(() => "");
@@ -780,7 +786,7 @@ function GlobalBriefingCard({
   useEffect(() => {
     void load(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entreprises.length]);
+  }, [entreprises.length, scope]);
 
   const lime = "var(--qg-accent)";
 
@@ -805,7 +811,8 @@ function GlobalBriefingCard({
             className="text-xs font-bold uppercase tracking-wider"
             style={{ color: lime }}
           >
-            ✦ Briefing IA — toutes entreprises &amp; deals
+            ✦ Briefing IA —{" "}
+            {scope === "mine" ? "mes tâches" : "toutes entreprises & deals"}
           </h2>
         </div>
         <div className="flex items-center gap-2">

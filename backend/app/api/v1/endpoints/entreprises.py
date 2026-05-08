@@ -1256,12 +1256,25 @@ class GlobalBriefingOut(BaseModel):
     summary="Briefing IA global toutes entreprises + deals (cache jour)",
 )
 async def get_global_pulse(
-    db: DBSession, user: CurrentUser, force: bool = False
+    db: DBSession,
+    user: CurrentUser,
+    force: bool = False,
+    scope: str = "all",
 ) -> Optional[GlobalBriefingOut]:
+    """`scope=all` (défaut) : briefing global cross-entreprise.
+    `scope=mine` : briefing filtré aux tâches assignées au user
+    connecté — utilisé par le bouton « Mes tâches » de la page
+    Tâches agrégée."""
     _require_volet(user)
     from app.services.qg_global_pulse import get_or_generate_global_pulse
 
-    g = await get_or_generate_global_pulse(db, force=force)
+    user_filter: Optional[int] = None
+    if scope == "mine":
+        user_filter = getattr(user, "id", None)
+
+    g = await get_or_generate_global_pulse(
+        db, force=force, user_id=user_filter
+    )
     if g is None:
         return None
     return GlobalBriefingOut(
