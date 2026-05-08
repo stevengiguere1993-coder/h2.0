@@ -64,6 +64,7 @@ const STATUS_LABEL: Record<string, string> = {
   visite: "Visité",
   a_contacter: "À contacter",
   contacte: "Contacté",
+  hot_lead: "🔥 Hot Lead",
   soumissionne: "Soumissionné",
   converti: "Converti",
   perdu: "Perdu"

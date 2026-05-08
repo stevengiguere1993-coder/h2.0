@@ -7,6 +7,7 @@ Project.
 Lookup propriétaire via rôle d'évaluation et REQ : Phase 2.
 """
 
+import logging
 from datetime import date as DateT, datetime, timezone
 from typing import List, Optional
 
@@ -32,6 +33,9 @@ from app.models.prospection_lead import (
 )
 from app.models.prospection_lead_photo import ProspectionLeadPhoto
 from app.services.prospection_scoring import apply_score, parse_tags
+
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/prospection", tags=["prospection"])
 
@@ -587,7 +591,7 @@ async def update_lead(
     lead_id: int,
     data: LeadUpdate,
     db: DBSession,
-    _: CurrentUser,
+    user: CurrentUser,
 ) -> LeadRead:
     lead = (
         await db.execute(
@@ -597,10 +601,33 @@ async def update_lead(
     if lead is None:
         raise HTTPException(404, "Prospect introuvable")
     update = data.model_dump(exclude_unset=True)
+    # Détecte la transition vers HOT_LEAD AVANT le setattr pour
+    # qu'on ait l'ancien statut. Permet de ne notifier qu'à
+    # l'instant du drag, pas à chaque sauvegarde subséquente.
+    previous_status = lead.status
+    new_status = update.get("status")
+    just_became_hot = (
+        new_status == ProspectionLeadStatus.HOT_LEAD.value
+        and previous_status != ProspectionLeadStatus.HOT_LEAD.value
+    )
     for k, v in update.items():
         setattr(lead, k, v)
     apply_score(lead)
     await db.flush()
+    if just_became_hot:
+        # Notifie Philippe + Steven + Michael (ou les noms configurés
+        # dans HOT_LEAD_ALERT_FIRSTNAMES) — fan-out par first_name.
+        from app.services.hot_lead_alerts import notify_hot_lead_team
+
+        try:
+            await notify_hot_lead_team(
+                db,
+                lead=lead,
+                triggered_by_user_id=getattr(user, "id", None),
+            )
+        except Exception:  # noqa: BLE001
+            # On ne bloque pas l'update si la notif échoue.
+            log.exception("notify_hot_lead_team failed for lead %s", lead_id)
     await db.refresh(lead)
     photos_count = await _photos_count_for(db, lead_id)
     return _serialize(lead, photos_count)
