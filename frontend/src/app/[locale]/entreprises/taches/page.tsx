@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronUp, Loader2, Target } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronUp, Loader2, Target, X } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
 import { QGTopbar } from "../layout";
@@ -84,8 +84,6 @@ type Deal = {
 };
 
 type DailyBriefing = {
-  id: number;
-  entreprise_id: number;
   period_start: string;
   period_end: string;
   headline: string;
@@ -118,6 +116,17 @@ export default function MesTachesPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [scope, setScope] = useState<"all" | "mine">("all");
+  // Modale de choix entreprise / deal lors de la création d'une
+  // tâche depuis le bouton « + Nouvelle tâche » du TaskBoard.
+  // Quand non-null, contient le statut cible (todo / a_faire …) et
+  // se résoud via la promesse stockée dans `createResolverRef`.
+  const [pendingCreate, setPendingCreate] = useState<{
+    status: string;
+    name: string;
+  } | null>(null);
+  const createResolverRef = useRef<((id: number | null) => void) | null>(
+    null
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -286,6 +295,54 @@ export default function MesTachesPage() {
     }
   }
 
+  // Préfixe pour rendre les ids uniques entre les séquences
+  // entreprise / deal indépendantes.
+  const DEAL_ID_OFFSET = 10_000_000;
+  const boardIdFor = (owner: TaskOwner, realId: number): number =>
+    owner.kind === "entreprise" ? realId : DEAL_ID_OFFSET + realId;
+
+  /** Crée une tâche pour un owner choisi (entreprise ou deal).
+   *  Retourne le board id (préfixé) pour que le TaskBoard puisse
+   *  ouvrir la fiche détaillée. */
+  async function createTacheFor(
+    owner: TaskOwner,
+    status: string,
+    name: string
+  ): Promise<number | null> {
+    try {
+      if (owner.kind === "entreprise") {
+        const res = await authedFetch("/api/v1/entreprises/taches", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            entreprise_id: owner.id,
+            title: name,
+            status
+          })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const created = (await res.json()) as TacheEnt;
+        setTachesEnt((prev) => [...prev, created]);
+        return boardIdFor(owner, created.id);
+      }
+      const res = await authedFetch(
+        `/api/v1/prospection/deals/${owner.id}/tasks`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, status })
+        }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const created = (await res.json()) as TacheDeal;
+      setTachesDeal((prev) => [...prev, created]);
+      return boardIdFor(owner, created.id);
+    } catch (err) {
+      setError(`Création échouée : ${(err as Error).message}`);
+      return null;
+    }
+  }
+
   async function reloadImmeubles() {
     try {
       const r = await authedFetch("/api/v1/immobilier/immeubles/picker");
@@ -314,11 +371,8 @@ export default function MesTachesPage() {
 
   // Pour rendre les ids uniques (les séquences entreprise/deal sont
   // indépendantes), on préfixe : entreprise → +0, deal → +10_000_000.
-  // Cet offset reste interne au board ; toute API réelle reçoit
-  // l'id original via le owner.
-  const DEAL_ID_OFFSET = 10_000_000;
-  const toBoardId = (owner: TaskOwner, realId: number): number =>
-    owner.kind === "entreprise" ? realId : DEAL_ID_OFFSET + realId;
+  // L'offset est défini plus haut (boardIdFor / DEAL_ID_OFFSET).
+  const toBoardId = boardIdFor;
   const fromBoardId = (boardId: number): { id: number; isDeal: boolean } =>
     boardId >= DEAL_ID_OFFSET
       ? { id: boardId - DEAL_ID_OFFSET, isDeal: true }
@@ -340,6 +394,9 @@ export default function MesTachesPage() {
       })
     );
     return m;
+    // toBoardId est un alias stable (= boardIdFor), pas de re-render
+    // induit par sa référence.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tachesEnt, tachesDeal]);
 
   const ownerBadge = (owner: TaskOwner | null) => {
@@ -527,7 +584,8 @@ export default function MesTachesPage() {
             users={users}
             immeubles={immeubles}
             onImmeublesChanged={() => void reloadImmeubles()}
-            showNewTaskButton={false}
+            showNewTaskButton
+            newTaskLabel="+ Nouvelle tâche"
             title="Toutes les tâches"
             extraColumn={extraColumn}
             onPatch={(boardId, patch) => {
@@ -593,12 +651,42 @@ export default function MesTachesPage() {
               const { id: realId } = fromBoardId(boardId);
               void deleteTache(owner, realId);
             }}
-            // Pas de onCreate effectif — la création se fait dans la
-            // fiche d'une entreprise ou d'un deal.
-            onCreate={() => null}
+            // Demande d'abord à quelle entreprise / deal rattacher la
+            // tâche (sinon elle ne serait liée à rien). Ouvre une
+            // modale ; le promise se résoud avec l'id board créé.
+            onCreate={(status, name) =>
+              new Promise<number | null>((resolve) => {
+                createResolverRef.current = resolve;
+                setPendingCreate({ status, name });
+              })
+            }
           />
         )}
       </div>
+
+      {pendingCreate ? (
+        <CreateTaskOwnerModal
+          status={pendingCreate.status}
+          name={pendingCreate.name}
+          entreprises={entreprises}
+          deals={deals}
+          onCancel={() => {
+            createResolverRef.current?.(null);
+            createResolverRef.current = null;
+            setPendingCreate(null);
+          }}
+          onConfirm={async (owner, finalName) => {
+            const boardId = await createTacheFor(
+              owner,
+              pendingCreate.status,
+              finalName
+            );
+            createResolverRef.current?.(boardId);
+            createResolverRef.current = null;
+            setPendingCreate(null);
+          }}
+        />
+      ) : null}
     </>
   );
 }
@@ -639,63 +727,48 @@ function GlobalBriefingCard({
 }: {
   entreprises: Entreprise[];
 }) {
-  const [briefings, setBriefings] = useState<
-    Array<{ ent: Entreprise; brief: DailyBriefing }>
-  >([]);
+  // Briefing global cross-entreprise — un seul résumé pour tout le
+  // périmètre, généré côté backend (cache journée).
+  const [brief, setBrief] = useState<DailyBriefing | null>(null);
   const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
   const [expanded, setExpanded] = useState(true);
-  const [activeEntId, setActiveEntId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  async function load(force: boolean) {
     if (entreprises.length === 0) {
-      setBriefings([]);
+      setBrief(null);
       setLoading(false);
       return;
     }
-    let cancelled = false;
-    void (async () => {
-      setLoading(true);
-      try {
-        const results = await Promise.all(
-          entreprises.map(async (e) => {
-            try {
-              const r = await authedFetch(
-                `/api/v1/entreprises/${e.id}/daily-pulse`
-              );
-              if (!r.ok) return null;
-              const data = (await r.json()) as DailyBriefing | null;
-              return data ? { ent: e, brief: data } : null;
-            } catch {
-              return null;
-            }
-          })
-        );
-        if (cancelled) return;
-        const list = results.filter(
-          (x): x is { ent: Entreprise; brief: DailyBriefing } => x !== null
-        );
-        // Ordre : briefing le plus récent en tête.
-        list.sort((a, b) =>
-          b.brief.created_at.localeCompare(a.brief.created_at)
-        );
-        setBriefings(list);
-        setActiveEntId((prev) =>
-          prev != null && list.some((x) => x.ent.id === prev)
-            ? prev
-            : list[0]?.ent.id ?? null
-        );
-      } finally {
-        if (!cancelled) setLoading(false);
+    if (force) setGenerating(true);
+    else setLoading(true);
+    setError(null);
+    try {
+      const url = force
+        ? "/api/v1/entreprises/global-pulse?force=true"
+        : "/api/v1/entreprises/global-pulse";
+      const r = await authedFetch(url);
+      if (!r.ok) {
+        const txt = await r.text().catch(() => "");
+        throw new Error(`HTTP ${r.status}${txt ? ` — ${txt.slice(0, 200)}` : ""}`);
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [entreprises]);
+      const data = (await r.json()) as DailyBriefing | null;
+      setBrief(data);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+      setGenerating(false);
+    }
+  }
+
+  useEffect(() => {
+    void load(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entreprises.length]);
 
   const lime = "var(--qg-accent)";
-  const active =
-    briefings.find((x) => x.ent.id === activeEntId) ?? briefings[0] ?? null;
 
   return (
     <section
@@ -718,24 +791,19 @@ function GlobalBriefingCard({
             className="text-xs font-bold uppercase tracking-wider"
             style={{ color: lime }}
           >
-            ✦ Briefing IA du jour
+            ✦ Briefing IA — toutes entreprises &amp; deals
           </h2>
         </div>
         <div className="flex items-center gap-2">
-          {briefings.length > 1 ? (
-            <select
-              value={activeEntId ?? ""}
-              onChange={(e) => setActiveEntId(Number(e.target.value))}
-              className="rounded-md border border-brand-700 bg-brand-900 px-2 py-1 text-[11px] text-white/80 focus:border-accent-500 focus:outline-none"
-              title="Choisir l'entreprise"
-            >
-              {briefings.map(({ ent }) => (
-                <option key={ent.id} value={ent.id}>
-                  {ent.name}
-                </option>
-              ))}
-            </select>
-          ) : null}
+          <button
+            type="button"
+            onClick={() => void load(true)}
+            disabled={generating}
+            title="Regénérer le briefing global"
+            className="rounded-md border border-brand-700 bg-brand-900 px-2.5 py-1 text-[10px] font-semibold text-white/60 hover:text-white disabled:opacity-50"
+          >
+            {generating ? "…" : "Regénérer"}
+          </button>
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
@@ -754,33 +822,26 @@ function GlobalBriefingCard({
 
       {!expanded ? null : loading ? (
         <p className="mt-3 text-xs text-white/40">Chargement…</p>
-      ) : active ? (
+      ) : brief ? (
         <div className="mt-3">
-          <p className="text-[10px] uppercase tracking-wider text-white/40">
-            <span
-              className="mr-1.5 inline-block h-2 w-2 rounded-full align-middle"
-              style={{ backgroundColor: active.ent.color_accent }}
-            />
-            {active.ent.name}
-          </p>
-          <h3 className="mt-1 text-base font-bold text-white">
-            {active.brief.headline}
+          <h3 className="text-base font-bold text-white">
+            {brief.headline}
           </h3>
           <p className="mt-1 text-[10px] text-white/40">
             Généré le{" "}
-            {new Date(active.brief.created_at).toLocaleString("fr-CA", {
+            {new Date(brief.created_at).toLocaleString("fr-CA", {
               dateStyle: "medium",
               timeStyle: "short"
             })}
-            {active.brief.provider ? ` · ${active.brief.provider}` : ""}
-            {active.brief.model_used ? ` · ${active.brief.model_used}` : ""}
+            {brief.provider ? ` · ${brief.provider}` : ""}
+            {brief.model_used ? ` · ${brief.model_used}` : ""}
           </p>
           <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-white/80">
-            {active.brief.summary_text}
+            {brief.summary_text}
           </p>
-          {active.brief.highlights && active.brief.highlights.length > 0 ? (
+          {brief.highlights && brief.highlights.length > 0 ? (
             <ul className="mt-3 space-y-1">
-              {active.brief.highlights.map((h, i) => (
+              {brief.highlights.map((h, i) => (
                 <li
                   key={i}
                   className="flex items-start gap-2 text-xs text-white/70"
@@ -791,13 +852,168 @@ function GlobalBriefingCard({
               ))}
             </ul>
           ) : null}
+          {error ? (
+            <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300">
+              {error}
+            </p>
+          ) : null}
         </div>
+      ) : error ? (
+        <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300">
+          {error}
+        </p>
       ) : (
         <p className="mt-3 text-xs text-white/60">
-          Aucun briefing disponible. Générez-en un depuis la fiche d&apos;une
-          entreprise.
+          Aucun briefing disponible. Cliquez « Regénérer » pour
+          produire un résumé matinal cross-entreprise.
         </p>
       )}
     </section>
   );
+}
+
+// ─── Modale : choix entreprise / deal lors d'une création depuis
+//     la vue agrégée. Évite que la tâche reste orpheline. ─────────
+
+function CreateTaskOwnerModal({
+  status,
+  name: initialName,
+  entreprises,
+  deals,
+  onCancel,
+  onConfirm
+}: {
+  status: string;
+  name: string;
+  entreprises: Entreprise[];
+  deals: Deal[];
+  onCancel: () => void;
+  onConfirm: (owner: TaskOwner, name: string) => void | Promise<void>;
+}) {
+  const [name, setName] = useState(initialName);
+  const [ownerKeyValue, setOwnerKeyValue] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+
+  const owner = useMemo(() => parseOwnerKey(ownerKeyValue), [ownerKeyValue]);
+
+  async function submit() {
+    if (!owner) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setBusy(true);
+    try {
+      await onConfirm(owner, trimmed);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 pt-16"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl border border-brand-800 bg-brand-950 p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-bold uppercase tracking-wider text-white/80">
+            Nouvelle tâche
+          </h3>
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label="Fermer"
+            className="rounded-md p-1 text-white/40 hover:bg-white/5 hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <p className="mb-3 text-[11px] text-white/50">
+          Statut : <span className="text-white/80">{status}</span>
+        </p>
+
+        <label className="block text-[11px] font-semibold uppercase tracking-wider text-white/50">
+          Titre
+        </label>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          autoFocus
+          className="mt-1 w-full rounded-md border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white focus:border-accent-500 focus:outline-none"
+          placeholder="Nom de la tâche…"
+        />
+
+        <label className="mt-4 block text-[11px] font-semibold uppercase tracking-wider text-white/50">
+          Entreprise ou Deal*
+        </label>
+        <select
+          value={ownerKeyValue}
+          onChange={(e) => setOwnerKeyValue(e.target.value)}
+          className="mt-1 w-full rounded-md border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white focus:border-accent-500 focus:outline-none"
+        >
+          <option value="">— Choisir —</option>
+          {entreprises.length > 0 ? (
+            <optgroup label="Entreprises">
+              {entreprises.map((e) => (
+                <option
+                  key={`ent:${e.id}`}
+                  value={ownerKey({ kind: "entreprise", id: e.id })}
+                >
+                  {e.name}
+                </option>
+              ))}
+            </optgroup>
+          ) : null}
+          {deals.length > 0 ? (
+            <optgroup label="Deals (Pipeline)">
+              {deals.map((d) => (
+                <option
+                  key={`deal:${d.id}`}
+                  value={ownerKey({ kind: "deal", id: d.id })}
+                >
+                  {d.address}
+                </option>
+              ))}
+            </optgroup>
+          ) : null}
+        </select>
+        <p className="mt-1 text-[10px] text-white/40">
+          La tâche sera rattachée à cette fiche. Sans choix, la
+          création est annulée.
+        </p>
+
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-md border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs text-white/70 hover:text-white"
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={() => void submit()}
+            disabled={!owner || !name.trim() || busy}
+            className="btn-accent text-xs disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy ? "Création…" : "Créer"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function parseOwnerKey(key: string): TaskOwner | null {
+  const [kind, idStr] = key.split(":");
+  const id = Number(idStr);
+  if (!Number.isFinite(id)) return null;
+  if (kind === "entreprise" || kind === "deal") {
+    return { kind, id };
+  }
+  return null;
 }

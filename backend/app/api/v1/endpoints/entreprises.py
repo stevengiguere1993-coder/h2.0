@@ -1206,6 +1206,46 @@ async def generate_daily_pulse(
 # ── Scoring proactif IA ─────────────────────────────────────────────────
 
 
+# ── Global pulse — briefing IA cross-entreprise ─────────────────
+
+
+class GlobalBriefingOut(BaseModel):
+    headline: str
+    summary_text: str
+    highlights: List[str] = Field(default_factory=list)
+    model_used: Optional[str] = None
+    provider: Optional[str] = None
+    created_at: datetime
+    period_start: datetime
+    period_end: datetime
+
+
+@router.get(
+    "/global-pulse",
+    response_model=Optional[GlobalBriefingOut],
+    summary="Briefing IA global toutes entreprises + deals (cache jour)",
+)
+async def get_global_pulse(
+    db: DBSession, user: CurrentUser, force: bool = False
+) -> Optional[GlobalBriefingOut]:
+    _require_volet(user)
+    from app.services.qg_global_pulse import get_or_generate_global_pulse
+
+    g = await get_or_generate_global_pulse(db, force=force)
+    if g is None:
+        return None
+    return GlobalBriefingOut(
+        headline=g.headline,
+        summary_text=g.summary_text,
+        highlights=g.highlights,
+        model_used=g.model_used,
+        provider=g.provider,
+        created_at=g.created_at,
+        period_start=g.period_start,
+        period_end=g.period_end,
+    )
+
+
 class TacheScoreSuggestion(BaseModel):
     impact: int = Field(..., ge=1, le=10)
     confidence: int = Field(..., ge=1, le=10)
