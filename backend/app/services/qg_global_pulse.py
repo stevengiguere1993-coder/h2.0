@@ -26,8 +26,12 @@ from app.integrations.ai import (
 )
 from app.models.entreprise import Entreprise
 from app.models.entreprise_tache import EntrepriseTache, TacheStatus
+from app.models.entreprise_tache_assignee import EntrepriseTacheAssignee
 from app.models.prospection_deal import ProspectionDeal
 from app.models.prospection_deal_task import ProspectionDealTask
+from app.models.prospection_deal_task_assignee import (
+    ProspectionDealTaskAssignee,
+)
 
 log = logging.getLogger(__name__)
 
@@ -52,7 +56,8 @@ class GlobalBriefing:
     created_at: datetime
 
 
-# Cache en mémoire : { date_iso: GlobalBriefing }. Recyclé au boot.
+# Cache en mémoire. Clé = date_iso (briefing global) ou
+# `date_iso:user:{id}` (briefing scopé à un user). Recyclé au boot.
 _CACHE: dict[str, GlobalBriefing] = {}
 
 
@@ -105,8 +110,15 @@ def _build_prompt(
     done_yesterday_by_ent: dict[int, list[EntrepriseTache]],
     deals_open_taches: list[ProspectionDealTask],
     deals_count: int,
+    user_scoped: bool = False,
 ) -> str:
     parts = ["## Périmètre"]
+    if user_scoped:
+        parts.append(
+            "**Périmètre filtré : uniquement les tâches assignées à "
+            "l'utilisateur connecté.** Le briefing porte exclusivement "
+            "sur ses dossiers personnels."
+        )
     parts.append(
         f"{len(entreprises)} entreprise(s) active(s), "
         f"{deals_count} deal(s) actif(s) au Pipeline."
@@ -151,12 +163,25 @@ def _parse_ai_json(raw: str) -> dict:
 
 
 async def get_or_generate_global_pulse(
-    db: AsyncSession, *, force: bool = False
+    db: AsyncSession,
+    *,
+    force: bool = False,
+    user_id: Optional[int] = None,
 ) -> Optional[GlobalBriefing]:
     """Retourne le briefing global du jour. Génère via l'IA si
-    absent du cache ou force=True. None si IA indisponible."""
+    absent du cache ou force=True. None si IA indisponible.
+
+    Si `user_id` est fourni, le périmètre est filtré aux **tâches
+    assignées à ce user** (entreprise + deals) — utilisé par le
+    bouton « Mes tâches » de la page agrégée Tâches. Cache distinct
+    par user pour éviter le crosstalk.
+    """
     today = datetime.now(timezone.utc).date()
-    cache_key = today.isoformat()
+    cache_key = (
+        f"{today.isoformat()}:user:{user_id}"
+        if user_id is not None
+        else today.isoformat()
+    )
     if not force and cache_key in _CACHE:
         return _CACHE[cache_key]
 
@@ -174,23 +199,71 @@ async def get_or_generate_global_pulse(
 
     ent_ids = [e.id for e in entreprises]
 
-    open_taches = list(
-        (
+    # Filtre user : seulement les tâches assignées à ce user.
+    # On considère deux sources : `assignee_user_id` (scalaire legacy
+    # = primary) et la table `entreprise_tache_assignees` (multi).
+    user_tache_ids: Optional[set[int]] = None
+    user_deal_task_ids: Optional[set[int]] = None
+    if user_id is not None:
+        # IDs de tâches entreprise auxquelles ce user est assigné
+        # (via le multi-assignees ou le scalaire legacy).
+        multi_ids = (
             await db.execute(
-                select(EntrepriseTache).where(
-                    EntrepriseTache.entreprise_id.in_(ent_ids),
-                    EntrepriseTache.status.in_(
-                        [
-                            TacheStatus.TODO.value,
-                            TacheStatus.A_FAIRE.value,
-                            TacheStatus.IN_PROGRESS.value,
-                            TacheStatus.WAITING.value,
-                        ]
-                    ),
+                select(EntrepriseTacheAssignee.tache_id).where(
+                    EntrepriseTacheAssignee.user_id == user_id
                 )
             )
         ).scalars().all()
+        legacy_ids = (
+            await db.execute(
+                select(EntrepriseTache.id).where(
+                    EntrepriseTache.assignee_user_id == user_id
+                )
+            )
+        ).scalars().all()
+        user_tache_ids = set(multi_ids) | set(legacy_ids)
+
+        # IDs de tâches deal assignées.
+        deal_multi = (
+            await db.execute(
+                select(ProspectionDealTaskAssignee.task_id).where(
+                    ProspectionDealTaskAssignee.user_id == user_id
+                )
+            )
+        ).scalars().all()
+        deal_legacy = (
+            await db.execute(
+                select(ProspectionDealTask.id).where(
+                    ProspectionDealTask.assignee_user_id == user_id
+                )
+            )
+        ).scalars().all()
+        user_deal_task_ids = set(deal_multi) | set(deal_legacy)
+
+    open_q = select(EntrepriseTache).where(
+        EntrepriseTache.entreprise_id.in_(ent_ids),
+        EntrepriseTache.status.in_(
+            [
+                TacheStatus.TODO.value,
+                TacheStatus.A_FAIRE.value,
+                TacheStatus.IN_PROGRESS.value,
+                TacheStatus.WAITING.value,
+            ]
+        ),
     )
+    if user_tache_ids is not None:
+        if not user_tache_ids:
+            open_taches = []
+        else:
+            open_taches = list(
+                (
+                    await db.execute(
+                        open_q.where(EntrepriseTache.id.in_(user_tache_ids))
+                    )
+                ).scalars().all()
+            )
+    else:
+        open_taches = list((await db.execute(open_q)).scalars().all())
     open_by_ent: dict[int, list[EntrepriseTache]] = {}
     for t in open_taches:
         open_by_ent.setdefault(t.entreprise_id, []).append(t)
@@ -198,18 +271,25 @@ async def get_or_generate_global_pulse(
     yesterday = today - timedelta(days=1)
     yest_start = datetime.combine(yesterday, dtime.min, tzinfo=timezone.utc)
     today_start = datetime.combine(today, dtime.min, tzinfo=timezone.utc)
-    done_yest = list(
-        (
-            await db.execute(
-                select(EntrepriseTache).where(
-                    EntrepriseTache.entreprise_id.in_(ent_ids),
-                    EntrepriseTache.status == TacheStatus.DONE.value,
-                    EntrepriseTache.completed_at >= yest_start,
-                    EntrepriseTache.completed_at < today_start,
-                )
-            )
-        ).scalars().all()
+    done_q = select(EntrepriseTache).where(
+        EntrepriseTache.entreprise_id.in_(ent_ids),
+        EntrepriseTache.status == TacheStatus.DONE.value,
+        EntrepriseTache.completed_at >= yest_start,
+        EntrepriseTache.completed_at < today_start,
     )
+    if user_tache_ids is not None:
+        if not user_tache_ids:
+            done_yest = []
+        else:
+            done_yest = list(
+                (
+                    await db.execute(
+                        done_q.where(EntrepriseTache.id.in_(user_tache_ids))
+                    )
+                ).scalars().all()
+            )
+    else:
+        done_yest = list((await db.execute(done_q)).scalars().all())
     done_by_ent: dict[int, list[EntrepriseTache]] = {}
     for t in done_yest:
         done_by_ent.setdefault(t.entreprise_id, []).append(t)
@@ -227,18 +307,29 @@ async def get_or_generate_global_pulse(
     deal_ids = [d.id for d in active_deals]
     deal_open_taches: list[ProspectionDealTask] = []
     if deal_ids:
-        deal_open_taches = list(
-            (
-                await db.execute(
-                    select(ProspectionDealTask).where(
-                        ProspectionDealTask.deal_id.in_(deal_ids),
-                        ProspectionDealTask.status.in_(
-                            ["todo", "a_faire", "in_progress", "waiting"]
-                        ),
-                    )
-                )
-            ).scalars().all()
+        deal_q = select(ProspectionDealTask).where(
+            ProspectionDealTask.deal_id.in_(deal_ids),
+            ProspectionDealTask.status.in_(
+                ["todo", "a_faire", "in_progress", "waiting"]
+            ),
         )
+        if user_deal_task_ids is not None:
+            if not user_deal_task_ids:
+                deal_open_taches = []
+            else:
+                deal_open_taches = list(
+                    (
+                        await db.execute(
+                            deal_q.where(
+                                ProspectionDealTask.id.in_(user_deal_task_ids)
+                            )
+                        )
+                    ).scalars().all()
+                )
+        else:
+            deal_open_taches = list(
+                (await db.execute(deal_q)).scalars().all()
+            )
 
     prompt = _build_prompt(
         entreprises=entreprises,
@@ -246,6 +337,7 @@ async def get_or_generate_global_pulse(
         done_yesterday_by_ent=done_by_ent,
         deals_open_taches=deal_open_taches,
         deals_count=len(active_deals),
+        user_scoped=user_id is not None,
     )
 
     t0 = time.perf_counter()
