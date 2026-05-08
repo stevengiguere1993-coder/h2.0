@@ -125,10 +125,10 @@ export function TaskDetailsModal({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl rounded-2xl border border-brand-800 bg-brand-950 p-6"
+        className="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-brand-800 bg-brand-950"
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="flex items-start justify-between gap-3">
+        <header className="flex flex-shrink-0 items-start justify-between gap-3 border-b border-brand-800 px-6 py-4">
           <h3 className="text-base font-semibold text-white/60">
             Détails de la tâche
           </h3>
@@ -142,7 +142,7 @@ export function TaskDetailsModal({
           </button>
         </header>
 
-        <div className="mt-4 space-y-4">
+        <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
           <div>
             <label className="label">Titre</label>
             <textarea
@@ -294,7 +294,7 @@ export function TaskDetailsModal({
           </div>
         </div>
 
-        <footer className="mt-5 flex items-center justify-end">
+        <footer className="flex flex-shrink-0 items-center justify-end border-t border-brand-800 px-6 py-3">
           <button
             type="button"
             onClick={onClose}

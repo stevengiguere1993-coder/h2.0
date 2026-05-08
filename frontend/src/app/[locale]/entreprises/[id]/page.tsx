@@ -20,6 +20,7 @@ import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { EntreprisesTopbar } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
+import { DriveButton } from "@/components/drive-button";
 import {
   AssigneePicker,
   type TaskUserMini
@@ -41,6 +42,7 @@ type Entreprise = {
   type: string;
   color_accent: string;
   description: string | null;
+  drive_folder_url: string | null;
   monday_board_id: string | null;
   monday_board_name: string | null;
 };
@@ -416,7 +418,23 @@ export default function EntrepriseDetailPage() {
             <Briefcase className="h-5 w-5" />
           </span>
           <div className="flex-1">
-            <h1 className="text-2xl font-bold text-white">{ent.name}</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-2xl font-bold text-white">{ent.name}</h1>
+              <DriveButton
+                url={ent.drive_folder_url}
+                onSave={async (newUrl) => {
+                  const r = await authedFetch(
+                    `/api/v1/entreprises/${ent.id}`,
+                    {
+                      method: "PATCH",
+                      body: JSON.stringify({ drive_folder_url: newUrl })
+                    }
+                  );
+                  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                  setEnt({ ...ent, drive_folder_url: newUrl || null });
+                }}
+              />
+            </div>
             {ent.description ? (
               <p className="mt-1 text-sm text-white/60">{ent.description}</p>
             ) : null}

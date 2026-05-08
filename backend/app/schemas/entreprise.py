@@ -17,6 +17,7 @@ class EntrepriseBase(BaseModel):
     type: str = Field(default="gestion", max_length=32)
     color_accent: str = Field(default="#7c3aed", pattern=r"^#[0-9a-fA-F]{6}$")
     description: Optional[str] = None
+    drive_folder_url: Optional[str] = Field(default=None, max_length=1024)
     is_active: bool = True
 
 
@@ -32,6 +33,7 @@ class EntrepriseUpdate(BaseModel):
         default=None, pattern=r"^#[0-9a-fA-F]{6}$"
     )
     description: Optional[str] = None
+    drive_folder_url: Optional[str] = Field(default=None, max_length=1024)
     is_active: Optional[bool] = None
 
 

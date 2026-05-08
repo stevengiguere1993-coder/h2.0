@@ -27,6 +27,7 @@ import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { useProspectionLayout } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
+import { DriveButton } from "@/components/drive-button";
 import { ActivityTimeline } from "./_activity-timeline";
 import { AddressAutocomplete } from "./_address-autocomplete";
 import { AnalysesSection } from "./_analyses-section";
@@ -72,6 +73,7 @@ type Lead = {
   mailing_address: string | null;
   estimated_equity: number | null;
   estimated_equity_pct: number | null;
+  drive_folder_url: string | null;
 };
 
 type Transaction = {
@@ -596,15 +598,31 @@ export default function ProspectionDetailPage() {
         onOpenSidebar={onOpenSidebar}
         rightSlot={
           lead ? (
-            <Link
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              href={
-                `/prospection/analyse/nouveau?lead_id=${lead.id}` as any
-              }
-              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-brand-950 hover:bg-emerald-400"
-            >
-              <Calculator className="h-4 w-4" /> Analyser
-            </Link>
+            <div className="flex items-center gap-2">
+              <DriveButton
+                url={lead.drive_folder_url}
+                onSave={async (newUrl) => {
+                  const r = await authedFetch(
+                    `/api/v1/prospection/leads/${lead.id}`,
+                    {
+                      method: "PATCH",
+                      body: JSON.stringify({ drive_folder_url: newUrl })
+                    }
+                  );
+                  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                  setLead({ ...lead, drive_folder_url: newUrl || null });
+                }}
+              />
+              <Link
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={
+                  `/prospection/analyse/nouveau?lead_id=${lead.id}` as any
+                }
+                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-brand-950 hover:bg-emerald-400"
+              >
+                <Calculator className="h-4 w-4" /> Analyser
+              </Link>
+            </div>
           ) : undefined
         }
       />

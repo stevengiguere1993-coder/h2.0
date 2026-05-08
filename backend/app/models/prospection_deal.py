@@ -50,6 +50,12 @@ class ProspectionDeal(Base):
         Integer, nullable=False, default=0, server_default="0", index=True
     )
 
+    # URL du dossier Google Drive du deal. Bouton « Drive » dans le
+    # header de la fiche y mène. NULL = pas configuré.
+    drive_folder_url: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

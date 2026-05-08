@@ -342,6 +342,12 @@ async def init_db() -> None:
             # la fois (immeuble appartient à une entreprise OU un deal).
             ("imm_immeubles", "owner_entreprise_id", "INTEGER"),
             ("imm_immeubles", "owner_deal_id", "INTEGER"),
+            # Drive : URL du dossier Google Drive lié à l'entité.
+            # Bouton « Drive » dans le header de la fiche y mène.
+            # NULL = pas configuré.
+            ("entreprises", "drive_folder_url", "VARCHAR(1024)"),
+            ("prospection_leads", "drive_folder_url", "VARCHAR(1024)"),
+            ("prospection_deals", "drive_folder_url", "VARCHAR(1024)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
