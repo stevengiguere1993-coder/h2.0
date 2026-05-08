@@ -824,8 +824,8 @@ function TaskListView({
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-brand-800 bg-brand-900/40">
-      <table className="w-full text-[13px]">
+    <div className="overflow-x-auto rounded-xl border border-brand-800 bg-brand-900/40">
+      <table className="w-full min-w-[480px] text-[13px]">
         <thead>
           <tr
             className="text-[10px] font-semibold uppercase tracking-wider text-white/40"
