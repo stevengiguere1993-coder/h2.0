@@ -31,6 +31,7 @@ type PublicSoumission = {
   company_name: string;
   company_rbq: string;
   company_email: string;
+  pricing_kind?: "forfaitaire" | "estime";
 };
 
 function money(n: number): string {
@@ -295,6 +296,35 @@ export default function PublicSoumissionPage() {
         {data.client_note ? (
           <section className="mt-4 rounded-xl border border-accent-500/30 bg-accent-500/5 p-4 text-sm text-brand-100 whitespace-pre-line">
             {data.client_note}
+          </section>
+        ) : null}
+
+        {/* Clause client-facing pour les soumissions ESTIMÉES — clarifie
+            que les montants peuvent évoluer en cours de projet et que
+            l'équipe s'engage à tenir le client au courant. */}
+        {data.pricing_kind === "estime" ? (
+          <section className="mt-4 rounded-xl border border-amber-400/40 bg-amber-500/10 p-4 text-sm text-brand-100">
+            <p className="mb-2 text-xs font-bold uppercase tracking-wider text-amber-300">
+              Estimé — important
+            </p>
+            <p>
+              Cette soumission est un <strong>estimé</strong> et non un
+              prix forfaitaire fixe. Les montants présentés sont basés
+              sur notre meilleure évaluation des matériaux, de la
+              main-d&apos;œuvre et des conditions actuellement connues.
+            </p>
+            <p className="mt-2">
+              Les coûts réels peuvent <strong>varier en cours de projet</strong>{" "}
+              (découvertes en cours de travaux, ajustements de matériaux,
+              modifications demandées par le client, fluctuations des
+              prix fournisseurs, etc.).
+            </p>
+            <p className="mt-2">
+              Nous nous engageons à <strong>vous tenir informé en
+              continu</strong> de l&apos;avancement, des coûts engagés et
+              de tout écart significatif par rapport à cet estimé, afin
+              que les décisions soient prises ensemble.
+            </p>
           </section>
         ) : null}
 

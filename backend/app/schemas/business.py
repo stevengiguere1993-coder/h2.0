@@ -126,6 +126,9 @@ class SoumissionCreate(BaseModel):
     notes: Optional[str] = None
     client_note: Optional[str] = None
     property_address: Optional[str] = None
+    pricing_kind: str = Field(
+        default="forfaitaire", pattern="^(forfaitaire|estime)$"
+    )
 
 
 class SoumissionUpdate(BaseModel):
@@ -143,6 +146,9 @@ class SoumissionUpdate(BaseModel):
     notes: Optional[str] = None
     client_note: Optional[str] = None
     property_address: Optional[str] = None
+    pricing_kind: Optional[str] = Field(
+        default=None, pattern="^(forfaitaire|estime)$"
+    )
 
 
 class SoumissionRead(_Base):
@@ -164,6 +170,7 @@ class SoumissionRead(_Base):
     notes: Optional[str]
     client_note: Optional[str] = None
     property_address: Optional[str]
+    pricing_kind: str = "forfaitaire"
     created_at: datetime
 
 

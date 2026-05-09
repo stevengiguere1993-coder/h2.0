@@ -360,6 +360,13 @@ async def init_db() -> None:
             ("help_requests", "screenshot_blob", "BYTEA"),
             ("help_requests", "screenshot_content_type", "VARCHAR(64)"),
             ("help_requests", "resolution_notes", "TEXT"),
+            # Type de soumission (forfaitaire / estime). Défaut
+            # "forfaitaire" (95% des cas en construction).
+            (
+                "soumissions",
+                "pricing_kind",
+                "VARCHAR(16) NOT NULL DEFAULT 'forfaitaire'",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

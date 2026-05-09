@@ -45,6 +45,7 @@ type Soumission = {
   notes: string | null;
   client_note: string | null;
   property_address: string | null;
+  pricing_kind?: "forfaitaire" | "estime";
   created_at: string;
   qbo_estimate_id?: string | null;
   qbo_doc_number?: string | null;
@@ -130,6 +131,9 @@ export default function SoumissionDetailPage() {
   const [notes, setNotes] = useState("");
   const [clientNote, setClientNote] = useState("");
   const [propertyAddress, setPropertyAddress] = useState("");
+  const [pricingKind, setPricingKind] = useState<"forfaitaire" | "estime">(
+    "forfaitaire"
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -153,6 +157,9 @@ export default function SoumissionDetailPage() {
         setNotes(sData.notes || "");
         setClientNote(sData.client_note || "");
         setPropertyAddress(sData.property_address || "");
+        setPricingKind(
+          sData.pricing_kind === "estime" ? "estime" : "forfaitaire"
+        );
         setSendSubject(`Soumission ${sData.reference} — ${sData.title}`);
         if (sData.contact_request_id) {
           const cr = await authedFetch(
@@ -371,7 +378,8 @@ export default function SoumissionDetailPage() {
         valid_until: validUntil ? new Date(validUntil).toISOString() : null,
         notes: notes.trim() || null,
         client_note: clientNote.trim() || null,
-        property_address: propertyAddress.trim() || null
+        property_address: propertyAddress.trim() || null,
+        pricing_kind: pricingKind
       };
       const res = await authedFetch(`/api/v1/soumissions/${id}`, {
         method: "PATCH",
@@ -886,6 +894,44 @@ export default function SoumissionDetailPage() {
                     onChange={(e) => setValidUntil(e.target.value)}
                     className="input sm:w-60"
                   />
+                </div>
+
+                {/* Type de soumission : forfaitaire (prix fixe) vs
+                    estimé (estimation à confirmer). En mode estimé,
+                    le PDF ET la page publique affichent une clause
+                    qui explique au client que les coûts peuvent
+                    varier. */}
+                <div>
+                  <label className="label">Type de soumission</label>
+                  <div className="inline-flex rounded-lg border border-brand-700 bg-brand-950/40 p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setPricingKind("forfaitaire")}
+                      className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                        pricingKind === "forfaitaire"
+                          ? "bg-accent-500 text-brand-950 shadow"
+                          : "text-white/70 hover:text-white"
+                      }`}
+                    >
+                      Forfaitaire
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPricingKind("estime")}
+                      className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                        pricingKind === "estime"
+                          ? "bg-amber-500 text-brand-950 shadow"
+                          : "text-white/70 hover:text-white"
+                      }`}
+                    >
+                      Estimé
+                    </button>
+                  </div>
+                  <p className="mt-1 text-xs text-white/50">
+                    {pricingKind === "forfaitaire"
+                      ? "Prix fixe garanti — le client paye le total même si nos coûts dépassent."
+                      : "Estimé — clause client-facing ajoutée au PDF et à la page publique : « les coûts peuvent varier en cours de projet, on tient le client au courant »."}
+                  </p>
                 </div>
 
                 <div>

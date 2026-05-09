@@ -58,6 +58,7 @@ class PublicSoumission(BaseModel):
     company_name: str = "Horizon Services Immobiliers"
     company_rbq: str = "RBQ 5868-5991-01"
     company_email: str = "info@immohorizon.com"
+    pricing_kind: str = "forfaitaire"  # "forfaitaire" | "estime"
 
 
 class AcceptRequest(BaseModel):
@@ -158,6 +159,7 @@ async def public_read(token: str, db: DBSession) -> PublicSoumission:
         tps=tps,
         tvq=tvq,
         total=total,
+        pricing_kind=getattr(sm, "pricing_kind", "forfaitaire") or "forfaitaire",
     )
 
 
