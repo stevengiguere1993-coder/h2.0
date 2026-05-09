@@ -408,6 +408,31 @@ def _render_bytes(
         )
         story.append(Spacer(1, 12))
 
+    # Si la soumission est de type ESTIMÉ (pricing_kind="estime"),
+    # on insère une clause client-facing qui clarifie que les
+    # montants sont estimatifs et peuvent évoluer en cours de
+    # projet — avec engagement à tenir le client au courant.
+    if getattr(sm, "pricing_kind", "forfaitaire") == "estime":
+        story.append(Paragraph("ESTIMÉ — IMPORTANT", s["accent"]))
+        story.append(
+            Paragraph(
+                "Cette soumission est un <b>estimé</b> et non un prix "
+                "forfaitaire fixe. Les montants présentés sont basés sur "
+                "notre meilleure évaluation des matériaux, de la "
+                "main-d'œuvre et des conditions actuellement connues. "
+                "Les coûts réels peuvent varier en cours de projet "
+                "(découvertes en cours de travaux, ajustements de "
+                "matériaux, modifications demandées par le client, "
+                "fluctuations des prix fournisseurs, etc.). "
+                "Nous nous engageons à <b>tenir le client informé en "
+                "continu</b> de l'avancement, des coûts engagés et de "
+                "tout écart significatif par rapport à cet estimé, "
+                "afin que les décisions soient prises ensemble.",
+                s["body"],
+            )
+        )
+        story.append(Spacer(1, 12))
+
     # Conditions
     story.append(Paragraph("CONDITIONS", s["accent"]))
     story.append(

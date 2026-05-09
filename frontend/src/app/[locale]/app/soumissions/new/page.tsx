@@ -54,6 +54,11 @@ export default function NewSoumissionPage() {
   );
   const [title, setTitle] = useState("");
   const [propertyAddress, setPropertyAddress] = useState("");
+  // Type de soumission : forfaitaire (montant fixe) vs estime
+  // (estimation à confirmer / refacturable selon la réalité).
+  const [pricingKind, setPricingKind] = useState<"forfaitaire" | "estime">(
+    "forfaitaire"
+  );
   const [validUntil, setValidUntil] = useState<string>(() => {
     const d = new Date();
     d.setDate(d.getDate() + 30);
@@ -122,6 +127,7 @@ export default function NewSoumissionPage() {
       if (propertyAddress.trim()) {
         payload.property_address = propertyAddress.trim();
       }
+      payload.pricing_kind = pricingKind;
 
       const res = await authedFetch("/api/v1/soumissions", {
         method: "POST",
@@ -277,6 +283,40 @@ export default function NewSoumissionPage() {
             <p className="mt-1 text-xs text-white/50">
               Pré-remplie depuis le prospect si disponible. Street View
               disponible après création sur la page de la soumission.
+            </p>
+          </div>
+
+          {/* Type de soumission : forfaitaire (défaut) ou estimé. */}
+          <div>
+            <label className="label">Type de soumission</label>
+            <div className="inline-flex rounded-lg border border-brand-700 bg-brand-950/40 p-0.5">
+              <button
+                type="button"
+                onClick={() => setPricingKind("forfaitaire")}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                  pricingKind === "forfaitaire"
+                    ? "bg-accent-500 text-brand-950 shadow"
+                    : "text-white/70 hover:text-white"
+                }`}
+              >
+                Forfaitaire
+              </button>
+              <button
+                type="button"
+                onClick={() => setPricingKind("estime")}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                  pricingKind === "estime"
+                    ? "bg-accent-500 text-brand-950 shadow"
+                    : "text-white/70 hover:text-white"
+                }`}
+              >
+                Estimé
+              </button>
+            </div>
+            <p className="mt-1 text-xs text-white/50">
+              {pricingKind === "forfaitaire"
+                ? "Prix fixe garanti — le client paye le total même si nos coûts dépassent."
+                : "Estimation à confirmer — refacturable selon les heures et matériaux réels."}
             </p>
           </div>
 

@@ -44,6 +44,13 @@ class Soumission(Base, TimestampUpdateMixin):
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=SoumissionStatus.DRAFT.value, index=True
     )
+    # Type de soumission : "forfaitaire" (montant fixe garanti) ou
+    # "estime" (estimation à confirmer / refacturable selon réalité).
+    # Influence l'affichage côté UI et le wording dans le PDF.
+    pricing_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False,
+        default="forfaitaire", server_default="forfaitaire",
+    )
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     valid_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
