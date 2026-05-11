@@ -205,6 +205,12 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
     best_refi_amount: Mapped[Optional[float]] = mapped_column(
         Numeric(14, 2), nullable=True
     )
+    # Nom du programme qui a donné la meilleure équité (« SCHL
+    # standard », « SCHL Efficacité énergétique (50 pts) »,
+    # « SCHL Abordabilité + Efficacité (100 pts) »).
+    best_refi_program: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
 
     # Notes internes (champ libre admin).
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

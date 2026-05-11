@@ -126,6 +126,7 @@ class LeadAnalysisRead(BaseModel):
 
     analysis_results_json: Optional[str] = None
     best_refi_amount: Optional[float] = None
+    best_refi_program: Optional[str] = None
     notes: Optional[str] = None
     converted_to_lead_id: Optional[int] = None
 
@@ -149,6 +150,7 @@ class LeadAnalysisListItem(BaseModel):
     nb_logements: Optional[int]
     annee_construction: Optional[int]
     best_refi_amount: Optional[float]
+    best_refi_program: Optional[str] = None
     type_batiment: Optional[str]
     converted_to_lead_id: Optional[int]
     created_at: datetime
@@ -234,6 +236,7 @@ def _to_list_item(rec: LeadAnalysis, attachments_count: int) -> LeadAnalysisList
             if rec.best_refi_amount is not None
             else None
         ),
+        best_refi_program=rec.best_refi_program,
         type_batiment=rec.type_batiment,
         converted_to_lead_id=rec.converted_to_lead_id,
         created_at=rec.created_at,
@@ -593,4 +596,107 @@ async def get_attachment(
                 f'inline; filename="{att.filename}"'
             )
         },
+    )
+
+
+# ── Analyse financière (Phase 3b) ──────────────────────────────────
+
+
+class RunAnalysisResult(BaseModel):
+    """Réponse de l'endpoint run-financial-analysis."""
+    best_refi_amount: float
+    best_refi_program: str
+    analysis_results: dict
+
+
+@router.post(
+    "/{analysis_id}/run-financial-analysis",
+    response_model=RunAnalysisResult,
+    summary="Lance le moteur de calcul financier (réplique Excel).",
+)
+async def run_financial_analysis(
+    analysis_id: int, db: DBSession, user: CurrentUser
+) -> RunAnalysisResult:
+    """Lit les champs du `LeadAnalysis`, lance le moteur de calcul
+    (réplique exacte des 2 calculateurs Excel), persiste le résultat
+    en JSON, met à jour `best_refi_amount` + `best_refi_program`,
+    et bascule le statut en `decision_en_attente`."""
+    _require_prospection(user)
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+
+    from app.services.lead_analysis_finance import FinanceInputs, compute_all
+
+    # Désérialise les loyers projetés (typologie_prix) depuis le JSON
+    # stocké dans `loyers_projetes_json` : { "3.5": 1400, "4.5": 1600 }
+    loyers_projetes: dict = {}
+    if rec.loyers_projetes_json:
+        try:
+            loyers_projetes = json.loads(rec.loyers_projetes_json) or {}
+        except Exception:  # noqa: BLE001
+            loyers_projetes = {}
+
+    typologie: dict = {}
+    if rec.typology_json:
+        try:
+            raw = json.loads(rec.typology_json)
+            if isinstance(raw, dict):
+                typologie = {str(k): int(v or 0) for k, v in raw.items()}
+        except Exception:  # noqa: BLE001
+            typologie = {}
+
+    # Loyer abordable (APH SELECT) — stocké comme premier item du JSON
+    # `loyers_max_abordabilite_json` (clé arbitraire « abordable »).
+    loyer_abord = 0.0
+    if rec.loyers_max_abordabilite_json:
+        try:
+            d = json.loads(rec.loyers_max_abordabilite_json) or {}
+            loyer_abord = float(d.get("abordable", 0) or 0)
+        except Exception:  # noqa: BLE001
+            loyer_abord = 0.0
+
+    inputs = FinanceInputs(
+        adresse=rec.address or "",
+        prix_achat=float(rec.asking_price or 0),
+        nombre_logements=int(rec.nb_logements or 0),
+        revenus_annuels=float(rec.revenus_bruts or 0),
+        taxes_municipales=float(rec.taxes_municipales or 0),
+        taxes_scolaires=float(rec.taxes_scolaires or 0),
+        assurances=float(rec.assurances or 0),
+        energie=float(rec.energie or 0),
+        depenses_autres=float(rec.depenses_autres or 0),
+        tga=0.04,  # défaut, sera stocké comme manuel-input plus tard
+        taux_interet_achat=0.04,
+        nb_logements_ajoutes=int(rec.nb_logements_ajoutes or 0),
+        nb_thermopompes_ajoutees=int(rec.nb_thermopompes_ajoutees or 0),
+        wifi_ajoute=bool(rec.ajout_wifi) if rec.ajout_wifi is not None else True,
+        reduction_energie_pct=float(rec.reduction_energie_pct or 0) / 100.0,
+        taux_interet_refi=float(rec.taux_interet_refi_pct or 0) / 100.0,
+        typologie=typologie,
+        typologie_prix=loyers_projetes,
+        duree_projet_annees=int(rec.duree_projet_annees or 2),
+        frais_developpement=float(rec.frais_developpement or 0),
+        frais_negociations=float(rec.frais_negociations or 0),
+        frais_travaux=float(rec.travaux_estimes or 0),
+        nouveau_loyer_abordable=loyer_abord,
+    )
+
+    use_aph = loyer_abord > 0 and inputs.nombre_logements > 0
+    results = compute_all(inputs, use_aph_select=use_aph)
+    results_dict = results.to_dict()
+
+    rec.analysis_results_json = json.dumps(results_dict)[:50_000]
+    rec.best_refi_amount = results.best_refi_amount
+    rec.best_refi_program = results.best_refi_program
+    # Auto-bascule en « Décision en attente » comme spécifié.
+    if rec.status == LeadAnalysisStatus.A_ANALYSER.value:
+        rec.status = LeadAnalysisStatus.DECISION_EN_ATTENTE.value
+    rec.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return RunAnalysisResult(
+        best_refi_amount=results.best_refi_amount,
+        best_refi_program=results.best_refi_program,
+        analysis_results=results_dict,
     )
