@@ -36,6 +36,11 @@ from app.models.entreprise_recurrence import (  # noqa: F401
 from app.models.entreprise_tache import EntrepriseTache, TacheStatus  # noqa: F401
 from app.models.entreprise_tache_assignee import EntrepriseTacheAssignee  # noqa: F401
 from app.models.entreprise_tache_immeuble import EntrepriseTacheImmeuble  # noqa: F401
+from app.models.lead_analysis import (  # noqa: F401
+    LeadAnalysis,
+    LeadAnalysisAttachment,
+    LeadAnalysisStatus,
+)
 from app.models.qg_embedding import Embedding  # noqa: F401
 from app.models.qg_strategic import (  # noqa: F401
     Activity,

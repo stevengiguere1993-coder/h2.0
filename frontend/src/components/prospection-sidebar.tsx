@@ -15,6 +15,7 @@ import {
   Plus,
   Settings,
   Smartphone,
+  Sparkles,
   Sun,
   Trello,
   UserCircle,
@@ -82,6 +83,12 @@ const PROSPECTION_SECTIONS: NavSection[] = [
         href: "/prospection/leads",
         label: "Suivi de leads",
         icon: Trello,
+        minRole: "employee"
+      },
+      {
+        href: "/prospection/analyses-leads",
+        label: "Analyses des leads",
+        icon: Sparkles,
         minRole: "employee"
       },
       {
