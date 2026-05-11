@@ -120,6 +120,8 @@ class LeadAnalysisRead(BaseModel):
     ajout_wifi: Optional[bool] = None
     reduction_energie_pct: Optional[float] = None
     taux_interet_refi_pct: Optional[float] = None
+    tga_pct: Optional[float] = None
+    taux_interet_achat_pct: Optional[float] = None
     duree_projet_annees: Optional[int] = None
     frais_developpement: Optional[float] = None
     frais_negociations: Optional[float] = None
@@ -198,6 +200,8 @@ class LeadAnalysisUpdate(BaseModel):
     ajout_wifi: Optional[bool] = None
     reduction_energie_pct: Optional[float] = None
     taux_interet_refi_pct: Optional[float] = None
+    tga_pct: Optional[float] = None
+    taux_interet_achat_pct: Optional[float] = None
     duree_projet_annees: Optional[int] = None
     frais_developpement: Optional[float] = None
     frais_negociations: Optional[float] = None
@@ -666,8 +670,8 @@ async def run_financial_analysis(
         assurances=float(rec.assurances or 0),
         energie=float(rec.energie or 0),
         depenses_autres=float(rec.depenses_autres or 0),
-        tga=0.04,  # défaut, sera stocké comme manuel-input plus tard
-        taux_interet_achat=0.04,
+        tga=float(rec.tga_pct or 4.0) / 100.0,
+        taux_interet_achat=float(rec.taux_interet_achat_pct or 4.0) / 100.0,
         nb_logements_ajoutes=int(rec.nb_logements_ajoutes or 0),
         nb_thermopompes_ajoutees=int(rec.nb_thermopompes_ajoutees or 0),
         wifi_ajoute=bool(rec.ajout_wifi) if rec.ajout_wifi is not None else True,

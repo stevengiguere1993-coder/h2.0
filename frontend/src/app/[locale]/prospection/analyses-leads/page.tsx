@@ -49,6 +49,7 @@ type Lead = {
   nb_logements: number | null;
   annee_construction: number | null;
   best_refi_amount: number | null;
+  best_refi_program: string | null;
   type_batiment: string | null;
   converted_to_lead_id: number | null;
   created_at: string;
@@ -635,12 +636,23 @@ function LeadCard({
           </span>
         ) : null}
         {lead.best_refi_amount != null ? (
-          <span className="inline-flex items-center gap-0.5 text-emerald-300">
-            <Flame className="h-2.5 w-2.5" /> refi{" "}
+          <span
+            className={`inline-flex items-center gap-0.5 ${
+              lead.best_refi_amount >= 0 ? "text-emerald-300" : "text-rose-300"
+            }`}
+            title={lead.best_refi_program || ""}
+          >
+            <Flame className="h-2.5 w-2.5" />
+            {lead.best_refi_amount >= 0 ? "refi" : "perte"}{" "}
             {fmtMoney(lead.best_refi_amount)}
           </span>
         ) : null}
       </div>
+      {lead.best_refi_program ? (
+        <p className="mt-0.5 truncate text-[9px] text-white/40" title={lead.best_refi_program}>
+          {lead.best_refi_program}
+        </p>
+      ) : null}
       <div className="mt-2 flex flex-wrap items-center gap-1">
         <button
           type="button"
@@ -808,6 +820,22 @@ type LeadDetail = Lead & {
   source_urls: string | null;
   source_text: string | null;
   notes: string | null;
+  // Inputs manuels analyse financière
+  loyers_projetes_json: string | null;
+  loyers_max_abordabilite_json: string | null;
+  travaux_estimes: number | null;
+  nb_logements_ajoutes: number | null;
+  nb_thermopompes_ajoutees: number | null;
+  ajout_wifi: boolean | null;
+  reduction_energie_pct: number | null;
+  taux_interet_refi_pct: number | null;
+  tga_pct: number | null;
+  taux_interet_achat_pct: number | null;
+  duree_projet_annees: number | null;
+  frais_developpement: number | null;
+  frais_negociations: number | null;
+  // Résultats analyse
+  analysis_results_json: string | null;
   attachments: Array<{
     id: number;
     filename: string;
@@ -815,6 +843,8 @@ type LeadDetail = Lead & {
     size_bytes: number;
   }>;
 };
+
+const TYPOLOGY_KEYS = ["2.5", "3.5", "4.5", "5.5", "6.5", "7.5", "8.5"];
 
 function LeadDetailModal({
   id,
@@ -1120,21 +1150,24 @@ function LeadDetailModal({
                 </section>
               ) : null}
 
-              {/* Section Analyse financière — Phase 3 placeholder */}
-              <section className="rounded-xl border border-dashed border-amber-400/30 bg-amber-500/5 p-4">
-                <div className="flex items-center gap-2">
-                  <Pause className="h-4 w-4 text-amber-300" />
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-amber-300">
-                    Analyse financière — à venir
-                  </h3>
-                </div>
-                <p className="mt-1 text-xs text-white/60">
-                  Phase 3 du projet : moteur de calcul qui réplique tes
-                  Excels (avec / sans abordabilité), bouton « Lancer
-                  l&apos;analyse », résultats cashflow + TGA + scénarios
-                  de refi.
-                </p>
-              </section>
+              {/* Section Analyse financière — inputs manuels + bouton */}
+              <ManualAnalysisSection
+                data={data}
+                onPatch={patchField}
+                onRefresh={async () => {
+                  // Recharge la fiche pour récupérer les résultats
+                  const r = await authedFetch(`/api/v1/lead-analyses/${id}`);
+                  if (r.ok) setData((await r.json()) as LeadDetail);
+                  onSaved();
+                }}
+              />
+
+              {/* Résultats si analyse exécutée */}
+              {data.analysis_results_json ? (
+                <AnalysisResultsTable
+                  resultsJson={data.analysis_results_json}
+                />
+              ) : null}
 
               {/* Notes internes */}
               <section>
@@ -1231,5 +1264,519 @@ function FieldNumber({
         className="input mt-1 font-mono text-xs"
       />
     </div>
+  );
+}
+
+// ─── Section infos manuelles d'analyse + bouton Lancer ─────────
+
+function ManualAnalysisSection({
+  data,
+  onPatch,
+  onRefresh
+}: {
+  data: LeadDetail;
+  onPatch: (field: string, value: unknown) => void;
+  onRefresh: () => Promise<void>;
+}) {
+  // Typologie parsée pour savoir quels prix H demander.
+  const typology = useMemo<Record<string, number>>(() => {
+    if (!data.typology_json) return {};
+    try {
+      const j = JSON.parse(data.typology_json);
+      if (j && typeof j === "object") return j;
+    } catch {
+      /* ignore */
+    }
+    return {};
+  }, [data.typology_json]);
+
+  // Loyers projetés (H6..H12) — seulement où G > 0.
+  const [prixLoyers, setPrixLoyers] = useState<Record<string, string>>(
+    () => {
+      try {
+        const j = JSON.parse(data.loyers_projetes_json || "{}");
+        const m: Record<string, string> = {};
+        for (const k of Object.keys(j)) m[k] = String(j[k]);
+        return m;
+      } catch {
+        return {};
+      }
+    }
+  );
+
+  // Loyer abordable (D8 APH SELECT).
+  const [loyerAbord, setLoyerAbord] = useState<string>(() => {
+    try {
+      const j = JSON.parse(data.loyers_max_abordabilite_json || "{}");
+      return String(j.abordable ?? "");
+    } catch {
+      return "";
+    }
+  });
+
+  const [running, setRunning] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Champs B/G obligatoires manquants.
+  const missingRequired = useMemo(() => {
+    const missing: string[] = [];
+    if (!data.address) missing.push("Adresse");
+    if (!data.asking_price) missing.push("Prix demandé");
+    if (!data.nb_logements) missing.push("Nb logements");
+    if (!data.revenus_bruts) missing.push("Revenus annuels");
+    if (data.taxes_municipales == null) missing.push("Taxes municipales");
+    if (data.taxes_scolaires == null) missing.push("Taxes scolaires");
+    if (data.assurances == null) missing.push("Assurances");
+    if (data.energie == null) missing.push("Énergie");
+    if (data.depenses_autres == null) missing.push("Autres dépenses");
+    return missing;
+  }, [data]);
+
+  function setPrixLoyer(typo: string, v: string) {
+    const next = { ...prixLoyers, [typo]: v };
+    setPrixLoyers(next);
+    const asJson: Record<string, number> = {};
+    for (const [k, val] of Object.entries(next)) {
+      const num = Number(val);
+      if (Number.isFinite(num) && num > 0) asJson[k] = num;
+    }
+    onPatch("loyers_projetes_json", JSON.stringify(asJson));
+  }
+
+  function setLoyerAbordable(v: string) {
+    setLoyerAbord(v);
+    const num = Number(v);
+    onPatch(
+      "loyers_max_abordabilite_json",
+      JSON.stringify(Number.isFinite(num) && num > 0 ? { abordable: num } : {})
+    );
+  }
+
+  async function launchAnalysis() {
+    setErr(null);
+    if (missingRequired.length > 0) {
+      setErr(
+        `Champs obligatoires manquants : ${missingRequired.join(", ")}.`
+      );
+      return;
+    }
+    setRunning(true);
+    try {
+      const r = await authedFetch(
+        `/api/v1/lead-analyses/${data.id}/run-financial-analysis`,
+        { method: "POST" }
+      );
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(t.slice(0, 240) || `HTTP ${r.status}`);
+      }
+      await onRefresh();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-accent-500/30 bg-accent-500/5 p-4">
+      <div className="flex items-center gap-2">
+        <Sparkles className="h-4 w-4 text-accent-500" />
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-accent-500">
+          Analyse financière — inputs manuels
+        </h3>
+      </div>
+
+      {missingRequired.length > 0 ? (
+        <p className="mt-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-300">
+          ⚠ Champs « Infos extraites » obligatoires manquants :{" "}
+          <strong>{missingRequired.join(", ")}</strong>. Complète-les
+          dans la section ci-dessus avant de lancer l&apos;analyse.
+        </p>
+      ) : null}
+
+      {/* Inputs avec défaut */}
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <FieldNumber
+          label="TGA (%)"
+          value={data.tga_pct ?? 4}
+          onSave={(v) => onPatch("tga_pct", v ?? 4)}
+        />
+        <FieldNumber
+          label="Taux intérêt achat (%)"
+          value={data.taux_interet_achat_pct ?? 4}
+          onSave={(v) => onPatch("taux_interet_achat_pct", v ?? 4)}
+        />
+        <FieldYesNo
+          label="Wifi inclus refi"
+          value={data.ajout_wifi ?? true}
+          onSave={(v) => onPatch("ajout_wifi", v)}
+        />
+      </div>
+
+      {/* Inputs purement manuels */}
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <FieldNumber
+          label="Logements ajoutés refi"
+          value={data.nb_logements_ajoutes}
+          onSave={(v) => onPatch("nb_logements_ajoutes", v)}
+        />
+        <FieldNumber
+          label="Thermopompes ajoutées"
+          value={data.nb_thermopompes_ajoutees}
+          onSave={(v) => onPatch("nb_thermopompes_ajoutees", v)}
+        />
+        <FieldNumber
+          label="% réduction énergie"
+          value={data.reduction_energie_pct}
+          onSave={(v) => onPatch("reduction_energie_pct", v)}
+        />
+        <FieldNumber
+          label="Taux d'intérêt refi (%)"
+          value={data.taux_interet_refi_pct}
+          onSave={(v) => onPatch("taux_interet_refi_pct", v)}
+        />
+        <FieldNumber
+          label="Durée projet (années)"
+          value={data.duree_projet_annees}
+          onSave={(v) => onPatch("duree_projet_annees", v)}
+        />
+        <FieldNumber
+          label="Frais développement ($)"
+          value={data.frais_developpement}
+          onSave={(v) => onPatch("frais_developpement", v)}
+        />
+        <FieldNumber
+          label="Frais négociations ($)"
+          value={data.frais_negociations}
+          onSave={(v) => onPatch("frais_negociations", v)}
+        />
+        <FieldNumber
+          label="Frais travaux ($)"
+          value={data.travaux_estimes}
+          onSave={(v) => onPatch("travaux_estimes", v)}
+        />
+        <FieldNumber
+          label="Loyer abordable (APH SELECT)"
+          value={loyerAbord ? Number(loyerAbord) : null}
+          onSave={(v) => setLoyerAbordable(v == null ? "" : String(v))}
+        />
+      </div>
+
+      {/* Prix loyers projetés par typologie (H6..H12, où G > 0) */}
+      <div className="mt-3">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
+          Loyers projetés par typologie (uniquement où la quantité &gt; 0)
+        </p>
+        <div className="mt-1 grid gap-2 sm:grid-cols-3">
+          {TYPOLOGY_KEYS.filter((k) => (typology[k] || 0) > 0).map((k) => (
+            <div key={k}>
+              <label className="text-[10px] uppercase tracking-wider text-white/50">
+                {k} ({typology[k]} log.) — $/mois
+              </label>
+              <input
+                type="number"
+                step="any"
+                value={prixLoyers[k] ?? ""}
+                onChange={(e) => setPrixLoyer(k, e.target.value)}
+                className="input font-mono text-xs"
+                placeholder="ex. 1400"
+              />
+            </div>
+          ))}
+          {TYPOLOGY_KEYS.filter((k) => (typology[k] || 0) > 0).length === 0 ? (
+            <p className="col-span-3 text-[11px] text-white/40">
+              Renseigne d&apos;abord la typologie dans les infos extraites
+              ci-dessus.
+            </p>
+          ) : null}
+        </div>
+      </div>
+
+      {err ? (
+        <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-300">
+          {err}
+        </p>
+      ) : null}
+
+      {/* Bouton Lancer */}
+      <div className="mt-4 flex justify-end">
+        <button
+          type="button"
+          onClick={() => void launchAnalysis()}
+          disabled={running || missingRequired.length > 0}
+          className="btn-accent inline-flex items-center text-sm disabled:opacity-60"
+        >
+          {running ? (
+            <>
+              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              Calcul en cours…
+            </>
+          ) : (
+            <>
+              <Flame className="mr-1.5 h-4 w-4" />
+              Lancer l&apos;analyse
+            </>
+          )}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function FieldYesNo({
+  label,
+  value,
+  onSave
+}: {
+  label: string;
+  value: boolean;
+  onSave: (v: boolean) => void;
+}) {
+  return (
+    <div>
+      <label className="text-[10px] uppercase tracking-wider text-white/50">
+        {label}
+      </label>
+      <div className="mt-1 inline-flex rounded-md border border-brand-700 bg-brand-950 p-0.5">
+        <button
+          type="button"
+          onClick={() => onSave(true)}
+          className={`rounded px-3 py-1 text-[11px] font-semibold ${
+            value ? "bg-emerald-500 text-brand-950" : "text-white/60"
+          }`}
+        >
+          Oui
+        </button>
+        <button
+          type="button"
+          onClick={() => onSave(false)}
+          className={`rounded px-3 py-1 text-[11px] font-semibold ${
+            !value ? "bg-rose-500 text-white" : "text-white/60"
+          }`}
+        >
+          Non
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Tableau de résultats post-analyse ─────────────────────────
+
+type ScenarioResult = {
+  name: string;
+  label: string;
+  ltv: number;
+  amort_annees: number;
+  rcd: number;
+  nb_log: number;
+  loyer_mois: number;
+  revenus_totaux: number;
+  depenses_total: number;
+  revenus_net: number;
+  valeur_eco_tga: number;
+  valeur_eco_rcd: number;
+  valeur_marchande: number | null;
+  valeur_retenue: number;
+  financement: number;
+  mdf_necessaire: number | null;
+  equite_a_la_fin: number | null;
+};
+
+type AnalysisResults = {
+  frais_demarrage_total: number;
+  prix_acquisition: number;
+  typology: {
+    h13_loyer_pondere: number;
+    nb_abordables: number;
+    nb_pdm: number;
+    nouveau_loyer_moyen_pdm: number;
+  };
+  scenarios: {
+    achat: ScenarioResult;
+    refi_schl: ScenarioResult;
+    refi_aph_50: ScenarioResult;
+    refi_aph_100: ScenarioResult | null;
+  };
+  best_refi: {
+    amount: number;
+    program: string;
+  };
+};
+
+function AnalysisResultsTable({ resultsJson }: { resultsJson: string }) {
+  const data = useMemo<AnalysisResults | null>(() => {
+    try {
+      return JSON.parse(resultsJson) as AnalysisResults;
+    } catch {
+      return null;
+    }
+  }, [resultsJson]);
+
+  if (!data) return null;
+
+  const cols: Array<[string, ScenarioResult | null]> = [
+    ["Achat", data.scenarios.achat],
+    ["SCHL standard", data.scenarios.refi_schl],
+    ["SCHL Efficacité (50 pts)", data.scenarios.refi_aph_50],
+    ["SCHL Abord+Eff (100 pts)", data.scenarios.refi_aph_100]
+  ];
+
+  return (
+    <section className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-emerald-300">
+          ✓ Résultats de l&apos;analyse financière
+        </h3>
+        <div className="text-[11px] text-white/70">
+          <strong className="text-emerald-300">Best refi</strong> :{" "}
+          {fmtMoney(data.best_refi.amount)} —{" "}
+          <span className="text-white/60">{data.best_refi.program}</span>
+        </div>
+      </div>
+
+      <p className="mt-1 text-[10px] text-white/40">
+        Frais démarrage : {fmtMoney(data.frais_demarrage_total)} · Prix
+        acquisition : {fmtMoney(data.prix_acquisition)} · Loyer pondéré H13 :{" "}
+        {fmtMoney(data.typology.h13_loyer_pondere)} /mois
+        {data.typology.nb_abordables > 0
+          ? ` · ${data.typology.nb_abordables} abord / ${data.typology.nb_pdm} PDM`
+          : ""}
+      </p>
+
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full min-w-[640px] text-[11px]">
+          <thead>
+            <tr className="text-white/40">
+              <th className="px-2 py-1 text-left">Métrique</th>
+              {cols.map(([label, s]) => (
+                <th key={label} className="px-2 py-1 text-right">
+                  {label}
+                  {s ? (
+                    <span className="ml-1 text-white/30">
+                      ({(s.ltv * 100).toFixed(0)}% · {s.amort_annees}ans · RCD{" "}
+                      {s.rcd.toFixed(2)})
+                    </span>
+                  ) : null}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            <ResultRow
+              label="Loyer moyen ($/mois)"
+              cols={cols}
+              pick={(s) => s.loyer_mois}
+            />
+            <ResultRow
+              label="Revenus totaux ($/an)"
+              cols={cols}
+              pick={(s) => s.revenus_totaux}
+            />
+            <ResultRow
+              label="Dépenses totales"
+              cols={cols}
+              pick={(s) => s.depenses_total}
+            />
+            <ResultRow
+              label="Revenus net"
+              cols={cols}
+              pick={(s) => s.revenus_net}
+            />
+            <ResultRow
+              label="Valeur éco RDC"
+              cols={cols}
+              pick={(s) => s.valeur_eco_rcd}
+            />
+            <ResultRow
+              label="Valeur éco TGA"
+              cols={cols}
+              pick={(s) => s.valeur_eco_tga}
+            />
+            <ResultRow
+              label="Valeur marchande"
+              cols={cols}
+              pick={(s) => s.valeur_marchande}
+              fallback="—"
+            />
+            <ResultRow
+              label="Valeur retenue"
+              cols={cols}
+              pick={(s) => s.valeur_retenue}
+              bold
+            />
+            <ResultRow
+              label="Prêt accordé"
+              cols={cols}
+              pick={(s) => s.financement}
+              bold
+            />
+            <ResultRow
+              label="MDF nécessaire"
+              cols={cols}
+              pick={(s) => s.mdf_necessaire}
+              fallback="N/A"
+            />
+            <ResultRow
+              label="Équité à la fin"
+              cols={cols}
+              pick={(s) => s.equite_a_la_fin}
+              fallback="N/A"
+              colorEquite
+            />
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function ResultRow({
+  label,
+  cols,
+  pick,
+  bold,
+  fallback,
+  colorEquite
+}: {
+  label: string;
+  cols: Array<[string, ScenarioResult | null]>;
+  pick: (s: ScenarioResult) => number | null | undefined;
+  bold?: boolean;
+  fallback?: string;
+  colorEquite?: boolean;
+}) {
+  return (
+    <tr className="border-t border-brand-800/60">
+      <td className="px-2 py-1 text-white/60">{label}</td>
+      {cols.map(([k, s]) => {
+        if (!s) return (
+          <td key={k} className="px-2 py-1 text-right text-white/30">—</td>
+        );
+        const val = pick(s);
+        if (val == null) return (
+          <td key={k} className="px-2 py-1 text-right text-white/30">
+            {fallback || "—"}
+          </td>
+        );
+        const txt = fmtMoney(val);
+        const tone = colorEquite
+          ? val >= 0
+            ? "text-emerald-300"
+            : "text-rose-300"
+          : bold
+            ? "text-white"
+            : "text-white/80";
+        return (
+          <td
+            key={k}
+            className={`px-2 py-1 text-right font-mono tabular-nums ${tone} ${bold ? "font-bold" : ""}`}
+          >
+            {txt}
+          </td>
+        );
+      })}
+    </tr>
   );
 }

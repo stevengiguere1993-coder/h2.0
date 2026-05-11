@@ -368,6 +368,16 @@ async def init_db() -> None:
                 "VARCHAR(16) NOT NULL DEFAULT 'forfaitaire'",
             ),
             ("lead_analyses", "best_refi_program", "VARCHAR(128)"),
+            (
+                "lead_analyses",
+                "tga_pct",
+                "NUMERIC(5,3) DEFAULT 4.0",
+            ),
+            (
+                "lead_analyses",
+                "taux_interet_achat_pct",
+                "NUMERIC(5,3) DEFAULT 4.0",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
