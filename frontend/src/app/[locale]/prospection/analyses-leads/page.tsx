@@ -97,9 +97,11 @@ const COLUMNS: Array<{
 
 function fmtMoney(n: number | null): string {
   if (n == null) return "—";
-  if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(2)} M$`;
-  if (Math.abs(n) >= 1_000) return `${(n / 1_000).toFixed(0)} k$`;
-  return `${Math.round(n)} $`;
+  const rounded = Math.round(n);
+  const sign = rounded < 0 ? "-" : "";
+  const abs = Math.abs(rounded).toString();
+  const withSep = abs.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return `${sign}${withSep} $`;
 }
 
 function fmtDate(iso: string): string {
