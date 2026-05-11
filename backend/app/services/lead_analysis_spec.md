@@ -414,3 +414,48 @@ revenus_refi_aph_select = (
     + nb_logements_pdm * D9_loyer_moyen_pdm
 ) * 12
 ```
+
+---
+
+## 10. Décisions finales — Steven (12 mai 2026, 2e tour)
+
+### Réponses aux 4 questions ouvertes
+1. **Frais dev/négo/travaux** : éditable cas par cas (pas de défauts proposés). Inputs libres.
+2. **Énergie côté refi** : `(1 − D7)` s'applique **uniquement aux colonnes refi** (pas à l'achat). Justification : pendant la possession pré-refinancement, on fait des travaux qui réduisent la facture énergétique avant le refi. Cohérent avec la formule Excel originale.
+3. **B5 (frais démarrage)** : **strict auto = L19**, pas d'override manuel.
+4. **APH SELECT variante D** : `LTV 0,95 / amort 50 ans / RCD 1,10` confirmé — programme **SCHL APH Select**.
+
+### Bonus : 3 scénarios refi à exposer (et non 2)
+
+Chaque analyse roule **les 2 calculateurs** et produit **3 scénarios** :
+
+| # | Programme                               | Source         | LTV  | Amort | RCD  |
+|---|------------------------------------------|----------------|------|-------|------|
+| 1 | SCHL standard                            | Col C          | 0,85 | 35    | 1,30 |
+| 2 | SCHL Efficacité énergétique (50 pts)     | Col D OFFICIEL | 0,85 | 40    | 1,10 |
+| 3 | SCHL Abordabilité + Efficacité (100 pts) | Col D APH SEL  | 0,95 | 50    | 1,10 |
+
+(Col C est identique entre les 2 calculateurs : on la calcule une seule fois.)
+
+### Best refi pour la carte kanban
+```python
+scenarios = [
+    {"nom": "SCHL standard",                          "equite": equite_schl},
+    {"nom": "SCHL Efficacité énergétique (50 pts)",   "equite": equite_aph_50},
+    {"nom": "SCHL Abordabilité + Efficacité (100 pts)","equite": equite_aph_100},
+]
+best = max(scenarios, key=lambda s: s["equite"])
+
+# Affichage carte kanban :
+#   Si best.equite > 0 :  "Meilleur refi : 245 000 $ — SCHL Abord+Eff (100 pts)"
+#   Sinon (tous négatifs): "Moins pire : -85 000 $ — SCHL Efficacité (50 pts)"
+```
+
+Le champ `best_refi_amount` reçoit `best.equite`. Un nouveau champ
+`best_refi_program` (TEXT) reçoit `best.nom` pour qu'on puisse l'afficher
+sur la carte.
+
+### Implication côté code
+- Le moteur retourne 4 colonnes : `achat`, `refi_schl_standard`, `refi_aph_50`, `refi_aph_100`.
+- L'UI fiche montre les 4 côte à côte (tableau récap).
+- L'UI carte kanban montre uniquement `best_refi_amount` + `best_refi_program`.
