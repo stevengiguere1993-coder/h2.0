@@ -315,3 +315,102 @@ equite_apres_aph50     ≈  -108 009   # toujours négatif mais meilleur
 6. **Best refi pour la carte kanban** : on prend `max(equite_schl, equite_aph)`.
    Si les deux sont négatifs (mauvais cas), on affiche le « moins pire ».
    Ok ou on affiche null ?
+
+---
+
+## 8. Précisions inputs (validation Steven — 12 mai 2026)
+
+### Auto-importé via l'extraction Claude (sinon manuel ou « Estimation IA »)
+- B3 (Adresse), B4 (Prix achat), B5 (Frais démarrage = auto via L19),
+  B6 (Nb logements), B7 (Revenus annuels), B8 (Taxes muni), B9 (Taxes
+  scolaires), B10 (Assurances), B11 (Énergie), B12 (Autres dépenses).
+- G6..G12 (Nombre de logements par typologie).
+
+**Règle de validation** : avant de pouvoir lancer l'analyse, tous les
+champs B3..B12 + G6..G12 doivent être remplis. Si l'extraction n'a
+pas trouvé une valeur, l'utilisateur a 2 options :
+  - Saisir manuellement.
+  - Cliquer un bouton « ✦ Estimation IA » qui demande à Claude
+    d'estimer la valeur manquante à partir des sources fournies +
+    valeurs typiques pour un multilogement québécois.
+
+### Inputs avec défaut (modifiables)
+- B13 (TGA) : **défaut 0,04 (4 %)** modifiable.
+- B14 (Taux intérêt achat) : **défaut 0,04 (4 %)** modifiable.
+- D6 (Wifi) : **défaut « Oui »** modifiable.
+
+### Inputs manuels purs (à remplir par l'utilisateur)
+- D4 (Nb logements ajoutés au refi)
+- D5 (Nb thermopompes ajoutées)
+- D7 (% réduction coût énergie)
+- D9 (Taux d'intérêt refinancement) — **OFFICIEL**
+- L3 (Nombre d'années du projet)
+- L14 (Frais de développement)
+- L15 (Frais de négociation)
+- L16 (Frais de travaux)
+- H6..H12 (Prix loyer par typologie) — **uniquement les lignes
+  où G > 0**. Si typo `4.5` a 0 logement, on ne demande pas H8.
+
+### Calculé automatiquement
+- B5 = L19 (somme des frais de démarrage).
+- D8 (Nouveau loyer moyen — OFFICIEL) = **H13** (moyenne pondérée
+  des loyers selon la typologie ; déjà dans l'Excel).
+- H13 = `Σ (G[typo] × H[typo]) / B6` (loyer pondéré).
+- L4..L13, L17, L18 = formules détaillées section 2.
+
+---
+
+## 9. Précisions APH SELECT (avec abordabilité)
+
+### Calcul automatique du nombre de logements abordables
+```python
+nb_logements_abordables = ceil(0.40 * nombre_logements_total)
+nb_logements_pdm        = nombre_logements_total - nb_logements_abordables
+```
+Exemple : 11 logements → ceil(0,40 × 11) = ceil(4,4) = **5 abordables**,
+**6 prix du marché (PDM)**.
+
+### Input manuel APH SELECT
+- D8 (Nouveau loyer abordable, $/mois) : **input utilisateur**.
+
+### Calcul automatique du nouveau loyer moyen PDM (`D9`)
+On prend les **logements les plus chers** d'abord, jusqu'à atteindre
+`nb_logements_pdm` unités. Algorithme :
+
+```python
+# 1. Tri des typologies par prix DÉCROISSANT
+# (uniquement les typologies avec G > 0)
+sorted_typos = sorted(
+    [(typo, G[typo], H[typo]) for typo in TYPOS if G[typo] > 0],
+    key=lambda x: x[2],  # par prix
+    reverse=True,        # décroissant
+)
+
+# 2. On remplit la « tranche PDM » avec les plus chers
+restant = nb_logements_pdm
+total_loyers_pdm = 0.0
+for typo, nb_dans_typo, prix in sorted_typos:
+    pris = min(restant, nb_dans_typo)
+    total_loyers_pdm += pris * prix
+    restant -= pris
+    if restant == 0:
+        break
+
+nouveau_loyer_moyen_pdm = total_loyers_pdm / nb_logements_pdm
+```
+
+**Exemple complet** (Steven, 12 mai 2026) :
+- Total = 11 logements (5 abordables, 6 PDM)
+- Typologie actuelle : 4 × 5½ à 1 500 $ + 7 × 4½ à 1 300 $
+- Sélection PDM (6 unités les plus chères) :
+  - 4 × 5½ à 1 500 $ = 6 000 $
+  - 2 × 4½ à 1 300 $ = 2 600 $ (les 2 restants de la tranche PDM)
+- `D9` = (6 000 + 2 600) / 6 ≈ **1 433,33 $/mois**
+
+### Revenus refi pour APH SELECT (col D)
+```python
+revenus_refi_aph_select = (
+    nb_logements_abordables * D8_loyer_abordable
+    + nb_logements_pdm * D9_loyer_moyen_pdm
+) * 12
+```
