@@ -285,6 +285,22 @@ def _map_extracted_to_lead(data: dict) -> dict:
 # ── Endpoints ──────────────────────────────────────────────────────
 
 
+# Défauts appliqués à la création d'une fiche `LeadAnalysis`
+# pour pré-remplir les champs manuels d'analyse financière.
+# Modifiables ensuite par l'utilisateur dans la fiche.
+DEFAULTS_NEW_ANALYSIS: dict = {
+    "nb_logements_ajoutes": 0,
+    "nb_thermopompes_ajoutees": 0,
+    "reduction_energie_pct": 0,
+    "taux_interet_refi_pct": 3.75,
+    "duree_projet_annees": 2,
+    "tga_pct": 4.0,
+    "taux_interet_achat_pct": 4.0,
+    "ajout_wifi": True,
+    "loyers_max_abordabilite_json": json.dumps({"abordable": 1090}),
+}
+
+
 @router.post(
     "/extract",
     response_model=ExtractResult,
@@ -349,6 +365,10 @@ async def extract_and_create(
     now = datetime.now(timezone.utc)
     for idx, item in enumerate(res.data or []):
         kwargs = _map_extracted_to_lead(item)
+        # Applique les défauts pour les champs manuels d'analyse
+        # avant les valeurs extraites (les extraites ne touchent
+        # jamais ces champs de toute façon).
+        kwargs = {**DEFAULTS_NEW_ANALYSIS, **kwargs}
         rec = LeadAnalysis(
             status=LeadAnalysisStatus.A_ANALYSER.value,
             source_urls=src_url_str if idx == 0 else None,
@@ -387,6 +407,7 @@ async def extract_and_create(
             source_text=src_text,
             extracted_json=None,
             created_by_user_id=getattr(user, "id", None),
+            **DEFAULTS_NEW_ANALYSIS,
             notes="Extraction IA n'a retourné aucun champ — à compléter manuellement.",
         )
         rec.created_at = now
