@@ -186,6 +186,14 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
     taux_interet_refi_pct: Mapped[Optional[float]] = mapped_column(
         Numeric(5, 3), nullable=True
     )
+    # B13 (Taux global d'actualisation) — défaut 4 %, modifiable.
+    tga_pct: Mapped[Optional[float]] = mapped_column(
+        Numeric(5, 3), nullable=True, default=4.0, server_default="4.0"
+    )
+    # B14 (Taux d'intérêt prêt à l'achat) — défaut 4 %, modifiable.
+    taux_interet_achat_pct: Mapped[Optional[float]] = mapped_column(
+        Numeric(5, 3), nullable=True, default=4.0, server_default="4.0"
+    )
     duree_projet_annees: Mapped[Optional[int]] = mapped_column(
         Integer, nullable=True
     )
