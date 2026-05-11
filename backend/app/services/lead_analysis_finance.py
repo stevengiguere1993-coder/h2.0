@@ -141,6 +141,25 @@ def pv_canadian(
     return -payment_monthly * factor
 
 
+def pmt_canadian(
+    rate_annual: float, n_months: int, principal: float
+) -> float:
+    """Paiement mensuel pour un prêt avec intérêt composé
+    semestriellement (convention canadienne). Inverse de `pv_canadian`.
+
+    Réplique Excel `PMT((1+rate/2)^(1/6)-1, n*12, -principal)`.
+    Retourne une valeur **positive** = paiement mensuel à débourser.
+    """
+    if n_months <= 0 or principal <= 0:
+        return 0.0
+    if rate_annual == 0:
+        return principal / n_months
+    rate_monthly = (1 + rate_annual / 2) ** (1 / 6) - 1
+    if rate_monthly == 0:
+        return principal / n_months
+    return principal * rate_monthly / (1 - (1 + rate_monthly) ** (-n_months))
+
+
 # ─── Agrégats de typologie ─────────────────────────────────────────
 
 
@@ -333,6 +352,13 @@ class ScenarioResult:
     hyp_max_vm: Optional[float]
     valeur_retenue: float
     financement: float
+    # Paiement mensuel actuel sur le `financement` au `taux_interet`
+    # du scénario, amortissement = `config.amort_annees` × 12 mois.
+    paiement_mensuel_actuel: float = 0.0
+    # Cashflow annuel = revenus_net − (paiement_mensuel_actuel × 12).
+    # Représente ce qu'il reste en poche chaque année après le service
+    # de la dette, en supposant qu'on emprunte le plein `financement`.
+    cashflow_annuel: float = 0.0
     mdf_necessaire: Optional[float] = None
     equite_a_la_fin: Optional[float] = None
 
@@ -385,6 +411,15 @@ def compute_scenario(
     # Financement total (R69)
     financement = valeur_retenue * config.ltv
 
+    # Paiement mensuel actuel sur le `financement` (au taux du
+    # scénario, amortissement = config.amort_annees) + cashflow.
+    paiement_mensuel_actuel = pmt_canadian(
+        rate_annual=taux_interet,
+        n_months=config.amort_annees * 12,
+        principal=financement,
+    )
+    cashflow_annuel = revenus_net - paiement_mensuel_actuel * 12.0
+
     return ScenarioResult(
         config=config,
         nb_log=nb_log,
@@ -401,6 +436,8 @@ def compute_scenario(
         hyp_max_vm=hyp_max_vm,
         valeur_retenue=valeur_retenue,
         financement=financement,
+        paiement_mensuel_actuel=paiement_mensuel_actuel,
+        cashflow_annuel=cashflow_annuel,
     )
 
 
@@ -555,6 +592,12 @@ class FinanceResults:
             "frais_demarrage_total": self.frais_demarrage.total,
             "prix_acquisition": self.prix_acquisition,
             "mdf_preteur_b": self.mdf_preteur_b,
+            # Composantes du MDF prêteur B (pour breakdown UI) :
+            #   mdf_25pct_prix_achat (25 % × prix d'achat)
+            # + frais_demarrage.total
+            # = mdf_preteur_b
+            "mdf_25pct_prix_achat": 0.25 * self.inputs.prix_achat,
+            "prix_achat": self.inputs.prix_achat,
             "typology": {
                 "h13_loyer_pondere": self.typology.h13_loyer_pondere,
                 "nb_abordables": self.typology.nb_abordables,
@@ -600,6 +643,8 @@ def _scenario_to_dict(r: ScenarioResult) -> dict:
         "valeur_marchande": r.valeur_marchande,
         "valeur_retenue": r.valeur_retenue,
         "financement": r.financement,
+        "paiement_mensuel_actuel": r.paiement_mensuel_actuel,
+        "cashflow_annuel": r.cashflow_annuel,
         "mdf_necessaire": r.mdf_necessaire,
         "equite_a_la_fin": r.equite_a_la_fin,
     }

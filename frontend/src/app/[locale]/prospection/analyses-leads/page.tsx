@@ -1591,14 +1591,37 @@ type ScenarioResult = {
   valeur_marchande: number | null;
   valeur_retenue: number;
   financement: number;
+  paiement_mensuel_actuel?: number;
+  cashflow_annuel?: number;
   mdf_necessaire: number | null;
   equite_a_la_fin: number | null;
 };
 
+type FraisDemarrageBreakdown = {
+  courtier_hypothecaire_1: number;
+  courtier_hypothecaire_2: number;
+  taxes_bienvenue: number;
+  evaluateur: number;
+  evaluateur_2: number;
+  inspection: number;
+  avocat: number;
+  notaire: number;
+  notaire_2: number;
+  rapport_efficacite: number;
+  frais_developpement: number;
+  frais_negociations: number;
+  frais_travaux: number;
+  interets: number;
+  revenus_nets_pendant_projet: number;
+};
+
 type AnalysisResults = {
+  frais_demarrage?: FraisDemarrageBreakdown;
   frais_demarrage_total: number;
   prix_acquisition: number;
   mdf_preteur_b?: number;
+  mdf_25pct_prix_achat?: number;
+  prix_achat?: number;
   typology: {
     h13_loyer_pondere: number;
     nb_abordables: number;
@@ -1748,6 +1771,13 @@ function AnalysisResultsTable({ resultsJson }: { resultsJson: string }) {
               fallback="N/A"
             />
             <ResultRow
+              label="Cashflow annuel"
+              cols={cols}
+              pick={(s) => s.cashflow_annuel}
+              fallback="N/A"
+              colorEquite
+            />
+            <ResultRow
               label="Équité à la fin"
               cols={cols}
               pick={(s) => s.equite_a_la_fin}
@@ -1757,6 +1787,104 @@ function AnalysisResultsTable({ resultsJson }: { resultsJson: string }) {
           </tbody>
         </table>
       </div>
+
+      <FraisDemarrageBreakdownPanel data={data} />
+    </section>
+  );
+}
+
+// ─── Détail des frais de démarrage + composition de la MDF ─────
+
+const FRAIS_LABELS: Array<[keyof FraisDemarrageBreakdown, string]> = [
+  ["courtier_hypothecaire_1", "Courtier hypothécaire (1 % × prix d'achat)"],
+  ["courtier_hypothecaire_2", "Courtier hypothécaire 2 (1 % × financement APH)"],
+  ["taxes_bienvenue", "Taxes de bienvenue (Montréal, tiers progressifs)"],
+  ["evaluateur", "Évaluateur agréé"],
+  ["evaluateur_2", "Évaluateur agréé 2"],
+  ["inspection", "Inspection"],
+  ["avocat", "Avocat"],
+  ["notaire", "Notaire"],
+  ["notaire_2", "Notaire 2"],
+  ["rapport_efficacite", "Rapport d'efficacité énergétique"],
+  ["frais_developpement", "Frais de développement"],
+  ["frais_negociations", "Frais de négociations"],
+  ["frais_travaux", "Travaux estimés"],
+  ["interets", "Intérêts pendant projet (75 % × prix × 8 % × durée)"],
+  ["revenus_nets_pendant_projet", "Revenus nets pendant projet (négatif)"]
+];
+
+function FraisDemarrageBreakdownPanel({
+  data
+}: {
+  data: AnalysisResults;
+}) {
+  const frais = data.frais_demarrage;
+  const mdf25 = data.mdf_25pct_prix_achat;
+  const mdfTotal = data.mdf_preteur_b;
+  if (!frais || mdf25 == null || mdfTotal == null) return null;
+
+  return (
+    <section className="mt-4 rounded-lg border border-amber-400/30 bg-amber-500/5 p-4">
+      <h4 className="text-xs font-semibold uppercase tracking-wider text-amber-300">
+        Composition de la MDF avec prêteur B
+      </h4>
+      <p className="mt-0.5 text-[10px] text-white/40">
+        Total à sortir en cash = 25 % du prix d&apos;achat + tous les frais
+        de démarrage.
+      </p>
+
+      <table className="mt-3 w-full text-[11px]">
+        <tbody>
+          <tr className="border-t border-amber-400/20">
+            <td className="px-2 py-1 font-semibold text-amber-200">
+              25 % du prix d&apos;achat
+              {data.prix_achat != null ? (
+                <span className="ml-1 text-white/40">
+                  (25 % × {fmtMoney(data.prix_achat)})
+                </span>
+              ) : null}
+            </td>
+            <td className="px-2 py-1 text-right font-mono tabular-nums font-semibold text-amber-200">
+              {fmtMoney(mdf25)}
+            </td>
+          </tr>
+          <tr className="border-t border-amber-400/20">
+            <td className="px-2 py-1 text-white/50" colSpan={2}>
+              <span className="text-[10px] uppercase tracking-wider">
+                Frais de démarrage
+              </span>
+            </td>
+          </tr>
+          {FRAIS_LABELS.map(([key, label]) => {
+            const val = frais[key];
+            if (!val) return null;
+            return (
+              <tr key={key} className="border-t border-brand-800/60">
+                <td className="px-2 py-1 pl-4 text-white/60">{label}</td>
+                <td className="px-2 py-1 text-right font-mono tabular-nums text-white/80">
+                  {fmtMoney(val)}
+                </td>
+              </tr>
+            );
+          })}
+          <tr className="border-t border-amber-400/40 bg-amber-500/5">
+            <td className="px-2 py-1 pl-4 text-amber-200">
+              Sous-total frais de démarrage
+            </td>
+            <td className="px-2 py-1 text-right font-mono tabular-nums font-semibold text-amber-200">
+              {fmtMoney(data.frais_demarrage_total)}
+            </td>
+          </tr>
+          <tr className="border-t-2 border-amber-400/60 bg-amber-500/10">
+            <td className="px-2 py-1.5 font-bold text-amber-200">
+              Total — MDF avec prêteur B
+            </td>
+            <td className="px-2 py-1.5 text-right font-mono tabular-nums font-bold text-amber-200">
+              {fmtMoney(mdfTotal)}
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </section>
   );
 }
