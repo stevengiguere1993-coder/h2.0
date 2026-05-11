@@ -1,0 +1,306 @@
+"""Extraction d'infos immeuble depuis sources multiples.
+
+Pipeline unifié :
+  1. Pour chaque input (URL, texte, fichier image/PDF) on prépare un
+     content block Anthropic.
+  2. On envoie tous les blocks à Claude avec un schéma JSON cible.
+  3. On parse le JSON retourné et on le mappe sur les colonnes
+     `lead_analyses`.
+
+Modèle utilisé : `claude-sonnet-4-6` (vision native, qualité élevée
+pour l'extraction structurée). Fallback `claude-haiku-4-5` si besoin
+de réduire les coûts.
+
+Sources supportées :
+  - URLs : Centris.ca, DuProprio.com, Realtor.ca, ou n'importe quel
+    autre site avec contenu HTML public. On fetch via httpx avec un
+    User-Agent réaliste ; si bloqué (403/Cloudflare), on envoie
+    l'URL telle quelle à Claude qui essaiera de raisonner dessus.
+  - Texte : passé tel quel.
+  - Image (JPEG/PNG/WebP/HEIC) : envoyée comme content block image.
+  - PDF : encodé en base64 et envoyé via le type document Anthropic.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import logging
+import os
+import re
+from dataclasses import dataclass, field
+from typing import Any, List, Optional, Tuple
+
+import httpx
+
+from app.core.config import settings
+
+log = logging.getLogger(__name__)
+
+
+EXTRACTION_MODEL = os.environ.get(
+    "LEAD_EXTRACTION_MODEL", "claude-sonnet-4-6"
+)
+
+
+SYSTEM_PROMPT = """Tu es un assistant d'extraction de données pour \
+un dirigeant qui acquiert des immeubles à logements au Québec. \
+Tu reçois des sources hétérogènes (lien Centris, courriel courtier, \
+photo de fiche MLS, PDF descriptif, capture d'écran, SMS). \
+Tu extraies les infos clés sous forme de JSON strict. \
+Si une info n'est pas présente dans les sources, retourne `null`. \
+Ne devine jamais — null vaut mieux qu'une valeur approximative. \
+Réponds UNIQUEMENT avec le JSON, sans texte avant ni après. \
+Si tu vois plusieurs immeubles différents dans les sources \
+(adresses qui ne matchent pas), retourne un array JSON de plusieurs \
+objets. Sinon retourne un seul objet."""
+
+
+SCHEMA_GUIDE = """Schéma JSON attendu (1 objet, ou array si plusieurs immeubles distincts) :
+
+{
+  "address": "123 Rue Example",            // adresse civique + rue
+  "city": "Montréal",
+  "postal_code": "H1H 1H1",
+  "province": "QC",
+  "asking_price": 1250000,                 // CAD, prix demandé
+  "nb_logements": 6,
+  "typology": {                            // répartition par typo
+    "1.5": 0,
+    "2.5": 0,
+    "3.5": 2,
+    "4.5": 4,
+    "5.5": 0,
+    "6.5+": 0,
+    "loft": 0
+  },
+  "revenus_bruts": 84000,                  // CAD/an
+  "taxes_municipales": 8500,               // CAD/an
+  "taxes_scolaires": 1200,                 // CAD/an
+  "assurances": 4500,                      // CAD/an
+  "energie": 0,                            // CAD/an si payé par owner
+  "depenses_autres": 0,                    // entretien, déneigement…
+  "annee_construction": 1965,
+  "superficie_terrain": 4500,              // pi² ou m² — précise ?
+  "superficie_batiment": 3800,
+  "evaluation_municipale": 980000,
+  "description": "Triplex bien situé...",  // notes du courtier
+  "courtier_nom": "Jane Doe",
+  "courtier_contact": "514-555-1234 / jane@centris.ca",
+  "type_batiment": "Triplex",              // Plex / Multi / Mixte / etc.
+  "nb_stationnements": 3
+}"""
+
+
+@dataclass
+class ExtractionInput:
+    """Un input à extraire. Un seul type doit être rempli à la fois."""
+
+    url: Optional[str] = None
+    text: Optional[str] = None
+    # (filename, content_type, raw bytes)
+    file_data: Optional[Tuple[str, str, bytes]] = None
+
+
+@dataclass
+class ExtractionResult:
+    """Résultat d'une extraction. `data` est un dict (un seul
+    immeuble) ou une list de dicts (plusieurs)."""
+
+    data: List[dict] = field(default_factory=list)
+    model_used: Optional[str] = None
+    raw_response: Optional[str] = None
+    warnings: List[str] = field(default_factory=list)
+
+
+async def _fetch_url_text(url: str) -> str:
+    """Récupère le contenu HTML d'une URL et le strip en texte.
+    Si bloqué, retourne juste l'URL pour que Claude essaie de
+    raisonner dessus (Centris en particulier bloque les bots)."""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "fr-CA,fr;q=0.9,en;q=0.8",
+    }
+    try:
+        async with httpx.AsyncClient(
+            timeout=20.0, follow_redirects=True
+        ) as client:
+            r = await client.get(url, headers=headers)
+            if r.status_code >= 400:
+                return f"[URL non accessible — code {r.status_code}] {url}"
+            html = r.text
+    except Exception as exc:  # noqa: BLE001
+        log.warning("fetch_url_text failed for %s: %s", url, exc)
+        return f"[URL non récupérable : {exc!s}] {url}"
+
+    # Strip très grossier : on enlève script/style et balises.
+    text = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.I)
+    text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    # Tronque pour rester dans le contexte (Claude gère 200k mais
+    # pas la peine de payer pour 50k de HTML noise).
+    if len(text) > 30_000:
+        text = text[:30_000] + "\n[…tronqué]"
+    return f"[Contenu URL {url}]\n{text}"
+
+
+def _build_content_blocks(
+    inputs: List[ExtractionInput],
+) -> Tuple[List[dict], List[str]]:
+    """Convertit la liste d'inputs en content blocks Anthropic.
+    Retourne aussi la liste des warnings (sources sautées)."""
+    blocks: List[dict] = []
+    warnings: List[str] = []
+
+    for inp in inputs:
+        if inp.text and inp.text.strip():
+            blocks.append({"type": "text", "text": inp.text.strip()})
+        if inp.file_data:
+            filename, content_type, data = inp.file_data
+            ct = (content_type or "").lower()
+            if ct.startswith("image/"):
+                # Anthropic vision accepte image/jpeg, image/png,
+                # image/webp, image/gif. On force vers ces 4.
+                supported = {
+                    "image/jpeg",
+                    "image/jpg",
+                    "image/png",
+                    "image/webp",
+                    "image/gif",
+                }
+                if ct == "image/jpg":
+                    ct = "image/jpeg"
+                if ct not in supported:
+                    warnings.append(
+                        f"Format image non supporté pour {filename} : {ct}"
+                    )
+                    continue
+                blocks.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": ct,
+                            "data": base64.b64encode(data).decode("ascii"),
+                        },
+                    }
+                )
+            elif ct == "application/pdf":
+                blocks.append(
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": base64.b64encode(data).decode("ascii"),
+                        },
+                    }
+                )
+            else:
+                warnings.append(
+                    f"Type de fichier non supporté pour {filename} : {ct}"
+                )
+    return blocks, warnings
+
+
+async def extract_lead_info(
+    *,
+    urls: List[str] | None = None,
+    text: str | None = None,
+    files: List[Tuple[str, str, bytes]] | None = None,
+) -> ExtractionResult:
+    """Pipeline principal d'extraction. Retourne le résultat structuré."""
+    if not settings.anthropic_api_key:
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY non configuré — extraction impossible."
+        )
+
+    inputs: List[ExtractionInput] = []
+    # Texte d'entrée brut.
+    if text and text.strip():
+        inputs.append(ExtractionInput(text=text))
+
+    # URLs : on fetch et on injecte le texte récupéré.
+    for u in urls or []:
+        u = u.strip()
+        if not u:
+            continue
+        fetched = await _fetch_url_text(u)
+        inputs.append(ExtractionInput(text=fetched))
+
+    # Fichiers : on les passe tels quels.
+    for filename, content_type, data in files or []:
+        inputs.append(
+            ExtractionInput(file_data=(filename, content_type, data))
+        )
+
+    if not inputs:
+        return ExtractionResult(
+            data=[],
+            warnings=["Aucune source fournie."],
+        )
+
+    content_blocks, warns = _build_content_blocks(inputs)
+    # Ajoute toujours la consigne JSON en fin pour bien cadrer la sortie.
+    content_blocks.append(
+        {
+            "type": "text",
+            "text": (
+                "Extrais maintenant les infos selon le schéma ci-dessous.\n\n"
+                + SCHEMA_GUIDE
+            ),
+        }
+    )
+
+    import anthropic  # import paresseux
+
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    try:
+        msg = client.messages.create(
+            model=EXTRACTION_MODEL,
+            max_tokens=2500,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": content_blocks}],
+        )
+    except anthropic.APIError as exc:
+        log.exception("Claude extraction failed")
+        raise RuntimeError(f"Claude API error: {exc!s}") from exc
+
+    raw = "\n".join(b.text for b in msg.content if b.type == "text").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```\s*$", "", raw)
+
+    parsed: Any
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        log.warning("Claude returned non-JSON: %s", raw[:300])
+        warns.append(f"Réponse Claude non-JSON : {exc!s}")
+        return ExtractionResult(
+            data=[],
+            model_used=EXTRACTION_MODEL,
+            raw_response=raw,
+            warnings=warns,
+        )
+
+    if isinstance(parsed, dict):
+        data = [parsed]
+    elif isinstance(parsed, list):
+        data = [x for x in parsed if isinstance(x, dict)]
+    else:
+        warns.append("Format JSON inattendu (ni dict ni list).")
+        data = []
+
+    return ExtractionResult(
+        data=data,
+        model_used=EXTRACTION_MODEL,
+        raw_response=raw,
+        warnings=warns,
+    )

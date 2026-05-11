@@ -60,6 +60,7 @@ from app.api.v1.endpoints import (
     achat_qbo,
     email_templates,
     mtl_properties,
+    lead_analyses,
     prospection,
     prospection_analyse_extract,
     prospection_analyses,
@@ -194,6 +195,7 @@ api_router.include_router(mtl_properties.router)
 # pour que le path littéral matche avant /prospection/analyses/{id}.
 api_router.include_router(prospection_analyse_extract.router)
 api_router.include_router(prospection_analyses.router)
+api_router.include_router(lead_analyses.router)
 # /prospection/deals DOIT être avant prospection.router pour la même
 # raison que les autres : éviter la collision avec /prospection/{lead_id}.
 api_router.include_router(prospection_deals.router)
