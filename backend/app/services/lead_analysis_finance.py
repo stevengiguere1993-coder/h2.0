@@ -533,6 +533,11 @@ class FinanceResults:
     typology: TypologyAggregates
     frais_demarrage: FraisDemarrage
     prix_acquisition: float
+    # MDF si on finance avec un prêteur B (privé, hypothèque
+    # conventionnelle 75 % LTV) : 25 % du prix d'achat + frais
+    # de démarrage. Plus simple à comprendre que le MDF basé
+    # sur la valeur économique retenue (cf. `achat.mdf_necessaire`).
+    mdf_preteur_b: float
 
     achat: ScenarioResult
     refi_schl: ScenarioResult
@@ -549,6 +554,7 @@ class FinanceResults:
             "frais_demarrage": _dataclass_to_dict(self.frais_demarrage),
             "frais_demarrage_total": self.frais_demarrage.total,
             "prix_acquisition": self.prix_acquisition,
+            "mdf_preteur_b": self.mdf_preteur_b,
             "typology": {
                 "h13_loyer_pondere": self.typology.h13_loyer_pondere,
                 "nb_abordables": self.typology.nb_abordables,
@@ -771,6 +777,10 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         frais_travaux=inputs.frais_travaux,
     )
     prix_acquisition = inputs.prix_achat + frais.total
+    # MDF avec prêteur B = 25 % prix achat + frais démarrage. C'est
+    # ce qu'il faut sortir en cash pour boucler l'achat conventionnel
+    # sans valeur économique retenue, juste sur le prix marchand.
+    mdf_preteur_b = 0.25 * inputs.prix_achat + frais.total
 
     # ── Étape 5 : MDF achat / équité refi ────────────────────────
     achat.mdf_necessaire = prix_acquisition - achat.financement
@@ -794,6 +804,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         typology=typo,
         frais_demarrage=frais,
         prix_acquisition=prix_acquisition,
+        mdf_preteur_b=mdf_preteur_b,
         achat=achat,
         refi_schl=refi_schl,
         refi_aph_50=refi_aph_50,

@@ -219,6 +219,12 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
     best_refi_program: Mapped[Optional[str]] = mapped_column(
         String(128), nullable=True
     )
+    # MDF avec prêteur B (25 % prix achat + frais démarrage).
+    # Calculé à chaque run-financial-analysis et affiché sur la
+    # carte kanban pour avoir le « cash à sortir » à portée de vue.
+    mdf_preteur_b: Mapped[Optional[float]] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
 
     # Notes internes (champ libre admin).
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

@@ -50,6 +50,7 @@ type Lead = {
   annee_construction: number | null;
   best_refi_amount: number | null;
   best_refi_program: string | null;
+  mdf_preteur_b: number | null;
   type_batiment: string | null;
   converted_to_lead_id: number | null;
   created_at: string;
@@ -651,6 +652,14 @@ function LeadCard({
       {lead.best_refi_program ? (
         <p className="mt-0.5 truncate text-[9px] text-white/40" title={lead.best_refi_program}>
           {lead.best_refi_program}
+        </p>
+      ) : null}
+      {lead.mdf_preteur_b != null ? (
+        <p
+          className="mt-0.5 text-[10px] text-amber-300/80"
+          title="Mise de fonds avec prêteur B = 25 % × prix d'achat + frais démarrage"
+        >
+          MDF prêteur B : <span className="font-mono">{fmtMoney(lead.mdf_preteur_b)}</span>
         </p>
       ) : null}
       <div className="mt-2 flex flex-wrap items-center gap-1">
@@ -1587,6 +1596,7 @@ type ScenarioResult = {
 type AnalysisResults = {
   frais_demarrage_total: number;
   prix_acquisition: number;
+  mdf_preteur_b?: number;
   typology: {
     h13_loyer_pondere: number;
     nb_abordables: number;
@@ -1644,6 +1654,23 @@ function AnalysisResultsTable({ resultsJson }: { resultsJson: string }) {
           ? ` · ${data.typology.nb_abordables} abord / ${data.typology.nb_pdm} PDM`
           : ""}
       </p>
+
+      {/* MDF avec prêteur B — 25 % du prix d'achat + frais
+          démarrage. Plus simple à comprendre que le MDF nécessaire
+          basé sur la valeur économique retenue. */}
+      {data.mdf_preteur_b != null ? (
+        <div className="mt-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wider text-amber-300">
+            MDF avec prêteur B
+          </p>
+          <p className="mt-0.5 text-sm font-bold text-amber-200">
+            {fmtMoney(data.mdf_preteur_b)}
+          </p>
+          <p className="text-[10px] text-white/50">
+            25 % × prix d&apos;achat + frais démarrage
+          </p>
+        </div>
+      ) : null}
 
       <div className="mt-3 overflow-x-auto">
         <table className="w-full min-w-[640px] text-[11px]">

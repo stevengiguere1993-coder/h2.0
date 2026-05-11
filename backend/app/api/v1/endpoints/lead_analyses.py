@@ -129,6 +129,7 @@ class LeadAnalysisRead(BaseModel):
     analysis_results_json: Optional[str] = None
     best_refi_amount: Optional[float] = None
     best_refi_program: Optional[str] = None
+    mdf_preteur_b: Optional[float] = None
     notes: Optional[str] = None
     converted_to_lead_id: Optional[int] = None
 
@@ -153,6 +154,7 @@ class LeadAnalysisListItem(BaseModel):
     annee_construction: Optional[int]
     best_refi_amount: Optional[float]
     best_refi_program: Optional[str] = None
+    mdf_preteur_b: Optional[float] = None
     type_batiment: Optional[str]
     converted_to_lead_id: Optional[int]
     created_at: datetime
@@ -241,6 +243,11 @@ def _to_list_item(rec: LeadAnalysis, attachments_count: int) -> LeadAnalysisList
             else None
         ),
         best_refi_program=rec.best_refi_program,
+        mdf_preteur_b=(
+            float(rec.mdf_preteur_b)
+            if rec.mdf_preteur_b is not None
+            else None
+        ),
         type_batiment=rec.type_batiment,
         converted_to_lead_id=rec.converted_to_lead_id,
         created_at=rec.created_at,
@@ -693,6 +700,7 @@ async def run_financial_analysis(
     rec.analysis_results_json = json.dumps(results_dict)[:50_000]
     rec.best_refi_amount = results.best_refi_amount
     rec.best_refi_program = results.best_refi_program
+    rec.mdf_preteur_b = results.mdf_preteur_b
     # Auto-bascule en « Décision en attente » comme spécifié.
     if rec.status == LeadAnalysisStatus.A_ANALYSER.value:
         rec.status = LeadAnalysisStatus.DECISION_EN_ATTENTE.value
