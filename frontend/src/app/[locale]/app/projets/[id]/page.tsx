@@ -61,7 +61,8 @@ type TabId =
   | "achats"
   | "photos"
   | "tasks"
-  | "finances";
+  | "finances"
+  | "recap";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "summary", label: "Résumé" },
@@ -69,6 +70,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "agenda", label: "Agenda chantier" },
   { id: "achats", label: "Achats / PO" },
   { id: "finances", label: "Finances" },
+  { id: "recap", label: "Récap" },
   { id: "photos", label: "Photos" },
   { id: "tasks", label: "Tâches" }
 ];
@@ -123,7 +125,8 @@ export default function ProjectDetailPage() {
       "achats",
       "photos",
       "tasks",
-      "finances"
+      "finances",
+      "recap"
     ];
     if (valid.includes(hash)) setTab(hash);
   }, []);
@@ -528,6 +531,7 @@ export default function ProjectDetailPage() {
                 <ChantierAgendaTab
                   projectId={id}
                   projectName={p?.name || ""}
+                  projectEndDate={p?.end_date || null}
                   onOpenPhase={() => {
                     setTab("planification");
                     if (typeof window !== "undefined") {
@@ -539,6 +543,8 @@ export default function ProjectDetailPage() {
                 <ProjectAchatsTab projectId={id} />
               ) : tab === "finances" ? (
                 <FinancesTab projectId={id} />
+              ) : tab === "recap" ? (
+                <RecapTab project={p} />
               ) : tab === "photos" ? (
                 <PhotosTab projectId={id} />
               ) : (
@@ -1523,6 +1529,412 @@ type Finances = {
   balance_due: number;
   invoices?: InvoiceLine[];
 };
+
+// ─── Onglet « Récap » : synthèse délai + finances + profit ────
+
+function RecapTab({ project }: { project: Project | null }) {
+  const [finances, setFinances] = useState<{
+    projected_revenue: number;
+    projected_total_cost: number;
+    projected_profit: number;
+    projected_margin_pct: number;
+    projected_labour_hours: number;
+    actual_total_cost: number;
+    actual_profit: number;
+    actual_margin_pct: number;
+    actual_labour_hours: number;
+    actual_material_cost: number;
+    actual_labour_cost: number;
+    paid_amount: number;
+    invoiced_amount: number;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!project) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/projects/${project.id}/finances`
+        );
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!cancelled) setFinances(await r.json());
+      } catch (e) {
+        if (!cancelled) setError((e as Error).message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [project]);
+
+  if (!project) return null;
+
+  // Calcul du délai
+  const parseDate = (s: string | null): Date | null => {
+    if (!s) return null;
+    const [y, m, d] = s.split("-").map(Number);
+    if (!y || !m || !d) return null;
+    return new Date(y, m - 1, d);
+  };
+  const startDate = parseDate(project.start_date);
+  const endDate = parseDate(project.end_date);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const isDelivered = project.status === "delivered";
+  // Date de fin effective : si livré, on prend updated_at (à défaut
+  // d'un vrai `delivered_at` en base) ; sinon aujourd'hui.
+  const actualEnd = isDelivered
+    ? new Date(project.updated_at)
+    : today;
+  actualEnd.setHours(0, 0, 0, 0);
+
+  const plannedDays =
+    startDate && endDate
+      ? Math.round(
+          (endDate.getTime() - startDate.getTime()) / 86_400_000
+        ) + 1
+      : null;
+  const actualDays =
+    startDate
+      ? Math.round(
+          (actualEnd.getTime() - startDate.getTime()) / 86_400_000
+        ) + 1
+      : null;
+  // Dépassement signé : positif = retard, négatif = avance.
+  const overrunDays =
+    endDate
+      ? Math.round(
+          (actualEnd.getTime() - endDate.getTime()) / 86_400_000
+        )
+      : null;
+
+  return (
+    <div className="space-y-4">
+      <header>
+        <h2 className="text-lg font-bold text-white">
+          Récapitulatif du projet
+        </h2>
+        <p className="mt-0.5 text-xs text-white/50">
+          Synthèse délai + coûts + profit. Données à jour ·{" "}
+          {today.toLocaleDateString("fr-CA", {
+            day: "2-digit",
+            month: "short",
+            year: "numeric"
+          })}
+        </p>
+      </header>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
+        </div>
+      ) : error ? (
+        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+          {error}
+        </p>
+      ) : finances ? (
+        <>
+          {/* Cards : Délai + Coûts + Profit */}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <RecapDelayCard
+              plannedDays={plannedDays}
+              actualDays={actualDays}
+              overrunDays={overrunDays}
+              endDate={endDate}
+              isDelivered={isDelivered}
+            />
+            <RecapCostCard
+              projectedRevenue={finances.projected_revenue}
+              projectedCost={finances.projected_total_cost}
+              actualCost={finances.actual_total_cost}
+            />
+            <RecapProfitCard
+              projectedProfit={finances.projected_profit}
+              projectedMargin={finances.projected_margin_pct}
+              actualCost={finances.actual_total_cost}
+              projectedRevenue={finances.projected_revenue}
+              paidAmount={finances.paid_amount}
+              invoicedAmount={finances.invoiced_amount}
+              isDelivered={isDelivered}
+            />
+          </div>
+
+          {/* Détail heures + ventilation coût réel */}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+              <h3 className="text-[10px] uppercase tracking-wider text-white/50">
+                Heures de main-d&apos;œuvre
+              </h3>
+              <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                <div>
+                  <p className="text-[10px] text-white/40">Prévu</p>
+                  <p className="text-base font-semibold text-white">
+                    {finances.projected_labour_hours.toFixed(1)} h
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-white/40">Réel (punché)</p>
+                  <p className="text-base font-semibold text-white">
+                    {finances.actual_labour_hours.toFixed(1)} h
+                  </p>
+                </div>
+              </div>
+              {finances.projected_labour_hours > 0 ? (
+                <p className="mt-1 text-[10px] text-white/40">
+                  {Math.round(
+                    (finances.actual_labour_hours /
+                      finances.projected_labour_hours) *
+                      100
+                  )}{" "}
+                  % consommé
+                </p>
+              ) : null}
+            </div>
+
+            <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+              <h3 className="text-[10px] uppercase tracking-wider text-white/50">
+                Coût réel ventilé
+              </h3>
+              <div className="mt-2 space-y-1 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-white/60">Matériel / achats</span>
+                  <span className="font-mono text-white/90">
+                    {fmtMoney(finances.actual_material_cost)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-white/60">Main-d&apos;œuvre</span>
+                  <span className="font-mono text-white/90">
+                    {fmtMoney(finances.actual_labour_cost)}
+                  </span>
+                </div>
+                <div className="mt-1 flex items-center justify-between border-t border-brand-800 pt-1 font-semibold">
+                  <span className="text-white">Total</span>
+                  <span className="font-mono text-white">
+                    {fmtMoney(finances.actual_total_cost)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function RecapDelayCard({
+  plannedDays,
+  actualDays,
+  overrunDays,
+  endDate,
+  isDelivered
+}: {
+  plannedDays: number | null;
+  actualDays: number | null;
+  overrunDays: number | null;
+  endDate: Date | null;
+  isDelivered: boolean;
+}) {
+  let pillCls = "bg-emerald-500/15 text-emerald-300 border-emerald-500/30";
+  let label = "Dans les temps";
+  let detail = "";
+  if (overrunDays != null) {
+    if (overrunDays > 0) {
+      pillCls = "bg-rose-500/15 text-rose-300 border-rose-500/30";
+      label = `${overrunDays} jour${overrunDays > 1 ? "s" : ""} de retard`;
+      detail = isDelivered
+        ? "Livré au-delà de la date prévue."
+        : "La date de fin prévue est dépassée.";
+    } else if (overrunDays < 0) {
+      label = `${-overrunDays} jour${
+        -overrunDays > 1 ? "s" : ""
+      } d'avance`;
+      detail = isDelivered
+        ? "Livré avant la date prévue. Bravo."
+        : "Date de fin prévue pas encore atteinte.";
+    } else {
+      label = "Pile à la date prévue";
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+      <h3 className="text-[10px] uppercase tracking-wider text-white/50">
+        Délai
+      </h3>
+      <span
+        className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${pillCls}`}
+      >
+        {label}
+      </span>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+        <div>
+          <p className="text-[10px] text-white/40">Jours prévus</p>
+          <p className="text-base font-semibold text-white">
+            {plannedDays != null ? `${plannedDays} j` : "—"}
+          </p>
+        </div>
+        <div>
+          <p className="text-[10px] text-white/40">
+            Jours {isDelivered ? "réels" : "écoulés"}
+          </p>
+          <p className="text-base font-semibold text-white">
+            {actualDays != null ? `${actualDays} j` : "—"}
+          </p>
+        </div>
+      </div>
+      {endDate ? (
+        <p className="mt-2 text-[10px] text-white/40">
+          Fin prévue :{" "}
+          {endDate.toLocaleDateString("fr-CA", {
+            day: "2-digit",
+            month: "short",
+            year: "numeric"
+          })}
+        </p>
+      ) : null}
+      {detail ? (
+        <p className="mt-1 text-[10px] text-white/50">{detail}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function RecapCostCard({
+  projectedRevenue,
+  projectedCost,
+  actualCost
+}: {
+  projectedRevenue: number;
+  projectedCost: number;
+  actualCost: number;
+}) {
+  const diff = actualCost - projectedCost;
+  const overBudget = diff > 0;
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+      <h3 className="text-[10px] uppercase tracking-wider text-white/50">
+        Coûts
+      </h3>
+      <span
+        className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+          overBudget
+            ? "border-rose-500/30 bg-rose-500/15 text-rose-300"
+            : "border-emerald-500/30 bg-emerald-500/15 text-emerald-300"
+        }`}
+      >
+        {overBudget
+          ? `+${fmtMoney(diff)} de dépassement`
+          : `${fmtMoney(Math.abs(diff))} sous budget`}
+      </span>
+      <div className="mt-3 space-y-1 text-sm">
+        <div className="flex items-center justify-between">
+          <span className="text-white/50 text-xs">Soumission initiale</span>
+          <span className="font-mono text-white/80">
+            {fmtMoney(projectedRevenue)}
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-white/50 text-xs">Coût prévu</span>
+          <span className="font-mono text-white/80">
+            {fmtMoney(projectedCost)}
+          </span>
+        </div>
+        <div className="flex items-center justify-between border-t border-brand-800 pt-1">
+          <span className="text-xs font-semibold text-white">
+            Coût réel
+          </span>
+          <span className="font-mono font-semibold text-white">
+            {fmtMoney(actualCost)}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RecapProfitCard({
+  projectedProfit,
+  projectedMargin,
+  actualCost,
+  projectedRevenue,
+  paidAmount,
+  invoicedAmount,
+  isDelivered
+}: {
+  projectedProfit: number;
+  projectedMargin: number;
+  actualCost: number;
+  projectedRevenue: number;
+  paidAmount: number;
+  invoicedAmount: number;
+  isDelivered: boolean;
+}) {
+  // Profit réel : on prend ce qui a été FACTURÉ (engagement) plutôt
+  // que ce qui a été PAYÉ — sinon un projet livré mais pas encore
+  // payé a un « profit » négatif trompeur. Si rien n'a été facturé,
+  // on tombe sur la soumission initiale.
+  const revenueBase = invoicedAmount > 0 ? invoicedAmount : projectedRevenue;
+  const actualProfit = revenueBase - actualCost;
+  const actualMargin =
+    revenueBase > 0 ? (actualProfit / revenueBase) * 100 : 0;
+  const positive = actualProfit >= 0;
+  const profitDiff = actualProfit - projectedProfit;
+
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+      <h3 className="text-[10px] uppercase tracking-wider text-white/50">
+        Profit
+      </h3>
+      <span
+        className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+          positive
+            ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-300"
+            : "border-rose-500/30 bg-rose-500/15 text-rose-300"
+        }`}
+      >
+        {fmtMoney(actualProfit)} · {actualMargin.toFixed(1)} %
+      </span>
+      <div className="mt-3 space-y-1 text-sm">
+        <div className="flex items-center justify-between">
+          <span className="text-white/50 text-xs">Profit prévu</span>
+          <span className="font-mono text-white/80">
+            {fmtMoney(projectedProfit)} · {projectedMargin.toFixed(1)} %
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-white/50 text-xs">
+            {profitDiff >= 0 ? "Gain vs prévu" : "Perte vs prévu"}
+          </span>
+          <span
+            className={`font-mono ${
+              profitDiff >= 0 ? "text-emerald-300" : "text-rose-300"
+            }`}
+          >
+            {profitDiff >= 0 ? "+" : ""}
+            {fmtMoney(profitDiff)}
+          </span>
+        </div>
+        <div className="flex items-center justify-between border-t border-brand-800 pt-1">
+          <span className="text-xs font-semibold text-white">
+            {isDelivered ? "Encaissé" : "Facturé"} à ce jour
+          </span>
+          <span className="font-mono font-semibold text-white">
+            {fmtMoney(isDelivered ? paidAmount : invoicedAmount)}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function FinancesTab({ projectId }: { projectId: number }) {
   const [data, setData] = useState<Finances | null>(null);
@@ -3028,10 +3440,12 @@ type ChantierEvent = {
 function ChantierAgendaTab({
   projectId,
   projectName,
+  projectEndDate,
   onOpenPhase
 }: {
   projectId: number;
   projectName: string;
+  projectEndDate?: string | null;
   onOpenPhase: () => void;
 }) {
   const confirm = useConfirm();
@@ -3045,6 +3459,11 @@ function ChantierAgendaTab({
   // Inline form state for adding an event (replaces broken window.prompt
   // flow which is blocked in PWA standalone mode on iOS and Android).
   const [formOpen, setFormOpen] = useState(false);
+  // État du modal d'édition d'un event existant (clic sur la carte
+  // dans la liste « À venir » / « Passés »).
+  const [editingEvent, setEditingEvent] = useState<ChantierEvent | null>(
+    null
+  );
   const [fTitle, setFTitle] = useState("");
   const [fDate, setFDate] = useState(() => {
     const d = new Date();
@@ -3495,8 +3914,10 @@ function ChantierAgendaTab({
                     key={e.id}
                     event={e}
                     projectName={projectName}
+                    projectEndDate={projectEndDate}
                     onRemove={() => removeEvent(e.id)}
                     onClickPhase={onOpenPhase}
+                    onClickEvent={(ev) => setEditingEvent(ev)}
                   />
                 ))}
               </ul>
@@ -3514,8 +3935,10 @@ function ChantierAgendaTab({
                     key={e.id}
                     event={e}
                     projectName={projectName}
+                    projectEndDate={projectEndDate}
                     onRemove={() => removeEvent(e.id)}
                     onClickPhase={onOpenPhase}
+                    onClickEvent={(ev) => setEditingEvent(ev)}
                   />
                 ))}
               </ul>
@@ -3523,6 +3946,241 @@ function ChantierAgendaTab({
           ) : null}
         </>
       )}
+
+      {editingEvent ? (
+        <EventEditModal
+          event={editingEvent}
+          employes={employes}
+          onClose={() => setEditingEvent(null)}
+          onSaved={(updated) => {
+            setEvents((xs) =>
+              xs.map((x) => (x.id === updated.id ? updated : x))
+            );
+            setEditingEvent(null);
+          }}
+          onDeleted={(id) => {
+            setEvents((xs) => xs.filter((x) => x.id !== id));
+            setEditingEvent(null);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function EventEditModal({
+  event,
+  employes,
+  onClose,
+  onSaved,
+  onDeleted
+}: {
+  event: ChantierEvent;
+  employes: Array<{ id: number; full_name: string }>;
+  onClose: () => void;
+  onSaved: (e: ChantierEvent) => void;
+  onDeleted: (id: number) => void;
+}) {
+  const confirm = useConfirm();
+  const initial = new Date(event.start_at);
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  const [title, setTitle] = useState(event.title);
+  const [date, setDate] = useState(
+    `${initial.getFullYear()}-${p2(initial.getMonth() + 1)}-${p2(initial.getDate())}`
+  );
+  const [time, setTime] = useState(
+    event.all_day
+      ? "08:00"
+      : `${p2(initial.getHours())}:${p2(initial.getMinutes())}`
+  );
+  const [allDay, setAllDay] = useState(event.all_day);
+  const [location, setLocation] = useState(event.location || "");
+  const [description, setDescription] = useState(event.description || "");
+  const [assigneeId, setAssigneeId] = useState(
+    event.assignee_id != null ? String(event.assignee_id) : ""
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!title.trim()) {
+      setError("Le titre est requis.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const startIso = allDay
+        ? new Date(`${date}T00:00:00`).toISOString()
+        : new Date(`${date}T${time || "08:00"}:00`).toISOString();
+      const payload = {
+        title: title.trim(),
+        description: description.trim() || null,
+        location: location.trim() || null,
+        start_at: startIso,
+        all_day: allDay,
+        assignee_id: assigneeId ? Number(assigneeId) : null
+      };
+      const res = await authedFetch(`/api/v1/agenda/${event.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt.slice(0, 240) || `HTTP ${res.status}`);
+      }
+      onSaved((await res.json()) as ChantierEvent);
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (
+      !(await confirm({
+        title: `Supprimer « ${event.title} » ?`,
+        description: "L'événement sera effacé définitivement.",
+        confirmLabel: "Supprimer",
+        destructive: true
+      }))
+    )
+      return;
+    setBusy(true);
+    try {
+      const res = await authedFetch(`/api/v1/agenda/${event.id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) throw new Error();
+      onDeleted(event.id);
+    } catch {
+      setError("Suppression échouée.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={() => (!busy ? onClose() : null)}
+    >
+      <form
+        onSubmit={save}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md space-y-3 rounded-2xl border border-brand-800 bg-brand-900 p-5"
+      >
+        <h3 className="text-base font-bold text-white">
+          Modifier l&apos;événement
+        </h3>
+        {error ? (
+          <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+            {error}
+          </p>
+        ) : null}
+        <div>
+          <label className="label text-[10px] uppercase">Titre</label>
+          <input
+            className="input"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Titre de l'événement"
+            autoFocus
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label text-[10px] uppercase">Date</label>
+            <input
+              type="date"
+              className="input"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label text-[10px] uppercase">Heure</label>
+            <input
+              type="time"
+              className="input"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              disabled={allDay}
+            />
+          </div>
+        </div>
+        <label className="flex items-center gap-2 text-xs text-white/70">
+          <input
+            type="checkbox"
+            checked={allDay}
+            onChange={(e) => setAllDay(e.target.checked)}
+          />
+          Journée complète
+        </label>
+        <div>
+          <label className="label text-[10px] uppercase">Assigné à</label>
+          <select
+            className="input"
+            value={assigneeId}
+            onChange={(e) => setAssigneeId(e.target.value)}
+          >
+            <option value="">—</option>
+            {employes.map((e) => (
+              <option key={e.id} value={String(e.id)}>
+                {e.full_name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label text-[10px] uppercase">Lieu</label>
+          <input
+            className="input"
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            placeholder="Adresse du chantier, bureau…"
+          />
+        </div>
+        <div>
+          <label className="label text-[10px] uppercase">Description</label>
+          <textarea
+            className="input min-h-[80px]"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </div>
+        <div className="flex items-center justify-between pt-2">
+          <button
+            type="button"
+            onClick={remove}
+            disabled={busy}
+            className="rounded-md border border-rose-500/40 px-3 py-1.5 text-xs text-rose-300 hover:bg-rose-500/10 disabled:opacity-40"
+          >
+            <Trash2 className="mr-1 inline-block h-3.5 w-3.5" />
+            Supprimer
+          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={busy}
+              className="rounded-md px-3 py-1.5 text-xs text-white/70 hover:bg-white/5"
+            >
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={busy}
+              className="btn-accent text-xs disabled:opacity-60"
+            >
+              {busy ? (
+                <Loader2 className="mr-1.5 inline-block h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Enregistrer
+            </button>
+          </div>
+        </div>
+      </form>
     </div>
   );
 }
@@ -3530,13 +4188,17 @@ function ChantierAgendaTab({
 function EventRow({
   event,
   projectName,
+  projectEndDate,
   onRemove,
-  onClickPhase
+  onClickPhase,
+  onClickEvent
 }: {
   event: ChantierEvent;
   projectName: string;
+  projectEndDate?: string | null;
   onRemove: () => void;
   onClickPhase?: () => void;
+  onClickEvent?: (e: ChantierEvent) => void;
 }) {
   const s = new Date(event.start_at);
   const dayFmt = s.toLocaleDateString("fr-CA", {
@@ -3552,17 +4214,43 @@ function EventRow({
         minute: "2-digit"
       });
   const isPhase = event.event_type === "phase";
+  const clickable = isPhase
+    ? !!onClickPhase
+    : !!onClickEvent;
+  // Détecte un event hors-délai (après date fin projet) → mise en
+  // évidence jaune ambré, cohérent avec l'agenda.
+  let outOfRange = false;
+  if (projectEndDate) {
+    const [y, m, d] = projectEndDate.split("-").map(Number);
+    if (y && m && d) {
+      const projectEnd = new Date(y, m - 1, d, 23, 59, 59, 999);
+      outOfRange = s > projectEnd;
+    }
+  }
   return (
     <li
-      className={`flex items-start justify-between gap-3 rounded-xl border border-brand-800 bg-brand-900 p-3 ${
-        isPhase ? "cursor-pointer hover:border-accent-500" : ""
-      }`}
-      onClick={isPhase && onClickPhase ? onClickPhase : undefined}
+      className={`flex items-start justify-between gap-3 rounded-xl border p-3 ${
+        outOfRange
+          ? "border-amber-400/60 bg-amber-500/10"
+          : "border-brand-800 bg-brand-900"
+      } ${clickable ? "cursor-pointer hover:border-accent-500" : ""}`}
+      onClick={
+        isPhase && onClickPhase
+          ? onClickPhase
+          : onClickEvent
+          ? () => onClickEvent(event)
+          : undefined
+      }
     >
       <div className="min-w-0">
         <p className="text-sm font-semibold text-white">{event.title}</p>
         <p className="mt-0.5 text-xs text-white/60">
           {dayFmt} · {timeFmt}
+          {outOfRange ? (
+            <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200">
+              Hors délai
+            </span>
+          ) : null}
         </p>
         {event.location ? (
           <p className="mt-0.5 text-xs text-white/50">📍 {event.location}</p>
@@ -3574,7 +4262,10 @@ function EventRow({
       {isPhase ? null : (
         <button
           type="button"
-          onClick={onRemove}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
           className="rounded p-1 text-white/40 hover:text-rose-300"
           aria-label="Supprimer"
         >

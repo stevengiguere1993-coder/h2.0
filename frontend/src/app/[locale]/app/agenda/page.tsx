@@ -129,6 +129,28 @@ function projectColor(projectId: number | null | undefined): {
   };
 }
 
+// Palette « hors délai » — utilisée quand un event/phase est rattaché
+// à un projet mais tombe APRÈS la `end_date` planifiée du projet
+// (dépassement). Jaune ambré pour signaler visuellement le retard.
+const OUT_OF_RANGE_COLOR = {
+  hue: 45,
+  bg: "hsl(45, 90%, 50%)",
+  border: "hsl(45, 95%, 38%)",
+  text: "#1a1300",
+  solid: "hsl(45, 90%, 55%)"
+} as const;
+
+function isEventOutOfRange(
+  eventDate: Date,
+  project: { end_date?: string | null } | null | undefined
+): boolean {
+  if (!project?.end_date) return false;
+  const [y, m, d] = project.end_date.split("-").map(Number);
+  if (!y || !m || !d) return false;
+  const projectEnd = new Date(y, m - 1, d, 23, 59, 59, 999);
+  return eventDate > projectEnd;
+}
+
 const TYPE_CLASS: Record<string, string> = {
   chantier: "bg-accent-500/20 text-accent-300 border-accent-500/40",
   conge: "bg-orange-500/20 text-orange-300 border-orange-500/40",
@@ -762,6 +784,7 @@ export default function AgendaPage() {
             eventsByDay={eventsByDay}
             multiDayEventsByDay={multiDayEventsByDay}
             projectsByDay={projectsByDay}
+            projectsAll={projects}
             projectHasTeam={projectHasTeam}
             expandedProjects={expandedProjects}
             onToggleProject={toggleProject}
@@ -861,6 +884,7 @@ function MonthView({
   eventsByDay,
   multiDayEventsByDay,
   projectsByDay,
+  projectsAll,
   projectHasTeam,
   expandedProjects,
   onToggleProject,
@@ -872,6 +896,7 @@ function MonthView({
   eventsByDay: Map<string, AgendaEvent[]>;
   multiDayEventsByDay: Map<string, AgendaEvent[]>;
   projectsByDay: Map<string, Project[]>;
+  projectsAll: Project[];
   projectHasTeam: Map<number, boolean>;
   expandedProjects: Set<number>;
   onToggleProject: (projectId: number) => void;
@@ -927,14 +952,17 @@ function MonthView({
         }
       }
       for (const ev of multiDayEventsByDay.get(key) || []) {
-        // Si l'event est lié à un projet et que ce projet n'est PAS
-        // dépliée, on cache la bande individuelle — seule la bande
-        // chantier reste visible. Click sur la bande → expand.
+        // Si l'event est lié à un projet ET que ce projet a une bande
+        // active ce jour-là ET qu'il n'est pas déplié → cacher l'event
+        // (il sera vu en cliquant sur la bande). Si pas de bande
+        // (hors-délai), l'event reste visible.
         if (
           ev.project_id != null &&
           !expandedProjects.has(ev.project_id)
         ) {
-          continue;
+          const projectsHere = projectsByDay.get(key) || [];
+          const hasBand = projectsHere.some((p) => p.id === ev.project_id);
+          if (hasBand) continue;
         }
         const ex = eventSpans.get(ev.id);
         if (!ex) {
@@ -1029,14 +1057,21 @@ function MonthView({
               const inMonth = d.getMonth() === ref.getMonth();
               const isToday = sameDay(d, today);
               const allDayEvents = eventsByDay.get(d.toDateString()) || [];
-              // Cache les events liés à un projet replié — seuls les
-              // events sans projet (réunions, RDV externes) ou ceux
-              // dont le projet est déplié restent visibles inline.
-              const dayEvents = allDayEvents.filter(
-                (e) =>
-                  e.project_id == null ||
-                  expandedProjects.has(e.project_id)
+              // Cache les events liés à un projet replié — sauf si
+              // l'event tombe HORS de la plage du projet (cas
+              // « dépassement » : pas de bande pour les regrouper donc
+              // on les rend toujours visibles, en jaune pour signaler
+              // le hors-délai).
+              const projectsHereIds = new Set(
+                (projectsByDay.get(d.toDateString()) || []).map((p) => p.id)
               );
+              const dayEvents = allDayEvents.filter((e) => {
+                if (e.project_id == null) return true;
+                if (expandedProjects.has(e.project_id)) return true;
+                // Pas de bande active pour ce projet aujourd'hui →
+                // toujours afficher l'event individuellement.
+                return !projectsHereIds.has(e.project_id);
+              });
               return (
                 <div
                   key={i}
@@ -1074,11 +1109,20 @@ function MonthView({
 
                   <div className="mt-1 space-y-0.5">
                     {dayEvents.slice(0, 3).map((e) => {
-                      // Couleur du chantier prioritaire — si l'event
-                      // est rattaché à un projet, on prend la teinte
-                      // unique du projet (cohérent avec les bandes
-                      // multi-jours et le reste du calendrier).
-                      const pc = e.project_id
+                      // Détecte event « hors délais » (après end_date
+                      // du projet) → teinte jaune ambré au lieu de
+                      // la couleur du chantier, peu importe la teinte
+                      // habituelle du projet.
+                      const ownerProj = e.project_id
+                        ? projectsAll.find((pp) => pp.id === e.project_id)
+                        : null;
+                      const outOfRange = isEventOutOfRange(
+                        new Date(e.start_at),
+                        ownerProj
+                      );
+                      const pc = outOfRange
+                        ? OUT_OF_RANGE_COLOR
+                        : e.project_id
                         ? projectColor(e.project_id)
                         : null;
                       const cls = pc
@@ -1178,10 +1222,20 @@ function MonthView({
               }
 
               // Événement multi-jours — couleur du chantier si lié à
-              // un projet (même couleur que la bande). Sinon couleur
-              // par event_type (livraison violet, inspection rouge…).
+              // un projet (même couleur que la bande). Si l'event est
+              // après la `end_date` du projet, on bascule en jaune
+              // ambré (dépassement). Sinon couleur par event_type.
               const ev = bar.event;
-              const projColor = ev.project_id
+              const ownerProj = ev.project_id
+                ? projectsAll.find((pp) => pp.id === ev.project_id)
+                : null;
+              const evOutOfRange = isEventOutOfRange(
+                new Date(ev.start_at),
+                ownerProj
+              );
+              const projColor = evOutOfRange
+                ? OUT_OF_RANGE_COLOR
+                : ev.project_id
                 ? projectColor(ev.project_id)
                 : null;
               const typeClass = projColor
