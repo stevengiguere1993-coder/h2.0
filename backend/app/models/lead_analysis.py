@@ -219,11 +219,27 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
     best_refi_program: Mapped[Optional[str]] = mapped_column(
         String(128), nullable=True
     )
-    # MDF avec prêteur B (25 % prix achat + frais démarrage).
+    # MDF avec prêteur B (X % prix achat + frais démarrage).
     # Calculé à chaque run-financial-analysis et affiché sur la
     # carte kanban pour avoir le « cash à sortir » à portée de vue.
     mdf_preteur_b: Mapped[Optional[float]] = mapped_column(
         Numeric(14, 2), nullable=True
+    )
+    # Pourcentage de mise de fonds avec prêteur B — défaut 25 %,
+    # modifiable selon le prêteur (« des fois 35 % »).
+    mdf_preteur_b_pct: Mapped[Optional[float]] = mapped_column(
+        Numeric(5, 2),
+        nullable=True,
+        default=25.0,
+        server_default="25.0",
+    )
+    # Overrides manuels des frais de démarrage par poste.
+    # JSON `{ "evaluateur": 1800, "inspection": 2000, ... }` : pour
+    # chaque clé présente, on ignore le calcul automatique et on
+    # utilise la valeur fournie. Permet à l'utilisateur d'ajuster
+    # cas par cas sans casser les défauts.
+    frais_demarrage_overrides_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
     )
 
     # Notes internes (champ libre admin).

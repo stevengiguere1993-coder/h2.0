@@ -845,6 +845,9 @@ type LeadDetail = Lead & {
   duree_projet_annees: number | null;
   frais_developpement: number | null;
   frais_negociations: number | null;
+  // MDF prêteur B configurable + overrides frais démarrage
+  mdf_preteur_b_pct: number | null;
+  frais_demarrage_overrides_json: string | null;
   // Résultats analyse
   analysis_results_json: string | null;
   attachments: Array<{
@@ -855,7 +858,7 @@ type LeadDetail = Lead & {
   }>;
 };
 
-const TYPOLOGY_KEYS = ["2.5", "3.5", "4.5", "5.5", "6.5", "7.5", "8.5"];
+const TYPOLOGY_KEYS = ["1.5", "2.5", "3.5", "4.5", "5.5", "6.5", "7.5", "8.5"];
 
 function LeadDetailModal({
   id,
@@ -1056,26 +1059,21 @@ function LeadDetailModal({
                   />
                 </div>
 
-                {typology ? (
-                  <div className="mt-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
-                      Typologie des logements
-                    </p>
-                    <div className="mt-1 flex flex-wrap gap-2">
-                      {Object.entries(typology).map(([k, v]) =>
-                        v ? (
-                          <span
-                            key={k}
-                            className="rounded-full bg-brand-800 px-2 py-0.5 text-[11px] text-white/70"
-                          >
-                            <span className="font-mono">{k}</span> ×{" "}
-                            <strong>{v}</strong>
-                          </span>
-                        ) : null
-                      )}
-                    </div>
-                  </div>
-                ) : null}
+                <div className="mt-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
+                    Typologie des logements
+                  </p>
+                  <p className="mt-0.5 text-[10px] text-white/40">
+                    Quantité par typologie — modifiable si Claude n&apos;a
+                    pas trouvé ou si tu veux corriger.
+                  </p>
+                  <TypologyEditor
+                    value={typology || {}}
+                    onSave={(j) =>
+                      patchField("typology_json", JSON.stringify(j))
+                    }
+                  />
+                </div>
 
                 <div className="mt-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
@@ -1177,6 +1175,14 @@ function LeadDetailModal({
               {data.analysis_results_json ? (
                 <AnalysisResultsTable
                   resultsJson={data.analysis_results_json}
+                  overridesJson={data.frais_demarrage_overrides_json}
+                  mdfPct={data.mdf_preteur_b_pct ?? 25}
+                  prixAchat={data.asking_price ?? 0}
+                  fraisDemarrageTotalDb={null}
+                  mdfPreteurBDb={data.mdf_preteur_b ?? null}
+                  onPatchOverrides={(j) =>
+                    patchField("frais_demarrage_overrides_json", j)
+                  }
                 />
               ) : null}
 
@@ -1274,6 +1280,71 @@ function FieldNumber({
         }}
         className="input mt-1 font-mono text-xs"
       />
+    </div>
+  );
+}
+
+// ─── Typology editor : grille éditable des unités par type ─────
+
+function TypologyEditor({
+  value,
+  onSave
+}: {
+  value: Record<string, number>;
+  onSave: (newValue: Record<string, number>) => void;
+}) {
+  const [local, setLocal] = useState<Record<string, string>>(() => {
+    const m: Record<string, string> = {};
+    for (const k of TYPOLOGY_KEYS) {
+      const n = Number(value[k] || 0);
+      m[k] = n > 0 ? String(n) : "";
+    }
+    return m;
+  });
+
+  function commit(k: string, raw: string) {
+    setLocal((prev) => ({ ...prev, [k]: raw }));
+    const next: Record<string, number> = {};
+    for (const kk of TYPOLOGY_KEYS) {
+      const r = kk === k ? raw : local[kk];
+      const n = Number(r);
+      if (Number.isFinite(n) && n > 0) next[kk] = Math.floor(n);
+    }
+    onSave(next);
+  }
+
+  const total = TYPOLOGY_KEYS.reduce(
+    (acc, k) => acc + (Number(local[k]) || 0),
+    0
+  );
+
+  return (
+    <div className="mt-1">
+      <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
+        {TYPOLOGY_KEYS.map((k) => (
+          <div key={k} className="flex flex-col items-center">
+            <label className="text-[10px] font-mono text-white/50">
+              {k}
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={local[k]}
+              onChange={(e) =>
+                setLocal((prev) => ({ ...prev, [k]: e.target.value }))
+              }
+              onBlur={(e) => commit(k, e.target.value)}
+              placeholder="0"
+              className="w-full rounded border border-brand-800 bg-brand-950 px-1 py-0.5 text-center text-xs text-white focus:border-accent-500 focus:outline-none"
+            />
+          </div>
+        ))}
+      </div>
+      <p className="mt-1 text-[10px] text-white/40">
+        Total typologie : <strong className="text-white/70">{total}</strong>{" "}
+        unité{total > 1 ? "s" : ""}
+      </p>
     </div>
   );
 }
@@ -1407,7 +1478,7 @@ function ManualAnalysisSection({
       ) : null}
 
       {/* Inputs avec défaut */}
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+      <div className="mt-3 grid gap-3 sm:grid-cols-4">
         <FieldNumber
           label="TGA (%)"
           value={data.tga_pct ?? 4}
@@ -1417,6 +1488,11 @@ function ManualAnalysisSection({
           label="Taux intérêt achat (%)"
           value={data.taux_interet_achat_pct ?? 4}
           onSave={(v) => onPatch("taux_interet_achat_pct", v ?? 4)}
+        />
+        <FieldNumber
+          label="MDF prêteur B (%)"
+          value={data.mdf_preteur_b_pct ?? 25}
+          onSave={(v) => onPatch("mdf_preteur_b_pct", v ?? 25)}
         />
         <FieldYesNo
           label="Wifi inclus refi"
@@ -1620,6 +1696,8 @@ type AnalysisResults = {
   frais_demarrage_total: number;
   prix_acquisition: number;
   mdf_preteur_b?: number;
+  mdf_preteur_b_pct?: number;
+  mdf_pct_prix_achat?: number;
   mdf_25pct_prix_achat?: number;
   prix_achat?: number;
   typology: {
@@ -1640,7 +1718,23 @@ type AnalysisResults = {
   };
 };
 
-function AnalysisResultsTable({ resultsJson }: { resultsJson: string }) {
+function AnalysisResultsTable({
+  resultsJson,
+  overridesJson,
+  mdfPct,
+  prixAchat,
+  fraisDemarrageTotalDb,
+  mdfPreteurBDb,
+  onPatchOverrides
+}: {
+  resultsJson: string;
+  overridesJson?: string | null;
+  mdfPct?: number;
+  prixAchat?: number;
+  fraisDemarrageTotalDb?: number | null;
+  mdfPreteurBDb?: number | null;
+  onPatchOverrides?: (json: string) => void;
+}) {
   const data = useMemo<AnalysisResults | null>(() => {
     try {
       return JSON.parse(resultsJson) as AnalysisResults;
@@ -1788,7 +1882,14 @@ function AnalysisResultsTable({ resultsJson }: { resultsJson: string }) {
         </table>
       </div>
 
-      <FraisDemarrageBreakdownPanel data={data} />
+      <FraisDemarrageBreakdownPanel
+        data={data}
+        overridesJson={overridesJson}
+        mdfPct={mdfPct}
+        prixAchat={prixAchat}
+        mdfPreteurBDb={mdfPreteurBDb}
+        onPatchOverrides={onPatchOverrides}
+      />
     </section>
   );
 }
@@ -1814,38 +1915,87 @@ const FRAIS_LABELS: Array<[keyof FraisDemarrageBreakdown, string]> = [
 ];
 
 function FraisDemarrageBreakdownPanel({
-  data
+  data,
+  overridesJson,
+  mdfPct,
+  prixAchat,
+  mdfPreteurBDb,
+  onPatchOverrides
 }: {
   data: AnalysisResults;
+  overridesJson?: string | null;
+  mdfPct?: number;
+  prixAchat?: number;
+  mdfPreteurBDb?: number | null;
+  onPatchOverrides?: (json: string) => void;
 }) {
   const frais = data.frais_demarrage;
-  const mdf25 = data.mdf_25pct_prix_achat;
-  const mdfTotal = data.mdf_preteur_b;
-  if (!frais || mdf25 == null || mdfTotal == null) return null;
+  const mdfPctFinal = mdfPct ?? data.mdf_preteur_b_pct ?? 25;
+  const prixFinal = prixAchat ?? data.prix_achat ?? 0;
+  const mdfPctValue =
+    data.mdf_pct_prix_achat ?? data.mdf_25pct_prix_achat ?? (mdfPctFinal / 100) * prixFinal;
+  const mdfTotalStored = mdfPreteurBDb ?? data.mdf_preteur_b ?? null;
+
+  const overrides = useMemo<Record<string, number>>(() => {
+    if (!overridesJson) return {};
+    try {
+      const j = JSON.parse(overridesJson);
+      if (j && typeof j === "object") return j as Record<string, number>;
+    } catch {
+      /* ignore */
+    }
+    return {};
+  }, [overridesJson]);
+
+  function setOverride(key: string, val: number | null) {
+    const next = { ...overrides };
+    if (val == null || !Number.isFinite(val)) {
+      delete next[key];
+    } else {
+      next[key] = val;
+    }
+    onPatchOverrides?.(JSON.stringify(next));
+  }
+
+  // Calcule le sous-total local (en appliquant les overrides) pour
+  // afficher le bon total même si le moteur n'a pas encore re-roulé
+  // après une saisie.
+  let subTotal = 0;
+  if (frais) {
+    for (const [k] of FRAIS_LABELS) {
+      const v =
+        overrides[k] != null ? Number(overrides[k]) : Number(frais[k] || 0);
+      if (Number.isFinite(v)) subTotal += v;
+    }
+  }
+  const totalMdfLocal = mdfPctValue + subTotal;
+
+  if (!frais) return null;
 
   return (
     <section className="mt-4 rounded-lg border border-amber-400/30 bg-amber-500/5 p-4">
       <h4 className="text-xs font-semibold uppercase tracking-wider text-amber-300">
         Composition de la MDF avec prêteur B
       </h4>
-      <p className="mt-0.5 text-[10px] text-white/40">
-        Total à sortir en cash = 25 % du prix d&apos;achat + tous les frais
-        de démarrage.
+      <p className="mt-0.5 text-[10px] text-white/50">
+        Total à sortir en cash = {mdfPctFinal} % du prix d&apos;achat + tous
+        les frais de démarrage. Tu peux overrider chaque ligne en cliquant
+        sur sa valeur. Re-lance l&apos;analyse pour persister.
       </p>
 
       <table className="mt-3 w-full text-[11px]">
         <tbody>
           <tr className="border-t border-amber-400/20">
             <td className="px-2 py-1 font-semibold text-amber-200">
-              25 % du prix d&apos;achat
-              {data.prix_achat != null ? (
-                <span className="ml-1 text-white/40">
-                  (25 % × {fmtMoney(data.prix_achat)})
+              {mdfPctFinal} % du prix d&apos;achat
+              {prixFinal > 0 ? (
+                <span className="ml-1 text-white/50">
+                  ({mdfPctFinal} % × {fmtMoney(prixFinal)})
                 </span>
               ) : null}
             </td>
             <td className="px-2 py-1 text-right font-mono tabular-nums font-semibold text-amber-200">
-              {fmtMoney(mdf25)}
+              {fmtMoney(mdfPctValue)}
             </td>
           </tr>
           <tr className="border-t border-amber-400/20">
@@ -1856,13 +2006,36 @@ function FraisDemarrageBreakdownPanel({
             </td>
           </tr>
           {FRAIS_LABELS.map(([key, label]) => {
-            const val = frais[key];
-            if (!val) return null;
+            const computed = Number(frais[key] || 0);
+            const overridden = overrides[key] != null;
+            const displayVal = overridden
+              ? Number(overrides[key])
+              : computed;
+            if (!overridden && !computed) return null;
             return (
               <tr key={key} className="border-t border-brand-800/60">
-                <td className="px-2 py-1 pl-4 text-white/60">{label}</td>
-                <td className="px-2 py-1 text-right font-mono tabular-nums text-white/80">
-                  {fmtMoney(val)}
+                <td className="px-2 py-1 pl-4 text-white/60">
+                  {label}
+                  {overridden ? (
+                    <button
+                      type="button"
+                      onClick={() => setOverride(key, null)}
+                      className="ml-1 rounded bg-amber-500/20 px-1 py-0 text-[9px] text-amber-200 hover:bg-amber-500/30"
+                      title="Réinitialiser à la valeur calculée"
+                    >
+                      override · réinit
+                    </button>
+                  ) : null}
+                </td>
+                <td className="px-2 py-1 text-right">
+                  <EditableMoney
+                    value={displayVal}
+                    computed={computed}
+                    overridden={overridden}
+                    onSave={(v) =>
+                      setOverride(key, v === computed ? null : v)
+                    }
+                  />
                 </td>
               </tr>
             );
@@ -1872,20 +2045,88 @@ function FraisDemarrageBreakdownPanel({
               Sous-total frais de démarrage
             </td>
             <td className="px-2 py-1 text-right font-mono tabular-nums font-semibold text-amber-200">
-              {fmtMoney(data.frais_demarrage_total)}
+              {fmtMoney(subTotal)}
             </td>
           </tr>
           <tr className="border-t-2 border-amber-400/60 bg-amber-500/10">
             <td className="px-2 py-1.5 font-bold text-amber-200">
               Total — MDF avec prêteur B
+              {mdfTotalStored != null &&
+              Math.abs((mdfTotalStored || 0) - totalMdfLocal) > 1 ? (
+                <span className="ml-2 rounded bg-amber-500/30 px-1 py-0 text-[9px] font-normal text-amber-100">
+                  recalcul requis
+                </span>
+              ) : null}
             </td>
             <td className="px-2 py-1.5 text-right font-mono tabular-nums font-bold text-amber-200">
-              {fmtMoney(mdfTotal)}
+              {fmtMoney(totalMdfLocal)}
             </td>
           </tr>
         </tbody>
       </table>
     </section>
+  );
+}
+
+function EditableMoney({
+  value,
+  computed,
+  overridden,
+  onSave
+}: {
+  value: number;
+  computed: number;
+  overridden: boolean;
+  onSave: (v: number) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(String(Math.round(value)));
+  useEffect(() => {
+    if (!editing) setDraft(String(Math.round(value)));
+  }, [value, editing]);
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        type="number"
+        value={draft}
+        step="1"
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          setEditing(false);
+          const n = Number(draft);
+          if (Number.isFinite(n)) onSave(n);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            const n = Number(draft);
+            if (Number.isFinite(n)) onSave(n);
+            setEditing(false);
+          } else if (e.key === "Escape") {
+            setEditing(false);
+            setDraft(String(Math.round(computed)));
+          }
+        }}
+        className="w-28 rounded border border-amber-400/40 bg-brand-950 px-1 py-0.5 text-right font-mono text-[11px] text-white focus:border-accent-500 focus:outline-none"
+      />
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => setEditing(true)}
+      title={
+        overridden
+          ? `Manuel (calcul auto : ${fmtMoney(computed)}). Clique pour modifier.`
+          : "Clique pour overrider"
+      }
+      className={`font-mono tabular-nums hover:underline ${
+        overridden ? "text-amber-200 font-semibold" : "text-white/80"
+      }`}
+    >
+      {fmtMoney(value)}
+    </button>
   );
 }
 

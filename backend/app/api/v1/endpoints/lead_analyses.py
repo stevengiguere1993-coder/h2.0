@@ -130,6 +130,8 @@ class LeadAnalysisRead(BaseModel):
     best_refi_amount: Optional[float] = None
     best_refi_program: Optional[str] = None
     mdf_preteur_b: Optional[float] = None
+    mdf_preteur_b_pct: Optional[float] = None
+    frais_demarrage_overrides_json: Optional[str] = None
     notes: Optional[str] = None
     converted_to_lead_id: Optional[int] = None
 
@@ -207,6 +209,9 @@ class LeadAnalysisUpdate(BaseModel):
     duree_projet_annees: Optional[int] = None
     frais_developpement: Optional[float] = None
     frais_negociations: Optional[float] = None
+
+    mdf_preteur_b_pct: Optional[float] = None
+    frais_demarrage_overrides_json: Optional[str] = None
 
     notes: Optional[str] = None
 
@@ -298,6 +303,7 @@ DEFAULTS_NEW_ANALYSIS: dict = {
     "taux_interet_achat_pct": 4.0,
     "ajout_wifi": True,
     "loyers_max_abordabilite_json": json.dumps({"abordable": 1090}),
+    "mdf_preteur_b_pct": 25.0,
 }
 
 
@@ -688,6 +694,22 @@ async def run_financial_analysis(
         except Exception:  # noqa: BLE001
             loyer_abord = 0.0
 
+    # Overrides manuels des frais de démarrage (saisis par l'utilisateur
+    # depuis l'UI). Dict { "evaluateur": 1800, ... }.
+    frais_overrides: dict = {}
+    if rec.frais_demarrage_overrides_json:
+        try:
+            j = json.loads(rec.frais_demarrage_overrides_json) or {}
+            if isinstance(j, dict):
+                frais_overrides = {
+                    k: float(v)
+                    for k, v in j.items()
+                    if v is not None and isinstance(v, (int, float, str))
+                    and str(v).replace(".", "", 1).replace("-", "", 1).isdigit()
+                }
+        except Exception:  # noqa: BLE001
+            frais_overrides = {}
+
     inputs = FinanceInputs(
         adresse=rec.address or "",
         prix_achat=float(rec.asking_price or 0),
@@ -712,6 +734,12 @@ async def run_financial_analysis(
         frais_negociations=float(rec.frais_negociations or 0),
         frais_travaux=float(rec.travaux_estimes or 0),
         nouveau_loyer_abordable=loyer_abord,
+        mdf_preteur_b_pct=(
+            float(rec.mdf_preteur_b_pct) / 100.0
+            if rec.mdf_preteur_b_pct is not None
+            else 0.25
+        ),
+        frais_demarrage_overrides=frais_overrides,
     )
 
     use_aph = loyer_abord > 0 and inputs.nombre_logements > 0
