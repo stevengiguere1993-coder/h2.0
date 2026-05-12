@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ClipboardCheck, Loader2, Plus, Search } from "lucide-react";
+import { ClipboardCheck, Loader2, Plus, Search, Trash2 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { Link, useRouter } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 
 type PurchaseOrder = {
   id: number;
@@ -53,16 +54,41 @@ function fmtMoney(n: number | string | null): string {
 export default function PurchaseOrdersListPage() {
   const { onOpenSidebar } = useAppLayout();
   const router = useRouter();
+  const confirm = useConfirm();
   const [items, setItems] = useState<PurchaseOrder[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
   const [employes, setEmployes] = useState<Employe[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState<
     "all" | "draft" | "sent" | "fulfilled"
   >("all");
+
+  async function deletePO(po: PurchaseOrder) {
+    const ok = await confirm({
+      title: `Supprimer ${po.reference} ?`,
+      description:
+        "Le bon de commande sera supprimé définitivement. Son numéro sera recyclé pour le prochain PO créé s'il s'agit du dernier.",
+      confirmLabel: "Supprimer",
+      destructive: true
+    });
+    if (!ok) return;
+    setDeleting(po.id);
+    try {
+      const r = await authedFetch(`/api/v1/purchase-orders/${po.id}`, {
+        method: "DELETE"
+      });
+      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      setItems((prev) => prev.filter((x) => x.id !== po.id));
+    } catch {
+      setError("Suppression échouée.");
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -246,6 +272,7 @@ export default function PurchaseOrdersListPage() {
                   <th className="px-3 py-2">Assigné à</th>
                   <th className="px-3 py-2 text-right">Max autorisé</th>
                   <th className="px-3 py-2 text-center">Statut</th>
+                  <th className="w-10 px-2 py-2"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-brand-800">
@@ -305,6 +332,24 @@ export default function PurchaseOrdersListPage() {
                         >
                           {STATUS_LABELS[po.status] || po.status}
                         </span>
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void deletePO(po);
+                          }}
+                          disabled={deleting === po.id}
+                          title="Supprimer ce PO"
+                          className="rounded p-1.5 text-white/40 transition hover:bg-rose-500/15 hover:text-rose-300 disabled:opacity-40"
+                        >
+                          {deleting === po.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-4 w-4" />
+                          )}
+                        </button>
                       </td>
                     </tr>
                   );

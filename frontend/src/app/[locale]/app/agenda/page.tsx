@@ -61,6 +61,7 @@ type Project = {
   status: string;
   start_date: string | null;
   end_date: string | null;
+  address?: string | null;
   members?: Array<{ employe_id: number }> | null;
 };
 type Employe = { id: number; full_name: string };
@@ -1502,7 +1503,17 @@ function EventModal({
               <select
                 id="ev_project"
                 value={projectId}
-                onChange={(e) => setProjectId(e.target.value)}
+                onChange={(e) => {
+                  const newId = e.target.value;
+                  setProjectId(newId);
+                  // Pré-remplit le lieu avec l'adresse du projet
+                  // sélectionné — sauf si l'utilisateur a déjà saisi
+                  // quelque chose à la main.
+                  if (newId && !location.trim()) {
+                    const p = projects.find((x) => String(x.id) === newId);
+                    if (p?.address) setLocation(p.address);
+                  }
+                }}
                 className="input"
               >
                 <option value="">—</option>

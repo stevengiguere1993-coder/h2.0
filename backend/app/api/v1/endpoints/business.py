@@ -186,6 +186,14 @@ def make_crud_router(
         if obj is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
         await crud.delete(obj)
+        # Après suppression d'un PO, on recycle son numéro : on
+        # ré-aligne le compteur `next_po_number` sur (max restant + 1).
+        # Comme ça, supprimer le dernier PO-0030 fait que le prochain
+        # créé reprendra le numéro 0030.
+        if model is PurchaseOrder:
+            from app.services.numbering import resync_po_counter
+
+            await resync_po_counter(db)
 
     return router
 
