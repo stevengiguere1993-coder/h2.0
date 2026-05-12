@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Building2, Plus, Search } from "lucide-react";
 
 import {
@@ -684,6 +684,92 @@ function KanbanView({
   const [adding, setAdding] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
 
+  // Touch-drag support pour mobile : HTML5 dnd ne fonctionne pas avec
+  // les events tactiles. On émule un long-press → drag → drop via les
+  // events `onTouch*` posés sur chaque card, avec `elementFromPoint`
+  // pour détecter au-dessus de quelle colonne se trouve le doigt.
+  const touchRef = useRef<{
+    id: number;
+    startX: number;
+    startY: number;
+    dragMode: boolean;
+    longPressTimer: number | null;
+  } | null>(null);
+
+  function onCardTouchStart(e: React.TouchEvent, taskId: number) {
+    // Ignore le touch s'il provient d'un élément interactif (bouton,
+    // select, input) à l'intérieur de la carte : on laisse l'élément
+    // gérer son tap normalement.
+    const target = e.target as HTMLElement;
+    if (target.closest("button, select, input, textarea, a")) return;
+    const t = e.touches[0];
+    if (!t) return;
+    if (touchRef.current?.longPressTimer) {
+      window.clearTimeout(touchRef.current.longPressTimer);
+    }
+    touchRef.current = {
+      id: taskId,
+      startX: t.clientX,
+      startY: t.clientY,
+      dragMode: false,
+      longPressTimer: window.setTimeout(() => {
+        const ref = touchRef.current;
+        if (ref?.id === taskId) {
+          ref.dragMode = true;
+          setDragId(taskId);
+          if ("vibrate" in navigator) {
+            try {
+              navigator.vibrate(30);
+            } catch {
+              /* iOS sans vibrate */
+            }
+          }
+        }
+      }, 350)
+    };
+  }
+
+  function onCardTouchMove(e: React.TouchEvent) {
+    const ref = touchRef.current;
+    if (!ref) return;
+    const t = e.touches[0];
+    if (!t) return;
+    const dx = t.clientX - ref.startX;
+    const dy = t.clientY - ref.startY;
+    if (!ref.dragMode) {
+      // Mouvement avant l'activation du long-press → annule (l'utilisateur
+      // est en train de scroller, pas de drag).
+      if (Math.hypot(dx, dy) > 10) {
+        if (ref.longPressTimer) window.clearTimeout(ref.longPressTimer);
+        touchRef.current = null;
+      }
+      return;
+    }
+    // En mode drag : empêche le scroll et suit le doigt.
+    e.preventDefault();
+    const el = document.elementFromPoint(t.clientX, t.clientY);
+    let parent: HTMLElement | null = el as HTMLElement | null;
+    while (parent && !parent.dataset?.kanbanStatus) {
+      parent = parent.parentElement;
+    }
+    setHoverCol(parent?.dataset.kanbanStatus || null);
+  }
+
+  function onCardTouchEnd() {
+    const ref = touchRef.current;
+    if (!ref) {
+      return;
+    }
+    if (ref.longPressTimer) window.clearTimeout(ref.longPressTimer);
+    if (ref.dragMode && hoverCol) {
+      handleDrop(hoverCol);
+    } else {
+      setDragId(null);
+      setHoverCol(null);
+    }
+    touchRef.current = null;
+  }
+
   const byStatus = useMemo(() => {
     const map: Record<string, TaskBoardItem[]> = Object.fromEntries(
       TASK_STATUS_OPTIONS.map((s) => [s.value, [] as TaskBoardItem[]])
@@ -732,6 +818,7 @@ function KanbanView({
         return (
           <div
             key={col.value}
+            data-kanban-status={col.value}
             onDragOver={(e) => {
               e.preventDefault();
               setHoverCol(col.value);
@@ -769,27 +856,35 @@ function KanbanView({
               ) : null}
 
               {list.map((t) => (
-                <TaskCard
+                <div
                   key={t.id}
-                  task={t}
-                  users={users}
-                  onPatch={(p) => onPatch(t.id, p)}
-                  onDelete={(ev) => {
-                    ev.stopPropagation();
-                    ev.preventDefault();
-                    onDelete(t.id);
-                  }}
-                  onOpenDetails={() => onOpenDetails(t.id)}
-                  onMove={onMove ? () => onMove(t.id) : undefined}
-                  draggable
-                  dragging={dragId === t.id}
-                  onDragStart={() => setDragId(t.id)}
-                  onDragEnd={() => {
-                    setDragId(null);
-                    setHoverCol(null);
-                  }}
-                  footer={t.footer}
-                />
+                  onTouchStart={(e) => onCardTouchStart(e, t.id)}
+                  onTouchMove={onCardTouchMove}
+                  onTouchEnd={onCardTouchEnd}
+                  onTouchCancel={onCardTouchEnd}
+                  style={{ touchAction: dragId === t.id ? "none" : "auto" }}
+                >
+                  <TaskCard
+                    task={t}
+                    users={users}
+                    onPatch={(p) => onPatch(t.id, p)}
+                    onDelete={(ev) => {
+                      ev.stopPropagation();
+                      ev.preventDefault();
+                      onDelete(t.id);
+                    }}
+                    onOpenDetails={() => onOpenDetails(t.id)}
+                    onMove={onMove ? () => onMove(t.id) : undefined}
+                    draggable
+                    dragging={dragId === t.id}
+                    onDragStart={() => setDragId(t.id)}
+                    onDragEnd={() => {
+                      setDragId(null);
+                      setHoverCol(null);
+                    }}
+                    footer={t.footer}
+                  />
+                </div>
               ))}
 
               {adding === col.value ? (
