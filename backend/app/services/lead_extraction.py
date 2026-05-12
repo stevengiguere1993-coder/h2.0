@@ -114,9 +114,18 @@ class ExtractionResult:
 
 
 async def _fetch_url_text(url: str) -> str:
-    """Récupère le contenu HTML d'une URL et le strip en texte.
-    Si bloqué, retourne juste l'URL pour que Claude essaie de
-    raisonner dessus (Centris en particulier bloque les bots)."""
+    """Récupère le contenu HTML d'une URL et le transforme en texte
+    riche pour Claude.
+
+    Pour les sites SPA (Next.js, Nuxt, etc. — beaucoup de courtiers
+    modernes : pmml.ca, certaines pages immobilières), le HTML rendu
+    côté serveur est souvent vide ; la donnée vit dans des blocs
+    `<script id="__NEXT_DATA__">` ou `<script type="application/ld+json">`.
+    On les extrait en priorité et on les passe à Claude tels quels
+    (en JSON) avant de stripper le HTML.
+
+    Si l'URL est bloquée, on retourne juste l'URL pour que Claude
+    raisonne dessus."""
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -138,16 +147,58 @@ async def _fetch_url_text(url: str) -> str:
         log.warning("fetch_url_text failed for %s: %s", url, exc)
         return f"[URL non récupérable : {exc!s}] {url}"
 
-    # Strip très grossier : on enlève script/style et balises.
+    parts: List[str] = [f"[Source URL : {url}]"]
+
+    # 1. __NEXT_DATA__ (Next.js apps : pmml.ca et beaucoup d'autres).
+    nd_match = re.search(
+        r'<script[^>]*id=["\']__NEXT_DATA__["\'][^>]*>([\s\S]*?)</script>',
+        html,
+        flags=re.I,
+    )
+    if nd_match:
+        nd_raw = nd_match.group(1).strip()
+        if len(nd_raw) > 40_000:
+            nd_raw = nd_raw[:40_000] + "\n[…tronqué]"
+        parts.append(f"[Bloc __NEXT_DATA__ — JSON Next.js]\n{nd_raw}")
+
+    # 2. JSON-LD (schema.org Property / Apartment / Place).
+    ld_matches = re.findall(
+        r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>([\s\S]*?)</script>',
+        html,
+        flags=re.I,
+    )
+    for i, blob in enumerate(ld_matches[:5]):  # max 5 pour limiter le bruit
+        clean = blob.strip()
+        if not clean:
+            continue
+        if len(clean) > 8_000:
+            clean = clean[:8_000] + "\n[…tronqué]"
+        parts.append(f"[JSON-LD #{i + 1}]\n{clean}")
+
+    # 3. Meta OpenGraph + Twitter (titre, description, image, prix).
+    meta_tags = re.findall(
+        r'<meta\s+(?:property|name)=["\'](og:[^"\']+|twitter:[^"\']+|description)["\']'
+        r'\s+content=["\']([^"\']+)["\']',
+        html,
+        flags=re.I,
+    )
+    if meta_tags:
+        meta_str = "\n".join(f"{k}: {v}" for k, v in meta_tags[:20])
+        parts.append(f"[Meta tags]\n{meta_str}")
+
+    # 4. Texte visible — strip standard, en queue (souvent moins
+    # structuré que les blocs JSON ci-dessus mais ajoute du contexte).
     text = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.I)
     text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
     text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"\s+", " ", text)
-    # Tronque pour rester dans le contexte (Claude gère 200k mais
-    # pas la peine de payer pour 50k de HTML noise).
-    if len(text) > 30_000:
-        text = text[:30_000] + "\n[…tronqué]"
-    return f"[Contenu URL {url}]\n{text}"
+    text = re.sub(r"&nbsp;", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > 20_000:
+        text = text[:20_000] + "\n[…tronqué]"
+    if text:
+        parts.append(f"[Texte visible]\n{text}")
+
+    return "\n\n".join(parts)
 
 
 def _build_content_blocks(

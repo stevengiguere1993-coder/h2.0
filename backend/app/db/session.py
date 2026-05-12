@@ -379,6 +379,16 @@ async def init_db() -> None:
                 "NUMERIC(5,3) DEFAULT 4.0",
             ),
             ("lead_analyses", "mdf_preteur_b", "NUMERIC(14,2)"),
+            (
+                "lead_analyses",
+                "mdf_preteur_b_pct",
+                "NUMERIC(5,2) DEFAULT 25.0",
+            ),
+            (
+                "lead_analyses",
+                "frais_demarrage_overrides_json",
+                "TEXT",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

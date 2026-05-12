@@ -561,6 +561,16 @@ class FinanceInputs:
     # APH SELECT only (manuel)
     nouveau_loyer_abordable: float = 0.0
 
+    # MDF prêteur B (en fraction, ex. 0.25 pour 25 %). Modifiable
+    # selon le prêteur (peut monter à 0.35).
+    mdf_preteur_b_pct: float = 0.25
+
+    # Overrides manuels des postes de frais de démarrage. Dict
+    # `{ "evaluateur": 1800, "inspection": 2000, ... }` — chaque clé
+    # présente remplace la valeur calculée par défaut. Keys autorisées
+    # = attributs de `FraisDemarrage` dataclass.
+    frais_demarrage_overrides: Dict[str, float] = field(default_factory=dict)
+
 
 @dataclass
 class FinanceResults:
@@ -587,16 +597,24 @@ class FinanceResults:
 
     def to_dict(self) -> dict:
         """Pour persistance JSON dans `LeadAnalysis.analysis_results_json`."""
+        mdf_pct = (
+            self.inputs.mdf_preteur_b_pct
+            if self.inputs.mdf_preteur_b_pct is not None
+            else 0.25
+        )
         return {
             "frais_demarrage": _dataclass_to_dict(self.frais_demarrage),
             "frais_demarrage_total": self.frais_demarrage.total,
             "prix_acquisition": self.prix_acquisition,
             "mdf_preteur_b": self.mdf_preteur_b,
             # Composantes du MDF prêteur B (pour breakdown UI) :
-            #   mdf_25pct_prix_achat (25 % × prix d'achat)
+            #   mdf_pct_prix_achat (X % × prix d'achat)
             # + frais_demarrage.total
             # = mdf_preteur_b
-            "mdf_25pct_prix_achat": 0.25 * self.inputs.prix_achat,
+            "mdf_preteur_b_pct": mdf_pct,
+            # Alias conservé pour rétrocompat UI front-end.
+            "mdf_25pct_prix_achat": mdf_pct * self.inputs.prix_achat,
+            "mdf_pct_prix_achat": mdf_pct * self.inputs.prix_achat,
             "prix_achat": self.inputs.prix_achat,
             "typology": {
                 "h13_loyer_pondere": self.typology.h13_loyer_pondere,
@@ -821,11 +839,26 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         frais_negociations=inputs.frais_negociations,
         frais_travaux=inputs.frais_travaux,
     )
+    # Overrides manuels : pour chaque clé fournie par l'utilisateur,
+    # on remplace la valeur calculée par sa saisie. Permet d'ajuster
+    # les frais sans casser les défauts pour les autres postes.
+    if inputs.frais_demarrage_overrides:
+        for k, v in inputs.frais_demarrage_overrides.items():
+            if v is None:
+                continue
+            if hasattr(frais, k):
+                setattr(frais, k, float(v))
     prix_acquisition = inputs.prix_achat + frais.total
-    # MDF avec prêteur B = 25 % prix achat + frais démarrage. C'est
+    # MDF avec prêteur B = X % prix achat + frais démarrage. C'est
     # ce qu'il faut sortir en cash pour boucler l'achat conventionnel
-    # sans valeur économique retenue, juste sur le prix marchand.
-    mdf_preteur_b = 0.25 * inputs.prix_achat + frais.total
+    # sans valeur économique retenue, juste sur le prix marchand. X
+    # est `mdf_preteur_b_pct` (défaut 25 %, parfois 35 %).
+    mdf_pct = (
+        inputs.mdf_preteur_b_pct
+        if inputs.mdf_preteur_b_pct is not None
+        else 0.25
+    )
+    mdf_preteur_b = mdf_pct * inputs.prix_achat + frais.total
 
     # ── Étape 5 : MDF achat / équité refi ────────────────────────
     achat.mdf_necessaire = prix_acquisition - achat.financement
