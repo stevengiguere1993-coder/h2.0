@@ -89,3 +89,39 @@ async def next_po_number(db: AsyncSession) -> str:
     Cohérent avec ce que la cie utilise déjà (PO-0026, PO-0025, …)."""
     n = await _next(db, "po")
     return f"PO-{n:04d}"
+
+
+async def resync_po_counter(db: AsyncSession) -> int:
+    """Recale `next_po_number` sur (max numéro restant + 1).
+
+    Appelé après suppression d'un PO pour recycler son numéro :
+    si on supprime le dernier PO-0030, le prochain créé sera PO-0030.
+    Si on supprime un PO « du milieu », le compteur reste à max+1
+    et le numéro supprimé reste un trou (acceptable).
+    """
+    from app.models.purchase_order import PurchaseOrder
+
+    rows = (
+        await db.execute(select(PurchaseOrder.reference))
+    ).scalars().all()
+    max_num = 0
+    for ref in rows:
+        if not ref:
+            continue
+        # Format "PO-0027" → 27.
+        tail = ref.split("-")[-1] if "-" in ref else ref
+        try:
+            n = int(tail)
+        except ValueError:
+            continue
+        if n > max_num:
+            max_num = n
+    new_next = max_num + 1
+    await _ensure_row(db)
+    await db.execute(
+        update(NumberingCounter)
+        .where(NumberingCounter.id == 1)
+        .values(next_po_number=new_next)
+    )
+    await db.flush()
+    return new_next
