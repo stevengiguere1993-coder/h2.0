@@ -161,3 +161,27 @@ services:
         value: production
       - key: DATABASE_URL
         sync: false
+
+  # --------------------------------------------------------------
+  # Cron — daily punch auto-close à 22:00 (heure Montréal) :
+  #   - ferme les punches restés ouverts (clock-out oublié)
+  #   - notifie les managers+ via la cloche pour qu'ils corrigent
+  # 03:00 UTC = 22:00 EST (hiver) / 23:00 EDT (été). En été on est
+  # 1h en retard sur 22:00 local, ce qui est acceptable — l'idée
+  # étant de capturer les oublis en fin de journée.
+  # --------------------------------------------------------------
+  - type: cron
+    name: h2-0-punch-auto-close
+    runtime: python
+    region: oregon
+    plan: free
+    rootDir: backend
+    branch: main
+    schedule: "0 3 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.jobs.punch_auto_close
+    envVars:
+      - key: ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false

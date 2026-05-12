@@ -16,9 +16,10 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
-from app.api.deps import CurrentUser, DBSession, RequireManager
+from app.api.deps import CurrentUser, DBSession, RequireAdminRole, RequireManager
 from app.models.employe import Employe
 from app.models.punch import Punch
+from app.services.audit import log_action
 from app.services.project_auto_status import bump_to_in_progress_if_needed
 
 
@@ -202,6 +203,18 @@ async def clock_in(
     await bump_to_in_progress_if_needed(db, p.project_id)
     await db.flush()
     await db.refresh(p)
+    await log_action(
+        db,
+        user=user,
+        action="punch.clock_in",
+        entity_type="punch",
+        entity_id=p.id,
+        details={
+            "employe_id": emp.id,
+            "project_id": p.project_id,
+            "started_at": p.started_at.isoformat(),
+        },
+    )
     return PunchRead.model_validate(p)
 
 
@@ -248,7 +261,72 @@ async def clock_out(
             open_punch.geolocation = end_geo
     await db.flush()
     await db.refresh(open_punch)
+    await log_action(
+        db,
+        user=user,
+        action="punch.clock_out",
+        entity_type="punch",
+        entity_id=open_punch.id,
+        details={
+            "employe_id": emp.id,
+            "hours": float(open_punch.hours or 0),
+            "ended_at": open_punch.ended_at.isoformat(),
+        },
+    )
     return PunchRead.model_validate(open_punch)
+
+
+@router.get(
+    "/diagnose",
+    summary="Liste TOUS les punches sur N jours (incl. ouverts) — manager+",
+)
+async def punch_diagnose(
+    db: DBSession,
+    _: RequireManager,
+    days: int = Query(default=7, ge=1, le=90),
+    employe_id: Optional[int] = Query(default=None, gt=0),
+    only_open: bool = Query(
+        default=False,
+        description="Si True, retourne uniquement les punches sans clock-out",
+    ),
+) -> list[dict]:
+    """Vue d'audit pour retrouver les punches « invisibles » des vues
+    standards (Semaine/Mois/Paie) qui filtrent `ended_at IS NOT NULL`.
+
+    Tout punch ouvert (clock-out oublié) apparaît ici, peu importe
+    l'employé. Utile quand un manager dit « j'avais un punch hier
+    mais je ne le vois plus » — il s'agit presque toujours d'un
+    oubli de clock-out."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    stmt = (
+        select(Punch, Employe.full_name)
+        .join(Employe, Employe.id == Punch.employe_id)
+        .where(Punch.started_at >= cutoff)
+        .order_by(Punch.started_at.desc())
+    )
+    if employe_id is not None:
+        stmt = stmt.where(Punch.employe_id == employe_id)
+    if only_open:
+        stmt = stmt.where(Punch.ended_at.is_(None))
+    rows = (await db.execute(stmt)).all()
+    out: list[dict] = []
+    for p, full_name in rows:
+        out.append(
+            {
+                "id": p.id,
+                "employe_id": p.employe_id,
+                "employe_name": full_name,
+                "project_id": p.project_id,
+                "started_at": p.started_at.isoformat(),
+                "ended_at": p.ended_at.isoformat() if p.ended_at else None,
+                "hours": float(p.hours) if p.hours is not None else None,
+                "approved": p.approved,
+                "task": p.task,
+                "notes": p.notes,
+                "is_open": p.ended_at is None,
+            }
+        )
+    return out
 
 
 @router.get(
@@ -389,7 +467,7 @@ async def pending_count(db: DBSession, _: RequireManager) -> int:
 async def approve_punch(
     punch_id: int,
     db: DBSession,
-    _: RequireManager,
+    user: RequireManager,
 ) -> PunchPending:
     p = (
         await db.execute(select(Punch).where(Punch.id == punch_id))
@@ -404,6 +482,14 @@ async def approve_punch(
     p.approved = True
     await db.flush()
     await db.refresh(p)
+    await log_action(
+        db,
+        user=user,
+        action="punch.approved",
+        entity_type="punch",
+        entity_id=p.id,
+        details={"employe_id": p.employe_id, "hours": float(p.hours or 0)},
+    )
     emp = (
         await db.execute(select(Employe).where(Employe.id == p.employe_id))
     ).scalar_one_or_none()
@@ -421,16 +507,29 @@ async def approve_punch(
 async def reject_punch(
     punch_id: int,
     db: DBSession,
-    _: RequireManager,
+    user: RequireManager,
 ) -> None:
-    """Rejecting a punch simply deletes it. The employee can redo the
-    entry if needed. We don't try to keep a soft-deleted audit trail
-    at this stage — admins who want history can approve+add notes."""
+    """Rejecting a punch simply deletes it. Le journal d'audit garde
+    la trace de qui a rejeté quoi et quand."""
     p = (
         await db.execute(select(Punch).where(Punch.id == punch_id))
     ).scalar_one_or_none()
     if p is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Punch introuvable.")
+    await log_action(
+        db,
+        user=user,
+        action="punch.rejected",
+        entity_type="punch",
+        entity_id=p.id,
+        details={
+            "employe_id": p.employe_id,
+            "project_id": p.project_id,
+            "started_at": p.started_at.isoformat() if p.started_at else None,
+            "ended_at": p.ended_at.isoformat() if p.ended_at else None,
+            "hours": float(p.hours) if p.hours is not None else None,
+        },
+    )
     await db.delete(p)
     await db.flush()
 

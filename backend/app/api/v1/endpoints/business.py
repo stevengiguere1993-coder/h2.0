@@ -80,7 +80,7 @@ def make_crud_router(
     AuthWrite = RequireManager
 
     @router.post("", status_code=status.HTTP_201_CREATED)
-    async def create(data: create_schema, db: DBSession, _: AuthWrite):  # type: ignore[valid-type]
+    async def create(data: create_schema, db: DBSession, user: AuthWrite):  # type: ignore[valid-type]
         # Numérotation séquentielle auto pour Soumission / Facture si
         # la référence n'est pas fournie (alignée sur la séquence
         # QuickBooks via /api/v1/settings/numbering).
@@ -121,6 +121,23 @@ def make_crud_router(
                 db, getattr(obj, "project_id", None)
             )
             await db.flush()
+        # Journal d'audit : on trace la création pour pouvoir
+        # retrouver qui a créé quoi (volet construction & Co.).
+        from app.services.audit import log_action as _log_action
+
+        await _log_action(
+            db,
+            user=user,
+            action=f"{tag}.created",
+            entity_type=tag,
+            entity_id=getattr(obj, "id", None),
+            details={
+                "reference": getattr(obj, "reference", None),
+                "name": getattr(obj, "name", None)
+                or getattr(obj, "title", None)
+                or getattr(obj, "full_name", None),
+            },
+        )
         return read_schema.model_validate(obj)
 
     @router.get("", response_model=List[read_schema])  # type: ignore[valid-type]
@@ -180,12 +197,30 @@ def make_crud_router(
         return read_schema.model_validate(obj)
 
     @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-    async def delete_item(item_id: int, db: DBSession, _: AuthWrite):
+    async def delete_item(item_id: int, db: DBSession, user: AuthWrite):
         crud = GenericCrud(db, model)
         obj = await crud.get(item_id)
         if obj is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+        # Snapshot avant suppression pour le journal d'audit
+        # (référence + label visible si dispo).
+        snap = {
+            "reference": getattr(obj, "reference", None),
+            "name": getattr(obj, "name", None)
+            or getattr(obj, "title", None)
+            or getattr(obj, "full_name", None),
+        }
         await crud.delete(obj)
+        from app.services.audit import log_action as _log_action
+
+        await _log_action(
+            db,
+            user=user,
+            action=f"{tag}.deleted",
+            entity_type=tag,
+            entity_id=item_id,
+            details=snap,
+        )
         # Après suppression d'un PO, on recycle son numéro : on
         # ré-aligne le compteur `next_po_number` sur (max restant + 1).
         # Comme ça, supprimer le dernier PO-0030 fait que le prochain
