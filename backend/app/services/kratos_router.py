@@ -67,7 +67,7 @@ sans markdown.
 Schéma de sortie :
 {
   "kind": "entreprise_task" | "lead_note" | "prospection_lead_note" | "note" | "unknown",
-  "summary": "résumé court (max 200 caractères) de l'entrée",
+  "summary": "résumé court (max 200 caractères) de l'entrée — pour un courriel, résume la réponse",
   "title": "titre court si c'est une tâche (max 120 car), sinon null",
   "entreprise_id": id numérique de l'entreprise mentionnée (parmi la liste fournie), ou null,
   "lead_analysis_id": id numérique de la LeadAnalysis mentionnée, ou null,
@@ -77,6 +77,11 @@ Schéma de sortie :
 }
 
 Règles :
+- Si le texte ressemble à un COURRIEL reçu (entête From: / De: / Subject: / Objet:, ou si le \
+contexte « Indices courriel détectés » ci-dessous est fourni), il s'agit d'une réponse à un \
+suivi : route obligatoirement vers lead_note ou prospection_lead_note quand un candidat \
+est suggéré (lead trouvé par email/téléphone/adresse). Si plusieurs candidats, choisis le \
+plus probable avec confidence=medium et explique dans reason.
 - Si le texte parle d'un suivi/relance/note sur un lead immobilier \
 existant dans la liste, kind=lead_note ou prospection_lead_note.
 - Si le texte décrit une action à faire / problème à régler / chose \
@@ -111,6 +116,121 @@ class RoutingResult:
     confidence: str
     reason: str
     raw_json: dict
+
+
+EMAIL_HEADER_RE = re.compile(
+    r"^\s*(?:From|De|Sender|Expéditeur)\s*:\s*", re.I | re.M
+)
+EMAIL_SUBJECT_RE = re.compile(
+    r"^\s*(?:Subject|Objet)\s*:\s*(.+)$", re.I | re.M
+)
+EMAIL_ADDRESS_RE = re.compile(
+    r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+)
+PHONE_RE = re.compile(
+    r"(?:\+?1[\s\-.]?)?\(?\d{3}\)?[\s\-.]?\d{3}[\s\-.]?\d{4}"
+)
+
+
+def _detect_email_signals(text: str) -> dict:
+    """Détecte si le texte ressemble à un courriel reçu/transféré.
+
+    Retourne un dict avec :
+      - is_email : bool (true si entête From/De: présent)
+      - emails   : list[str] (toutes les adresses détectées)
+      - phones   : list[str] (numéros normalisés à 10 chiffres)
+      - subject  : str | None (extrait du Subject/Objet si présent)
+    """
+    is_email = bool(EMAIL_HEADER_RE.search(text))
+    emails_raw = EMAIL_ADDRESS_RE.findall(text)
+    # Dédoublonne + normalise lowercase.
+    seen: list[str] = []
+    for e in emails_raw:
+        el = e.lower().strip()
+        if el not in seen:
+            seen.append(el)
+    phones_raw = PHONE_RE.findall(text)
+    phones_norm: list[str] = []
+    for p in phones_raw:
+        digits = re.sub(r"\D", "", p)
+        if len(digits) == 11 and digits.startswith("1"):
+            digits = digits[1:]
+        if len(digits) == 10 and digits not in phones_norm:
+            phones_norm.append(digits)
+    subj_m = EMAIL_SUBJECT_RE.search(text)
+    subject = subj_m.group(1).strip()[:200] if subj_m else None
+    return {
+        "is_email": is_email or (len(seen) > 0 and len(text) > 200),
+        "emails": seen[:5],
+        "phones": phones_norm[:5],
+        "subject": subject,
+    }
+
+
+async def _match_leads_by_contact(
+    db: AsyncSession, emails: list[str], phones: list[str]
+) -> tuple[list[LeadAnalysis], list[ProspectionLead]]:
+    """Cherche les leads dont les coordonnées matchent (email ou
+    téléphone). Permet de pointer Claude vers le bon candidat plutôt
+    que de lui filer la liste complète."""
+    leads_hits: list[LeadAnalysis] = []
+    pleads_hits: list[ProspectionLead] = []
+
+    if emails:
+        from sqlalchemy import or_
+
+        # LeadAnalysis.courtier_contact est un texte libre — on cherche
+        # par "contains" sur chaque email.
+        for e in emails:
+            rows = (
+                await db.execute(
+                    select(LeadAnalysis).where(
+                        LeadAnalysis.courtier_contact.ilike(f"%{e}%")
+                    )
+                )
+            ).scalars().all()
+            for r in rows:
+                if r not in leads_hits:
+                    leads_hits.append(r)
+            # ProspectionLead a owner_email dédié.
+            rows2 = (
+                await db.execute(
+                    select(ProspectionLead).where(
+                        ProspectionLead.owner_email.ilike(e)
+                    )
+                )
+            ).scalars().all()
+            for r in rows2:
+                if r not in pleads_hits:
+                    pleads_hits.append(r)
+
+    if phones:
+        for p in phones:
+            # On cherche les 7 derniers chiffres pour tolérer les
+            # formats (514) 555-1234 / 5145551234 / 514.555.1234.
+            tail = p[-7:]
+            rows = (
+                await db.execute(
+                    select(LeadAnalysis).where(
+                        LeadAnalysis.courtier_contact.ilike(f"%{tail}%")
+                    )
+                )
+            ).scalars().all()
+            for r in rows:
+                if r not in leads_hits:
+                    leads_hits.append(r)
+            rows2 = (
+                await db.execute(
+                    select(ProspectionLead).where(
+                        ProspectionLead.owner_phone.ilike(f"%{tail}%")
+                    )
+                )
+            ).scalars().all()
+            for r in rows2:
+                if r not in pleads_hits:
+                    pleads_hits.append(r)
+
+    return leads_hits[:5], pleads_hits[:5]
 
 
 async def _gather_context(
@@ -170,17 +290,63 @@ def _format_context(ctx: RoutingContext) -> str:
     return "\n\n".join(parts) if parts else "(aucun contexte chargé)"
 
 
-async def _call_claude(text: str, ctx: RoutingContext) -> dict:
+async def _call_claude(
+    text: str,
+    ctx: RoutingContext,
+    *,
+    email_signals: Optional[dict] = None,
+    email_lead_matches: Optional[list[LeadAnalysis]] = None,
+    email_plead_matches: Optional[list[ProspectionLead]] = None,
+) -> dict:
     """Appelle Claude et retourne le dict parsé. Lève si l'IA n'est
     pas configurée — le caller gère le fallback (status=needs_review,
-    kind=unknown)."""
+    kind=unknown).
+
+    Si `email_signals` est fourni, on injecte un bloc « Indices courriel
+    détectés » dans le prompt avec les candidats identifiés par
+    email/téléphone — Claude saura router en priorité sur ces leads."""
     if not settings.anthropic_api_key:
         raise RuntimeError("ANTHROPIC_API_KEY non configuré.")
     import anthropic
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+    extra = ""
+    if email_signals and email_signals.get("is_email"):
+        lines = ["## Indices courriel détectés"]
+        if email_signals.get("subject"):
+            lines.append(f"Objet : {email_signals['subject']}")
+        if email_signals.get("emails"):
+            lines.append(
+                "Adresses détectées : " + ", ".join(email_signals["emails"])
+            )
+        if email_signals.get("phones"):
+            lines.append(
+                "Téléphones détectés : " + ", ".join(email_signals["phones"])
+            )
+        if email_lead_matches:
+            lines.append("Leads d'analyse correspondant (priorité) :")
+            for l in email_lead_matches:
+                addr = l.address or "—"
+                contact = l.courtier_contact or ""
+                lines.append(f"  - #{l.id} {addr} — {contact[:80]}")
+        if email_plead_matches:
+            lines.append("Leads du Pipeline correspondant (priorité) :")
+            for pl in email_plead_matches:
+                addr = pl.address or "—"
+                lines.append(
+                    f"  - #{pl.id} {addr} — {pl.owner_email or ''} / {pl.owner_phone or ''}"
+                )
+        if not email_lead_matches and not email_plead_matches:
+            lines.append(
+                "(aucun lead trouvé par email/téléphone — propose `note` "
+                "ou kind=unknown avec confidence=low.)"
+            )
+        extra = "\n".join(lines) + "\n\n"
+
     user_prompt = (
         f"## Contexte (entités disponibles)\n{_format_context(ctx)}\n\n"
+        f"{extra}"
         f"## Entrée utilisateur\n{text.strip()}\n\n"
         "Retourne le JSON strict selon le schéma."
     )
@@ -305,9 +471,26 @@ async def route_text(
 
     ctx = await _gather_context(db, user)
 
+    # Détection courriel + pré-matching par adresse/téléphone (Phase 2).
+    email_signals = _detect_email_signals(text_clean)
+    lead_matches: list[LeadAnalysis] = []
+    plead_matches: list[ProspectionLead] = []
+    if email_signals["is_email"] and (
+        email_signals["emails"] or email_signals["phones"]
+    ):
+        lead_matches, plead_matches = await _match_leads_by_contact(
+            db, email_signals["emails"], email_signals["phones"]
+        )
+
     # Appel IA (avec fallback gracieux).
     try:
-        raw = await _call_claude(text_clean, ctx)
+        raw = await _call_claude(
+            text_clean,
+            ctx,
+            email_signals=email_signals if email_signals["is_email"] else None,
+            email_lead_matches=lead_matches if email_signals["is_email"] else None,
+            email_plead_matches=plead_matches if email_signals["is_email"] else None,
+        )
         routing = _parse_routing(raw)
         ia_ok = True
     except Exception as exc:  # noqa: BLE001
