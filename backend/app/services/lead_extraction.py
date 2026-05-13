@@ -45,13 +45,29 @@ EXTRACTION_MODEL = os.environ.get(
 
 SYSTEM_PROMPT = """Tu es un assistant d'extraction de données pour \
 un dirigeant qui acquiert des immeubles à logements au Québec. \
-Tu reçois des sources hétérogènes (lien Centris, courriel courtier, \
-photo de fiche MLS, PDF descriptif, capture d'écran, SMS). \
-Tu extraies les infos clés sous forme de JSON strict. \
-Si une info n'est pas présente dans les sources, retourne `null`. \
-Ne devine jamais — null vaut mieux qu'une valeur approximative. \
-Réponds UNIQUEMENT avec le JSON, sans texte avant ni après. \
-Si tu vois plusieurs immeubles différents dans les sources \
+Tu reçois des sources hétérogènes (lien Centris, DuProprio, PMML, \
+courriel courtier, photo de fiche MLS, PDF descriptif, capture \
+d'écran, SMS).
+
+Règles d'extraction :
+- Convertis TOUS les nombres en VALEUR NUMÉRIQUE PURE (jamais de \
+chaîne, jamais de symbole). Exemples :
+  - « 3 560 000 $ » → 3560000
+  - « 2 676 100 $ » → 2676100
+  - « 1 908 » (année) → 1908
+- Pour la typologie, parse les expressions du type « 8 x 5.5 + 4 x 4.5 » \
+ou « 8 unités de 5 ½ et 4 unités de 4 ½ » en un dict
+  `{ "1.5": 0, "2.5": 0, "3.5": 0, "4.5": 4, "5.5": 8, ... }`.
+- Adresse civique + rue dans `address` (ex. « 3715-3737 Ethel ») et \
+ville dans `city` (ex. « Verdun »).
+- Si plusieurs blocs structurés sont fournis (Meta tags, JSON-LD, \
+__NEXT_DATA__, En-têtes h1-h3, Texte visible), CROISE-les pour \
+trouver la même info plutôt que de te limiter à un seul bloc.
+- Si une info n'est pas présente, retourne `null`. Ne devine jamais — \
+null vaut mieux qu'une valeur approximative.
+- Réponds UNIQUEMENT avec le JSON strict, sans texte avant ni après, \
+sans markdown.
+- Si tu vois plusieurs immeubles différents dans les sources \
 (adresses qui ne matchent pas), retourne un array JSON de plusieurs \
 objets. Sinon retourne un seul objet."""
 
@@ -340,7 +356,7 @@ async def extract_lead_info(
     try:
         msg = client.messages.create(
             model=EXTRACTION_MODEL,
-            max_tokens=2500,
+            max_tokens=4000,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": content_blocks}],
         )

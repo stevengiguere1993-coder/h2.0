@@ -22,6 +22,7 @@ import {
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { AppTopbar } from "@/components/app-topbar";
+import { PillPicker } from "@/components/task-pills";
 import { useProspectionLayout } from "../layout";
 import { Link, useRouter } from "@/i18n/navigation";
 
@@ -679,20 +680,24 @@ function LeadCard({
           MDF prêteur B : <span className="font-mono">{fmtMoney(lead.mdf_preteur_b)}</span>
         </p>
       ) : null}
-      {/* Sélecteur de statut — change rapide sans drag */}
-      <select
-        value={lead.status}
+      {/* Sélecteur de statut — même style que les pills tâches
+          d'entreprise (point coloré + label, picker discret). */}
+      <div
+        className="mt-1.5"
         onClick={(e) => e.stopPropagation()}
-        onChange={(e) => onChangeStatus(e.target.value as Lead["status"])}
-        className="mt-1.5 w-full rounded-md border border-brand-800 bg-brand-950 px-1.5 py-0.5 text-[10px] text-white/80 focus:border-accent-500 focus:outline-none"
-        title="Changer le statut"
       >
-        {COLUMNS.map((c) => (
-          <option key={c.key} value={c.key}>
-            {c.label}
-          </option>
-        ))}
-      </select>
+        <PillPicker
+          options={COLUMNS.map((c) => ({
+            value: c.key,
+            label: c.label,
+            dot: c.dot,
+            cls: c.dot
+          }))}
+          value={lead.status}
+          onChange={(v) => onChangeStatus(v as Lead["status"])}
+          ariaLabel="Statut du lead"
+        />
+      </div>
       <div className="mt-2 flex flex-wrap items-center gap-1">
         <button
           type="button"
@@ -938,6 +943,49 @@ function LeadDetailModal({
     }
   }
 
+  // ── Estimation IA des dépenses manquantes ─────────────────────
+  // Appelle l'endpoint /estimate-expenses qui retourne 3 valeurs
+  // (taxes muni / scolaires / assurances) basées sur Claude +
+  // fallback ratios marché Québec. On ne remplace que les champs
+  // encore vides.
+  const [estimatingExpenses, setEstimatingExpenses] = useState(false);
+  async function estimateExpenses() {
+    if (!data) return;
+    setEstimatingExpenses(true);
+    try {
+      const r = await authedFetch(
+        `/api/v1/lead-analyses/${id}/estimate-expenses`,
+        { method: "POST" }
+      );
+      if (!r.ok) return;
+      const out = (await r.json()) as {
+        taxes_municipales: number | null;
+        taxes_scolaires: number | null;
+        assurances: number | null;
+      };
+      const patch: Record<string, number> = {};
+      if (data.taxes_municipales == null && out.taxes_municipales != null) {
+        patch.taxes_municipales = out.taxes_municipales;
+      }
+      if (data.taxes_scolaires == null && out.taxes_scolaires != null) {
+        patch.taxes_scolaires = out.taxes_scolaires;
+      }
+      if (data.assurances == null && out.assurances != null) {
+        patch.assurances = out.assurances;
+      }
+      if (Object.keys(patch).length > 0) {
+        setData({ ...data, ...patch } as LeadDetail);
+        await authedFetch(`/api/v1/lead-analyses/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify(patch)
+        });
+        onSaved();
+      }
+    } finally {
+      setEstimatingExpenses(false);
+    }
+  }
+
   const typology = useMemo(() => {
     if (!data?.typology_json) return null;
     try {
@@ -987,6 +1035,30 @@ function LeadDetailModal({
             </p>
           ) : !data ? null : (
             <div className="space-y-5">
+              {/* Sélecteur de statut — première section (déplacée
+                  ici depuis la fin de la fiche pour mise en avant). */}
+              <section className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+                <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+                  Statut du lead
+                </h3>
+                <p className="mt-1 text-[10px] text-white/50">
+                  Change la colonne du kanban depuis ici aussi.
+                </p>
+                <div className="mt-2">
+                  <PillPicker
+                    options={COLUMNS.map((c) => ({
+                      value: c.key,
+                      label: c.label,
+                      dot: c.dot,
+                      cls: c.dot
+                    }))}
+                    value={data.status}
+                    onChange={(v) => patchField("status", v)}
+                    ariaLabel="Statut du lead"
+                  />
+                </div>
+              </section>
+
               <section>
                 <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
                   Infos extraites
@@ -1023,6 +1095,7 @@ function LeadDetailModal({
                     value={data.asking_price}
                     onSave={(v) => patchField("asking_price", v)}
                     required
+                    format="money"
                   />
                   <FieldNumber
                     label="Année construction"
@@ -1045,34 +1118,46 @@ function LeadDetailModal({
                     value={data.revenus_bruts}
                     onSave={(v) => patchField("revenus_bruts", v)}
                     required
+                    format="money"
                   />
                   <FieldNumber
                     label="Évaluation municipale ($)"
                     value={data.evaluation_municipale}
                     onSave={(v) => patchField("evaluation_municipale", v)}
+                    format="money"
                   />
                   <FieldNumber
                     label="Taxes municipales ($/an)"
                     value={data.taxes_municipales}
                     onSave={(v) => patchField("taxes_municipales", v)}
                     required
+                    onEstimate={() => void estimateExpenses()}
+                    estimating={estimatingExpenses}
+                    format="money"
                   />
                   <FieldNumber
                     label="Taxes scolaires ($/an)"
                     value={data.taxes_scolaires}
                     onSave={(v) => patchField("taxes_scolaires", v)}
                     required
+                    onEstimate={() => void estimateExpenses()}
+                    estimating={estimatingExpenses}
+                    format="money"
                   />
                   <FieldNumber
                     label="Assurances ($/an)"
                     value={data.assurances}
                     onSave={(v) => patchField("assurances", v)}
                     required
+                    onEstimate={() => void estimateExpenses()}
+                    estimating={estimatingExpenses}
+                    format="money"
                   />
                   <FieldNumber
                     label="Énergie ($/an)"
                     value={data.energie}
                     onSave={(v) => patchField("energie", v)}
+                    format="money"
                   />
                   <FieldNumber
                     label="Superficie terrain"
@@ -1221,37 +1306,6 @@ function LeadDetailModal({
                 />
               </section>
 
-              {/* Sélecteur de statut — dernier item de la fiche */}
-              <section className="rounded-xl border border-brand-800 bg-brand-900 p-4">
-                <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-                  Statut du lead
-                </h3>
-                <p className="mt-1 text-[10px] text-white/50">
-                  Change la colonne du kanban depuis ici aussi.
-                </p>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {COLUMNS.map((c) => {
-                    const active = data.status === c.key;
-                    return (
-                      <button
-                        key={c.key}
-                        type="button"
-                        onClick={() => patchField("status", c.key)}
-                        className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-semibold transition ${
-                          active
-                            ? "border-accent-500 bg-accent-500/15 text-accent-300"
-                            : "border-brand-800 bg-brand-950 text-white/60 hover:border-accent-500/40 hover:text-white"
-                        }`}
-                      >
-                        <span
-                          className={`h-1.5 w-1.5 rounded-full ${c.dot}`}
-                        />
-                        {c.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
             </div>
           )}
         </div>
@@ -1398,43 +1452,131 @@ function FieldText({
   );
 }
 
+function _formatMoneyExcel(n: number): string {
+  // 100000 → "100 000 $"
+  const sign = n < 0 ? "-" : "";
+  const rounded = Math.round(Math.abs(n));
+  const withSep = rounded
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return `${sign}${withSep} $`;
+}
+
+function _formatPercentExcel(n: number): string {
+  // 4 → "4.00 %"
+  return `${n.toFixed(2)} %`;
+}
+
+function _parseNumberLiberal(s: string): number | null {
+  // Accepte "100 000 $", "100,000.00", "100000", "4.00%", "4%"
+  if (s == null) return null;
+  const cleaned = s
+    .replace(/[\s ]/g, "")
+    .replace(/\$/g, "")
+    .replace(/%/g, "")
+    .replace(/,/g, ".");
+  if (cleaned === "" || cleaned === "-" || cleaned === ".") return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
 function FieldNumber({
   label,
   value,
   onSave,
-  required
+  required,
+  onEstimate,
+  estimating,
+  format = "plain"
 }: {
   label: string;
   value: number | null;
   onSave: (v: number | null) => void;
   required?: boolean;
+  /** Quand le champ est vide ET cette prop est fournie, on affiche
+   *  un bouton « Estimer IA » à droite du label qui appelle ce
+   *  handler. Utilisé pour taxes muni / scolaires / assurances. */
+  onEstimate?: () => void;
+  estimating?: boolean;
+  /** Format d'affichage hors-focus :
+   *  - "money"   : « 100 000 $ » (Excel style)
+   *  - "percent" : « 4.00 % »
+   *  - "plain"   : valeur brute (défaut) */
+  format?: "money" | "percent" | "plain";
 }) {
+  const [focused, setFocused] = useState(false);
   const [v, setV] = useState(value != null ? String(value) : "");
-  useEffect(() => setV(value != null ? String(value) : ""), [value]);
+  useEffect(() => {
+    if (!focused) setV(value != null ? String(value) : "");
+  }, [value, focused]);
   const isEmpty = value == null;
   const missingRequired = isEmpty && required;
+
+  // Texte affiché quand le champ n'est pas focus.
+  const displayed = (() => {
+    if (focused) return v;
+    if (value == null) return "";
+    if (format === "money") return _formatMoneyExcel(value);
+    if (format === "percent") return _formatPercentExcel(value);
+    return String(value);
+  })();
+
   return (
     <div>
-      <label
-        className={`text-[10px] uppercase tracking-wider ${
-          missingRequired
-            ? "text-rose-400 font-semibold"
-            : isEmpty
-            ? "text-amber-600 dark:text-amber-300/80"
-            : "text-white/50"
-        }`}
-      >
-        {label}
-        {missingRequired ? " · OBLIGATOIRE" : isEmpty ? " ⚠" : ""}
-      </label>
+      <div className="flex items-baseline justify-between gap-2">
+        <label
+          className={`text-[10px] uppercase tracking-wider ${
+            missingRequired
+              ? "text-rose-400 font-semibold"
+              : isEmpty
+              ? "text-amber-600 dark:text-amber-300/80"
+              : "text-white/50"
+          }`}
+        >
+          {label}
+          {missingRequired ? " · OBLIGATOIRE" : isEmpty ? " ⚠" : ""}
+        </label>
+        {isEmpty && onEstimate ? (
+          <button
+            type="button"
+            onClick={onEstimate}
+            disabled={!!estimating}
+            className="inline-flex items-center gap-1 rounded border border-amber-400/50 bg-amber-500/15 px-1.5 py-0 text-[9px] font-semibold text-amber-200 hover:bg-amber-500/25 disabled:opacity-50"
+            title="Estimer cette valeur avec l'IA"
+          >
+            {estimating ? (
+              <Loader2 className="h-2.5 w-2.5 animate-spin" />
+            ) : (
+              <Sparkles className="h-2.5 w-2.5" />
+            )}
+            IA
+          </button>
+        ) : null}
+      </div>
       <input
-        type="number"
-        step="any"
-        value={v}
+        type="text"
+        inputMode="decimal"
+        value={displayed}
+        onFocus={(e) => {
+          setFocused(true);
+          // À l'entrée en focus, on charge la valeur brute pour
+          // permettre l'édition naturelle (pas de « 100 000 $ »
+          // qui empêcherait de taper).
+          setV(value != null ? String(value) : "");
+          // Sélectionne le contenu pour faciliter l'écrasement.
+          requestAnimationFrame(() => {
+            try {
+              e.target.select();
+            } catch {
+              /* ignore */
+            }
+          });
+        }}
         onChange={(e) => setV(e.target.value)}
         onBlur={() => {
-          const num = v.trim() === "" ? null : Number(v);
-          if (num !== value) onSave(Number.isFinite(num as number) ? num : null);
+          setFocused(false);
+          const num = _parseNumberLiberal(v);
+          if (num !== value) onSave(num);
         }}
         className={`input mt-1 font-mono text-xs ${
           missingRequired
@@ -1738,16 +1880,19 @@ function ManualAnalysisSection({
           label="TGA (%)"
           value={data.tga_pct ?? 4}
           onSave={(v) => onPatch("tga_pct", v ?? 4)}
+          format="percent"
         />
         <FieldNumber
           label="Taux intérêt achat (%)"
           value={data.taux_interet_achat_pct ?? 4}
           onSave={(v) => onPatch("taux_interet_achat_pct", v ?? 4)}
+          format="percent"
         />
         <FieldNumber
           label="MDF prêteur B (%)"
           value={data.mdf_preteur_b_pct ?? 25}
           onSave={(v) => onPatch("mdf_preteur_b_pct", v ?? 25)}
+          format="percent"
         />
         <FieldYesNo
           label="Wifi inclus refi"
@@ -1772,11 +1917,13 @@ function ManualAnalysisSection({
           label="% réduction énergie"
           value={data.reduction_energie_pct}
           onSave={(v) => onPatch("reduction_energie_pct", v)}
+          format="percent"
         />
         <FieldNumber
           label="Taux d'intérêt refi (%)"
           value={data.taux_interet_refi_pct}
           onSave={(v) => onPatch("taux_interet_refi_pct", v)}
+          format="percent"
         />
         <FieldNumber
           label="Durée projet (années)"
@@ -1787,16 +1934,19 @@ function ManualAnalysisSection({
           label="Frais développement ($)"
           value={data.frais_developpement}
           onSave={(v) => onPatch("frais_developpement", v)}
+          format="money"
         />
         <FieldNumber
           label="Frais négociations ($)"
           value={data.frais_negociations}
           onSave={(v) => onPatch("frais_negociations", v)}
+          format="money"
         />
         <FieldNumber
           label="Frais travaux ($)"
           value={data.travaux_estimes}
           onSave={(v) => onPatch("travaux_estimes", v)}
+          format="money"
         />
         <FieldNumber
           label="Loyer abordable (APH SELECT)"
