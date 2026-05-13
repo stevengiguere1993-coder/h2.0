@@ -12,6 +12,7 @@ import {
   BarChart3,
   Brain,
   Briefcase,
+  Calendar,
   ChevronDown,
   ChevronRight,
   ExternalLink,
@@ -255,6 +256,7 @@ export default function EntreprisesLayout({
       badge: openTasksCount || undefined
     },
     { href: "/entreprises/resumes", label: "Résumés IA", icon: Sparkles },
+    { href: "/entreprises/rencontres", label: "Rencontres", icon: Calendar },
     { href: "/entreprises/kratos", label: "Kratos · Cerveau", icon: Brain },
     { href: "/entreprises/vision", label: "Vision & Stratégie", icon: BarChart3 },
     { href: "/entreprises/comparatif", label: "Comparatif", icon: BarChart3 },

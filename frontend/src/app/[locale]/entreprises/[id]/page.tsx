@@ -5,7 +5,9 @@ import { useParams } from "next/navigation";
 import {
   ArrowLeft,
   Briefcase,
+  Calendar,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   Loader2,
   Pause,
@@ -471,6 +473,25 @@ export default function EntrepriseDetailPage() {
 
         {/* Daily Pulse — briefing IA quotidien */}
         <DailyPulseCard entrepriseId={ent.id} accent={ent.color_accent} />
+
+        {/* Lien rapide vers les rencontres tagguées sur cette entreprise */}
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={`/entreprises/rencontres?entreprise=${ent.id}` as any}
+          className="mt-6 flex items-center gap-3 rounded-2xl border border-brand-800 bg-brand-900 p-5 transition hover:border-accent-500"
+        >
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
+            <Calendar className="h-5 w-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base font-bold text-white">Rencontres</h2>
+            <p className="mt-0.5 text-xs text-white/60">
+              Comptes rendus de conseils d&apos;actionnaires et retraites
+              stratégiques où cette entreprise est concernée.
+            </p>
+          </div>
+          <ChevronRight className="h-4 w-4 text-white/40" />
+        </Link>
 
         {/* Immobilier — portefeuille détenu par cette entreprise */}
         <EntrepriseImmobilierSection entrepriseId={ent.id} />

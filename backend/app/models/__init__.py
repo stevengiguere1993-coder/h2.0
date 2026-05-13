@@ -42,6 +42,11 @@ from app.models.lead_analysis import (  # noqa: F401
     LeadAnalysisStatus,
 )
 from app.models.qg_embedding import Embedding  # noqa: F401
+from app.models.rencontre import (  # noqa: F401
+    Rencontre,
+    RencontreSection,
+    RencontreStatus,
+)
 from app.models.qg_strategic import (  # noqa: F401
     Activity,
     ActivityKind,

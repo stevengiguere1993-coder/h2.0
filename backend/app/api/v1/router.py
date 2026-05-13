@@ -29,6 +29,7 @@ from app.api.v1.endpoints import (
     dashboard,
     help,
     kratos,
+    rencontres,
     achat_receipt,
     bon_items,
     bon_send,
@@ -211,6 +212,7 @@ api_router.include_router(email_templates.router)
 api_router.include_router(admin_data.router)
 api_router.include_router(help.router)
 api_router.include_router(kratos.router)
+api_router.include_router(rencontres.router)
 api_router.include_router(ai.router)
 api_router.include_router(entreprises.router)
 # entreprise_extras DOIT être registered avant entreprises.router pour que
