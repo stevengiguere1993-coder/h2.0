@@ -179,10 +179,14 @@ async def confirm(
 class KratosProblemRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
-    entreprise_id: int
+    # entreprise_id devient OPTIONNEL : un problème peut être transverse.
+    entreprise_id: Optional[int] = None
+    problem_text: Optional[str] = None
     title: str
     description: Optional[str]
     severity: str
+    solution_plan: Optional[str] = None
+    solution_steps_json: Optional[str] = None
     suggested_action_kind: Optional[str]
     suggested_action_label: Optional[str]
     suggested_action_params: Optional[str]
@@ -284,3 +288,58 @@ async def dismiss_problem(
     problem.status = KratosProblemStatus.DISMISSED.value
     problem.resolved_at = datetime.utcnow()
     await db.commit()
+
+
+# ─── Problèmes user-driven (Phase 4 réorientée) ──────────────────────
+
+
+class SolveProblemRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=8000)
+
+
+class KratosProblemWithSolutionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    entreprise_id: Optional[int]
+    problem_text: Optional[str]
+    title: str
+    description: Optional[str]
+    severity: str
+    solution_plan: Optional[str]
+    solution_steps_json: Optional[str]
+    suggested_action_kind: Optional[str]
+    suggested_action_label: Optional[str]
+    suggested_action_params: Optional[str]
+    status: str
+    applied_target_type: Optional[str]
+    applied_target_id: Optional[int]
+    created_at: datetime
+    resolved_at: Optional[datetime]
+
+
+@router.post(
+    "/solve",
+    response_model=KratosProblemWithSolutionRead,
+    summary="L'utilisateur décrit un problème, Kratos propose un plan",
+)
+async def solve(
+    data: SolveProblemRequest,
+    db: DBSession,
+    _: CurrentUser,
+) -> KratosProblemWithSolutionRead:
+    from app.services.kratos_problem_detector import solve_problem
+
+    try:
+        problem = await solve_problem(db, data.text)
+        await db.commit()
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, str(exc)
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Kratos /solve failed")
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"kratos_solve_failed: {type(exc).__name__}",
+        ) from exc
+    return KratosProblemWithSolutionRead.model_validate(problem)

@@ -389,6 +389,11 @@ async def init_db() -> None:
                 "frais_demarrage_overrides_json",
                 "TEXT",
             ),
+            # Kratos : pivot vers le modèle user-driven (problème
+            # écrit/dicté par l'utilisateur, solution générée par l'IA).
+            ("kratos_problems", "problem_text", "TEXT"),
+            ("kratos_problems", "solution_plan", "TEXT"),
+            ("kratos_problems", "solution_steps_json", "TEXT"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
@@ -397,6 +402,18 @@ async def init_db() -> None:
                     f'ADD COLUMN IF NOT EXISTS {column} {col_type}'
                 )
             )
+
+        # Kratos : passage à entreprise_id NULLABLE (problème global
+        # transverse possible). Idempotent : si déjà nullable, no-op.
+        try:
+            await conn.execute(
+                text(
+                    "ALTER TABLE kratos_problems "
+                    "ALTER COLUMN entreprise_id DROP NOT NULL"
+                )
+            )
+        except Exception:
+            pass
 
         # Backfill: any pre-existing user with is_admin=TRUE becomes
         # an "owner" so current sign-ins keep full access. Only runs

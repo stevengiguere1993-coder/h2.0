@@ -46,11 +46,19 @@ class KratosProblem(Base):
     __tablename__ = "kratos_problems"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    entreprise_id: Mapped[int] = mapped_column(
+    # entreprise_id devient OPTIONNEL : un problème peut concerner
+    # une entreprise précise OU être transverse (organisation globale,
+    # ressources, stratégie). Quand null = problème cross-entreprise.
+    entreprise_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("entreprises.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
+
+    # Texte original du problème tel que tapé/dicté par l'utilisateur.
+    # Avant : auto-extrait de l'analyse Claude.
+    # Maintenant : c'est l'INPUT de l'utilisateur, conservé verbatim.
+    problem_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -58,6 +66,17 @@ class KratosProblem(Base):
         String(16),
         nullable=False,
         default=KratosProblemSeverity.MEDIUM.value,
+    )
+
+    # Plan de solution complet (markdown lisible) — narratif pour
+    # l'utilisateur. Stocké en plus des solution_steps_json pour ne
+    # pas perdre les nuances/contexte.
+    solution_plan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Étapes structurées (JSON array de { title, description?,
+    # entreprise_id?, action_kind?, action_params? }) — utilisé pour
+    # afficher des boutons « créer la tâche » par étape.
+    solution_steps_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
     )
 
     # Action suggérée par l'IA :

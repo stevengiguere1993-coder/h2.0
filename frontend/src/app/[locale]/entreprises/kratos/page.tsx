@@ -43,10 +43,13 @@ type KratosMessage = {
 
 type KratosProblem = {
   id: number;
-  entreprise_id: number;
+  entreprise_id: number | null;
+  problem_text: string | null;
   title: string;
   description: string | null;
   severity: string;
+  solution_plan: string | null;
+  solution_steps_json: string | null;
   suggested_action_kind: string | null;
   suggested_action_label: string | null;
   suggested_action_params: string | null;
@@ -55,6 +58,14 @@ type KratosProblem = {
   applied_target_id: number | null;
   created_at: string;
   resolved_at: string | null;
+};
+
+type SolutionStep = {
+  title: string;
+  description?: string;
+  entreprise_id?: number | null;
+  action_kind?: string;
+  action_params?: Record<string, unknown>;
 };
 
 type EntrepriseMini = { id: number; name: string };
@@ -119,12 +130,94 @@ export default function KratosPage() {
   const [listening, setListening] = useState(false);
   const recogRef = useRef<unknown>(null);
 
-  // ── Problèmes proactifs (Phase 4) ────────────────────────────
+  // ── Problèmes user-driven (Phase 4 réorientée) ──────────────
   const [problems, setProblems] = useState<KratosProblem[]>([]);
   const [entreprises, setEntreprises] = useState<EntrepriseMini[]>([]);
-  const [scanningId, setScanningId] = useState<number | null>(null);
-  const entById = (id: number) =>
-    entreprises.find((e) => e.id === id)?.name || `Entreprise #${id}`;
+  const [problemText, setProblemText] = useState("");
+  const [solving, setSolving] = useState(false);
+  const [solveErr, setSolveErr] = useState<string | null>(null);
+  const [problemListening, setProblemListening] = useState(false);
+  const problemRecogRef = useRef<unknown>(null);
+  const entById = (id: number | null | undefined) =>
+    id == null
+      ? "Transverse"
+      : entreprises.find((e) => e.id === id)?.name || `Entreprise #${id}`;
+
+  async function solveProblem() {
+    const t = problemText.trim();
+    if (!t) return;
+    setSolving(true);
+    setSolveErr(null);
+    try {
+      const r = await authedFetch("/api/v1/kratos/solve", {
+        method: "POST",
+        body: JSON.stringify({ text: t })
+      });
+      if (!r.ok) {
+        const body = await r.text();
+        throw new Error(body.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      const p = (await r.json()) as KratosProblem;
+      setProblems((prev) => [p, ...prev]);
+      setProblemText("");
+    } catch (e) {
+      setSolveErr((e as Error).message);
+    } finally {
+      setSolving(false);
+    }
+  }
+
+  function toggleProblemMic() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w: any =
+      typeof window !== "undefined" ? (window as unknown) : null;
+    const SR = w?.SpeechRecognition || w?.webkitSpeechRecognition;
+    if (!SR) {
+      setSolveErr(
+        "Dictée vocale non supportée — utilise Chrome ou Safari."
+      );
+      return;
+    }
+    if (problemListening) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (problemRecogRef.current as any)?.stop();
+      } catch {
+        /* ignore */
+      }
+      setProblemListening(false);
+      return;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rec: any = new SR();
+    rec.lang = "fr-CA";
+    rec.continuous = true;
+    rec.interimResults = true;
+    let accumulated = problemText ? problemText + " " : "";
+    rec.onresult = (e: {
+      results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }>;
+      resultIndex: number;
+    }) => {
+      let interim = "";
+      let final = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) final += r[0].transcript;
+        else interim += r[0].transcript;
+      }
+      if (final) {
+        accumulated += final;
+        setProblemText(accumulated.trim());
+      } else if (interim) {
+        setProblemText((accumulated + interim).trim());
+      }
+    };
+    rec.onend = () => setProblemListening(false);
+    rec.onerror = () => setProblemListening(false);
+    rec.start();
+    problemRecogRef.current = rec;
+    setProblemListening(true);
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -150,26 +243,6 @@ export default function KratosPage() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  async function scan(entrepriseId: number) {
-    setScanningId(entrepriseId);
-    try {
-      const r = await authedFetch(
-        `/api/v1/kratos/scan/${entrepriseId}?force=true`,
-        { method: "POST" }
-      );
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const created = (await r.json()) as KratosProblem[];
-      setProblems((prev) => {
-        const fresh = prev.filter((p) => p.entreprise_id !== entrepriseId);
-        return [...created, ...fresh];
-      });
-    } catch (e) {
-      setError(`Scan échoué : ${(e as Error).message}`);
-    } finally {
-      setScanningId(null);
-    }
-  }
 
   async function applyProblem(id: number) {
     try {
@@ -402,12 +475,16 @@ export default function KratosPage() {
           ) : null}
         </section>
 
-        {/* Phase 4 — Problèmes proactifs */}
-        <ProblemsSection
+        {/* Phase 4 réorientée — Problèmes user-driven + solutions IA */}
+        <UserDrivenProblemsSection
           problems={problems}
-          entreprises={entreprises}
-          scanningId={scanningId}
-          onScan={scan}
+          problemText={problemText}
+          setProblemText={setProblemText}
+          solving={solving}
+          solveErr={solveErr}
+          onSolve={() => void solveProblem()}
+          listening={problemListening}
+          onToggleMic={toggleProblemMic}
           onApply={applyProblem}
           onDismiss={dismissProblem}
           entById={entById}
@@ -530,7 +607,8 @@ export default function KratosPage() {
   );
 }
 
-// ─── Section problèmes proactifs (Phase 4) ─────────────────────
+
+// ─── Section problèmes user-driven (Phase 4 réorientée) ────────
 
 const SEVERITY_CLS: Record<string, string> = {
   high: "bg-rose-500/15 text-rose-300 border-rose-500/40",
@@ -538,40 +616,31 @@ const SEVERITY_CLS: Record<string, string> = {
   low: "bg-sky-500/15 text-sky-300 border-sky-500/30"
 };
 
-function ProblemsSection({
+function UserDrivenProblemsSection({
   problems,
-  entreprises,
-  scanningId,
-  onScan,
+  problemText,
+  setProblemText,
+  solving,
+  solveErr,
+  onSolve,
+  listening,
+  onToggleMic,
   onApply,
   onDismiss,
   entById
 }: {
   problems: KratosProblem[];
-  entreprises: EntrepriseMini[];
-  scanningId: number | null;
-  onScan: (entrepriseId: number) => Promise<void>;
-  onApply: (problemId: number) => Promise<void>;
-  onDismiss: (problemId: number) => Promise<void>;
-  entById: (id: number) => string;
+  problemText: string;
+  setProblemText: (s: string) => void;
+  solving: boolean;
+  solveErr: string | null;
+  onSolve: () => void;
+  listening: boolean;
+  onToggleMic: () => void;
+  onApply: (id: number) => Promise<void>;
+  onDismiss: (id: number) => Promise<void>;
+  entById: (id: number | null | undefined) => string;
 }) {
-  // Group by entreprise
-  const byEnt = new Map<number, KratosProblem[]>();
-  for (const p of problems) {
-    const arr = byEnt.get(p.entreprise_id) || [];
-    arr.push(p);
-    byEnt.set(p.entreprise_id, arr);
-  }
-  // Liste : entreprises ayant déjà des problèmes en premier, puis
-  // toutes les autres (pour pouvoir lancer un scan ad hoc).
-  const orderedEnts: EntrepriseMini[] = [
-    ...Array.from(byEnt.keys()).map((id) => ({
-      id,
-      name: entById(id)
-    })),
-    ...entreprises.filter((e) => !byEnt.has(e.id))
-  ];
-
   return (
     <section className="mt-6">
       <h2
@@ -579,18 +648,84 @@ function ProblemsSection({
         style={{ color: "var(--qg-text-muted)" }}
       >
         <Lightbulb className="mr-1 inline-block h-3.5 w-3.5" />
-        Problèmes détectés & solutions
+        Problèmes & solutions
       </h2>
       <p
         className="mt-0.5 text-[10px]"
         style={{ color: "var(--qg-text-muted)" }}
       >
-        Kratos analyse chaque entreprise (1×/jour) et propose 3 à 5
-        actions concrètes. Tu peux relancer un scan à la demande.
+        Décris (ou dicte) un problème. Kratos propose un plan d&apos;action
+        en tenant compte de tes entreprises, ressources et solutions
+        externes.
       </p>
 
+      {/* Capture box pour décrire un problème */}
+      <div
+        className="mt-3 rounded-2xl border p-4"
+        style={{
+          borderColor: "var(--qg-border)",
+          backgroundColor: "var(--qg-card-bg)"
+        }}
+      >
+        <textarea
+          value={problemText}
+          onChange={(e) => setProblemText(e.target.value)}
+          rows={4}
+          placeholder="Exemples :
+— On a trop d'achats non-classés dans QuickBooks chaque mois — comment systématiser ?
+— Pas de relève pour la gestion locative quand Marie part en congé.
+— Comment automatiser les rappels de fin de bail pour les locataires ?"
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              e.preventDefault();
+              onSolve();
+            }
+          }}
+          className="w-full resize-y rounded-lg border bg-transparent p-3 text-sm focus:outline-none"
+          style={{
+            borderColor: "var(--qg-border)",
+            color: "var(--qg-text)"
+          }}
+        />
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={onToggleMic}
+            className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-semibold transition ${
+              listening
+                ? "border-rose-500/40 bg-rose-500/15 text-rose-300"
+                : "border-accent-500/40 bg-accent-500/10 text-accent-300 hover:bg-accent-500/20"
+            }`}
+          >
+            <Mic
+              className={`h-3.5 w-3.5 ${listening ? "animate-pulse" : ""}`}
+            />
+            {listening ? "Écoute…" : "Dicter"}
+          </button>
+          <button
+            type="button"
+            onClick={onSolve}
+            disabled={solving || !problemText.trim()}
+            className="btn-accent inline-flex items-center gap-1.5 text-xs disabled:opacity-50"
+          >
+            {solving ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Send className="h-3.5 w-3.5" />
+            )}
+            Demander un plan d&apos;action
+          </button>
+        </div>
+        {solveErr ? (
+          <p className="mt-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+            {solveErr}
+          </p>
+        ) : null}
+      </div>
+
+      {/* Liste des problèmes + solutions */}
       <div className="mt-3 space-y-3">
-        {orderedEnts.length === 0 ? (
+        {problems.length === 0 ? (
           <p
             className="rounded-2xl border border-dashed px-6 py-8 text-center text-xs"
             style={{
@@ -598,134 +733,175 @@ function ProblemsSection({
               color: "var(--qg-text-muted)"
             }}
           >
-            Aucune entreprise active.
+            Aucun problème pour l&apos;instant. Écris-en un et Kratos
+            te propose un plan d&apos;action.
           </p>
         ) : null}
-        {orderedEnts.map((ent) => {
-          const list = byEnt.get(ent.id) || [];
-          return (
-            <div
-              key={ent.id}
-              className="rounded-xl border p-3"
-              style={{
-                borderColor: "var(--qg-border)",
-                backgroundColor: "var(--qg-card-bg)"
-              }}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <h3
-                  className="text-sm font-semibold"
-                  style={{ color: "var(--qg-text)" }}
-                >
-                  {ent.name}
-                  <span
-                    className="ml-2 text-[10px] font-normal"
-                    style={{ color: "var(--qg-text-muted)" }}
-                  >
-                    {list.length} problème{list.length > 1 ? "s" : ""}{" "}
-                    ouvert{list.length > 1 ? "s" : ""}
-                  </span>
-                </h3>
-                <button
-                  type="button"
-                  onClick={() => void onScan(ent.id)}
-                  disabled={scanningId === ent.id}
-                  className="inline-flex items-center gap-1 rounded-md border border-accent-500/40 bg-accent-500/10 px-2 py-1 text-[11px] font-semibold text-accent-300 hover:bg-accent-500/20 disabled:opacity-40"
-                  title="Lancer un scan IA maintenant"
-                >
-                  {scanningId === ent.id ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <RefreshCw className="h-3 w-3" />
-                  )}
-                  Scanner
-                </button>
-              </div>
-              {list.length === 0 ? (
-                <p
-                  className="mt-2 text-[11px]"
-                  style={{ color: "var(--qg-text-muted)" }}
-                >
-                  Aucun problème détecté — clique « Scanner » pour
-                  demander une analyse à Kratos.
-                </p>
-              ) : (
-                <ul className="mt-2 space-y-2">
-                  {list.map((p) => (
-                    <li
-                      key={p.id}
-                      className="rounded-lg border p-2.5"
-                      style={{
-                        borderColor: "var(--qg-border-soft)",
-                        backgroundColor: "var(--qg-bg-alt, transparent)"
-                      }}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <AlertTriangle className="h-3 w-3 text-amber-400" />
-                            <span
-                              className={`rounded-full border px-1.5 py-0 text-[9px] font-bold uppercase ${
-                                SEVERITY_CLS[p.severity] || SEVERITY_CLS.medium
-                              }`}
-                            >
-                              {p.severity}
-                            </span>
-                            <span
-                              className="text-sm font-semibold"
-                              style={{ color: "var(--qg-text)" }}
-                            >
-                              {p.title}
-                            </span>
-                          </div>
-                          {p.description ? (
-                            <p
-                              className="mt-1 text-xs"
-                              style={{ color: "var(--qg-text-muted)" }}
-                            >
-                              {p.description}
-                            </p>
-                          ) : null}
-                          <div className="mt-2 flex flex-wrap items-center gap-2">
-                            {p.suggested_action_kind === "create_task" ? (
-                              <button
-                                type="button"
-                                onClick={() => void onApply(p.id)}
-                                className="btn-accent inline-flex items-center gap-1 text-[11px]"
-                              >
-                                <Check className="h-3 w-3" />
-                                {p.suggested_action_label || "Créer la tâche"}
-                              </button>
-                            ) : p.suggested_action_label ? (
-                              <span
-                                className="rounded-md border px-2 py-0.5 text-[11px]"
-                                style={{
-                                  borderColor: "var(--qg-border)",
-                                  color: "var(--qg-text-muted)"
-                                }}
-                              >
-                                {p.suggested_action_label}
-                              </span>
-                            ) : null}
-                            <button
-                              type="button"
-                              onClick={() => void onDismiss(p.id)}
-                              className="text-[11px] hover:underline"
-                              style={{ color: "var(--qg-text-muted)" }}
-                            >
-                              Rejeter
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          );
-        })}
+        {problems.map((p) => (
+          <ProblemSolutionCard
+            key={p.id}
+            problem={p}
+            entById={entById}
+            onApply={() => void onApply(p.id)}
+            onDismiss={() => void onDismiss(p.id)}
+          />
+        ))}
       </div>
     </section>
+  );
+}
+
+function ProblemSolutionCard({
+  problem,
+  entById,
+  onApply,
+  onDismiss
+}: {
+  problem: KratosProblem;
+  entById: (id: number | null | undefined) => string;
+  onApply: () => void;
+  onDismiss: () => void;
+}) {
+  let steps: SolutionStep[] = [];
+  try {
+    if (problem.solution_steps_json) {
+      const parsed = JSON.parse(problem.solution_steps_json);
+      if (Array.isArray(parsed)) steps = parsed as SolutionStep[];
+    }
+  } catch {
+    /* ignore */
+  }
+  const isDismissed = problem.status === "dismissed";
+  const isApplied = problem.status === "applied";
+
+  return (
+    <div
+      className={`rounded-xl border p-4 ${isDismissed ? "opacity-50" : ""}`}
+      style={{
+        borderColor: "var(--qg-border)",
+        backgroundColor: "var(--qg-card-bg)"
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${
+                SEVERITY_CLS[problem.severity] || SEVERITY_CLS.medium
+              }`}
+            >
+              {problem.severity}
+            </span>
+            <span
+              className="rounded-full border px-2 py-0.5 text-[10px]"
+              style={{
+                borderColor: "var(--qg-border)",
+                color: "var(--qg-text-muted)"
+              }}
+            >
+              {entById(problem.entreprise_id)}
+            </span>
+            {isApplied ? (
+              <span className="rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                appliqué
+              </span>
+            ) : null}
+            {isDismissed ? (
+              <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+                rejeté
+              </span>
+            ) : null}
+          </div>
+          <h3
+            className="mt-2 text-sm font-bold"
+            style={{ color: "var(--qg-text)" }}
+          >
+            {problem.title}
+          </h3>
+          {problem.problem_text ? (
+            <p
+              className="mt-1 whitespace-pre-wrap text-[11px] italic"
+              style={{ color: "var(--qg-text-muted)" }}
+            >
+              « {problem.problem_text.slice(0, 400)}
+              {problem.problem_text.length > 400 ? "…" : ""} »
+            </p>
+          ) : null}
+        </div>
+      </div>
+
+      {problem.solution_plan ? (
+        <div
+          className="mt-3 rounded-lg border px-3 py-2 text-[12px] whitespace-pre-wrap"
+          style={{
+            borderColor: "var(--qg-border-soft)",
+            backgroundColor: "var(--qg-bg-alt, transparent)",
+            color: "var(--qg-text)"
+          }}
+        >
+          {problem.solution_plan}
+        </div>
+      ) : null}
+
+      {steps.length > 0 ? (
+        <div className="mt-3">
+          <h4
+            className="text-[10px] font-semibold uppercase tracking-wider"
+            style={{ color: "var(--qg-text-muted)" }}
+          >
+            Étapes proposées
+          </h4>
+          <ol className="mt-2 space-y-1.5">
+            {steps.map((s, i) => (
+              <li
+                key={i}
+                className="rounded-md border p-2 text-[11px]"
+                style={{
+                  borderColor: "var(--qg-border-soft)",
+                  backgroundColor: "var(--qg-bg-alt, transparent)"
+                }}
+              >
+                <p className="font-semibold" style={{ color: "var(--qg-text)" }}>
+                  {i + 1}. {s.title}
+                </p>
+                {s.description ? (
+                  <p className="mt-0.5" style={{ color: "var(--qg-text-muted)" }}>
+                    {s.description}
+                  </p>
+                ) : null}
+                {s.action_kind === "create_task" ? (
+                  <p className="mt-0.5 text-[10px] text-accent-400">
+                    → suggérée comme tâche d&apos;entreprise
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+
+      {!isDismissed && !isApplied ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {problem.suggested_action_kind === "create_task" ? (
+            <button
+              type="button"
+              onClick={onApply}
+              className="btn-accent inline-flex items-center gap-1 text-[11px]"
+            >
+              <Check className="h-3 w-3" />
+              Créer la 1ʳᵉ tâche
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="text-[11px] hover:underline"
+            style={{ color: "var(--qg-text-muted)" }}
+          >
+            Rejeter
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }

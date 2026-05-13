@@ -944,24 +944,36 @@ function LeadDetailModal({
   }
 
   // ── Estimation IA des dépenses manquantes ─────────────────────
-  // Appelle l'endpoint /estimate-expenses qui retourne 3 valeurs
-  // (taxes muni / scolaires / assurances) basées sur Claude +
-  // fallback ratios marché Québec. On ne remplace que les champs
-  // encore vides.
+  // Appelle /estimate-expenses (Claude + fallback heuristique). On
+  // ne remplace que les champs vides. Si l'IA ne peut rien estimer
+  // (ex. fiche sans prix d'achat), on affiche un message clair.
   const [estimatingExpenses, setEstimatingExpenses] = useState(false);
+  const [estimateMsg, setEstimateMsg] = useState<{
+    text: string;
+    kind: "ok" | "warn" | "err";
+  } | null>(null);
   async function estimateExpenses() {
     if (!data) return;
     setEstimatingExpenses(true);
+    setEstimateMsg(null);
     try {
       const r = await authedFetch(
         `/api/v1/lead-analyses/${id}/estimate-expenses`,
         { method: "POST" }
       );
-      if (!r.ok) return;
+      if (!r.ok) {
+        setEstimateMsg({
+          text: `Estimation échouée (HTTP ${r.status})`,
+          kind: "err"
+        });
+        return;
+      }
       const out = (await r.json()) as {
         taxes_municipales: number | null;
         taxes_scolaires: number | null;
         assurances: number | null;
+        source?: string;
+        note?: string;
       };
       const patch: Record<string, number> = {};
       if (data.taxes_municipales == null && out.taxes_municipales != null) {
@@ -980,7 +992,34 @@ function LeadDetailModal({
           body: JSON.stringify(patch)
         });
         onSaved();
+        const labels = Object.keys(patch)
+          .map((k) =>
+            k === "taxes_municipales"
+              ? "taxes muni"
+              : k === "taxes_scolaires"
+              ? "taxes scol"
+              : "assurances"
+          )
+          .join(", ");
+        setEstimateMsg({
+          text: `${labels} estimé${
+            Object.keys(patch).length > 1 ? "s" : ""
+          } via ${out.source || "IA"}.`,
+          kind: "ok"
+        });
+      } else {
+        // Aucun champ patché — soit tout est déjà rempli, soit l'IA
+        // n'a rien pu estimer faute d'infos (ex. prix manquant).
+        const reason =
+          out.note ||
+          "L'IA n'a pas pu estimer — vérifie que le prix demandé et le nombre de logements sont renseignés.";
+        setEstimateMsg({ text: reason, kind: "warn" });
       }
+    } catch (e) {
+      setEstimateMsg({
+        text: `Estimation échouée : ${(e as Error).message}`,
+        kind: "err"
+      });
     } finally {
       setEstimatingExpenses(false);
     }
@@ -1180,6 +1219,20 @@ function LeadDetailModal({
                     onSave={(v) => patchField("courtier_contact", v)}
                   />
                 </div>
+
+                {estimateMsg ? (
+                  <p
+                    className={`mt-2 rounded-lg border px-3 py-2 text-[11px] ${
+                      estimateMsg.kind === "ok"
+                        ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                        : estimateMsg.kind === "warn"
+                        ? "border-amber-500/50 bg-amber-500/10 text-amber-200"
+                        : "border-rose-500/40 bg-rose-500/10 text-rose-300"
+                    }`}
+                  >
+                    {estimateMsg.text}
+                  </p>
+                ) : null}
 
                 <div className="mt-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">

@@ -220,8 +220,10 @@ async def _fetch_url_text(url: str) -> str:
         if cleaned:
             parts.append("[En-têtes (h1..h3)]\n" + "\n".join(cleaned))
 
-    # 4. Texte visible — strip standard, en queue (souvent moins
-    # structuré que les blocs JSON ci-dessus mais ajoute du contexte).
+    # 4. Texte visible — strip standard. Pour pmml.ca, c'est le bloc
+    # qui contient la plupart des données (prix, typologie, évaluation
+    # municipale, année). On le met en TÊTE de liste pour que Claude
+    # le voie en premier — les meta/JSON-LD viennent compléter.
     text = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.I)
     text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
     text = re.sub(r"<!--[\s\S]*?-->", " ", text)
@@ -232,12 +234,12 @@ async def _fetch_url_text(url: str) -> str:
     text = re.sub(r"&quot;", '"', text)
     text = re.sub(r"&#?\w+;", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
-    # 35k au lieu de 20k pour les pages riches (pmml.ca = 61k de HTML,
-    # ~20k de texte brut après strip).
     if len(text) > 35_000:
         text = text[:35_000] + "\n[…tronqué]"
     if text:
-        parts.append(f"[Texte visible]\n{text}")
+        # Insère APRÈS la première ligne (l'URL source) pour le
+        # rendre prioritaire.
+        parts.insert(1, f"[Texte de la page]\n{text}")
 
     return "\n\n".join(parts)
 
