@@ -555,3 +555,199 @@ async def apply_solution(
     problem.resolved_at = datetime.now(timezone.utc)
     await db.flush()
     return problem
+
+
+# ─── Mode user-driven : utilisateur décrit un problème, IA propose ─────
+
+
+SOLVE_SYSTEM_PROMPT = """Tu es Kratos, le consultant interne du \
+dirigeant. Tu reçois un problème décrit (ou dicté) par l'utilisateur \
+et tu produis un plan d'action concret en t'appuyant sur :
+- les entreprises qu'il dirige (noms, descriptions, état),
+- son organigramme et ses ressources actuelles,
+- les solutions externes possibles (outils, prestataires, processus),
+- les leviers stratégiques classiques (offre, marketing, processus, \
+recrutement, finance, partenariats).
+
+Tu réponds UNIQUEMENT en JSON strict :
+{
+  "title": "Titre court max 120 caractères qui résume le problème",
+  "severity": "low" | "medium" | "high",
+  "entreprise_id": id numérique de l'entreprise principale concernée \
+(parmi la liste fournie), ou null si transverse,
+  "solution_plan": "Plan d'action narratif markdown — 3 à 6 \
+paragraphes. Couvre : diagnostic court, leviers à activer, ressources \
+internes à mobiliser, options externes à considérer, indicateurs de \
+succès.",
+  "steps": [
+    {
+      "title": "Étape 1 — Titre court",
+      "description": "Quoi faire concrètement (1-2 phrases)",
+      "entreprise_id": id ou null,
+      "action_kind": "create_task" | "manual",
+      "action_params": { "title": "...", "priority": "high"|"medium"|"low" }
+    }
+  ]
+}
+
+Règles :
+- 3 à 6 étapes maximum.
+- Pour chaque étape qui peut devenir une tâche d'entreprise, mets \
+action_kind="create_task" avec un title clair et priority cohérente.
+- N'invente pas de prestataires précis (« Atelier X ») — reste sur \
+catégories de solutions (« cabinet comptable », « consultant Lean »).
+- Sois pragmatique, pas théorique."""
+
+
+async def _solve_with_claude(
+    text: str, entreprises: list[Entreprise]
+) -> Optional[dict]:
+    """Appelle Claude pour générer un plan de solution. Retourne le
+    dict parsé, ou None si l'IA est indisponible."""
+    if not settings.anthropic_api_key:
+        return None
+    import anthropic
+
+    ents_block = "\n".join(
+        f"- #{e.id} {e.name} : {(e.description or '(pas de description)')[:200]}"
+        for e in entreprises[:30]
+    ) or "(aucune entreprise active)"
+
+    user_prompt = (
+        f"## Entreprises actives\n{ents_block}\n\n"
+        f"## Problème décrit par le dirigeant\n{text.strip()}\n\n"
+        "Génère le plan d'action JSON selon le schéma."
+    )
+
+    try:
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        msg = client.messages.create(
+            model=MODEL,
+            max_tokens=2500,
+            system=SOLVE_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Kratos solve_problem failed: %s", exc)
+        return None
+
+    raw = "\n".join(b.text for b in msg.content if b.type == "text").strip()
+    if raw.startswith("```"):
+        import re
+
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```\s*$", "", raw)
+    try:
+        return json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _solve_locally(text: str, entreprises: list[Entreprise]) -> dict:
+    """Fallback heuristique sans IA. Plan minimal qui invite à
+    structurer le diagnostic et à attaquer le problème en 3 étapes."""
+    title = (text.strip().split("\n", 1)[0] or "Problème à résoudre")[:120]
+    ent_id = entreprises[0].id if entreprises else None
+    return {
+        "title": title,
+        "severity": "medium",
+        "entreprise_id": ent_id,
+        "solution_plan": (
+            "**Diagnostic à clarifier** — précise l'impact financier, "
+            "humain et temporel du problème.\n\n"
+            "**Leviers internes** — identifie quelle ressource de "
+            "l'organigramme peut porter ce dossier en priorité.\n\n"
+            "**Solutions externes** — si l'expertise manque, envisage "
+            "un consultant, un outil SaaS ou un partenaire externe.\n\n"
+            "**Indicateur de succès** — fixe un critère mesurable pour "
+            "savoir quand le problème est résolu."
+        ),
+        "steps": [
+            {
+                "title": "Clarifier le diagnostic",
+                "description": (
+                    "Documenter le problème : qui, quoi, quand, "
+                    "combien ça coûte si on ne le règle pas."
+                ),
+                "entreprise_id": ent_id,
+                "action_kind": "create_task",
+                "action_params": {
+                    "title": f"Diagnostiquer : {title}",
+                    "priority": "high",
+                },
+            },
+            {
+                "title": "Identifier le porteur du dossier",
+                "description": (
+                    "Décider qui dans l'équipe est responsable. Si "
+                    "personne, prévoir un recrutement ou une "
+                    "externalisation."
+                ),
+                "entreprise_id": ent_id,
+                "action_kind": "create_task",
+                "action_params": {
+                    "title": "Assigner un porteur au dossier",
+                    "priority": "medium",
+                },
+            },
+            {
+                "title": "Définir l'indicateur de succès",
+                "description": (
+                    "Préciser comment on saura que le problème est "
+                    "résolu (KPI mesurable + horizon)."
+                ),
+                "entreprise_id": ent_id,
+                "action_kind": "manual",
+                "action_params": {},
+            },
+        ],
+    }
+
+
+async def solve_problem(
+    db: AsyncSession, problem_text: str
+) -> KratosProblem:
+    """Pipeline : reçoit un texte de problème → génère plan via IA
+    (fallback local) → persiste un KratosProblem avec problem_text,
+    solution_plan et steps. Status = open."""
+    text = (problem_text or "").strip()
+    if not text:
+        raise ValueError("Le texte du problème est requis.")
+
+    ents = (
+        await db.execute(
+            select(Entreprise).where(Entreprise.is_active.is_(True))
+        )
+    ).scalars().all()
+
+    plan = await _solve_with_claude(text, list(ents))
+    if plan is None:
+        plan = _solve_locally(text, list(ents))
+
+    title = str(plan.get("title") or text[:120]).strip()[:255]
+    severity = str(plan.get("severity") or "medium").lower()
+    if severity not in {s.value for s in KratosProblemSeverity}:
+        severity = KratosProblemSeverity.MEDIUM.value
+    entreprise_id = plan.get("entreprise_id")
+    try:
+        entreprise_id = int(entreprise_id) if entreprise_id else None
+    except (ValueError, TypeError):
+        entreprise_id = None
+    steps = plan.get("steps") or []
+    if not isinstance(steps, list):
+        steps = []
+    solution_plan = str(plan.get("solution_plan") or "").strip()[:8000]
+
+    problem = KratosProblem(
+        entreprise_id=entreprise_id,
+        problem_text=text[:8000],
+        title=title,
+        description=text[:2000],
+        severity=severity,
+        solution_plan=solution_plan or None,
+        solution_steps_json=json.dumps(steps, default=str)[:8000],
+        status=KratosProblemStatus.OPEN.value,
+    )
+    db.add(problem)
+    await db.flush()
+    return problem

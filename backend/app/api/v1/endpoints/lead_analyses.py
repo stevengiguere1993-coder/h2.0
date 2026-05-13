@@ -917,3 +917,86 @@ async def estimate_expenses(
         revenus_bruts=float(rec.revenus_bruts) if rec.revenus_bruts else None,
         city=rec.city,
     )
+
+
+# ─── Endpoint diagnostic d'extraction URL ────────────────────────
+
+
+class DebugExtractRequest(BaseModel):
+    url: str = Field(..., max_length=2000)
+
+
+@router.post(
+    "/debug-extract-url",
+    summary=(
+        "Diagnostic : montre ce que l'extracteur envoie à Claude pour "
+        "une URL, et la réponse JSON brute"
+    ),
+)
+async def debug_extract_url(
+    data: DebugExtractRequest,
+    user: CurrentUser,
+):
+    """Renvoie le texte stripé envoyé à Claude + la réponse brute,
+    pour comprendre pourquoi une URL ne s'extrait pas."""
+    _require_prospection(user)
+    from app.services.lead_extraction import (
+        _fetch_url_text,
+        SYSTEM_PROMPT,
+        SCHEMA_GUIDE,
+        EXTRACTION_MODEL,
+    )
+
+    fetched = await _fetch_url_text(data.url)
+    # Coupé pour ne pas exploser la réponse JSON.
+    preview = fetched[:8000]
+
+    if not settings.anthropic_api_key:
+        return {
+            "preview_text_first_8k": preview,
+            "fetched_total_len": len(fetched),
+            "model_used": None,
+            "raw_response": "(IA non configurée)",
+        }
+
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    try:
+        msg = client.messages.create(
+            model=EXTRACTION_MODEL,
+            max_tokens=4000,
+            system=SYSTEM_PROMPT,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": fetched},
+                        {
+                            "type": "text",
+                            "text": (
+                                "Extrais maintenant les infos selon "
+                                "le schéma ci-dessous.\n\n" + SCHEMA_GUIDE
+                            ),
+                        },
+                    ],
+                }
+            ],
+        )
+        raw = "\n".join(
+            b.text for b in msg.content if b.type == "text"
+        ).strip()
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "preview_text_first_8k": preview,
+            "fetched_total_len": len(fetched),
+            "model_used": EXTRACTION_MODEL,
+            "raw_response": f"ERREUR : {type(exc).__name__}: {exc}",
+        }
+
+    return {
+        "preview_text_first_8k": preview,
+        "fetched_total_len": len(fetched),
+        "model_used": EXTRACTION_MODEL,
+        "raw_response": raw,
+    }
