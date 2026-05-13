@@ -37,12 +37,28 @@ from app.models.qg_strategic import (
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "daily-pulse@v1"
+PROMPT_VERSION = "daily-pulse@v2"
 SYSTEM_PROMPT = (
-    "Tu es l'assistant stratégique d'un dirigeant d'entreprise. "
-    "Tu rédiges un briefing matinal en français québécois, factuel "
-    "et orienté action. Pas de flatterie, pas de blabla. Si peu de "
-    "données, dis-le directement."
+    "Tu es l'assistant stratégique d'un dirigeant d'entreprise au "
+    "Québec. Tu rédiges un briefing matinal en français québécois, "
+    "factuel et orienté action. Pas de flatterie, pas de blabla.\n\n"
+    "RÈGLE CRITIQUE : tu produis TOUJOURS une analyse utile, même "
+    "quand peu de données récentes existent. Une entreprise doit "
+    "croître en continu : il y a toujours quelque chose à analyser, "
+    "à prioriser, à exécuter — qu'il s'agisse de tâches en cours "
+    "même anciennes, de projets stratégiques en attente, de la "
+    "vision long terme, du positionnement, des opportunités de "
+    "croissance, de la santé financière ou des chantiers internes "
+    "à lancer. Tu ne dis JAMAIS « rien à analyser », « système à "
+    "l'arrêt », « pas de données » ou équivalent. Si l'activité "
+    "récente est faible, tu pivotes vers : (1) les tâches actives "
+    "non-bougées qui méritent une relance, (2) la mission/vision "
+    "de l'entreprise et ce que ça implique cette semaine, (3) des "
+    "pistes concrètes de croissance ou d'amélioration interne "
+    "(marketing, processus, recrutement, finances, qualité, etc.).\n\n"
+    "Format : 1 accroche (max 120 caractères), un résumé de 3 à 5 "
+    "phrases, et 3 à 5 puces très courtes — chaque puce est une "
+    "action ou un constat exploitable, pas une généralité."
 )
 
 
@@ -101,6 +117,28 @@ def _format_activities_block(acts: list[Activity]) -> str:
     return "\n".join(lines)
 
 
+def _format_visions_block(visions: list["Vision"]) -> str:  # type: ignore[name-defined]
+    if not visions:
+        return "(aucune vision enregistrée — propose-en une dans le briefing)"
+    lines = []
+    for v in visions[:5]:
+        lines.append(
+            f"- [{v.horizon_label}] {v.title} — {v.narrative[:200]}"
+        )
+    return "\n".join(lines)
+
+
+def _format_projects_block(projects: list) -> str:
+    if not projects:
+        return "(aucun projet stratégique enregistré)"
+    lines = []
+    for p in projects[:10]:
+        status = getattr(p, "status", "?")
+        title = getattr(p, "title", "?")
+        lines.append(f"- [{status}] {title}")
+    return "\n".join(lines)
+
+
 def _build_prompt(
     *,
     entreprise: Entreprise,
@@ -109,14 +147,27 @@ def _build_prompt(
     done_yesterday: list[EntrepriseTache],
     today_acts: list[Activity],
     yesterday_briefing: Optional[Summary],
+    visions: list | None = None,
+    strategic_projects: list | None = None,
 ) -> str:
     parts = [
         f"## Entreprise\n{entreprise.name}",
     ]
     if entreprise.description:
         parts.append(f"Description : {entreprise.description}")
+
+    # Stats pour rappeler à l'IA la situation globale.
+    total_open = len(todo_taches) + len(in_progress_taches)
     parts.append(
-        "## Tâches À FAIRE / EN COURS (à traiter cette semaine)\n"
+        "## Vue d'ensemble rapide\n"
+        f"- {len(todo_taches)} tâches à faire\n"
+        f"- {len(in_progress_taches)} tâches en cours\n"
+        f"- {len(done_yesterday)} tâches terminées hier\n"
+        f"- {len(today_acts)} activités enregistrées dans les dernières 24 h"
+    )
+
+    parts.append(
+        "## Tâches À FAIRE / EN COURS (toutes — à traiter ou relancer)\n"
         + _format_taches_block(todo_taches + in_progress_taches)
     )
     parts.append(
@@ -127,21 +178,50 @@ def _build_prompt(
         "## Activités enregistrées aujourd'hui (24h)\n"
         + _format_activities_block(today_acts)
     )
+    parts.append(
+        "## Visions stratégiques actives\n"
+        + _format_visions_block(visions or [])
+    )
+    parts.append(
+        "## Projets stratégiques\n"
+        + _format_projects_block(strategic_projects or [])
+    )
     if yesterday_briefing:
         parts.append(
             "## Briefing d'hier (pour contexte)\n"
             + (yesterday_briefing.summary_text[:1500])
         )
-    parts.append(
+
+    # Garde-fou explicite contre le « rien à dire ».
+    low_activity = (
+        total_open == 0
+        and len(done_yesterday) == 0
+        and len(today_acts) == 0
+    )
+    instruction = (
         "## Demande\n"
         "Rédige un briefing matinal pour le dirigeant en JSON strict "
         "avec ces clés :\n"
         '  "headline" (string, max 120 caractères, accroche du jour)\n'
-        '  "summary" (string, 3-5 phrases concises)\n'
-        '  "highlights" (array de 3-5 strings, faits saillants ou '
-        "actions à prioriser, format puce courte)\n"
-        "Réponds UNIQUEMENT avec le JSON, sans markdown autour."
+        '  "summary" (string, 3-5 phrases concises, exploitables)\n'
+        '  "highlights" (array de 3-5 strings, actions ou constats '
+        "concrets — toujours utiles, jamais « pas de données »)\n"
+        "Réponds UNIQUEMENT avec le JSON, sans markdown autour.\n\n"
+        "RAPPEL : tu ne dis JAMAIS « rien à analyser » ou « système "
+        "à l'arrêt »."
     )
+    if low_activity:
+        instruction += (
+            " Aujourd'hui l'activité enregistrée est faible — ne le "
+            "constate pas comme un échec. Pivote sur : (a) la mission/"
+            "description de l'entreprise et ce qu'elle implique cette "
+            "semaine, (b) des pistes concrètes pour relancer la "
+            "croissance (offre, marketing, processus, finances, "
+            "recrutement, qualité, partenariats), (c) des actions à "
+            "faire MAINTENANT pour reprendre le momentum. Sors 3 à 5 "
+            "actions actionnables."
+        )
+    parts.append(instruction)
     return "\n\n".join(parts)
 
 
@@ -233,6 +313,29 @@ async def generate_for_entreprise(
 
     yest_brief = await _today_briefing(db, entreprise_id, yesterday)
 
+    # Contexte stratégique : visions actives + projets stratégiques en
+    # cours. Permet à l'IA de toujours avoir matière à analyser même
+    # quand l'activité quotidienne est faible.
+    from app.models.qg_strategic import StrategicProject, Vision
+
+    visions = (
+        await db.execute(
+            select(Vision)
+            .where(Vision.entreprise_id == entreprise_id)
+            .where(Vision.horizon_end >= today)
+            .order_by(Vision.horizon_end.asc())
+            .limit(5)
+        )
+    ).scalars().all()
+    strategic_projects = (
+        await db.execute(
+            select(StrategicProject)
+            .where(StrategicProject.entreprise_id == entreprise_id)
+            .order_by(StrategicProject.updated_at.desc())
+            .limit(10)
+        )
+    ).scalars().all()
+
     prompt = _build_prompt(
         entreprise=ent,
         todo_taches=list(todo),
@@ -240,6 +343,8 @@ async def generate_for_entreprise(
         done_yesterday=list(done_yest),
         today_acts=list(acts),
         yesterday_briefing=yest_brief,
+        visions=list(visions),
+        strategic_projects=list(strategic_projects),
     )
 
     t0 = time.perf_counter()
