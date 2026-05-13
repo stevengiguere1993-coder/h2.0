@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
+import { KratosFloating } from "@/components/kratos-floating";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
@@ -40,6 +41,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               <main className="flex-1 overflow-x-hidden">{children}</main>
               {/* Kratos est désormais intégré dans le AppTopbar de
                   chaque page (statique, ne chevauche plus le contenu). */}
+              <KratosFloating />
               <HelpButton />
             </ConfirmProvider>
           </AppLayoutContextProvider>

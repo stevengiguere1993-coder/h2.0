@@ -32,6 +32,7 @@ import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
 import { KratosLogo } from "@/components/kratos-logo";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { KratosFloating } from "@/components/kratos-floating";
 import { QGCommandBar } from "@/components/qg-command-bar";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { useCurrentUser } from "@/hooks/use-current-user";
@@ -437,6 +438,7 @@ export default function EntreprisesLayout({
               </main>
               {/* Kratos + ThemeToggle intégrés dans QGTopbar/EntreprisesTopbar */}
               {allowed ? <QGCommandBar /> : null}
+              {allowed ? <KratosFloating /> : null}
               <HelpButton />
               {addEntOpen ? (
                 <div
