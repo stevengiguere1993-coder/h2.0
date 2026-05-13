@@ -91,6 +91,11 @@ from app.models.immobilier import (  # noqa: F401
     MaintenanceStatus,
     PaiementLoyer,
 )
+from app.models.kratos_message import (  # noqa: F401
+    KratosIntentKind,
+    KratosMessage,
+    KratosMessageStatus,
+)
 from app.models.leave_request import LeaveRequest, LeaveStatus  # noqa: F401
 from app.models.measurement import MeasurementSnapshot
 from app.models.measurement_photo import MeasurementPhoto

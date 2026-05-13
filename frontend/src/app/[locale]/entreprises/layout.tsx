@@ -10,6 +10,7 @@ import { usePathname } from "next/navigation";
 import {
   ArrowDownAZ,
   BarChart3,
+  Brain,
   Briefcase,
   ChevronDown,
   ChevronRight,
@@ -251,6 +252,7 @@ export default function EntreprisesLayout({
       badge: openTasksCount || undefined
     },
     { href: "/entreprises/resumes", label: "Résumés IA", icon: Sparkles },
+    { href: "/entreprises/kratos", label: "Kratos · Cerveau", icon: Brain },
     { href: "/entreprises/vision", label: "Vision & Stratégie", icon: BarChart3 },
     { href: "/entreprises/comparatif", label: "Comparatif", icon: BarChart3 },
     { href: "/entreprises/projets", label: "Projets", icon: Briefcase }
