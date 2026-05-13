@@ -582,6 +582,12 @@ class FinanceInputs:
     # = attributs de `FraisDemarrage` dataclass.
     frais_demarrage_overrides: Dict[str, float] = field(default_factory=dict)
 
+    # Liste des postes de frais de démarrage finançables par prêteur B.
+    # Pour ces postes, on paie seulement `mdf_preteur_b_pct` en cash,
+    # le reste s'ajoute au prêt. Défaut : rapport_efficacite,
+    # frais_developpement, frais_travaux.
+    frais_demarrage_financables: list[str] = field(default_factory=list)
+
 
 @dataclass
 class FinanceResults:
@@ -627,6 +633,9 @@ class FinanceResults:
             "mdf_25pct_prix_achat": mdf_pct * self.inputs.prix_achat,
             "mdf_pct_prix_achat": mdf_pct * self.inputs.prix_achat,
             "prix_achat": self.inputs.prix_achat,
+            "frais_demarrage_financables": list(
+                self.inputs.frais_demarrage_financables or []
+            ),
             "typology": {
                 "h13_loyer_pondere": self.typology.h13_loyer_pondere,
                 "nb_abordables": self.typology.nb_abordables,
@@ -860,16 +869,25 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             if hasattr(frais, k):
                 setattr(frais, k, float(v))
     prix_acquisition = inputs.prix_achat + frais.total
-    # MDF avec prêteur B = X % prix achat + frais démarrage. C'est
-    # ce qu'il faut sortir en cash pour boucler l'achat conventionnel
-    # sans valeur économique retenue, juste sur le prix marchand. X
+    # MDF avec prêteur B = X % prix achat + frais démarrage cash. X
     # est `mdf_preteur_b_pct` (défaut 25 %, parfois 35 %).
+    # Certains postes de frais sont FINANÇABLES par le prêteur B :
+    # pour ceux-là, on paie seulement X % en cash (le reste est
+    # ajouté au prêt). Les autres postes sont payés 100 % cash.
     mdf_pct = (
         inputs.mdf_preteur_b_pct
         if inputs.mdf_preteur_b_pct is not None
         else 0.25
     )
-    mdf_preteur_b = mdf_pct * inputs.prix_achat + frais.total
+    financables = set(inputs.frais_demarrage_financables or [])
+    frais_cash_total = 0.0
+    for k, v in frais.__dict__.items():
+        amount = float(v or 0)
+        if k in financables:
+            frais_cash_total += amount * mdf_pct
+        else:
+            frais_cash_total += amount
+    mdf_preteur_b = mdf_pct * inputs.prix_achat + frais_cash_total
 
     # ── Étape 5 : MDF achat / équité refi ────────────────────────
     achat.mdf_necessaire = prix_acquisition - achat.financement
