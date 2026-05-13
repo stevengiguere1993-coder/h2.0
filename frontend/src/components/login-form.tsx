@@ -110,7 +110,13 @@ export function LoginForm() {
           router.replace("/m" as any);
           return;
         }
+        // IMPORTANT : on hydrate volets + role AVANT setAuthed(true)
+        // sinon le picker rend avec userRole="" et les pastilles
+        // gated sur le rôle (Gestion d'entreprises, etc.) restent
+        // cachées jusqu'au prochain refresh.
         setUserEmail(me.email || null);
+        setUserVolets(Array.isArray(me.volets) ? me.volets : []);
+        setUserRole(me.role || "");
       } catch {
         /* fall through to picker */
       }
@@ -163,6 +169,13 @@ export function LoginForm() {
     // affiche tout par sécurité (backward-compat).
     const has = (v: string) =>
       userVolets.length === 0 || userVolets.includes(v);
+    // Comparaison de rôle insensible à la casse / espaces pour éviter
+    // de cacher la pastille « Gestion d'entreprises » à cause d'un
+    // « Owner » / « OWNER » / « owner  » qui ne matcherait pas
+    // l'égalité stricte.
+    const role = (userRole || "").toLowerCase().trim();
+    const isOwner = role === "owner";
+    const isAdminOrOwner = role === "owner" || role === "admin";
     return (
       <div className="relative space-y-4">
         {showDev ? (
@@ -269,7 +282,7 @@ export function LoginForm() {
             </button>
           ) : null}
 
-          {has("entreprises") && userRole === "owner" ? (
+          {has("entreprises") && isOwner ? (
             <button
               type="button"
               onClick={() => {
@@ -359,7 +372,7 @@ export function LoginForm() {
         {/* Audit IA — visible owner / admin uniquement. Résume les
             PRs mergés pour qu'un partner reprenant le développement
             voit en un coup d'œil ce qui a été ajouté / modifié. */}
-        {(userRole === "owner" || userRole === "admin") ? (
+        {isAdminOrOwner ? (
           <ChangelogAudit />
         ) : null}
       </div>
