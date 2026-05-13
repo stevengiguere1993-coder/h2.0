@@ -172,3 +172,214 @@ async def delete_node(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Nœud introuvable.")
     await db.delete(n)
     await db.commit()
+
+
+@router.post(
+    "/seed-default",
+    response_model=List[OrgNodeRead],
+    summary=(
+        "Seed l'organigramme initial du groupe MGV Investissements "
+        "(basé sur le schéma papier). Erreur si des nœuds existent déjà."
+    ),
+)
+async def seed_default_org(
+    db: DBSession,
+    _: CurrentUser,
+    force: bool = Query(default=False),
+) -> List[OrgNodeRead]:
+    """Crée la structure de départ : 6 branches top-level
+    (Construction, Dev logiciel, Gestion Immo, Prospection, Dev Immo /
+    Aguci, Comptabilité) avec leurs rôles et tâches. Lie aux entreprises
+    par NOM (matching insensible à la casse) quand possible.
+
+    `force=true` efface l'existant avant de seed (DANGER : supprime
+    toutes les hiérarchies actuelles)."""
+    from app.models.entreprise import Entreprise
+
+    existing_count = len(
+        (await db.execute(select(OrgNode))).scalars().all()
+    )
+    if existing_count > 0 and not force:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            (
+                f"L'organigramme contient déjà {existing_count} nœud(s). "
+                "Utilise `?force=true` pour tout remplacer."
+            ),
+        )
+
+    if force and existing_count > 0:
+        # Supprime tout (cascade gère les enfants).
+        roots = (
+            await db.execute(
+                select(OrgNode).where(OrgNode.parent_id.is_(None))
+            )
+        ).scalars().all()
+        for r in roots:
+            await db.delete(r)
+        await db.flush()
+
+    # Lookup entreprises par nom (case-insensitive, sans accents).
+    entreprises_rows = (
+        await db.execute(select(Entreprise))
+    ).scalars().all()
+
+    def _norm(s: str) -> str:
+        s = (s or "").strip().lower()
+        for a, b in (
+            ("é", "e"), ("è", "e"), ("ê", "e"),
+            ("à", "a"), ("â", "a"),
+            ("ô", "o"), ("ç", "c"),
+        ):
+            s = s.replace(a, b)
+        return s
+
+    def find_ent(*candidates: str) -> Optional[int]:
+        norm_cands = [_norm(c) for c in candidates if c]
+        for e in entreprises_rows:
+            n = _norm(e.name)
+            for c in norm_cands:
+                if c in n or n in c:
+                    return e.id
+        return None
+
+    # Structure à seeder. Chaque tuple :
+    #   (label, kind, entreprise_id_or_None, assignee_external_or_None,
+    #    children_list)
+    # Children récursifs même format.
+    structure = [
+        # ── 1. Construction ─────────────────────────────────
+        (
+            "Construction",
+            "dept",
+            find_ent("Construction", "MGV Construction", "Horizon Construction"),
+            None,
+            [
+                ("Chargé de projet", "role", None, None, []),
+                ("Closer / Soumissionnaire", "role", None, None, []),
+                ("Sous-traitants", "role", None, "Sous-traitants externes", []),
+            ],
+        ),
+        # ── 2. Dev logiciel ─────────────────────────────────
+        (
+            "Dev logiciel",
+            "dept",
+            find_ent("Développement", "MGV Développement", "MC"),
+            None,
+            [
+                (
+                    "Développeur",
+                    "role",
+                    None,
+                    "Freelance ou Phil",
+                    [],
+                ),
+                ("Acquisition", "role", None, None, []),
+                ("E-payable", "task", None, None, []),
+                ("E-recevable", "task", None, None, []),
+            ],
+        ),
+        # ── 3. Gestion Immo ─────────────────────────────────
+        (
+            "Gestion Immo",
+            "dept",
+            find_ent("Gestion Immo", "MGV", "Horizon"),
+            "Steven",
+            [
+                ("Kyle / Kario", "role", None, "Kyle / Kario", []),
+                ("Communication", "role", None, None, []),
+                ("Gestion des loyers", "role", None, None, []),
+                (
+                    "Réception des loyers",
+                    "role",
+                    None,
+                    None,
+                    [
+                        ("Augmentation", "task", None, None, []),
+                        ("Réparation", "task", None, None, []),
+                        ("Bris", "task", None, None, []),
+                    ],
+                ),
+            ],
+        ),
+        # ── 4. Prospection ──────────────────────────────────
+        (
+            "Prospection",
+            "dept",
+            find_ent("Prospection"),
+            "Steven",
+            [
+                (
+                    "Prospecteur",
+                    "role",
+                    None,
+                    "Zach",
+                    [],
+                ),
+                (
+                    "Acquisition",
+                    "role",
+                    None,
+                    None,
+                    [
+                        ("Analyse", "task", None, None, []),
+                        ("Étude lead", "task", None, None, []),
+                        ("Screening Centris", "task", None, None, []),
+                        ("Cold call", "task", None, None, []),
+                    ],
+                ),
+            ],
+        ),
+        # ── 5. Dev Immo / Aguci ─────────────────────────────
+        (
+            "Dev Immo / Aguci",
+            "dept",
+            find_ent("Aguci", "Dev Immo"),
+            None,
+            [
+                ("Dev logiciel", "role", None, None, []),
+                ("Dev Prospection", "role", None, None, []),
+                ("Ouvrir inc", "task", None, None, []),
+                ("Desjardins", "task", None, None, []),
+                ("Marge crédit", "task", None, None, []),
+                ("Convention actionnaire", "task", None, None, []),
+            ],
+        ),
+        # ── 6. Comptabilité (service partagé) ───────────────
+        (
+            "Comptabilité",
+            "service",
+            None,
+            None,
+            [
+                ("Gestion taxes", "task", None, None, []),
+                ("Payable", "task", None, None, []),
+                ("Recevable", "task", None, None, []),
+                ("Tenue de livres", "task", None, None, []),
+            ],
+        ),
+    ]
+
+    created: List[OrgNode] = []
+
+    async def _create_recursive(
+        items: list, parent_id: Optional[int], depth: int
+    ) -> None:
+        for i, (label, kind, ent_id, ext, children) in enumerate(items):
+            node = OrgNode(
+                parent_id=parent_id,
+                position=i,
+                kind=kind,
+                label=label,
+                entreprise_id=ent_id,
+                assignee_external_name=ext,
+            )
+            db.add(node)
+            await db.flush()
+            created.append(node)
+            if children:
+                await _create_recursive(children, node.id, depth + 1)
+
+    await _create_recursive(structure, None, 0)
+    await db.commit()
+    return [OrgNodeRead.model_validate(n) for n in created]

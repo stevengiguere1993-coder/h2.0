@@ -78,6 +78,23 @@ export default function OrganigrammePage() {
   const [error, setError] = useState<string | null>(null);
   const [creatingTop, setCreatingTop] = useState(false);
   const [newTopLabel, setNewTopLabel] = useState("");
+  const [seeding, setSeeding] = useState(false);
+
+  // Entreprise mère du groupe (affichée en bandeau au-dessus de
+  // tout l'organigramme, comme dans le carnet où MGV Investissements
+  // est tout en haut).
+  const parentEnt = useMemo(
+    () =>
+      entreprises.find(
+        (e) =>
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (e as any).is_parent_company === true
+      ) ||
+      // Fallback : match par nom si la prop n'est pas encore exposée
+      // dans le payload light de la sidebar.
+      entreprises.find((e) => /mgv\s*invest/i.test(e.name)),
+    [entreprises]
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -98,6 +115,26 @@ export default function OrganigrammePage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function seedDefault(force: boolean) {
+    setSeeding(true);
+    setError(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/org-nodes/seed-default${force ? "?force=true" : ""}`,
+        { method: "POST" }
+      );
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error(txt.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      await load();
+    } catch (e) {
+      setError(`Import échoué : ${(e as Error).message}`);
+    } finally {
+      setSeeding(false);
+    }
+  }
 
   // Index : parent_id → enfants triés par position
   const byParent = useMemo(() => {
@@ -203,6 +240,45 @@ export default function OrganigrammePage() {
       />
 
       <div className="p-4 lg:p-6">
+        {/* Bandeau « Entreprise mère » tout en haut — comme dans
+            le carnet où MGV Investissements chapeaute tout. */}
+        {parentEnt ? (
+          <div
+            className="mb-4 flex items-center gap-3 rounded-2xl border p-4"
+            style={{
+              borderColor: "var(--qg-accent)",
+              backgroundColor: "var(--qg-bg-alt, transparent)"
+            }}
+          >
+            <span
+              className="flex h-12 w-12 items-center justify-center rounded-xl text-xl font-bold"
+              style={{
+                backgroundColor: "var(--qg-accent)",
+                color: "var(--qg-accent-ink, #0a0a0b)"
+              }}
+            >
+              ★
+            </span>
+            <div>
+              <p
+                className="text-[10px] font-semibold uppercase tracking-[0.16em]"
+                style={{ color: "var(--qg-text-soft)" }}
+              >
+                Entreprise mère du groupe
+              </p>
+              <h2
+                className="text-lg font-bold"
+                style={{
+                  color: "var(--qg-text)",
+                  fontFamily: "var(--font-fraunces, Georgia, serif)"
+                }}
+              >
+                {parentEnt.name}
+              </h2>
+            </div>
+          </div>
+        ) : null}
+
         {error ? (
           <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
             {error}
@@ -246,17 +322,36 @@ export default function OrganigrammePage() {
             </form>
 
             {topLevel.length === 0 ? (
-              <p
-                className="rounded-2xl border border-dashed px-6 py-12 text-center text-sm"
+              <div
+                className="rounded-2xl border border-dashed p-6 text-center text-sm"
                 style={{
                   borderColor: "var(--qg-border-soft)",
                   color: "var(--qg-text-muted)"
                 }}
               >
-                Aucun nœud d&apos;organigramme. Ajoute une première
-                branche ci-dessus (ex. « Construction », « Dev logiciel »,
-                « Gestion Immo »).
-              </p>
+                <p>
+                  Aucun nœud d&apos;organigramme pour l&apos;instant.
+                </p>
+                <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void seedDefault(false)}
+                    disabled={seeding}
+                    className="btn-accent inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
+                    title="Crée la structure de départ basée sur ton carnet (Construction, Dev logiciel, Gestion Immo, Prospection, Dev Immo / Aguci, Comptabilité + rôles et tâches)"
+                  >
+                    {seeding ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Save className="h-3.5 w-3.5" />
+                    )}
+                    Importer le canevas du carnet
+                  </button>
+                  <span className="text-[10px]" style={{ color: "var(--qg-text-soft)" }}>
+                    ou ajoute manuellement une branche ci-dessus
+                  </span>
+                </div>
+              </div>
             ) : (
               <div className="grid auto-cols-[minmax(280px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-4">
                 {topLevel.map((n) => (
