@@ -482,7 +482,7 @@ async def route_text(
             db, email_signals["emails"], email_signals["phones"]
         )
 
-    # Appel IA (avec fallback gracieux).
+    # Appel IA (avec fallback heuristique LOCAL si Claude échoue).
     try:
         raw = await _call_claude(
             text_clean,
@@ -494,19 +494,25 @@ async def route_text(
         routing = _parse_routing(raw)
         ia_ok = True
     except Exception as exc:  # noqa: BLE001
-        log.warning("Kratos IA fallback: %s", exc)
+        log.warning("Kratos IA fallback → routeur local : %s", exc)
+        # Plutôt que de marquer en `unknown / needs_review`, on délègue
+        # au routeur heuristique local. Kratos continue à classer même
+        # si Claude est down / quota dépassé / clé manquante.
+        from app.services.kratos_local_router import route_locally
+
+        local = await route_locally(db, text_clean)
         routing = RoutingResult(
-            kind=KratosIntentKind.UNKNOWN.value,
-            summary=text_clean[:200],
-            title=None,
-            entreprise_id=None,
-            lead_analysis_id=None,
-            prospection_lead_id=None,
-            confidence="low",
-            reason=f"IA indisponible : {exc!s}",
-            raw_json={},
+            kind=local.kind,
+            summary=local.summary,
+            title=local.title,
+            entreprise_id=local.entreprise_id,
+            lead_analysis_id=local.lead_analysis_id,
+            prospection_lead_id=local.prospection_lead_id,
+            confidence=local.confidence,
+            reason=f"Fallback local (Claude indisponible) : {local.reason}",
+            raw_json={"fallback": "local", "reason": local.reason},
         )
-        ia_ok = False
+        ia_ok = True  # le local a routé, on applique normalement
 
     # Routage seulement si confidence >= medium.
     target_type: Optional[str] = None
