@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 
 import { Link, useRouter } from "@/i18n/navigation";
-import { ArrowLeft, Home, ShieldAlert } from "lucide-react";
+import { Home, ShieldAlert } from "lucide-react";
 
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { HelpRequestsSection } from "@/components/help-requests-section";
@@ -70,13 +70,6 @@ export default function DevPage() {
           <Link
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             href={"/connexion" as any}
-            className="inline-flex items-center text-xs text-white/60 hover:text-accent-500"
-          >
-            <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Retour aux portails
-          </Link>
-          <Link
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/app" as any}
             className="inline-flex items-center rounded-md border border-accent-500/40 bg-accent-500/10 px-2.5 py-1 text-xs font-semibold text-accent-300 hover:bg-accent-500/20"
           >
             <Home className="mr-1 h-3.5 w-3.5" /> Accueil du portail
