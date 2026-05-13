@@ -5,7 +5,9 @@ export default function ReglagesIndex({
 }: {
   params: { locale: string };
 }) {
-  // Tab par défaut : Intégrations. Locale-aware path.
+  // Tab par défaut : Entreprises (modèles, flag « entreprise mère »,
+  // etc.). Locale-aware path. L'ancienne route `/integration`
+  // n'existait pas → 404.
   const prefix = locale && locale !== "fr" ? `/${locale}` : "";
-  redirect(`${prefix}/entreprises/reglages/integration`);
+  redirect(`${prefix}/entreprises/reglages/entreprises`);
 }
