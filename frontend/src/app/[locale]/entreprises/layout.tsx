@@ -55,6 +55,7 @@ type EntrepriseLite = {
   color_accent: string;
   health_label?: "good" | "warn" | "risk";
   is_active: boolean;
+  is_parent_company?: boolean;
 };
 
 type Ctx = {
