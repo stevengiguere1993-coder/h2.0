@@ -19,6 +19,7 @@ class EntrepriseBase(BaseModel):
     description: Optional[str] = None
     drive_folder_url: Optional[str] = Field(default=None, max_length=1024)
     is_active: bool = True
+    is_parent_company: bool = False
 
 
 class EntrepriseCreate(EntrepriseBase):
@@ -35,6 +36,7 @@ class EntrepriseUpdate(BaseModel):
     description: Optional[str] = None
     drive_folder_url: Optional[str] = Field(default=None, max_length=1024)
     is_active: Optional[bool] = None
+    is_parent_company: Optional[bool] = None
 
 
 class EntrepriseRead(EntrepriseBase):

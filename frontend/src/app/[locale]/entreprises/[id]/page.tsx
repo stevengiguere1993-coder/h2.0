@@ -47,6 +47,7 @@ type Entreprise = {
   drive_folder_url: string | null;
   monday_board_id: string | null;
   monday_board_name: string | null;
+  is_parent_company?: boolean;
 };
 
 type Tache = {

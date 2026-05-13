@@ -399,6 +399,11 @@ async def init_db() -> None:
                 "frais_demarrage_financables_json",
                 "TEXT",
             ),
+            (
+                "entreprises",
+                "is_parent_company",
+                "BOOLEAN DEFAULT FALSE NOT NULL",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
