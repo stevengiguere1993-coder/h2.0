@@ -172,7 +172,7 @@ export default function RencontresListPage() {
           >
             <Calendar className="mx-auto h-8 w-8 opacity-40" />
             <p className="mt-3 text-sm">
-              Aucune rencontre encore. Crée la première pour ta retraite à venir.
+              Aucune rencontre encore.
             </p>
             <button
               type="button"
@@ -306,27 +306,72 @@ export default function RencontresListPage() {
               />
             </div>
             <div>
-              <label className="label text-[10px] uppercase">
-                Entreprises concernées
-              </label>
-              <select
-                multiple
-                value={fEntIds.map(String)}
-                onChange={(e) =>
-                  setFEntIds(
-                    Array.from(e.target.selectedOptions).map((o) => Number(o.value))
-                  )
-                }
-                className="input min-h-[120px]"
+              <div className="flex items-baseline justify-between gap-2">
+                <label className="label text-[10px] uppercase">
+                  Entreprises concernées
+                </label>
+                <div className="flex items-center gap-2 text-[10px] text-white/50">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFEntIds(entreprises.map((e) => e.id))
+                    }
+                    className="hover:text-accent-400"
+                  >
+                    Tout sélectionner
+                  </button>
+                  <span>·</span>
+                  <button
+                    type="button"
+                    onClick={() => setFEntIds([])}
+                    className="hover:text-rose-300"
+                  >
+                    Tout désélectionner
+                  </button>
+                </div>
+              </div>
+              <div
+                className="mt-1 max-h-[200px] overflow-y-auto rounded-lg border border-white/15 bg-brand-950 p-2"
               >
-                {entreprises.map((e) => (
-                  <option key={e.id} value={String(e.id)}>
-                    {e.name}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-0.5 text-[10px] text-white/40">
-                Cmd/Ctrl + clic pour sélectionner plusieurs.
+                {entreprises.length === 0 ? (
+                  <p className="text-[11px] text-white/40">
+                    Aucune entreprise dans la sidebar.
+                  </p>
+                ) : (
+                  <ul className="space-y-0.5">
+                    {entreprises.map((e) => {
+                      const checked = fEntIds.includes(e.id);
+                      return (
+                        <li key={e.id}>
+                          <label className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs text-white/80 hover:bg-white/5">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(ev) => {
+                                if (ev.target.checked) {
+                                  setFEntIds((prev) =>
+                                    prev.includes(e.id) ? prev : [...prev, e.id]
+                                  );
+                                } else {
+                                  setFEntIds((prev) =>
+                                    prev.filter((x) => x !== e.id)
+                                  );
+                                }
+                              }}
+                              className="h-3.5 w-3.5 accent-violet-500"
+                            />
+                            <span className="flex-1 truncate">{e.name}</span>
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+              <p className="mt-1 text-[10px] text-white/40">
+                {fEntIds.length === 0
+                  ? "Aucune entreprise sélectionnée — la rencontre sera transverse"
+                  : `${fEntIds.length} entreprise${fEntIds.length > 1 ? "s" : ""} sélectionnée${fEntIds.length > 1 ? "s" : ""}`}
               </p>
             </div>
             <div className="flex justify-end gap-2 pt-2">

@@ -8,6 +8,7 @@ import {
   GripVertical,
   Loader2,
   Plus,
+  RefreshCw,
   Sparkles,
   TrendingUp
 } from "lucide-react";
@@ -103,6 +104,10 @@ export default function EntreprisesDashboard() {
   const [stats, setStats] = useState<StatsOverview | null>(null);
   const [health, setHealth] = useState<EntrepriseHealth[]>([]);
   const [topBriefing, setTopBriefing] = useState<DailyBriefing | null>(null);
+  const [briefingEntrepriseName, setBriefingEntrepriseName] = useState<string | null>(null);
+  const [briefingEntrepriseId, setBriefingEntrepriseId] = useState<number | null>(null);
+  const [briefingIsParent, setBriefingIsParent] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [alphaSort, setAlphaSort] = useState(false);
@@ -176,6 +181,8 @@ export default function EntreprisesDashboard() {
         // priorité. Sinon : on prend l'entreprise avec le score de
         // santé le plus bas (la plus à risque) en fallback.
         let targetId: number | null = null;
+        let targetName: string | null = null;
+        let targetIsParent = false;
         try {
           const r = await authedFetch(
             "/api/v1/entreprises?limit=200"
@@ -183,13 +190,18 @@ export default function EntreprisesDashboard() {
           if (r.ok) {
             const all = (await r.json()) as Array<{
               id: number;
+              name: string;
               is_parent_company?: boolean;
               is_active?: boolean;
             }>;
             const parent = all.find(
               (x) => x.is_parent_company && x.is_active !== false
             );
-            if (parent) targetId = parent.id;
+            if (parent) {
+              targetId = parent.id;
+              targetName = parent.name;
+              targetIsParent = true;
+            }
           }
         } catch {
           /* fallback below */
@@ -199,7 +211,15 @@ export default function EntreprisesDashboard() {
             (a, b) => a.health_score - b.health_score
           );
           const target = sorted[0];
-          if (target) targetId = target.entreprise_id;
+          if (target) {
+            targetId = target.entreprise_id;
+            targetName = target.name;
+          }
+        }
+        if (!cancelled) {
+          setBriefingEntrepriseId(targetId);
+          setBriefingEntrepriseName(targetName);
+          setBriefingIsParent(targetIsParent);
         }
         if (targetId != null) {
           const r = await authedFetch(
@@ -220,6 +240,25 @@ export default function EntreprisesDashboard() {
       cancelled = true;
     };
   }, []);
+
+  async function regenerateBriefing() {
+    if (briefingEntrepriseId == null) return;
+    setRegenerating(true);
+    try {
+      const r = await authedFetch(
+        `/api/v1/entreprises/${briefingEntrepriseId}/daily-pulse?force=true`,
+        { method: "POST" }
+      );
+      if (r.ok) {
+        const data = (await r.json()) as DailyBriefing | null;
+        setTopBriefing(data);
+      }
+    } catch {
+      /* silent */
+    } finally {
+      setRegenerating(false);
+    }
+  }
 
   const today = new Date();
   const greetingName = firstName(user?.email);
@@ -441,7 +480,18 @@ export default function EntreprisesDashboard() {
             )}
           </div>
 
-          <BriefingCard briefing={topBriefing} loading={loading} />
+          <BriefingCard
+            briefing={topBriefing}
+            loading={loading}
+            entrepriseName={briefingEntrepriseName}
+            isParent={briefingIsParent}
+            onRegenerate={
+              briefingEntrepriseId != null
+                ? () => void regenerateBriefing()
+                : undefined
+            }
+            regenerating={regenerating}
+          />
         </section>
       </div>
     </>
@@ -681,10 +731,18 @@ function EmptyEntreprises() {
 
 function BriefingCard({
   briefing,
-  loading
+  loading,
+  entrepriseName,
+  isParent,
+  onRegenerate,
+  regenerating
 }: {
   briefing: DailyBriefing | null;
   loading: boolean;
+  entrepriseName?: string | null;
+  isParent?: boolean;
+  onRegenerate?: () => void;
+  regenerating?: boolean;
 }) {
   return (
     <aside
@@ -695,26 +753,55 @@ function BriefingCard({
       }}
     >
       <div className="flex items-baseline justify-between px-5 pt-5">
-        <h2
-          className="text-[18px] font-bold text-[var(--qg-text)]"
-          style={{ fontFamily: "var(--font-fraunces, Georgia, serif)" }}
-        >
-          Briefing{" "}
-          <span className="italic" style={{ color: "var(--qg-accent)" }}>
-            du jour
-          </span>
-        </h2>
-        {briefing ? (
-          <span
-            className="text-[10px] uppercase tracking-wider text-[var(--qg-text-soft)]"
-            style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}
+        <div>
+          <h2
+            className="text-[18px] font-bold text-[var(--qg-text)]"
+            style={{ fontFamily: "var(--font-fraunces, Georgia, serif)" }}
           >
-            {new Date(briefing.created_at).toLocaleTimeString("fr-CA", {
-              hour: "2-digit",
-              minute: "2-digit"
-            })}
-          </span>
-        ) : null}
+            Briefing{" "}
+            <span className="italic" style={{ color: "var(--qg-accent)" }}>
+              du jour
+            </span>
+          </h2>
+          {entrepriseName ? (
+            <p
+              className="mt-0.5 text-[10px] uppercase tracking-[0.16em]"
+              style={{ color: "var(--qg-text-soft)" }}
+            >
+              {isParent ? "Vision globale · " : ""}
+              {entrepriseName}
+            </p>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2">
+          {briefing ? (
+            <span
+              className="text-[10px] uppercase tracking-wider text-[var(--qg-text-soft)]"
+              style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}
+            >
+              {new Date(briefing.created_at).toLocaleTimeString("fr-CA", {
+                hour: "2-digit",
+                minute: "2-digit"
+              })}
+            </span>
+          ) : null}
+          {onRegenerate ? (
+            <button
+              type="button"
+              onClick={onRegenerate}
+              disabled={!!regenerating}
+              className="inline-flex items-center gap-1 rounded-md border border-accent-500/40 bg-accent-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent-300 hover:bg-accent-500/20 disabled:opacity-50"
+              title="Régénérer le briefing maintenant (utile après avoir changé l'entreprise mère)"
+            >
+              {regenerating ? (
+                <Loader2 className="h-2.5 w-2.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-2.5 w-2.5" />
+              )}
+              Régénérer
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div className="px-5 pb-5 pt-3">

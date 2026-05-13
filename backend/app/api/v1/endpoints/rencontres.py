@@ -369,7 +369,32 @@ async def summarize_section_endpoint(
     _: CurrentUser,
 ) -> SectionRead:
     s = await _get_section_or_404(db, rencontre_id, section_id)
-    summary = await summarize_section(s.title, s.transcript or "")
+    # Charge les entreprises de la rencontre pour donner du contexte
+    # à Claude → tagging précis des action_items par entreprise.
+    r = await _get_rencontre_or_404(db, rencontre_id)
+    ent_ids: list[int] = []
+    if r.entreprise_ids_json:
+        try:
+            v = json.loads(r.entreprise_ids_json)
+            if isinstance(v, list):
+                ent_ids = [int(x) for x in v if isinstance(x, (int, str))]
+        except Exception:  # noqa: BLE001
+            ent_ids = []
+    entreprises_context: list[dict] = []
+    if ent_ids:
+        from app.models.entreprise import Entreprise as _Ent
+
+        rows = (
+            await db.execute(
+                select(_Ent).where(_Ent.id.in_(ent_ids))
+            )
+        ).scalars().all()
+        entreprises_context = [
+            {"id": e.id, "name": e.name} for e in rows
+        ]
+    summary = await summarize_section(
+        s.title, s.transcript or "", entreprises_context=entreprises_context
+    )
     s.ai_summary_json = json.dumps(summary, default=str)[:20_000]
     await db.commit()
     await db.refresh(s)

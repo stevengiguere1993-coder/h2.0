@@ -293,9 +293,46 @@ async def update_entreprise(
     ).scalar_one_or_none()
     if e is None:
         raise HTTPException(404, "Entreprise non trouvée")
-    for k, v in body.model_dump(exclude_unset=True).items():
+    payload = body.model_dump(exclude_unset=True)
+    # Détection du changement de flag « entreprise mère » : si on
+    # vient de cocher la case, on invalide le briefing du jour (sinon
+    # l'ancien briefing avec scope local resterait en cache 24h).
+    becoming_parent = (
+        "is_parent_company" in payload
+        and payload["is_parent_company"]
+        and not bool(getattr(e, "is_parent_company", False))
+    )
+    for k, v in payload.items():
         setattr(e, k, v)
     await db.flush()
+    if becoming_parent:
+        # Supprime le briefing « daily_briefing » du jour s'il existe
+        # → le prochain GET /daily-pulse régénérera avec scope global.
+        try:
+            from datetime import datetime as _dt, time as _t, timezone as _tz, timedelta as _td
+
+            from app.models.qg_strategic import Summary, SummaryType
+
+            today = _dt.now(_tz.utc).date()
+            start = _dt.combine(today, _t.min, tzinfo=_tz.utc)
+            end = start + _td(days=1)
+            today_briefings = (
+                await db.execute(
+                    select(Summary).where(
+                        Summary.entreprise_id == entreprise_id,
+                        Summary.type == SummaryType.DAILY_BRIEFING.value,
+                        Summary.period_start >= start,
+                        Summary.period_start < end,
+                    )
+                )
+            ).scalars().all()
+            for b in today_briefings:
+                await db.delete(b)
+            await db.flush()
+        except Exception:  # noqa: BLE001
+            # On ne bloque pas le PATCH si la suppression échoue —
+            # l'utilisateur pourra utiliser le bouton « Régénérer ».
+            pass
     await db.refresh(e)
     return EntrepriseRead.model_validate(e)
 
