@@ -217,6 +217,185 @@ async def _call_claude(entreprise: Entreprise, state: dict) -> list[dict]:
     return list(parsed.get("problems") or [])
 
 
+def _detect_problems_locally(entreprise: Entreprise, state: dict) -> list[dict]:
+    """Fallback heuristique sans IA. Produit 3-5 problèmes basés sur
+    des règles dures à partir de l'état de l'entreprise."""
+    problems: list[dict] = []
+    today = date.today()
+    todo = state.get("todo") or []
+    overdue = state.get("overdue") or []
+    visions = state.get("visions") or []
+    projects = state.get("projects") or []
+    activities = state.get("activities") or []
+
+    # 1. Tâches en retard
+    for t in overdue[:3]:
+        days = (today - t.due_date).days if t.due_date else 0
+        problems.append(
+            {
+                "title": f"Tâche en retard : {t.title[:80]}",
+                "description": (
+                    f"Cette tâche est due depuis {days} jour"
+                    f"{'s' if days > 1 else ''}. Statut actuel : {t.status}."
+                ),
+                "severity": "high" if days > 7 else "medium",
+                "action_kind": "create_task",
+                "action_label": "Relancer cette tâche",
+                "action_params": {
+                    "title": f"Relancer : {t.title[:100]}",
+                    "description": (
+                        f"Tâche en retard depuis {days} jour(s) — "
+                        f"décider de la fermer ou de l'avancer."
+                    ),
+                    "priority": "high",
+                },
+            }
+        )
+
+    # 2. Tâches stagnantes (créées il y a > 30 jours, toujours TODO)
+    stagnant = []
+    for t in todo:
+        if t.created_at and t.status == "todo":
+            created = t.created_at
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            age_days = (datetime.now(timezone.utc) - created).days
+            if age_days > 30 and t not in overdue:
+                stagnant.append((t, age_days))
+    if stagnant:
+        stagnant.sort(key=lambda x: -x[1])
+        for t, age in stagnant[:2]:
+            problems.append(
+                {
+                    "title": f"Tâche stagnante depuis {age}j : {t.title[:80]}",
+                    "description": (
+                        f"Cette tâche est restée « à faire » depuis {age} "
+                        "jours sans activité. À fermer, à reprioriser ou à "
+                        "déléguer."
+                    ),
+                    "severity": "medium",
+                    "action_kind": "manual",
+                    "action_label": "Décider du sort",
+                    "action_params": {},
+                }
+            )
+
+    # 3. Pas d'activité récente
+    if not activities and not problems:
+        problems.append(
+            {
+                "title": "Aucune activité enregistrée depuis 7 jours",
+                "description": (
+                    "Aucun mouvement noté pour cette entreprise dans la "
+                    "dernière semaine. Planifie au minimum les 3 tâches "
+                    "prioritaires de la semaine pour reprendre le momentum."
+                ),
+                "severity": "medium",
+                "action_kind": "create_task",
+                "action_label": "Planifier la semaine",
+                "action_params": {
+                    "title": "Planifier les 3 priorités de la semaine",
+                    "description": (
+                        "Lister les 3 actions concrètes à pousser cette "
+                        "semaine pour faire avancer l'entreprise."
+                    ),
+                    "priority": "medium",
+                },
+            }
+        )
+
+    # 4. Vision absente
+    if not visions:
+        problems.append(
+            {
+                "title": "Vision stratégique à formaliser",
+                "description": (
+                    "Aucune vision active enregistrée pour cette entreprise. "
+                    "Sans cap clair sur 30/90 jours, les tâches dérivent et "
+                    "le suivi devient réactif."
+                ),
+                "severity": "medium",
+                "action_kind": "create_task",
+                "action_label": "Rédiger la vision 90 jours",
+                "action_params": {
+                    "title": "Rédiger la vision stratégique 90 jours",
+                    "description": (
+                        "Définir le cap court terme : 3 objectifs clés et "
+                        "les indicateurs pour les suivre."
+                    ),
+                    "priority": "medium",
+                },
+            }
+        )
+
+    # 5. Aucun projet stratégique en cours
+    if not projects and len(problems) < 5:
+        problems.append(
+            {
+                "title": "Aucun projet stratégique actif",
+                "description": (
+                    "Pas de chantier structurant en cours pour faire grandir "
+                    "cette entreprise. Identifie 1 projet ambitieux à lancer "
+                    "ce mois-ci (marketing, recrutement, processus, offre)."
+                ),
+                "severity": "low",
+                "action_kind": "create_task",
+                "action_label": "Identifier 1 projet à lancer",
+                "action_params": {
+                    "title": "Identifier 1 projet stratégique du mois",
+                    "description": (
+                        "Choisir un chantier interne ou commercial à "
+                        "lancer ce mois-ci avec un impact mesurable."
+                    ),
+                    "priority": "medium",
+                },
+            }
+        )
+
+    # 6. Beaucoup de tâches ouvertes → focus
+    if len(todo) > 15 and len(problems) < 5:
+        problems.append(
+            {
+                "title": f"{len(todo)} tâches ouvertes — risque de dispersion",
+                "description": (
+                    "Trop de tâches ouvertes en parallèle réduit la "
+                    "concentration. Sélectionne les 3-5 ICE les plus élevés "
+                    "et reporte le reste."
+                ),
+                "severity": "low",
+                "action_kind": "manual",
+                "action_label": "Trier par score ICE",
+                "action_params": {},
+            }
+        )
+
+    # Garde-fou : au minimum 3 problèmes même si l'entreprise va bien.
+    if len(problems) < 3:
+        problems.append(
+            {
+                "title": f"Faire évoluer {entreprise.name}",
+                "description": (
+                    "État stable. Profite-en pour pousser un chantier de "
+                    "fond : marketing, optimisation, recrutement ou "
+                    "partenariats."
+                ),
+                "severity": "low",
+                "action_kind": "create_task",
+                "action_label": "Choisir un chantier de fond",
+                "action_params": {
+                    "title": "Choisir un chantier de fond ce mois-ci",
+                    "description": (
+                        "Marketing, optimisation, recrutement, partenariats — "
+                        "identifier UN levier de croissance pour le mois."
+                    ),
+                    "priority": "medium",
+                },
+            }
+        )
+
+    return problems[:5]
+
+
 async def detect_for_entreprise(
     db: AsyncSession,
     entreprise_id: int,
@@ -283,8 +462,16 @@ async def detect_for_entreprise(
     try:
         problems_raw = await _call_claude(ent, state)
     except Exception as exc:  # noqa: BLE001
-        log.warning("Kratos problem detector failed for %s: %s", ent.id, exc)
-        return []
+        log.warning(
+            "Kratos detector → fallback heuristique local pour %s : %s",
+            ent.id,
+            exc,
+        )
+        # Fallback heuristique : on génère des problèmes basés sur
+        # l'état actuel (tâches en retard, stagnation, vision absente,
+        # etc.) pour que Kratos continue à proposer des actions même
+        # sans Claude.
+        problems_raw = _detect_problems_locally(ent, state)
 
     created: list[KratosProblem] = []
     valid_sev = {s.value for s in KratosProblemSeverity}
