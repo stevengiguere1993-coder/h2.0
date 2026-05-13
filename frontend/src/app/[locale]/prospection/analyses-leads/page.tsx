@@ -21,6 +21,8 @@ import {
 
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
+import { AppTopbar } from "@/components/app-topbar";
+import { useProspectionLayout } from "../layout";
 import { Link, useRouter } from "@/i18n/navigation";
 
 /**
@@ -113,6 +115,7 @@ function fmtDate(iso: string): string {
 
 export default function AnalysesLeadsPage() {
   const router = useRouter();
+  const { onOpenSidebar } = useProspectionLayout();
   const confirm = useConfirm();
 
   // ── Capture ───────────────────────────────────────────────────
@@ -316,6 +319,14 @@ export default function AnalysesLeadsPage() {
   }, [filtered]);
 
   return (
+    <>
+      <AppTopbar
+        breadcrumbs={[
+          { label: "Prospection", href: "/prospection" },
+          { label: "Analyses des leads" }
+        ]}
+        onOpenSidebar={onOpenSidebar}
+      />
     <div className="px-5 py-6 lg:px-8">
       <header className="mb-5">
         <h1
@@ -584,6 +595,7 @@ export default function AnalysesLeadsPage() {
         />
       ) : null}
     </div>
+    </>
   );
 }
 
@@ -971,11 +983,13 @@ function LeadDetailModal({
                     label="Adresse"
                     value={data.address}
                     onSave={(v) => patchField("address", v)}
+                    required
                   />
                   <FieldText
                     label="Ville"
                     value={data.city}
                     onSave={(v) => patchField("city", v)}
+                    required
                   />
                   <FieldText
                     label="Code postal"
@@ -991,6 +1005,7 @@ function LeadDetailModal({
                     label="Prix demandé ($)"
                     value={data.asking_price}
                     onSave={(v) => patchField("asking_price", v)}
+                    required
                   />
                   <FieldNumber
                     label="Année construction"
@@ -1001,6 +1016,7 @@ function LeadDetailModal({
                     label="Nb logements"
                     value={data.nb_logements}
                     onSave={(v) => patchField("nb_logements", v)}
+                    required
                   />
                   <FieldNumber
                     label="Nb stationnements"
@@ -1011,6 +1027,7 @@ function LeadDetailModal({
                     label="Revenus bruts ($/an)"
                     value={data.revenus_bruts}
                     onSave={(v) => patchField("revenus_bruts", v)}
+                    required
                   />
                   <FieldNumber
                     label="Évaluation municipale ($)"
@@ -1021,16 +1038,19 @@ function LeadDetailModal({
                     label="Taxes municipales ($/an)"
                     value={data.taxes_municipales}
                     onSave={(v) => patchField("taxes_municipales", v)}
+                    required
                   />
                   <FieldNumber
                     label="Taxes scolaires ($/an)"
                     value={data.taxes_scolaires}
                     onSave={(v) => patchField("taxes_scolaires", v)}
+                    required
                   />
                   <FieldNumber
                     label="Assurances ($/an)"
                     value={data.assurances}
                     onSave={(v) => patchField("assurances", v)}
+                    required
                   />
                   <FieldNumber
                     label="Énergie ($/an)"
@@ -1119,30 +1139,11 @@ function LeadDetailModal({
                   {data.attachments?.length ? (
                     <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
                       {data.attachments.map((a) => (
-                        <a
+                        <AttachmentThumb
                           key={a.id}
-                          href={`/api/v1/lead-analyses/${id}/attachments/${a.id}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="block overflow-hidden rounded-md border border-brand-800 bg-brand-950 hover:border-accent-500"
-                          title={a.filename}
-                        >
-                          {a.content_type.startsWith("image/") ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={`/api/v1/lead-analyses/${id}/attachments/${a.id}`}
-                              alt={a.filename}
-                              className="h-24 w-full object-cover"
-                            />
-                          ) : (
-                            <div className="flex h-24 items-center justify-center text-3xl text-white/30">
-                              📄
-                            </div>
-                          )}
-                          <p className="truncate px-2 py-1 text-[10px] text-white/60">
-                            {a.filename}
-                          </p>
-                        </a>
+                          leadId={id}
+                          attachment={a}
+                        />
                       ))}
                     </div>
                   ) : null}
@@ -1212,27 +1213,124 @@ function LeadDetailModal({
 
 // ─── Champ éditable ────────────────────────────────────────────
 
+// ─── Vignette d'attachment : fetch via authedFetch puis blob URL ───
+//
+// Les endpoints backend qui servent un fichier (image, PDF) exigent
+// un Bearer token. Un <img src> ou <a href> direct envoie une simple
+// GET sans token → 401. On télécharge le blob côté JS et on génère
+// un objectURL pour l'aperçu + le lien d'ouverture en nouvel onglet.
+
+function AttachmentThumb({
+  leadId,
+  attachment
+}: {
+  leadId: number;
+  attachment: {
+    id: number;
+    filename: string;
+    content_type: string;
+    size_bytes: number;
+  };
+}) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [err, setErr] = useState(false);
+  const isImage = (attachment.content_type || "").startsWith("image/");
+  const isPdf = (attachment.content_type || "").includes("pdf");
+
+  useEffect(() => {
+    let cancelled = false;
+    let cleanupUrl: string | null = null;
+    (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/lead-analyses/${leadId}/attachments/${attachment.id}`
+        );
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const blob = await r.blob();
+        if (cancelled) return;
+        const url = URL.createObjectURL(blob);
+        cleanupUrl = url;
+        setBlobUrl(url);
+      } catch {
+        if (!cancelled) setErr(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (cleanupUrl) URL.revokeObjectURL(cleanupUrl);
+    };
+  }, [leadId, attachment.id]);
+
+  return (
+    <a
+      href={blobUrl || "#"}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => {
+        if (!blobUrl) e.preventDefault();
+      }}
+      className="block overflow-hidden rounded-md border border-brand-800 bg-brand-950 hover:border-accent-500"
+      title={attachment.filename}
+    >
+      {isImage && blobUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={blobUrl}
+          alt={attachment.filename}
+          className="h-24 w-full object-cover"
+        />
+      ) : isImage && !blobUrl && !err ? (
+        <div className="flex h-24 items-center justify-center text-white/30">
+          <Loader2 className="h-4 w-4 animate-spin" />
+        </div>
+      ) : err ? (
+        <div className="flex h-24 items-center justify-center text-2xl text-rose-300/60">
+          ✗
+        </div>
+      ) : isPdf ? (
+        <div className="flex h-24 items-center justify-center text-3xl text-white/30">
+          📕
+        </div>
+      ) : (
+        <div className="flex h-24 items-center justify-center text-3xl text-white/30">
+          📄
+        </div>
+      )}
+      <p className="truncate px-2 py-1 text-[10px] text-white/60">
+        {attachment.filename}
+      </p>
+    </a>
+  );
+}
+
 function FieldText({
   label,
   value,
-  onSave
+  onSave,
+  required
 }: {
   label: string;
   value: string | null;
   onSave: (v: string | null) => void;
+  required?: boolean;
 }) {
   const [v, setV] = useState(value || "");
   useEffect(() => setV(value || ""), [value]);
   const isEmpty = !value;
+  const missingRequired = isEmpty && required;
   return (
     <div>
       <label
         className={`text-[10px] uppercase tracking-wider ${
-          isEmpty ? "text-amber-300/80" : "text-white/50"
+          missingRequired
+            ? "text-rose-400 font-semibold"
+            : isEmpty
+            ? "text-amber-600 dark:text-amber-300/80"
+            : "text-white/50"
         }`}
       >
         {label}
-        {isEmpty ? " ⚠" : ""}
+        {missingRequired ? " · OBLIGATOIRE" : isEmpty ? " ⚠" : ""}
       </label>
       <input
         type="text"
@@ -1241,7 +1339,11 @@ function FieldText({
         onBlur={() => {
           if ((value || "") !== v) onSave(v.trim() || null);
         }}
-        className="input mt-1 text-xs"
+        className={`input mt-1 text-xs ${
+          missingRequired
+            ? "border-rose-400/70 focus:border-rose-400 ring-1 ring-rose-400/30"
+            : ""
+        }`}
       />
     </div>
   );
@@ -1250,24 +1352,31 @@ function FieldText({
 function FieldNumber({
   label,
   value,
-  onSave
+  onSave,
+  required
 }: {
   label: string;
   value: number | null;
   onSave: (v: number | null) => void;
+  required?: boolean;
 }) {
   const [v, setV] = useState(value != null ? String(value) : "");
   useEffect(() => setV(value != null ? String(value) : ""), [value]);
   const isEmpty = value == null;
+  const missingRequired = isEmpty && required;
   return (
     <div>
       <label
         className={`text-[10px] uppercase tracking-wider ${
-          isEmpty ? "text-amber-300/80" : "text-white/50"
+          missingRequired
+            ? "text-rose-400 font-semibold"
+            : isEmpty
+            ? "text-amber-600 dark:text-amber-300/80"
+            : "text-white/50"
         }`}
       >
         {label}
-        {isEmpty ? " ⚠" : ""}
+        {missingRequired ? " · OBLIGATOIRE" : isEmpty ? " ⚠" : ""}
       </label>
       <input
         type="number"
@@ -1278,7 +1387,11 @@ function FieldNumber({
           const num = v.trim() === "" ? null : Number(v);
           if (num !== value) onSave(Number.isFinite(num as number) ? num : null);
         }}
-        className="input mt-1 font-mono text-xs"
+        className={`input mt-1 font-mono text-xs ${
+          missingRequired
+            ? "border-rose-400/70 focus:border-rose-400 ring-1 ring-rose-400/30"
+            : ""
+        }`}
       />
     </div>
   );
@@ -1399,20 +1512,82 @@ function ManualAnalysisSection({
   const [running, setRunning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Champs B/G obligatoires manquants.
+  // Champs OBLIGATOIRES pour lancer l'analyse. Sans eux, le bouton
+  // est désactivé. Adresse, ville, nb logements, prix, revenus,
+  // taxes muni/scolaires/assurances sont indispensables à la
+  // mécanique de calcul (Steven : tout le reste est recommandé).
   const missingRequired = useMemo(() => {
     const missing: string[] = [];
     if (!data.address) missing.push("Adresse");
-    if (!data.asking_price) missing.push("Prix demandé");
+    if (!data.city) missing.push("Ville");
     if (!data.nb_logements) missing.push("Nb logements");
+    if (!data.asking_price) missing.push("Prix demandé");
     if (!data.revenus_bruts) missing.push("Revenus annuels");
     if (data.taxes_municipales == null) missing.push("Taxes municipales");
     if (data.taxes_scolaires == null) missing.push("Taxes scolaires");
     if (data.assurances == null) missing.push("Assurances");
-    if (data.energie == null) missing.push("Énergie");
-    if (data.depenses_autres == null) missing.push("Autres dépenses");
     return missing;
   }, [data]);
+
+  // Champs recommandés (non bloquants) — affichage informatif si
+  // manquants, mais l'analyse peut quand même se lancer.
+  const missingRecommended = useMemo(() => {
+    const missing: string[] = [];
+    if (data.energie == null) missing.push("Énergie");
+    if (data.depenses_autres == null) missing.push("Autres dépenses");
+    if (!data.annee_construction) missing.push("Année construction");
+    if (!data.evaluation_municipale) missing.push("Évaluation municipale");
+    return missing;
+  }, [data]);
+
+  // Sous-ensemble que l'IA peut estimer (taxes muni/scol/assurances).
+  const missingEstimable = useMemo(() => {
+    const m: string[] = [];
+    if (data.taxes_municipales == null) m.push("Taxes municipales");
+    if (data.taxes_scolaires == null) m.push("Taxes scolaires");
+    if (data.assurances == null) m.push("Assurances");
+    return m;
+  }, [data]);
+
+  const [estimating, setEstimating] = useState(false);
+
+  async function estimateExpenses() {
+    setEstimating(true);
+    setErr(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/lead-analyses/${data.id}/estimate-expenses`,
+        { method: "POST" }
+      );
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error(txt.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      const out = (await r.json()) as {
+        taxes_municipales: number | null;
+        taxes_scolaires: number | null;
+        assurances: number | null;
+        source: string;
+        note?: string;
+      };
+      // Patche uniquement les champs encore vides — on ne remplace
+      // pas une valeur déjà saisie manuellement.
+      if (data.taxes_municipales == null && out.taxes_municipales != null) {
+        onPatch("taxes_municipales", out.taxes_municipales);
+      }
+      if (data.taxes_scolaires == null && out.taxes_scolaires != null) {
+        onPatch("taxes_scolaires", out.taxes_scolaires);
+      }
+      if (data.assurances == null && out.assurances != null) {
+        onPatch("assurances", out.assurances);
+      }
+      await onRefresh();
+    } catch (e) {
+      setErr(`Estimation IA échouée : ${(e as Error).message}`);
+    } finally {
+      setEstimating(false);
+    }
+  }
 
   function setPrixLoyer(typo: string, v: string) {
     const next = { ...prixLoyers, [typo]: v };
@@ -1470,10 +1645,41 @@ function ManualAnalysisSection({
       </div>
 
       {missingRequired.length > 0 ? (
-        <p className="mt-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-300">
-          ⚠ Champs « Infos extraites » obligatoires manquants :{" "}
-          <strong>{missingRequired.join(", ")}</strong>. Complète-les
-          dans la section ci-dessus avant de lancer l&apos;analyse.
+        <div className="mt-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px]">
+          <p className="text-rose-300">
+            ⚠ Obligatoires manquants :{" "}
+            <strong>{missingRequired.join(", ")}</strong>. Complète-les
+            dans la section ci-dessus avant de lancer l&apos;analyse.
+          </p>
+          {missingEstimable.length > 0 ? (
+            <div className="mt-1.5 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void estimateExpenses()}
+                disabled={estimating}
+                className="inline-flex items-center gap-1.5 rounded-md border border-amber-400/50 bg-amber-500/15 px-2 py-1 text-[11px] font-semibold text-amber-200 hover:bg-amber-500/25 disabled:opacity-50"
+                title="Estimer avec l'IA (taxes muni, taxes scol, assurances)"
+              >
+                {estimating ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3 w-3" />
+                )}
+                Estimer avec l&apos;IA : {missingEstimable.join(", ")}
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {missingRequired.length === 0 && missingRecommended.length > 0 ? (
+        <p className="mt-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/60">
+          ℹ Informations recommandées non saisies (l&apos;analyse peut
+          quand même se lancer) :{" "}
+          <strong className="text-white/80">
+            {missingRecommended.join(", ")}
+          </strong>
+          .
         </p>
       ) : null}
 

@@ -58,10 +58,12 @@ type EntrepriseLite = {
 type Ctx = {
   onOpenSidebar: () => void;
   entreprises: EntrepriseLite[];
+  reorderEntreprises: (ids: number[]) => Promise<void>;
 };
 const ctx = createContext<Ctx>({
   onOpenSidebar: () => {},
-  entreprises: []
+  entreprises: [],
+  reorderEntreprises: async () => {}
 });
 
 export function useEntreprisesLayout() {
@@ -244,7 +246,7 @@ export default function EntreprisesLayout({
     (user.volets || []).includes("entreprises") && user.role === "owner";
 
   const NAVIGATION: NavItem[] = [
-    { href: "/entreprises", label: "Vue d'ensemble", icon: Home },
+    { href: "/entreprises", label: "Entreprises", icon: Briefcase },
     { href: "/entreprises/dashboards", label: "Tableaux de bord", icon: LayoutGrid },
     {
       href: "/entreprises/taches",
@@ -338,49 +340,10 @@ export default function EntreprisesLayout({
               ))}
             </SidebarSection>
 
-            <SidebarSection
-              title="Mes entreprises"
-              action={
-                <div className="flex items-center gap-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setAlphaSort((v) => !v)}
-                    title={
-                      alphaSort
-                        ? "Retour à l'ordre manuel"
-                        : "Trier par ordre alphabétique"
-                    }
-                    aria-label="Trier par ordre alphabétique"
-                    className={`rounded p-0.5 transition ${
-                      alphaSort
-                        ? "bg-[var(--qg-bg-alt)] text-[var(--qg-accent)]"
-                        : "text-[var(--qg-text-soft)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
-                    }`}
-                  >
-                    <ArrowDownAZ className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAddEntOpen(true)}
-                    title="Ajouter une entreprise"
-                    className="rounded p-0.5 text-[var(--qg-text-soft)] hover:bg-[var(--qg-bg-alt)] hover:text-[var(--qg-text)]"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              }
-            >
-              <EntrepriseListWithFolder
-                entreprises={entreprises}
-                alphaSort={alphaSort}
-                pathname={pathname}
-                onClose={() => setSidebarOpen(false)}
-                dragId={dragId}
-                setDragId={setDragId}
-                onReorderDrop={handleDragEntreprise}
-                onArchive={(id, target) => void archiveEntreprise(id, target)}
-              />
-            </SidebarSection>
+            {/* La liste « Mes entreprises » était ici. Retirée :
+                trop de bruit dans la sidebar. On accède désormais
+                aux entreprises individuelles via la page
+                /entreprises (lien « Entreprises » ci-dessus). */}
 
             <SidebarSection title="Réglages">
               {REGLAGES.map((item) => (
@@ -429,7 +392,8 @@ export default function EntreprisesLayout({
           <ctx.Provider
             value={{
               onOpenSidebar: () => setSidebarOpen(true),
-              entreprises
+              entreprises,
+              reorderEntreprises
             }}
           >
             <ConfirmProvider>

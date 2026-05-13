@@ -17,8 +17,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import List, Optional
+
+from app.core.config import settings
 
 from fastapi import (
     APIRouter,
@@ -760,4 +763,157 @@ async def run_financial_analysis(
         best_refi_amount=results.best_refi_amount,
         best_refi_program=results.best_refi_program,
         analysis_results=results_dict,
+    )
+
+
+# ─── Estimation IA des dépenses manquantes ─────────────────────────
+
+
+class EstimateExpensesResponse(BaseModel):
+    """Estimations heuristiques (avec IA si disponible) des dépenses
+    d'opération d'un immeuble pour pré-remplir les champs manquants."""
+
+    taxes_municipales: Optional[float] = None
+    taxes_scolaires: Optional[float] = None
+    assurances: Optional[float] = None
+    source: str  # "ai" | "heuristic"
+    note: Optional[str] = None
+
+
+def _heuristic_estimate_expenses(
+    *,
+    asking_price: Optional[float],
+    nb_logements: Optional[int],
+    revenus_bruts: Optional[float],
+    city: Optional[str],
+) -> EstimateExpensesResponse:
+    """Estimation pure-code basée sur des ratios marché Québec usuels.
+    Sert de fallback si Claude est indisponible.
+
+    Ratios appliqués (immeubles à logements Québec, 2024-2025) :
+      - Taxes municipales ≈ 0.75 % du prix d'achat (Montréal+couronne)
+      - Taxes scolaires    ≈ 0.10 % du prix d'achat (Centre de services)
+      - Assurances         ≈ 250 $/logement/an, plancher 1 200 $/an
+    """
+    price = float(asking_price or 0)
+    nb = int(nb_logements or 0)
+    tm = round(price * 0.0075, 2) if price > 0 else None
+    ts = round(price * 0.0010, 2) if price > 0 else None
+    if nb > 0:
+        ass = round(max(1_200.0, nb * 250.0), 2)
+    elif price > 0:
+        ass = round(max(1_200.0, price * 0.0015), 2)
+    else:
+        ass = None
+    return EstimateExpensesResponse(
+        taxes_municipales=tm,
+        taxes_scolaires=ts,
+        assurances=ass,
+        source="heuristic",
+        note=(
+            "Estimations ratios marché Québec : taxes muni 0.75 % du prix, "
+            "taxes scolaires 0.10 %, assurances 250 $/logement (plancher "
+            "1 200 $/an). À valider avec le rôle d'évaluation."
+        ),
+    )
+
+
+async def _ai_estimate_expenses(
+    rec: LeadAnalysis,
+) -> Optional[EstimateExpensesResponse]:
+    """Demande à Claude une estimation des dépenses manquantes en
+    fonction de l'adresse, du prix, du nombre de logements et de
+    l'évaluation municipale. Retourne None si Claude indisponible
+    (le caller fera le fallback heuristique)."""
+    if not settings.anthropic_api_key:
+        return None
+    import anthropic
+
+    prompt = (
+        "Tu es un expert en immobilier locatif Québec. Estime les "
+        "dépenses d'opération annuelles MANQUANTES pour cet immeuble "
+        "(en CAD/an). Retourne UNIQUEMENT un JSON strict avec les "
+        "clés taxes_municipales (float|null), taxes_scolaires "
+        "(float|null), assurances (float|null), note (string).\n\n"
+        "Règles : utilise les barèmes municipaux de la ville fournie "
+        "(Montréal ≈ 0.7-0.85 % du prix, banlieue ≈ 0.6-0.75 %, "
+        "Québec-ville 1 %), taxes scolaires ≈ 0.10-0.13 % du prix, "
+        "assurances ≈ 200-300 $/logement avec plancher 1 200 $. Si une "
+        "info est déjà fournie, ne la remplace pas (retourne null pour "
+        "elle).\n\n"
+        f"Adresse : {rec.address or 'inconnue'}, "
+        f"{rec.city or 'ville inconnue'}\n"
+        f"Prix demandé : {rec.asking_price or 'inconnu'} $\n"
+        f"Nombre de logements : {rec.nb_logements or 'inconnu'}\n"
+        f"Revenus bruts annuels : {rec.revenus_bruts or 'inconnu'} $\n"
+        f"Évaluation municipale : {rec.evaluation_municipale or 'inconnue'} $\n"
+        f"Année construction : {rec.annee_construction or 'inconnue'}\n"
+        "Déjà saisis (ne pas remplacer) : "
+        f"taxes_muni={rec.taxes_municipales}, "
+        f"taxes_scolaires={rec.taxes_scolaires}, "
+        f"assurances={rec.assurances}"
+    )
+
+    try:
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("AI estimate expenses failed: %s", exc)
+        return None
+
+    raw = "\n".join(b.text for b in msg.content if b.type == "text").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```\s*$", "", raw)
+    try:
+        parsed = json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return None
+
+    def _num(v):
+        try:
+            return float(v) if v is not None else None
+        except (ValueError, TypeError):
+            return None
+
+    return EstimateExpensesResponse(
+        taxes_municipales=_num(parsed.get("taxes_municipales")),
+        taxes_scolaires=_num(parsed.get("taxes_scolaires")),
+        assurances=_num(parsed.get("assurances")),
+        source="ai",
+        note=str(parsed.get("note") or "")[:500],
+    )
+
+
+@router.post(
+    "/{lead_id}/estimate-expenses",
+    response_model=EstimateExpensesResponse,
+    summary="Estime taxes muni/scol/assurances manquantes (IA + fallback)",
+)
+async def estimate_expenses(
+    lead_id: int,
+    db: DBSession,
+    user: CurrentUser,
+) -> EstimateExpensesResponse:
+    _require_prospection(user)
+    rec = (
+        await db.execute(
+            select(LeadAnalysis).where(LeadAnalysis.id == lead_id)
+        )
+    ).scalar_one_or_none()
+    if rec is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Lead introuvable.")
+
+    ai = await _ai_estimate_expenses(rec)
+    if ai is not None:
+        return ai
+    return _heuristic_estimate_expenses(
+        asking_price=float(rec.asking_price) if rec.asking_price else None,
+        nb_logements=rec.nb_logements,
+        revenus_bruts=float(rec.revenus_bruts) if rec.revenus_bruts else None,
+        city=rec.city,
     )

@@ -186,15 +186,40 @@ async def _fetch_url_text(url: str) -> str:
         meta_str = "\n".join(f"{k}: {v}" for k, v in meta_tags[:20])
         parts.append(f"[Meta tags]\n{meta_str}")
 
+    # 3b. Titre + headers structurels (h1/h2/h3) — utile sur les sites
+    # qui rendent tout en HTML statique (Astro, Hugo, Jekyll, pmml.ca).
+    title_m = re.search(r"<title[^>]*>([^<]+)</title>", html, flags=re.I)
+    if title_m:
+        parts.append(f"[Titre page]\n{title_m.group(1).strip()}")
+    headers = re.findall(
+        r"<h[1-3][^>]*>([\s\S]{1,300}?)</h[1-3]>", html, flags=re.I
+    )
+    if headers:
+        cleaned = []
+        for h in headers[:30]:
+            h_clean = re.sub(r"<[^>]+>", " ", h)
+            h_clean = re.sub(r"\s+", " ", h_clean).strip()
+            if h_clean and len(h_clean) < 200:
+                cleaned.append(f"- {h_clean}")
+        if cleaned:
+            parts.append("[En-têtes (h1..h3)]\n" + "\n".join(cleaned))
+
     # 4. Texte visible — strip standard, en queue (souvent moins
     # structuré que les blocs JSON ci-dessus mais ajoute du contexte).
     text = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.I)
     text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
+    text = re.sub(r"<!--[\s\S]*?-->", " ", text)
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"&nbsp;", " ", text)
+    text = re.sub(r"&amp;", "&", text)
+    text = re.sub(r"&#x27;", "'", text)
+    text = re.sub(r"&quot;", '"', text)
+    text = re.sub(r"&#?\w+;", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
-    if len(text) > 20_000:
-        text = text[:20_000] + "\n[…tronqué]"
+    # 35k au lieu de 20k pour les pages riches (pmml.ca = 61k de HTML,
+    # ~20k de texte brut après strip).
+    if len(text) > 35_000:
+        text = text[:35_000] + "\n[…tronqué]"
     if text:
         parts.append(f"[Texte visible]\n{text}")
 

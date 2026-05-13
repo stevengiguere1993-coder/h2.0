@@ -3,7 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  ArrowDownAZ,
   ChevronRight,
+  GripVertical,
   Loader2,
   Plus,
   Sparkles,
@@ -94,12 +96,53 @@ function firstName(email?: string): string {
 
 export default function EntreprisesDashboard() {
   const { user } = useCurrentUser();
-  const { entreprises: layoutEntreprises } = useEntreprisesLayout();
+  const {
+    entreprises: layoutEntreprises,
+    reorderEntreprises
+  } = useEntreprisesLayout();
   const [stats, setStats] = useState<StatsOverview | null>(null);
   const [health, setHealth] = useState<EntrepriseHealth[]>([]);
   const [topBriefing, setTopBriefing] = useState<DailyBriefing | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [alphaSort, setAlphaSort] = useState(false);
+  const [dragId, setDragId] = useState<number | null>(null);
+
+  // Ordre des entreprises pour la table : manuel (via DB) ou alpha.
+  const orderedHealth = useMemo(() => {
+    if (health.length === 0) return health;
+    if (alphaSort) {
+      return [...health].sort((a, b) =>
+        (a.name || "").localeCompare(b.name || "", "fr", {
+          sensitivity: "base"
+        })
+      );
+    }
+    // Ordre manuel : on suit l'ordre de layoutEntreprises (qui reflète
+    // l'ordre persisté en DB).
+    const indexById = new Map(
+      layoutEntreprises.map((e, i) => [e.id, i] as const)
+    );
+    return [...health].sort((a, b) => {
+      const ia = indexById.get(a.entreprise_id) ?? 9999;
+      const ib = indexById.get(b.entreprise_id) ?? 9999;
+      return ia - ib;
+    });
+  }, [health, alphaSort, layoutEntreprises]);
+
+  function handleDrop(targetId: number) {
+    const did = dragId;
+    setDragId(null);
+    if (did == null || did === targetId) return;
+    // Reconstruit l'ordre demandé en se basant sur layoutEntreprises.
+    const ids = layoutEntreprises.map((e) => e.id);
+    const fromIdx = ids.indexOf(did);
+    const toIdx = ids.indexOf(targetId);
+    if (fromIdx < 0 || toIdx < 0) return;
+    ids.splice(fromIdx, 1);
+    ids.splice(toIdx, 0, did);
+    void reorderEntreprises(ids);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -278,26 +321,51 @@ export default function EntreprisesDashboard() {
               border: "1px solid var(--qg-border)"
             }}
           >
-            <div className="flex items-baseline justify-between px-5 pt-5">
+            <div className="flex items-center justify-between px-5 pt-5">
               <h2
                 className="text-[18px] font-bold text-[var(--qg-text)]"
                 style={{
                   fontFamily: "var(--font-fraunces, Georgia, serif)"
                 }}
               >
-                État des{" "}
+                Mes{" "}
                 <span className="italic" style={{ color: "var(--qg-accent)" }}>
                   entreprises
                 </span>
               </h2>
-              <Link
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                href={"/entreprises/taches" as any}
-                className="text-[11px] text-[var(--qg-text-soft)] hover:text-[var(--qg-accent)]"
-              >
-                Voir tout →
-              </Link>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAlphaSort((v) => !v)}
+                  title={
+                    alphaSort
+                      ? "Retour à l'ordre manuel (drag & drop)"
+                      : "Trier par ordre alphabétique"
+                  }
+                  className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold transition ${
+                    alphaSort
+                      ? "border-[var(--qg-accent)] bg-[var(--qg-bg-alt)] text-[var(--qg-accent)]"
+                      : "border-[var(--qg-border)] text-[var(--qg-text-soft)] hover:bg-[var(--qg-bg-alt)]"
+                  }`}
+                >
+                  <ArrowDownAZ className="h-3.5 w-3.5" />
+                  {alphaSort ? "Tri A–Z" : "Trier A–Z"}
+                </button>
+                <Link
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  href={"/entreprises/taches" as any}
+                  className="text-[11px] text-[var(--qg-text-soft)] hover:text-[var(--qg-accent)]"
+                >
+                  Voir tout →
+                </Link>
+              </div>
             </div>
+            {!alphaSort ? (
+              <p className="px-5 pt-1 text-[10px] text-[var(--qg-text-soft)]">
+                Glisse-déplace une ligne pour réordonner. Cliquer A–Z
+                pour passer en tri alphabétique.
+              </p>
+            ) : null}
 
             {loading ? (
               <div className="flex min-h-[200px] items-center justify-center">
@@ -312,6 +380,9 @@ export default function EntreprisesDashboard() {
                     className="text-[10px] uppercase tracking-wider text-[var(--qg-text-soft)]"
                     style={{ borderBottom: "1px solid var(--qg-border)" }}
                   >
+                    {!alphaSort ? (
+                      <th className="w-6 px-2 py-2.5"></th>
+                    ) : null}
                     <th className="px-5 py-2.5 text-left font-semibold">
                       Entreprise · Domaine
                     </th>
@@ -325,8 +396,17 @@ export default function EntreprisesDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {health.map((e) => (
-                    <EntrepriseRow key={e.entreprise_id} e={e} />
+                  {orderedHealth.map((e) => (
+                    <EntrepriseRow
+                      key={e.entreprise_id}
+                      e={e}
+                      draggable={!alphaSort}
+                      isDragging={dragId === e.entreprise_id}
+                      onDragStart={() => setDragId(e.entreprise_id)}
+                      onDragEnd={() => setDragId(null)}
+                      onDragOver={(ev) => ev.preventDefault()}
+                      onDrop={() => handleDrop(e.entreprise_id)}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -428,7 +508,23 @@ function KpiCard({
   );
 }
 
-function EntrepriseRow({ e }: { e: EntrepriseHealth }) {
+function EntrepriseRow({
+  e,
+  draggable,
+  isDragging,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop
+}: {
+  e: EntrepriseHealth;
+  draggable?: boolean;
+  isDragging?: boolean;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+  onDragOver?: (ev: React.DragEvent) => void;
+  onDrop?: () => void;
+}) {
   const initials = e.name
     .split(" ")
     .map((w) => w[0])
@@ -445,9 +541,21 @@ function EntrepriseRow({ e }: { e: EntrepriseHealth }) {
   const overdueAlert = e.taches_overdue > 0;
   return (
     <tr
-      className="text-[13px] hover:bg-[var(--qg-bg-alt)]"
+      draggable={!!draggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      className={`text-[13px] hover:bg-[var(--qg-bg-alt)] ${
+        isDragging ? "opacity-40" : ""
+      } ${draggable ? "cursor-grab active:cursor-grabbing" : ""}`}
       style={{ borderBottom: "1px solid var(--qg-border-soft)" }}
     >
+      {draggable ? (
+        <td className="w-6 px-2 py-3 text-center text-[var(--qg-text-soft)]">
+          <GripVertical className="inline-block h-3.5 w-3.5" />
+        </td>
+      ) : null}
       <td className="px-5 py-3">
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
