@@ -394,6 +394,11 @@ async def init_db() -> None:
             ("kratos_problems", "problem_text", "TEXT"),
             ("kratos_problems", "solution_plan", "TEXT"),
             ("kratos_problems", "solution_steps_json", "TEXT"),
+            (
+                "lead_analyses",
+                "frais_demarrage_financables_json",
+                "TEXT",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

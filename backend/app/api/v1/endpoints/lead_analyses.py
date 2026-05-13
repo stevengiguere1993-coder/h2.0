@@ -135,6 +135,7 @@ class LeadAnalysisRead(BaseModel):
     mdf_preteur_b: Optional[float] = None
     mdf_preteur_b_pct: Optional[float] = None
     frais_demarrage_overrides_json: Optional[str] = None
+    frais_demarrage_financables_json: Optional[str] = None
     notes: Optional[str] = None
     converted_to_lead_id: Optional[int] = None
 
@@ -215,6 +216,7 @@ class LeadAnalysisUpdate(BaseModel):
 
     mdf_preteur_b_pct: Optional[float] = None
     frais_demarrage_overrides_json: Optional[str] = None
+    frais_demarrage_financables_json: Optional[str] = None
 
     notes: Optional[str] = None
 
@@ -296,6 +298,21 @@ def _map_extracted_to_lead(data: dict) -> dict:
 # Défauts appliqués à la création d'une fiche `LeadAnalysis`
 # pour pré-remplir les champs manuels d'analyse financière.
 # Modifiables ensuite par l'utilisateur dans la fiche.
+def _parse_financables(raw: Optional[str]) -> list[str]:
+    """Décode la liste JSON des clés finançables. Si invalide ou
+    None, retourne les défauts (rapport efficacité, dev, travaux)."""
+    DEFAULT = ["rapport_efficacite", "frais_developpement", "frais_travaux"]
+    if not raw:
+        return DEFAULT
+    try:
+        v = json.loads(raw)
+        if isinstance(v, list):
+            return [str(x) for x in v if isinstance(x, str)]
+    except Exception:  # noqa: BLE001
+        pass
+    return DEFAULT
+
+
 DEFAULTS_NEW_ANALYSIS: dict = {
     "nb_logements_ajoutes": 0,
     "nb_thermopompes_ajoutees": 0,
@@ -307,6 +324,15 @@ DEFAULTS_NEW_ANALYSIS: dict = {
     "ajout_wifi": True,
     "loyers_max_abordabilite_json": json.dumps({"abordable": 1090}),
     "mdf_preteur_b_pct": 25.0,
+    # Frais finançables par défaut (modifiable par l'utilisateur) :
+    # rapport d'efficacité énergétique, frais de développement,
+    # travaux estimés. Les autres postes (courtier, notaire, etc.)
+    # sont payés 100 % cash sauf si on les coche.
+    "frais_demarrage_financables_json": json.dumps([
+        "rapport_efficacite",
+        "frais_developpement",
+        "frais_travaux",
+    ]),
 }
 
 
@@ -743,6 +769,9 @@ async def run_financial_analysis(
             else 0.25
         ),
         frais_demarrage_overrides=frais_overrides,
+        frais_demarrage_financables=_parse_financables(
+            rec.frais_demarrage_financables_json
+        ),
     )
 
     use_aph = loyer_abord > 0 and inputs.nombre_logements > 0

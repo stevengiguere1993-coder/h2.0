@@ -882,6 +882,7 @@ type LeadDetail = Lead & {
   // MDF prêteur B configurable + overrides frais démarrage
   mdf_preteur_b_pct: number | null;
   frais_demarrage_overrides_json: string | null;
+  frais_demarrage_financables_json: string | null;
   // Résultats analyse
   analysis_results_json: string | null;
   attachments: Array<{
@@ -1332,12 +1333,16 @@ function LeadDetailModal({
                 <AnalysisResultsTable
                   resultsJson={data.analysis_results_json}
                   overridesJson={data.frais_demarrage_overrides_json}
+                  financablesJson={data.frais_demarrage_financables_json}
                   mdfPct={data.mdf_preteur_b_pct ?? 25}
                   prixAchat={data.asking_price ?? 0}
                   fraisDemarrageTotalDb={null}
                   mdfPreteurBDb={data.mdf_preteur_b ?? null}
                   onPatchOverrides={(j) =>
                     patchField("frais_demarrage_overrides_json", j)
+                  }
+                  onPatchFinancables={(j) =>
+                    patchField("frais_demarrage_financables_json", j)
                   }
                 />
               ) : null}
@@ -2179,19 +2184,23 @@ type AnalysisResults = {
 function AnalysisResultsTable({
   resultsJson,
   overridesJson,
+  financablesJson,
   mdfPct,
   prixAchat,
   fraisDemarrageTotalDb,
   mdfPreteurBDb,
-  onPatchOverrides
+  onPatchOverrides,
+  onPatchFinancables
 }: {
   resultsJson: string;
   overridesJson?: string | null;
+  financablesJson?: string | null;
   mdfPct?: number;
   prixAchat?: number;
   fraisDemarrageTotalDb?: number | null;
   mdfPreteurBDb?: number | null;
   onPatchOverrides?: (json: string) => void;
+  onPatchFinancables?: (json: string) => void;
 }) {
   const data = useMemo<AnalysisResults | null>(() => {
     try {
@@ -2369,10 +2378,12 @@ function AnalysisResultsTable({
       <FraisDemarrageBreakdownPanel
         data={data}
         overridesJson={overridesJson}
+        financablesJson={financablesJson}
         mdfPct={mdfPct}
         prixAchat={prixAchat}
         mdfPreteurBDb={mdfPreteurBDb}
         onPatchOverrides={onPatchOverrides}
+        onPatchFinancables={onPatchFinancables}
       />
     </section>
   );
@@ -2398,26 +2409,38 @@ const FRAIS_LABELS: Array<[keyof FraisDemarrageBreakdown, string]> = [
   ["revenus_nets_pendant_projet", "Revenus nets pendant projet (négatif)"]
 ];
 
+const DEFAULT_FINANCABLES = [
+  "rapport_efficacite",
+  "frais_developpement",
+  "frais_travaux"
+];
+
 function FraisDemarrageBreakdownPanel({
   data,
   overridesJson,
+  financablesJson,
   mdfPct,
   prixAchat,
   mdfPreteurBDb,
-  onPatchOverrides
+  onPatchOverrides,
+  onPatchFinancables
 }: {
   data: AnalysisResults;
   overridesJson?: string | null;
+  financablesJson?: string | null;
   mdfPct?: number;
   prixAchat?: number;
   mdfPreteurBDb?: number | null;
   onPatchOverrides?: (json: string) => void;
+  onPatchFinancables?: (json: string) => void;
 }) {
   const frais = data.frais_demarrage;
   const mdfPctFinal = mdfPct ?? data.mdf_preteur_b_pct ?? 25;
+  const mdfPctNumeric =
+    mdfPctFinal > 1 ? mdfPctFinal / 100 : mdfPctFinal; // tolère fraction ou %
   const prixFinal = prixAchat ?? data.prix_achat ?? 0;
   const mdfPctValue =
-    data.mdf_pct_prix_achat ?? data.mdf_25pct_prix_achat ?? (mdfPctFinal / 100) * prixFinal;
+    data.mdf_pct_prix_achat ?? data.mdf_25pct_prix_achat ?? mdfPctNumeric * prixFinal;
   const mdfTotalStored = mdfPreteurBDb ?? data.mdf_preteur_b ?? null;
 
   const overrides = useMemo<Record<string, number>>(() => {
@@ -2431,6 +2454,28 @@ function FraisDemarrageBreakdownPanel({
     return {};
   }, [overridesJson]);
 
+  // Set des clés finançables (= payées seulement à mdfPct % en cash).
+  // Si le JSON est invalide ou absent → défauts (rapport eff, dev,
+  // travaux).
+  const financables = useMemo<Set<string>>(() => {
+    if (financablesJson) {
+      try {
+        const j = JSON.parse(financablesJson);
+        if (Array.isArray(j)) return new Set(j.map((x) => String(x)));
+      } catch {
+        /* ignore */
+      }
+    }
+    return new Set(DEFAULT_FINANCABLES);
+  }, [financablesJson]);
+
+  function toggleFinancable(key: string) {
+    const next = new Set(financables);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    onPatchFinancables?.(JSON.stringify(Array.from(next)));
+  }
+
   function setOverride(key: string, val: number | null) {
     const next = { ...overrides };
     if (val == null || !Number.isFinite(val)) {
@@ -2441,18 +2486,25 @@ function FraisDemarrageBreakdownPanel({
     onPatchOverrides?.(JSON.stringify(next));
   }
 
-  // Calcule le sous-total local (en appliquant les overrides) pour
-  // afficher le bon total même si le moteur n'a pas encore re-roulé
-  // après une saisie.
-  let subTotal = 0;
+  // Calcule le sous-total local (en appliquant les overrides ET la
+  // logique finançable : un poste coché ne compte que mdfPct % en
+  // cash). Affiche le bon total même si le moteur n'a pas re-roulé.
+  let subTotalCash = 0;
+  let subTotalFinanced = 0;
   if (frais) {
     for (const [k] of FRAIS_LABELS) {
       const v =
         overrides[k] != null ? Number(overrides[k]) : Number(frais[k] || 0);
-      if (Number.isFinite(v)) subTotal += v;
+      if (!Number.isFinite(v)) continue;
+      if (financables.has(k)) {
+        subTotalCash += v * mdfPctNumeric;
+        subTotalFinanced += v * (1 - mdfPctNumeric);
+      } else {
+        subTotalCash += v;
+      }
     }
   }
-  const totalMdfLocal = mdfPctValue + subTotal;
+  const totalMdfLocal = mdfPctValue + subTotalCash;
 
   if (!frais) return null;
 
@@ -2462,15 +2514,26 @@ function FraisDemarrageBreakdownPanel({
         Composition de la MDF avec prêteur B
       </h4>
       <p className="mt-0.5 text-[10px] text-white/50">
-        Total à sortir en cash = {mdfPctFinal} % du prix d&apos;achat + tous
-        les frais de démarrage. Tu peux overrider chaque ligne en cliquant
-        sur sa valeur. Re-lance l&apos;analyse pour persister.
+        Total à sortir en cash = {mdfPctFinal} % du prix d&apos;achat +
+        frais non finançables + {mdfPctFinal} % des frais finançables.
+        Coche un poste pour le rendre finançable par le prêteur B
+        (par défaut : rapport efficacité, frais développement, travaux).
       </p>
 
       <table className="mt-3 w-full text-[11px]">
+        <thead>
+          <tr className="text-[9px] uppercase tracking-wider text-white/40">
+            <th className="px-2 py-1 text-left">Poste</th>
+            <th className="px-2 py-1 text-right">Valeur</th>
+            <th className="w-16 px-2 py-1 text-center" title="Coché = ce poste est financé par le prêteur B, tu ne paies que le pct en cash">
+              Finançable
+            </th>
+            <th className="px-2 py-1 text-right">Cash à sortir</th>
+          </tr>
+        </thead>
         <tbody>
           <tr className="border-t border-amber-400/20">
-            <td className="px-2 py-1 font-semibold text-amber-200">
+            <td className="px-2 py-1 font-semibold text-amber-200" colSpan={3}>
               {mdfPctFinal} % du prix d&apos;achat
               {prixFinal > 0 ? (
                 <span className="ml-1 text-white/50">
@@ -2483,7 +2546,7 @@ function FraisDemarrageBreakdownPanel({
             </td>
           </tr>
           <tr className="border-t border-amber-400/20">
-            <td className="px-2 py-1 text-white/50" colSpan={2}>
+            <td className="px-2 py-1 text-white/50" colSpan={4}>
               <span className="text-[10px] uppercase tracking-wider">
                 Frais de démarrage
               </span>
@@ -2496,6 +2559,10 @@ function FraisDemarrageBreakdownPanel({
               ? Number(overrides[key])
               : computed;
             if (!overridden && !computed) return null;
+            const isFinancable = financables.has(key);
+            const cashForRow = isFinancable
+              ? displayVal * mdfPctNumeric
+              : displayVal;
             return (
               <tr key={key} className="border-t border-brand-800/60">
                 <td className="px-2 py-1 pl-4 text-white/60">
@@ -2521,19 +2588,58 @@ function FraisDemarrageBreakdownPanel({
                     }
                   />
                 </td>
+                <td className="px-2 py-1 text-center">
+                  <input
+                    type="checkbox"
+                    checked={isFinancable}
+                    onChange={() => toggleFinancable(key)}
+                    className="h-3.5 w-3.5 cursor-pointer accent-amber-400"
+                    title={
+                      isFinancable
+                        ? `Finançable — payé seulement à ${mdfPctFinal} % en cash`
+                        : "Non finançable — payé 100 % en cash"
+                    }
+                  />
+                </td>
+                <td
+                  className={`px-2 py-1 text-right font-mono tabular-nums ${
+                    isFinancable ? "text-emerald-300" : "text-white/80"
+                  }`}
+                >
+                  {fmtMoney(cashForRow)}
+                </td>
               </tr>
             );
           })}
           <tr className="border-t border-amber-400/40 bg-amber-500/5">
-            <td className="px-2 py-1 pl-4 text-amber-200">
-              Sous-total frais de démarrage
+            <td
+              className="px-2 py-1 pl-4 text-amber-200"
+              colSpan={3}
+            >
+              Sous-total frais de démarrage (cash)
             </td>
             <td className="px-2 py-1 text-right font-mono tabular-nums font-semibold text-amber-200">
-              {fmtMoney(subTotal)}
+              {fmtMoney(subTotalCash)}
             </td>
           </tr>
+          {subTotalFinanced > 0.5 ? (
+            <tr className="bg-emerald-500/5">
+              <td
+                className="px-2 py-1 pl-4 text-[10px] text-emerald-300"
+                colSpan={3}
+              >
+                dont financé par prêteur B
+              </td>
+              <td className="px-2 py-1 text-right font-mono tabular-nums text-[10px] text-emerald-300">
+                +{fmtMoney(subTotalFinanced)}
+              </td>
+            </tr>
+          ) : null}
           <tr className="border-t-2 border-amber-400/60 bg-amber-500/10">
-            <td className="px-2 py-1.5 font-bold text-amber-200">
+            <td
+              className="px-2 py-1.5 font-bold text-amber-200"
+              colSpan={3}
+            >
               Total — MDF avec prêteur B
               {mdfTotalStored != null &&
               Math.abs((mdfTotalStored || 0) - totalMdfLocal) > 1 ? (

@@ -241,6 +241,13 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
     frais_demarrage_overrides_json: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True
     )
+    # Liste JSON des clés de frais de démarrage FINANÇABLES par
+    # prêteur B (ex. ["rapport_efficacite", "frais_developpement",
+    # "frais_travaux"]). Pour ces postes, on paie seulement
+    # `mdf_preteur_b_pct` en cash, le reste est ajouté au prêt.
+    frais_demarrage_financables_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
 
     # Notes internes (champ libre admin).
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
