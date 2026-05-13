@@ -29,7 +29,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -236,12 +236,148 @@ async def _fetch_url_text(url: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) > 35_000:
         text = text[:35_000] + "\n[…tronqué]"
+
+    # 5. Pré-extraction par regex côté Python — on identifie les
+    # patterns canoniques (prix, typologie, évaluation, année,
+    # courtier) directement dans le texte strippé et on les injecte
+    # en TÊTE du prompt sous forme de pré-données. Donne un coup de
+    # pouce à Claude qui peut alors traduire en JSON sans deviner.
     if text:
-        # Insère APRÈS la première ligne (l'URL source) pour le
-        # rendre prioritaire.
-        parts.insert(1, f"[Texte de la page]\n{text}")
+        pre_extracted = _pre_extract_canonical_fields(text)
+        if pre_extracted:
+            parts.insert(1, "[Données identifiées par regex]\n" + pre_extracted)
+        parts.insert(2, f"[Texte de la page]\n{text}")
 
     return "\n\n".join(parts)
+
+
+def _pre_extract_canonical_fields(text: str) -> str:
+    """Cherche des patterns canoniques (prix demandé, X logements,
+    évaluation municipale, année construction, X x typo) dans le
+    texte et retourne un bloc lisible pour Claude. Best-effort —
+    on ne fournit que ce qu'on trouve avec une confiance raisonnable."""
+    lines: List[str] = []
+
+    # Prix demandé : « Prix demandé : 3 560 000 $ » ou « Prix demandé 3 560 000 $ »
+    m = re.search(
+        r"Prix demand[eé][^0-9$]{0,30}?([\d\s]{3,15})\s*\$",
+        text,
+        flags=re.I,
+    )
+    if m:
+        cleaned = re.sub(r"\s", "", m.group(1))
+        if cleaned.isdigit():
+            lines.append(f"Prix demandé : {int(cleaned)} CAD")
+
+    # Évaluation municipale totale
+    m = re.search(
+        r"[ÉE]valuation municipale[^0-9$]{0,40}?([\d\s]{3,15})\s*\$",
+        text,
+        flags=re.I,
+    )
+    if m:
+        cleaned = re.sub(r"\s", "", m.group(1))
+        if cleaned.isdigit():
+            lines.append(f"Évaluation municipale : {int(cleaned)} CAD")
+
+    # Évaluation terrain
+    m = re.search(
+        r"[ÉE]valuation municipale du terrain[^0-9$]{0,40}?([\d\s]{3,15})\s*\$",
+        text,
+        flags=re.I,
+    )
+    if m:
+        cleaned = re.sub(r"\s", "", m.group(1))
+        if cleaned.isdigit():
+            lines.append(f"Évaluation municipale terrain : {int(cleaned)} CAD")
+
+    # Évaluation bâtiment
+    m = re.search(
+        r"[ÉE]valuation municipale du b[aâ]timent[^0-9$]{0,40}?([\d\s]{3,15})\s*\$",
+        text,
+        flags=re.I,
+    )
+    if m:
+        cleaned = re.sub(r"\s", "", m.group(1))
+        if cleaned.isdigit():
+            lines.append(f"Évaluation municipale bâtiment : {int(cleaned)} CAD")
+
+    # Année de construction
+    m = re.search(
+        r"Ann[eé]e\s+de\s+construction[^\d]{0,30}?(\d{4})",
+        text,
+        flags=re.I,
+    )
+    if m:
+        lines.append(f"Année de construction : {m.group(1)}")
+
+    # Nombre de logements / unités
+    m = re.search(
+        r"(?:Nombre d['e]\s*(?:logements|unit[eé]s)|(?:\b|[^\d])(\d{1,3})\s*(?:logements|Unit[eé]s))",
+        text,
+        flags=re.I,
+    )
+    if m:
+        # Cas 2 : « 12 Unités »
+        if m.group(1):
+            lines.append(f"Nombre de logements : {m.group(1)}")
+        else:
+            # Cas 1 : « Nombre de logements 12 » — refaire le match
+            m2 = re.search(
+                r"Nombre d['e]\s*(?:logements|unit[eé]s)[^\d]{0,15}?(\d{1,3})",
+                text,
+                flags=re.I,
+            )
+            if m2:
+                lines.append(f"Nombre de logements : {m2.group(1)}")
+
+    # Typologie : on EXIGE le pattern X.5 ou X ½ (caractéristique
+    # des typologies multilogements québécois : 2.5, 3.5, 4.5, 5.5,
+    # 6.5). Évite les faux positifs (« 2 x 6 unités », « 1 x 1 dans
+    # un numéro de cadastre », etc.).
+    typo_matches = re.findall(
+        r"(\d{1,2})\s*[xX×]\s*(\d\s*(?:\.\s*5|½))",
+        text,
+    )
+    typo_clean: Dict[str, int] = {}
+    for qty, typ in typo_matches:
+        # « 5 ½ » → « 5.5 », « 5.5 » → « 5.5 »
+        t = typ.strip().replace("½", ".5")
+        t = re.sub(r"\s+", "", t)
+        try:
+            qn = int(qty)
+            # On garde le MAX (pas la somme) : le texte cite souvent
+            # plusieurs fois la même typologie (description + tableau).
+            typo_clean[t] = max(typo_clean.get(t, 0), qn)
+        except ValueError:
+            pass
+    if typo_clean:
+        lines.append(
+            "Typologie identifiée : "
+            + " + ".join(f"{q}×{t}" for t, q in typo_clean.items())
+        )
+
+    # Nombre de stationnements
+    m = re.search(
+        r"Nombre\s+de\s+stationnements[^\d]{0,15}?(\d{1,3})",
+        text,
+        flags=re.I,
+    )
+    if m:
+        lines.append(f"Nombre de stationnements : {m.group(1)}")
+
+    # Adresse : best-effort sur les patterns « 3715-3737 Rue X » ou
+    # « X-Y Rue Name » courants dans le titre/h1.
+    m = re.search(
+        r"(\d{1,5}\s*-\s*\d{1,5}\s+[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\.\-' ]{2,50})",
+        text,
+    )
+    if m:
+        addr = m.group(1).strip()
+        if len(addr) < 100:
+            lines.append(f"Adresse possible : {addr}")
+
+    return "\n".join(lines)
 
 
 def _build_content_blocks(
