@@ -96,6 +96,11 @@ from app.models.kratos_message import (  # noqa: F401
     KratosMessage,
     KratosMessageStatus,
 )
+from app.models.kratos_problem import (  # noqa: F401
+    KratosProblem,
+    KratosProblemSeverity,
+    KratosProblemStatus,
+)
 from app.models.leave_request import LeaveRequest, LeaveStatus  # noqa: F401
 from app.models.measurement import MeasurementSnapshot
 from app.models.measurement_photo import MeasurementPhoto
