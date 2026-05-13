@@ -562,6 +562,7 @@ export default function AnalysesLeadsPage() {
                         onDragStart={() => setDragId(l.id)}
                         onDragEnd={() => setDragId(null)}
                         onView={() => setDetailId(l.id)}
+                        onChangeStatus={(s) => void moveLead(l.id, s)}
                         onDelete={() =>
                           deleteLead(l.id, l.address || `Lead #${l.id}`)
                         }
@@ -607,6 +608,7 @@ function LeadCard({
   onDragStart,
   onDragEnd,
   onView,
+  onChangeStatus,
   onDelete,
   onConvert
 }: {
@@ -615,6 +617,7 @@ function LeadCard({
   onDragStart: () => void;
   onDragEnd: () => void;
   onView: () => void;
+  onChangeStatus: (s: Lead["status"]) => void;
   onDelete: () => void;
   onConvert: () => void;
 }) {
@@ -676,6 +679,20 @@ function LeadCard({
           MDF prêteur B : <span className="font-mono">{fmtMoney(lead.mdf_preteur_b)}</span>
         </p>
       ) : null}
+      {/* Sélecteur de statut — change rapide sans drag */}
+      <select
+        value={lead.status}
+        onClick={(e) => e.stopPropagation()}
+        onChange={(e) => onChangeStatus(e.target.value as Lead["status"])}
+        className="mt-1.5 w-full rounded-md border border-brand-800 bg-brand-950 px-1.5 py-0.5 text-[10px] text-white/80 focus:border-accent-500 focus:outline-none"
+        title="Changer le statut"
+      >
+        {COLUMNS.map((c) => (
+          <option key={c.key} value={c.key}>
+            {c.label}
+          </option>
+        ))}
+      </select>
       <div className="mt-2 flex flex-wrap items-center gap-1">
         <button
           type="button"
@@ -1202,6 +1219,38 @@ function LeadDetailModal({
                   placeholder="Tes notes privées sur ce lead"
                   className="input mt-2 text-xs"
                 />
+              </section>
+
+              {/* Sélecteur de statut — dernier item de la fiche */}
+              <section className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+                <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+                  Statut du lead
+                </h3>
+                <p className="mt-1 text-[10px] text-white/50">
+                  Change la colonne du kanban depuis ici aussi.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {COLUMNS.map((c) => {
+                    const active = data.status === c.key;
+                    return (
+                      <button
+                        key={c.key}
+                        type="button"
+                        onClick={() => patchField("status", c.key)}
+                        className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-semibold transition ${
+                          active
+                            ? "border-accent-500 bg-accent-500/15 text-accent-300"
+                            : "border-brand-800 bg-brand-950 text-white/60 hover:border-accent-500/40 hover:text-white"
+                        }`}
+                      >
+                        <span
+                          className={`h-1.5 w-1.5 rounded-full ${c.dot}`}
+                        />
+                        {c.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </section>
             </div>
           )}
@@ -1958,6 +2007,15 @@ function AnalysisResultsTable({
     ["SCHL Abord+Eff (100 pts)", data.scenarios.refi_aph_100]
   ];
 
+  // Détecte si les inputs LIVE divergent du snapshot JSON
+  // (mdfPct ou pourcentage de la MDF prêteur B). Si oui, on affiche
+  // un bandeau « Re-lancer l'analyse » pour avertir l'utilisateur.
+  const jsonPct = data.mdf_preteur_b_pct;
+  const jsonPctPercent = jsonPct != null && jsonPct < 1 ? jsonPct * 100 : jsonPct;
+  const livePct = mdfPct ?? 25;
+  const inputsChanged =
+    jsonPctPercent != null && Math.abs(jsonPctPercent - livePct) > 0.01;
+
   return (
     <section className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1980,9 +2038,17 @@ function AnalysisResultsTable({
           : ""}
       </p>
 
-      {/* MDF avec prêteur B — 25 % du prix d'achat + frais
-          démarrage. Plus simple à comprendre que le MDF nécessaire
-          basé sur la valeur économique retenue. */}
+      {inputsChanged ? (
+        <div className="mt-2 rounded-lg border border-amber-400/60 bg-amber-500/15 px-3 py-2 text-[11px] text-amber-200">
+          ⚠ Les inputs ont changé depuis la dernière analyse
+          (ex. MDF prêteur B : {jsonPctPercent}% → {livePct}%).{" "}
+          <strong>Relance l&apos;analyse</strong> pour mettre à jour
+          les résultats ci-dessous.
+        </div>
+      ) : null}
+
+      {/* MDF avec prêteur B — X % du prix d'achat + frais
+          démarrage. X paramétrable (défaut 25 %, parfois 35 %). */}
       {data.mdf_preteur_b != null ? (
         <div className="mt-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2">
           <p className="text-[10px] uppercase tracking-wider text-amber-300">
@@ -1992,7 +2058,16 @@ function AnalysisResultsTable({
             {fmtMoney(data.mdf_preteur_b)}
           </p>
           <p className="text-[10px] text-white/50">
-            25 % × prix d&apos;achat + frais démarrage
+            {(() => {
+              // Priorité au prop `mdfPct` (live depuis la DB).
+              // Sinon valeur figée dans le JSON d'analyse.
+              const liveOrJson = mdfPct ?? data.mdf_preteur_b_pct ?? 25;
+              const pctDisplay =
+                liveOrJson < 1
+                  ? (liveOrJson * 100).toFixed(0)
+                  : liveOrJson.toFixed(0);
+              return `${pctDisplay} % × prix d'achat + frais démarrage`;
+            })()}
           </p>
         </div>
       ) : null}

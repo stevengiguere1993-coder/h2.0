@@ -185,14 +185,25 @@ def compute_typology_aggregates(
     if nb_total <= 0:
         return TypologyAggregates(0.0, 0, 0, 0.0)
 
-    # H13 = moyenne pondérée des loyers (total revenus / nb)
+    # H13 = moyenne pondérée des loyers.
+    # On ne divise que par les unités QUI ONT UN PRIX SAISI — sinon
+    # les unités sans prix font baisser artificiellement la moyenne
+    # (cas : utilisateur saisit le prix pour 8 × 4.5 mais oublie
+    # 4 × 5.5 → la moyenne tombait à 16800/12 = 1400 au lieu de
+    # 16800/8 = 2100). Si TOUTES les typos ont un prix, le résultat
+    # est strictement identique à total/nb_total.
     total_loyers = 0.0
+    nb_with_price = 0
     for typo, qty in typologie.items():
         if qty <= 0:
             continue
         prix = float(typologie_prix.get(typo, 0) or 0)
-        total_loyers += qty * prix
-    h13 = total_loyers / nb_total if nb_total > 0 else 0.0
+        if prix > 0:
+            total_loyers += qty * prix
+            nb_with_price += qty
+    h13 = (
+        total_loyers / nb_with_price if nb_with_price > 0 else 0.0
+    )
 
     # APH SELECT : nombre abordables = ceil(40 % × total)
     nb_abordables = math.ceil(0.40 * nb_total)
