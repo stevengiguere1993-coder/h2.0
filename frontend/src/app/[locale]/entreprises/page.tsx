@@ -170,16 +170,40 @@ export default function EntreprisesDashboard() {
         setHealth(h);
         setStats(s);
 
-        // Premier briefing dispo : on prend l'entreprise avec le
-        // health_score le plus bas (donc la plus à risque) en
-        // priorité ; sinon la première.
-        const sorted = [...h].sort(
-          (a, b) => a.health_score - b.health_score
-        );
-        const target = sorted[0];
-        if (target) {
+        // Briefing du jour : si une entreprise est marquée comme
+        // « mère » du groupe (is_parent_company), son briefing
+        // couvre toutes les entreprises actives → on l'affiche en
+        // priorité. Sinon : on prend l'entreprise avec le score de
+        // santé le plus bas (la plus à risque) en fallback.
+        let targetId: number | null = null;
+        try {
           const r = await authedFetch(
-            `/api/v1/entreprises/${target.entreprise_id}/daily-pulse`
+            "/api/v1/entreprises?limit=200"
+          );
+          if (r.ok) {
+            const all = (await r.json()) as Array<{
+              id: number;
+              is_parent_company?: boolean;
+              is_active?: boolean;
+            }>;
+            const parent = all.find(
+              (x) => x.is_parent_company && x.is_active !== false
+            );
+            if (parent) targetId = parent.id;
+          }
+        } catch {
+          /* fallback below */
+        }
+        if (targetId == null) {
+          const sorted = [...h].sort(
+            (a, b) => a.health_score - b.health_score
+          );
+          const target = sorted[0];
+          if (target) targetId = target.entreprise_id;
+        }
+        if (targetId != null) {
+          const r = await authedFetch(
+            `/api/v1/entreprises/${targetId}/daily-pulse`
           );
           if (!cancelled && r.ok) {
             const data = (await r.json()) as DailyBriefing | null;
@@ -273,6 +297,7 @@ export default function EntreprisesDashboard() {
                 : "—"
             }
             tone="info"
+            href="/entreprises/taches"
           />
           <KpiCard
             label="Urgentes · 7 prochains jours"
@@ -287,6 +312,7 @@ export default function EntreprisesDashboard() {
                 : "Aucune urgence"
             }
             tone={stats && stats.taches_urgent > 0 ? "warning" : "muted"}
+            href="/entreprises/taches?filter=urgent"
           />
           <KpiCard
             label="Terminées · 30 derniers jours"
@@ -297,6 +323,7 @@ export default function EntreprisesDashboard() {
             }
             sub="Productivité"
             tone="success"
+            href="/entreprises/taches?filter=done"
           />
           <KpiCard
             label="Score moyen · Tâches ouvertes"
@@ -309,6 +336,7 @@ export default function EntreprisesDashboard() {
             }
             sub="ICE × urgence"
             tone="lime"
+            href="/entreprises/taches"
           />
         </section>
 
@@ -462,12 +490,15 @@ function KpiCard({
   label,
   value,
   sub,
-  tone
+  tone,
+  href
 }: {
   label: string;
   value: string;
   sub: string;
   tone: "info" | "warning" | "success" | "muted" | "lime";
+  /** Si défini, la carte devient cliquable (Link) → page filtrée. */
+  href?: string;
 }) {
   const toneColor =
     tone === "warning"
@@ -479,9 +510,17 @@ function KpiCard({
       : tone === "info"
       ? "#60a5fa"
       : "var(--qg-text-soft)";
+  const Wrapper: React.ElementType = href ? Link : "div";
+  const wrapperProps: Record<string, unknown> = href
+    ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { href: href as any }
+    : {};
   return (
-    <div
-      className="rounded-xl px-5 py-5"
+    <Wrapper
+      {...wrapperProps}
+      className={`rounded-xl px-5 py-5 ${
+        href ? "transition hover:border-accent-500" : ""
+      }`}
       style={{
         backgroundColor: "var(--qg-card-bg)",
         border: "1px solid var(--qg-border)"
@@ -504,7 +543,7 @@ function KpiCard({
       >
         ▲ {sub}
       </p>
-    </div>
+    </Wrapper>
   );
 }
 

@@ -25,6 +25,7 @@ type Entreprise = {
   color_accent: string;
   description?: string | null;
   is_active: boolean;
+  is_parent_company?: boolean;
   monday_board_id?: string | null;
   monday_board_name?: string | null;
   created_at: string;
@@ -38,6 +39,7 @@ type FormState = {
   color_accent: string;
   description: string;
   is_active: boolean;
+  is_parent_company: boolean;
 };
 
 const TYPES = [
@@ -55,7 +57,8 @@ function toForm(e: Entreprise): FormState {
     type: e.type,
     color_accent: e.color_accent,
     description: e.description || "",
-    is_active: e.is_active
+    is_active: e.is_active,
+    is_parent_company: !!e.is_parent_company
   };
 }
 
@@ -97,7 +100,8 @@ export default function ReglagesEntreprisesPage() {
       type: "gestion",
       color_accent: "#7c3aed",
       description: "",
-      is_active: true
+      is_active: true,
+      is_parent_company: false
     });
     setSaveError(null);
   }
@@ -123,7 +127,8 @@ export default function ReglagesEntreprisesPage() {
         type: form.type,
         color_accent: form.color_accent,
         description: form.description.trim() || null,
-        is_active: form.is_active
+        is_active: form.is_active,
+        is_parent_company: form.is_parent_company
       };
       const res = await authedFetch(url, {
         method: isNew ? "POST" : "PATCH",
@@ -439,6 +444,28 @@ function EntrepriseForm({
           />
           <span>{form.is_active ? "Actif" : "Inactif"}</span>
         </label>
+      </div>
+      <div className="sm:col-span-2">
+        <label className="label">Entreprise mère du groupe</label>
+        <label className="mt-1 flex cursor-pointer items-center gap-2 rounded-lg border border-white/15 bg-brand-950 px-3 py-2 text-sm">
+          <input
+            type="checkbox"
+            checked={form.is_parent_company}
+            onChange={(e) =>
+              set("is_parent_company", e.target.checked)
+            }
+            className="h-4 w-4 accent-violet-500"
+          />
+          <span>
+            {form.is_parent_company
+              ? "Oui — son briefing IA quotidien couvre TOUTES les entreprises actives (vision globale)"
+              : "Non — briefing IA limité à cette entreprise"}
+          </span>
+        </label>
+        <p className="mt-1 text-[10px] text-white/40">
+          Coche cette case sur l&apos;entreprise mère du groupe
+          (ex. MGV Investissements). Une seule à la fois en pratique.
+        </p>
       </div>
       <div className="sm:col-span-2">
         <label htmlFor="description" className="label">

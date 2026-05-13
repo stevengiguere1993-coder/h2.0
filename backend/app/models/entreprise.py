@@ -66,6 +66,15 @@ class Entreprise(Base, TimestampUpdateMixin):
         Boolean, nullable=False, default=True, server_default="true"
     )
 
+    # Entreprise mère du groupe — il ne devrait y en avoir qu'UNE
+    # active à la fois (ex. MGV Investissements). Quand cochée, son
+    # briefing quotidien IA inclut une vision globale de toutes les
+    # autres entreprises actives (vs juste son propre périmètre).
+    is_parent_company: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+        index=True,
+    )
+
     # URL du dossier Google Drive lié à cette entreprise. Le bouton
     # « Drive » du header de la fiche y mène. NULL = pas configuré
     # encore (le bouton propose alors de coller l'URL).

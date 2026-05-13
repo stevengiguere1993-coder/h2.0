@@ -265,23 +265,38 @@ async def generate_for_entreprise(
     if existing is not None and not force:
         return existing
 
-    # Rassemble le contexte
+    # Quand l'entreprise est marquée « parent » (ex. MGV
+    # Investissements), on inclut les tâches/activités/visions de
+    # TOUTES les entreprises actives — son briefing devient la vision
+    # globale du groupe. Sinon : périmètre normal de l'entreprise.
+    is_parent = bool(getattr(ent, "is_parent_company", False))
+    if is_parent:
+        active_ids = (
+            await db.execute(
+                select(Entreprise.id).where(Entreprise.is_active.is_(True))
+            )
+        ).scalars().all()
+        scope_ids = list(active_ids) or [entreprise_id]
+    else:
+        scope_ids = [entreprise_id]
+
+    # Rassemble le contexte (sur scope_ids = [self] ou [tout le groupe])
     todo = (
         await db.execute(
             select(EntrepriseTache).where(
-                EntrepriseTache.entreprise_id == entreprise_id,
+                EntrepriseTache.entreprise_id.in_(scope_ids),
                 EntrepriseTache.status == TacheStatus.TODO.value,
             )
-            .limit(30)
+            .limit(60 if is_parent else 30)
         )
     ).scalars().all()
     in_prog = (
         await db.execute(
             select(EntrepriseTache).where(
-                EntrepriseTache.entreprise_id == entreprise_id,
+                EntrepriseTache.entreprise_id.in_(scope_ids),
                 EntrepriseTache.status == TacheStatus.IN_PROGRESS.value,
             )
-            .limit(30)
+            .limit(60 if is_parent else 30)
         )
     ).scalars().all()
 
@@ -291,23 +306,23 @@ async def generate_for_entreprise(
     done_yest = (
         await db.execute(
             select(EntrepriseTache).where(
-                EntrepriseTache.entreprise_id == entreprise_id,
+                EntrepriseTache.entreprise_id.in_(scope_ids),
                 EntrepriseTache.status == TacheStatus.DONE.value,
                 EntrepriseTache.completed_at >= yest_start,
                 EntrepriseTache.completed_at < today_start,
             )
-            .limit(30)
+            .limit(60 if is_parent else 30)
         )
     ).scalars().all()
 
     acts = (
         await db.execute(
             select(Activity).where(
-                Activity.entreprise_id == entreprise_id,
+                Activity.entreprise_id.in_(scope_ids),
                 Activity.occurred_at >= today_start - timedelta(days=1),
             )
             .order_by(Activity.occurred_at.desc())
-            .limit(30)
+            .limit(60 if is_parent else 30)
         )
     ).scalars().all()
 
@@ -321,18 +336,18 @@ async def generate_for_entreprise(
     visions = (
         await db.execute(
             select(Vision)
-            .where(Vision.entreprise_id == entreprise_id)
+            .where(Vision.entreprise_id.in_(scope_ids))
             .where(Vision.horizon_end >= today)
             .order_by(Vision.horizon_end.asc())
-            .limit(5)
+            .limit(10 if is_parent else 5)
         )
     ).scalars().all()
     strategic_projects = (
         await db.execute(
             select(StrategicProject)
-            .where(StrategicProject.entreprise_id == entreprise_id)
+            .where(StrategicProject.entreprise_id.in_(scope_ids))
             .order_by(StrategicProject.updated_at.desc())
-            .limit(10)
+            .limit(20 if is_parent else 10)
         )
     ).scalars().all()
 
@@ -346,13 +361,26 @@ async def generate_for_entreprise(
         visions=list(visions),
         strategic_projects=list(strategic_projects),
     )
+    # Si entreprise mère : on préfixe le prompt avec une consigne
+    # spéciale « vision globale du groupe » pour que l'IA résume
+    # l'ensemble du portefeuille au lieu d'une seule entité.
+    if is_parent:
+        prompt = (
+            "## Contexte spécial — Entreprise mère\n"
+            f"« {ent.name} » est l'entreprise mère du groupe. Le "
+            "briefing ci-dessous concerne TOUTES les entreprises "
+            "actives (tâches, activités, visions et projets de "
+            "l'ensemble du portefeuille). Rédige un briefing avec un "
+            "regard de dirigeant qui supervise tout le groupe — pas "
+            "seulement une entité.\n\n"
+        ) + prompt
 
     t0 = time.perf_counter()
     try:
         res = await complete(
             prompt=prompt,
             system=SYSTEM_PROMPT,
-            max_tokens=600,
+            max_tokens=800 if is_parent else 600,
             temperature=0.4,
         )
     except (AIProviderUnavailable, AIProviderError) as exc:

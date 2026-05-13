@@ -446,30 +446,42 @@ function SectionCard({
     }
   }
 
-  function toggleMic() {
+  // Mode dictée stable + persistant. Web Speech a tendance à s'arrêter
+  // tout seul après 30-60s ou quand il n'entend rien — on relance
+  // automatiquement tant que l'utilisateur n'a pas cliqué stop. On
+  // auto-save toutes les 5s pour ne jamais rien perdre. Et on traite
+  // les commandes vocales de ponctuation (« virgule », « point »,
+  // « nouveau paragraphe ») pour une saisie naturelle.
+  const wantListenRef = useRef<boolean>(false);
+  const accumulatedRef = useRef<string>("");
+  const autoSaveRef = useRef<number | null>(null);
+
+  function applyVoiceCommands(text: string): string {
+    // Remplace les expressions parlées par leur ponctuation.
+    return text
+      .replace(/\b(virgule)\b/gi, ",")
+      .replace(/\b(point d'interrogation)\b/gi, "?")
+      .replace(/\b(point d'exclamation)\b/gi, "!")
+      .replace(/\b(deux points)\b/gi, " : ")
+      .replace(/\b(point virgule)\b/gi, ";")
+      .replace(/\b(point)\b/gi, ".")
+      .replace(/\b(nouvelle ligne|à la ligne)\b/gi, "\n")
+      .replace(/\b(nouveau paragraphe)\b/gi, "\n\n")
+      .replace(/\s+([,.!?;:])/g, "$1")
+      .replace(/([,.!?;:])(?=\S)/g, "$1 ");
+  }
+
+  function startRecognition() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const w: any = typeof window !== "undefined" ? (window as unknown) : null;
     const SR = w?.SpeechRecognition || w?.webkitSpeechRecognition;
-    if (!SR) {
-      alert("Dictée non supportée (Chrome/Safari).");
-      return;
-    }
-    if (listening) {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (recogRef.current as any)?.stop();
-      } catch {
-        /* ignore */
-      }
-      setListening(false);
-      return;
-    }
+    if (!SR) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rec: any = new SR();
     rec.lang = "fr-CA";
     rec.continuous = true;
     rec.interimResults = true;
-    let accumulated = transcript ? transcript + "\n\n" : "";
+    rec.maxAlternatives = 1;
     rec.onresult = (e: {
       results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }>;
       resultIndex: number;
@@ -482,44 +494,115 @@ function SectionCard({
         else interim += r[0].transcript;
       }
       if (final) {
-        accumulated += final;
-        setTranscript(accumulated.trim());
+        accumulatedRef.current += applyVoiceCommands(final);
+        setTranscript(accumulatedRef.current.trim());
       } else if (interim) {
-        setTranscript((accumulated + interim).trim());
+        setTranscript(
+          (accumulatedRef.current + applyVoiceCommands(interim)).trim()
+        );
+      }
+    };
+    rec.onerror = (e: { error: string }) => {
+      // « no-speech » et « aborted » sont normaux — on relance.
+      // Les autres (network, not-allowed) sont fatals.
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        wantListenRef.current = false;
+        setListening(false);
+        alert(
+          "Microphone refusé par le navigateur. Active la permission micro."
+        );
       }
     };
     rec.onend = () => {
-      setListening(false);
-      // Persiste le transcript à la fin de la dictée.
-      void patchSection({ transcript });
+      // Si l'utilisateur n'a pas cliqué stop, on relance — Web Speech
+      // a tendance à s'arrêter automatiquement après 30-60s.
+      if (wantListenRef.current) {
+        try {
+          setTimeout(() => {
+            try {
+              rec.start();
+            } catch {
+              // Si start échoue, recrée une nouvelle instance.
+              if (wantListenRef.current) startRecognition();
+            }
+          }, 100);
+        } catch {
+          /* ignore */
+        }
+      } else {
+        setListening(false);
+        // Persiste le transcript à la fin de la dictée.
+        void patchSection({ transcript: accumulatedRef.current.trim() });
+      }
     };
-    rec.onerror = () => setListening(false);
-    rec.start();
-    recogRef.current = rec;
-    setListening(true);
+    try {
+      rec.start();
+      recogRef.current = rec;
+    } catch {
+      /* déjà actif — ignore */
+    }
   }
 
-  async function uploadAudio(file: File) {
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const r = await authedFetch(
-        `/api/v1/rencontres/${rencontreId}/sections/${section.id}/transcribe`,
-        { method: "POST", body: fd }
+  function toggleMic() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w: any = typeof window !== "undefined" ? (window as unknown) : null;
+    const SR = w?.SpeechRecognition || w?.webkitSpeechRecognition;
+    if (!SR) {
+      alert(
+        "Dictée non supportée par ce navigateur — utilise Chrome ou Safari."
       );
-      if (!r.ok) {
-        const txt = await r.text();
-        alert(`Transcription échouée : ${txt.slice(0, 200)}`);
-        return;
-      }
-      const updated = (await r.json()) as Section;
-      onChanged(updated);
-      setTranscript(updated.transcript || "");
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = "";
+      return;
     }
+    if (listening) {
+      // Stop volontaire.
+      wantListenRef.current = false;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (recogRef.current as any)?.stop();
+      } catch {
+        /* ignore */
+      }
+      if (autoSaveRef.current) {
+        window.clearInterval(autoSaveRef.current);
+        autoSaveRef.current = null;
+      }
+      setListening(false);
+      return;
+    }
+    // Démarre — on (re)part du transcript actuel.
+    accumulatedRef.current = transcript ? transcript + " " : "";
+    wantListenRef.current = true;
+    setListening(true);
+    startRecognition();
+    // Auto-save toutes les 5s pour ne JAMAIS rien perdre, même si
+    // crash / fermeture onglet.
+    if (autoSaveRef.current) window.clearInterval(autoSaveRef.current);
+    autoSaveRef.current = window.setInterval(() => {
+      const t = accumulatedRef.current.trim();
+      if (t && t !== (section.transcript || "")) {
+        void patchSection({ transcript: t });
+      }
+    }, 5000);
+  }
+
+  // Cleanup auto-save interval au démontage.
+  useEffect(() => {
+    return () => {
+      if (autoSaveRef.current) window.clearInterval(autoSaveRef.current);
+      wantListenRef.current = false;
+    };
+  }, []);
+
+  async function uploadAudio(_file: File) {
+    // Désactivé : on garde uniquement la dictée live (gratuite,
+    // 100 % navigateur). Évite la dépendance Whisper API payante.
+    alert(
+      "L'upload audio n'est pas disponible — utilise plutôt « Dicter ». "
+      + "Le mode dictée a un auto-save toutes les 5s et se relance "
+      + "automatiquement quand le micro se met en pause. Tu peux dire "
+      + "« virgule », « point », « nouveau paragraphe » à la voix."
+    );
+    if (fileRef.current) fileRef.current.value = "";
   }
 
   const summary = parseSummary(section.ai_summary_json);
@@ -578,29 +661,27 @@ function SectionCard({
             }`}
           >
             <Mic className={`h-3 w-3 ${listening ? "animate-pulse" : ""}`} />
-            {listening ? "Écoute…" : "Dicter"}
+            {listening
+              ? "Écoute… (clique pour arrêter)"
+              : "Dicter (mode persistant + auto-save)"}
           </button>
-          <label
-            className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-violet-500/40 bg-violet-500/10 px-2 py-1 text-[11px] font-semibold text-violet-300 hover:bg-violet-500/20"
-            title="Upload MP3/M4A/WAV → transcrit via Whisper (OpenAI)"
+          <span
+            className="text-[10px]"
+            style={{ color: "var(--qg-text-muted)" }}
+            title="La dictée gère « point », « virgule », « nouveau paragraphe » à la voix"
           >
-            {uploading ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <Upload className="h-3 w-3" />
-            )}
-            Upload audio
-            <input
-              ref={fileRef}
-              type="file"
-              accept="audio/*"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void uploadAudio(f);
+            astuce : dis « virgule », « point », « nouveau paragraphe »
+          </span>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="audio/*"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void uploadAudio(f);
               }}
             />
-          </label>
         </div>
         <button
           type="button"

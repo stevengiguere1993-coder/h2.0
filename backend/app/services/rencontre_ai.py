@@ -202,48 +202,14 @@ async def summarize_global(sections: list[dict]) -> str:
 async def transcribe_audio(
     filename: str, content_type: str, data: bytes
 ) -> str:
-    """Transcrit un fichier audio via l'API Whisper d'OpenAI.
+    """Transcription audio désactivée — on s'appuie uniquement sur la
+    dictée vocale Web Speech API (gratuite, native navigateur).
 
-    Si OPENAI_API_KEY n'est pas configuré, lève une RuntimeError avec
-    un message explicite (l'UI affichera l'erreur).
-    """
-    api_key = getattr(settings, "openai_api_key", None) or _env(
-        "OPENAI_API_KEY"
+    Ce stub est conservé pour ne pas casser les imports / endpoints,
+    mais lève toujours une RuntimeError. L'UI doit éviter d'appeler
+    cet endpoint et orienter l'utilisateur vers la dictée live."""
+    raise RuntimeError(
+        "La transcription d'audio uploadé est désactivée. Utilise la "
+        "dictée vocale en direct (bouton « Dicter ») — c'est gratuit, "
+        "100 % navigateur, et bien adapté au français québécois."
     )
-    if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY non configuré — la transcription audio "
-            "nécessite cette clé. Mets-la dans les variables "
-            "d'environnement Render."
-        )
-
-    # OpenAI Whisper API : POST /v1/audio/transcriptions, multipart
-    async with httpx.AsyncClient(timeout=180.0) as client:
-        files = {
-            "file": (filename, data, content_type or "audio/mpeg"),
-            "model": (None, "whisper-1"),
-            "language": (None, "fr"),
-            "response_format": (None, "text"),
-        }
-        try:
-            r = await client.post(
-                "https://api.openai.com/v1/audio/transcriptions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                files=files,
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(
-                f"Réseau Whisper échoué : {exc!s}"
-            ) from exc
-    if r.status_code >= 400:
-        raise RuntimeError(
-            f"Whisper HTTP {r.status_code} : {r.text[:300]}"
-        )
-    return r.text.strip()
-
-
-def _env(name: str) -> Optional[str]:
-    import os
-
-    v = os.environ.get(name)
-    return v.strip() if v and v.strip() else None
