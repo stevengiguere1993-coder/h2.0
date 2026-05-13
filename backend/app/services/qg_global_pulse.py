@@ -35,12 +35,20 @@ from app.models.prospection_deal_task_assignee import (
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "global-pulse@v1"
+PROMPT_VERSION = "global-pulse@v2"
 SYSTEM_PROMPT = (
     "Tu es l'assistant stratégique d'un dirigeant qui supervise "
     "plusieurs entreprises et un pipeline d'acquisition immobilière. "
     "Tu rédiges un briefing matinal en français québécois, factuel "
-    "et orienté action. Pas de flatterie. Si peu de données, dis-le."
+    "et orienté action. Pas de flatterie, pas de blabla.\n\n"
+    "RÈGLE CRITIQUE : tu produis TOUJOURS une analyse utile, même "
+    "quand peu de données récentes existent. Tu ne dis JAMAIS « rien "
+    "à analyser », « système à l'arrêt », « pas de données » ou "
+    "équivalent. Si l'activité récente est faible, tu pivotes vers "
+    "les chantiers internes à lancer, la santé financière, les "
+    "opportunités de croissance, les tâches anciennes à relancer, ou "
+    "la vision long terme. Le but : toujours donner au dirigeant des "
+    "pistes concrètes pour faire avancer ses entreprises."
 )
 
 
@@ -146,9 +154,13 @@ def _build_prompt(
         '  "headline" (string, max 120 caractères, accroche du jour)\n'
         '  "summary" (string, 4-6 phrases concises — vue d\'ensemble '
         "cross-entreprise + deals)\n"
-        '  "highlights" (array de 4-6 strings, faits saillants ou '
-        "actions à prioriser, format puce courte)\n"
-        "Réponds UNIQUEMENT avec le JSON, sans markdown autour."
+        '  "highlights" (array de 4-6 strings, actions ou constats '
+        "exploitables — toujours utiles, jamais « pas de données »)\n"
+        "Réponds UNIQUEMENT avec le JSON, sans markdown autour.\n\n"
+        "RAPPEL : tu ne dis JAMAIS « rien à analyser » ou « système "
+        "à l'arrêt ». Si l'activité récente est faible, pivote sur "
+        "des pistes de croissance, des relances de tâches anciennes, "
+        "des chantiers internes ou la vision long terme."
     )
     return "\n".join(parts)
 
