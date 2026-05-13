@@ -185,3 +185,30 @@ services:
         value: production
       - key: DATABASE_URL
         sync: false
+
+  # --------------------------------------------------------------
+  # Cron — Kratos daily problem scan (06:00 Montréal = 10:00 UTC) :
+  #   - pour chaque entreprise active, demande à Claude 3-5
+  #     problèmes concrets + actions suggérées
+  #   - persiste dans kratos_problems, status=open
+  # Le dirigeant trouve son tableau de bord rempli au matin.
+  # --------------------------------------------------------------
+  - type: cron
+    name: h2-0-kratos-problems-daily
+    runtime: python
+    region: oregon
+    plan: free
+    rootDir: backend
+    branch: main
+    schedule: "0 10 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.jobs.kratos_problems_daily
+    envVars:
+      - key: ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CLAUDE_MODEL
+        value: "claude-sonnet-4-6"
