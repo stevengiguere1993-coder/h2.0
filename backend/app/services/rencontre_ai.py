@@ -99,15 +99,40 @@ def _heuristic_section_summary(title: str, transcript: str) -> dict:
     }
 
 
-async def summarize_section(title: str, transcript: str) -> dict:
+async def summarize_section(
+    title: str,
+    transcript: str,
+    entreprises_context: Optional[list[dict]] = None,
+) -> dict:
     """Résume une section. Retourne toujours un dict valide
-    (fallback heuristique si Claude indisponible)."""
+    (fallback heuristique si Claude indisponible).
+
+    `entreprises_context` : liste optionnelle [{id, name}, ...] des
+    entreprises concernées par la rencontre. Permet à Claude de tagger
+    chaque action_item avec le nom exact de l'entreprise (utile quand
+    une rencontre couvre plusieurs sociétés)."""
     text = (transcript or "").strip()
     if not text:
         return _heuristic_section_summary(title, "")
     if not settings.anthropic_api_key:
         return _heuristic_section_summary(title, text)
     import anthropic
+
+    ents_block = ""
+    if entreprises_context:
+        lines = [
+            f"- {e.get('name', '?')}"
+            for e in entreprises_context
+            if e.get("name")
+        ]
+        if lines:
+            ents_block = (
+                "## Entreprises concernées par cette rencontre\n"
+                + "\n".join(lines)
+                + "\n\nQuand une action concerne une entreprise précise "
+                "ci-dessus, mets son NOM EXACT dans `entreprise_hint`. "
+                "Si transverse, laisse null.\n\n"
+            )
 
     try:
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
@@ -120,7 +145,8 @@ async def summarize_section(title: str, transcript: str) -> dict:
                     "role": "user",
                     "content": (
                         f"## Section\n{title}\n\n"
-                        f"## Transcript brut\n{text[:30_000]}\n\n"
+                        + ents_block
+                        + f"## Transcript brut\n{text[:30_000]}\n\n"
                         "Génère le JSON selon le schéma."
                     ),
                 }
