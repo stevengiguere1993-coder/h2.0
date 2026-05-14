@@ -9,6 +9,9 @@ services partagés du groupe. Inspirée du schéma papier de Steven :
     └── Dev Immo / Aguci (Inc)    → Dev logiciel, Dev prospection, ...
 
 Chaque nœud peut être :
+  - kind="company" — une entreprise du groupe
+  - kind="person" — une personne physique qui détient des entités
+    (détention personnelle, pas seulement via une société)
   - kind="dept" — une grande branche (Construction, Gestion Immo...)
   - kind="role" — un poste / responsabilité (Chargé Projet, Développeur...)
   - kind="service" — un service partagé (Comptabilité, Gestion taxes...)

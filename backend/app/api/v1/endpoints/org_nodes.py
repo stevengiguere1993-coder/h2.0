@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/org-nodes", tags=["org-nodes"])
 
 
-VALID_KINDS = {"dept", "role", "service", "task", "company"}
+VALID_KINDS = {"dept", "role", "service", "task", "company", "person"}
 VALID_TIERS = {"direction", "adjoint", "adjoint_virtuel"}
 
 
