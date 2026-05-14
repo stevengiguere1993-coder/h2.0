@@ -392,6 +392,26 @@ export default function SoumissionDetailPage() {
     }
   }
 
+  async function changeKind(newKind: "quote" | "contract") {
+    if (!s || newKind === kind) return;
+    setKind(newKind);
+    // Persiste tout de suite le type : la prévisualisation PDF lit la
+    // base, donc sans ça elle générerait le mauvais document (devis
+    // vs contrat). Le reste du formulaire se sauvegarde normalement.
+    try {
+      const res = await authedFetch(`/api/v1/soumissions/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ kind: newKind })
+      });
+      if (res.ok) {
+        const updated = (await res.json()) as Soumission;
+        setS(updated);
+      }
+    } catch {
+      /* sera persisté au prochain « Sauvegarder » */
+    }
+  }
+
   function openSendModal() {
     if (!s) return;
     // Un contrat doit être signé par l'entrepreneur (chargé de
@@ -904,7 +924,7 @@ export default function SoumissionDetailPage() {
               <div className="mt-2 inline-flex rounded-lg border border-brand-700 bg-brand-950/40 p-0.5">
                 <button
                   type="button"
-                  onClick={() => setKind("quote")}
+                  onClick={() => void changeKind("quote")}
                   className={`rounded-md px-4 py-1.5 text-xs font-semibold transition ${
                     kind === "quote"
                       ? "bg-accent-500 text-brand-950 shadow"
@@ -915,7 +935,7 @@ export default function SoumissionDetailPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setKind("contract")}
+                  onClick={() => void changeKind("contract")}
                   className={`rounded-md px-4 py-1.5 text-xs font-semibold transition ${
                     kind === "contract"
                       ? "bg-accent-500 text-brand-950 shadow"

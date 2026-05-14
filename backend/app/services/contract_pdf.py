@@ -64,9 +64,9 @@ GENERAL_CONDITIONS: list[tuple[int, str, str]] = [
     (
         1,
         "G1.2 Avis et droit à un délai raisonnable",
-        "Lorsqu'une partie constate le défaut de l'autre partie de "
+        "Une partie qui constate le défaut de l'autre partie de "
         "respecter l'une ou l'autre des obligations lui incombant en "
-        "vertu du présent contrat ou de la loi, elle doit mettre la "
+        "vertu du présent contrat ou de la loi, doit mettre la "
         "partie défaillante en demeure de remédier à son défaut par "
         "l'envoi d'un avis écrit à cet effet. Un tel avis devra énoncer "
         "la nature du ou des défauts reprochés et donner à la partie "
@@ -87,14 +87,14 @@ GENERAL_CONDITIONS: list[tuple[int, str, str]] = [
         2,
         "G1.3.1",
         "S'il n'exécute pas les travaux prévus conformément au contrat, à "
-        "la loi ou aux règles de l'art.",
+        "la loi ou aux règles de l'art ;",
     ),
     (
         2,
         "G1.3.2",
         "S'il tarde de façon indue à fournir la main-d'œuvre, l'outillage "
         "et l'équipement requis à la bonne réalisation des travaux, dans "
-        "les délais prévus conformément au contrat.",
+        "les délais prévus contractuellement ;",
     ),
     (
         2,
@@ -115,7 +115,7 @@ GENERAL_CONDITIONS: list[tuple[int, str, str]] = [
         "à cet égard ou encore à la suite d'une ordonnance ou d'une "
         "décision d'un tribunal, d'un organisme ou d'une corporation de "
         "droit public et que telle ordonnance ou décision ne résulte pas "
-        "de la faute ou de la négligence de l'entrepreneur.",
+        "de la faute ou de la négligence de l'entrepreneur ;",
     ),
     (
         2,
@@ -132,7 +132,7 @@ GENERAL_CONDITIONS: list[tuple[int, str, str]] = [
         "Dans l'éventualité où le client néglige de corriger son ou ses "
         "défauts dans le délai imparti à un avis de défaut transmis "
         "conformément à l'article G1.2, l'entrepreneur peut, à son choix, "
-        "suspendre ses travaux jusqu'à ce que le client ait remédié audit "
+        "suspendre les travaux jusqu'à ce que le client ait remédié à son "
         "défaut, ou mettre fin au contrat, en transmettant à l'autre "
         "partie un avis écrit à cet effet. Le contrat qui sera ainsi "
         "résilié sera réputé l'avoir été à la date indiquée à l'avis de "
@@ -149,9 +149,10 @@ GENERAL_CONDITIONS: list[tuple[int, str, str]] = [
     (
         1,
         "G2.2 Force majeure ou imprévus",
-        "L'entrepreneur pourra suspendre les travaux prévus au contrat ou "
-        "en demander la résiliation, pour cause de découvertes imprévues "
-        "ou autre cause de force majeure et ce, sans nécessité d'avis au "
+        "L'entrepreneur se réserve le droit de suspendre les travaux "
+        "prévus au contrat ou d'en demander la résiliation, ou pendant "
+        "leur réalisation, pour cause de découvertes imprévues ou autre "
+        "cause de force majeure et ce, sans nécessité d'avis au "
         "préalable. Sont réputées être une cause de force majeure, toutes "
         "causes ne dépendant pas de la volonté des parties au contrat, "
         "qu'elles n'ont pu raisonnablement avoir prévues, et notamment, "
@@ -180,7 +181,7 @@ GENERAL_CONDITIONS: list[tuple[int, str, str]] = [
         "pour cause de défaut du client, il aura droit, en plus d'être "
         "payé pour la valeur des travaux exécutés en date de la "
         "résiliation, d'être indemnisé par le client de toutes les pertes "
-        "subies en raison de la résiliation du contrat. En tous temps "
+        "subies en raison de la résiliation du contrat. En tout temps "
         "pertinents, l'entrepreneur pourra conserver les acomptes et les "
         "versements déjà perçus du client, en compensation du préjudice "
         "subi, sans préjudice à tous autres droits et recours, notamment "
@@ -194,7 +195,7 @@ GENERAL_CONDITIONS: list[tuple[int, str, str]] = [
         "ses défauts dans le délai imparti à un avis de défaut transmis "
         "conformément à l'article G1.2, le client peut, à son choix, "
         "suspendre les versements progressifs dus à l'entrepreneur aux "
-        "termes des modalités de paiement convenues au contrat et ce, "
+        "termes des modalités de paiement prévues au contrat et ce, "
         "jusqu'à ce que l'entrepreneur ait remédié audit défaut, ou "
         "encore, mettre fin au contrat en transmettant à l'entrepreneur "
         "un avis écrit à cet effet.",
@@ -203,10 +204,10 @@ GENERAL_CONDITIONS: list[tuple[int, str, str]] = [
         1,
         "G3.2 Résiliation unilatérale",
         "Le client peut, de façon unilatérale et sans aucun motif, "
-        "résilier le présent contrat en transmettant un avis de "
+        "résilier le présent contrat en transmettant un avis écrit de "
         "résiliation à cet effet à l'entrepreneur. Lorsque le client "
         "exerce son droit à la résiliation unilatérale, il doit payer à "
-        "l'entrepreneur les frais et dépenses actuels, la valeur des "
+        "l'entrepreneur, les frais et dépenses actuelles, la valeur des "
         "travaux exécutés et la valeur des biens fournis, le tout en date "
         "de la résiliation du contrat. De plus, le client devra également "
         "payer à l'entrepreneur une indemnité additionnelle équivalente à "
@@ -230,7 +231,7 @@ GENERAL_CONDITIONS: list[tuple[int, str, str]] = [
         "Si l'une ou l'autre des parties devient insolvable, est déclarée "
         "en faillite ou encore que des procédures en faillite sont "
         "entreprises contre elle ou qu'une cession générale de ses biens "
-        "au profit de l'ensemble de ses créanciers est prononcée.",
+        "au profit de l'ensemble de ses créanciers est prononcée ;",
     ),
     (
         1,
@@ -238,7 +239,7 @@ GENERAL_CONDITIONS: list[tuple[int, str, str]] = [
         "Si un séquestre, un syndic ou toute autre personne ayant des "
         "pouvoirs similaires est nommé afin de prendre, en tout ou en "
         "partie, les affaires ou les actifs de l'une ou l'autre des "
-        "parties.",
+        "parties ;",
     ),
     (
         1,
@@ -289,8 +290,8 @@ GENERAL_CONDITIONS: list[tuple[int, str, str]] = [
         "Avant le début des travaux, l'entrepreneur devra démontrer au "
         "client qu'il est muni d'une assurance de responsabilité civile "
         "adéquate concernant les travaux qu'il exécutera sur l'immeuble "
-        "et devra, sur demande écrite du client, lui fournir une copie de "
-        "sa police d'assurance.",
+        "et devra uniquement, sur demande écrite du client, lui fournir "
+        "une copie de sa police d'assurance.",
     ),
     (
         1,
@@ -343,7 +344,7 @@ GENERAL_CONDITIONS: list[tuple[int, str, str]] = [
     (0, "G11. SOL ET CONTAMINANTS", ""),
     (
         1,
-        "G11.1 Sol contaminé",
+        "G11.1 Contaminé",
         "Le client se déclare et se reconnaît responsable de la présence, "
         "sur l'immeuble, de polluants ou de contaminants tels que définis "
         "par la Loi sur la qualité de l'environnement. En conséquence, le "
@@ -387,8 +388,8 @@ GENERAL_CONDITIONS: list[tuple[int, str, str]] = [
         "G14. SÛRETÉ SUFFISANTE",
         "Au regard de l'article 2111 du Code civil du Québec et à la "
         "condition que l'entrepreneur soit dûment accrédité auprès d'un "
-        "plan de garantie, le client reconnaît et accepte que ce plan de "
-        "garantie constitue une sûreté suffisante garantissant "
+        "plan de garantie de l'APCHQ, le client reconnaît et accepte que "
+        "ce plan de garantie constitue une sûreté suffisante garantissant "
         "l'exécution des obligations de l'entrepreneur en ce qui "
         "concerne : toute réserve faite pour la réparation ou la "
         "correction des malfaçons apparentes lors de la réception de "
@@ -411,7 +412,7 @@ GENERAL_CONDITIONS: list[tuple[int, str, str]] = [
     ),
     (
         0,
-        "G16. RÈGLEMENT DES DIFFÉRENDS",
+        "G16. RÈGLEMENTS DES DIFFÉRENDS",
         "En cas de différends ou litiges résultant de l'interprétation ou "
         "de l'application du contrat, l'entrepreneur et le client "
         "pourront, d'un commun accord, convenir de soumettre les "
@@ -427,7 +428,7 @@ GENERAL_CONDITIONS: list[tuple[int, str, str]] = [
         "travail prévues à la convention collective applicable au secteur "
         "visé par les travaux auraient pour effet d'augmenter les coûts "
         "de construction de l'entrepreneur, lesquels n'ont pu être prévus "
-        "en date de la signature du contrat, ce dernier aura le droit, en "
+        "en date de réception des travaux, ce dernier aura le droit, en "
         "justifiant une telle augmentation auprès du client, de réviser à "
         "la hausse le prix prévu au contrat.",
     ),
@@ -1042,10 +1043,7 @@ def _render_bytes(
     story.append(sig)
 
     # ── Clauses générales (page séparée) ──
-    PageBreak = __import__(
-        "reportlab.platypus", fromlist=["PageBreak"]
-    ).PageBreak
-    story.append(PageBreak())
+    story.append(rl["PageBreak"]())
     section_bar("CLAUSES GÉNÉRALES")
     for level, title, body in GENERAL_CONDITIONS:
         if title:
