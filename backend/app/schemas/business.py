@@ -129,6 +129,10 @@ class SoumissionCreate(BaseModel):
     pricing_kind: str = Field(
         default="forfaitaire", pattern="^(forfaitaire|estime)$"
     )
+    # "quote" = devis classique (lignes de prix) ; "contract" = contrat
+    # d'entreprise APCHQ (champs structurés dans contract_data, JSON).
+    kind: str = Field(default="quote", pattern="^(quote|contract)$")
+    contract_data: Optional[str] = None
 
 
 class SoumissionUpdate(BaseModel):
@@ -149,6 +153,10 @@ class SoumissionUpdate(BaseModel):
     pricing_kind: Optional[str] = Field(
         default=None, pattern="^(forfaitaire|estime)$"
     )
+    kind: Optional[str] = Field(
+        default=None, pattern="^(quote|contract)$"
+    )
+    contract_data: Optional[str] = None
 
 
 class SoumissionRead(_Base):
@@ -171,6 +179,11 @@ class SoumissionRead(_Base):
     client_note: Optional[str] = None
     property_address: Optional[str]
     pricing_kind: str = "forfaitaire"
+    kind: str = "quote"
+    contract_data: Optional[str] = None
+    contractor_signed_name: Optional[str] = None
+    contractor_signed_at: Optional[datetime] = None
+    signed_name: Optional[str] = None
     created_at: datetime
 
 

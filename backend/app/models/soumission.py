@@ -101,3 +101,38 @@ class Soumission(Base, TimestampUpdateMixin):
     project_skip_backfill: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+
+    # Nature du document : "quote" (devis classique avec lignes de
+    # prix) ou "contract" (contrat d'entreprise APCHQ personnalisé
+    # Horizon — prix coûtant majoré, clauses, signatures des 2 parties).
+    # Un contrat réutilise toute l'infra soumission (référence, client,
+    # e-signature, provisionnement projet/facture) mais ses champs
+    # structurés vivent dans contract_data.
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="quote", server_default="quote"
+    )
+    # Données structurées du contrat d'entreprise (JSON sérialisé) :
+    # responsable du projet, type de travaux, prestation, services,
+    # exclusions, prix coûtant majoré (5.1/5.2), versements (6.2),
+    # intérêts (6.4), élection de domicile, etc. NULL pour un devis.
+    contract_data: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Signature de l'entrepreneur (Horizon) — le chargé de projet signe
+    # pour la compagnie AVANT l'envoi au client. La signature du client
+    # réutilise les champs signed_name / signature_image ci-dessus.
+    contractor_signed_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    contractor_signed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    contractor_signed_ip: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    contractor_signature_image: Mapped[Optional[bytes]] = deferred(
+        mapped_column(LargeBinary, nullable=True)
+    )
+    contractor_signature_image_content_type: Mapped[Optional[str]] = (
+        mapped_column(String(100), nullable=True)
+    )
+

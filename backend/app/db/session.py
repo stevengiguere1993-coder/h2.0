@@ -367,6 +367,29 @@ async def init_db() -> None:
                 "pricing_kind",
                 "VARCHAR(16) NOT NULL DEFAULT 'forfaitaire'",
             ),
+            # Contrat d'entreprise APCHQ personnalisé Horizon : un
+            # document soumission de type "contract" porte ses champs
+            # structurés dans contract_data (JSON), et la signature de
+            # l'entrepreneur (chargé de projet) dans contractor_*.
+            (
+                "soumissions",
+                "kind",
+                "VARCHAR(16) NOT NULL DEFAULT 'quote'",
+            ),
+            ("soumissions", "contract_data", "TEXT"),
+            ("soumissions", "contractor_signed_name", "VARCHAR(255)"),
+            (
+                "soumissions",
+                "contractor_signed_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
+            ("soumissions", "contractor_signed_ip", "VARCHAR(64)"),
+            ("soumissions", "contractor_signature_image", "BYTEA"),
+            (
+                "soumissions",
+                "contractor_signature_image_content_type",
+                "VARCHAR(100)",
+            ),
             ("lead_analyses", "best_refi_program", "VARCHAR(128)"),
             (
                 "lead_analyses",
