@@ -65,6 +65,48 @@ _LOGO_PATH = os.path.join(
     "logo.png",
 )
 
+# Le logo asset (assets/logo.png) est blanc sur fond noir. Sur un PDF
+# (fond blanc) ça donne un vilain carré noir. On l'inverse une seule
+# fois (noir sur blanc) et on met le résultat en cache mémoire.
+# Pillow est dispo en prod (dépendance de reportlab) ; en repli on
+# garde le logo source.
+_LOGO_LIGHT_CACHE: Optional[bytes] = None
+_LOGO_LIGHT_DONE = False
+
+
+def _logo_light_bytes() -> Optional[bytes]:
+    global _LOGO_LIGHT_CACHE, _LOGO_LIGHT_DONE
+    if _LOGO_LIGHT_DONE:
+        return _LOGO_LIGHT_CACHE
+    _LOGO_LIGHT_DONE = True
+    if not os.path.exists(_LOGO_PATH):
+        return None
+    try:
+        from PIL import Image as _PILImage, ImageOps  # type: ignore
+
+        img = _PILImage.open(_LOGO_PATH).convert("RGB")
+        inverted = ImageOps.invert(img)
+        out = io.BytesIO()
+        inverted.save(out, format="PNG")
+        _LOGO_LIGHT_CACHE = out.getvalue()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Logo clair (PDF) non généré, repli logo source : %s", exc)
+        _LOGO_LIGHT_CACHE = None
+    return _LOGO_LIGHT_CACHE
+
+
+def _logo_light_source():
+    """Source du logo adaptée à un fond blanc (noir sur blanc) pour les
+    PDF. Renvoie un BytesIO du logo inversé, le chemin source en repli,
+    ou None si l'asset est absent."""
+    if not os.path.exists(_LOGO_PATH):
+        return None
+    data = _logo_light_bytes()
+    if data:
+        return io.BytesIO(data)
+    return _LOGO_PATH
+
+
 COMPANY_NAME = "Horizon Services Immobiliers"
 COMPANY_RBQ = "RBQ 5868-5991-01"
 COMPANY_INSURANCE = "Police d'assurance : SUM-CGL-44100-001"
@@ -212,9 +254,10 @@ def _render_bytes(
     # Header: logo + company on the left, "SOUMISSION" on the right.
     Image = rl["Image"]
     left_cell: list = []
-    if os.path.exists(_LOGO_PATH):
+    _logo_src = _logo_light_source()
+    if _logo_src is not None:
         try:
-            logo = Image(_LOGO_PATH, width=28 * mm, height=28 * mm)
+            logo = Image(_logo_src, width=28 * mm, height=28 * mm)
             left_cell.append(logo)
             left_cell.append(Spacer(1, 4))
         except Exception as exc:

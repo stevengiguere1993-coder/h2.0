@@ -32,9 +32,9 @@ from app.services.soumission_pdf import (
     DARK_HEX,
     LINE_HEX,
     MUTED_HEX,
-    _LOGO_PATH,
     _date,
     _lazy_reportlab,
+    _logo_light_source,
     _money,
     _styles,
 )
@@ -623,10 +623,11 @@ def _render_bytes(
 
     # ── En-tête ──
     left_cell: list = []
-    if os.path.exists(_LOGO_PATH):
+    _logo_src = _logo_light_source()
+    if _logo_src is not None:
         try:
             left_cell.append(
-                Image(_LOGO_PATH, width=26 * mm, height=26 * mm)
+                Image(_logo_src, width=26 * mm, height=26 * mm)
             )
             left_cell.append(Spacer(1, 4))
         except Exception as exc:  # noqa: BLE001
