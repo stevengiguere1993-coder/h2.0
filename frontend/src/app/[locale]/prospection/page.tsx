@@ -601,8 +601,16 @@ function RouteModal({
     );
   }, [open, useGps, gpsCoords]);
 
+  // Sélectionnables : tout lead avec des coordonnées OU une adresse.
+  // Les leads « adresse seule » sont géolocalisés côté serveur au
+  // moment d'optimiser la route (forward-geocoding Nominatim).
   const eligible = useMemo(
-    () => leads.filter((l) => l.lat != null && l.lng != null),
+    () =>
+      leads.filter(
+        (l) =>
+          (l.lat != null && l.lng != null) ||
+          (l.address || "").trim() !== ""
+      ),
     [leads]
   );
 
@@ -733,6 +741,12 @@ function RouteModal({
                           {l.address || "Sans adresse"}
                           {l.city ? ` · ${l.city}` : ""}
                         </span>
+                        {l.lat == null || l.lng == null ? (
+                          <span className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-amber-300">
+                            <MapPin className="h-2.5 w-2.5" />
+                            sera géolocalisé à l&apos;optimisation
+                          </span>
+                        ) : null}
                       </span>
                       <span className="rounded bg-brand-800 px-1.5 py-0.5 text-[10px] text-white/60">
                         {l.score}
