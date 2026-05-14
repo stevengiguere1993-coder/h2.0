@@ -8,16 +8,19 @@ import {
   ChevronRight,
   Download,
   GripVertical,
+  Link2,
   Loader2,
   Plus,
   Save,
   Sparkles,
+  Star,
   Trash2,
   User as UserIcon,
   Users
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { MultiSelectDropdown } from "@/components/multi-select-dropdown";
 import { QGTopbar, useEntreprisesLayout } from "../layout";
 
 /**
@@ -30,12 +33,14 @@ import { QGTopbar, useEntreprisesLayout } from "../layout";
  *  - label
  *  - lien optionnel à une entreprise
  *  - assignation (employé interne OU texte externe « Freelance », etc.)
+ *  - co-détenteurs (autres entreprises qui possèdent aussi ce nœud)
  *
  * Les entreprises s'importent en un clic (« Importer les entreprises »)
  * comme nœuds `company` à plat, puis se réorganisent par glisser-déposer
  * pour bâtir la hiérarchie de détention (qui détient quoi) et de
  * fonction (qui fait quoi) — entreprises et départements/rôles vivent
- * dans le même arbre.
+ * dans le même arbre. Le détenteur principal donne la position dans
+ * l'arbre ; les co-détenteurs s'affichent en badges sur la carte.
  */
 
 type OrgNode = {
@@ -49,6 +54,7 @@ type OrgNode = {
   assignee_employe_id: number | null;
   assignee_user_id: number | null;
   assignee_external_name: string | null;
+  co_owner_node_ids: number[];
   created_at: string;
   updated_at: string;
 };
@@ -106,21 +112,17 @@ export default function OrganigrammePage() {
   const [dragId, setDragId] = useState<number | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
 
-  // Entreprise mère du groupe (affichée en bandeau au-dessus de
-  // tout l'organigramme, comme dans le carnet où MGV Investissements
-  // est tout en haut).
-  const parentEnt = useMemo(
-    () =>
+  // Entreprise mère du groupe — sert à mettre en évidence SON nœud
+  // dans l'arbre (étoile + bordure accent), plutôt qu'un bandeau
+  // séparé non interactif.
+  const parentEntId = useMemo(() => {
+    const e =
       entreprises.find(
-        (e) =>
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (e as any).is_parent_company === true
-      ) ||
-      // Fallback : match par nom si la prop n'est pas encore exposée
-      // dans le payload light de la sidebar.
-      entreprises.find((e) => /mgv\s*invest/i.test(e.name)),
-    [entreprises]
-  );
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (x) => (x as any).is_parent_company === true
+      ) || entreprises.find((x) => /mgv\s*invest/i.test(x.name));
+    return e ? e.id : null;
+  }, [entreprises]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -368,47 +370,8 @@ export default function OrganigrammePage() {
       />
 
       <div className="p-4 lg:p-6">
-        {/* Bandeau « Entreprise mère » tout en haut — comme dans
-            le carnet où MGV Investissements chapeaute tout. */}
-        {parentEnt ? (
-          <div
-            className="mb-4 flex items-center gap-3 rounded-2xl border p-4"
-            style={{
-              borderColor: "var(--qg-accent)",
-              backgroundColor: "var(--qg-bg-alt, transparent)"
-            }}
-          >
-            <span
-              className="flex h-12 w-12 items-center justify-center rounded-xl text-xl font-bold"
-              style={{
-                backgroundColor: "var(--qg-accent)",
-                color: "var(--qg-accent-ink, #0a0a0b)"
-              }}
-            >
-              ★
-            </span>
-            <div>
-              <p
-                className="text-[10px] font-semibold uppercase tracking-[0.16em]"
-                style={{ color: "var(--qg-text-soft)" }}
-              >
-                Entreprise mère du groupe
-              </p>
-              <h2
-                className="text-lg font-bold"
-                style={{
-                  color: "var(--qg-text)",
-                  fontFamily: "var(--font-fraunces, Georgia, serif)"
-                }}
-              >
-                {parentEnt.name}
-              </h2>
-            </div>
-          </div>
-        ) : null}
-
         {error ? (
-          <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-600">
             {error}
           </p>
         ) : null}
@@ -472,9 +435,11 @@ export default function OrganigrammePage() {
                 className="mb-4 text-[11px]"
                 style={{ color: "var(--qg-text-soft)" }}
               >
-                Glisse un nœud <strong>sur</strong> un autre pour qu&apos;il
-                en devienne l&apos;enfant (changement de détenteur), ou{" "}
-                <strong>entre deux</strong> nœuds pour les réordonner.
+                Glisse une carte <strong>sur</strong> une autre (n&apos;importe
+                où dans sa colonne) pour qu&apos;elle en devienne l&apos;enfant
+                — changement de détenteur. Glisse <strong>entre deux</strong>{" "}
+                cartes pour les réordonner. Plusieurs détenteurs ? Ouvre la
+                carte (chevron) → <strong>Co-détenteurs</strong>.
               </p>
             ) : null}
 
@@ -536,8 +501,10 @@ export default function OrganigrammePage() {
                     <ColumnView
                       node={n}
                       byParent={byParent}
+                      allNodes={nodes}
                       entreprises={entreprises}
                       employes={employes}
+                      parentEntId={parentEntId}
                       dnd={dnd}
                       onCreate={createNode}
                       onPatch={patchNode}
@@ -618,8 +585,10 @@ function DropBar({
 function ColumnView({
   node,
   byParent,
+  allNodes,
   entreprises,
   employes,
+  parentEntId,
   dnd,
   onCreate,
   onPatch,
@@ -627,8 +596,10 @@ function ColumnView({
 }: {
   node: OrgNode;
   byParent: Map<number | null, OrgNode[]>;
+  allNodes: OrgNode[];
   entreprises: Array<{ id: number; name: string }>;
   employes: Employe[];
+  parentEntId: number | null;
   dnd: Dnd;
   onCreate: (
     parent_id: number | null,
@@ -638,18 +609,43 @@ function ColumnView({
   onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
 }) {
+  // La colonne entière est une grande cible de dépôt « dans cette
+  // entreprise » : déposer n'importe où dans la carte (hors d'un
+  // sous-nœud précis, qui lui stoppe la propagation) re-parente le
+  // nœud glissé sous la racine de la colonne. Rend le glisser-déposer
+  // d'une entreprise vers une autre beaucoup plus facile.
+  const colDroppable =
+    dnd.dragId != null && !dnd.draggedSubtree.has(node.id);
+  const isColTarget =
+    dnd.dropTarget?.id === node.id && dnd.dropTarget.mode === "into";
+
   return (
     <div
-      className="w-[300px] shrink-0 rounded-xl border p-3"
+      onDragOver={(e) => {
+        if (!colDroppable) return;
+        e.preventDefault();
+        if (!isColTarget) dnd.onHover({ id: node.id, mode: "into" });
+      }}
+      onDrop={(e) => {
+        if (!colDroppable) return;
+        e.preventDefault();
+        dnd.onDrop();
+      }}
+      className="w-[300px] shrink-0 rounded-xl border p-3 transition"
       style={{
-        borderColor: "var(--qg-border)",
-        backgroundColor: "var(--qg-card-bg)"
+        borderColor: isColTarget ? "var(--qg-accent)" : "var(--qg-border)",
+        backgroundColor: "var(--qg-card-bg)",
+        boxShadow: isColTarget
+          ? "0 0 0 2px var(--qg-accent) inset"
+          : "none"
       }}
     >
       <NodeRow
         node={node}
+        allNodes={allNodes}
         entreprises={entreprises}
         employes={employes}
+        parentEntId={parentEntId}
         dnd={dnd}
         onCreate={onCreate}
         onPatch={onPatch}
@@ -659,8 +655,10 @@ function ColumnView({
       <Children
         parentId={node.id}
         byParent={byParent}
+        allNodes={allNodes}
         entreprises={entreprises}
         employes={employes}
+        parentEntId={parentEntId}
         dnd={dnd}
         onCreate={onCreate}
         onPatch={onPatch}
@@ -674,8 +672,10 @@ function ColumnView({
 function Children({
   parentId,
   byParent,
+  allNodes,
   entreprises,
   employes,
+  parentEntId,
   dnd,
   onCreate,
   onPatch,
@@ -684,8 +684,10 @@ function Children({
 }: {
   parentId: number;
   byParent: Map<number | null, OrgNode[]>;
+  allNodes: OrgNode[];
   entreprises: Array<{ id: number; name: string }>;
   employes: Employe[];
+  parentEntId: number | null;
   dnd: Dnd;
   onCreate: (
     parent_id: number | null,
@@ -722,8 +724,10 @@ function Children({
           <DropBar targetId={c.id} dnd={dnd} />
           <NodeRow
             node={c}
+            allNodes={allNodes}
             entreprises={entreprises}
             employes={employes}
+            parentEntId={parentEntId}
             dnd={dnd}
             onCreate={onCreate}
             onPatch={onPatch}
@@ -733,8 +737,10 @@ function Children({
           <Children
             parentId={c.id}
             byParent={byParent}
+            allNodes={allNodes}
             entreprises={entreprises}
             employes={employes}
+            parentEntId={parentEntId}
             dnd={dnd}
             onCreate={onCreate}
             onPatch={onPatch}
@@ -796,8 +802,10 @@ type RoleSuggestion = {
 
 function NodeRow({
   node,
+  allNodes,
   entreprises,
   employes,
+  parentEntId,
   dnd,
   onCreate,
   onPatch,
@@ -805,8 +813,10 @@ function NodeRow({
   depth
 }: {
   node: OrgNode;
+  allNodes: OrgNode[];
   entreprises: Array<{ id: number; name: string }>;
   employes: Employe[];
+  parentEntId: number | null;
   dnd: Dnd;
   onCreate: (
     parent_id: number | null,
@@ -820,9 +830,10 @@ function NodeRow({
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(node.label);
   const [extName, setExtName] = useState(node.assignee_external_name || "");
-  // Le drag n'est armé que si on l'amorce via la poignée — sinon
-  // cliquer dans le champ « label » déclencherait un glissement.
-  const [dragArmed, setDragArmed] = useState(false);
+  // Toute la carte est saisissable pour le drag — SAUF quand on est en
+  // train d'éditer le libellé (sinon on ne pourrait plus sélectionner
+  // le texte du champ).
+  const [labelFocused, setLabelFocused] = useState(false);
 
   // Suggestions de rôles manquants (bouton « Générer » sur les
   // nœuds entreprise).
@@ -875,6 +886,22 @@ function NodeRow({
     ? entreprises.find((e) => e.id === node.entreprise_id)
     : null;
 
+  // Entreprise mère du groupe — mise en évidence dans l'arbre.
+  const isParentCompany =
+    node.kind === "company" &&
+    parentEntId != null &&
+    node.entreprise_id === parentEntId;
+
+  // Co-détenteurs : on résout les IDs en libellés pour les badges,
+  // et on prépare les options du sélecteur multiple.
+  const coOwnerIds = node.co_owner_node_ids || [];
+  const coOwnerNodes = coOwnerIds
+    .map((id) => allNodes.find((n) => n.id === id))
+    .filter((n): n is OrgNode => Boolean(n));
+  const companyOptions = allNodes
+    .filter((n) => n.kind === "company" && n.id !== node.id)
+    .map((n) => ({ id: n.id, label: n.label }));
+
   const isDragging = dnd.dragId === node.id;
   const isIntoTarget =
     dnd.dropTarget?.id === node.id && dnd.dropTarget.mode === "into";
@@ -883,16 +910,13 @@ function NodeRow({
 
   return (
     <div
-      draggable={dragArmed}
+      draggable={!labelFocused}
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData("text/plain", String(node.id));
         dnd.onDragStartNode(node.id);
       }}
-      onDragEnd={() => {
-        setDragArmed(false);
-        dnd.onDragEndNode();
-      }}
+      onDragEnd={() => dnd.onDragEndNode()}
       onDragOver={(e) => {
         if (!droppable) return;
         e.preventDefault();
@@ -905,11 +929,15 @@ function NodeRow({
         e.stopPropagation();
         dnd.onDrop();
       }}
-      className="rounded-md border px-2 py-1.5 transition"
+      className={`rounded-md border px-2 py-1.5 transition ${
+        labelFocused ? "" : "cursor-grab active:cursor-grabbing"
+      }`}
       style={{
         borderColor: isIntoTarget
           ? "var(--qg-accent)"
-          : "var(--qg-border-soft)",
+          : isParentCompany
+            ? "var(--qg-accent)"
+            : "var(--qg-border-soft)",
         backgroundColor: isIntoTarget
           ? "var(--qg-bg-alt)"
           : "var(--qg-bg-alt, transparent)",
@@ -921,17 +949,17 @@ function NodeRow({
       }}
     >
       <div className="flex items-start gap-1.5">
-        <button
-          type="button"
-          aria-label="Déplacer"
+        <span
+          aria-hidden
           title="Glisser pour déplacer / re-parenter"
-          onMouseDown={() => setDragArmed(true)}
-          onMouseUp={() => setDragArmed(false)}
-          onMouseLeave={() => setDragArmed(false)}
-          className="mt-0.5 cursor-grab text-white/30 hover:text-accent-400 active:cursor-grabbing"
+          className="mt-0.5 text-white/30"
         >
-          <GripVertical className="h-3.5 w-3.5" />
-        </button>
+          {isParentCompany ? (
+            <Star className="h-3.5 w-3.5 text-accent-400" />
+          ) : (
+            <GripVertical className="h-3.5 w-3.5" />
+          )}
+        </span>
         <span
           className={`mt-0.5 rounded-full border px-1.5 py-0 text-[9px] font-bold uppercase ${kindInfo.cls}`}
         >
@@ -940,8 +968,10 @@ function NodeRow({
         <input
           value={label}
           draggable={false}
+          onFocus={() => setLabelFocused(true)}
           onChange={(e) => setLabel(e.target.value)}
           onBlur={() => {
+            setLabelFocused(false);
             if (label.trim() && label !== node.label) {
               void onPatch(node.id, { label: label.trim() });
             }
@@ -989,6 +1019,19 @@ function NodeRow({
 
       {/* Badges info compacts */}
       <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px]">
+        {isParentCompany ? (
+          <span
+            className="inline-flex items-center gap-0.5 rounded px-1 py-0 font-semibold"
+            style={{
+              backgroundColor: "var(--qg-accent)",
+              color: "var(--qg-accent-ink, #0a0a0b)"
+            }}
+            title="Entreprise mère du groupe"
+          >
+            <Star className="h-2.5 w-2.5" />
+            Entreprise mère
+          </span>
+        ) : null}
         {entreprise ? (
           <span
             className="inline-flex items-center gap-0.5 rounded px-1 py-0"
@@ -1017,6 +1060,15 @@ function NodeRow({
           >
             <Briefcase className="h-2.5 w-2.5" />
             {node.assignee_external_name}
+          </span>
+        ) : null}
+        {coOwnerNodes.length > 0 ? (
+          <span
+            className="inline-flex items-center gap-0.5 rounded bg-sky-500/10 px-1 py-0 text-sky-300"
+            title="Détenu aussi par ces entreprises (co-détention)"
+          >
+            <Link2 className="h-2.5 w-2.5" />
+            aussi détenu par {coOwnerNodes.map((n) => n.label).join(", ")}
           </span>
         ) : null}
       </div>
@@ -1171,6 +1223,26 @@ function NodeRow({
                   </option>
                 ))}
               </select>
+            </div>
+          </div>
+
+          {/* Co-détenteurs — une entreprise peut être détenue par
+              plusieurs. Le parent dans l'arbre = détenteur principal ;
+              ici on liste les co-détenteurs (affichés en badge). */}
+          <div>
+            <label className="text-[9px] uppercase text-white/40">
+              Co-détenteurs (en plus du parent dans l&apos;arbre)
+            </label>
+            <div className="mt-0.5">
+              <MultiSelectDropdown
+                options={companyOptions}
+                selectedIds={coOwnerIds}
+                onChange={(ids) =>
+                  void onPatch(node.id, { co_owner_node_ids: ids })
+                }
+                placeholder="— Aucun co-détenteur —"
+                emptyLabel="Aucune autre entreprise dans l'organigramme"
+              />
             </div>
           </div>
 

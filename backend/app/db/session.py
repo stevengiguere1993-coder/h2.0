@@ -404,6 +404,10 @@ async def init_db() -> None:
                 "is_parent_company",
                 "BOOLEAN DEFAULT FALSE NOT NULL",
             ),
+            # Organigramme : co-détenteurs d'un nœud entreprise (JSON
+            # liste d'IDs org_nodes) — la détention n'est pas un arbre
+            # strict, plusieurs entreprises peuvent en posséder une.
+            ("org_nodes", "co_owner_node_ids", "TEXT"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
