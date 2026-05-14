@@ -44,6 +44,8 @@ class OrgNodeRead(BaseModel):
     assignee_user_id: Optional[int]
     assignee_external_name: Optional[str]
     co_owner_node_ids: List[int] = []
+    pos_x: Optional[float] = None
+    pos_y: Optional[float] = None
     created_at: datetime
     updated_at: datetime
 
@@ -96,6 +98,8 @@ class OrgNodeUpdate(BaseModel):
         default=None, max_length=255
     )
     co_owner_node_ids: Optional[List[int]] = None
+    pos_x: Optional[float] = None
+    pos_y: Optional[float] = None
 
 
 @router.get("", response_model=List[OrgNodeRead])

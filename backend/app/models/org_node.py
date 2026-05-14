@@ -31,6 +31,7 @@ from typing import Optional
 
 from sqlalchemy import (
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -99,3 +100,11 @@ class OrgNode(Base, TimestampUpdateMixin):
     co_owner_node_ids: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True
     )
+
+    # Position libre sur le canvas type Miro (vue alternative à
+    # l'arbre en colonnes). NULL = pas encore placé → l'UI calcule
+    # une position de départ. Le canvas et la vue colonnes partagent
+    # les mêmes données (parent_id / co_owner_node_ids) : seul
+    # l'affichage diffère.
+    pos_x: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pos_y: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
