@@ -6,9 +6,12 @@ import {
   Building2,
   ChevronDown,
   ChevronRight,
+  Download,
+  GripVertical,
   Loader2,
   Plus,
   Save,
+  Sparkles,
   Trash2,
   User as UserIcon,
   Users
@@ -20,18 +23,19 @@ import { QGTopbar, useEntreprisesLayout } from "../layout";
 /**
  * Page Organigramme — inspirée du schéma papier de Steven.
  *
- * Affiche l'arbre des départements / rôles / services partagés du
- * groupe en colonnes (top-level), avec sous-nœuds en cascade dans
+ * Affiche l'arbre des entreprises / départements / rôles / services
+ * du groupe en colonnes (top-level), avec sous-nœuds en cascade dans
  * chaque colonne. Chaque nœud :
- *  - kind (dept / role / service / task)
+ *  - kind (company / dept / role / service / task)
  *  - label
  *  - lien optionnel à une entreprise
  *  - assignation (employé interne OU texte externe « Freelance », etc.)
  *
- * MVP scaffold : édition simple (création, label, kind, parent,
- * assignation texte). Vue visuelle plus poussée (drag-and-drop, lignes
- * connectées) à venir dans une PR suivante après que tu auras saisi
- * une première version.
+ * Les entreprises s'importent en un clic (« Importer les entreprises »)
+ * comme nœuds `company` à plat, puis se réorganisent par glisser-déposer
+ * pour bâtir la hiérarchie de détention (qui détient quoi) et de
+ * fonction (qui fait quoi) — entreprises et départements/rôles vivent
+ * dans le même arbre.
  */
 
 type OrgNode = {
@@ -51,7 +55,24 @@ type OrgNode = {
 
 type Employe = { id: number; full_name: string };
 
+type DropTarget = { id: number; mode: "into" | "before" };
+
+type Dnd = {
+  dragId: number | null;
+  dropTarget: DropTarget | null;
+  draggedSubtree: Set<number>;
+  onDragStartNode: (id: number) => void;
+  onDragEndNode: () => void;
+  onHover: (t: DropTarget | null) => void;
+  onDrop: () => void;
+  onDropRootEnd: () => void;
+};
+
 const KIND_LABELS: Record<string, { label: string; cls: string }> = {
+  company: {
+    label: "Entreprise",
+    cls: "bg-indigo-500/15 text-indigo-300 border-indigo-500/30"
+  },
   dept: {
     label: "Département",
     cls: "bg-violet-500/15 text-violet-300 border-violet-500/30"
@@ -79,6 +100,11 @@ export default function OrganigrammePage() {
   const [creatingTop, setCreatingTop] = useState(false);
   const [newTopLabel, setNewTopLabel] = useState("");
   const [seeding, setSeeding] = useState(false);
+  const [importing, setImporting] = useState(false);
+
+  // État du glisser-déposer.
+  const [dragId, setDragId] = useState<number | null>(null);
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
 
   // Entreprise mère du groupe (affichée en bandeau au-dessus de
   // tout l'organigramme, comme dans le carnet où MGV Investissements
@@ -136,6 +162,25 @@ export default function OrganigrammePage() {
     }
   }
 
+  async function importEntreprises() {
+    setImporting(true);
+    setError(null);
+    try {
+      const r = await authedFetch("/api/v1/org-nodes/import-entreprises", {
+        method: "POST"
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error(txt.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      setNodes((await r.json()) as OrgNode[]);
+    } catch (e) {
+      setError(`Import des entreprises échoué : ${(e as Error).message}`);
+    } finally {
+      setImporting(false);
+    }
+  }
+
   // Index : parent_id → enfants triés par position
   const byParent = useMemo(() => {
     const m = new Map<number | null, OrgNode[]>();
@@ -152,7 +197,95 @@ export default function OrganigrammePage() {
 
   const topLevel = byParent.get(null) || [];
 
-  async function createNode(parent_id: number | null, label: string, kind = "dept") {
+  // Sous-arbre du nœud en cours de glissement — on l'exclut des cibles
+  // de dépôt valides (un nœud ne peut pas atterrir sur lui-même ni
+  // sur un de ses descendants).
+  const draggedSubtree = useMemo(() => {
+    const s = new Set<number>();
+    if (dragId == null) return s;
+    const stack = [dragId];
+    while (stack.length) {
+      const cur = stack.pop() as number;
+      if (s.has(cur)) continue;
+      s.add(cur);
+      for (const c of byParent.get(cur) || []) stack.push(c.id);
+    }
+    return s;
+  }, [dragId, byParent]);
+
+  async function moveNode(
+    id: number,
+    parentId: number | null,
+    position: number
+  ) {
+    try {
+      const r = await authedFetch(`/api/v1/org-nodes/${id}/move`, {
+        method: "POST",
+        body: JSON.stringify({ parent_id: parentId, position })
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error(txt.slice(0, 160) || `HTTP ${r.status}`);
+      }
+      setNodes((await r.json()) as OrgNode[]);
+    } catch (e) {
+      setError(`Déplacement échoué : ${(e as Error).message}`);
+    }
+  }
+
+  function handleDrop() {
+    const dId = dragId;
+    const dt = dropTarget;
+    setDragId(null);
+    setDropTarget(null);
+    if (dId == null || !dt || dt.id === dId) return;
+    if (draggedSubtree.has(dt.id)) return;
+    const target = nodes.find((n) => n.id === dt.id);
+    if (!target) return;
+
+    if (dt.mode === "into") {
+      const kids = (byParent.get(dt.id) || []).filter((n) => n.id !== dId);
+      void moveNode(dId, dt.id, kids.length);
+    } else {
+      // Insère avant `target`, sous le même parent. La position est
+      // l'index de `target` dans la fratrie une fois le nœud déplacé
+      // retiré (le backend recalcule de toute façon).
+      const sibs = (byParent.get(target.parent_id) || []).filter(
+        (n) => n.id !== dId
+      );
+      const idx = sibs.findIndex((n) => n.id === target.id);
+      void moveNode(dId, target.parent_id, idx < 0 ? sibs.length : idx);
+    }
+  }
+
+  function handleDropRootEnd() {
+    const dId = dragId;
+    setDragId(null);
+    setDropTarget(null);
+    if (dId == null) return;
+    const roots = (byParent.get(null) || []).filter((n) => n.id !== dId);
+    void moveNode(dId, null, roots.length);
+  }
+
+  const dnd: Dnd = {
+    dragId,
+    dropTarget,
+    draggedSubtree,
+    onDragStartNode: (id) => setDragId(id),
+    onDragEndNode: () => {
+      setDragId(null);
+      setDropTarget(null);
+    },
+    onHover: (t) => setDropTarget(t),
+    onDrop: handleDrop,
+    onDropRootEnd: handleDropRootEnd
+  };
+
+  async function createNode(
+    parent_id: number | null,
+    label: string,
+    kind = "dept"
+  ) {
     if (!label.trim()) return;
     try {
       const r = await authedFetch("/api/v1/org-nodes", {
@@ -183,12 +316,7 @@ export default function OrganigrammePage() {
   }
 
   async function deleteNode(id: number) {
-    if (
-      !window.confirm(
-        "Supprimer ce nœud et tous ses enfants ?"
-      )
-    )
-      return;
+    if (!window.confirm("Supprimer ce nœud et tous ses enfants ?")) return;
     try {
       const r = await authedFetch(`/api/v1/org-nodes/${id}`, {
         method: "DELETE"
@@ -236,7 +364,7 @@ export default function OrganigrammePage() {
             Organigramme
           </span>
         }
-        subtitle="Départements, rôles, responsables — internes ou externes"
+        subtitle="Entreprises, départements, rôles — qui détient quoi, qui fait quoi"
       />
 
       <div className="p-4 lg:p-6">
@@ -291,10 +419,10 @@ export default function OrganigrammePage() {
           </div>
         ) : (
           <>
-            {/* Bandeau de création top-level (département / branche) */}
+            {/* Bandeau de création + import des entreprises */}
             <form
               onSubmit={submitTop}
-              className="mb-5 flex flex-wrap items-center gap-2 rounded-xl border p-3"
+              className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border p-3"
               style={{
                 borderColor: "var(--qg-border)",
                 backgroundColor: "var(--qg-card-bg)"
@@ -305,7 +433,7 @@ export default function OrganigrammePage() {
                 value={newTopLabel}
                 onChange={(e) => setNewTopLabel(e.target.value)}
                 placeholder="Nouvelle branche (ex. Construction, Dev logiciel, Gestion Immo, Prospection, Comptabilité…)"
-                className="input flex-1 min-w-[260px] text-sm"
+                className="input flex-1 min-w-[220px] text-sm"
               />
               <button
                 type="submit"
@@ -319,7 +447,36 @@ export default function OrganigrammePage() {
                 )}
                 Ajouter
               </button>
+              <button
+                type="button"
+                onClick={() => void importEntreprises()}
+                disabled={importing}
+                className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50"
+                style={{
+                  borderColor: "var(--qg-border)",
+                  color: "var(--qg-text-soft)"
+                }}
+                title="Crée un nœud pour chaque entreprise du groupe non encore présente dans l'organigramme. Tu les replaces ensuite par glisser-déposer."
+              >
+                {importing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Download className="h-3.5 w-3.5" />
+                )}
+                Importer les entreprises
+              </button>
             </form>
+
+            {topLevel.length > 0 ? (
+              <p
+                className="mb-4 text-[11px]"
+                style={{ color: "var(--qg-text-soft)" }}
+              >
+                Glisse un nœud <strong>sur</strong> un autre pour qu&apos;il
+                en devienne l&apos;enfant (changement de détenteur), ou{" "}
+                <strong>entre deux</strong> nœuds pour les réordonner.
+              </p>
+            ) : null}
 
             {topLevel.length === 0 ? (
               <div
@@ -329,15 +486,31 @@ export default function OrganigrammePage() {
                   color: "var(--qg-text-muted)"
                 }}
               >
-                <p>
-                  Aucun nœud d&apos;organigramme pour l&apos;instant.
-                </p>
+                <p>Aucun nœud d&apos;organigramme pour l&apos;instant.</p>
                 <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void importEntreprises()}
+                    disabled={importing}
+                    className="btn-accent inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
+                    title="Crée un nœud pour chaque entreprise du groupe."
+                  >
+                    {importing ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Download className="h-3.5 w-3.5" />
+                    )}
+                    Importer les entreprises
+                  </button>
                   <button
                     type="button"
                     onClick={() => void seedDefault(false)}
                     disabled={seeding}
-                    className="btn-accent inline-flex items-center gap-1.5 text-sm disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-semibold disabled:opacity-50"
+                    style={{
+                      borderColor: "var(--qg-border)",
+                      color: "var(--qg-text-soft)"
+                    }}
                     title="Crée la structure de départ basée sur ton carnet (Construction, Dev logiciel, Gestion Immo, Prospection, Dev Immo / Aguci, Comptabilité + rôles et tâches)"
                   >
                     {seeding ? (
@@ -347,31 +520,96 @@ export default function OrganigrammePage() {
                     )}
                     Importer le canevas du carnet
                   </button>
-                  <span className="text-[10px]" style={{ color: "var(--qg-text-soft)" }}>
-                    ou ajoute manuellement une branche ci-dessus
-                  </span>
                 </div>
+                <span
+                  className="mt-2 block text-[10px]"
+                  style={{ color: "var(--qg-text-soft)" }}
+                >
+                  ou ajoute manuellement une branche ci-dessus
+                </span>
               </div>
             ) : (
-              <div className="grid auto-cols-[minmax(280px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-4">
+              <div className="flex items-stretch gap-1 overflow-x-auto pb-4">
                 {topLevel.map((n) => (
-                  <ColumnView
-                    key={n.id}
-                    node={n}
-                    byParent={byParent}
-                    entreprises={entreprises}
-                    employes={employes}
-                    onCreate={createNode}
-                    onPatch={patchNode}
-                    onDelete={deleteNode}
-                  />
+                  <div key={n.id} className="flex items-stretch">
+                    <DropBar targetId={n.id} dnd={dnd} vertical />
+                    <ColumnView
+                      node={n}
+                      byParent={byParent}
+                      entreprises={entreprises}
+                      employes={employes}
+                      dnd={dnd}
+                      onCreate={createNode}
+                      onPatch={patchNode}
+                      onDelete={deleteNode}
+                    />
+                  </div>
                 ))}
+                {/* Zone de dépôt finale : ramène un nœud à la racine. */}
+                {dragId != null ? (
+                  <div
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      dnd.onHover(null);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      dnd.onDropRootEnd();
+                    }}
+                    className="flex w-[150px] shrink-0 items-center justify-center rounded-xl border border-dashed text-center text-[11px]"
+                    style={{
+                      borderColor: "var(--qg-accent)",
+                      color: "var(--qg-text-soft)"
+                    }}
+                  >
+                    Déposer ici →<br />racine du groupe
+                  </div>
+                ) : null}
               </div>
             )}
           </>
         )}
       </div>
     </>
+  );
+}
+
+// ─── Barre de dépôt fine (réordonner / re-parenter) ──────────────
+
+function DropBar({
+  targetId,
+  dnd,
+  vertical
+}: {
+  targetId: number;
+  dnd: Dnd;
+  vertical?: boolean;
+}) {
+  if (dnd.dragId == null) return null;
+  if (dnd.draggedSubtree.has(targetId)) {
+    // Place-holder neutre : garde l'espacement sans être droppable.
+    return <div className={vertical ? "w-1 shrink-0" : "h-1.5"} />;
+  }
+  const active =
+    dnd.dropTarget?.id === targetId && dnd.dropTarget.mode === "before";
+  return (
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!active) dnd.onHover({ id: targetId, mode: "before" });
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dnd.onDrop();
+      }}
+      className={vertical ? "w-2 shrink-0" : "h-2"}
+      style={{
+        backgroundColor: active ? "var(--qg-accent)" : "transparent",
+        borderRadius: 4
+      }}
+    />
   );
 }
 
@@ -382,6 +620,7 @@ function ColumnView({
   byParent,
   entreprises,
   employes,
+  dnd,
   onCreate,
   onPatch,
   onDelete
@@ -390,13 +629,18 @@ function ColumnView({
   byParent: Map<number | null, OrgNode[]>;
   entreprises: Array<{ id: number; name: string }>;
   employes: Employe[];
-  onCreate: (parent_id: number | null, label: string, kind?: string) => Promise<OrgNode | undefined>;
+  dnd: Dnd;
+  onCreate: (
+    parent_id: number | null,
+    label: string,
+    kind?: string
+  ) => Promise<OrgNode | undefined>;
   onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
 }) {
   return (
     <div
-      className="rounded-xl border p-3"
+      className="w-[300px] shrink-0 rounded-xl border p-3"
       style={{
         borderColor: "var(--qg-border)",
         backgroundColor: "var(--qg-card-bg)"
@@ -406,6 +650,8 @@ function ColumnView({
         node={node}
         entreprises={entreprises}
         employes={employes}
+        dnd={dnd}
+        onCreate={onCreate}
         onPatch={onPatch}
         onDelete={onDelete}
         depth={0}
@@ -415,6 +661,7 @@ function ColumnView({
         byParent={byParent}
         entreprises={entreprises}
         employes={employes}
+        dnd={dnd}
         onCreate={onCreate}
         onPatch={onPatch}
         onDelete={onDelete}
@@ -429,6 +676,7 @@ function Children({
   byParent,
   entreprises,
   employes,
+  dnd,
   onCreate,
   onPatch,
   onDelete,
@@ -438,7 +686,12 @@ function Children({
   byParent: Map<number | null, OrgNode[]>;
   entreprises: Array<{ id: number; name: string }>;
   employes: Employe[];
-  onCreate: (parent_id: number | null, label: string, kind?: string) => Promise<OrgNode | undefined>;
+  dnd: Dnd;
+  onCreate: (
+    parent_id: number | null,
+    label: string,
+    kind?: string
+  ) => Promise<OrgNode | undefined>;
   onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
   depth: number;
@@ -461,17 +714,18 @@ function Children({
       style={{
         paddingLeft: depth > 0 ? "0.75rem" : 0,
         borderLeft:
-          depth > 0
-            ? `2px solid var(--qg-border-soft)`
-            : "none"
+          depth > 0 ? `2px solid var(--qg-border-soft)` : "none"
       }}
     >
       {children.map((c) => (
         <div key={c.id}>
+          <DropBar targetId={c.id} dnd={dnd} />
           <NodeRow
             node={c}
             entreprises={entreprises}
             employes={employes}
+            dnd={dnd}
+            onCreate={onCreate}
             onPatch={onPatch}
             onDelete={onDelete}
             depth={depth}
@@ -481,6 +735,7 @@ function Children({
             byParent={byParent}
             entreprises={entreprises}
             employes={employes}
+            dnd={dnd}
             onCreate={onCreate}
             onPatch={onPatch}
             onDelete={onDelete}
@@ -533,10 +788,18 @@ function Children({
   );
 }
 
+type RoleSuggestion = {
+  label: string;
+  kind: string;
+  description: string | null;
+};
+
 function NodeRow({
   node,
   entreprises,
   employes,
+  dnd,
+  onCreate,
   onPatch,
   onDelete,
   depth
@@ -544,15 +807,60 @@ function NodeRow({
   node: OrgNode;
   entreprises: Array<{ id: number; name: string }>;
   employes: Employe[];
+  dnd: Dnd;
+  onCreate: (
+    parent_id: number | null,
+    label: string,
+    kind?: string
+  ) => Promise<OrgNode | undefined>;
   onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
   depth: number;
 }) {
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(node.label);
-  const [extName, setExtName] = useState(
-    node.assignee_external_name || ""
+  const [extName, setExtName] = useState(node.assignee_external_name || "");
+  // Le drag n'est armé que si on l'amorce via la poignée — sinon
+  // cliquer dans le champ « label » déclencherait un glissement.
+  const [dragArmed, setDragArmed] = useState(false);
+
+  // Suggestions de rôles manquants (bouton « Générer » sur les
+  // nœuds entreprise).
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestions, setSuggestions] = useState<RoleSuggestion[] | null>(
+    null
   );
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [addedSuggestions, setAddedSuggestions] = useState<Set<string>>(
+    new Set()
+  );
+
+  async function generateRoles() {
+    setSuggesting(true);
+    setSuggestError(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/org-nodes/${node.id}/suggest-roles`,
+        { method: "POST" }
+      );
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error(txt.slice(0, 160) || `HTTP ${r.status}`);
+      }
+      setSuggestions((await r.json()) as RoleSuggestion[]);
+      setAddedSuggestions(new Set());
+    } catch (e) {
+      setSuggestError((e as Error).message);
+      setSuggestions([]);
+    } finally {
+      setSuggesting(false);
+    }
+  }
+
+  async function addSuggestion(s: RoleSuggestion) {
+    setAddedSuggestions((prev) => new Set(prev).add(s.label));
+    await onCreate(node.id, s.label, s.kind);
+  }
 
   useEffect(() => {
     setLabel(node.label);
@@ -567,23 +875,71 @@ function NodeRow({
     ? entreprises.find((e) => e.id === node.entreprise_id)
     : null;
 
+  const isDragging = dnd.dragId === node.id;
+  const isIntoTarget =
+    dnd.dropTarget?.id === node.id && dnd.dropTarget.mode === "into";
+  const droppable =
+    dnd.dragId != null && !dnd.draggedSubtree.has(node.id);
+
   return (
     <div
-      className="rounded-md border px-2 py-1.5"
+      draggable={dragArmed}
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", String(node.id));
+        dnd.onDragStartNode(node.id);
+      }}
+      onDragEnd={() => {
+        setDragArmed(false);
+        dnd.onDragEndNode();
+      }}
+      onDragOver={(e) => {
+        if (!droppable) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (!isIntoTarget) dnd.onHover({ id: node.id, mode: "into" });
+      }}
+      onDrop={(e) => {
+        if (!droppable) return;
+        e.preventDefault();
+        e.stopPropagation();
+        dnd.onDrop();
+      }}
+      className="rounded-md border px-2 py-1.5 transition"
       style={{
-        borderColor: "var(--qg-border-soft)",
-        backgroundColor: "var(--qg-bg-alt, transparent)",
+        borderColor: isIntoTarget
+          ? "var(--qg-accent)"
+          : "var(--qg-border-soft)",
+        backgroundColor: isIntoTarget
+          ? "var(--qg-bg-alt)"
+          : "var(--qg-bg-alt, transparent)",
+        boxShadow: isIntoTarget
+          ? "0 0 0 1px var(--qg-accent) inset"
+          : "none",
+        opacity: isDragging ? 0.4 : 1,
         fontSize: depth === 0 ? "13px" : "12px"
       }}
     >
-      <div className="flex items-start gap-2">
+      <div className="flex items-start gap-1.5">
+        <button
+          type="button"
+          aria-label="Déplacer"
+          title="Glisser pour déplacer / re-parenter"
+          onMouseDown={() => setDragArmed(true)}
+          onMouseUp={() => setDragArmed(false)}
+          onMouseLeave={() => setDragArmed(false)}
+          className="mt-0.5 cursor-grab text-white/30 hover:text-accent-400 active:cursor-grabbing"
+        >
+          <GripVertical className="h-3.5 w-3.5" />
+        </button>
         <span
-          className={`rounded-full border px-1.5 py-0 text-[9px] font-bold uppercase ${kindInfo.cls}`}
+          className={`mt-0.5 rounded-full border px-1.5 py-0 text-[9px] font-bold uppercase ${kindInfo.cls}`}
         >
           {kindInfo.label}
         </span>
         <input
           value={label}
+          draggable={false}
           onChange={(e) => setLabel(e.target.value)}
           onBlur={() => {
             if (label.trim() && label !== node.label) {
@@ -593,6 +949,22 @@ function NodeRow({
           className="flex-1 bg-transparent text-sm font-semibold focus:outline-none"
           style={{ color: "var(--qg-text)" }}
         />
+        {node.kind === "company" ? (
+          <button
+            type="button"
+            onClick={() => void generateRoles()}
+            disabled={suggesting}
+            className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] font-semibold text-accent-300 hover:bg-accent-500/10 disabled:opacity-50"
+            title="Générer les rôles / tâches manquants selon le but de cette entreprise"
+          >
+            {suggesting ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Sparkles className="h-3 w-3" />
+            )}
+            Générer
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => setEditing((v) => !v)}
@@ -649,6 +1021,106 @@ function NodeRow({
         ) : null}
       </div>
 
+      {/* Suggestions de rôles manquants (IA) */}
+      {suggestions !== null || suggestError ? (
+        <div
+          className="mt-2 rounded border p-2 text-[11px]"
+          style={{
+            borderColor: "var(--qg-border-soft)",
+            backgroundColor: "var(--qg-card-bg)"
+          }}
+        >
+          <div className="flex items-center justify-between">
+            <span
+              className="inline-flex items-center gap-1 font-semibold"
+              style={{ color: "var(--qg-text)" }}
+            >
+              <Sparkles className="h-3 w-3 text-accent-400" />
+              Rôles / tâches suggérés
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => void generateRoles()}
+                disabled={suggesting}
+                className="rounded px-1 py-0.5 text-[10px] text-accent-300 hover:bg-accent-500/10 disabled:opacity-50"
+              >
+                Régénérer
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSuggestions(null);
+                  setSuggestError(null);
+                }}
+                className="rounded p-0.5 text-white/40 hover:text-rose-300"
+                aria-label="Fermer les suggestions"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </div>
+          </div>
+
+          {suggestError ? (
+            <p className="mt-1 text-[10px] text-rose-300">{suggestError}</p>
+          ) : null}
+
+          {suggestions && suggestions.length === 0 && !suggestError ? (
+            <p
+              className="mt-1 text-[10px]"
+              style={{ color: "var(--qg-text-soft)" }}
+            >
+              Rien de neuf à suggérer — la structure semble déjà couverte.
+            </p>
+          ) : null}
+
+          <div className="mt-1.5 space-y-1">
+            {(suggestions || []).map((s) => {
+              const added = addedSuggestions.has(s.label);
+              const sKind = KIND_LABELS[s.kind] || KIND_LABELS.role;
+              return (
+                <div
+                  key={s.label}
+                  className="flex items-start gap-1.5 rounded px-1 py-1"
+                  style={{ backgroundColor: "var(--qg-bg-alt, transparent)" }}
+                >
+                  <span
+                    className={`mt-0.5 rounded-full border px-1 py-0 text-[8px] font-bold uppercase ${sKind.cls}`}
+                  >
+                    {sKind.label}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span
+                      className="block font-semibold"
+                      style={{ color: "var(--qg-text)" }}
+                    >
+                      {s.label}
+                    </span>
+                    {s.description ? (
+                      <span
+                        className="block text-[10px]"
+                        style={{ color: "var(--qg-text-soft)" }}
+                      >
+                        {s.description}
+                      </span>
+                    ) : null}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void addSuggestion(s)}
+                    disabled={added}
+                    className="mt-0.5 inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold text-accent-300 hover:bg-accent-500/10 disabled:opacity-40"
+                  >
+                    <Plus className="h-2.5 w-2.5" />
+                    {added ? "Ajouté" : "Ajouter"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
       {/* Bloc édition étendu */}
       {editing ? (
         <div
@@ -670,6 +1142,7 @@ function NodeRow({
                 }
                 className="input mt-0.5 text-[11px]"
               >
+                <option value="company">Entreprise</option>
                 <option value="dept">Département</option>
                 <option value="role">Rôle</option>
                 <option value="task">Tâche</option>

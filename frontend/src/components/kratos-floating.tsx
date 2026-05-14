@@ -158,7 +158,9 @@ export function KratosFloating() {
           onClick={() => setOpen(true)}
           title="Kratos · Cmd/Ctrl + J"
           aria-label="Ouvrir Kratos"
-          className="fixed bottom-5 right-5 z-40 inline-flex h-12 w-12 items-center justify-center rounded-full shadow-lg transition hover:scale-105"
+          // Calé au-dessus du bouton « Aide » (lui aussi en bas-droite)
+          // pour ne pas le chevaucher / être caché derrière.
+          className="fixed bottom-[4.75rem] right-5 z-40 inline-flex h-12 w-12 items-center justify-center rounded-full shadow-lg transition hover:scale-105"
           style={{
             backgroundColor: "var(--qg-accent, #d4ff3a)",
             color: "var(--qg-accent-ink, #0a0a0b)"
