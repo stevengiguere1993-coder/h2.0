@@ -715,13 +715,7 @@ def _render_bytes(
 
     # ── 2. Immeuble visé par les travaux ──
     section_bar("2.  IMMEUBLE VISÉ PAR LES TRAVAUX")
-    field("Adresse", _cd_get(cd, "immeuble_address"))
-    field("Ville", _cd_get(cd, "immeuble_ville"))
-    field("Lot numéro", _cd_get(cd, "immeuble_lot"))
-    field(
-        "Circonscription foncière de",
-        _cd_get(cd, "immeuble_circonscription"),
-    )
+    field("Adresse du chantier", _cd_get(cd, "immeuble_address"))
 
     # ── 3. Objet du contrat ──
     section_bar("3.  OBJET DU CONTRAT")

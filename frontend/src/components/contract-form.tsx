@@ -1,5 +1,7 @@
 "use client";
 
+import { AddressInput } from "@/components/address-input";
+
 /**
  * Formulaire de contrat d'entreprise — version Horizon du contrat
  * APCHQ « à prix coûtant majoré ». Affiché dans le détail d'une
@@ -28,11 +30,9 @@ type ServiceParty = "client" | "entrepreneur" | null;
 export type ContractData = {
   // 1. Identification — entrepreneur (Horizon, constant) + responsable
   responsable_user_id: number | null;
-  // 2. Immeuble visé par les travaux (chantier)
+  // 2. Immeuble visé par les travaux (chantier) — adresse unique,
+  // saisie via l'autocomplétion d'adresse (la ville y est incluse).
   immeuble_address: string;
-  immeuble_ville: string;
-  immeuble_lot: string;
-  immeuble_circonscription: string;
   // 3.1 Type de travaux
   type_travaux: {
     residentiel: boolean;
@@ -106,14 +106,10 @@ export type ContractData = {
 
 export function defaultContractData(prefill?: {
   address?: string;
-  ville?: string;
 }): ContractData {
   return {
     responsable_user_id: null,
     immeuble_address: prefill?.address || "",
-    immeuble_ville: prefill?.ville || "",
-    immeuble_lot: "",
-    immeuble_circonscription: "",
     type_travaux: {
       residentiel: true,
       commercial: false,
@@ -177,7 +173,7 @@ export function defaultContractData(prefill?: {
  *  manquant. */
 export function normalizeContractData(
   raw: unknown,
-  prefill?: { address?: string; ville?: string }
+  prefill?: { address?: string }
 ): ContractData {
   const d = defaultContractData(prefill);
   if (!raw || typeof raw !== "object") return d;
@@ -375,49 +371,18 @@ export function ContractForm({
 
       {/* 2. Immeuble visé par les travaux */}
       <Section num="2." title="Immeuble visé par les travaux">
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="md:col-span-2">
-            <label className="label">Adresse du chantier</label>
-            <input
-              type="text"
-              value={value.immeuble_address}
-              onChange={(e) => set({ immeuble_address: e.target.value })}
-              placeholder="Adresse des travaux"
-              className="input"
-            />
-            <p className="mt-1 text-[11px] text-white/40">
-              Pré-remplie avec l&apos;adresse du client — modifiable.
-            </p>
-          </div>
-          <div>
-            <label className="label">Ville</label>
-            <input
-              type="text"
-              value={value.immeuble_ville}
-              onChange={(e) => set({ immeuble_ville: e.target.value })}
-              className="input"
-            />
-          </div>
-          <div>
-            <label className="label">Lot numéro</label>
-            <input
-              type="text"
-              value={value.immeuble_lot}
-              onChange={(e) => set({ immeuble_lot: e.target.value })}
-              className="input"
-            />
-          </div>
-          <div className="md:col-span-2">
-            <label className="label">Circonscription foncière de</label>
-            <input
-              type="text"
-              value={value.immeuble_circonscription}
-              onChange={(e) =>
-                set({ immeuble_circonscription: e.target.value })
-              }
-              className="input"
-            />
-          </div>
+        <div>
+          <label className="label">Adresse du chantier</label>
+          <AddressInput
+            id="immeuble_address"
+            value={value.immeuble_address}
+            onChange={(v) => set({ immeuble_address: v })}
+            placeholder="Commence à taper — adresses canadiennes proposées"
+          />
+          <p className="mt-1 text-[11px] text-white/40">
+            Pré-remplie avec l&apos;adresse du client (ville incluse) —
+            modifiable.
+          </p>
         </div>
       </Section>
 
