@@ -40,6 +40,7 @@ from app.services.soumission_pdf import (
     LINE_HEX,
     MUTED_HEX,
     _lazy_reportlab,
+    _logo_light_source,
 )
 
 
@@ -361,9 +362,10 @@ def _render_bytes(
     story: list = []
 
     left_cell: list = []
-    if os.path.exists(_LOGO_PATH):
+    _logo_src = _logo_light_source()
+    if _logo_src is not None:
         try:
-            logo = Image(_LOGO_PATH, width=28 * mm, height=28 * mm)
+            logo = Image(_logo_src, width=28 * mm, height=28 * mm)
             left_cell.append(logo)
             left_cell.append(Spacer(1, 4))
         except Exception as exc:
