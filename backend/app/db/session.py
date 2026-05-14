@@ -411,6 +411,9 @@ async def init_db() -> None:
             # Organigramme : position libre sur le canvas type Miro.
             ("org_nodes", "pos_x", "DOUBLE PRECISION"),
             ("org_nodes", "pos_y", "DOUBLE PRECISION"),
+            # Organigramme : niveau d'exécution (direction / adjoint /
+            # adjoint_virtuel) — qui doit faire ce rôle / cette tâche.
+            ("org_nodes", "execution_tier", "VARCHAR(24)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

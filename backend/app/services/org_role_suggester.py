@@ -33,6 +33,7 @@ log = logging.getLogger(__name__)
 
 MODEL = "claude-sonnet-4-6"
 VALID_KINDS = {"dept", "role", "service", "task"}
+VALID_TIERS = {"direction", "adjoint", "adjoint_virtuel"}
 
 
 SYSTEM_PROMPT = """Tu es Kratos, l'architecte organisationnel d'un \
@@ -48,7 +49,8 @@ Tu réponds UNIQUEMENT en JSON strict :
     {
       "label": "Nom du rôle / département / tâche (max 80 caractères)",
       "kind": "dept" | "role" | "service" | "task",
-      "description": "Pourquoi c'est nécessaire et ce que ça couvre (1-2 phrases)"
+      "description": "Pourquoi c'est nécessaire et ce que ça couvre (1-2 phrases)",
+      "execution_tier": "direction" | "adjoint" | "adjoint_virtuel"
     }
   ]
 }
@@ -61,57 +63,86 @@ fournis, même approximativement).
 rôles génériques creux.
 - kind="dept" pour une grande fonction, "role" pour un poste, "task" \
 pour une action concrète, "service" pour un service partagé/transverse.
+- execution_tier : QUI doit prendre ça en charge.
+  * "direction" — relève du dirigeant : stratégie, décisions, \
+négociations clés, relations bancaires/partenaires. Non délégable.
+  * "adjoint" — délégable à un adjoint humain : coordination, suivi, \
+exécution qui demande du jugement ou du contact humain.
+  * "adjoint_virtuel" — automatisable ou délégable à un adjoint \
+virtuel (IA, outils) : saisie, relances, rapports, screening, \
+tâches répétitives et procédurales.
 - Chaque suggestion doit combler un vrai trou opérationnel ou \
 stratégique."""
 
 
 # Canevas de secours par type d'entreprise (fallback sans IA).
-_CANEVAS: dict[str, list[tuple[str, str, str]]] = {
+# Tuple : (label, kind, description, execution_tier).
+_CANEVAS: dict[str, list[tuple[str, str, str, str]]] = {
     "immobilier": [
         ("Gestion locative", "dept",
-         "Baux, renouvellements, communication avec les locataires."),
+         "Baux, renouvellements, communication avec les locataires.",
+         "adjoint"),
         ("Réception des loyers", "role",
-         "Encaissement, relances, suivi des retards de paiement."),
+         "Encaissement, relances, suivi des retards de paiement.",
+         "adjoint_virtuel"),
         ("Maintenance & réparations", "role",
-         "Bons de travail, suivi des bris, coordination des fournisseurs."),
+         "Bons de travail, suivi des bris, coordination des fournisseurs.",
+         "adjoint"),
         ("Comptabilité immeuble", "service",
-         "Tenue de livres, taxes et états financiers par immeuble."),
+         "Tenue de livres, taxes et états financiers par immeuble.",
+         "adjoint_virtuel"),
         ("Acquisition", "role",
-         "Analyse de leads, montage financier, négociation d'achat."),
+         "Analyse de leads, montage financier, négociation d'achat.",
+         "direction"),
         ("Financement & refinancement", "task",
-         "Suivi des hypothèques, dates de terme, marges de crédit."),
+         "Suivi des hypothèques, dates de terme, marges de crédit.",
+         "direction"),
         ("Assurances & conformité", "task",
-         "Polices à jour, conformité municipale et réglementaire."),
+         "Polices à jour, conformité municipale et réglementaire.",
+         "adjoint"),
     ],
     "construction": [
         ("Estimation / soumissions", "role",
-         "Chiffrage, rédaction des soumissions, suivi du taux d'acceptation."),
+         "Chiffrage, rédaction des soumissions, suivi du taux d'acceptation.",
+         "direction"),
         ("Chargé de projet", "role",
-         "Planification de chantier, échéancier, coordination des équipes."),
+         "Planification de chantier, échéancier, coordination des équipes.",
+         "adjoint"),
         ("Approvisionnement", "role",
-         "Bons d'achat, relation fournisseurs, gestion des matériaux."),
+         "Bons d'achat, relation fournisseurs, gestion des matériaux.",
+         "adjoint"),
         ("Sous-traitants", "role",
-         "Sélection, contrats et évaluation des sous-traitants."),
+         "Sélection, contrats et évaluation des sous-traitants.",
+         "direction"),
         ("Facturation & paiements", "service",
-         "Factures clients, comptes à recevoir et à payer."),
+         "Factures clients, comptes à recevoir et à payer.",
+         "adjoint_virtuel"),
         ("Santé-sécurité (CNESST)", "task",
-         "Conformité chantier, prévention et formation."),
+         "Conformité chantier, prévention et formation.",
+         "adjoint"),
         ("Service après-vente", "task",
-         "Suivi des déficiences et des garanties."),
+         "Suivi des déficiences et des garanties.",
+         "adjoint"),
     ],
     "gestion": [
         ("Comptabilité", "service",
-         "Tenue de livres, taxes, comptes payables et recevables."),
+         "Tenue de livres, taxes, comptes payables et recevables.",
+         "adjoint_virtuel"),
         ("Ressources humaines", "role",
-         "Embauche, paie, congés et dossiers employés."),
+         "Embauche, paie, congés et dossiers employés.",
+         "adjoint"),
         ("Direction / stratégie", "role",
-         "Vision, objectifs trimestriels et suivi des indicateurs."),
+         "Vision, objectifs trimestriels et suivi des indicateurs.",
+         "direction"),
         ("Juridique & conformité", "task",
-         "Statuts, conventions d'actionnaires, contrats et assurances."),
+         "Statuts, conventions d'actionnaires, contrats et assurances.",
+         "direction"),
         ("Marketing & développement", "role",
-         "Acquisition de clients et image de marque."),
+         "Acquisition de clients et image de marque.",
+         "adjoint"),
         ("Administration", "task",
-         "Gestion documentaire, classement et fournisseurs internes."),
+         "Gestion documentaire, classement et fournisseurs internes.",
+         "adjoint_virtuel"),
     ],
 }
 _DEFAULT_CANEVAS = _CANEVAS["gestion"]
@@ -192,10 +223,17 @@ def _suggest_locally(
     canevas = _CANEVAS.get(ent_type, _DEFAULT_CANEVAS)
     covered = {_norm(n.label) for n in existing}
     out: list[dict] = []
-    for label, kind, desc in canevas:
+    for label, kind, desc, tier in canevas:
         if _norm(label) in covered:
             continue
-        out.append({"label": label, "kind": kind, "description": desc})
+        out.append(
+            {
+                "label": label,
+                "kind": kind,
+                "description": desc,
+                "execution_tier": tier,
+            }
+        )
     return out
 
 
@@ -247,6 +285,9 @@ async def suggest_roles(db: AsyncSession, node_id: int) -> list[dict]:
         kind = str(s.get("kind") or "role").strip().lower()
         if kind not in VALID_KINDS:
             kind = "role"
+        tier = str(s.get("execution_tier") or "").strip().lower()
+        if tier not in VALID_TIERS:
+            tier = None
         out.append(
             {
                 "label": label,
@@ -254,6 +295,7 @@ async def suggest_roles(db: AsyncSession, node_id: int) -> list[dict]:
                 "description": (
                     str(s.get("description") or "").strip()[:600] or None
                 ),
+                "execution_tier": tier,
             }
         )
     return out[:10]
