@@ -85,6 +85,10 @@ const KIND_LABELS: Record<string, { label: string; cls: string }> = {
     label: "Entreprise",
     cls: "bg-indigo-500/15 text-indigo-300 border-indigo-500/30"
   },
+  person: {
+    label: "Personne",
+    cls: "bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-500/30"
+  },
   dept: {
     label: "Département",
     cls: "bg-violet-500/15 text-violet-300 border-violet-500/30"
@@ -943,8 +947,14 @@ function NodeEditorBlock({
   }, [node.assignee_external_name]);
 
   const coOwnerIds = node.co_owner_node_ids || [];
+  // Détenteurs possibles : entreprises ET personnes physiques (la
+  // détention n'est pas que sociétale — il y a aussi de la détention
+  // personnelle).
   const companyOptions = allNodes
-    .filter((n) => n.kind === "company" && n.id !== node.id)
+    .filter(
+      (n) =>
+        (n.kind === "company" || n.kind === "person") && n.id !== node.id
+    )
     .map((n) => ({ id: n.id, label: n.label }));
 
   return (
@@ -964,6 +974,7 @@ function NodeEditorBlock({
             className="input mt-0.5 text-[11px]"
           >
             <option value="company">Entreprise</option>
+            <option value="person">Personne</option>
             <option value="dept">Département</option>
             <option value="role">Rôle</option>
             <option value="task">Tâche</option>
@@ -1054,7 +1065,7 @@ function NodeEditorBlock({
               void onPatch(node.id, { co_owner_node_ids: ids })
             }
             placeholder="— Aucun co-détenteur —"
-            emptyLabel="Aucune autre entreprise dans l'organigramme"
+            emptyLabel="Aucune entreprise ni personne dans l'organigramme"
           />
         </div>
       </div>
