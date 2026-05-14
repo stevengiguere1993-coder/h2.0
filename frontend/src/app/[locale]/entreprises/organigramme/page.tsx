@@ -150,6 +150,10 @@ export default function OrganigrammePage() {
     "columns"
   );
 
+  // Zoom de la vue colonnes (le canvas a son propre zoom interne) —
+  // pour une vue plus globale au besoin.
+  const [columnsZoom, setColumnsZoom] = useState(1);
+
   // État du glisser-déposer.
   const [dragId, setDragId] = useState<number | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
@@ -239,27 +243,58 @@ export default function OrganigrammePage() {
     return m;
   }, [nodes]);
 
-  const topLevel = byParent.get(null) || [];
-
-  // Index : id d'un détenteur → nœuds qu'il co-détient (il figure dans
-  // leur co_owner_node_ids). Permet d'afficher dans l'arbre, sous
-  // chaque détenteur, TOUTES les entités qu'il détient — pas seulement
-  // ses enfants directs (détenteur principal). La détention multiple
-  // est ainsi visible comme de vraies cartes, comme dans le canvas.
-  const byCoOwner = useMemo(() => {
-    const m = new Map<number, OrgNode[]>();
+  // Placement dans l'arbre par « détenteur principal » :
+  //  • détenteur principal d'un nœud = son parent_id si défini, sinon
+  //    son 1er co-détenteur. Un nœud n'est une VRAIE racine que s'il
+  //    n'a AUCUN détenteur → une entreprise co-détenue ne flotte
+  //    jamais comme entité distincte.
+  //  • byPrimary   : détenteur principal → nœuds placés sous lui
+  //  • bySecondary : détenteur → nœuds qu'il co-détient sans en être
+  //    le détenteur principal (affichés en « Co-détenu ici »).
+  const { byPrimary, bySecondary } = useMemo(() => {
+    const prim = new Map<number | null, OrgNode[]>();
+    const sec = new Map<number, OrgNode[]>();
     for (const n of nodes) {
-      for (const ownerId of n.co_owner_node_ids || []) {
-        const arr = m.get(ownerId) || [];
-        arr.push(n);
-        m.set(ownerId, arr);
+      const co = n.co_owner_node_ids || [];
+      const primary = n.parent_id ?? (co.length > 0 ? co[0] : null);
+      const pArr = prim.get(primary);
+      if (pArr) pArr.push(n);
+      else prim.set(primary, [n]);
+      // Co-détenteurs « secondaires » = tous sauf celui déjà utilisé
+      // comme détenteur principal (le 1er, quand il n'y a pas de
+      // parent_id).
+      const secondaries = n.parent_id != null ? co : co.slice(1);
+      for (const h of secondaries) {
+        const sArr = sec.get(h);
+        if (sArr) sArr.push(n);
+        else sec.set(h, [n]);
       }
     }
-    for (const arr of m.values()) {
+    for (const arr of prim.values())
       arr.sort((a, b) => a.position - b.position);
-    }
-    return m;
+    for (const arr of sec.values())
+      arr.sort((a, b) => a.position - b.position);
+    return { byPrimary: prim, bySecondary: sec };
   }, [nodes]);
+
+  // Racines de l'arbre : les vrais top-level (aucun détenteur) + un
+  // filet de sécurité — si des co-détentions forment un cycle
+  // déconnecté des racines, les nœuds concernés ne seraient sous
+  // personne ; on les rattache comme racines pour qu'ils restent
+  // toujours visibles.
+  const topLevel = useMemo(() => {
+    const roots = byPrimary.get(null) || [];
+    const reachable = new Set<number>();
+    const stack = roots.map((r) => r.id);
+    while (stack.length) {
+      const id = stack.pop() as number;
+      if (reachable.has(id)) continue;
+      reachable.add(id);
+      for (const c of byPrimary.get(id) || []) stack.push(c.id);
+    }
+    const orphans = nodes.filter((n) => !reachable.has(n.id));
+    return orphans.length > 0 ? [...roots, ...orphans] : roots;
+  }, [byPrimary, nodes]);
 
   // Sous-arbre du nœud en cours de glissement — on l'exclut des cibles
   // de dépôt valides (un nœud ne peut pas atterrir sur lui-même ni
@@ -625,14 +660,24 @@ export default function OrganigrammePage() {
                 </span>
               </div>
             ) : viewMode === "columns" ? (
-              <div className="flex items-stretch gap-1 overflow-x-auto pb-4">
+              <>
+                <div className="mb-2 flex justify-end">
+                  <ZoomControl
+                    zoom={columnsZoom}
+                    setZoom={setColumnsZoom}
+                  />
+                </div>
+                <div
+                  className="flex items-stretch gap-1 overflow-x-auto pb-4"
+                  style={{ zoom: columnsZoom }}
+                >
                 {topLevel.map((n) => (
                   <div key={n.id} className="flex items-stretch">
                     <DropBar targetId={n.id} dnd={dnd} vertical />
                     <ColumnView
                       node={n}
-                      byParent={byParent}
-                      byCoOwner={byCoOwner}
+                      byPrimary={byPrimary}
+                      bySecondary={bySecondary}
                       allNodes={nodes}
                       entreprises={entreprises}
                       employes={employes}
@@ -664,7 +709,8 @@ export default function OrganigrammePage() {
                     Déposer ici →<br />racine du groupe
                   </div>
                 ) : null}
-              </div>
+                </div>
+              </>
             ) : (
               <CanvasView
                 nodes={nodes}
@@ -723,12 +769,67 @@ function DropBar({
   );
 }
 
+// ─── Contrôle de zoom (vues colonnes & canvas) ───────────────────
+
+function ZoomControl({
+  zoom,
+  setZoom
+}: {
+  zoom: number;
+  setZoom: (z: number) => void;
+}) {
+  const clamp = (z: number) =>
+    Math.min(2, Math.max(0.4, Math.round(z * 10) / 10));
+  return (
+    <div
+      className="inline-flex items-center overflow-hidden rounded-lg border"
+      style={{
+        borderColor: "var(--qg-border)",
+        backgroundColor: "var(--qg-card-bg)"
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setZoom(clamp(zoom - 0.1))}
+        className="px-2.5 py-1 text-sm font-bold leading-none hover:bg-accent-500/10"
+        style={{ color: "var(--qg-text-soft)" }}
+        title="Dézoomer"
+        aria-label="Dézoomer"
+      >
+        −
+      </button>
+      <button
+        type="button"
+        onClick={() => setZoom(1)}
+        className="min-w-[46px] border-x py-1 text-[11px] font-semibold leading-none hover:bg-accent-500/10"
+        style={{
+          borderColor: "var(--qg-border)",
+          color: "var(--qg-text-soft)"
+        }}
+        title="Réinitialiser le zoom (100 %)"
+      >
+        {Math.round(zoom * 100)}%
+      </button>
+      <button
+        type="button"
+        onClick={() => setZoom(clamp(zoom + 0.1))}
+        className="px-2.5 py-1 text-sm font-bold leading-none hover:bg-accent-500/10"
+        style={{ color: "var(--qg-text-soft)" }}
+        title="Zoomer"
+        aria-label="Zoomer"
+      >
+        +
+      </button>
+    </div>
+  );
+}
+
 // ─── Une colonne = une branche top-level + son arbre ─────────────
 
 function ColumnView({
   node,
-  byParent,
-  byCoOwner,
+  byPrimary,
+  bySecondary,
   allNodes,
   entreprises,
   employes,
@@ -739,8 +840,8 @@ function ColumnView({
   onDelete
 }: {
   node: OrgNode;
-  byParent: Map<number | null, OrgNode[]>;
-  byCoOwner: Map<number, OrgNode[]>;
+  byPrimary: Map<number | null, OrgNode[]>;
+  bySecondary: Map<number, OrgNode[]>;
   allNodes: OrgNode[];
   entreprises: Array<{ id: number; name: string }>;
   employes: Employe[];
@@ -800,8 +901,8 @@ function ColumnView({
       />
       <Children
         parentId={node.id}
-        byParent={byParent}
-        byCoOwner={byCoOwner}
+        byPrimary={byPrimary}
+        bySecondary={bySecondary}
         ancestors={new Set([node.id])}
         allNodes={allNodes}
         entreprises={entreprises}
@@ -819,8 +920,8 @@ function ColumnView({
 
 function Children({
   parentId,
-  byParent,
-  byCoOwner,
+  byPrimary,
+  bySecondary,
   ancestors,
   allNodes,
   entreprises,
@@ -833,8 +934,8 @@ function Children({
   depth
 }: {
   parentId: number;
-  byParent: Map<number | null, OrgNode[]>;
-  byCoOwner: Map<number, OrgNode[]>;
+  byPrimary: Map<number | null, OrgNode[]>;
+  bySecondary: Map<number, OrgNode[]>;
   ancestors: Set<number>;
   allNodes: OrgNode[];
   entreprises: Array<{ id: number; name: string }>;
@@ -851,12 +952,14 @@ function Children({
   onDelete: (id: number) => Promise<void>;
   depth: number;
 }) {
-  // Enfants directs (détenteur principal) ET entités co-détenues par
-  // ce nœud — affichées comme de vraies cartes dans l'arbre, pas juste
-  // mentionnées. La détention multiple est ainsi visible partout.
-  const directChildren = byParent.get(parentId) || [];
+  // Nœuds dont CE nœud est le détenteur principal (placement de base
+  // dans l'arbre) ET nœuds qu'il co-détient sans en être le principal
+  // (« Co-détenu ici »). La détention multiple reste visible comme de
+  // vraies cartes, et une entité co-détenue n'apparaît jamais comme
+  // racine distincte.
+  const directChildren = byPrimary.get(parentId) || [];
   const directIds = new Set(directChildren.map((c) => c.id));
-  const coDetained = (byCoOwner.get(parentId) || []).filter(
+  const coDetained = (bySecondary.get(parentId) || []).filter(
     (c) => !directIds.has(c.id)
   );
 
@@ -875,6 +978,10 @@ function Children({
     // Garde anti-boucle : si le nœud est déjà un ancêtre de cette
     // branche (co-détentions croisées), on l'affiche sans redescendre.
     const alreadyShown = ancestors.has(c.id);
+    // Vrai enfant direct (parent_id pointe ici) → barre de dépôt pour
+    // réordonner. Un nœud placé ici via sa 1re co-détention (faute de
+    // parent_id) reste une carte normale, mais sans barre de dépôt.
+    const realChild = c.parent_id === parentId;
     return (
       <div key={c.id}>
         {coDetainedHere ? (
@@ -885,9 +992,9 @@ function Children({
             <Link2 className="h-2.5 w-2.5" />
             Co-détenu ici
           </div>
-        ) : (
+        ) : realChild ? (
           <DropBar targetId={c.id} dnd={dnd} />
-        )}
+        ) : null}
         <NodeRow
           node={c}
           allNodes={allNodes}
@@ -910,8 +1017,8 @@ function Children({
         ) : (
           <Children
             parentId={c.id}
-            byParent={byParent}
-            byCoOwner={byCoOwner}
+            byPrimary={byPrimary}
+            bySecondary={bySecondary}
             ancestors={new Set(ancestors).add(c.id)}
             allNodes={allNodes}
             entreprises={entreprises}
@@ -1686,6 +1793,11 @@ function CanvasView({
   // Bulle sélectionnée → ouvre le panneau d'édition latéral.
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
+  // Zoom du canvas — vue plus globale au besoin. Appliqué en
+  // transform:scale sur la couche de contenu ; canvasCoords divise
+  // par le zoom pour garder un drag / des flèches précis.
+  const [zoom, setZoom] = useState(1);
+
   // Positions de travail : seed depuis pos_x/pos_y du serveur, sinon
   // auto-layout en arbre. Le drag les met à jour localement ; on
   // PATCH au relâchement.
@@ -1760,9 +1872,12 @@ function CanvasView({
     const el = canvasRef.current;
     if (!el) return { x: 0, y: 0 };
     const r = el.getBoundingClientRect();
+    // (clientX - left + scroll) donne la position dans l'espace
+    // ZOOMÉ ; on divise par le zoom pour revenir aux coordonnées de
+    // contenu (celles stockées dans positions / pos_x).
     return {
-      x: e.clientX - r.left + el.scrollLeft,
-      y: e.clientY - r.top + el.scrollTop
+      x: (e.clientX - r.left + el.scrollLeft) / zoom,
+      y: (e.clientY - r.top + el.scrollTop) / zoom
     };
   }
 
@@ -1950,6 +2065,12 @@ function CanvasView({
           cursor: connect ? "crosshair" : "default"
         }}
       >
+        {/* Sizer : réserve la zone scrollable à la taille ZOOMÉE.
+            La couche de contenu en dessous est mise à l'échelle via
+            transform:scale — le scroll reste donc cohérent. */}
+        <div
+          style={{ width: canvasW * zoom, height: canvasH * zoom }}
+        >
         <div
           onMouseDown={(e) => {
             // Clic sur le fond quadrillé (hors bulle) → désélectionne.
@@ -1959,6 +2080,8 @@ function CanvasView({
             position: "relative",
             width: canvasW,
             height: canvasH,
+            transform: `scale(${zoom})`,
+            transformOrigin: "0 0",
             // Quadrillage en coordonnées contenu (s'aligne au snap).
             backgroundImage:
               "radial-gradient(var(--qg-border-soft) 1px, transparent 1px)",
@@ -2108,6 +2231,11 @@ function CanvasView({
           );
         })}
         </div>
+        </div>
+      </div>
+      {/* Contrôle de zoom — flottant, fixe (hors zone scrollable). */}
+      <div className="absolute bottom-3 left-3 z-10">
+        <ZoomControl zoom={zoom} setZoom={setZoom} />
       </div>
       {selectedNode ? (
         <CanvasNodeEditor
