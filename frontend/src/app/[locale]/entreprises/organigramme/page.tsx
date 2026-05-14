@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import {
   Briefcase,
   Building2,
@@ -151,8 +158,30 @@ export default function OrganigrammePage() {
   );
 
   // Zoom de la vue colonnes (le canvas a son propre zoom interne) —
-  // pour une vue plus globale au besoin.
+  // pour une vue plus globale au besoin. Ajustable via les boutons
+  // ou Ctrl/Cmd + molette.
   const [columnsZoom, setColumnsZoom] = useState(1);
+  const columnsRef = useRef<HTMLDivElement | null>(null);
+
+  // Ctrl/Cmd + molette → zoom de la vue colonnes (molette simple =
+  // défilement normal). Listener non-passif posé à la main car React
+  // attache `onWheel` en passif (preventDefault impossible sinon).
+  useEffect(() => {
+    const el = columnsRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      setColumnsZoom((z) =>
+        Math.min(
+          2,
+          Math.max(0.4, Math.round((z - e.deltaY * 0.0015) * 100) / 100)
+        )
+      );
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [viewMode]);
 
   // État du glisser-déposer.
   const [dragId, setDragId] = useState<number | null>(null);
@@ -668,6 +697,7 @@ export default function OrganigrammePage() {
                   />
                 </div>
                 <div
+                  ref={columnsRef}
                   className="flex items-stretch gap-1 overflow-x-auto pb-4"
                   style={{ zoom: columnsZoom }}
                 >
@@ -783,6 +813,7 @@ function ZoomControl({
   return (
     <div
       className="inline-flex items-center overflow-hidden rounded-lg border"
+      title="Zoom — ou Ctrl/Cmd + molette"
       style={{
         borderColor: "var(--qg-border)",
         backgroundColor: "var(--qg-card-bg)"
@@ -1795,8 +1826,18 @@ function CanvasView({
 
   // Zoom du canvas — vue plus globale au besoin. Appliqué en
   // transform:scale sur la couche de contenu ; canvasCoords divise
-  // par le zoom pour garder un drag / des flèches précis.
+  // par le zoom pour garder un drag / des flèches précis. Ajustable
+  // via les boutons ou Ctrl/Cmd + molette.
   const [zoom, setZoom] = useState(1);
+  // Point de contenu à garder fixe sous le curseur après un zoom
+  // molette (appliqué en useLayoutEffect une fois la nouvelle échelle
+  // rendue).
+  const zoomFocusRef = useRef<{
+    contentX: number;
+    contentY: number;
+    vpX: number;
+    vpY: number;
+  } | null>(null);
 
   // Positions de travail : seed depuis pos_x/pos_y du serveur, sinon
   // auto-layout en arbre. Le drag les met à jour localement ; on
@@ -1867,6 +1908,49 @@ function CanvasView({
       return next;
     });
   }, [nodes, autoLayout]);
+
+  // Ctrl/Cmd + molette → zoom du canvas centré sur le curseur
+  // (molette simple = défilement normal). Listener non-passif posé à
+  // la main car React attache `onWheel` en passif.
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      const vpX = e.clientX - r.left;
+      const vpY = e.clientY - r.top;
+      setZoom((z) => {
+        const next = Math.min(
+          2,
+          Math.max(0.4, Math.round((z - e.deltaY * 0.0015) * 100) / 100)
+        );
+        if (next !== z) {
+          zoomFocusRef.current = {
+            contentX: (vpX + el.scrollLeft) / z,
+            contentY: (vpY + el.scrollTop) / z,
+            vpX,
+            vpY
+          };
+        }
+        return next;
+      });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // Après un zoom molette : repositionne le scroll pour garder le
+  // point de contenu sous le curseur immobile.
+  useLayoutEffect(() => {
+    const el = canvasRef.current;
+    const f = zoomFocusRef.current;
+    if (!el || !f) return;
+    el.scrollLeft = f.contentX * zoom - f.vpX;
+    el.scrollTop = f.contentY * zoom - f.vpY;
+    zoomFocusRef.current = null;
+  }, [zoom]);
 
   function canvasCoords(e: { clientX: number; clientY: number }): XY {
     const el = canvasRef.current;
