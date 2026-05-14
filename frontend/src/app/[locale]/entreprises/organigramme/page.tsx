@@ -501,7 +501,8 @@ export default function OrganigrammePage() {
                 className="mb-3 text-[11px]"
                 style={{ color: "var(--qg-text-soft)" }}
               >
-                Déplace les bulles librement. Tire depuis le point{" "}
+                Déplace les bulles — elles s&apos;aimantent à la grille
+                pour rester alignées. Tire depuis le point{" "}
                 <span
                   className="inline-block h-2 w-2 rounded-full align-middle"
                   style={{ backgroundColor: "var(--qg-accent)" }}
@@ -1417,6 +1418,10 @@ function NodeRow({
 const BUBBLE_W = 210;
 const BUBBLE_H = 66;
 const CANVAS_PAD = 400;
+// Pas de la grille (= taille du quadrillage de fond). Les bulles
+// s'aimantent dessus → lignes droites, niveaux alignés.
+const GRID = 24;
+const snap = (v: number) => Math.round(v / GRID) * GRID;
 
 type XY = { x: number; y: number };
 
@@ -1500,8 +1505,8 @@ function CanvasView({
     let row = 0;
     const place = (n: OrgNode, depth: number) => {
       out.set(n.id, {
-        x: 60 + depth * (BUBBLE_W + 90),
-        y: 60 + row * (BUBBLE_H + 40)
+        x: snap(48 + depth * (BUBBLE_W + 96)),
+        y: snap(48 + row * (BUBBLE_H + 42))
       });
       row += 1;
       for (const c of childrenOf.get(n.id) || []) place(c, depth + 1);
@@ -1621,8 +1626,8 @@ function CanvasView({
     if (dragRef.current) {
       const d = dragRef.current;
       d.moved = true;
-      const nx = Math.max(0, d.origX + (m.x - d.startX));
-      const ny = Math.max(0, d.origY + (m.y - d.startY));
+      const nx = Math.max(0, snap(d.origX + (m.x - d.startX)));
+      const ny = Math.max(0, snap(d.origY + (m.y - d.startY)));
       setPositions((prev) => {
         const next = new Map(prev);
         next.set(d.id, { x: nx, y: ny });
@@ -1705,14 +1710,19 @@ function CanvasView({
         minHeight: 420,
         borderColor: "var(--qg-border)",
         backgroundColor: "var(--qg-bg-alt, transparent)",
-        backgroundImage:
-          "radial-gradient(var(--qg-border-soft) 1px, transparent 1px)",
-        backgroundSize: "24px 24px",
         cursor: connect ? "crosshair" : "default"
       }}
     >
       <div
-        style={{ position: "relative", width: canvasW, height: canvasH }}
+        style={{
+          position: "relative",
+          width: canvasW,
+          height: canvasH,
+          // Quadrillage en coordonnées contenu (s'aligne au snap).
+          backgroundImage:
+            "radial-gradient(var(--qg-border-soft) 1px, transparent 1px)",
+          backgroundSize: `${GRID}px ${GRID}px`
+        }}
       >
         {/* Couche SVG : flèches */}
         <svg
