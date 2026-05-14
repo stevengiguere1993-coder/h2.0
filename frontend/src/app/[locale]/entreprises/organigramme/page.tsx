@@ -548,8 +548,9 @@ export default function OrganigrammePage() {
                   style={{ backgroundColor: "var(--qg-accent)" }}
                 />{" "}
                 d&apos;une bulle vers une autre pour créer une flèche de
-                détention. Survole une flèche pour la supprimer. Trait
-                plein = détenteur principal, pointillé = co-détenteur.
+                détention. Survole une flèche pour la supprimer. Chaque
+                détenteur — principal ou co-détenteur, même minoritaire —
+                est un propriétaire à part entière.
               </p>
             ) : null}
 
@@ -1553,8 +1554,9 @@ function NodeRow({
 // ─── Vue Canvas type Miro ────────────────────────────────────────
 //
 // Bulles positionnables librement (pos_x / pos_y persistés) + flèches
-// auto-tracées depuis la hiérarchie (parent_id = trait plein,
-// co_owner_node_ids = pointillé) avec ajout / suppression manuelle.
+// de détention auto-tracées (parent_id + co_owner_node_ids), toutes
+// en trait plein — un co-détenteur est un propriétaire à part
+// entière —, avec ajout / suppression manuelle.
 // Le canvas et la vue colonnes partagent les mêmes données : tirer
 // une flèche A→B re-parente B (ou ajoute A en co-détenteur), donc la
 // vue colonnes reflète immédiatement les changements.
@@ -1705,7 +1707,8 @@ function CanvasView({
     return { canvasW: mx + CANVAS_PAD, canvasH: my + CANVAS_PAD };
   }, [positions]);
 
-  // Flèches : parent_id (plein) + co_owner_node_ids (pointillé).
+  // Flèches de détention : parent_id + co_owner_node_ids, toutes en
+  // trait plein (la détention compte autant pour tous les détenteurs).
   const arrows = useMemo(() => {
     const out: Array<{
       key: string;
@@ -1960,12 +1963,9 @@ function CanvasView({
                   stroke={
                     hovered
                       ? "var(--qg-accent)"
-                      : a.kind === "coowner"
-                        ? "var(--qg-text-soft)"
-                        : "var(--qg-text-muted)"
+                      : "var(--qg-text-muted)"
                   }
                   strokeWidth={hovered ? 2.5 : 1.75}
-                  strokeDasharray={a.kind === "coowner" ? "5 4" : undefined}
                   markerEnd={`url(#org-arrow${hovered ? "-accent" : ""})`}
                   style={{ pointerEvents: "none" }}
                 />
