@@ -175,11 +175,12 @@ export default function EntreprisesDashboard() {
         setHealth(h);
         setStats(s);
 
-        // Briefing du jour : si une entreprise est marquée comme
-        // « mère » du groupe (is_parent_company), son briefing
-        // couvre toutes les entreprises actives → on l'affiche en
-        // priorité. Sinon : on prend l'entreprise avec le score de
-        // santé le plus bas (la plus à risque) en fallback.
+        // Briefing du jour : priorité d'affichage —
+        //   1. Entreprise explicitement marquée « mère »
+        //      (is_parent_company) → briefing global du groupe.
+        //   2. Sinon : entreprise dont le nom matche « MGV
+        //      Investissements » (mère par défaut du groupe).
+        //   3. Sinon : entreprise au plus bas score de santé.
         let targetId: number | null = null;
         let targetName: string | null = null;
         let targetIsParent = false;
@@ -194,9 +195,15 @@ export default function EntreprisesDashboard() {
               is_parent_company?: boolean;
               is_active?: boolean;
             }>;
-            const parent = all.find(
-              (x) => x.is_parent_company && x.is_active !== false
-            );
+            const active = all.filter((x) => x.is_active !== false);
+            // 1. flag explicite
+            let parent = active.find((x) => x.is_parent_company);
+            // 2. fallback : match nom « MGV Investissement(s) »
+            if (!parent) {
+              parent = active.find((x) =>
+                /mgv\s*invest/i.test(x.name || "")
+              );
+            }
             if (parent) {
               targetId = parent.id;
               targetName = parent.name;
