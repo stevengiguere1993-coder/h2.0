@@ -479,6 +479,13 @@ async def render_soumission_pdf(
     sm, items, contact = await _load(db, soumission_id)
     if sm is None:
         return None
+    # Les documents de type « contrat » utilisent le rendu du contrat
+    # d'entreprise (sections APCHQ + clauses générales G1-G20). Import
+    # tardif : contract_pdf importe ce module → éviterait une boucle.
+    if getattr(sm, "kind", "quote") == "contract":
+        from app.services.contract_pdf import render_contract_pdf
+
+        return await render_contract_pdf(db, soumission_id)
     gst, qst = await _fetch_tax_numbers()
     pdf = _render_bytes(sm, items, contact, tax_gst=gst, tax_qst=qst)
     return sm, pdf
