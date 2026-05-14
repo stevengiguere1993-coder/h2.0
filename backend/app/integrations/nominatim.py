@@ -19,7 +19,54 @@ import httpx
 log = logging.getLogger(__name__)
 
 NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
+NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
 USER_AGENT = "h2.0-Horizon/1.0 (contact@immohorizon.com)"
+
+
+async def geocode_address(query: str) -> Optional[Dict[str, float]]:
+    """Forward-geocoding : transforme une adresse texte en coordonnées.
+
+    Renvoie ``{"lat": ..., "lng": ...}`` ou ``None`` si Nominatim ne
+    trouve rien. Restreint au Canada. Sert à géolocaliser les leads
+    saisis par adresse (sans GPS drive-by) pour qu'ils apparaissent
+    sur la carte et soient sélectionnables dans « Planifier ma route ».
+    """
+    q = (query or "").strip()
+    if not q:
+        return None
+    params = {
+        "format": "jsonv2",
+        "q": q,
+        "limit": "1",
+        "countrycodes": "ca",
+        "accept-language": "fr-CA,fr;q=0.9,en;q=0.7",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            r = await http.get(
+                NOMINATIM_SEARCH_URL,
+                params=params,
+                headers={"User-Agent": USER_AGENT},
+            )
+            if r.status_code != 200:
+                log.warning(
+                    "Nominatim search '%s' -> %s", q, r.status_code
+                )
+                return None
+            data = r.json()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Nominatim search exception '%s': %s", q, exc)
+        return None
+    if not isinstance(data, list) or not data:
+        return None
+    first = data[0]
+    try:
+        return {
+            "lat": float(first["lat"]),
+            "lng": float(first["lon"]),
+        }
+    except (KeyError, ValueError, TypeError):
+        return None
 
 
 async def reverse_geocode(

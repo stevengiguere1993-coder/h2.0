@@ -531,6 +531,30 @@ async def create_lead(
             final_city = final_city or geo.get("city")
             final_postal = final_postal or geo.get("postal_code")
 
+    # Ville par défaut : si rien n'est saisi ni résolu par le
+    # reverse-geocoding, on assume Montréal (zone de prospection
+    # principale). Évite des leads « repérés » sans ville.
+    if not final_city:
+        final_city = "Montréal"
+
+    # Forward-geocoding : une adresse saisie sans coordonnées GPS
+    # (lead tapé, pas drive-by) est résolue en lat/lng pour que le
+    # lead apparaisse sur la carte ET soit sélectionnable dans
+    # « Planifier ma route ».
+    if final_address and (lat is None or lng is None):
+        from app.integrations.nominatim import geocode_address
+
+        geo_fwd = await geocode_address(
+            ", ".join(
+                p
+                for p in [final_address, final_city, "Québec, Canada"]
+                if p
+            )
+        )
+        if geo_fwd:
+            lat = geo_fwd["lat"]
+            lng = geo_fwd["lng"]
+
     # Auto-génère le nom depuis l'adresse si pas fourni — l'utilisateur
     # n'a plus à saisir un nom à la main. Format « 4520 Saint-Laurent ».
     if not final_name:
@@ -1206,6 +1230,36 @@ async def optimize_route(
         )
     ).scalars().all()
     by_id = {r.id: r for r in rows}
+
+    # Filet de sécurité : géocode à la volée les leads sélectionnés
+    # qui n'ont pas encore de coordonnées mais ont une adresse, puis
+    # persiste — comme ça ils ne sont géocodés qu'une fois et
+    # apparaissent ensuite sur la carte.
+    from app.integrations.nominatim import geocode_address
+
+    for lid in payload.lead_ids:
+        lead = by_id.get(lid)
+        if lead is None:
+            continue
+        if (lead.lat is None or lead.lng is None) and (
+            lead.address or ""
+        ).strip():
+            geo_fwd = await geocode_address(
+                ", ".join(
+                    p
+                    for p in [
+                        lead.address,
+                        lead.city or "Montréal",
+                        "Québec, Canada",
+                    ]
+                    if p
+                )
+            )
+            if geo_fwd:
+                lead.lat = geo_fwd["lat"]
+                lead.lng = geo_fwd["lng"]
+    await db.flush()
+
     geo_leads = [
         by_id[lid]
         for lid in payload.lead_ids
@@ -1215,8 +1269,8 @@ async def optimize_route(
     if len(geo_leads) < 2:
         raise HTTPException(
             400,
-            "Au moins 2 leads géolocalisés sont requis pour optimiser "
-            "un itinéraire.",
+            "Au moins 2 leads avec une adresse géolocalisable sont "
+            "requis pour optimiser un itinéraire.",
         )
 
     # OSRM "trip" attend les coordonnées en lng,lat séparées par ;.

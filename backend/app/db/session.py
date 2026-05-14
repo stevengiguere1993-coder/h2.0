@@ -408,6 +408,9 @@ async def init_db() -> None:
             # liste d'IDs org_nodes) — la détention n'est pas un arbre
             # strict, plusieurs entreprises peuvent en posséder une.
             ("org_nodes", "co_owner_node_ids", "TEXT"),
+            # Organigramme : position libre sur le canvas type Miro.
+            ("org_nodes", "pos_x", "DOUBLE PRECISION"),
+            ("org_nodes", "pos_y", "DOUBLE PRECISION"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

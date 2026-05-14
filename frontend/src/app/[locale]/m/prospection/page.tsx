@@ -11,6 +11,7 @@ import {
   X
 } from "lucide-react";
 
+import { AddressInput } from "@/components/address-input";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { loadPrefs } from "@/lib/prospection-prefs";
@@ -55,6 +56,10 @@ export default function MobileProspectionPage() {
   const [geoLoading, setGeoLoading] = useState(false);
   const [photo, setPhoto] = useState<File | null>(null);
   const [address, setAddress] = useState("");
+  // Ville — défaut Montréal (zone de prospection principale). Aide
+  // le géocodage de l'adresse pour que le lead apparaisse sur la
+  // carte et dans « Planifier ma route ».
+  const [city, setCity] = useState("Montréal");
   const [addressSuggestions, setAddressSuggestions] = useState<
     {
       label: string;
@@ -181,6 +186,8 @@ export default function MobileProspectionPage() {
       // Le backend auto-génère le nom depuis l'adresse si non fourni.
       if (name.trim()) fd.append("name", name.trim());
       if (address.trim()) fd.append("address", address.trim());
+      // Ville — toujours envoyée (défaut Montréal si vidée).
+      fd.append("city", city.trim() || "Montréal");
       fd.append("kind", kind);
       // Priorité par défaut depuis les préférences user (1-5).
       fd.append(
@@ -395,14 +402,12 @@ export default function MobileProspectionPage() {
               <label htmlFor="paddr" className="label">
                 Adresse de l&apos;immeuble
               </label>
-              <input
+              <AddressInput
                 id="paddr"
-                type="text"
                 value={address}
-                onChange={(e) => setAddress(e.target.value)}
+                onChange={setAddress}
                 placeholder="Ex. 4520 Saint-Laurent, Montréal"
                 className="input"
-                autoFocus
               />
               {addressSuggestions.length > 0 && !address ? (
                 <div className="mt-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-2">
@@ -431,8 +436,24 @@ export default function MobileProspectionPage() {
                 </div>
               ) : null}
               <p className="mt-1 text-[10px] text-white/40">
-                Le nom du lead sera auto-généré depuis l&apos;adresse.
+                Choisis une adresse dans les suggestions. Le nom du
+                lead sera auto-généré depuis l&apos;adresse.
               </p>
+            </div>
+
+            {/* Ville — défaut Montréal (aide le géocodage) */}
+            <div>
+              <label htmlFor="pcity" className="label">
+                Ville
+              </label>
+              <input
+                id="pcity"
+                type="text"
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                placeholder="Montréal"
+                className="input"
+              />
             </div>
 
             {/* Type */}
