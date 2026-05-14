@@ -273,6 +273,29 @@ async def public_accept(
         # manuellement.
         pass
 
+    # Contrat signé par le client → on archive le PDF signé (les deux
+    # signatures) dans les documents de la fiche client. Best-effort.
+    if getattr(sm, "kind", "quote") == "contract" and sm.client_id:
+        try:
+            from app.models.client_document import ClientDocument
+
+            rendered = await render_soumission_pdf(db, sm.id)
+            if rendered is not None:
+                _, pdf_bytes = rendered
+                db.add(
+                    ClientDocument(
+                        client_id=sm.client_id,
+                        name=f"contrat-{sm.reference}-signe.pdf",
+                        content_type="application/pdf",
+                        source="contract",
+                        soumission_id=sm.id,
+                        blob=pdf_bytes,
+                    )
+                )
+                await db.flush()
+        except Exception:  # noqa: BLE001
+            pass
+
     await db.refresh(sm)
 
     # Notify managers+ that the quote was signed online

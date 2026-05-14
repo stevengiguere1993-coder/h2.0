@@ -146,7 +146,45 @@ async def provision_project_for_soumission(
     await db.refresh(project)
 
     facture: Optional[Facture] = None
-    if deposit_percentage > 0:
+    # Montant de l'acompte à facturer :
+    #  • Contrat d'entreprise → montant d'acompte saisi dans le
+    #    contrat, TAXES INCLUSES (« taxe in ») : on rétro-calcule
+    #    sous-total / TPS / TVQ à partir du total.
+    #  • Devis classique → pourcentage du sous-total, taxes ajoutées.
+    deposit_subtotal = 0.0
+    grand_total = 0.0
+    tps = 0.0
+    tvq = 0.0
+    label = ""
+    note = ""
+    if getattr(sm, "kind", "quote") == "contract":
+        import json as _json
+
+        try:
+            cd = _json.loads(sm.contract_data) if sm.contract_data else {}
+        except (TypeError, ValueError):
+            cd = {}
+        try:
+            acompte_ttc = float((cd or {}).get("acompte") or 0)
+        except (TypeError, ValueError):
+            acompte_ttc = 0.0
+        if acompte_ttc > 0:
+            deposit_subtotal = round(
+                acompte_ttc / (1 + TPS_RATE + TVQ_RATE), 2
+            )
+            tps = round(deposit_subtotal * TPS_RATE, 2)
+            tvq = round(acompte_ttc - deposit_subtotal - tps, 2)
+            grand_total = round(acompte_ttc, 2)
+            label = (
+                f"Acompte — Contrat {sm.reference}"
+                + (f" — {sm.title}" if sm.title else "")
+            )
+            note = (
+                f"Acompte à la signature du contrat {sm.reference} "
+                "(taxes incluses). Le solde sera facturé selon "
+                "l'avancement des travaux."
+            )
+    elif deposit_percentage > 0:
         sm_subtotal = await _soumission_subtotal(db, sm)
         if sm_subtotal > 0:
             ratio = deposit_percentage / 100.0
@@ -154,46 +192,48 @@ async def provision_project_for_soumission(
             tps = round(deposit_subtotal * TPS_RATE, 2)
             tvq = round(deposit_subtotal * TVQ_RATE, 2)
             grand_total = round(deposit_subtotal + tps + tvq, 2)
+            label = (
+                f"Acompte {deposit_percentage} % — Soumission "
+                f"{sm.reference}"
+                + (f" — {sm.title}" if sm.title else "")
+            )
+            note = (
+                f"Acompte de {deposit_percentage} % sur la soumission "
+                f"{sm.reference}. Le solde sera facturé selon "
+                "l'avancement des travaux."
+            )
 
-            facture = Facture(
-                reference=await next_facture_number(db),
-                client_id=project.client_id,
-                project_id=project.id,
-                status=FactureStatus.DRAFT.value,
-                issued_at=datetime.now(timezone.utc),
-                due_at=(
-                    datetime.now(timezone.utc)
-                    + timedelta(days=due_in_days)
-                ),
-                subtotal=deposit_subtotal,
-                tps=tps,
-                tvq=tvq,
-                total=grand_total,
-                balance=grand_total,
-                client_note=(
-                    f"Acompte de {deposit_percentage} % sur la soumission "
-                    f"{sm.reference}. Le solde sera facturé selon "
-                    "l'avancement des travaux."
-                ),
+    if grand_total > 0:
+        facture = Facture(
+            reference=await next_facture_number(db),
+            client_id=project.client_id,
+            project_id=project.id,
+            status=FactureStatus.DRAFT.value,
+            issued_at=datetime.now(timezone.utc),
+            due_at=(
+                datetime.now(timezone.utc) + timedelta(days=due_in_days)
+            ),
+            subtotal=deposit_subtotal,
+            tps=tps,
+            tvq=tvq,
+            total=grand_total,
+            balance=grand_total,
+            client_note=note,
+        )
+        db.add(facture)
+        await db.flush()
+        db.add(
+            FactureItem(
+                facture_id=facture.id,
+                position=0,
+                description=label,
+                unit="lot",
+                quantity=1,
+                unit_price=deposit_subtotal,
+                total=deposit_subtotal,
             )
-            db.add(facture)
-            await db.flush()
-            db.add(
-                FactureItem(
-                    facture_id=facture.id,
-                    position=0,
-                    description=(
-                        f"Acompte {deposit_percentage} % — Soumission "
-                        f"{sm.reference}"
-                        + (f" — {sm.title}" if sm.title else "")
-                    ),
-                    unit="lot",
-                    quantity=1,
-                    unit_price=deposit_subtotal,
-                    total=deposit_subtotal,
-                )
-            )
-            await db.flush()
+        )
+        await db.flush()
 
     return project, facture
 

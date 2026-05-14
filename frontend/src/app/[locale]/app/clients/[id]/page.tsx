@@ -658,6 +658,17 @@ function ClientDocuments({
   const [prospectFiles, setProspectFiles] = useState<ProspectFile[]>([]);
   const [fileUrls, setFileUrls] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
+  // Documents archivés (PDF) — ex. contrat d'entreprise signé par les
+  // deux parties, déposé automatiquement à la signature du client.
+  const [archivedDocs, setArchivedDocs] = useState<
+    Array<{
+      id: number;
+      name: string;
+      source: string | null;
+      soumission_id: number | null;
+      created_at: string;
+    }>
+  >([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -696,6 +707,13 @@ function ClientDocuments({
         }
         if (pRes && pRes.ok) {
           setProspectFiles((await pRes.json()) as ProspectFile[]);
+        }
+        // PDF archivés de la fiche client (contrats signés…).
+        const dRes = await authedFetch(
+          `/api/v1/clients/${clientId}/documents`
+        );
+        if (dRes.ok && !cancelled) {
+          setArchivedDocs(await dRes.json());
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -760,6 +778,17 @@ function ClientDocuments({
     }).format(v);
   }
 
+  async function downloadArchivedDoc(docId: number) {
+    const res = await authedFetch(
+      `/api/v1/clients/${clientId}/documents/${docId}/download`
+    );
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank", "noopener,noreferrer");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
   return (
     <section className="space-y-2">
       <div>
@@ -767,7 +796,7 @@ function ClientDocuments({
           Documents du client
         </h2>
         <p className="mt-1 text-xs text-white/60">
-          Soumissions signées · contrats · factures
+          Contrats signés · soumissions · factures
           {contactRequestId ? " · photos et documents du formulaire prospect" : ""}.
         </p>
       </div>
@@ -778,6 +807,51 @@ function ClientDocuments({
         </div>
       ) : (
         <>
+          <DocSection
+            title="Contrats signés (PDF archivés)"
+            count={archivedDocs.length}
+            icon={<FileText className="h-3.5 w-3.5" />}
+            defaultOpen={archivedDocs.length > 0}
+          >
+            {archivedDocs.length === 0 ? (
+              <p className="text-xs text-white/40">
+                Aucun contrat signé archivé. Le PDF du contrat signé
+                par les deux parties est déposé ici automatiquement
+                lorsque le client signe en ligne.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {archivedDocs.map((d) => (
+                  <li key={d.id}>
+                    <button
+                      type="button"
+                      onClick={() => void downloadArchivedDoc(d.id)}
+                      className="flex w-full items-start justify-between gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-left text-sm hover:border-emerald-500/50"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-white">
+                          {d.name}
+                        </p>
+                        <p className="text-[11px] text-white/50">
+                          Archivé le{" "}
+                          {new Date(d.created_at).toLocaleDateString(
+                            "fr-CA"
+                          )}
+                          {d.source === "contract"
+                            ? " · contrat signé"
+                            : ""}
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-[11px] font-semibold text-emerald-300">
+                        Ouvrir le PDF
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </DocSection>
+
           <DocSection
             title="Soumissions signées"
             count={signedSoumissions.length}

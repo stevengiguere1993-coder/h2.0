@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 
 import { AddressInput } from "@/components/address-input";
+import { SignaturePad } from "@/components/signature-pad";
 import { AppTopbar } from "@/components/app-topbar";
 import {
   ContractForm,
@@ -157,6 +158,17 @@ export default function SoumissionDetailPage() {
   const [clientName, setClientName] = useState("");
   const [clientEmail, setClientEmail] = useState("");
   const [clientAddress, setClientAddress] = useState("");
+
+  // Signature de l'entrepreneur (Horizon) — le chargé de projet signe
+  // le contrat AVANT l'envoi au client.
+  const [contractorSigName, setContractorSigName] = useState("");
+  const [contractorSigImg, setContractorSigImg] = useState<string | null>(
+    null
+  );
+  const [contractorSigning, setContractorSigning] = useState(false);
+  const [contractorSigNotice, setContractorSigNotice] = useState<
+    string | null
+  >(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -379,10 +391,54 @@ export default function SoumissionDetailPage() {
 
   function openSendModal() {
     if (!s) return;
+    // Un contrat doit être signé par l'entrepreneur (chargé de
+    // projet) AVANT l'envoi au client.
+    if (kind === "contract" && !s.contractor_signed_name) {
+      setSendNotice(
+        "Le chargé de projet doit signer le contrat pour Horizon " +
+          "avant de l'envoyer au client (section « Signature de " +
+          "l'entrepreneur » ci-dessous)."
+      );
+      return;
+    }
     if (!sendSubject)
-      setSendSubject(`Soumission ${s.reference} — ${s.title}`);
+      setSendSubject(
+        `${kind === "contract" ? "Contrat" : "Soumission"} ` +
+          `${s.reference} — ${s.title}`
+      );
     setSendNotice(null);
     setSendOpen(true);
+  }
+
+  async function signContractor() {
+    if (!s || !contractorSigName.trim()) return;
+    setContractorSigning(true);
+    setContractorSigNotice(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/soumissions/${id}/contractor-sign`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            name: contractorSigName.trim(),
+            signature_image_data_url: contractorSigImg
+          })
+        }
+      );
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt.slice(0, 200) || `http_${res.status}`);
+      }
+      const updated = (await res.json()) as Soumission;
+      setS(updated);
+      setContractorSigNotice("Contrat signé pour Horizon.");
+    } catch (err) {
+      setContractorSigNotice(
+        `Signature échouée : ${(err as Error).message}`
+      );
+    } finally {
+      setContractorSigning(false);
+    }
   }
 
   async function previewPdf() {
@@ -1018,6 +1074,87 @@ export default function SoumissionDetailPage() {
                     )}
                   </button>
                 </div>
+
+                {/* Signature de l'entrepreneur — le chargé de projet
+                    signe pour Horizon AVANT l'envoi au client. */}
+                <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900 p-5">
+                  <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    <PenTool className="h-4 w-4" />
+                    Signature de l&apos;entrepreneur (Horizon)
+                  </h2>
+                  {s.contractor_signed_name ? (
+                    <div className="mt-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+                      <Check className="mr-1.5 inline h-4 w-4" />
+                      Signé par{" "}
+                      <strong>{s.contractor_signed_name}</strong> pour
+                      Horizon. Le contrat peut être envoyé au client
+                      pour signature.
+                    </div>
+                  ) : (
+                    <div className="mt-3 space-y-3">
+                      <p className="text-xs text-white/60">
+                        Le chargé de projet signe le contrat pour la
+                        compagnie. Une fois signé, vous pourrez
+                        l&apos;envoyer au client pour sa signature.
+                      </p>
+                      <div>
+                        <label className="label">
+                          Nom du signataire (chargé de projet)
+                        </label>
+                        <input
+                          type="text"
+                          value={contractorSigName}
+                          onChange={(e) =>
+                            setContractorSigName(e.target.value)
+                          }
+                          placeholder="Prénom Nom"
+                          className="input sm:w-80"
+                        />
+                      </div>
+                      <div>
+                        <label className="label">Signature</label>
+                        <div className="max-w-md rounded-lg border border-brand-700 bg-brand-950/40 p-2">
+                          <SignaturePad
+                            onChange={setContractorSigImg}
+                            height={140}
+                          />
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={signContractor}
+                        disabled={
+                          contractorSigning ||
+                          contractorSigName.trim().length < 2
+                        }
+                        className="btn-accent text-sm disabled:opacity-50"
+                      >
+                        {contractorSigning ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Signature…
+                          </>
+                        ) : (
+                          <>
+                            <PenTool className="mr-2 h-4 w-4" />
+                            Signer pour Horizon
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
+                  {contractorSigNotice ? (
+                    <p
+                      className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
+                        contractorSigNotice.startsWith("Contrat signé")
+                          ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                          : "border-amber-500/40 bg-amber-500/10 text-amber-200"
+                      }`}
+                    >
+                      {contractorSigNotice}
+                    </p>
+                  ) : null}
+                </section>
               </>
             ) : null}
 
