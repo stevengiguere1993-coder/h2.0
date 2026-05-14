@@ -29,6 +29,7 @@ router = APIRouter(prefix="/org-nodes", tags=["org-nodes"])
 
 
 VALID_KINDS = {"dept", "role", "service", "task", "company"}
+VALID_TIERS = {"direction", "adjoint", "adjoint_virtuel"}
 
 
 class OrgNodeRead(BaseModel):
@@ -46,6 +47,7 @@ class OrgNodeRead(BaseModel):
     co_owner_node_ids: List[int] = []
     pos_x: Optional[float] = None
     pos_y: Optional[float] = None
+    execution_tier: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -76,6 +78,7 @@ class OrgNodeCreate(BaseModel):
     assignee_external_name: Optional[str] = Field(
         default=None, max_length=255
     )
+    execution_tier: Optional[str] = None
 
 
 class OrgNodeMove(BaseModel):
@@ -100,6 +103,7 @@ class OrgNodeUpdate(BaseModel):
     co_owner_node_ids: Optional[List[int]] = None
     pos_x: Optional[float] = None
     pos_y: Optional[float] = None
+    execution_tier: Optional[str] = None
 
 
 @router.get("", response_model=List[OrgNodeRead])
@@ -125,6 +129,7 @@ async def create_node(
     data: OrgNodeCreate, db: DBSession, _: CurrentUser
 ) -> OrgNodeRead:
     kind = data.kind if data.kind in VALID_KINDS else "dept"
+    tier = data.execution_tier if data.execution_tier in VALID_TIERS else None
     # Position auto si non fournie : max(siblings) + 1
     if data.position is None:
         sibling = (
@@ -148,6 +153,7 @@ async def create_node(
         assignee_employe_id=data.assignee_employe_id,
         assignee_user_id=data.assignee_user_id,
         assignee_external_name=data.assignee_external_name,
+        execution_tier=tier,
     )
     db.add(n)
     await db.commit()
@@ -182,6 +188,12 @@ async def update_node(
     payload = data.model_dump(exclude_unset=True)
     if "kind" in payload and payload["kind"] not in VALID_KINDS:
         payload.pop("kind")
+    if (
+        "execution_tier" in payload
+        and payload["execution_tier"] is not None
+        and payload["execution_tier"] not in VALID_TIERS
+    ):
+        payload.pop("execution_tier")
     if "co_owner_node_ids" in payload:
         # Stocké en JSON texte ; on filtre l'auto-référence par sûreté.
         ids = [
@@ -213,6 +225,7 @@ class RoleSuggestion(BaseModel):
     label: str
     kind: str
     description: Optional[str] = None
+    execution_tier: Optional[str] = None
 
 
 @router.post(

@@ -18,7 +18,8 @@ import {
   Trash2,
   User as UserIcon,
   Users,
-  Workflow
+  Workflow,
+  X
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
@@ -59,6 +60,7 @@ type OrgNode = {
   co_owner_node_ids: number[];
   pos_x: number | null;
   pos_y: number | null;
+  execution_tier: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -98,6 +100,31 @@ const KIND_LABELS: Record<string, { label: string; cls: string }> = {
   service: {
     label: "Service partagé",
     cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+  }
+};
+
+// Niveau d'exécution : qui doit prendre en charge le rôle / la tâche.
+// Aide à voir d'un coup d'œil ce qui doit rester au dirigeant, ce qui
+// est délégable à un adjoint, et ce qui peut passer à l'adjoint
+// virtuel (automatisable).
+const TIER_LABELS: Record<
+  string,
+  { label: string; short: string; cls: string }
+> = {
+  direction: {
+    label: "Direction",
+    short: "Direction",
+    cls: "bg-rose-500/15 text-rose-300 border-rose-500/30"
+  },
+  adjoint: {
+    label: "Adjoint",
+    short: "Adjoint",
+    cls: "bg-orange-500/15 text-orange-300 border-orange-500/30"
+  },
+  adjoint_virtuel: {
+    label: "Adjoint virtuel",
+    short: "Adj. virtuel",
+    cls: "bg-teal-500/15 text-teal-300 border-teal-500/30"
   }
 };
 
@@ -297,13 +324,22 @@ export default function OrganigrammePage() {
   async function createNode(
     parent_id: number | null,
     label: string,
-    kind = "dept"
+    kind = "dept",
+    extra?: { description?: string | null; execution_tier?: string | null }
   ) {
     if (!label.trim()) return;
     try {
       const r = await authedFetch("/api/v1/org-nodes", {
         method: "POST",
-        body: JSON.stringify({ parent_id, label: label.trim(), kind })
+        body: JSON.stringify({
+          parent_id,
+          label: label.trim(),
+          kind,
+          ...(extra?.description ? { description: extra.description } : {}),
+          ...(extra?.execution_tier
+            ? { execution_tier: extra.execution_tier }
+            : {})
+        })
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const created = (await r.json()) as OrgNode;
@@ -609,6 +645,7 @@ export default function OrganigrammePage() {
                 entreprises={entreprises}
                 employes={employes}
                 parentEntId={parentEntId}
+                onCreate={createNode}
                 onPatch={patchNode}
                 onMove={moveNode}
                 onDelete={deleteNode}
@@ -684,7 +721,8 @@ function ColumnView({
   onCreate: (
     parent_id: number | null,
     label: string,
-    kind?: string
+    kind?: string,
+    extra?: { description?: string | null; execution_tier?: string | null }
   ) => Promise<OrgNode | undefined>;
   onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
@@ -772,7 +810,8 @@ function Children({
   onCreate: (
     parent_id: number | null,
     label: string,
-    kind?: string
+    kind?: string,
+    extra?: { description?: string | null; execution_tier?: string | null }
   ) => Promise<OrgNode | undefined>;
   onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
@@ -878,7 +917,378 @@ type RoleSuggestion = {
   label: string;
   kind: string;
   description: string | null;
+  execution_tier: string | null;
 };
+
+// Bloc d'édition partagé par la vue colonnes et le panneau du canvas :
+// type, entreprise liée (fiche), niveau d'exécution, co-détenteurs,
+// responsable, description. Entièrement piloté par onPatch — donc les
+// deux vues restent synchronisées.
+function NodeEditorBlock({
+  node,
+  allNodes,
+  entreprises,
+  employes,
+  onPatch
+}: {
+  node: OrgNode;
+  allNodes: OrgNode[];
+  entreprises: Array<{ id: number; name: string }>;
+  employes: Employe[];
+  onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
+}) {
+  const [extName, setExtName] = useState(node.assignee_external_name || "");
+  useEffect(() => {
+    setExtName(node.assignee_external_name || "");
+  }, [node.assignee_external_name]);
+
+  const coOwnerIds = node.co_owner_node_ids || [];
+  const companyOptions = allNodes
+    .filter((n) => n.kind === "company" && n.id !== node.id)
+    .map((n) => ({ id: n.id, label: n.label }));
+
+  return (
+    <div
+      className="space-y-2 rounded border p-2 text-[11px]"
+      style={{
+        borderColor: "var(--qg-border-soft)",
+        backgroundColor: "var(--qg-card-bg)"
+      }}
+    >
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="text-[9px] uppercase text-white/40">Type</label>
+          <select
+            value={node.kind}
+            onChange={(e) => void onPatch(node.id, { kind: e.target.value })}
+            className="input mt-0.5 text-[11px]"
+          >
+            <option value="company">Entreprise</option>
+            <option value="dept">Département</option>
+            <option value="role">Rôle</option>
+            <option value="task">Tâche</option>
+            <option value="service">Service partagé</option>
+          </select>
+        </div>
+        <div>
+          <label className="text-[9px] uppercase text-white/40">
+            Entreprise liée (fiche)
+          </label>
+          <select
+            value={node.entreprise_id ? String(node.entreprise_id) : ""}
+            onChange={(e) =>
+              void onPatch(node.id, {
+                entreprise_id: e.target.value
+                  ? Number(e.target.value)
+                  : null
+              })
+            }
+            className="input mt-0.5 text-[11px]"
+          >
+            <option value="">Transverse (groupe)</option>
+            {entreprises.map((ent) => (
+              <option key={ent.id} value={String(ent.id)}>
+                {ent.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Niveau d'exécution — qui doit prendre ça en charge. Aide
+          l'analyse : ce qui reste au dirigeant, ce qui est délégable
+          à un adjoint, ce qui peut passer à l'adjoint virtuel. */}
+      <div>
+        <label className="text-[9px] uppercase text-white/40">
+          Niveau d&apos;exécution — qui doit le faire
+        </label>
+        <div className="mt-0.5 flex gap-1">
+          {(
+            [
+              ["", "Non classé"],
+              ["direction", TIER_LABELS.direction.label],
+              ["adjoint", TIER_LABELS.adjoint.label],
+              ["adjoint_virtuel", TIER_LABELS.adjoint_virtuel.label]
+            ] as const
+          ).map(([val, lbl]) => {
+            const active = (node.execution_tier || "") === val;
+            const info = val ? TIER_LABELS[val] : null;
+            return (
+              <button
+                key={val || "none"}
+                type="button"
+                onClick={() =>
+                  void onPatch(node.id, { execution_tier: val || null })
+                }
+                className={`flex-1 rounded border px-1 py-1 text-[10px] font-semibold transition ${
+                  active && info
+                    ? info.cls
+                    : active
+                      ? "border-white/30 text-white/80"
+                      : "border-transparent text-white/40 hover:text-white/70"
+                }`}
+                style={
+                  !active
+                    ? { backgroundColor: "var(--qg-bg-alt, transparent)" }
+                    : undefined
+                }
+              >
+                {lbl}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Co-détenteurs — une entreprise peut être détenue par
+          plusieurs ; le parent dans l'arbre = détenteur principal. */}
+      <div>
+        <label className="text-[9px] uppercase text-white/40">
+          Co-détenteurs (en plus du parent dans l&apos;arbre)
+        </label>
+        <div className="mt-0.5">
+          <MultiSelectDropdown
+            options={companyOptions}
+            selectedIds={coOwnerIds}
+            onChange={(ids) =>
+              void onPatch(node.id, { co_owner_node_ids: ids })
+            }
+            placeholder="— Aucun co-détenteur —"
+            emptyLabel="Aucune autre entreprise dans l'organigramme"
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="text-[9px] uppercase text-white/40">
+            Employé responsable
+          </label>
+          <select
+            value={
+              node.assignee_employe_id
+                ? String(node.assignee_employe_id)
+                : ""
+            }
+            onChange={(e) =>
+              void onPatch(node.id, {
+                assignee_employe_id: e.target.value
+                  ? Number(e.target.value)
+                  : null,
+                assignee_external_name: e.target.value
+                  ? null
+                  : node.assignee_external_name
+              })
+            }
+            className="input mt-0.5 text-[11px]"
+          >
+            <option value="">— Aucun —</option>
+            {employes.map((emp) => (
+              <option key={emp.id} value={String(emp.id)}>
+                {emp.full_name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="text-[9px] uppercase text-white/40">
+            OU externe (freelance, partenaire)
+          </label>
+          <input
+            value={extName}
+            onChange={(e) => setExtName(e.target.value)}
+            onBlur={() => {
+              if (extName !== (node.assignee_external_name || "")) {
+                void onPatch(node.id, {
+                  assignee_external_name: extName.trim() || null,
+                  assignee_employe_id: extName.trim()
+                    ? null
+                    : node.assignee_employe_id
+                });
+              }
+            }}
+            placeholder="Ex. Freelance, sous-traitant XYZ"
+            className="input mt-0.5 text-[11px]"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className="text-[9px] uppercase text-white/40">
+          Description / ce que ça fait
+        </label>
+        <textarea
+          key={node.id}
+          defaultValue={node.description || ""}
+          onBlur={(e) => {
+            if (e.target.value !== (node.description || "")) {
+              void onPatch(node.id, {
+                description: e.target.value.trim() || null
+              });
+            }
+          }}
+          rows={2}
+          className="input mt-0.5 text-[11px]"
+          placeholder="Notes, responsabilités, KPIs, ce que ce rôle / cette tâche accomplit..."
+        />
+      </div>
+    </div>
+  );
+}
+
+// Panneau « Générer » (IA Kratos) : suggère les rôles / départements /
+// tâches manquants d'une entreprise selon son but, chacun classé par
+// niveau d'exécution. Partagé entre la vue colonnes et le canvas.
+function RoleSuggestionsPanel({
+  node,
+  onCreate
+}: {
+  node: OrgNode;
+  onCreate: (
+    parent_id: number | null,
+    label: string,
+    kind?: string,
+    extra?: { description?: string | null; execution_tier?: string | null }
+  ) => Promise<OrgNode | undefined>;
+}) {
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestions, setSuggestions] = useState<RoleSuggestion[] | null>(
+    null
+  );
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [added, setAdded] = useState<Set<string>>(new Set());
+
+  async function generate() {
+    setSuggesting(true);
+    setSuggestError(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/org-nodes/${node.id}/suggest-roles`,
+        { method: "POST" }
+      );
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error(txt.slice(0, 160) || `HTTP ${r.status}`);
+      }
+      setSuggestions((await r.json()) as RoleSuggestion[]);
+      setAdded(new Set());
+    } catch (e) {
+      setSuggestError((e as Error).message);
+      setSuggestions([]);
+    } finally {
+      setSuggesting(false);
+    }
+  }
+
+  async function addOne(s: RoleSuggestion) {
+    setAdded((prev) => new Set(prev).add(s.label));
+    await onCreate(node.id, s.label, s.kind, {
+      description: s.description,
+      execution_tier: s.execution_tier
+    });
+  }
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => void generate()}
+        disabled={suggesting}
+        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold text-accent-300 hover:bg-accent-500/10 disabled:opacity-50"
+        title="Suggère les rôles / tâches manquants selon le but de cette entreprise"
+      >
+        {suggesting ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : (
+          <Sparkles className="h-3 w-3" />
+        )}
+        {suggestions === null && !suggestError
+          ? "Générer les rôles / tâches manquants"
+          : "Régénérer"}
+      </button>
+
+      {suggestions !== null || suggestError ? (
+        <div
+          className="mt-1.5 rounded border p-2 text-[11px]"
+          style={{
+            borderColor: "var(--qg-border-soft)",
+            backgroundColor: "var(--qg-card-bg)"
+          }}
+        >
+          {suggestError ? (
+            <p className="text-[10px] text-rose-300">{suggestError}</p>
+          ) : null}
+          {suggestions && suggestions.length === 0 && !suggestError ? (
+            <p
+              className="text-[10px]"
+              style={{ color: "var(--qg-text-soft)" }}
+            >
+              Rien de neuf à suggérer — la structure semble déjà couverte.
+            </p>
+          ) : null}
+          <div className="space-y-1">
+            {(suggestions || []).map((s) => {
+              const isAdded = added.has(s.label);
+              const sKind = KIND_LABELS[s.kind] || KIND_LABELS.role;
+              const sTier = s.execution_tier
+                ? TIER_LABELS[s.execution_tier]
+                : null;
+              return (
+                <div
+                  key={s.label}
+                  className="flex items-start gap-1.5 rounded px-1 py-1"
+                  style={{
+                    backgroundColor: "var(--qg-bg-alt, transparent)"
+                  }}
+                >
+                  <span className="mt-0.5 flex shrink-0 flex-col gap-0.5">
+                    <span
+                      className={`rounded-full border px-1 py-0 text-center text-[8px] font-bold uppercase ${sKind.cls}`}
+                    >
+                      {sKind.label}
+                    </span>
+                    {sTier ? (
+                      <span
+                        className={`rounded-full border px-1 py-0 text-center text-[8px] font-bold ${sTier.cls}`}
+                      >
+                        {sTier.short}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span
+                      className="block font-semibold"
+                      style={{ color: "var(--qg-text)" }}
+                    >
+                      {s.label}
+                    </span>
+                    {s.description ? (
+                      <span
+                        className="block text-[10px]"
+                        style={{ color: "var(--qg-text-soft)" }}
+                      >
+                        {s.description}
+                      </span>
+                    ) : null}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void addOne(s)}
+                    disabled={isAdded}
+                    className="mt-0.5 inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold text-accent-300 hover:bg-accent-500/10 disabled:opacity-40"
+                  >
+                    <Plus className="h-2.5 w-2.5" />
+                    {isAdded ? "Ajouté" : "Ajouter"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function NodeRow({
   node,
@@ -901,7 +1311,8 @@ function NodeRow({
   onCreate: (
     parent_id: number | null,
     label: string,
-    kind?: string
+    kind?: string,
+    extra?: { description?: string | null; execution_tier?: string | null }
   ) => Promise<OrgNode | undefined>;
   onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
@@ -909,54 +1320,14 @@ function NodeRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(node.label);
-  const [extName, setExtName] = useState(node.assignee_external_name || "");
   // Toute la carte est saisissable pour le drag — SAUF quand on est en
   // train d'éditer le libellé (sinon on ne pourrait plus sélectionner
   // le texte du champ).
   const [labelFocused, setLabelFocused] = useState(false);
 
-  // Suggestions de rôles manquants (bouton « Générer » sur les
-  // nœuds entreprise).
-  const [suggesting, setSuggesting] = useState(false);
-  const [suggestions, setSuggestions] = useState<RoleSuggestion[] | null>(
-    null
-  );
-  const [suggestError, setSuggestError] = useState<string | null>(null);
-  const [addedSuggestions, setAddedSuggestions] = useState<Set<string>>(
-    new Set()
-  );
-
-  async function generateRoles() {
-    setSuggesting(true);
-    setSuggestError(null);
-    try {
-      const r = await authedFetch(
-        `/api/v1/org-nodes/${node.id}/suggest-roles`,
-        { method: "POST" }
-      );
-      if (!r.ok) {
-        const txt = await r.text();
-        throw new Error(txt.slice(0, 160) || `HTTP ${r.status}`);
-      }
-      setSuggestions((await r.json()) as RoleSuggestion[]);
-      setAddedSuggestions(new Set());
-    } catch (e) {
-      setSuggestError((e as Error).message);
-      setSuggestions([]);
-    } finally {
-      setSuggesting(false);
-    }
-  }
-
-  async function addSuggestion(s: RoleSuggestion) {
-    setAddedSuggestions((prev) => new Set(prev).add(s.label));
-    await onCreate(node.id, s.label, s.kind);
-  }
-
   useEffect(() => {
     setLabel(node.label);
-    setExtName(node.assignee_external_name || "");
-  }, [node.label, node.assignee_external_name]);
+  }, [node.label]);
 
   const kindInfo = KIND_LABELS[node.kind] || KIND_LABELS.role;
   const assigneeEmploye = node.assignee_employe_id
@@ -972,15 +1343,14 @@ function NodeRow({
     parentEntId != null &&
     node.entreprise_id === parentEntId;
 
-  // Co-détenteurs : on résout les IDs en libellés pour les badges,
-  // et on prépare les options du sélecteur multiple.
+  // Co-détenteurs : on résout les IDs en libellés pour les badges.
   const coOwnerIds = node.co_owner_node_ids || [];
   const coOwnerNodes = coOwnerIds
     .map((id) => allNodes.find((n) => n.id === id))
     .filter((n): n is OrgNode => Boolean(n));
-  const companyOptions = allNodes
-    .filter((n) => n.kind === "company" && n.id !== node.id)
-    .map((n) => ({ id: n.id, label: n.label }));
+  const tierInfo = node.execution_tier
+    ? TIER_LABELS[node.execution_tier]
+    : null;
 
   const isDragging = dnd.dragId === node.id;
   const isIntoTarget =
@@ -1059,22 +1429,6 @@ function NodeRow({
           className="flex-1 bg-transparent text-sm font-semibold focus:outline-none"
           style={{ color: "var(--qg-text)" }}
         />
-        {node.kind === "company" ? (
-          <button
-            type="button"
-            onClick={() => void generateRoles()}
-            disabled={suggesting}
-            className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] font-semibold text-accent-300 hover:bg-accent-500/10 disabled:opacity-50"
-            title="Générer les rôles / tâches manquants selon le but de cette entreprise"
-          >
-            {suggesting ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <Sparkles className="h-3 w-3" />
-            )}
-            Générer
-          </button>
-        ) : null}
         <button
           type="button"
           onClick={() => setEditing((v) => !v)}
@@ -1125,6 +1479,14 @@ function NodeRow({
             {entreprise.name}
           </span>
         ) : null}
+        {tierInfo ? (
+          <span
+            className={`inline-flex items-center rounded border px-1 py-0 font-semibold ${tierInfo.cls}`}
+            title="Niveau d'exécution — qui doit prendre ça en charge"
+          >
+            {tierInfo.label}
+          </span>
+        ) : null}
         {assigneeEmploye ? (
           <span
             className="inline-flex items-center gap-0.5 rounded bg-accent-500/10 px-1 py-0 text-accent-300"
@@ -1153,253 +1515,24 @@ function NodeRow({
         ) : null}
       </div>
 
-      {/* Suggestions de rôles manquants (IA) */}
-      {suggestions !== null || suggestError ? (
-        <div
-          className="mt-2 rounded border p-2 text-[11px]"
-          style={{
-            borderColor: "var(--qg-border-soft)",
-            backgroundColor: "var(--qg-card-bg)"
-          }}
-        >
-          <div className="flex items-center justify-between">
-            <span
-              className="inline-flex items-center gap-1 font-semibold"
-              style={{ color: "var(--qg-text)" }}
-            >
-              <Sparkles className="h-3 w-3 text-accent-400" />
-              Rôles / tâches suggérés
-            </span>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => void generateRoles()}
-                disabled={suggesting}
-                className="rounded px-1 py-0.5 text-[10px] text-accent-300 hover:bg-accent-500/10 disabled:opacity-50"
-              >
-                Régénérer
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setSuggestions(null);
-                  setSuggestError(null);
-                }}
-                className="rounded p-0.5 text-white/40 hover:text-rose-300"
-                aria-label="Fermer les suggestions"
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
-            </div>
-          </div>
-
-          {suggestError ? (
-            <p className="mt-1 text-[10px] text-rose-300">{suggestError}</p>
-          ) : null}
-
-          {suggestions && suggestions.length === 0 && !suggestError ? (
-            <p
-              className="mt-1 text-[10px]"
-              style={{ color: "var(--qg-text-soft)" }}
-            >
-              Rien de neuf à suggérer — la structure semble déjà couverte.
-            </p>
-          ) : null}
-
-          <div className="mt-1.5 space-y-1">
-            {(suggestions || []).map((s) => {
-              const added = addedSuggestions.has(s.label);
-              const sKind = KIND_LABELS[s.kind] || KIND_LABELS.role;
-              return (
-                <div
-                  key={s.label}
-                  className="flex items-start gap-1.5 rounded px-1 py-1"
-                  style={{ backgroundColor: "var(--qg-bg-alt, transparent)" }}
-                >
-                  <span
-                    className={`mt-0.5 rounded-full border px-1 py-0 text-[8px] font-bold uppercase ${sKind.cls}`}
-                  >
-                    {sKind.label}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span
-                      className="block font-semibold"
-                      style={{ color: "var(--qg-text)" }}
-                    >
-                      {s.label}
-                    </span>
-                    {s.description ? (
-                      <span
-                        className="block text-[10px]"
-                        style={{ color: "var(--qg-text-soft)" }}
-                      >
-                        {s.description}
-                      </span>
-                    ) : null}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => void addSuggestion(s)}
-                    disabled={added}
-                    className="mt-0.5 inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold text-accent-300 hover:bg-accent-500/10 disabled:opacity-40"
-                  >
-                    <Plus className="h-2.5 w-2.5" />
-                    {added ? "Ajouté" : "Ajouter"}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
+      {/* IA Kratos — suggère les rôles / tâches manquants selon le
+          but de la fiche entreprise (pertinent sur un nœud entreprise). */}
+      {node.kind === "company" ? (
+        <div className="mt-2">
+          <RoleSuggestionsPanel node={node} onCreate={onCreate} />
         </div>
       ) : null}
 
-      {/* Bloc édition étendu */}
+      {/* Bloc édition étendu — partagé avec le panneau du canvas. */}
       {editing ? (
-        <div
-          className="mt-2 space-y-2 rounded border p-2 text-[11px]"
-          style={{
-            borderColor: "var(--qg-border-soft)",
-            backgroundColor: "var(--qg-card-bg)"
-          }}
-        >
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-[9px] uppercase text-white/40">
-                Type
-              </label>
-              <select
-                value={node.kind}
-                onChange={(e) =>
-                  void onPatch(node.id, { kind: e.target.value })
-                }
-                className="input mt-0.5 text-[11px]"
-              >
-                <option value="company">Entreprise</option>
-                <option value="dept">Département</option>
-                <option value="role">Rôle</option>
-                <option value="task">Tâche</option>
-                <option value="service">Service partagé</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-[9px] uppercase text-white/40">
-                Entreprise liée
-              </label>
-              <select
-                value={node.entreprise_id ? String(node.entreprise_id) : ""}
-                onChange={(e) =>
-                  void onPatch(node.id, {
-                    entreprise_id: e.target.value
-                      ? Number(e.target.value)
-                      : null
-                  })
-                }
-                className="input mt-0.5 text-[11px]"
-              >
-                <option value="">Transverse (groupe)</option>
-                {entreprises.map((ent) => (
-                  <option key={ent.id} value={String(ent.id)}>
-                    {ent.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Co-détenteurs — une entreprise peut être détenue par
-              plusieurs. Le parent dans l'arbre = détenteur principal ;
-              ici on liste les co-détenteurs (affichés en badge). */}
-          <div>
-            <label className="text-[9px] uppercase text-white/40">
-              Co-détenteurs (en plus du parent dans l&apos;arbre)
-            </label>
-            <div className="mt-0.5">
-              <MultiSelectDropdown
-                options={companyOptions}
-                selectedIds={coOwnerIds}
-                onChange={(ids) =>
-                  void onPatch(node.id, { co_owner_node_ids: ids })
-                }
-                placeholder="— Aucun co-détenteur —"
-                emptyLabel="Aucune autre entreprise dans l'organigramme"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-[9px] uppercase text-white/40">
-                Employé responsable
-              </label>
-              <select
-                value={
-                  node.assignee_employe_id
-                    ? String(node.assignee_employe_id)
-                    : ""
-                }
-                onChange={(e) =>
-                  void onPatch(node.id, {
-                    assignee_employe_id: e.target.value
-                      ? Number(e.target.value)
-                      : null,
-                    // si on assigne un employé interne, on retire
-                    // l'externe pour ne pas mélanger.
-                    assignee_external_name: e.target.value
-                      ? null
-                      : node.assignee_external_name
-                  })
-                }
-                className="input mt-0.5 text-[11px]"
-              >
-                <option value="">— Aucun —</option>
-                {employes.map((emp) => (
-                  <option key={emp.id} value={String(emp.id)}>
-                    {emp.full_name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="text-[9px] uppercase text-white/40">
-                OU externe (freelance, partenaire)
-              </label>
-              <input
-                value={extName}
-                onChange={(e) => setExtName(e.target.value)}
-                onBlur={() => {
-                  if (extName !== (node.assignee_external_name || "")) {
-                    void onPatch(node.id, {
-                      assignee_external_name: extName.trim() || null,
-                      assignee_employe_id: extName.trim()
-                        ? null
-                        : node.assignee_employe_id
-                    });
-                  }
-                }}
-                placeholder="Ex. Freelance, sous-traitant XYZ"
-                className="input mt-0.5 text-[11px]"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="text-[9px] uppercase text-white/40">
-              Description / notes
-            </label>
-            <textarea
-              defaultValue={node.description || ""}
-              onBlur={(e) => {
-                if (e.target.value !== (node.description || "")) {
-                  void onPatch(node.id, {
-                    description: e.target.value.trim() || null
-                  });
-                }
-              }}
-              rows={2}
-              className="input mt-0.5 text-[11px]"
-              placeholder="Notes, responsabilités, KPIs..."
-            />
-          </div>
+        <div className="mt-2">
+          <NodeEditorBlock
+            node={node}
+            allNodes={allNodes}
+            entreprises={entreprises}
+            employes={employes}
+            onPatch={onPatch}
+          />
         </div>
       ) : null}
     </div>
@@ -1443,6 +1576,7 @@ function CanvasView({
   entreprises,
   employes,
   parentEntId,
+  onCreate,
   onPatch,
   onMove,
   onDelete
@@ -1451,6 +1585,12 @@ function CanvasView({
   entreprises: Array<{ id: number; name: string }>;
   employes: Employe[];
   parentEntId: number | null;
+  onCreate: (
+    parent_id: number | null,
+    label: string,
+    kind?: string,
+    extra?: { description?: string | null; execution_tier?: string | null }
+  ) => Promise<OrgNode | undefined>;
   onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
   onMove: (
     id: number,
@@ -1460,6 +1600,9 @@ function CanvasView({
   onDelete: (id: number) => Promise<void>;
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
+
+  // Bulle sélectionnée → ouvre le panneau d'édition latéral.
+  const [selectedId, setSelectedId] = useState<number | null>(null);
 
   // Positions de travail : seed depuis pos_x/pos_y du serveur, sinon
   // auto-layout en arbre. Le drag les met à jour localement ; on
@@ -1625,9 +1768,11 @@ function CanvasView({
     const m = canvasCoords(e);
     if (dragRef.current) {
       const d = dragRef.current;
-      d.moved = true;
       const nx = Math.max(0, snap(d.origX + (m.x - d.startX)));
       const ny = Math.max(0, snap(d.origY + (m.y - d.startY)));
+      // « moved » seulement si la position change vraiment (au pas de
+      // grille) — un micro-tremblement laisse le clic = sélection.
+      if (nx !== d.origX || ny !== d.origY) d.moved = true;
       setPositions((prev) => {
         const next = new Map(prev);
         next.set(d.id, { x: nx, y: ny });
@@ -1645,6 +1790,9 @@ function CanvasView({
       if (d.moved) {
         const p = positions.get(d.id);
         if (p) void onPatch(d.id, { pos_x: p.x, pos_y: p.y });
+      } else {
+        // Clic sans déplacement → sélectionne la bulle (ouvre l'éditeur).
+        setSelectedId(d.id);
       }
     }
     if (connect) setConnect(null);
@@ -1698,32 +1846,42 @@ function CanvasView({
     }
   }
 
+  const selectedNode =
+    selectedId != null
+      ? nodes.find((n) => n.id === selectedId) || null
+      : null;
+
   return (
-    <div
-      ref={canvasRef}
-      onMouseMove={onCanvasMouseMove}
-      onMouseUp={onCanvasMouseUp}
-      onMouseLeave={onCanvasMouseUp}
-      className="relative overflow-auto rounded-xl border"
-      style={{
-        height: "calc(100vh - 250px)",
-        minHeight: 420,
-        borderColor: "var(--qg-border)",
-        backgroundColor: "var(--qg-bg-alt, transparent)",
-        cursor: connect ? "crosshair" : "default"
-      }}
-    >
+    <div className="relative">
       <div
+        ref={canvasRef}
+        onMouseMove={onCanvasMouseMove}
+        onMouseUp={onCanvasMouseUp}
+        onMouseLeave={onCanvasMouseUp}
+        className="relative overflow-auto rounded-xl border"
         style={{
-          position: "relative",
-          width: canvasW,
-          height: canvasH,
-          // Quadrillage en coordonnées contenu (s'aligne au snap).
-          backgroundImage:
-            "radial-gradient(var(--qg-border-soft) 1px, transparent 1px)",
-          backgroundSize: `${GRID}px ${GRID}px`
+          height: "calc(100vh - 250px)",
+          minHeight: 420,
+          borderColor: "var(--qg-border)",
+          backgroundColor: "var(--qg-bg-alt, transparent)",
+          cursor: connect ? "crosshair" : "default"
         }}
       >
+        <div
+          onMouseDown={(e) => {
+            // Clic sur le fond quadrillé (hors bulle) → désélectionne.
+            if (e.target === e.currentTarget) setSelectedId(null);
+          }}
+          style={{
+            position: "relative",
+            width: canvasW,
+            height: canvasH,
+            // Quadrillage en coordonnées contenu (s'aligne au snap).
+            backgroundImage:
+              "radial-gradient(var(--qg-border-soft) 1px, transparent 1px)",
+            backgroundSize: `${GRID}px ${GRID}px`
+          }}
+        >
         {/* Couche SVG : flèches */}
         <svg
           width={canvasW}
@@ -1860,6 +2018,7 @@ function CanvasView({
                 parentEntId != null &&
                 n.entreprise_id === parentEntId
               }
+              selected={selectedId === n.id}
               connecting={connect != null}
               onMouseDown={(e) => onBubbleMouseDown(e, n.id)}
               onHandleMouseDown={(e) => onHandleMouseDown(e, n.id)}
@@ -1868,7 +2027,20 @@ function CanvasView({
             />
           );
         })}
+        </div>
       </div>
+      {selectedNode ? (
+        <CanvasNodeEditor
+          node={selectedNode}
+          allNodes={nodes}
+          entreprises={entreprises}
+          employes={employes}
+          onCreate={onCreate}
+          onPatch={onPatch}
+          onDelete={onDelete}
+          onClose={() => setSelectedId(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1880,6 +2052,7 @@ function CanvasBubble({
   entreprises,
   employes,
   isParentCompany,
+  selected,
   connecting,
   onMouseDown,
   onHandleMouseDown,
@@ -1892,6 +2065,7 @@ function CanvasBubble({
   entreprises: Array<{ id: number; name: string }>;
   employes: Employe[];
   isParentCompany: boolean;
+  selected: boolean;
   connecting: boolean;
   onMouseDown: (e: React.MouseEvent) => void;
   onHandleMouseDown: (e: React.MouseEvent) => void;
@@ -1900,6 +2074,9 @@ function CanvasBubble({
 }) {
   const [hover, setHover] = useState(false);
   const kindInfo = KIND_LABELS[node.kind] || KIND_LABELS.role;
+  const tierInfo = node.execution_tier
+    ? TIER_LABELS[node.execution_tier]
+    : null;
   const entreprise = node.entreprise_id
     ? entreprises.find((e) => e.id === node.entreprise_id)
     : null;
@@ -1921,13 +2098,16 @@ function CanvasBubble({
         top: y,
         width: BUBBLE_W,
         minHeight: BUBBLE_H,
-        borderColor: isParentCompany
-          ? "var(--qg-accent)"
-          : "var(--qg-border)",
+        borderColor:
+          selected || isParentCompany
+            ? "var(--qg-accent)"
+            : "var(--qg-border)",
         backgroundColor: "var(--qg-card-bg)",
-        boxShadow: hover
-          ? "0 4px 14px -4px rgba(0,0,0,0.35)"
-          : "0 1px 3px rgba(0,0,0,0.18)",
+        boxShadow: selected
+          ? "0 0 0 2px var(--qg-accent), 0 6px 18px -4px rgba(0,0,0,0.4)"
+          : hover
+            ? "0 4px 14px -4px rgba(0,0,0,0.35)"
+            : "0 1px 3px rgba(0,0,0,0.18)",
         cursor: connecting ? "crosshair" : "grab",
         padding: "8px 10px"
       }}
@@ -1941,6 +2121,14 @@ function CanvasBubble({
         >
           {kindInfo.label}
         </span>
+        {tierInfo ? (
+          <span
+            className={`shrink-0 rounded-full border px-1.5 py-0 text-[8px] font-bold ${tierInfo.cls}`}
+            title="Niveau d'exécution — qui doit prendre ça en charge"
+          >
+            {tierInfo.short}
+          </span>
+        ) : null}
         {hover ? (
           <button
             type="button"
@@ -1986,6 +2174,110 @@ function CanvasBubble({
           cursor: "crosshair"
         }}
       />
+    </div>
+  );
+}
+
+// Panneau d'édition latéral du canvas — s'ouvre au clic sur une bulle.
+// Réutilise le bloc d'édition partagé (type, fiche entreprise, niveau
+// d'exécution, responsable, description) + l'IA Kratos pour les nœuds
+// entreprise. Tout passe par onPatch / onMove → la vue colonnes reste
+// synchronisée.
+function CanvasNodeEditor({
+  node,
+  allNodes,
+  entreprises,
+  employes,
+  onCreate,
+  onPatch,
+  onDelete,
+  onClose
+}: {
+  node: OrgNode;
+  allNodes: OrgNode[];
+  entreprises: Array<{ id: number; name: string }>;
+  employes: Employe[];
+  onCreate: (
+    parent_id: number | null,
+    label: string,
+    kind?: string,
+    extra?: { description?: string | null; execution_tier?: string | null }
+  ) => Promise<OrgNode | undefined>;
+  onPatch: (id: number, patch: Partial<OrgNode>) => Promise<void>;
+  onDelete: (id: number) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [label, setLabel] = useState(node.label);
+  useEffect(() => {
+    setLabel(node.label);
+  }, [node.id, node.label]);
+
+  const kindInfo = KIND_LABELS[node.kind] || KIND_LABELS.role;
+
+  return (
+    <div
+      className="absolute bottom-0 right-0 top-0 z-10 flex w-80 flex-col gap-2 overflow-y-auto border-l p-3"
+      style={{
+        borderColor: "var(--qg-border)",
+        backgroundColor: "var(--qg-card-bg)",
+        boxShadow: "-10px 0 28px -14px rgba(0,0,0,0.55)"
+      }}
+    >
+      <div className="flex items-center gap-1.5">
+        <span
+          className={`rounded-full border px-1.5 py-0 text-[9px] font-bold uppercase ${kindInfo.cls}`}
+        >
+          {kindInfo.label}
+        </span>
+        <span
+          className="text-[10px]"
+          style={{ color: "var(--qg-text-soft)" }}
+        >
+          Édition de la bulle
+        </span>
+        <span className="ml-auto flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={() => void onDelete(node.id)}
+            className="rounded p-1 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
+            title="Supprimer le nœud"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 text-white/40 hover:text-accent-400"
+            title="Fermer le panneau"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </span>
+      </div>
+
+      <input
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        onBlur={() => {
+          if (label.trim() && label !== node.label)
+            void onPatch(node.id, { label: label.trim() });
+        }}
+        className="input text-sm font-semibold"
+        placeholder="Nom du nœud"
+      />
+
+      <NodeEditorBlock
+        key={node.id}
+        node={node}
+        allNodes={allNodes}
+        entreprises={entreprises}
+        employes={employes}
+        onPatch={onPatch}
+      />
+
+      {node.kind === "company" ? (
+        <RoleSuggestionsPanel key={`sug-${node.id}`} node={node} onCreate={onCreate} />
+      ) : null}
     </div>
   );
 }

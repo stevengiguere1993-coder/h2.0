@@ -108,3 +108,16 @@ class OrgNode(Base, TimestampUpdateMixin):
     # l'affichage diffère.
     pos_x: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     pos_y: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Niveau d'exécution : qui doit prendre en charge ce rôle / cette
+    # tâche.
+    #   "direction"       — relève du dirigeant (stratégie, décisions,
+    #                       relations clés) — non délégable.
+    #   "adjoint"         — délégable à un adjoint humain.
+    #   "adjoint_virtuel" — automatisable / délégable à l'adjoint
+    #                       virtuel (IA, outils).
+    # NULL = pas encore classé. Sert à l'analyse : qu'est-ce qui doit
+    # être délégué, à qui, et qu'est-ce qui peut être automatisé.
+    execution_tier: Mapped[Optional[str]] = mapped_column(
+        String(24), nullable=True, index=True
+    )
