@@ -241,6 +241,26 @@ export default function OrganigrammePage() {
 
   const topLevel = byParent.get(null) || [];
 
+  // Index : id d'un détenteur → nœuds qu'il co-détient (il figure dans
+  // leur co_owner_node_ids). Permet d'afficher dans l'arbre, sous
+  // chaque détenteur, TOUTES les entités qu'il détient — pas seulement
+  // ses enfants directs (détenteur principal). La détention multiple
+  // est ainsi visible comme de vraies cartes, comme dans le canvas.
+  const byCoOwner = useMemo(() => {
+    const m = new Map<number, OrgNode[]>();
+    for (const n of nodes) {
+      for (const ownerId of n.co_owner_node_ids || []) {
+        const arr = m.get(ownerId) || [];
+        arr.push(n);
+        m.set(ownerId, arr);
+      }
+    }
+    for (const arr of m.values()) {
+      arr.sort((a, b) => a.position - b.position);
+    }
+    return m;
+  }, [nodes]);
+
   // Sous-arbre du nœud en cours de glissement — on l'exclut des cibles
   // de dépôt valides (un nœud ne peut pas atterrir sur lui-même ni
   // sur un de ses descendants).
@@ -612,6 +632,7 @@ export default function OrganigrammePage() {
                     <ColumnView
                       node={n}
                       byParent={byParent}
+                      byCoOwner={byCoOwner}
                       allNodes={nodes}
                       entreprises={entreprises}
                       employes={employes}
@@ -707,6 +728,7 @@ function DropBar({
 function ColumnView({
   node,
   byParent,
+  byCoOwner,
   allNodes,
   entreprises,
   employes,
@@ -718,6 +740,7 @@ function ColumnView({
 }: {
   node: OrgNode;
   byParent: Map<number | null, OrgNode[]>;
+  byCoOwner: Map<number, OrgNode[]>;
   allNodes: OrgNode[];
   entreprises: Array<{ id: number; name: string }>;
   employes: Employe[];
@@ -778,6 +801,8 @@ function ColumnView({
       <Children
         parentId={node.id}
         byParent={byParent}
+        byCoOwner={byCoOwner}
+        ancestors={new Set([node.id])}
         allNodes={allNodes}
         entreprises={entreprises}
         employes={employes}
@@ -795,6 +820,8 @@ function ColumnView({
 function Children({
   parentId,
   byParent,
+  byCoOwner,
+  ancestors,
   allNodes,
   entreprises,
   employes,
@@ -807,6 +834,8 @@ function Children({
 }: {
   parentId: number;
   byParent: Map<number | null, OrgNode[]>;
+  byCoOwner: Map<number, OrgNode[]>;
+  ancestors: Set<number>;
   allNodes: OrgNode[];
   entreprises: Array<{ id: number; name: string }>;
   employes: Employe[];
@@ -822,7 +851,15 @@ function Children({
   onDelete: (id: number) => Promise<void>;
   depth: number;
 }) {
-  const children = byParent.get(parentId) || [];
+  // Enfants directs (détenteur principal) ET entités co-détenues par
+  // ce nœud — affichées comme de vraies cartes dans l'arbre, pas juste
+  // mentionnées. La détention multiple est ainsi visible partout.
+  const directChildren = byParent.get(parentId) || [];
+  const directIds = new Set(directChildren.map((c) => c.id));
+  const coDetained = (byCoOwner.get(parentId) || []).filter(
+    (c) => !directIds.has(c.id)
+  );
+
   const [adding, setAdding] = useState(false);
   const [newLabel, setNewLabel] = useState("");
   const defaultKind = depth >= 2 ? "task" : "role";
@@ -834,33 +871,48 @@ function Children({
     setAdding(false);
   }
 
-  return (
-    <div
-      className="mt-2 space-y-1.5"
-      style={{
-        paddingLeft: depth > 0 ? "0.75rem" : 0,
-        borderLeft:
-          depth > 0 ? `2px solid var(--qg-border-soft)` : "none"
-      }}
-    >
-      {children.map((c) => (
-        <div key={c.id}>
+  function renderNode(c: OrgNode, coDetainedHere: boolean) {
+    // Garde anti-boucle : si le nœud est déjà un ancêtre de cette
+    // branche (co-détentions croisées), on l'affiche sans redescendre.
+    const alreadyShown = ancestors.has(c.id);
+    return (
+      <div key={c.id}>
+        {coDetainedHere ? (
+          <div
+            className="mb-0.5 inline-flex items-center gap-0.5 text-[9px] font-semibold uppercase tracking-wide"
+            style={{ color: "var(--qg-text-soft)" }}
+          >
+            <Link2 className="h-2.5 w-2.5" />
+            Co-détenu ici
+          </div>
+        ) : (
           <DropBar targetId={c.id} dnd={dnd} />
-          <NodeRow
-            node={c}
-            allNodes={allNodes}
-            entreprises={entreprises}
-            employes={employes}
-            parentEntId={parentEntId}
-            dnd={dnd}
-            onCreate={onCreate}
-            onPatch={onPatch}
-            onDelete={onDelete}
-            depth={depth}
-          />
+        )}
+        <NodeRow
+          node={c}
+          allNodes={allNodes}
+          entreprises={entreprises}
+          employes={employes}
+          parentEntId={parentEntId}
+          dnd={dnd}
+          onCreate={onCreate}
+          onPatch={onPatch}
+          onDelete={onDelete}
+          depth={depth}
+        />
+        {alreadyShown ? (
+          <div
+            className="ml-3 mt-0.5 text-[10px] italic"
+            style={{ color: "var(--qg-text-soft)" }}
+          >
+            ↑ déjà déployé plus haut dans cette branche
+          </div>
+        ) : (
           <Children
             parentId={c.id}
             byParent={byParent}
+            byCoOwner={byCoOwner}
+            ancestors={new Set(ancestors).add(c.id)}
             allNodes={allNodes}
             entreprises={entreprises}
             employes={employes}
@@ -871,8 +923,22 @@ function Children({
             onDelete={onDelete}
             depth={depth + 1}
           />
-        </div>
-      ))}
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="mt-2 space-y-1.5"
+      style={{
+        paddingLeft: depth > 0 ? "0.75rem" : 0,
+        borderLeft:
+          depth > 0 ? `2px solid var(--qg-border-soft)` : "none"
+      }}
+    >
+      {directChildren.map((c) => renderNode(c, false))}
+      {coDetained.map((c) => renderNode(c, true))}
       {adding ? (
         <div className="flex items-center gap-1">
           <input
@@ -1355,18 +1421,14 @@ function NodeRow({
     parentEntId != null &&
     node.entreprise_id === parentEntId;
 
-  // Co-détention — visible dans les deux sens pour refléter tout le
-  // canvas :
-  //  • coOwnerNodes      → qui détient AUSSI ce nœud (entrant)
-  //  • coDetainedNodes   → ce que ce nœud détient en co-détention
-  //                        (sortant : il est dans leur co_owner_node_ids)
+  // Co-détenteurs : qui détient AUSSI ce nœud (en plus du détenteur
+  // principal = parent dans l'arbre). Les entités que CE nœud
+  // co-détient, elles, sont affichées comme de vraies cartes nichées
+  // sous lui (cf. composant Children) — plus besoin d'un badge.
   const coOwnerIds = node.co_owner_node_ids || [];
   const coOwnerNodes = coOwnerIds
     .map((id) => allNodes.find((n) => n.id === id))
     .filter((n): n is OrgNode => Boolean(n));
-  const coDetainedNodes = allNodes.filter((n) =>
-    (n.co_owner_node_ids || []).includes(node.id)
-  );
   const tierInfo = node.execution_tier
     ? TIER_LABELS[node.execution_tier]
     : null;
@@ -1530,15 +1592,6 @@ function NodeRow({
           >
             <Link2 className="h-2.5 w-2.5" />
             aussi détenu par {coOwnerNodes.map((n) => n.label).join(", ")}
-          </span>
-        ) : null}
-        {coDetainedNodes.length > 0 ? (
-          <span
-            className="inline-flex items-center gap-0.5 rounded bg-emerald-500/10 px-1 py-0 text-emerald-300"
-            title="Détient aussi ces entités (co-détention) — hors enfants directs dans l'arbre"
-          >
-            <Link2 className="h-2.5 w-2.5" />
-            détient aussi {coDetainedNodes.map((n) => n.label).join(", ")}
           </span>
         ) : null}
       </div>
