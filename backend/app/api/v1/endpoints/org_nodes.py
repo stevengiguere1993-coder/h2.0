@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/org-nodes", tags=["org-nodes"])
 
 
-VALID_KINDS = {"dept", "role", "service", "task"}
+VALID_KINDS = {"dept", "role", "service", "task", "company"}
 
 
 class OrgNodeRead(BaseModel):
@@ -58,6 +58,13 @@ class OrgNodeCreate(BaseModel):
     assignee_external_name: Optional[str] = Field(
         default=None, max_length=255
     )
+
+
+class OrgNodeMove(BaseModel):
+    """Re-parente et réordonne un nœud (drag-and-drop)."""
+
+    parent_id: Optional[int] = None
+    position: int = Field(..., ge=0)
 
 
 class OrgNodeUpdate(BaseModel):
@@ -172,6 +179,182 @@ async def delete_node(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Nœud introuvable.")
     await db.delete(n)
     await db.commit()
+
+
+class RoleSuggestion(BaseModel):
+    label: str
+    kind: str
+    description: Optional[str] = None
+
+
+@router.post(
+    "/{node_id}/suggest-roles",
+    response_model=List[RoleSuggestion],
+    summary=(
+        "Suggère les rôles / départements / tâches manquants d'une "
+        "entreprise selon son but. Ne persiste rien — l'utilisateur "
+        "ajoute ensuite les suggestions retenues."
+    ),
+)
+async def suggest_roles_for_node(
+    node_id: int, db: DBSession, _: CurrentUser
+) -> List[RoleSuggestion]:
+    from app.services.org_role_suggester import suggest_roles
+
+    try:
+        suggestions = await suggest_roles(db, node_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, str(exc)
+        ) from exc
+    return [RoleSuggestion(**s) for s in suggestions]
+
+
+async def _all_nodes_sorted(db) -> List[OrgNode]:
+    return list(
+        (
+            await db.execute(
+                select(OrgNode).order_by(
+                    OrgNode.parent_id.asc().nulls_first(),
+                    OrgNode.position.asc(),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+@router.post(
+    "/{node_id}/move",
+    response_model=List[OrgNodeRead],
+    summary=(
+        "Re-parente et réordonne un nœud (drag-and-drop). Renvoie "
+        "l'organigramme complet à jour."
+    ),
+)
+async def move_node(
+    node_id: int,
+    data: OrgNodeMove,
+    db: DBSession,
+    _: CurrentUser,
+) -> List[OrgNodeRead]:
+    all_nodes = (await db.execute(select(OrgNode))).scalars().all()
+    by_id = {n.id: n for n in all_nodes}
+    node = by_id.get(node_id)
+    if node is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Nœud introuvable.")
+
+    new_parent = data.parent_id
+    if new_parent == node_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Un nœud ne peut pas être son propre parent.",
+        )
+    if new_parent is not None and new_parent not in by_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Parent cible introuvable."
+        )
+
+    # Anti-boucle : le nouveau parent ne doit pas être un descendant du
+    # nœud déplacé.
+    if new_parent is not None:
+        children_of: dict = {}
+        for n in all_nodes:
+            children_of.setdefault(n.parent_id, []).append(n.id)
+        stack = list(children_of.get(node_id, []))
+        descendants = set()
+        while stack:
+            cur = stack.pop()
+            if cur in descendants:
+                continue
+            descendants.add(cur)
+            stack.extend(children_of.get(cur, []))
+        if new_parent in descendants:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "Déplacement invalide : créerait une boucle.",
+            )
+
+    old_parent = node.parent_id
+
+    # Nouveaux frères (même parent cible), hors le nœud déplacé, triés.
+    siblings = sorted(
+        (
+            n
+            for n in all_nodes
+            if n.parent_id == new_parent and n.id != node_id
+        ),
+        key=lambda n: n.position,
+    )
+    pos = max(0, min(data.position, len(siblings)))
+    siblings.insert(pos, node)
+    node.parent_id = new_parent
+    for i, s in enumerate(siblings):
+        s.position = i
+
+    # Recompacte l'ancien parent si le nœud a changé de branche.
+    if old_parent != new_parent:
+        old_sibs = sorted(
+            (
+                n
+                for n in all_nodes
+                if n.parent_id == old_parent and n.id != node_id
+            ),
+            key=lambda n: n.position,
+        )
+        for i, s in enumerate(old_sibs):
+            s.position = i
+
+    await db.commit()
+    return [OrgNodeRead.model_validate(n) for n in await _all_nodes_sorted(db)]
+
+
+@router.post(
+    "/import-entreprises",
+    response_model=List[OrgNodeRead],
+    summary=(
+        "Crée un nœud « entreprise » (kind=company) pour chaque "
+        "entreprise pas encore présente dans l'organigramme. "
+        "Idempotent : les entreprises déjà importées sont ignorées."
+    ),
+)
+async def import_entreprises(
+    db: DBSession, _: CurrentUser
+) -> List[OrgNodeRead]:
+    from app.models.entreprise import Entreprise
+
+    nodes = (await db.execute(select(OrgNode))).scalars().all()
+    already = {
+        n.entreprise_id
+        for n in nodes
+        if n.kind == "company" and n.entreprise_id is not None
+    }
+    entreprises = (
+        await db.execute(
+            select(Entreprise).order_by(Entreprise.name.asc())
+        )
+    ).scalars().all()
+
+    pos = max(
+        (n.position for n in nodes if n.parent_id is None), default=-1
+    ) + 1
+    for e in entreprises:
+        if e.id in already:
+            continue
+        db.add(
+            OrgNode(
+                parent_id=None,
+                position=pos,
+                kind="company",
+                label=e.name,
+                entreprise_id=e.id,
+            )
+        )
+        pos += 1
+
+    await db.commit()
+    return [OrgNodeRead.model_validate(n) for n in await _all_nodes_sorted(db)]
 
 
 @router.post(
