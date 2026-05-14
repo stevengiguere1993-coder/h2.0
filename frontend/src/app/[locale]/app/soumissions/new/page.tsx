@@ -59,6 +59,9 @@ export default function NewSoumissionPage() {
   const [pricingKind, setPricingKind] = useState<"forfaitaire" | "estime">(
     "forfaitaire"
   );
+  // Type de document : devis classique (items) ou contrat d'entreprise
+  // (formulaire structuré rempli sur la page suivante).
+  const [kind, setKind] = useState<"quote" | "contract">("quote");
   const [validUntil, setValidUntil] = useState<string>(() => {
     const d = new Date();
     d.setDate(d.getDate() + 30);
@@ -128,6 +131,7 @@ export default function NewSoumissionPage() {
         payload.property_address = propertyAddress.trim();
       }
       payload.pricing_kind = pricingKind;
+      payload.kind = kind;
 
       const res = await authedFetch("/api/v1/soumissions", {
         method: "POST",
@@ -182,12 +186,21 @@ export default function NewSoumissionPage() {
 
         <div className="mt-6 flex max-w-3xl items-start gap-3 rounded-lg border border-accent-500/30 bg-accent-500/5 p-4 text-sm text-brand-100">
           <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-accent-500" />
-          <p>
-            Remplissez seulement le <strong className="text-white">titre</strong> ici.
-            Les <strong className="text-white">items détaillés, prix et description complète</strong>{" "}
-            seront ajoutés sur la page suivante (après « Créer »), avec calcul
-            automatique du sous-total et des taxes.
-          </p>
+          {kind === "contract" ? (
+            <p>
+              Remplissez le <strong className="text-white">titre</strong> ici.
+              Le <strong className="text-white">formulaire de contrat</strong>{" "}
+              (sections, prix coûtant majoré, signatures) sera rempli sur la
+              page suivante (après « Créer »).
+            </p>
+          ) : (
+            <p>
+              Remplissez seulement le <strong className="text-white">titre</strong> ici.
+              Les <strong className="text-white">items détaillés, prix et description complète</strong>{" "}
+              seront ajoutés sur la page suivante (après « Créer »), avec calcul
+              automatique du sous-total et des taxes.
+            </p>
+          )}
         </div>
 
         <form onSubmit={onSubmit} className="mt-6 max-w-3xl space-y-5">
@@ -286,39 +299,77 @@ export default function NewSoumissionPage() {
             </p>
           </div>
 
-          {/* Type de soumission : forfaitaire (défaut) ou estimé. */}
+          {/* Type de soumission : devis classique ou contrat
+              d'entreprise (formulaire APCHQ rempli ensuite). */}
           <div>
             <label className="label">Type de soumission</label>
             <div className="inline-flex rounded-lg border border-brand-700 bg-brand-950/40 p-0.5">
               <button
                 type="button"
-                onClick={() => setPricingKind("forfaitaire")}
-                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
-                  pricingKind === "forfaitaire"
+                onClick={() => setKind("quote")}
+                className={`rounded-md px-4 py-1.5 text-xs font-semibold transition ${
+                  kind === "quote"
                     ? "bg-accent-500 text-brand-950 shadow"
                     : "text-white/70 hover:text-white"
                 }`}
               >
-                Forfaitaire
+                Devis
               </button>
               <button
                 type="button"
-                onClick={() => setPricingKind("estime")}
-                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
-                  pricingKind === "estime"
+                onClick={() => setKind("contract")}
+                className={`rounded-md px-4 py-1.5 text-xs font-semibold transition ${
+                  kind === "contract"
                     ? "bg-accent-500 text-brand-950 shadow"
                     : "text-white/70 hover:text-white"
                 }`}
               >
-                Estimé
+                Contrat
               </button>
             </div>
             <p className="mt-1 text-xs text-white/50">
-              {pricingKind === "forfaitaire"
-                ? "Prix fixe garanti — le client paye le total même si nos coûts dépassent."
-                : "Estimation à confirmer — refacturable selon les heures et matériaux réels."}
+              {kind === "quote"
+                ? "Devis classique : tableau d'items, prix et taxes."
+                : "Contrat d'entreprise à prix coûtant majoré — formulaire structuré rempli sur la page suivante."}
             </p>
           </div>
+
+          {/* Mode de prix : forfaitaire ou estimé — sans objet pour
+              un contrat (prix coûtant majoré). */}
+          {kind === "quote" ? (
+            <div>
+              <label className="label">Mode de prix</label>
+              <div className="inline-flex rounded-lg border border-brand-700 bg-brand-950/40 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setPricingKind("forfaitaire")}
+                  className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                    pricingKind === "forfaitaire"
+                      ? "bg-accent-500 text-brand-950 shadow"
+                      : "text-white/70 hover:text-white"
+                  }`}
+                >
+                  Forfaitaire
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPricingKind("estime")}
+                  className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                    pricingKind === "estime"
+                      ? "bg-accent-500 text-brand-950 shadow"
+                      : "text-white/70 hover:text-white"
+                  }`}
+                >
+                  Estimé
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-white/50">
+                {pricingKind === "forfaitaire"
+                  ? "Prix fixe garanti — le client paye le total même si nos coûts dépassent."
+                  : "Estimation à confirmer — refacturable selon les heures et matériaux réels."}
+              </p>
+            </div>
+          ) : null}
 
           <div>
             <label htmlFor="valid_until" className="label">
@@ -346,6 +397,8 @@ export default function NewSoumissionPage() {
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Création…
                 </>
+              ) : kind === "contract" ? (
+                "Créer → remplir le contrat"
               ) : (
                 "Créer → ajouter les items"
               )}
