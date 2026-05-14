@@ -228,11 +228,14 @@ export default function SoumissionDetailPage() {
                 }))
             );
         }
-        // Client / prospect lié — nom, courriel, adresse (contrat +
-        // pré-remplissage envoi).
+        // Client / prospect lié — nom, courriel, adresse, et message
+        // d'origine (pour pré-remplir la description d'un contrat).
         let cName = "";
         let cEmail = "";
         let cAddress = "";
+        let cMessage = "";
+        let contactIdForMessage: number | null =
+          sData.contact_request_id;
         if (sData.client_id) {
           try {
             const cl = await authedFetch(
@@ -243,28 +246,33 @@ export default function SoumissionDetailPage() {
                 name?: string;
                 email?: string;
                 address?: string;
+                contact_request_id?: number | null;
               };
               cName = c.name || "";
               cEmail = c.email || "";
               cAddress = c.address || "";
+              if (!contactIdForMessage && c.contact_request_id)
+                contactIdForMessage = c.contact_request_id;
             }
           } catch {
             /* ignore */
           }
         }
-        if (!cName && sData.contact_request_id) {
+        if (contactIdForMessage) {
           const cr = await authedFetch(
-            `/api/v1/contact/${sData.contact_request_id}`
+            `/api/v1/contact/${contactIdForMessage}`
           );
           if (cr.ok) {
             const crData = (await cr.json()) as {
               name?: string;
               email?: string;
               address?: string;
+              message?: string;
             };
-            cName = crData.name || cName;
-            cEmail = crData.email || cEmail;
-            cAddress = crData.address || cAddress;
+            if (!cName) cName = crData.name || cName;
+            if (!cEmail) cEmail = crData.email || cEmail;
+            if (!cAddress) cAddress = crData.address || cAddress;
+            cMessage = crData.message || "";
           }
         }
         if (cancelled) return;
@@ -273,7 +281,8 @@ export default function SoumissionDetailPage() {
         setClientAddress(cAddress);
         if (cEmail) setSendTo(cEmail);
         // Données du contrat : parse contract_data si présent, sinon
-        // défaut pré-rempli (chantier = adresse du client).
+        // défaut pré-rempli — chantier = adresse du client, et
+        // description = message d'origine du prospect/client.
         const prefillAddr = sData.property_address || cAddress;
         let cd: ContractData;
         if (sData.contract_data) {
@@ -287,6 +296,7 @@ export default function SoumissionDetailPage() {
           }
         } else {
           cd = defaultContractData({ address: prefillAddr });
+          if (cMessage.trim()) cd.description = cMessage.trim();
         }
         setContractData(cd);
         setContractDirty(false);
@@ -1195,16 +1205,22 @@ export default function SoumissionDetailPage() {
                   />
                 </div>
 
-                <div>
-                  <label htmlFor="description" className="label">Description</label>
-                  <textarea
-                    id="description"
-                    rows={6}
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    className="input"
-                  />
-                </div>
+                {/* Description : masquée pour un contrat — il a sa
+                    propre « Description des travaux » (section 3.2). */}
+                {kind === "quote" ? (
+                  <div>
+                    <label htmlFor="description" className="label">
+                      Description
+                    </label>
+                    <textarea
+                      id="description"
+                      rows={6}
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      className="input"
+                    />
+                  </div>
+                ) : null}
 
                 <div>
                   <label htmlFor="property_address" className="label">
@@ -1277,25 +1293,29 @@ export default function SoumissionDetailPage() {
                   </div>
                 ) : null}
 
-                <div>
-                  <label htmlFor="client_note" className="label">
-                    Note sur la soumission{" "}
-                    <span className="text-[10px] font-normal text-accent-500">
-                      (visible par le client)
-                    </span>
-                  </label>
-                  <textarea
-                    id="client_note"
-                    rows={3}
-                    value={clientNote}
-                    onChange={(e) => setClientNote(e.target.value)}
-                    placeholder="Ex. Paiement 50 % à la signature, solde à la fin des travaux. Matériaux inclus."
-                    className="input"
-                  />
-                  <p className="mt-1 text-xs text-white/50">
-                    Apparaît sur le PDF + la page publique de signature.
-                  </p>
-                </div>
+                {/* Note sur la soumission : masquée pour un contrat —
+                    les modalités sont déjà dans le contrat lui-même. */}
+                {kind === "quote" ? (
+                  <div>
+                    <label htmlFor="client_note" className="label">
+                      Note sur la soumission{" "}
+                      <span className="text-[10px] font-normal text-accent-500">
+                        (visible par le client)
+                      </span>
+                    </label>
+                    <textarea
+                      id="client_note"
+                      rows={3}
+                      value={clientNote}
+                      onChange={(e) => setClientNote(e.target.value)}
+                      placeholder="Ex. Paiement 50 % à la signature, solde à la fin des travaux. Matériaux inclus."
+                      className="input"
+                    />
+                    <p className="mt-1 text-xs text-white/50">
+                      Apparaît sur le PDF + la page publique de signature.
+                    </p>
+                  </div>
+                ) : null}
 
                 <div>
                   <label htmlFor="notes" className="label">

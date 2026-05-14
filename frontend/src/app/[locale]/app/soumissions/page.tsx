@@ -26,8 +26,24 @@ type Soumission = {
   valid_until: string | null;
   pdf_url: string | null;
   notes: string | null;
+  property_address: string | null;
+  kind?: "quote" | "contract";
+  contract_data?: string | null;
   created_at: string;
 };
+
+/** Prix estimé interne d'un contrat (contract_data JSON) — affiché
+ *  dans la liste à la place du total, le contrat n'ayant pas d'items. */
+function contractEstimate(s: Soumission): number | null {
+  if (s.kind !== "contract" || !s.contract_data) return null;
+  try {
+    const cd = JSON.parse(s.contract_data) as { prix_estime?: unknown };
+    const v = Number(cd.prix_estime);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  } catch {
+    return null;
+  }
+}
 
 type Column = { id: string; label: string; dot: string };
 
@@ -116,7 +132,9 @@ export default function SoumissionsPage() {
         const ids = data
           .filter(
             (s) =>
-              !(Number(s.total) > 0) && !(Number(s.subtotal) > 0)
+              s.kind !== "contract" &&
+              !(Number(s.total) > 0) &&
+              !(Number(s.subtotal) > 0)
           )
           .map((s) => s.id);
         if (ids.length > 0) {
@@ -152,10 +170,12 @@ export default function SoumissionsPage() {
     };
   }, []);
 
-  // Helper : montant à afficher pour une soumission (total >
-  // subtotal > somme des items > null).
+  // Helper : montant à afficher pour une soumission. Pour un contrat,
+  // c'est le prix estimé interne (pas d'items) ; pour un devis, total >
+  // subtotal > somme des items.
   const amountFor = useMemo(() => {
     return (s: Soumission): number | null => {
+      if (s.kind === "contract") return contractEstimate(s);
       if (Number(s.total) > 0) return Number(s.total);
       if (Number(s.subtotal) > 0) return Number(s.subtotal);
       const fallback = itemsTotals[s.id];
@@ -389,10 +409,10 @@ function SoumissionCard({
         href={`/app/soumissions/${s.id}` as any}
         className="block pr-6"
       >
-        {/* Adresse du projet (top) — fallback au titre si la
-            soumission n'a pas encore été convertie en projet. */}
+        {/* Adresse du chantier (top) — toujours affichée, même pour
+            un contrat ; fallback à l'adresse du projet puis au titre. */}
         <p className="line-clamp-2 text-sm font-semibold text-white">
-          {projectAddress || s.title}
+          {s.property_address || projectAddress || s.title}
         </p>
         {/* Nom du client (sous-titre) — taille bumpée pour
             lecture plus rapide. */}
@@ -401,15 +421,26 @@ function SoumissionCard({
             {clientName}
           </p>
         ) : null}
-        {/* Montant du budget (= total soumission). */}
+        {/* Montant : total du devis, ou prix estimé interne pour un
+            contrat. */}
         <p className="mt-2 text-sm font-bold text-white">
           {fmtMoney(amount)}
+          {s.kind === "contract" ? (
+            <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+              estimé
+            </span>
+          ) : null}
         </p>
         {/* Numéro de la soumission, en bas — bumpé en text-xs pour
             la lisibilité. */}
         <div className="mt-1.5 flex items-center justify-between">
           <span className="text-xs font-semibold uppercase tracking-wider text-accent-500">
             {s.reference}
+            {s.kind === "contract" ? (
+              <span className="ml-1.5 rounded bg-indigo-500/15 px-1 py-0.5 text-[9px] text-indigo-300">
+                Contrat
+              </span>
+            ) : null}
           </span>
           <span className="text-[10px] text-white/40">
             {new Date(s.created_at).toLocaleDateString("fr-CA", {
