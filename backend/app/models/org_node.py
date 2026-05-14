@@ -89,3 +89,13 @@ class OrgNode(Base, TimestampUpdateMixin):
     assignee_external_name: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
+
+    # Co-détenteurs : autres nœuds entreprise qui possèdent AUSSI
+    # celui-ci, en plus du parent dans l'arbre. Une vraie structure
+    # de détention n'est pas un arbre strict (ex. MGV Investissements
+    # détenue par 3 holdings) — le parent donne la position d'affichage,
+    # ce champ liste les co-détenteurs montrés en badges sur la carte.
+    # Stocké en JSON : liste d'IDs de nœuds org_nodes.
+    co_owner_node_ids: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )

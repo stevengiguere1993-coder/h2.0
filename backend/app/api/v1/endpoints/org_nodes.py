@@ -11,12 +11,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
@@ -42,8 +43,23 @@ class OrgNodeRead(BaseModel):
     assignee_employe_id: Optional[int]
     assignee_user_id: Optional[int]
     assignee_external_name: Optional[str]
+    co_owner_node_ids: List[int] = []
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("co_owner_node_ids", mode="before")
+    @classmethod
+    def _parse_co_owners(cls, v: object) -> List[int]:
+        # En base : JSON texte (ou NULL). En sortie API : liste d'ints.
+        if not v:
+            return []
+        if isinstance(v, list):
+            return [int(x) for x in v]
+        try:
+            parsed = json.loads(v)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return []
+        return [int(x) for x in parsed] if isinstance(parsed, list) else []
 
 
 class OrgNodeCreate(BaseModel):
@@ -79,6 +95,7 @@ class OrgNodeUpdate(BaseModel):
     assignee_external_name: Optional[str] = Field(
         default=None, max_length=255
     )
+    co_owner_node_ids: Optional[List[int]] = None
 
 
 @router.get("", response_model=List[OrgNodeRead])
@@ -161,6 +178,13 @@ async def update_node(
     payload = data.model_dump(exclude_unset=True)
     if "kind" in payload and payload["kind"] not in VALID_KINDS:
         payload.pop("kind")
+    if "co_owner_node_ids" in payload:
+        # Stocké en JSON texte ; on filtre l'auto-référence par sûreté.
+        ids = [
+            int(x) for x in (payload.pop("co_owner_node_ids") or [])
+            if int(x) != node_id
+        ]
+        n.co_owner_node_ids = json.dumps(ids) if ids else None
     for k, v in payload.items():
         setattr(n, k, v)
     await db.commit()
