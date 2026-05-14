@@ -412,3 +412,14 @@ html[data-portal-theme="light"] .bg-cyan-500\/20 { background-color: rgb(165 243
   animation: hot-lead-flicker 1.6s ease-in-out infinite;
   filter: drop-shadow(0 0 4px rgba(251, 146, 60, 0.6));
 }
+
+/* Confine Leaflet à son propre contexte d'empilement.
+   Leaflet pose des z-index élevés (panes ~200-700, contrôles ~800-1000)
+   sur ses éléments internes. Sans contexte d'empilement propre, ces
+   z-index « fuient » dans le contexte global et passent par-dessus la
+   barre du haut (z-30), le menu latéral et le panneau de notifications.
+   isolation:isolate piège toute cette pile à l'intérieur de la carte —
+   la carte se comporte alors comme un simple bloc en flux normal. */
+.leaflet-container {
+  isolation: isolate;
+}
