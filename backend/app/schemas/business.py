@@ -183,6 +183,7 @@ class SoumissionRead(_Base):
     contract_data: Optional[str] = None
     contractor_signed_name: Optional[str] = None
     contractor_signed_at: Optional[datetime] = None
+    contractor_signature_token: Optional[str] = None
     signed_name: Optional[str] = None
     created_at: datetime
 

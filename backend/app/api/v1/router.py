@@ -54,6 +54,7 @@ from app.api.v1.endpoints import (
     project_to_facture,
     projects,
     public_bon,
+    public_contract,
     public_purchase_agreement,
     public_soumission,
     purchase_agreement_milestones,
@@ -120,6 +121,7 @@ api_router.include_router(contact.router)
 api_router.include_router(blog.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(public_soumission.router)
+api_router.include_router(public_contract.router)
 api_router.include_router(contract_sign.router)
 api_router.include_router(contract_sign.docs_router)
 api_router.include_router(public_bon.router)
