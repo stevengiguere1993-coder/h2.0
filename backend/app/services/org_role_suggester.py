@@ -71,6 +71,16 @@ exécution qui demande du jugement ou du contact humain.
   * "adjoint_virtuel" — automatisable ou délégable à un adjoint \
 virtuel (IA, outils) : saisie, relances, rapports, screening, \
 tâches répétitives et procédurales.
+- SOCLE ADMINISTRATIF : toute entreprise — même petite, même une \
+société mère — a une gestion administrative et opérationnelle de \
+base à couvrir, EN PLUS de son cœur de métier. Assure-toi que ces \
+fonctions sont présentes (suggère-les si elles manquent) : gestion \
+du courrier et des documents reçus, gestion des urgences, agenda et \
+prise de rendez-vous, communication avec les gestionnaires, \
+communication et suivi des sous-traitants, communication avec les \
+partenaires / banques / fournisseurs clés, classement et archivage. \
+L'objectif est que l'entreprise puisse réaliser TOUTES ses tâches de \
+la manière la plus efficace — pas seulement les plus visibles.
 - Chaque suggestion doit combler un vrai trou opérationnel ou \
 stratégique."""
 
@@ -146,6 +156,38 @@ _CANEVAS: dict[str, list[tuple[str, str, str, str]]] = {
     ],
 }
 _DEFAULT_CANEVAS = _CANEVAS["gestion"]
+
+# Socle administratif commun à TOUTE entreprise (et à la société mère),
+# quel que soit son secteur. La génération s'assure toujours que ces
+# fonctions de base sont couvertes — c'est ce qui permet à l'entreprise
+# de réaliser toutes ses tâches, pas seulement le cœur de métier.
+_ADMIN_CANEVAS: list[tuple[str, str, str, str]] = [
+    ("Gestion du courrier et des documents reçus", "task",
+     "Ouvrir, trier et router le courrier postal et les documents "
+     "entrants.",
+     "adjoint_virtuel"),
+    ("Gestion des urgences", "role",
+     "Premier répondant : trier les urgences et déclencher la bonne "
+     "action sans délai.",
+     "adjoint"),
+    ("Agenda & prise de rendez-vous", "task",
+     "Tenue de l'agenda, planification et confirmation des "
+     "rendez-vous.",
+     "adjoint_virtuel"),
+    ("Communication — gestionnaires", "task",
+     "Suivi et coordination réguliers avec les gestionnaires.",
+     "adjoint"),
+    ("Communication — sous-traitants", "task",
+     "Relances, suivi des mandats et coordination des sous-traitants.",
+     "adjoint"),
+    ("Communication — partenaires", "task",
+     "Entretien des relations avec partenaires, banques et "
+     "fournisseurs clés.",
+     "direction"),
+    ("Classement & archivage documentaire", "task",
+     "Classement des contrats, factures et pièces justificatives.",
+     "adjoint_virtuel"),
+]
 
 
 def _norm(s: str) -> str:
@@ -223,9 +265,14 @@ def _suggest_locally(
     canevas = _CANEVAS.get(ent_type, _DEFAULT_CANEVAS)
     covered = {_norm(n.label) for n in existing}
     out: list[dict] = []
-    for label, kind, desc, tier in canevas:
-        if _norm(label) in covered:
+    seen: set[str] = set()
+    # Cœur de métier d'abord, puis le socle administratif commun à
+    # toute entreprise (courrier, urgences, communications, agenda…).
+    for label, kind, desc, tier in (*canevas, *_ADMIN_CANEVAS):
+        key = _norm(label)
+        if key in covered or key in seen:
             continue
+        seen.add(key)
         out.append(
             {
                 "label": label,
