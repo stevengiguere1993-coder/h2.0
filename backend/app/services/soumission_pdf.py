@@ -35,6 +35,7 @@ def _lazy_reportlab() -> dict[str, Any]:
     from reportlab.lib.units import mm  # type: ignore
     from reportlab.platypus import (  # type: ignore
         Image,
+        PageBreak,
         Paragraph,
         SimpleDocTemplate,
         Spacer,
@@ -49,6 +50,7 @@ def _lazy_reportlab() -> dict[str, Any]:
         "getSampleStyleSheet": getSampleStyleSheet,
         "mm": mm,
         "Image": Image,
+        "PageBreak": PageBreak,
         "Paragraph": Paragraph,
         "SimpleDocTemplate": SimpleDocTemplate,
         "Spacer": Spacer,
