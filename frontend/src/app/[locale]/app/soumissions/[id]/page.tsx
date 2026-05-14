@@ -20,6 +20,13 @@ import {
 
 import { AddressInput } from "@/components/address-input";
 import { AppTopbar } from "@/components/app-topbar";
+import {
+  ContractForm,
+  defaultContractData,
+  normalizeContractData,
+  type ContractData,
+  type UserOption
+} from "@/components/contract-form";
 import { FollowUpTimeline } from "@/components/follow-up-timeline";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
@@ -46,6 +53,9 @@ type Soumission = {
   client_note: string | null;
   property_address: string | null;
   pricing_kind?: "forfaitaire" | "estime";
+  kind?: "quote" | "contract";
+  contract_data?: string | null;
+  contractor_signed_name?: string | null;
   created_at: string;
   qbo_estimate_id?: string | null;
   qbo_doc_number?: string | null;
@@ -135,15 +145,29 @@ export default function SoumissionDetailPage() {
     "forfaitaire"
   );
 
+  // Type de document : devis classique (items) ou contrat d'entreprise
+  // (formulaire structuré dans contractData). Le contrat masque le
+  // tableau d'items.
+  const [kind, setKind] = useState<"quote" | "contract">("quote");
+  const [contractData, setContractData] = useState<ContractData | null>(
+    null
+  );
+  const [contractDirty, setContractDirty] = useState(false);
+  const [users, setUsers] = useState<UserOption[]>([]);
+  const [clientName, setClientName] = useState("");
+  const [clientEmail, setClientEmail] = useState("");
+  const [clientAddress, setClientAddress] = useState("");
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
       setLoading(true);
       setError(null);
       try {
-        const [sRes, iRes] = await Promise.all([
+        const [sRes, iRes, uRes] = await Promise.all([
           authedFetch(`/api/v1/soumissions/${id}`),
-          authedFetch(`/api/v1/soumissions/${id}/items`)
+          authedFetch(`/api/v1/soumissions/${id}/items`),
+          authedFetch(`/api/v1/users`)
         ]);
         if (!sRes.ok) throw new Error(`http_${sRes.status}`);
         const sData = (await sRes.json()) as Soumission;
@@ -160,16 +184,99 @@ export default function SoumissionDetailPage() {
         setPricingKind(
           sData.pricing_kind === "estime" ? "estime" : "forfaitaire"
         );
-        setSendSubject(`Soumission ${sData.reference} — ${sData.title}`);
-        if (sData.contact_request_id) {
+        const docKind = sData.kind === "contract" ? "contract" : "quote";
+        setKind(docKind);
+        setSendSubject(
+          `${docKind === "contract" ? "Contrat" : "Soumission"} ` +
+            `${sData.reference} — ${sData.title}`
+        );
+        // Liste des utilisateurs → menu « responsable du projet ».
+        if (uRes.ok) {
+          const uData = (await uRes.json()) as Array<{
+            id: number;
+            display_name?: string | null;
+            first_name?: string | null;
+            last_name?: string | null;
+            email: string;
+            is_active?: boolean;
+          }>;
+          if (!cancelled)
+            setUsers(
+              uData
+                .filter((u) => u.is_active !== false)
+                .map((u) => ({
+                  id: u.id,
+                  label:
+                    u.display_name ||
+                    [u.first_name, u.last_name]
+                      .filter(Boolean)
+                      .join(" ") ||
+                    u.email
+                }))
+            );
+        }
+        // Client / prospect lié — nom, courriel, adresse (contrat +
+        // pré-remplissage envoi).
+        let cName = "";
+        let cEmail = "";
+        let cAddress = "";
+        if (sData.client_id) {
+          try {
+            const cl = await authedFetch(
+              `/api/v1/clients/${sData.client_id}`
+            );
+            if (cl.ok) {
+              const c = (await cl.json()) as {
+                name?: string;
+                email?: string;
+                address?: string;
+              };
+              cName = c.name || "";
+              cEmail = c.email || "";
+              cAddress = c.address || "";
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+        if (!cName && sData.contact_request_id) {
           const cr = await authedFetch(
             `/api/v1/contact/${sData.contact_request_id}`
           );
-          if (cr.ok && !cancelled) {
-            const crData = (await cr.json()) as { email?: string };
-            if (crData.email) setSendTo(crData.email);
+          if (cr.ok) {
+            const crData = (await cr.json()) as {
+              name?: string;
+              email?: string;
+              address?: string;
+            };
+            cName = crData.name || cName;
+            cEmail = crData.email || cEmail;
+            cAddress = crData.address || cAddress;
           }
         }
+        if (cancelled) return;
+        setClientName(cName);
+        setClientEmail(cEmail);
+        setClientAddress(cAddress);
+        if (cEmail) setSendTo(cEmail);
+        // Données du contrat : parse contract_data si présent, sinon
+        // défaut pré-rempli (chantier = adresse du client).
+        const prefillAddr = sData.property_address || cAddress;
+        let cd: ContractData;
+        if (sData.contract_data) {
+          try {
+            cd = normalizeContractData(
+              JSON.parse(sData.contract_data),
+              { address: prefillAddr }
+            );
+          } catch {
+            cd = defaultContractData({ address: prefillAddr });
+          }
+        } else {
+          cd = defaultContractData({ address: prefillAddr });
+        }
+        setContractData(cd);
+        setContractDirty(false);
       } catch {
         if (!cancelled) setError("Soumission introuvable.");
       } finally {
@@ -231,7 +338,9 @@ export default function SoumissionDetailPage() {
       description !== (s.description || "") ||
       isoToDateInput(s.valid_until) !== validUntil ||
       (s.notes || "") !== notes ||
-      (s.client_note || "") !== clientNote);
+      (s.client_note || "") !== clientNote ||
+      kind !== (s.kind || "quote") ||
+      contractDirty);
 
   async function syncToQbo(options?: { silent?: boolean }) {
     setQboBusy(true);
@@ -379,7 +488,9 @@ export default function SoumissionDetailPage() {
         notes: notes.trim() || null,
         client_note: clientNote.trim() || null,
         property_address: propertyAddress.trim() || null,
-        pricing_kind: pricingKind
+        pricing_kind: pricingKind,
+        kind,
+        contract_data: contractData ? JSON.stringify(contractData) : null
       };
       const res = await authedFetch(`/api/v1/soumissions/${id}`, {
         method: "PATCH",
@@ -388,6 +499,7 @@ export default function SoumissionDetailPage() {
       if (!res.ok) throw new Error();
       const updated = (await res.json()) as Soumission;
       setS(updated);
+      setContractDirty(false);
     } catch {
       setError("Sauvegarde échouée.");
     } finally {
@@ -724,7 +836,45 @@ export default function SoumissionDetailPage() {
               </div>
             ) : null}
 
-            <section className="mt-8 rounded-xl border border-brand-800 bg-brand-900">
+            {/* Type de soumission — devis (tableau d'items) ou
+                contrat d'entreprise (formulaire structuré). */}
+            <div className="mt-8 rounded-xl border border-brand-800 bg-brand-900 px-5 py-4">
+              <p className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                Type de soumission
+              </p>
+              <div className="mt-2 inline-flex rounded-lg border border-brand-700 bg-brand-950/40 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setKind("quote")}
+                  className={`rounded-md px-4 py-1.5 text-xs font-semibold transition ${
+                    kind === "quote"
+                      ? "bg-accent-500 text-brand-950 shadow"
+                      : "text-white/70 hover:text-white"
+                  }`}
+                >
+                  Devis
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setKind("contract")}
+                  className={`rounded-md px-4 py-1.5 text-xs font-semibold transition ${
+                    kind === "contract"
+                      ? "bg-accent-500 text-brand-950 shadow"
+                      : "text-white/70 hover:text-white"
+                  }`}
+                >
+                  Contrat
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-white/50">
+                {kind === "quote"
+                  ? "Devis classique : tableau d'items, prix et taxes."
+                  : "Contrat d'entreprise à prix coûtant majoré — formulaire structuré (le tableau d'items est masqué)."}
+              </p>
+            </div>
+
+            {kind === "quote" ? (
+            <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brand-800 px-5 py-4">
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                   Items de la soumission
@@ -833,6 +983,43 @@ export default function SoumissionDetailPage() {
                 </div>
               )}
             </section>
+            ) : contractData ? (
+              <>
+                <ContractForm
+                  value={contractData}
+                  onChange={(v) => {
+                    setContractData(v);
+                    setContractDirty(true);
+                  }}
+                  users={users}
+                  clientName={clientName}
+                  clientEmail={clientEmail}
+                  clientAddress={clientAddress}
+                />
+                <div className="mt-4">
+                  <button
+                    type="button"
+                    onClick={saveMeta}
+                    disabled={saving || !metaDirty}
+                    className="btn-accent text-sm"
+                  >
+                    {saving ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Sauvegarde…
+                      </>
+                    ) : (
+                      <>
+                        <Save className="mr-2 h-4 w-4" />
+                        {metaDirty
+                          ? "Sauvegarder le contrat"
+                          : "Contrat à jour"}
+                      </>
+                    )}
+                  </button>
+                </div>
+              </>
+            ) : null}
 
             <div className="mt-8">
               <FollowUpTimeline subjectType="soumission" subjectId={s.id} />
@@ -900,39 +1087,42 @@ export default function SoumissionDetailPage() {
                     estimé (estimation à confirmer). En mode estimé,
                     le PDF ET la page publique affichent une clause
                     qui explique au client que les coûts peuvent
-                    varier. */}
-                <div>
-                  <label className="label">Type de soumission</label>
-                  <div className="inline-flex rounded-lg border border-brand-700 bg-brand-950/40 p-0.5">
-                    <button
-                      type="button"
-                      onClick={() => setPricingKind("forfaitaire")}
-                      className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
-                        pricingKind === "forfaitaire"
-                          ? "bg-accent-500 text-brand-950 shadow"
-                          : "text-white/70 hover:text-white"
-                      }`}
-                    >
-                      Forfaitaire
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPricingKind("estime")}
-                      className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
-                        pricingKind === "estime"
-                          ? "bg-amber-500 text-brand-950 shadow"
-                          : "text-white/70 hover:text-white"
-                      }`}
-                    >
-                      Estimé
-                    </button>
+                    varier. Sans objet pour un contrat (prix coûtant
+                    majoré). */}
+                {kind === "quote" ? (
+                  <div>
+                    <label className="label">Mode de prix</label>
+                    <div className="inline-flex rounded-lg border border-brand-700 bg-brand-950/40 p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setPricingKind("forfaitaire")}
+                        className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                          pricingKind === "forfaitaire"
+                            ? "bg-accent-500 text-brand-950 shadow"
+                            : "text-white/70 hover:text-white"
+                        }`}
+                      >
+                        Forfaitaire
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPricingKind("estime")}
+                        className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                          pricingKind === "estime"
+                            ? "bg-amber-500 text-brand-950 shadow"
+                            : "text-white/70 hover:text-white"
+                        }`}
+                      >
+                        Estimé
+                      </button>
+                    </div>
+                    <p className="mt-1 text-xs text-white/50">
+                      {pricingKind === "forfaitaire"
+                        ? "Prix fixe garanti — le client paye le total même si nos coûts dépassent."
+                        : "Estimé — clause client-facing ajoutée au PDF et à la page publique : « les coûts peuvent varier en cours de projet, on tient le client au courant »."}
+                    </p>
                   </div>
-                  <p className="mt-1 text-xs text-white/50">
-                    {pricingKind === "forfaitaire"
-                      ? "Prix fixe garanti — le client paye le total même si nos coûts dépassent."
-                      : "Estimé — clause client-facing ajoutée au PDF et à la page publique : « les coûts peuvent varier en cours de projet, on tient le client au courant »."}
-                  </p>
-                </div>
+                ) : null}
 
                 <div>
                   <label htmlFor="client_note" className="label">
@@ -999,6 +1189,11 @@ export default function SoumissionDetailPage() {
               </div>
 
               <aside className="space-y-5">
+                {/* Montants + coût interne : dérivés du tableau
+                    d'items → masqués pour un contrat (prix coûtant
+                    majoré, pas de lignes de prix). */}
+                {kind === "quote" ? (
+                <>
                 <div className="rounded-xl border border-brand-800 bg-brand-900 p-5">
                   <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
                     Montants
@@ -1070,6 +1265,8 @@ export default function SoumissionDetailPage() {
                     page publique du client.
                   </p>
                 </div>
+                </>
+                ) : null}
 
                 <div className="rounded-xl border border-brand-800 bg-brand-900 p-5">
                   <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
