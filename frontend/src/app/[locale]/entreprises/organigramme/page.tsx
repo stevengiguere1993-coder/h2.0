@@ -1355,11 +1355,18 @@ function NodeRow({
     parentEntId != null &&
     node.entreprise_id === parentEntId;
 
-  // Co-détenteurs : on résout les IDs en libellés pour les badges.
+  // Co-détention — visible dans les deux sens pour refléter tout le
+  // canvas :
+  //  • coOwnerNodes      → qui détient AUSSI ce nœud (entrant)
+  //  • coDetainedNodes   → ce que ce nœud détient en co-détention
+  //                        (sortant : il est dans leur co_owner_node_ids)
   const coOwnerIds = node.co_owner_node_ids || [];
   const coOwnerNodes = coOwnerIds
     .map((id) => allNodes.find((n) => n.id === id))
     .filter((n): n is OrgNode => Boolean(n));
+  const coDetainedNodes = allNodes.filter((n) =>
+    (n.co_owner_node_ids || []).includes(node.id)
+  );
   const tierInfo = node.execution_tier
     ? TIER_LABELS[node.execution_tier]
     : null;
@@ -1519,10 +1526,19 @@ function NodeRow({
         {coOwnerNodes.length > 0 ? (
           <span
             className="inline-flex items-center gap-0.5 rounded bg-sky-500/10 px-1 py-0 text-sky-300"
-            title="Détenu aussi par ces entreprises (co-détention)"
+            title="Détenu aussi par ces entités (co-détention)"
           >
             <Link2 className="h-2.5 w-2.5" />
             aussi détenu par {coOwnerNodes.map((n) => n.label).join(", ")}
+          </span>
+        ) : null}
+        {coDetainedNodes.length > 0 ? (
+          <span
+            className="inline-flex items-center gap-0.5 rounded bg-emerald-500/10 px-1 py-0 text-emerald-300"
+            title="Détient aussi ces entités (co-détention) — hors enfants directs dans l'arbre"
+          >
+            <Link2 className="h-2.5 w-2.5" />
+            détient aussi {coDetainedNodes.map((n) => n.label).join(", ")}
           </span>
         ) : null}
       </div>
