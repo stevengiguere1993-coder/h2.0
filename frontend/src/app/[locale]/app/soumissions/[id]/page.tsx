@@ -218,11 +218,14 @@ export default function SoumissionDetailPage() {
                 .filter((u) => u.is_active !== false)
                 .map((u) => ({
                   id: u.id,
+                  // Nom réel en priorité (prénom + nom) ; on ne
+                  // retombe sur display_name / courriel que si le
+                  // profil n'a pas de nom complet renseigné.
                   label:
-                    u.display_name ||
                     [u.first_name, u.last_name]
                       .filter(Boolean)
                       .join(" ") ||
+                    u.display_name ||
                     u.email
                 }))
             );
