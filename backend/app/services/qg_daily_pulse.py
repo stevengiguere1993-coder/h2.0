@@ -269,7 +269,22 @@ async def generate_for_entreprise(
     # Investissements), on inclut les tâches/activités/visions de
     # TOUTES les entreprises actives — son briefing devient la vision
     # globale du groupe. Sinon : périmètre normal de l'entreprise.
+    # Fallback : si aucune entreprise n'a le flag, « MGV
+    # Investissement(s) » est considérée mère par défaut (match nom).
     is_parent = bool(getattr(ent, "is_parent_company", False))
+    if not is_parent:
+        import re as _re
+
+        if _re.search(r"mgv\s*invest", ent.name or "", _re.I):
+            any_flagged = (
+                await db.execute(
+                    select(Entreprise.id).where(
+                        Entreprise.is_parent_company.is_(True)
+                    )
+                )
+            ).scalars().first()
+            if any_flagged is None:
+                is_parent = True
     if is_parent:
         active_ids = (
             await db.execute(
