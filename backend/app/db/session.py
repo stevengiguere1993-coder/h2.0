@@ -390,6 +390,11 @@ async def init_db() -> None:
                 "contractor_signature_image_content_type",
                 "VARCHAR(100)",
             ),
+            (
+                "soumissions",
+                "contractor_signature_token",
+                "VARCHAR(64)",
+            ),
             ("lead_analyses", "best_refi_program", "VARCHAR(128)"),
             (
                 "lead_analyses",

@@ -135,4 +135,10 @@ class Soumission(Base, TimestampUpdateMixin):
     contractor_signature_image_content_type: Mapped[Optional[str]] = (
         mapped_column(String(100), nullable=True)
     )
+    # Jeton de signature de l'entrepreneur : le chargé de projet
+    # reçoit par courriel un lien public /contrat-signature/{token}
+    # pour signer le contrat AVANT son envoi au client.
+    contractor_signature_token: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
 
