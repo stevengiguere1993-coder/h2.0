@@ -79,12 +79,17 @@ export default function SoumissionsPage() {
   // recalcul du total). Peuplé en 1 batch après le chargement de la
   // liste.
   const [itemsTotals, setItemsTotals] = useState<Record<number, number>>({});
-  // Map client_id → name + map soumission_id → adresse projet
-  // (projet créé à partir de la soumission). Permet d'afficher
-  // l'adresse du projet sur la carte au lieu du juste-titre.
+  // Maps de résolution pour les cartes : nom du client (client_id →
+  // name), prospect lié (contact_request_id → {name, address}), et
+  // adresse du projet créé depuis la soumission (soumission_id →
+  // address). Servent à afficher adresse + nom sur chaque carte,
+  // qu'elle vise un client ou un prospect.
   const [clientNames, setClientNames] = useState<Map<number, string>>(
     new Map()
   );
+  const [prospectById, setProspectById] = useState<
+    Map<number, { name: string; address: string | null }>
+  >(new Map());
   const [projectAddrBySoumission, setProjectAddrBySoumission] = useState<
     Map<number, string>
   >(new Map());
@@ -95,11 +100,13 @@ export default function SoumissionsPage() {
       setLoading(true);
       setError(null);
       try {
-        const [res, clientsRes, projectsRes] = await Promise.all([
-          authedFetch("/api/v1/soumissions?limit=200"),
-          authedFetch("/api/v1/clients?limit=500"),
-          authedFetch("/api/v1/projects?limit=500")
-        ]);
+        const [res, clientsRes, projectsRes, prospectsRes] =
+          await Promise.all([
+            authedFetch("/api/v1/soumissions?limit=200"),
+            authedFetch("/api/v1/clients?limit=500"),
+            authedFetch("/api/v1/projects?limit=500"),
+            authedFetch("/api/v1/contact?limit=500")
+          ]);
         if (!res.ok) throw new Error(`http_${res.status}`);
         const data = (await res.json()) as Soumission[];
         if (cancelled) return;
@@ -112,6 +119,23 @@ export default function SoumissionsPage() {
           }>;
           if (!cancelled) {
             setClientNames(new Map(cs.map((c) => [c.id, c.name])));
+          }
+        }
+        if (prospectsRes.ok) {
+          const ps = (await prospectsRes.json()) as Array<{
+            id: number;
+            name: string;
+            address: string | null;
+          }>;
+          if (!cancelled) {
+            setProspectById(
+              new Map(
+                ps.map((p) => [
+                  p.id,
+                  { name: p.name, address: p.address }
+                ])
+              )
+            );
           }
         }
         if (projectsRes.ok) {
@@ -329,18 +353,26 @@ export default function SoumissionsPage() {
                         Aucune soumission
                       </p>
                     ) : (
-                      cards.map((s) => (
+                      cards.map((s) => {
+                        const prospect = s.contact_request_id
+                          ? prospectById.get(s.contact_request_id)
+                          : undefined;
+                        return (
                         <SoumissionCard
                           key={s.id}
                           soumission={s}
                           amount={amountFor(s)}
                           clientName={
-                            s.client_id
-                              ? clientNames.get(s.client_id) ?? null
-                              : null
+                            (s.client_id
+                              ? clientNames.get(s.client_id)
+                              : undefined) ??
+                            prospect?.name ??
+                            null
                           }
                           projectAddress={
-                            projectAddrBySoumission.get(s.id) ?? null
+                            projectAddrBySoumission.get(s.id) ??
+                            prospect?.address ??
+                            null
                           }
                           dragging={dragging === s.id}
                           onDragStart={() => setDragging(s.id)}
@@ -350,7 +382,8 @@ export default function SoumissionsPage() {
                           }}
                           onDelete={() => deleteSoumission(s.id, s.reference)}
                         />
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 </div>
