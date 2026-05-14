@@ -479,8 +479,11 @@ export default function ProspectionWebPage() {
           </div>
         </aside>
 
-        {/* Carte */}
-        <div className="relative flex-1">
+        {/* Carte — `isolate` confine la carte ET son overlay de détail
+            dans leur propre contexte d'empilement, pour qu'ils ne
+            passent jamais par-dessus la barre du haut / les
+            notifications. */}
+        <div className="relative isolate flex-1">
           <div
             ref={mapContainerRef}
             className="h-full w-full bg-brand-950"
