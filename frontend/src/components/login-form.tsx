@@ -58,11 +58,18 @@ export function LoginForm() {
         const me = await getMe(existing);
         if (cancelled) return;
         if (me.must_change_password) return; // laisse le user voir le form
-        // Employee → bypass picker, vers /m direct
+        // Employé construction (ou compte legacy sans volets_json) →
+        // bypass picker, app mobile chantier directe. Un employé d'un
+        // AUTRE volet (ex. prospection) doit voir le sélecteur de
+        // portail pour atterrir sur SON volet — on ne le force pas
+        // vers /m (qui est l'app chantier construction).
         if (me.role === "employee") {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          router.replace("/m" as any);
-          return;
+          const v = Array.isArray(me.volets) ? me.volets : [];
+          if (v.length === 0 || v.includes("construction")) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            router.replace("/m" as any);
+            return;
+          }
         }
         setUserEmail(me.email || null);
         setUserVolets(Array.isArray(me.volets) ? me.volets : []);
@@ -94,8 +101,9 @@ export function LoginForm() {
         router.replace(nextUrl as any);
         return;
       }
-      // Employees default to the mobile app — they have no use for /app.
-      // Manager+ see the Web / App picker so they can pick.
+      // Employés construction → app mobile chantier directe. Employés
+      // d'un autre volet (ex. prospection) + manager/owner → sélecteur
+      // de portail pour choisir / atterrir sur leur volet.
       try {
         const me = await getMe(result.access_token);
         // First-login (or admin-triggered reset) — force the user
@@ -106,9 +114,14 @@ export function LoginForm() {
           return;
         }
         if (me.role === "employee") {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          router.replace("/m" as any);
-          return;
+          const v = Array.isArray(me.volets) ? me.volets : [];
+          // Seul un employé construction (ou legacy sans volets) file
+          // direct vers /m. Les autres voient le sélecteur de portail.
+          if (v.length === 0 || v.includes("construction")) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            router.replace("/m" as any);
+            return;
+          }
         }
         // IMPORTANT : on hydrate volets + role AVANT setAuthed(true)
         // sinon le picker rend avec userRole="" et les pastilles
@@ -233,27 +246,29 @@ export function LoginForm() {
             </button>
           ) : null}
 
-          <button
-            type="button"
-            onClick={() => {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              router.replace("/m" as any);
-            }}
-            className="group flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-accent-500 hover:bg-brand-800"
-          >
-            <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500/15 text-blue-400 group-hover:bg-blue-500 group-hover:text-white">
-              <Smartphone className="h-6 w-6" />
-            </span>
-            <span className="flex-1">
-              <span className="block text-base font-bold text-white">
-                Application mobile
+          {has("construction") ? (
+            <button
+              type="button"
+              onClick={() => {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                router.replace("/m" as any);
+              }}
+              className="group flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-accent-500 hover:bg-brand-800"
+            >
+              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500/15 text-blue-400 group-hover:bg-blue-500 group-hover:text-white">
+                <Smartphone className="h-6 w-6" />
               </span>
-              <span className="mt-0.5 block text-xs text-white/60">
-                Employé sur chantier — poinçonner, agenda, intervention
-                avec photos.
+              <span className="flex-1">
+                <span className="block text-base font-bold text-white">
+                  Application mobile
+                </span>
+                <span className="mt-0.5 block text-xs text-white/60">
+                  Employé sur chantier — poinçonner, agenda, intervention
+                  avec photos.
+                </span>
               </span>
-            </span>
-          </button>
+            </button>
+          ) : null}
 
           {has("prospection") ? (
             <button
