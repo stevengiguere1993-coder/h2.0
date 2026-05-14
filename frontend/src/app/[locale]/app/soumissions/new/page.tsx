@@ -54,13 +54,9 @@ export default function NewSoumissionPage() {
   );
   const [title, setTitle] = useState("");
   const [propertyAddress, setPropertyAddress] = useState("");
-  // Type de soumission : forfaitaire (montant fixe) vs estime
-  // (estimation à confirmer / refacturable selon la réalité).
-  const [pricingKind, setPricingKind] = useState<"forfaitaire" | "estime">(
-    "forfaitaire"
-  );
   // Type de document : devis classique (items) ou contrat d'entreprise
-  // (formulaire structuré rempli sur la page suivante).
+  // (formulaire structuré rempli sur la page suivante). Le mode de
+  // prix (forfaitaire / estimé) se règle ensuite sur la soumission.
   const [kind, setKind] = useState<"quote" | "contract">("quote");
   const [validUntil, setValidUntil] = useState<string>(() => {
     const d = new Date();
@@ -130,7 +126,6 @@ export default function NewSoumissionPage() {
       if (propertyAddress.trim()) {
         payload.property_address = propertyAddress.trim();
       }
-      payload.pricing_kind = pricingKind;
       payload.kind = kind;
 
       const res = await authedFetch("/api/v1/soumissions", {
@@ -329,47 +324,10 @@ export default function NewSoumissionPage() {
             </div>
             <p className="mt-1 text-xs text-white/50">
               {kind === "quote"
-                ? "Devis classique : tableau d'items, prix et taxes."
+                ? "Devis classique : tableau d'items, prix et taxes. Le mode forfaitaire / estimé se règle ensuite sur la soumission."
                 : "Contrat d'entreprise à prix coûtant majoré — formulaire structuré rempli sur la page suivante."}
             </p>
           </div>
-
-          {/* Mode de prix : forfaitaire ou estimé — sans objet pour
-              un contrat (prix coûtant majoré). */}
-          {kind === "quote" ? (
-            <div>
-              <label className="label">Mode de prix</label>
-              <div className="inline-flex rounded-lg border border-brand-700 bg-brand-950/40 p-0.5">
-                <button
-                  type="button"
-                  onClick={() => setPricingKind("forfaitaire")}
-                  className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
-                    pricingKind === "forfaitaire"
-                      ? "bg-accent-500 text-brand-950 shadow"
-                      : "text-white/70 hover:text-white"
-                  }`}
-                >
-                  Forfaitaire
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPricingKind("estime")}
-                  className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
-                    pricingKind === "estime"
-                      ? "bg-accent-500 text-brand-950 shadow"
-                      : "text-white/70 hover:text-white"
-                  }`}
-                >
-                  Estimé
-                </button>
-              </div>
-              <p className="mt-1 text-xs text-white/50">
-                {pricingKind === "forfaitaire"
-                  ? "Prix fixe garanti — le client paye le total même si nos coûts dépassent."
-                  : "Estimation à confirmer — refacturable selon les heures et matériaux réels."}
-              </p>
-            </div>
-          ) : null}
 
           <div>
             <label htmlFor="valid_until" className="label">
