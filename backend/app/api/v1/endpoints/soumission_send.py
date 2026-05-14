@@ -104,7 +104,8 @@ async def get_soumission_pdf(
     if rendered is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Soumission not found")
     sm, pdf_bytes = rendered
-    filename = f"soumission-{sm.reference}.pdf"
+    prefix = "contrat" if getattr(sm, "kind", "quote") == "contract" else "soumission"
+    filename = f"{prefix}-{sm.reference}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
