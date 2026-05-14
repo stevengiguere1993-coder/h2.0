@@ -79,6 +79,7 @@ from app.api.v1.endpoints import (
     qbo_oauth,
     qbo_token,
     search,
+    contract_sign,
     soumission_items,
     soumission_qbo,
     soumission_send,
@@ -119,6 +120,8 @@ api_router.include_router(contact.router)
 api_router.include_router(blog.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(public_soumission.router)
+api_router.include_router(contract_sign.router)
+api_router.include_router(contract_sign.docs_router)
 api_router.include_router(public_bon.router)
 api_router.include_router(public_purchase_agreement.router)
 api_router.include_router(qbo_token.router)

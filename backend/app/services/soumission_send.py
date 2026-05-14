@@ -126,6 +126,33 @@ async def send_soumission(
         raise SoumissionSendError("Au moins un destinataire est requis.")
 
     cc_list = [a.strip() for a in (cc or []) if a and a.strip()]
+    # Contrat : on met le responsable de chantier en copie du courriel
+    # envoyé au client (best-effort — n'empêche pas l'envoi).
+    if getattr(sm, "kind", "quote") == "contract":
+        try:
+            import json as _json
+
+            from app.models.user import User as _User
+
+            cd = _json.loads(sm.contract_data) if sm.contract_data else {}
+            rid = (
+                cd.get("responsable_user_id")
+                if isinstance(cd, dict)
+                else None
+            )
+            if rid:
+                u = (
+                    await db.execute(
+                        select(_User).where(_User.id == int(rid))
+                    )
+                ).scalar_one_or_none()
+                if u and u.email and u.email not in cc_list:
+                    cc_list.append(u.email)
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "Responsable de chantier non ajouté en CC (soumission %s)",
+                soumission_id,
+            )
     subj = subject or _default_subject(sm)
     body_html = _default_body_html(sm, message)
     attachment = EmailAttachment(
