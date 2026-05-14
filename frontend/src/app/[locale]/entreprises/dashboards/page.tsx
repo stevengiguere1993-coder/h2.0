@@ -25,6 +25,9 @@ import { QGTopbar } from "../layout";
  * trésorerie / tâches), une heatmap revenu par entreprise × 12
  * mois, des alertes actionnables, la répartition de santé, et la
  * vélocité de complétion 30 jours.
+ *
+ * Couleurs : tout passe par les variables de thème `--qg-*` pour
+ * rester lisible en mode jour comme en mode nuit.
  */
 
 type DashKPI = {
@@ -112,6 +115,12 @@ const HEALTH_LABEL: Record<DashHealthBucket["label"], { label: string; color: st
     risk: { label: "À risque", color: "bg-rose-500" }
   };
 
+// Cartes / sections : fond + bordure de thème.
+const CARD_STYLE: React.CSSProperties = {
+  backgroundColor: "var(--qg-card-bg)",
+  borderColor: "var(--qg-border)"
+};
+
 export default function DashboardsPage() {
   const [data, setData] = useState<DashboardExec | null>(null);
   const [loading, setLoading] = useState(false);
@@ -170,13 +179,16 @@ export default function DashboardsPage() {
 
       <div className="px-5 py-6 lg:px-8">
         {err ? (
-          <p className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          <p className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-600">
             {err}
           </p>
         ) : null}
 
         {data === null ? (
-          <p className="py-12 text-center text-sm text-white/40">
+          <p
+            className="py-12 text-center text-sm"
+            style={{ color: "var(--qg-text-soft)" }}
+          >
             <Loader2 className="mr-2 inline h-4 w-4 animate-spin" />
             Chargement du cockpit…
           </p>
@@ -192,7 +204,10 @@ export default function DashboardsPage() {
               rows={data.heatmap_rows}
             />
             <VelocityPanel points={data.velocity} />
-            <p className="mt-6 text-center text-[10px] text-white/30">
+            <p
+              className="mt-6 text-center text-[10px]"
+              style={{ color: "var(--qg-text-soft)" }}
+            >
               Généré {new Date(data.generated_at).toLocaleString("fr-CA")}
             </p>
           </>
@@ -216,29 +231,38 @@ function KPIStrip({ kpis }: { kpis: DashKPI[] }) {
           delta !== null && (k.format === "count" && k.label.includes("ouvertes")
             ? delta < 0   // moins de tâches ouvertes = bon
             : delta > 0);
+        // Couleurs lisibles en mode jour ET nuit (shades médium).
+        const deltaColor =
+          delta === null || delta === 0
+            ? "var(--qg-text-soft)"
+            : deltaIsGood
+              ? "#10b981"
+              : "#f43f5e";
         return (
           <div
             key={i}
-            className="rounded-2xl border border-brand-800 bg-gradient-to-br from-brand-900 to-brand-950 p-4 shadow-card"
+            className="rounded-2xl border p-4 shadow-card"
+            style={CARD_STYLE}
           >
-            <p className="text-[10px] uppercase tracking-wider text-white/50">
+            <p
+              className="text-[10px] uppercase tracking-wider"
+              style={{ color: "var(--qg-text-soft)" }}
+            >
               {k.label}
             </p>
             <p
-              className="mt-1 text-2xl font-bold text-white"
-              style={{ fontFamily: "var(--font-fraunces, Georgia, serif)" }}
+              className="mt-1 text-2xl font-bold"
+              style={{
+                color: "var(--qg-text)",
+                fontFamily: "var(--font-fraunces, Georgia, serif)"
+              }}
             >
               {fmtKPI(k.value, k.format)}
             </p>
             {delta !== null ? (
               <p
-                className={`mt-1 inline-flex items-center gap-1 text-[11px] font-semibold ${
-                  deltaIsGood
-                    ? "text-emerald-400"
-                    : delta === 0
-                      ? "text-white/40"
-                      : "text-rose-400"
-                }`}
+                className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold"
+                style={{ color: deltaColor }}
               >
                 {delta > 0.5 ? (
                   <ArrowUpRight className="h-3 w-3" />
@@ -250,10 +274,13 @@ function KPIStrip({ kpis }: { kpis: DashKPI[] }) {
                 {delta > 0 ? "+" : ""}
                 {delta.toFixed(1)} %
               </p>
-            ) : k.previous === null ? (
-              <p className="mt-1 text-[11px] text-white/30">—</p>
             ) : (
-              <p className="mt-1 text-[11px] text-white/30">vs précédent</p>
+              <p
+                className="mt-1 text-[11px]"
+                style={{ color: "var(--qg-text-soft)" }}
+              >
+                {k.previous === null ? "—" : "vs précédent"}
+              </p>
             )}
           </div>
         );
@@ -267,11 +294,14 @@ function KPIStrip({ kpis }: { kpis: DashKPI[] }) {
 function HealthOverview({ buckets }: { buckets: DashHealthBucket[] }) {
   const total = buckets.reduce((s, b) => s + b.count, 0);
   return (
-    <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+    <section className="rounded-2xl border p-5" style={CARD_STYLE}>
+      <h2
+        className="text-sm font-semibold uppercase tracking-wider"
+        style={{ color: "var(--qg-accent)" }}
+      >
         ✦ Santé du portefeuille
       </h2>
-      <p className="mt-0.5 text-xs text-white/50">
+      <p className="mt-0.5 text-xs" style={{ color: "var(--qg-text-soft)" }}>
         Répartition des entreprises actives par état actuel.
       </p>
       <div className="mt-4 space-y-2">
@@ -281,10 +311,20 @@ function HealthOverview({ buckets }: { buckets: DashHealthBucket[] }) {
           return (
             <div key={b.label}>
               <div className="flex items-center justify-between text-xs">
-                <span className="text-white/70">{meta.label}</span>
-                <span className="font-mono text-white/90">{b.count}</span>
+                <span style={{ color: "var(--qg-text-muted)" }}>
+                  {meta.label}
+                </span>
+                <span
+                  className="font-mono"
+                  style={{ color: "var(--qg-text)" }}
+                >
+                  {b.count}
+                </span>
               </div>
-              <div className="mt-1 h-2 overflow-hidden rounded-full bg-brand-950">
+              <div
+                className="mt-1 h-2 overflow-hidden rounded-full"
+                style={{ backgroundColor: "var(--qg-bg-alt)" }}
+              >
                 <div
                   className={`h-full ${meta.color} transition-all`}
                   style={{ width: `${pct}%` }}
@@ -297,7 +337,8 @@ function HealthOverview({ buckets }: { buckets: DashHealthBucket[] }) {
       <Link
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         href={"/entreprises" as any}
-        className="mt-4 inline-flex items-center text-[11px] text-violet-300 hover:text-violet-200"
+        className="mt-4 inline-flex items-center text-[11px] hover:underline"
+        style={{ color: "var(--qg-accent)" }}
       >
         → Voir le détail par entreprise
       </Link>
@@ -309,16 +350,22 @@ function HealthOverview({ buckets }: { buckets: DashHealthBucket[] }) {
 
 function AlertsPanel({ alerts }: { alerts: DashAlert[] }) {
   return (
-    <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5 lg:col-span-2">
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+    <section
+      className="rounded-2xl border p-5 lg:col-span-2"
+      style={CARD_STYLE}
+    >
+      <h2
+        className="text-sm font-semibold uppercase tracking-wider"
+        style={{ color: "var(--qg-accent)" }}
+      >
         ⚠ Alertes actionnables
       </h2>
-      <p className="mt-0.5 text-xs text-white/50">
+      <p className="mt-0.5 text-xs" style={{ color: "var(--qg-text-soft)" }}>
         À traiter en priorité — modèles en retard, tâches très en retard,
         snapshots manquants.
       </p>
       {alerts.length === 0 ? (
-        <p className="mt-4 inline-flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+        <p className="mt-4 inline-flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-600">
           <CheckCircle2 className="h-3.5 w-3.5" />
           Aucune alerte. Tout est sous contrôle.
         </p>
@@ -326,15 +373,29 @@ function AlertsPanel({ alerts }: { alerts: DashAlert[] }) {
         <ul className="mt-4 space-y-2">
           {alerts.map((a, i) => {
             const Icon = ICON_MAP[a.icon] || AlertTriangle;
-            const sevColor =
+            // Styles lisibles en mode jour ET nuit.
+            const sevStyle: React.CSSProperties =
               a.severity === "high"
-                ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+                ? {
+                    borderColor: "rgba(244,63,94,0.4)",
+                    backgroundColor: "rgba(244,63,94,0.1)",
+                    color: "#e11d48"
+                  }
                 : a.severity === "medium"
-                  ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
-                  : "border-white/15 bg-brand-950 text-white/60";
+                  ? {
+                      borderColor: "rgba(245,158,11,0.45)",
+                      backgroundColor: "rgba(245,158,11,0.1)",
+                      color: "#d97706"
+                    }
+                  : {
+                      borderColor: "var(--qg-border)",
+                      backgroundColor: "var(--qg-bg-alt)",
+                      color: "var(--qg-text-muted)"
+                    };
             const inner = (
               <div
-                className={`flex items-start gap-3 rounded-lg border px-3 py-2 ${sevColor} hover:bg-opacity-30`}
+                className="flex items-start gap-3 rounded-lg border px-3 py-2"
+                style={sevStyle}
               >
                 <Icon className="mt-0.5 h-4 w-4 flex-shrink-0" />
                 <div className="min-w-0 flex-1">
@@ -394,48 +455,51 @@ function HeatmapPanel({
     return m;
   }, [rows]);
 
-  function cellBg(rev: number | null): string {
-    if (rev === null) return "bg-brand-950/40";
-    if (max === 0) return "bg-brand-900";
-    const ratio = rev / max;
-    // Vert d'intensité proportionnelle.
-    const alpha = Math.min(0.95, 0.15 + ratio * 0.8);
-    return "";
-    // (on utilise style inline pour le bg-color exact en heatmap).
-    void alpha;
-  }
-
-  function cellStyle(rev: number | null): React.CSSProperties | undefined {
-    if (rev === null || max === 0) return undefined;
+  function cellStyle(rev: number | null): React.CSSProperties {
+    if (rev === null) return { backgroundColor: "var(--qg-bg-alt)" };
+    if (max === 0) return { backgroundColor: "var(--qg-card-bg)" };
     const ratio = Math.max(0, Math.min(1, rev / max));
+    // Vert d'intensité proportionnelle — lisible sur fond clair ou sombre.
     return {
       backgroundColor: `rgba(16, 185, 129, ${0.12 + ratio * 0.78})`
     };
   }
 
   return (
-    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+    <section className="mt-6 rounded-2xl border p-5" style={CARD_STYLE}>
+      <h2
+        className="text-sm font-semibold uppercase tracking-wider"
+        style={{ color: "var(--qg-accent)" }}
+      >
         ▦ Heatmap revenus · 12 mois
       </h2>
-      <p className="mt-0.5 text-xs text-white/50">
+      <p className="mt-0.5 text-xs" style={{ color: "var(--qg-text-soft)" }}>
         Plus la cellule est verte, plus le revenu mensuel est élevé pour
         cette entreprise.
       </p>
       {rows.length === 0 ? (
-        <p className="mt-4 text-xs text-white/40">Aucune entreprise active.</p>
+        <p className="mt-4 text-xs" style={{ color: "var(--qg-text-soft)" }}>
+          Aucune entreprise active.
+        </p>
       ) : (
         <div className="mt-4 overflow-x-auto">
           <table className="w-full min-w-[720px] text-[11px]">
             <thead>
               <tr>
-                <th className="sticky left-0 z-10 bg-brand-900 py-2 pr-2 text-left font-semibold text-white/50">
+                <th
+                  className="sticky left-0 z-10 py-2 pr-2 text-left font-semibold"
+                  style={{
+                    backgroundColor: "var(--qg-card-bg)",
+                    color: "var(--qg-text-soft)"
+                  }}
+                >
                   Entreprise
                 </th>
                 {months.map((m) => (
                   <th
                     key={m}
-                    className="px-1 py-2 text-center font-mono text-[10px] text-white/40"
+                    className="px-1 py-2 text-center font-mono text-[10px]"
+                    style={{ color: "var(--qg-text-soft)" }}
                   >
                     {fmtMonth(m)}
                   </th>
@@ -445,11 +509,17 @@ function HeatmapPanel({
             <tbody>
               {rows.map((r) => (
                 <tr key={r.entreprise_id}>
-                  <td className="sticky left-0 z-10 bg-brand-900 py-1.5 pr-2 font-semibold text-white/80">
+                  <td
+                    className="sticky left-0 z-10 py-1.5 pr-2 font-semibold"
+                    style={{
+                      backgroundColor: "var(--qg-card-bg)",
+                      color: "var(--qg-text-muted)"
+                    }}
+                  >
                     <Link
                       // eslint-disable-next-line @typescript-eslint/no-explicit-any
                       href={`/entreprises/${r.entreprise_id}` as any}
-                      className="inline-flex items-center gap-1.5 hover:text-accent-500"
+                      className="inline-flex items-center gap-1.5 hover:text-[var(--qg-accent)]"
                     >
                       <span
                         className="h-2 w-2 rounded-full"
@@ -459,13 +529,13 @@ function HeatmapPanel({
                     </Link>
                   </td>
                   {r.cells.map((c) => (
-                    <td
-                      key={c.year_month}
-                      className={`px-1 py-1 ${cellBg(c.revenu)}`}
-                    >
+                    <td key={c.year_month} className="px-1 py-1">
                       <div
                         className="rounded px-1 py-0.5 text-center text-[10px] font-mono"
-                        style={cellStyle(c.revenu)}
+                        style={{
+                          ...cellStyle(c.revenu),
+                          color: "var(--qg-text)"
+                        }}
                         title={
                           c.revenu !== null
                             ? `${c.year_month} · ${fmtCurrency(c.revenu)}`
@@ -498,25 +568,34 @@ function VelocityPanel({ points }: { points: DashVelocityPoint[] }) {
   const totalCreated = points.reduce((s, p) => s + p.created, 0);
   const totalCompleted = points.reduce((s, p) => s + p.completed, 0);
   return (
-    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+    <section className="mt-6 rounded-2xl border p-5" style={CARD_STYLE}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div>
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+          <h2
+            className="text-sm font-semibold uppercase tracking-wider"
+            style={{ color: "var(--qg-accent)" }}
+          >
             ↗ Vélocité · 30 jours
           </h2>
-          <p className="mt-0.5 text-xs text-white/50">
+          <p
+            className="mt-0.5 text-xs"
+            style={{ color: "var(--qg-text-soft)" }}
+          >
             Tâches créées vs terminées par jour.
           </p>
         </div>
-        <div className="flex items-baseline gap-3 text-[11px]">
-          <span className="text-violet-300">
+        <div
+          className="flex items-baseline gap-3 text-[11px]"
+          style={{ color: "var(--qg-text-muted)" }}
+        >
+          <span>
             <span
               className="mr-1 inline-block h-2 w-2 rounded-full"
               style={{ backgroundColor: "rgb(167 139 250)" }}
             />
             Créées : <span className="font-mono">{totalCreated}</span>
           </span>
-          <span className="text-emerald-300">
+          <span>
             <span className="mr-1 inline-block h-2 w-2 rounded-full bg-emerald-400" />
             Terminées : <span className="font-mono">{totalCompleted}</span>
           </span>
@@ -548,7 +627,10 @@ function VelocityPanel({ points }: { points: DashVelocityPoint[] }) {
           </div>
         ))}
       </div>
-      <div className="mt-1 flex justify-between text-[9px] text-white/30">
+      <div
+        className="mt-1 flex justify-between text-[9px]"
+        style={{ color: "var(--qg-text-soft)" }}
+      >
         <span>il y a 30j</span>
         <span>aujourd&apos;hui</span>
       </div>
