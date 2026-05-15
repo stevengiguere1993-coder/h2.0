@@ -22,19 +22,22 @@ type Soumission = {
 
 type RefItem = { id: number; name: string };
 
-const STATUSES: { key: string; label: string }[] = [
-  { key: "brouillon", label: "Brouillon" },
-  { key: "envoyee", label: "Envoyée" },
-  { key: "acceptee", label: "Acceptée" },
-  { key: "refusee", label: "Refusée" }
-];
-
-const STATUS_CLS: Record<string, string> = {
-  brouillon: "bg-white/5 text-white/50",
-  envoyee: "bg-blue-500/15 text-blue-300",
-  acceptee: "bg-emerald-500/15 text-emerald-300",
-  refusee: "bg-rose-500/15 text-rose-300"
+type Column = {
+  key: string;
+  label: string;
+  dot: string; // tailwind bg color class
+  total: string; // tailwind text color for total
 };
+
+// Kanban du même style que les soumissions du portail Construction :
+// 5 colonnes avec dot couleur, count en badge, et total $ par colonne.
+const COLUMNS: Column[] = [
+  { key: "brouillon", label: "Brouillons", dot: "bg-white/40", total: "text-white/60" },
+  { key: "envoyee", label: "Envoyées", dot: "bg-blue-400", total: "text-blue-300" },
+  { key: "acceptee", label: "Acceptées", dot: "bg-emerald-400", total: "text-emerald-300" },
+  { key: "refusee", label: "Refusées", dot: "bg-rose-400", total: "text-rose-300" },
+  { key: "expiree", label: "Expirées", dot: "bg-amber-400", total: "text-amber-300" }
+];
 
 type Draft = {
   title: string;
@@ -65,6 +68,12 @@ function fmtAmount(n: number | null): string {
   });
 }
 
+function fmtDateShort(s: string): string {
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("fr-CA", { day: "numeric", month: "short" });
+}
+
 export default function DevlogSoumissionsPage() {
   const { onOpenSidebar } = useDevlogLayout();
   const confirm = useConfirm();
@@ -73,6 +82,10 @@ export default function DevlogSoumissionsPage() {
   const [clients, setClients] = useState<RefItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+
+  // Drag & drop entre colonnes.
+  const [draggedId, setDraggedId] = useState<number | null>(null);
 
   const [editing, setEditing] = useState<number | "new" | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
@@ -109,6 +122,39 @@ export default function DevlogSoumissionsPage() {
     () => new Map(clients.map((c) => [c.id, c.name])),
     [clients]
   );
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((s) =>
+      [s.title, s.summary, s.notes]
+        .filter(Boolean)
+        .some((v) => (v as string).toLowerCase().includes(q))
+    );
+  }, [items, search]);
+
+  const byColumn = useMemo(() => {
+    const map: Record<string, Soumission[]> = {};
+    for (const c of COLUMNS) map[c.key] = [];
+    for (const it of filtered) (map[it.status] ?? (map[it.status] = [])).push(it);
+    return map;
+  }, [filtered]);
+
+  async function moveStatus(id: number, status: string) {
+    const it = items.find((x) => x.id === id);
+    if (!it || it.status === status) return;
+    const prev = items;
+    setItems((xs) => xs.map((x) => (x.id === id ? { ...x, status } : x)));
+    try {
+      const r = await authedFetch(`/api/v1/devlog/soumissions/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status })
+      });
+      if (!r.ok) throw new Error();
+    } catch {
+      setItems(prev);
+    }
+  }
 
   function openNew() {
     setDraft(EMPTY_DRAFT);
@@ -189,6 +235,8 @@ export default function DevlogSoumissionsPage() {
           { label: "Soumissions" }
         ]}
         onOpenSidebar={onOpenSidebar}
+        searchPlaceholder="Chercher une soumission…"
+        onSearch={setSearch}
         rightSlot={
           <button
             type="button"
@@ -201,7 +249,7 @@ export default function DevlogSoumissionsPage() {
         }
       />
 
-      <div className="mx-auto max-w-4xl px-4 py-4 lg:px-6">
+      <div className="px-4 py-4 lg:px-6">
         {error ? (
           <div className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {error}
@@ -217,43 +265,98 @@ export default function DevlogSoumissionsPage() {
             Aucune soumission. Clique sur « Nouvelle soumission ».
           </p>
         ) : (
-          <ul className="space-y-2">
-            {items.map((s) => {
-              const target =
-                (s.client_id && clientName.get(s.client_id)) ||
-                (s.lead_id && leadName.get(s.lead_id)) ||
-                null;
+          <div className="flex gap-3 overflow-x-auto pb-4">
+            {COLUMNS.map((col) => {
+              const list = byColumn[col.key] ?? [];
+              const total = list.reduce(
+                (sum, s) => sum + (s.amount || 0),
+                0
+              );
               return (
-                <li key={s.id}>
-                  <button
-                    type="button"
-                    onClick={() => openEdit(s)}
-                    className="flex w-full items-center gap-3 rounded-xl border border-brand-800 bg-brand-900 p-3 text-left transition hover:border-blue-500/60"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold text-white">
-                        {s.title}
-                      </p>
-                      <p className="mt-0.5 text-xs text-white/50">
-                        {target ? target : "Sans destinataire"}
-                      </p>
+                <div
+                  key={col.key}
+                  onDragOver={(e) => {
+                    if (draggedId != null) e.preventDefault();
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (draggedId != null) void moveStatus(draggedId, col.key);
+                    setDraggedId(null);
+                  }}
+                  className="flex w-72 flex-shrink-0 flex-col rounded-xl border border-brand-800 bg-brand-900/60"
+                >
+                  <div className="flex items-center justify-between border-b border-brand-800 px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`h-2 w-2 rounded-full ${col.dot}`} />
+                      <span className="text-sm font-semibold text-white">
+                        {col.label}
+                      </span>
+                      <span className="rounded-full bg-white/5 px-2 text-xs font-bold text-white/60">
+                        {list.length}
+                      </span>
                     </div>
-                    <span className="text-sm font-semibold text-white">
-                      {fmtAmount(s.amount)}
-                    </span>
-                    <span
-                      className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
-                        STATUS_CLS[s.status] ?? "bg-white/5 text-white/50"
-                      }`}
-                    >
-                      {STATUSES.find((x) => x.key === s.status)?.label ??
-                        s.status}
-                    </span>
-                  </button>
-                </li>
+                    {total > 0 ? (
+                      <span className={`text-xs font-semibold ${col.total}`}>
+                        {fmtAmount(total)}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-1 flex-col gap-2 p-2">
+                    {list.map((s) => {
+                      const target =
+                        (s.client_id && clientName.get(s.client_id)) ||
+                        (s.lead_id && leadName.get(s.lead_id)) ||
+                        "Sans destinataire";
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          draggable
+                          onDragStart={() => setDraggedId(s.id)}
+                          onDragEnd={() => setDraggedId(null)}
+                          onClick={() => openEdit(s)}
+                          className={`group relative rounded-lg border border-brand-800 bg-brand-950 p-2.5 text-left transition hover:border-blue-500/60 ${
+                            draggedId === s.id ? "opacity-50" : ""
+                          }`}
+                        >
+                          <p className="line-clamp-2 text-sm font-semibold text-white">
+                            {s.title}
+                          </p>
+                          <p className="mt-0.5 truncate text-xs text-white/50">
+                            {target}
+                          </p>
+                          <div className="mt-2 flex items-center justify-between">
+                            <span className="text-[11px] uppercase tracking-wider text-blue-400">
+                              #{s.id} · {fmtDateShort(s.created_at)}
+                            </span>
+                            <span className="text-sm font-semibold text-white">
+                              {fmtAmount(s.amount)}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void deleteItem(s.id);
+                            }}
+                            title="Supprimer"
+                            className="absolute right-1.5 top-1.5 hidden rounded-md p-1 text-white/40 hover:bg-rose-500/20 hover:text-rose-300 group-hover:block"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </button>
+                      );
+                    })}
+                    {list.length === 0 ? (
+                      <p className="px-1 py-2 text-[11px] text-white/30">
+                        Aucune.
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
               );
             })}
-          </ul>
+          </div>
         )}
       </div>
 
@@ -377,11 +480,11 @@ function SoumissionDrawer({
                 onChange={(e) => set("status", e.target.value)}
                 className={inputCls}
               >
-                {STATUSES.map((s) => (
-                  <option key={s.key} value={s.key}>
-                    {s.label}
-                  </option>
-                ))}
+                <option value="brouillon">Brouillon</option>
+                <option value="envoyee">Envoyée</option>
+                <option value="acceptee">Acceptée</option>
+                <option value="refusee">Refusée</option>
+                <option value="expiree">Expirée</option>
               </select>
             </Field>
           </div>

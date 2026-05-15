@@ -11,8 +11,15 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
 
-#: Statuts d'une soumission.
-SOUMISSION_STATUSES = ("brouillon", "envoyee", "acceptee", "refusee")
+#: Statuts d'une soumission — alignés sur le pôle Construction
+#: (5 colonnes du kanban : brouillon → envoyée → acceptée / refusée / expirée).
+SOUMISSION_STATUSES = (
+    "brouillon",
+    "envoyee",
+    "acceptee",
+    "refusee",
+    "expiree",
+)
 
 
 class DevlogSoumission(Base, TimestampUpdateMixin):

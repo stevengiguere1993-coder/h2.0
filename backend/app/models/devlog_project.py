@@ -13,13 +13,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
 
-#: Étapes de vie d'un projet de développement.
+#: Étapes de vie d'un projet de développement — alignées sur le pôle
+#: Construction (5 colonnes du kanban).
 PROJECT_STATUSES = (
-    "a_demarrer",
+    "planifie",
+    "en_attente",
     "en_cours",
-    "en_pause",
+    "suspendu",
     "livre",
-    "archive",
 )
 
 
@@ -43,8 +44,8 @@ class DevlogProject(Base, TimestampUpdateMixin):
 
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="a_demarrer",
-        server_default="a_demarrer", index=True,
+        String(16), nullable=False, default="planifie",
+        server_default="planifie", index=True,
     )
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
