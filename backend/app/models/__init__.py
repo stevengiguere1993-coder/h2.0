@@ -24,6 +24,7 @@ from app.models.devlog_client import DevlogClient  # noqa: F401
 from app.models.devlog_invoice import DevlogInvoice  # noqa: F401
 from app.models.devlog_invoice_item import DevlogInvoiceItem  # noqa: F401
 from app.models.devlog_lead import DevlogLead  # noqa: F401
+from app.models.devlog_lead_need import DevlogLeadNeed  # noqa: F401
 from app.models.devlog_project import DevlogProject  # noqa: F401
 from app.models.devlog_soumission import DevlogSoumission  # noqa: F401
 from app.models.devlog_soumission_item import DevlogSoumissionItem  # noqa: F401

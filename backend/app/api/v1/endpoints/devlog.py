@@ -22,6 +22,7 @@ from app.models.devlog_client import DevlogClient
 from app.models.devlog_invoice import DevlogInvoice
 from app.models.devlog_invoice_item import DevlogInvoiceItem
 from app.models.devlog_lead import LEAD_STATUSES, DevlogLead
+from app.models.devlog_lead_need import DevlogLeadNeed
 from app.models.devlog_project import DevlogProject
 from app.models.devlog_soumission import DevlogSoumission
 from app.models.devlog_soumission_item import DevlogSoumissionItem
@@ -42,6 +43,11 @@ from app.schemas.devlog import (
     DevlogInvoiceRead,
     DevlogInvoiceUpdate,
     DevlogLeadCreate,
+    DevlogLeadNeedCreate,
+    DevlogLeadNeedRead,
+    DevlogLeadNeedUpdate,
+    DevlogLeadPlan,
+    DevlogLeadPlanToSoumissionRequest,
     DevlogLeadRead,
     DevlogLeadStatusUpdate,
     DevlogLeadUpdate,
@@ -955,3 +961,289 @@ async def list_project_time_entries(
         )
     ).scalars().all()
     return list(rows)
+
+
+# --------------------------------------------------------------------------
+# Besoins client (par pôle) + génération de plan IA + → soumission
+# --------------------------------------------------------------------------
+
+lead_needs_router = APIRouter(prefix="/devlog", tags=["devlog"])
+
+
+@lead_needs_router.get(
+    "/leads/{lead_id}/needs",
+    response_model=List[DevlogLeadNeedRead],
+)
+async def list_lead_needs(lead_id: int, db: DBSession, _: CurrentUser):
+    rows = (
+        await db.execute(
+            select(DevlogLeadNeed)
+            .where(DevlogLeadNeed.lead_id == lead_id)
+            .order_by(DevlogLeadNeed.position.asc(), DevlogLeadNeed.id.asc())
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+@lead_needs_router.post(
+    "/lead-needs",
+    response_model=DevlogLeadNeedRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_lead_need(
+    data: DevlogLeadNeedCreate, db: DBSession, _: CurrentUser
+):
+    if await GenericCrud(db, DevlogLead).get(data.lead_id) is None:
+        raise HTTPException(status_code=404, detail="Lead introuvable")
+    obj = await GenericCrud(db, DevlogLeadNeed).create(data)
+    return DevlogLeadNeedRead.model_validate(obj)
+
+
+@lead_needs_router.patch(
+    "/lead-needs/{need_id}",
+    response_model=DevlogLeadNeedRead,
+)
+async def update_lead_need(
+    need_id: int,
+    data: DevlogLeadNeedUpdate,
+    db: DBSession,
+    _: CurrentUser,
+):
+    crud = GenericCrud(db, DevlogLeadNeed)
+    obj = await crud.get(need_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Besoin introuvable")
+    obj = await crud.update(obj, data)
+    return DevlogLeadNeedRead.model_validate(obj)
+
+
+@lead_needs_router.delete(
+    "/lead-needs/{need_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_lead_need(
+    need_id: int, db: DBSession, _: CurrentUser
+):
+    crud = GenericCrud(db, DevlogLeadNeed)
+    obj = await crud.get(need_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Besoin introuvable")
+    await crud.delete(obj)
+
+
+# --- AI : génération d'un plan structuré depuis les besoins du client ----
+
+_PLAN_SYSTEM_PROMPT = """\
+Tu es un PM senior d'une boîte de dev logiciel. À partir d'un brief
+client par pôle (Frontend, Backend, Design, etc.), produis un plan
+structuré exploitable pour préparer une soumission. Sois pragmatique
+sur les estimations (heures + coût horaire interne ~75$/h dev,
+~100$/h design senior, ~65$/h support).
+
+RETOURNE UNIQUEMENT un JSON valide, sans markdown, sans texte autour,
+au format :
+
+{
+  "summary": "résumé exécutif en 2-3 phrases",
+  "sections": [
+    {
+      "pole": "frontend",
+      "name": "Frontend",
+      "billing_kind": "initial",
+      "markup_percent": 100,
+      "notes": "courte note interne",
+      "items": [
+        {"description": "...", "quantity": 40, "unit": "h", "cost_per_unit": 75}
+      ]
+    },
+    {
+      "pole": "hosting",
+      "name": "Hébergement + abonnements",
+      "billing_kind": "recurring",
+      "markup_percent": 50,
+      "items": [
+        {"description": "VPS production", "quantity": 1, "unit": "mois", "cost_per_unit": 40}
+      ]
+    }
+  ]
+}
+
+Règles strictes :
+- Inclure systématiquement une section recurring « Hébergement +
+  abonnements » (mandatory : Horizon héberge le produit du client).
+- billing_kind ∈ {"initial","recurring"}.
+- markup_percent : 100 pour initial (dev), 50 pour recurring (hosting).
+- Quantités et coûts réalistes. Pas de placeholder.
+- Pas de champs autres que ceux du schéma.
+"""
+
+
+def _coerce_plan_payload(raw: str) -> dict:
+    """Extrait un JSON depuis la réponse IA en étant tolérant aux
+    fences ```json``` que certains modèles ajoutent malgré tout."""
+    import json
+    import re
+
+    txt = raw.strip()
+    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", txt, re.DOTALL)
+    if fence:
+        txt = fence.group(1)
+    # Fallback : prendre le 1er { au dernier }.
+    if not txt.startswith("{"):
+        start = txt.find("{")
+        end = txt.rfind("}")
+        if start >= 0 and end > start:
+            txt = txt[start : end + 1]
+    return json.loads(txt)
+
+
+@lead_needs_router.post(
+    "/leads/{lead_id}/generate-plan",
+    response_model=DevlogLeadPlan,
+    summary="Génère un plan structuré depuis les besoins du lead (IA)",
+)
+async def generate_lead_plan(
+    lead_id: int, db: DBSession, _: CurrentUser
+):
+    from app.integrations.ai import (
+        AIProviderUnavailable,
+        complete,
+        is_configured,
+    )
+
+    lead = await GenericCrud(db, DevlogLead).get(lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead introuvable")
+    needs = (
+        await db.execute(
+            select(DevlogLeadNeed)
+            .where(DevlogLeadNeed.lead_id == lead_id)
+            .order_by(DevlogLeadNeed.position.asc(), DevlogLeadNeed.id.asc())
+        )
+    ).scalars().all()
+    if not needs:
+        raise HTTPException(
+            status_code=400,
+            detail="Ajoute au moins un besoin avant de générer le plan.",
+        )
+    if not is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Aucun provider IA configuré (AI_PROVIDER).",
+        )
+
+    # Compose le brief envoyé au modèle.
+    parts: List[str] = [
+        f"Client : {lead.name}",
+    ]
+    if lead.company:
+        parts.append(f"Entreprise : {lead.company}")
+    if lead.project_type:
+        parts.append(f"Type de projet : {lead.project_type}")
+    if lead.budget_range:
+        parts.append(f"Budget indicatif : {lead.budget_range}")
+    if lead.project_summary:
+        parts.append(f"Résumé : {lead.project_summary}")
+    parts.append("\nBesoins par pôle :")
+    for n in needs:
+        block = f"\n- {n.label} (pole={n.pole}"
+        if n.complexity:
+            block += f", complexité={n.complexity}"
+        if n.priority:
+            block += f", priorité={n.priority}"
+        block += ")"
+        if n.notes:
+            block += f"\n  {n.notes}"
+        parts.append(block)
+    brief = "\n".join(parts)
+
+    try:
+        res = await complete(
+            prompt=brief,
+            system=_PLAN_SYSTEM_PROMPT,
+            max_tokens=2048,
+            temperature=0.2,
+        )
+    except AIProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    try:
+        payload = _coerce_plan_payload(res.text)
+        return DevlogLeadPlan.model_validate(payload)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502,
+            detail=f"Plan IA illisible : {exc}",
+        ) from exc
+
+
+@lead_needs_router.post(
+    "/leads/{lead_id}/plan-to-soumission",
+    response_model=DevlogSoumissionRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crée une soumission (sections + items) depuis un plan",
+)
+async def plan_to_soumission(
+    lead_id: int,
+    data: DevlogLeadPlanToSoumissionRequest,
+    db: DBSession,
+    _: CurrentUser,
+):
+    lead = await GenericCrud(db, DevlogLead).get(lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead introuvable")
+    title = (data.title or f"Soumission — {lead.name}").strip()
+
+    soumission = DevlogSoumission(
+        title=title,
+        lead_id=lead_id,
+        client_id=lead.client_id,
+        status="brouillon",
+        amount=0,
+        summary=data.plan.summary,
+    )
+    db.add(soumission)
+    await db.flush()
+    await db.refresh(soumission)
+
+    for sec_idx, sec in enumerate(data.plan.sections):
+        section = DevlogSoumissionSection(
+            soumission_id=soumission.id,
+            position=sec_idx,
+            name=sec.name,
+            billing_kind=(
+                "recurring" if sec.billing_kind == "recurring" else "initial"
+            ),
+            markup_percent=(
+                float(sec.markup_percent)
+                if sec.markup_percent is not None
+                else None
+            ),
+            notes=sec.notes,
+        )
+        db.add(section)
+        await db.flush()
+        await db.refresh(section)
+
+        markup = float(section.markup_percent or 0)
+        for it_idx, it in enumerate(sec.items):
+            unit_price = _apply_markup(it.cost_per_unit, markup)
+            total = _compute_item_total(it.quantity, unit_price)
+            db.add(
+                DevlogSoumissionItem(
+                    soumission_id=soumission.id,
+                    section_id=section.id,
+                    position=it_idx,
+                    description=it.description,
+                    unit=it.unit,
+                    quantity=float(it.quantity),
+                    cost_per_unit=float(it.cost_per_unit),
+                    unit_price=unit_price,
+                    total=total,
+                )
+            )
+
+    await db.flush()
+    await _refresh_soumission_amount(db, soumission.id)
+    await db.refresh(soumission)
+    return DevlogSoumissionRead.model_validate(soumission)

@@ -26,7 +26,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
 import { FollowUpTimeline } from "@/components/follow-up-timeline";
-import { MeasurementsPanel } from "@/components/measurements-panel";
+import { DevlogLeadNeedsPanel } from "@/components/devlog-lead-needs-panel";
 import { SalesTasksPanel } from "@/components/sales-tasks-panel";
 import { Link } from "@/i18n/navigation";
 import { useDevlogLayout } from "../../layout";
@@ -537,10 +537,7 @@ export default function ProspectDetailPage() {
                 />
               ) : null}
               {tab === "mesures" ? (
-                <MeasurementsPanel
-                  contactRequestId={p.id}
-                  defaultAddress={p.address || null}
-                />
+                <DevlogLeadNeedsPanel leadId={p.id} />
               ) : null}
               {tab === "documents" ? (
                 <ProspectDocuments contactRequestId={p.id} />
