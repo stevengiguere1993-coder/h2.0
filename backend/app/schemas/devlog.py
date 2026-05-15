@@ -60,8 +60,12 @@ class DevlogLeadCreate(BaseModel):
     company: Optional[str] = Field(default=None, max_length=255)
     email: Optional[str] = Field(default=None, max_length=320)
     phone: Optional[str] = Field(default=None, max_length=50)
-    source: str = Field(default="interne", max_length=16)
-    status: str = Field(default="nouveau", max_length=20)
+    address: Optional[str] = Field(default=None, max_length=500)
+    project_type: str = Field(default="autre", max_length=32)
+    source: Optional[str] = Field(default=None, max_length=128)
+    status: str = Field(default="new", max_length=32)
+    kanban_column: Optional[str] = Field(default=None, max_length=64)
+    locale: str = Field(default="fr", max_length=8)
     assigned_to_user_id: Optional[int] = None
     project_summary: Optional[str] = None
     budget_range: Optional[str] = Field(default=None, max_length=64)
@@ -73,8 +77,12 @@ class DevlogLeadUpdate(BaseModel):
     company: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
+    address: Optional[str] = None
+    project_type: Optional[str] = None
     source: Optional[str] = None
     status: Optional[str] = None
+    kanban_column: Optional[str] = None
+    locale: Optional[str] = None
     position: Optional[int] = None
     assigned_to_user_id: Optional[int] = None
     project_summary: Optional[str] = None
@@ -83,9 +91,10 @@ class DevlogLeadUpdate(BaseModel):
 
 
 class DevlogLeadStatusUpdate(BaseModel):
-    """Déplacement d'un lead dans le kanban du closer."""
+    """Déplacement d'un lead dans le kanban du CRM."""
 
-    status: str = Field(..., max_length=20)
+    status: str = Field(..., max_length=32)
+    kanban_column: Optional[str] = Field(default=None, max_length=64)
     position: Optional[int] = None
 
 
@@ -97,9 +106,13 @@ class DevlogLeadRead(BaseModel):
     company: Optional[str]
     email: Optional[str]
     phone: Optional[str]
-    source: str
+    address: Optional[str]
+    project_type: str
+    source: Optional[str]
     status: str
+    kanban_column: Optional[str]
     position: int
+    locale: str
     assigned_to_user_id: Optional[int]
     project_summary: Optional[str]
     budget_range: Optional[str]
