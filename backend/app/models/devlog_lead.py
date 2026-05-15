@@ -21,6 +21,7 @@ from app.db.base import Base, TimestampUpdateMixin
 LEAD_STATUSES = (
     "new",
     "contacted",
+    "meeting",
     "qualified",
     "quoted",
     "won",
