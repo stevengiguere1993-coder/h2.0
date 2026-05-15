@@ -169,6 +169,7 @@ export default function PlanSuiviPage() {
   const [filterState, setFilterState] = useState<string>("all");
   const [filterPole, setFilterPole] = useState<string>("all");
   const [filterTier, setFilterTier] = useState<string>("all");
+  const [filterResp, setFilterResp] = useState<string>("all");
   const [search, setSearch] = useState("");
 
   // Inline note edit
@@ -222,6 +223,32 @@ export default function PlanSuiviPage() {
     return { pole, role };
   }
 
+  // Responsable d'une tâche : Kratos pour les `adjoint_virtuel`,
+  // sinon l'assignee de la tâche elle-même, sinon celui du rôle
+  // ancêtre le plus proche. NULL si rien défini.
+  function responsableFor(n: OrgNode): string | null {
+    if (n.execution_tier === "adjoint_virtuel") return "Kratos";
+    if (n.assignee_external_name) return n.assignee_external_name;
+    let cur: OrgNode | null = n.parent_id ? byId.get(n.parent_id) || null : null;
+    while (cur) {
+      if (cur.assignee_external_name) return cur.assignee_external_name;
+      cur = cur.parent_id ? byId.get(cur.parent_id) || null : null;
+    }
+    return null;
+  }
+
+  // Liste des responsables uniques pour alimenter le filtre.
+  const responsablesList = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of nodes) {
+      if (t.kind !== "task") continue;
+      const r = responsableFor(t);
+      if (r) set.add(r);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "fr-CA"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, byId]);
+
   // Toutes les tâches (kind=task) seulement — c'est ce qu'on suit.
   const tasks = useMemo(
     () => nodes.filter((n) => n.kind === "task"),
@@ -241,14 +268,19 @@ export default function PlanSuiviPage() {
       if (filterTier !== "all") {
         if ((t.execution_tier || "") !== filterTier) return false;
       }
+      if (filterResp !== "all") {
+        if ((responsableFor(t) || "—") !== filterResp) return false;
+      }
       if (q) {
-        const hay = norm(`${t.label} ${t.state_note || ""}`);
+        const hay = norm(
+          `${t.label} ${t.state_note || ""} ${responsableFor(t) || ""}`
+        );
         if (!hay.includes(q)) return false;
       }
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks, filterPole, filterState, filterTier, search, byId]);
+  }, [tasks, filterPole, filterState, filterTier, filterResp, search, byId]);
 
   // Groupement par pôle pour l'affichage.
   const byPole = useMemo(() => {
@@ -601,6 +633,19 @@ export default function PlanSuiviPage() {
             <option value="adjoint">Adjoint</option>
             <option value="adjoint_virtuel">Kratos</option>
           </select>
+          <select
+            value={filterResp}
+            onChange={(e) => setFilterResp(e.target.value)}
+            className="input text-sm sm:w-48"
+            title="Filtrer par responsable intérim"
+          >
+            <option value="all">Tous les responsables</option>
+            {responsablesList.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
         </section>
 
         {error ? (
@@ -679,6 +724,23 @@ export default function PlanSuiviPage() {
                               </div>
                               <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-white/40">
                                 {role ? <span>{role}</span> : null}
+                                {(() => {
+                                  const resp = responsableFor(t);
+                                  if (!resp) return null;
+                                  const isKratosResp = resp === "Kratos";
+                                  return (
+                                    <span
+                                      className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                                        isKratosResp
+                                          ? "bg-blue-500/15 text-blue-300"
+                                          : "bg-violet-500/15 text-violet-300"
+                                      }`}
+                                      title="Responsable intérim"
+                                    >
+                                      {resp}
+                                    </span>
+                                  );
+                                })()}
                                 {t.state_note ? (
                                   <span className="text-emerald-300/80">
                                     · {t.state_note}

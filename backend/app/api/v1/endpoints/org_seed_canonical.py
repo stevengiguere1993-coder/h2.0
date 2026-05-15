@@ -158,6 +158,7 @@ CANONICAL_STRUCTURE: List[dict] = [
         children=[
             role(
                 "Closer",
+                owner="Matias (intérim) — à pourvoir",
                 tier="adjoint",
                 note=HIRE_NOTE + " KPI : taux de conversion · valeur vendue · délai de suivi. Rémunération : salaire + commission.",
                 children=[
@@ -251,6 +252,7 @@ CANONICAL_STRUCTURE: List[dict] = [
             ),
             role(
                 "CEO Construction",
+                owner="Matias",
                 tier="direction",
                 note="Owner — supervise l'ensemble.",
                 children=[
@@ -282,6 +284,7 @@ CANONICAL_STRUCTURE: List[dict] = [
         children=[
             role(
                 "Closer",
+                owner="Philippe (intérim) — à pourvoir",
                 tier="adjoint",
                 note=HIRE_NOTE + " KPI : conversion · valeur vendue · délai de suivi. Rémunération : salaire + commission.",
                 children=[
@@ -310,6 +313,7 @@ CANONICAL_STRUCTURE: List[dict] = [
             ),
             role(
                 "Chargé de projet",
+                owner="Philippe (intérim) — à pourvoir",
                 tier="adjoint",
                 note=HIRE_NOTE + " KPI : budget · échéancier · satisfaction. Salaire + bonus.",
                 children=[
@@ -359,6 +363,7 @@ CANONICAL_STRUCTURE: List[dict] = [
             ),
             role(
                 "CEO Dev IA",
+                owner="Philippe",
                 tier="direction",
                 children=[
                     task("Développer la vision de l'entreprise", tier="direction"),
@@ -391,6 +396,7 @@ CANONICAL_STRUCTURE: List[dict] = [
         children=[
             role(
                 "Gestionnaire immobilier",
+                owner="Steven (intérim) + Kyle/Kario opérationnel — à pourvoir",
                 tier="adjoint",
                 note=HIRE_NOTE + " " + PROPOSAL_PREFIX + "Poste manquant — remplace le « tout le reste » vague des sous-traitants gestion.",
                 children=[
@@ -415,6 +421,7 @@ CANONICAL_STRUCTURE: List[dict] = [
             ),
             role(
                 "CEO Gestion immobilière",
+                owner="Steven",
                 tier="direction",
                 note="KPI à ajouter : taux d'occupation · délai moyen de relocation · dépense d'entretien par porte · marge nette par immeuble.",
                 children=[
@@ -480,6 +487,7 @@ CANONICAL_STRUCTURE: List[dict] = [
             ]),
             role(
                 "Analyste",
+                owner="Zach + Steven (split intérim) — à pourvoir",
                 tier="adjoint",
                 note=HIRE_NOTE + " À pourvoir quand volume de deals le justifie. KPI à ajouter : nombre de deals analysés · taux d'offres acceptées · rendement projeté vs réalisé.",
                 children=[
@@ -509,7 +517,7 @@ CANONICAL_STRUCTURE: List[dict] = [
             ),
             role(
                 "Investisseurs",
-                owner="Les 3 propriétaires",
+                owner="Steven, Matias, Philippe (3 owners)",
                 tier="direction",
                 children=[
                     task("Définir la stratégie d'acquisition", tier="direction"),
@@ -536,6 +544,7 @@ CANONICAL_STRUCTURE: List[dict] = [
             ),
             role(
                 "CEO Acquisition",
+                owner="Steven",
                 tier="direction",
                 children=[
                     task("Développer le réseau stratégique", tier="direction"),
@@ -578,7 +587,7 @@ CANONICAL_STRUCTURE: List[dict] = [
         children=[
             role(
                 "CEO Groupe",
-                owner="Les 3 propriétaires",
+                owner="Steven, Matias, Philippe (3 owners)",
                 tier="direction",
                 children=[
                     task("Définir la vision de l'entreprise", tier="direction"),
@@ -632,7 +641,7 @@ CANONICAL_STRUCTURE: List[dict] = [
             ),
             role(
                 "Adjoint administratif",
-                owner="Mutualisé sur les 6 pôles — à pourvoir (ou fusionner avec Bras droit selon volume)",
+                owner="Zach (intérim) + Kratos pour l'automatisable — à fusionner avec Bras droit selon volume",
                 tier="adjoint",
                 note="Rémunération : salaire. Sert TOUS les pôles — l'optimisation principale du groupe.",
                 children=[
@@ -686,6 +695,7 @@ CANONICAL_STRUCTURE: List[dict] = [
             # Mes propositions transverses
             role(
                 "Sécurité informatique et conformité Loi 25",
+                owner="Steven (intérim) + consultant externe annuel — à pourvoir",
                 tier="adjoint",
                 note=HIRE_NOTE + " " + PROPOSAL_PREFIX + "Personne désignée aujourd'hui — peut être un contrat externe annuel.",
                 children=[
@@ -697,6 +707,7 @@ CANONICAL_STRUCTURE: List[dict] = [
             ),
             role(
                 "Mutualisation entre pôles",
+                owner="Zach (futur bras droit) — pilote opérationnel",
                 tier=None,
                 note=PROPOSAL_PREFIX + "Checklist transverse — rituels et passages de relais.",
                 children=[
