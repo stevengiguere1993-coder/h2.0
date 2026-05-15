@@ -471,6 +471,20 @@ async def init_db() -> None:
             # (planifie | en_cours | fait | bloque | non_applicable).
             ("org_nodes", "state", "VARCHAR(16)"),
             ("org_nodes", "state_note", "TEXT"),
+            # DevlogLead — alignement structurel sur ContactRequest pour
+            # permettre le clonage 1:1 de la page CRM côté frontend.
+            ("devlog_leads", "address", "VARCHAR(500)"),
+            (
+                "devlog_leads",
+                "project_type",
+                "VARCHAR(32) NOT NULL DEFAULT 'autre'",
+            ),
+            ("devlog_leads", "kanban_column", "VARCHAR(64)"),
+            (
+                "devlog_leads",
+                "locale",
+                "VARCHAR(8) NOT NULL DEFAULT 'fr'",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
@@ -479,6 +493,43 @@ async def init_db() -> None:
                     f'ADD COLUMN IF NOT EXISTS {column} {col_type}'
                 )
             )
+
+        # DevlogLead : migration des statuts français vers les valeurs
+        # ContactRequest (new/contacted/qualified/quoted/won/lost/spam)
+        # pour aligner la page CRM Dev logiciel sur Construction.
+        # Idempotent : les rows déjà migrées (status déjà en anglais) ne
+        # sont pas touchées.
+        try:
+            for old, new in (
+                ("nouveau", "new"),
+                ("contacte", "contacted"),
+                ("rdv", "qualified"),
+                ("presentation", "qualified"),
+                ("soumission", "quoted"),
+                ("gagne", "won"),
+                ("perdu", "lost"),
+            ):
+                await conn.execute(
+                    text(
+                        "UPDATE devlog_leads SET status = :new "
+                        "WHERE status = :old"
+                    ),
+                    {"new": new, "old": old},
+                )
+            # Aligne la longueur de la colonne status à VARCHAR(32) au
+            # cas où l'ancienne VARCHAR(20) existerait — silencieux si
+            # déjà à la bonne taille.
+            await conn.execute(
+                text(
+                    "ALTER TABLE devlog_leads "
+                    "ALTER COLUMN status TYPE VARCHAR(32)"
+                )
+            )
+        except Exception:  # noqa: BLE001
+            # Table peut ne pas exister encore au tout premier démarrage
+            # ou avoir une autre forme. Migration silencieuse — sera
+            # rejouée au prochain redémarrage si nécessaire.
+            pass
 
         # Kratos : passage à entreprise_id NULLABLE (problème global
         # transverse possible). Idempotent : si déjà nullable, no-op.
