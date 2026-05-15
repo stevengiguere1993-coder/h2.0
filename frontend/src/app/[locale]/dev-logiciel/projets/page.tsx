@@ -23,21 +23,21 @@ type Project = {
 type RefItem = { id: number; name: string };
 type SoumissionRef = { id: number; title: string };
 
-const STATUSES: { key: string; label: string }[] = [
-  { key: "a_demarrer", label: "À démarrer" },
-  { key: "en_cours", label: "En cours" },
-  { key: "en_pause", label: "En pause" },
-  { key: "livre", label: "Livré" },
-  { key: "archive", label: "Archivé" }
-];
-
-const STATUS_CLS: Record<string, string> = {
-  a_demarrer: "bg-white/5 text-white/50",
-  en_cours: "bg-blue-500/15 text-blue-300",
-  en_pause: "bg-amber-500/15 text-amber-300",
-  livre: "bg-emerald-500/15 text-emerald-300",
-  archive: "bg-white/5 text-white/40"
+type Column = {
+  key: string;
+  label: string;
+  dot: string;
 };
+
+// Kanban des projets — alignement direct sur le pôle Construction :
+// 5 colonnes avec dot couleur et count badge.
+const COLUMNS: Column[] = [
+  { key: "planifie", label: "À planifier", dot: "bg-white/40" },
+  { key: "en_attente", label: "En attente de début", dot: "bg-violet-400" },
+  { key: "en_cours", label: "En cours", dot: "bg-blue-400" },
+  { key: "suspendu", label: "Suspendu", dot: "bg-amber-400" },
+  { key: "livre", label: "Livré", dot: "bg-emerald-400" }
+];
 
 type Draft = {
   name: string;
@@ -54,10 +54,17 @@ const EMPTY_DRAFT: Draft = {
   client_id: "",
   soumission_id: "",
   description: "",
-  status: "a_demarrer",
+  status: "planifie",
   start_date: "",
   due_date: ""
 };
+
+function fmtDateShort(s: string | null): string {
+  if (!s) return "";
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("fr-CA", { day: "numeric", month: "short" });
+}
 
 export default function DevlogProjectsPage() {
   const { onOpenSidebar } = useDevlogLayout();
@@ -67,6 +74,8 @@ export default function DevlogProjectsPage() {
   const [soumissions, setSoumissions] = useState<SoumissionRef[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [draggedId, setDraggedId] = useState<number | null>(null);
 
   const [editing, setEditing] = useState<number | "new" | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
@@ -99,6 +108,39 @@ export default function DevlogProjectsPage() {
     () => new Map(clients.map((c) => [c.id, c.name])),
     [clients]
   );
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((p) =>
+      [p.name, p.description]
+        .filter(Boolean)
+        .some((v) => (v as string).toLowerCase().includes(q))
+    );
+  }, [items, search]);
+
+  const byColumn = useMemo(() => {
+    const map: Record<string, Project[]> = {};
+    for (const c of COLUMNS) map[c.key] = [];
+    for (const p of filtered) (map[p.status] ?? (map[p.status] = [])).push(p);
+    return map;
+  }, [filtered]);
+
+  async function moveStatus(id: number, status: string) {
+    const p = items.find((x) => x.id === id);
+    if (!p || p.status === status) return;
+    const prev = items;
+    setItems((xs) => xs.map((x) => (x.id === id ? { ...x, status } : x)));
+    try {
+      const r = await authedFetch(`/api/v1/devlog/projects/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status })
+      });
+      if (!r.ok) throw new Error();
+    } catch {
+      setItems(prev);
+    }
+  }
 
   function openNew() {
     setDraft(EMPTY_DRAFT);
@@ -181,6 +223,8 @@ export default function DevlogProjectsPage() {
           { label: "Projets" }
         ]}
         onOpenSidebar={onOpenSidebar}
+        searchPlaceholder="Chercher un projet…"
+        onSearch={setSearch}
         rightSlot={
           <button
             type="button"
@@ -193,7 +237,7 @@ export default function DevlogProjectsPage() {
         }
       />
 
-      <div className="mx-auto max-w-4xl px-4 py-4 lg:px-6">
+      <div className="px-4 py-4 lg:px-6">
         {error ? (
           <div className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {error}
@@ -209,44 +253,86 @@ export default function DevlogProjectsPage() {
             Aucun projet. Clique sur « Nouveau projet ».
           </p>
         ) : (
-          <ul className="space-y-2">
-            {items.map((p) => (
-              <li key={p.id}>
-                <button
-                  type="button"
-                  onClick={() => openEdit(p)}
-                  className="flex w-full items-center gap-3 rounded-xl border border-brand-800 bg-brand-900 p-3 text-left transition hover:border-blue-500/60"
+          <div className="flex gap-3 overflow-x-auto pb-4">
+            {COLUMNS.map((col) => {
+              const list = byColumn[col.key] ?? [];
+              return (
+                <div
+                  key={col.key}
+                  onDragOver={(e) => {
+                    if (draggedId != null) e.preventDefault();
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (draggedId != null) void moveStatus(draggedId, col.key);
+                    setDraggedId(null);
+                  }}
+                  className="flex w-72 flex-shrink-0 flex-col rounded-xl border border-brand-800 bg-brand-900/60"
                 >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-white">
-                      {p.name}
-                    </p>
-                    <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-white/50">
-                      <span>
-                        {p.client_id
-                          ? clientName.get(p.client_id) ?? "Client supprimé"
-                          : "Sans client"}
-                      </span>
-                      {p.due_date ? (
-                        <span className="inline-flex items-center gap-1">
-                          <CalendarClock className="h-3 w-3" />
-                          {p.due_date}
-                        </span>
-                      ) : null}
-                    </div>
+                  <div className="flex items-center gap-2 border-b border-brand-800 px-3 py-2">
+                    <span className={`h-2 w-2 rounded-full ${col.dot}`} />
+                    <span className="text-sm font-semibold text-white">
+                      {col.label}
+                    </span>
+                    <span className="rounded-full bg-white/5 px-2 text-xs font-bold text-white/60">
+                      {list.length}
+                    </span>
                   </div>
-                  <span
-                    className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
-                      STATUS_CLS[p.status] ?? "bg-white/5 text-white/50"
-                    }`}
-                  >
-                    {STATUSES.find((x) => x.key === p.status)?.label ??
-                      p.status}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
+                  <div className="flex flex-1 flex-col gap-2 p-2">
+                    {list.map((p) => {
+                      const cn = p.client_id ? clientName.get(p.client_id) : null;
+                      const start = fmtDateShort(p.start_date);
+                      const end = fmtDateShort(p.due_date);
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          draggable
+                          onDragStart={() => setDraggedId(p.id)}
+                          onDragEnd={() => setDraggedId(null)}
+                          onClick={() => openEdit(p)}
+                          className={`group relative rounded-lg border border-brand-800 bg-brand-950 p-2.5 text-left transition hover:border-blue-500/60 ${
+                            draggedId === p.id ? "opacity-50" : ""
+                          }`}
+                        >
+                          <p className="line-clamp-2 text-sm font-semibold text-white">
+                            {p.name}
+                          </p>
+                          {cn ? (
+                            <p className="mt-0.5 truncate text-xs text-white/50">
+                              {cn}
+                            </p>
+                          ) : null}
+                          {start || end ? (
+                            <p className="mt-2 inline-flex items-center gap-1 text-[11px] text-white/40">
+                              <CalendarClock className="h-3 w-3" />
+                              {start || "?"} → {end || "?"}
+                            </p>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void deleteItem(p.id);
+                            }}
+                            title="Supprimer"
+                            className="absolute right-1.5 top-1.5 hidden rounded-md p-1 text-white/40 hover:bg-rose-500/20 hover:text-rose-300 group-hover:block"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </button>
+                      );
+                    })}
+                    {list.length === 0 ? (
+                      <p className="px-1 py-2 text-[11px] text-white/30">
+                        Aucun.
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
 
@@ -345,11 +431,11 @@ function ProjectDrawer({
                 onChange={(e) => set("status", e.target.value)}
                 className={inputCls}
               >
-                {STATUSES.map((s) => (
-                  <option key={s.key} value={s.key}>
-                    {s.label}
-                  </option>
-                ))}
+                <option value="planifie">À planifier</option>
+                <option value="en_attente">En attente de début</option>
+                <option value="en_cours">En cours</option>
+                <option value="suspendu">Suspendu</option>
+                <option value="livre">Livré</option>
               </select>
             </Field>
           </div>

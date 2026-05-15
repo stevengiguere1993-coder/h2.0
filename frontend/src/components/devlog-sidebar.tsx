@@ -39,7 +39,7 @@ const DEVLOG_SECTIONS: NavSection[] = [
   {
     label: "Closer",
     items: [
-      { href: "/dev-logiciel/leads", label: "Pipeline (leads)", icon: Trello },
+      { href: "/dev-logiciel/leads", label: "CRM", icon: Trello },
       {
         href: "/dev-logiciel/soumissions",
         label: "Soumissions",
