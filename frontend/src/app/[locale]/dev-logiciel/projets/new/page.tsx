@@ -56,7 +56,7 @@ export default function NewProjectPage() {
     try {
       const payload: Record<string, unknown> = {
         name: name.trim(),
-        status: "planned"
+        status: "planifie"
       };
       if (clientId) payload.client_id = Number(clientId);
       if (address.trim()) payload.address = address.trim();

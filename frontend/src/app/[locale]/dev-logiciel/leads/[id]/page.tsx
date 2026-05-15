@@ -878,10 +878,10 @@ function ProspectDocuments({
     (f) => !f.content_type.startsWith("image/")
   );
   const signedSoumissions = soumissions.filter(
-    (s) => s.status === "accepted" || s.accepted_at
+    (s) => s.status === "acceptee" || s.accepted_at
   );
   const pendingSoumissions = soumissions.filter(
-    (s) => s.status === "sent" && !s.accepted_at
+    (s) => s.status === "envoyee" && !s.accepted_at
   );
 
   // Lazy-load blob URLs for both photos (thumbnail preview) and

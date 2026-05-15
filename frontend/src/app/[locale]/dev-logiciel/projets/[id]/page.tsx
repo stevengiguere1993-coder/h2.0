@@ -1587,7 +1587,7 @@ function RecapTab({ project }: { project: Project | null }) {
   const endDate = parseDate(project.end_date);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const isDelivered = project.status === "delivered";
+  const isDelivered = project.status === "livre";
   // Date de fin effective : si livré, on prend updated_at (à défaut
   // d'un vrai `delivered_at` en base) ; sinon aujourd'hui.
   const actualEnd = isDelivered

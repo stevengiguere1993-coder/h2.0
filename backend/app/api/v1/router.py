@@ -114,6 +114,10 @@ api_router.include_router(users.router)
 api_router.include_router(clients.router)
 api_router.include_router(devlog.clients_router)
 api_router.include_router(devlog.leads_router)
+# Automations DOIT être registered AVANT soumissions_router pour que
+# le PATCH override (auto-création projet quand status → acceptee) et
+# /soumissions/{id}/convert-to-project matchent avant le CRUD générique.
+api_router.include_router(devlog.soumission_automations_router)
 api_router.include_router(devlog.soumissions_router)
 api_router.include_router(devlog.projects_router)
 api_router.include_router(devlog.time_entries_router)

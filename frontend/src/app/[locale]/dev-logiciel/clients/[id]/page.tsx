@@ -757,7 +757,7 @@ function ClientDocuments({
   }, []);
 
   const signedSoumissions = soumissions.filter(
-    (s) => s.status === "accepted" || s.accepted_at
+    (s) => s.status === "acceptee" || s.accepted_at
   );
   const signedBons = bons.filter(
     (b) => b.status === "signed" || b.accepted_at

@@ -32,12 +32,13 @@ type Project = {
 
 type Column = { id: string; label: string; dot: string };
 
+// IDs alignés sur les valeurs backend DevlogProject.status (français).
 const COLUMNS: Column[] = [
-  { id: "planned", label: "À planifier", dot: "bg-white/40" },
-  { id: "ready_to_start", label: "En attente de début", dot: "bg-violet-400" },
-  { id: "in_progress", label: "En cours", dot: "bg-blue-400" },
-  { id: "suspended", label: "Suspendu", dot: "bg-amber-400" },
-  { id: "delivered", label: "Livré", dot: "bg-emerald-400" }
+  { id: "planifie", label: "À planifier", dot: "bg-white/40" },
+  { id: "en_attente", label: "En attente de début", dot: "bg-violet-400" },
+  { id: "en_cours", label: "En cours", dot: "bg-blue-400" },
+  { id: "suspendu", label: "Suspendu", dot: "bg-amber-400" },
+  { id: "livre", label: "Livré", dot: "bg-emerald-400" }
 ];
 
 function fmtMoney(
@@ -127,7 +128,7 @@ export default function ProjectsPage() {
       COLUMNS.map((c) => [c.id, [] as Project[]])
     );
     for (const p of filtered) {
-      const target = COLUMNS.find((c) => c.id === p.status) ? p.status : "planned";
+      const target = COLUMNS.find((c) => c.id === p.status) ? p.status : "planifie";
       map[target].push(p);
     }
     return map;
