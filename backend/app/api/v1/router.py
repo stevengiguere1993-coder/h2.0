@@ -118,6 +118,8 @@ api_router.include_router(devlog.soumissions_router)
 api_router.include_router(devlog.projects_router)
 api_router.include_router(devlog.time_entries_router)
 api_router.include_router(devlog.invoices_router)
+api_router.include_router(devlog.soumission_items_router)
+api_router.include_router(devlog.related_router)
 # Nested project routes MUST be registered before projects.router so
 # /projects/{id}/photos etc. are matched before /projects/{item_id}.
 api_router.include_router(project_photos.router)

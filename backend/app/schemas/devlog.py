@@ -150,6 +150,46 @@ class DevlogSoumissionRead(BaseModel):
 
 
 # --------------------------------------------------------------------------
+# DevlogSoumissionItem (lignes de soumission)
+# --------------------------------------------------------------------------
+
+
+class DevlogSoumissionItemCreate(BaseModel):
+    soumission_id: int
+    position: Optional[int] = None
+    description: str = Field(..., min_length=1, max_length=500)
+    unit: Optional[str] = Field(default=None, max_length=32)
+    quantity: float = Field(default=1, ge=0)
+    unit_price: float = Field(default=0, ge=0)
+    notes: Optional[str] = None
+
+
+class DevlogSoumissionItemUpdate(BaseModel):
+    position: Optional[int] = None
+    description: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    unit: Optional[str] = Field(default=None, max_length=32)
+    quantity: Optional[float] = Field(default=None, ge=0)
+    unit_price: Optional[float] = Field(default=None, ge=0)
+    notes: Optional[str] = None
+
+
+class DevlogSoumissionItemRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    soumission_id: int
+    position: int
+    description: str
+    unit: Optional[str]
+    quantity: float
+    unit_price: float
+    total: float
+    notes: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+# --------------------------------------------------------------------------
 # DevlogProject
 # --------------------------------------------------------------------------
 
