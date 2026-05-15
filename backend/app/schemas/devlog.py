@@ -123,6 +123,71 @@ class DevlogLeadRead(BaseModel):
 
 
 # --------------------------------------------------------------------------
+# DevlogLeadNeed (besoins client par pôle)
+# --------------------------------------------------------------------------
+
+
+class DevlogLeadNeedCreate(BaseModel):
+    lead_id: int
+    position: Optional[int] = None
+    pole: str = Field(..., min_length=1, max_length=64)
+    label: str = Field(..., min_length=1, max_length=255)
+    notes: Optional[str] = None
+    complexity: Optional[str] = Field(default=None, max_length=16)
+    priority: Optional[str] = Field(default=None, max_length=16)
+
+
+class DevlogLeadNeedUpdate(BaseModel):
+    position: Optional[int] = None
+    pole: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    label: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    notes: Optional[str] = None
+    complexity: Optional[str] = Field(default=None, max_length=16)
+    priority: Optional[str] = Field(default=None, max_length=16)
+
+
+class DevlogLeadNeedRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    lead_id: int
+    position: int
+    pole: str
+    label: str
+    notes: Optional[str]
+    complexity: Optional[str]
+    priority: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class DevlogLeadPlanItem(BaseModel):
+    description: str
+    quantity: float = 1
+    unit: Optional[str] = "h"
+    cost_per_unit: float = 0
+
+
+class DevlogLeadPlanSection(BaseModel):
+    pole: str
+    name: str
+    billing_kind: str = "initial"
+    markup_percent: Optional[float] = 100
+    notes: Optional[str] = None
+    items: list[DevlogLeadPlanItem] = []
+
+
+class DevlogLeadPlan(BaseModel):
+    summary: str
+    sections: list[DevlogLeadPlanSection]
+
+
+class DevlogLeadPlanToSoumissionRequest(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=255)
+    plan: DevlogLeadPlan
+
+
+# --------------------------------------------------------------------------
 # DevlogSoumission
 # --------------------------------------------------------------------------
 
