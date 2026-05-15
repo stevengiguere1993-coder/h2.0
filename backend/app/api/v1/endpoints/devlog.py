@@ -20,9 +20,12 @@ from app.api.deps import CurrentUser, DBSession
 from app.db.base import Base
 from app.models.devlog_client import DevlogClient
 from app.models.devlog_invoice import DevlogInvoice
+from app.models.devlog_invoice_item import DevlogInvoiceItem
 from app.models.devlog_lead import LEAD_STATUSES, DevlogLead
 from app.models.devlog_project import DevlogProject
 from app.models.devlog_soumission import DevlogSoumission
+from app.models.devlog_soumission_item import DevlogSoumissionItem
+from app.models.devlog_sous_traitant import DevlogSousTraitant
 from app.models.devlog_time_entry import DevlogTimeEntry
 from app.repositories.generic import GenericCrud
 from app.schemas.devlog import (
@@ -30,6 +33,11 @@ from app.schemas.devlog import (
     DevlogClientRead,
     DevlogClientUpdate,
     DevlogInvoiceCreate,
+    DevlogInvoiceImportRequest,
+    DevlogInvoiceImportResult,
+    DevlogInvoiceItemCreate,
+    DevlogInvoiceItemRead,
+    DevlogInvoiceItemUpdate,
     DevlogInvoiceRead,
     DevlogInvoiceUpdate,
     DevlogLeadCreate,
@@ -40,8 +48,14 @@ from app.schemas.devlog import (
     DevlogProjectRead,
     DevlogProjectUpdate,
     DevlogSoumissionCreate,
+    DevlogSoumissionItemCreate,
+    DevlogSoumissionItemRead,
+    DevlogSoumissionItemUpdate,
     DevlogSoumissionRead,
     DevlogSoumissionUpdate,
+    DevlogSousTraitantCreate,
+    DevlogSousTraitantRead,
+    DevlogSousTraitantUpdate,
     DevlogTimeEntryCreate,
     DevlogTimeEntryRead,
     DevlogTimeEntryUpdate,
@@ -349,3 +363,415 @@ invoices_router = _make_crud_router(
     read_schema=DevlogInvoiceRead,
     not_found="Facture introuvable",
 )
+
+
+# --------------------------------------------------------------------------
+# Sous-traitants
+# --------------------------------------------------------------------------
+
+sous_traitants_router = _make_crud_router(
+    prefix="/devlog/sous-traitants",
+    model=DevlogSousTraitant,
+    create_schema=DevlogSousTraitantCreate,
+    update_schema=DevlogSousTraitantUpdate,
+    read_schema=DevlogSousTraitantRead,
+    not_found="Sous-traitant introuvable",
+)
+
+
+# --------------------------------------------------------------------------
+# Items de facture + import depuis projet
+# --------------------------------------------------------------------------
+
+invoice_items_router = APIRouter(prefix="/devlog", tags=["devlog"])
+
+
+async def _refresh_invoice_amount(db, invoice_id: int) -> None:
+    items = (
+        await db.execute(
+            select(DevlogInvoiceItem).where(
+                DevlogInvoiceItem.invoice_id == invoice_id
+            )
+        )
+    ).scalars().all()
+    total = round(sum(float(it.total or 0) for it in items), 2)
+    inv = await GenericCrud(db, DevlogInvoice).get(invoice_id)
+    if inv is not None:
+        inv.amount = total
+        await db.flush()
+
+
+@invoice_items_router.get(
+    "/invoices/{invoice_id}/items",
+    response_model=List[DevlogInvoiceItemRead],
+)
+async def list_invoice_items(
+    invoice_id: int, db: DBSession, _: CurrentUser
+):
+    rows = (
+        await db.execute(
+            select(DevlogInvoiceItem)
+            .where(DevlogInvoiceItem.invoice_id == invoice_id)
+            .order_by(DevlogInvoiceItem.position.asc(), DevlogInvoiceItem.id.asc())
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+@invoice_items_router.post(
+    "/invoice-items",
+    response_model=DevlogInvoiceItemRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_invoice_item(
+    data: DevlogInvoiceItemCreate, db: DBSession, _: CurrentUser
+):
+    if await GenericCrud(db, DevlogInvoice).get(data.invoice_id) is None:
+        raise HTTPException(status_code=404, detail="Facture introuvable")
+    payload = data.model_dump(exclude_unset=True)
+    payload["total"] = _compute_item_total(data.quantity, data.unit_price)
+    obj = DevlogInvoiceItem(**payload)
+    db.add(obj)
+    await db.flush()
+    await db.refresh(obj)
+    await _refresh_invoice_amount(db, data.invoice_id)
+    return DevlogInvoiceItemRead.model_validate(obj)
+
+
+@invoice_items_router.patch(
+    "/invoice-items/{item_id}",
+    response_model=DevlogInvoiceItemRead,
+)
+async def update_invoice_item(
+    item_id: int,
+    data: DevlogInvoiceItemUpdate,
+    db: DBSession,
+    _: CurrentUser,
+):
+    crud = GenericCrud(db, DevlogInvoiceItem)
+    obj = await crud.get(item_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Item introuvable")
+    update_data = data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(obj, field, value)
+    obj.total = _compute_item_total(obj.quantity, obj.unit_price)
+    await db.flush()
+    await db.refresh(obj)
+    await _refresh_invoice_amount(db, obj.invoice_id)
+    return DevlogInvoiceItemRead.model_validate(obj)
+
+
+@invoice_items_router.delete(
+    "/invoice-items/{item_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_invoice_item(
+    item_id: int, db: DBSession, _: CurrentUser
+):
+    crud = GenericCrud(db, DevlogInvoiceItem)
+    obj = await crud.get(item_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Item introuvable")
+    invoice_id = obj.invoice_id
+    await crud.delete(obj)
+    await _refresh_invoice_amount(db, invoice_id)
+
+
+@invoice_items_router.post(
+    "/invoices/{invoice_id}/import-sources",
+    response_model=DevlogInvoiceImportResult,
+)
+async def import_into_invoice(
+    invoice_id: int,
+    data: DevlogInvoiceImportRequest,
+    db: DBSession,
+    _: CurrentUser,
+):
+    """Ajoute des lignes à la facture en important depuis un projet :
+    heures totales + (optionnel) items de la soumission acceptée. Pas
+    de markup automatique pour l'instant — le `hourly_rate` du body
+    est le tarif facturable que l'admin choisit pour ce batch."""
+    inv = await GenericCrud(db, DevlogInvoice).get(invoice_id)
+    if inv is None:
+        raise HTTPException(status_code=404, detail="Facture introuvable")
+
+    existing = (
+        await db.execute(
+            select(DevlogInvoiceItem.position).where(
+                DevlogInvoiceItem.invoice_id == invoice_id
+            )
+        )
+    ).scalars().all()
+    next_pos = (max(existing) + 1) if existing else 0
+    added = 0
+
+    if data.include_hours:
+        rows = (
+            await db.execute(
+                select(DevlogTimeEntry).where(
+                    DevlogTimeEntry.project_id == data.project_id
+                )
+            )
+        ).scalars().all()
+        total_hours = round(sum(float(r.hours or 0) for r in rows), 2)
+        if total_hours > 0:
+            rate = float(data.hourly_rate or 0)
+            db.add(
+                DevlogInvoiceItem(
+                    invoice_id=invoice_id,
+                    position=next_pos,
+                    description=f"Heures du projet #{data.project_id}",
+                    unit="h",
+                    quantity=total_hours,
+                    unit_price=rate,
+                    total=round(total_hours * rate, 2),
+                    source_kind="heures",
+                )
+            )
+            next_pos += 1
+            added += 1
+
+    if data.include_soumission and data.soumission_id:
+        items = (
+            await db.execute(
+                select(DevlogSoumissionItem)
+                .where(DevlogSoumissionItem.soumission_id == data.soumission_id)
+                .order_by(DevlogSoumissionItem.position.asc())
+            )
+        ).scalars().all()
+        for it in items:
+            db.add(
+                DevlogInvoiceItem(
+                    invoice_id=invoice_id,
+                    position=next_pos,
+                    description=it.description,
+                    unit=it.unit,
+                    quantity=it.quantity,
+                    unit_price=it.unit_price,
+                    total=it.total,
+                    source_kind="soumission",
+                )
+            )
+            next_pos += 1
+            added += 1
+
+    await db.flush()
+    await _refresh_invoice_amount(db, invoice_id)
+    return DevlogInvoiceImportResult(added=added)
+
+
+# --------------------------------------------------------------------------
+# Items de soumission (lignes)
+# --------------------------------------------------------------------------
+
+soumission_items_router = APIRouter(prefix="/devlog", tags=["devlog"])
+
+
+def _compute_item_total(quantity: float, unit_price: float) -> float:
+    return round(float(quantity or 0) * float(unit_price or 0), 2)
+
+
+async def _refresh_soumission_amount(db, soumission_id: int) -> None:
+    """Recalcule `DevlogSoumission.amount` à partir de ses items et le
+    persiste — le total de la soumission est toujours la somme des items."""
+    items = (
+        await db.execute(
+            select(DevlogSoumissionItem).where(
+                DevlogSoumissionItem.soumission_id == soumission_id
+            )
+        )
+    ).scalars().all()
+    total = round(sum(float(it.total or 0) for it in items), 2)
+    soumission = await GenericCrud(db, DevlogSoumission).get(soumission_id)
+    if soumission is not None:
+        soumission.amount = total
+        await db.flush()
+
+
+@soumission_items_router.get(
+    "/soumissions/{soumission_id}/items",
+    response_model=List[DevlogSoumissionItemRead],
+)
+async def list_soumission_items(
+    soumission_id: int, db: DBSession, _: CurrentUser
+):
+    rows = (
+        await db.execute(
+            select(DevlogSoumissionItem)
+            .where(DevlogSoumissionItem.soumission_id == soumission_id)
+            .order_by(DevlogSoumissionItem.position.asc(), DevlogSoumissionItem.id.asc())
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+@soumission_items_router.post(
+    "/soumission-items",
+    response_model=DevlogSoumissionItemRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_soumission_item(
+    data: DevlogSoumissionItemCreate, db: DBSession, _: CurrentUser
+):
+    if await GenericCrud(db, DevlogSoumission).get(data.soumission_id) is None:
+        raise HTTPException(status_code=404, detail="Soumission introuvable")
+    payload = data.model_dump(exclude_unset=True)
+    payload["total"] = _compute_item_total(
+        data.quantity, data.unit_price
+    )
+    obj = DevlogSoumissionItem(**payload)
+    db.add(obj)
+    await db.flush()
+    await db.refresh(obj)
+    await _refresh_soumission_amount(db, data.soumission_id)
+    return DevlogSoumissionItemRead.model_validate(obj)
+
+
+@soumission_items_router.patch(
+    "/soumission-items/{item_id}",
+    response_model=DevlogSoumissionItemRead,
+)
+async def update_soumission_item(
+    item_id: int,
+    data: DevlogSoumissionItemUpdate,
+    db: DBSession,
+    _: CurrentUser,
+):
+    crud = GenericCrud(db, DevlogSoumissionItem)
+    obj = await crud.get(item_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Item introuvable")
+    update_data = data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(obj, field, value)
+    obj.total = _compute_item_total(obj.quantity, obj.unit_price)
+    await db.flush()
+    await db.refresh(obj)
+    await _refresh_soumission_amount(db, obj.soumission_id)
+    return DevlogSoumissionItemRead.model_validate(obj)
+
+
+@soumission_items_router.delete(
+    "/soumission-items/{item_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_soumission_item(
+    item_id: int, db: DBSession, _: CurrentUser
+):
+    crud = GenericCrud(db, DevlogSoumissionItem)
+    obj = await crud.get(item_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Item introuvable")
+    soumission_id = obj.soumission_id
+    await crud.delete(obj)
+    await _refresh_soumission_amount(db, soumission_id)
+
+
+# --------------------------------------------------------------------------
+# Vues « liées » — éléments rattachés à un lead / client / projet
+# --------------------------------------------------------------------------
+
+related_router = APIRouter(prefix="/devlog", tags=["devlog"])
+
+
+@related_router.get(
+    "/leads/{lead_id}/soumissions",
+    response_model=List[DevlogSoumissionRead],
+)
+async def list_lead_soumissions(
+    lead_id: int, db: DBSession, _: CurrentUser
+):
+    rows = (
+        await db.execute(
+            select(DevlogSoumission)
+            .where(DevlogSoumission.lead_id == lead_id)
+            .order_by(DevlogSoumission.id.desc())
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+@related_router.get(
+    "/clients/{client_id}/soumissions",
+    response_model=List[DevlogSoumissionRead],
+)
+async def list_client_soumissions(
+    client_id: int, db: DBSession, _: CurrentUser
+):
+    rows = (
+        await db.execute(
+            select(DevlogSoumission)
+            .where(DevlogSoumission.client_id == client_id)
+            .order_by(DevlogSoumission.id.desc())
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+@related_router.get(
+    "/clients/{client_id}/projects",
+    response_model=List[DevlogProjectRead],
+)
+async def list_client_projects(
+    client_id: int, db: DBSession, _: CurrentUser
+):
+    rows = (
+        await db.execute(
+            select(DevlogProject)
+            .where(DevlogProject.client_id == client_id)
+            .order_by(DevlogProject.id.desc())
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+@related_router.get(
+    "/clients/{client_id}/invoices",
+    response_model=List[DevlogInvoiceRead],
+)
+async def list_client_invoices(
+    client_id: int, db: DBSession, _: CurrentUser
+):
+    rows = (
+        await db.execute(
+            select(DevlogInvoice)
+            .where(DevlogInvoice.client_id == client_id)
+            .order_by(DevlogInvoice.id.desc())
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+@related_router.get(
+    "/projects/{project_id}/invoices",
+    response_model=List[DevlogInvoiceRead],
+)
+async def list_project_invoices(
+    project_id: int, db: DBSession, _: CurrentUser
+):
+    rows = (
+        await db.execute(
+            select(DevlogInvoice)
+            .where(DevlogInvoice.project_id == project_id)
+            .order_by(DevlogInvoice.id.desc())
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+@related_router.get(
+    "/projects/{project_id}/time-entries",
+    response_model=List[DevlogTimeEntryRead],
+)
+async def list_project_time_entries(
+    project_id: int, db: DBSession, _: CurrentUser
+):
+    rows = (
+        await db.execute(
+            select(DevlogTimeEntry)
+            .where(DevlogTimeEntry.project_id == project_id)
+            .order_by(DevlogTimeEntry.work_date.desc(), DevlogTimeEntry.id.desc())
+        )
+    ).scalars().all()
+    return list(rows)

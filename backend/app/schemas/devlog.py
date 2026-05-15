@@ -150,6 +150,92 @@ class DevlogSoumissionRead(BaseModel):
 
 
 # --------------------------------------------------------------------------
+# DevlogSoumissionItem (lignes de soumission)
+# --------------------------------------------------------------------------
+
+
+class DevlogSoumissionItemCreate(BaseModel):
+    soumission_id: int
+    position: Optional[int] = None
+    description: str = Field(..., min_length=1, max_length=500)
+    unit: Optional[str] = Field(default=None, max_length=32)
+    quantity: float = Field(default=1, ge=0)
+    unit_price: float = Field(default=0, ge=0)
+    notes: Optional[str] = None
+
+
+class DevlogSoumissionItemUpdate(BaseModel):
+    position: Optional[int] = None
+    description: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    unit: Optional[str] = Field(default=None, max_length=32)
+    quantity: Optional[float] = Field(default=None, ge=0)
+    unit_price: Optional[float] = Field(default=None, ge=0)
+    notes: Optional[str] = None
+
+
+class DevlogSoumissionItemRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    soumission_id: int
+    position: int
+    description: str
+    unit: Optional[str]
+    quantity: float
+    unit_price: float
+    total: float
+    notes: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+# --------------------------------------------------------------------------
+# DevlogSousTraitant
+# --------------------------------------------------------------------------
+
+
+class DevlogSousTraitantCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    company: Optional[str] = Field(default=None, max_length=255)
+    email: Optional[str] = Field(default=None, max_length=320)
+    phone: Optional[str] = Field(default=None, max_length=50)
+    specialty: Optional[str] = Field(default=None, max_length=255)
+    hourly_rate: Optional[float] = Field(default=None, ge=0)
+    active: bool = True
+    rating: Optional[int] = Field(default=None, ge=1, le=5)
+    notes: Optional[str] = None
+
+
+class DevlogSousTraitantUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    company: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    specialty: Optional[str] = None
+    hourly_rate: Optional[float] = Field(default=None, ge=0)
+    active: Optional[bool] = None
+    rating: Optional[int] = Field(default=None, ge=1, le=5)
+    notes: Optional[str] = None
+
+
+class DevlogSousTraitantRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    company: Optional[str]
+    email: Optional[str]
+    phone: Optional[str]
+    specialty: Optional[str]
+    hourly_rate: Optional[float]
+    active: bool
+    rating: Optional[int]
+    notes: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+# --------------------------------------------------------------------------
 # DevlogProject
 # --------------------------------------------------------------------------
 
@@ -264,3 +350,65 @@ class DevlogInvoiceRead(BaseModel):
     notes: Optional[str]
     created_at: datetime
     updated_at: datetime
+
+
+# --------------------------------------------------------------------------
+# DevlogInvoiceItem
+# --------------------------------------------------------------------------
+
+
+class DevlogInvoiceItemCreate(BaseModel):
+    invoice_id: int
+    position: Optional[int] = None
+    description: str = Field(..., min_length=1, max_length=500)
+    unit: Optional[str] = Field(default=None, max_length=32)
+    quantity: float = Field(default=1, ge=0)
+    unit_price: float = Field(default=0, ge=0)
+    source_kind: Optional[str] = Field(default=None, max_length=32)
+    notes: Optional[str] = None
+
+
+class DevlogInvoiceItemUpdate(BaseModel):
+    position: Optional[int] = None
+    description: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    unit: Optional[str] = Field(default=None, max_length=32)
+    quantity: Optional[float] = Field(default=None, ge=0)
+    unit_price: Optional[float] = Field(default=None, ge=0)
+    source_kind: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class DevlogInvoiceItemRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    invoice_id: int
+    position: int
+    description: str
+    unit: Optional[str]
+    quantity: float
+    unit_price: float
+    total: float
+    source_kind: Optional[str]
+    notes: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class DevlogInvoiceImportRequest(BaseModel):
+    """Import depuis un projet : heures (regroupées par employé × taux
+    facturable) et/ou items de la soumission acceptée."""
+
+    project_id: int
+    include_hours: bool = True
+    hourly_rate: Optional[float] = Field(
+        default=None, ge=0,
+        description="Taux facturable global (CAD/h). Si null, on prend "
+        "$0 — l'admin éditera la ligne après.",
+    )
+    include_soumission: bool = False
+    soumission_id: Optional[int] = None
+
+
+class DevlogInvoiceImportResult(BaseModel):
+    added: int
