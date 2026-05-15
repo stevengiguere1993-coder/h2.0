@@ -8,6 +8,7 @@ import {
   FolderKanban,
   Home,
   LogOut,
+  Receipt,
   Trello,
   UserCircle,
   Users,
@@ -59,6 +60,16 @@ const DEVLOG_SECTIONS: NavSection[] = [
         href: "/dev-logiciel/heures",
         label: "Heures",
         icon: Clock
+      }
+    ]
+  },
+  {
+    label: "Finances",
+    items: [
+      {
+        href: "/dev-logiciel/facturation",
+        label: "Facturation",
+        icon: Receipt
       }
     ]
   }

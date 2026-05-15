@@ -221,3 +221,46 @@ class DevlogTimeEntryRead(BaseModel):
     description: Optional[str]
     created_at: datetime
     updated_at: datetime
+
+
+# --------------------------------------------------------------------------
+# DevlogInvoice
+# --------------------------------------------------------------------------
+
+
+class DevlogInvoiceCreate(BaseModel):
+    number: Optional[str] = Field(default=None, max_length=64)
+    client_id: Optional[int] = None
+    project_id: Optional[int] = None
+    amount: Optional[float] = Field(default=None, ge=0)
+    status: str = Field(default="brouillon", max_length=16)
+    issued_date: Optional[date] = None
+    due_date: Optional[date] = None
+    notes: Optional[str] = None
+
+
+class DevlogInvoiceUpdate(BaseModel):
+    number: Optional[str] = None
+    client_id: Optional[int] = None
+    project_id: Optional[int] = None
+    amount: Optional[float] = Field(default=None, ge=0)
+    status: Optional[str] = None
+    issued_date: Optional[date] = None
+    due_date: Optional[date] = None
+    notes: Optional[str] = None
+
+
+class DevlogInvoiceRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    number: Optional[str]
+    client_id: Optional[int]
+    project_id: Optional[int]
+    amount: Optional[float]
+    status: str
+    issued_date: Optional[date]
+    due_date: Optional[date]
+    notes: Optional[str]
+    created_at: datetime
+    updated_at: datetime

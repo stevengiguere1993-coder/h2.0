@@ -1,0 +1,47 @@
+"""Facture du pôle Développement logiciel.
+
+Facturation d'un client, généralement rattachée à un projet de
+développement.
+"""
+
+from datetime import date
+from typing import Optional
+
+from sqlalchemy import Date, Float, ForeignKey, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base, TimestampUpdateMixin
+
+#: Statuts d'une facture.
+INVOICE_STATUSES = ("brouillon", "envoyee", "payee", "annulee")
+
+
+class DevlogInvoice(Base, TimestampUpdateMixin):
+    __tablename__ = "devlog_invoices"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    # Numéro de facture (saisi librement pour l'instant).
+    number: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    client_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("devlog_clients.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    project_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("devlog_projects.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="brouillon",
+        server_default="brouillon", index=True,
+    )
+    issued_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<DevlogInvoice(id={self.id}, number='{self.number}', status='{self.status}')>"

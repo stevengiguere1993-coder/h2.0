@@ -19,6 +19,7 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DBSession
 from app.db.base import Base
 from app.models.devlog_client import DevlogClient
+from app.models.devlog_invoice import DevlogInvoice
 from app.models.devlog_lead import LEAD_STATUSES, DevlogLead
 from app.models.devlog_project import DevlogProject
 from app.models.devlog_soumission import DevlogSoumission
@@ -28,6 +29,9 @@ from app.schemas.devlog import (
     DevlogClientCreate,
     DevlogClientRead,
     DevlogClientUpdate,
+    DevlogInvoiceCreate,
+    DevlogInvoiceRead,
+    DevlogInvoiceUpdate,
     DevlogLeadCreate,
     DevlogLeadRead,
     DevlogLeadStatusUpdate,
@@ -330,4 +334,18 @@ time_entries_router = _make_crud_router(
     update_schema=DevlogTimeEntryUpdate,
     read_schema=DevlogTimeEntryRead,
     not_found="Saisie d'heures introuvable",
+)
+
+
+# --------------------------------------------------------------------------
+# Facturation
+# --------------------------------------------------------------------------
+
+invoices_router = _make_crud_router(
+    prefix="/devlog/invoices",
+    model=DevlogInvoice,
+    create_schema=DevlogInvoiceCreate,
+    update_schema=DevlogInvoiceUpdate,
+    read_schema=DevlogInvoiceRead,
+    not_found="Facture introuvable",
 )
