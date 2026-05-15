@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
+  Briefcase,
   LayoutGrid,
-  List as ListIcon,
+  List,
   Loader2,
   Mail,
   MapPin,
@@ -11,475 +12,403 @@ import {
   Plus,
   Trash2,
   UserCheck,
-  Users,
-  X
+  Users
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
-import { useConfirm } from "@/components/confirm-dialog";
-import { authedFetch } from "@/lib/auth";
 import { useDevlogLayout } from "../layout";
+import { authedFetch } from "@/lib/auth";
+import { Link } from "@/i18n/navigation";
+import { formatPhone } from "@/lib/utils";
 
 type Client = {
   id: number;
   name: string;
-  company: string | null;
   email: string | null;
   phone: string | null;
   address: string | null;
-  website: string | null;
-  status: string;
   notes: string | null;
+  contact_request_id: number | null;
   created_at: string;
 };
 
-type Lead = {
+type Prospect = {
   id: number;
   name: string;
-  company: string | null;
-  email: string | null;
-  phone: string | null;
-  status: string;
-  client_id: number | null;
-  created_at: string;
-};
-
-// Vue unifiée — un contact peut être client OU lead.
-type Contact = {
-  id: string; // "c:42" ou "l:13"
-  kind: "client" | "lead";
-  raw_id: number;
-  name: string;
-  company: string | null;
-  email: string | null;
+  email: string;
   phone: string | null;
   address: string | null;
   status: string;
-  source: string; // "Converti" si lead.client_id != null, sinon "Manuel"
 };
 
-type Tab = "clients" | "prospects" | "perdu" | "all";
-
-type View = "list" | "kanban";
-
-const TABS: { key: Tab; label: string }[] = [
-  { key: "clients", label: "Clients" },
-  { key: "prospects", label: "Prospects" },
-  { key: "perdu", label: "Perdu" },
-  { key: "all", label: "Tous" }
-];
-
-const LEAD_KANBAN_LABEL: Record<string, string> = {
-  nouveau: "Nouveaux",
-  contacte: "Contactés",
-  rdv: "Rendez-vous",
-  presentation: "Présentation",
-  soumission: "Soumission",
-  gagne: "Gagnés",
-  perdu: "Perdus"
-};
-
-type DraftClient = {
+type Row = {
+  kind: "client" | "prospect";
+  id: number;
   name: string;
-  company: string;
-  email: string;
-  phone: string;
-  address: string;
-  website: string;
-  status: string;
-  notes: string;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  extra?: string;
 };
 
-const EMPTY_DRAFT: DraftClient = {
-  name: "",
-  company: "",
-  email: "",
-  phone: "",
-  address: "",
-  website: "",
-  status: "active",
-  notes: ""
+type TabKey = "clients" | "prospects" | "lost" | "all";
+type ViewMode = "list" | "kanban";
+
+const VIEW_PREF_KEY = "devlog_clients_view_v1";
+
+// Kanban column configuration per tab. `group` is the Row property we
+// bucket against (`kind` for Tous, `extra` for Clients/Prospects).
+type ColumnDef = {
+  id: string;
+  label: string;
+  dot: string;
+  match: (r: Row) => boolean;
 };
 
-export default function DevlogClientsPage() {
+function columnsForTab(tab: TabKey): ColumnDef[] {
+  if (tab === "clients") {
+    return [
+      {
+        id: "all_clients",
+        label: "Clients actifs",
+        dot: "bg-emerald-400",
+        match: (r) => r.kind === "client"
+      }
+    ];
+  }
+  if (tab === "prospects") {
+    return [
+      {
+        id: "new",
+        label: "Nouveaux",
+        dot: "bg-emerald-400",
+        match: (r) => r.kind === "prospect" && r.extra === "new"
+      },
+      {
+        id: "contacted",
+        label: "Suivi à faire",
+        dot: "bg-amber-400",
+        match: (r) => r.kind === "prospect" && r.extra === "contacted"
+      },
+      {
+        id: "qualified",
+        label: "Soumission en préparation",
+        dot: "bg-fuchsia-400",
+        match: (r) => r.kind === "prospect" && r.extra === "qualified"
+      },
+      {
+        id: "quoted",
+        label: "Soumission envoyée",
+        dot: "bg-blue-400",
+        match: (r) => r.kind === "prospect" && r.extra === "quoted"
+      }
+    ];
+  }
+  if (tab === "lost") {
+    return [
+      {
+        id: "lost",
+        label: "Perdu (refusé, sans projet)",
+        dot: "bg-rose-500",
+        match: (r) => r.kind === "prospect" && r.extra === "lost"
+      }
+    ];
+  }
+  // "all" — simpler: just prospects vs clients side by side.
+  return [
+    {
+      id: "prospect",
+      label: "Prospects",
+      dot: "bg-sky-400",
+      match: (r) => r.kind === "prospect"
+    },
+    {
+      id: "client",
+      label: "Clients",
+      dot: "bg-emerald-400",
+      match: (r) => r.kind === "client"
+    }
+  ];
+}
+
+export default function ClientsPage() {
   const { onOpenSidebar } = useDevlogLayout();
-  const confirm = useConfirm();
   const [clients, setClients] = useState<Client[]>([]);
-  const [leads, setLeads] = useState<Lead[]>([]);
+  const [prospects, setProspects] = useState<Prospect[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const [tab, setTab] = useState<Tab>("clients");
-  const [view, setView] = useState<View>("list");
   const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [tab, setTab] = useState<TabKey>("clients");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [view, setView] = useState<ViewMode>("list");
 
-  const [editing, setEditing] = useState<number | "new" | null>(null);
-  const [draft, setDraft] = useState<DraftClient>(EMPTY_DRAFT);
-  const [saving, setSaving] = useState(false);
-
-  // Mémorise la préférence de vue (liste/kanban) entre sessions.
+  // Restore the view preference so the chosen mode survives reloads.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const v = window.localStorage.getItem("devlog-clients-view");
-    if (v === "kanban" || v === "list") setView(v);
+    const saved = window.localStorage.getItem(VIEW_PREF_KEY);
+    if (saved === "list" || saved === "kanban") setView(saved);
   }, []);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem("devlog-clients-view", view);
+    try {
+      window.localStorage.setItem(VIEW_PREF_KEY, view);
+    } catch {
+      /* ignore */
+    }
   }, [view]);
 
-  async function loadAll() {
-    try {
-      const [cr, lr] = await Promise.all([
-        authedFetch("/api/v1/devlog/clients"),
-        authedFetch("/api/v1/devlog/leads")
-      ]);
-      if (!cr.ok || !lr.ok) throw new Error("Chargement impossible");
-      setClients(await cr.json());
-      setLeads(await lr.json());
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Erreur");
-    } finally {
-      setLoading(false);
-    }
-  }
-
   useEffect(() => {
-    void loadAll();
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const [cRes, pRes] = await Promise.all([
+          authedFetch("/api/v1/devlog/clients?limit=500"),
+          authedFetch("/api/v1/devlog/leads?limit=500")
+        ]);
+        if (!cRes.ok) throw new Error(`http_${cRes.status}`);
+        if (!cancelled) setClients((await cRes.json()) as Client[]);
+        if (pRes.ok && !cancelled)
+          setProspects((await pRes.json()) as Prospect[]);
+      } catch {
+        if (!cancelled) setError("Chargement échoué.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Unifie clients + leads en une liste de Contacts.
-  const allContacts: Contact[] = useMemo(() => {
-    const out: Contact[] = [];
-    for (const c of clients) {
-      out.push({
-        id: `c:${c.id}`,
-        kind: "client",
-        raw_id: c.id,
-        name: c.name,
-        company: c.company,
-        email: c.email,
-        phone: c.phone,
-        address: c.address,
-        status: c.status,
-        source: "Manuel"
-      });
-    }
-    for (const l of leads) {
-      out.push({
-        id: `l:${l.id}`,
-        kind: "lead",
-        raw_id: l.id,
-        name: l.name,
-        company: l.company,
-        email: l.email,
-        phone: l.phone,
-        address: null,
-        status: l.status,
-        source: l.client_id ? "Converti" : "Manuel"
-      });
-    }
-    return out;
-  }, [clients, leads]);
-
-  // Filtre selon l'onglet actif.
-  const tabbed = useMemo(() => {
-    if (tab === "clients") {
-      return allContacts.filter(
-        (x) => x.kind === "client" && x.status === "active"
-      );
-    }
-    if (tab === "prospects") {
-      return allContacts.filter(
-        (x) =>
-          x.kind === "lead" &&
-          x.status !== "gagne" &&
-          x.status !== "perdu"
-      );
-    }
-    if (tab === "perdu") {
-      return allContacts.filter(
-        (x) => x.kind === "lead" && x.status === "perdu"
-      );
-    }
-    return allContacts;
-  }, [allContacts, tab]);
-
-  const counts = useMemo(
-    () => ({
-      clients: allContacts.filter(
-        (x) => x.kind === "client" && x.status === "active"
-      ).length,
-      prospects: allContacts.filter(
-        (x) =>
-          x.kind === "lead" &&
-          x.status !== "gagne" &&
-          x.status !== "perdu"
-      ).length,
-      perdu: allContacts.filter(
-        (x) => x.kind === "lead" && x.status === "perdu"
-      ).length,
-      all: allContacts.length
-    }),
-    [allContacts]
-  );
+  const rows: Row[] = useMemo(() => {
+    const clientRows: Row[] = clients.map((c) => ({
+      kind: "client",
+      id: c.id,
+      name: c.name,
+      email: c.email,
+      phone: c.phone,
+      address: c.address,
+      extra: c.contact_request_id ? "Converti" : "Manuel"
+    }));
+    const allProspectRows: Row[] = prospects
+      .filter((p) => p.status !== "won")
+      .map((p) => ({
+        kind: "prospect",
+        id: p.id,
+        name: p.name,
+        email: p.email,
+        phone: p.phone,
+        address: p.address,
+        extra: p.status
+      }));
+    // Onglet Prospects = leads actifs (exclut les perdus)
+    const activeProspectRows = allProspectRows.filter(
+      (r) => r.extra !== "lost"
+    );
+    const lostProspectRows = allProspectRows.filter(
+      (r) => r.extra === "lost"
+    );
+    if (tab === "clients") return clientRows;
+    if (tab === "prospects") return activeProspectRows;
+    if (tab === "lost") return lostProspectRows;
+    return [...clientRows, ...allProspectRows];
+  }, [clients, prospects, tab]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return tabbed;
-    return tabbed.filter((x) =>
-      [x.name, x.company, x.email, x.phone, x.address]
-        .filter(Boolean)
-        .some((v) => (v as string).toLowerCase().includes(q))
+    if (!q) return rows;
+    return rows.filter(
+      (r) =>
+        r.name.toLowerCase().includes(q) ||
+        (r.email || "").toLowerCase().includes(q) ||
+        (r.phone || "").includes(q) ||
+        (r.address || "").toLowerCase().includes(q)
     );
-  }, [tabbed, search]);
+  }, [rows, search]);
 
-  // Colonnes kanban selon l'onglet (mirror du pattern Construction).
-  const kanbanColumns: { key: string; label: string }[] = useMemo(() => {
-    if (tab === "clients")
-      return [{ key: "active", label: "Clients actifs" }];
-    if (tab === "prospects")
-      return [
-        { key: "nouveau", label: "Nouveaux" },
-        { key: "contacte", label: "Contactés" },
-        { key: "rdv", label: "Rendez-vous" },
-        { key: "presentation", label: "Présentation" },
-        { key: "soumission", label: "Soumission" }
-      ];
-    if (tab === "perdu") return [{ key: "perdu", label: "Perdu" }];
-    return [
-      { key: "prospects", label: "Prospects" },
-      { key: "clients", label: "Clients" }
-    ];
-  }, [tab]);
-
-  function kanbanKeyOf(c: Contact): string {
-    if (tab === "all") return c.kind === "client" ? "clients" : "prospects";
-    if (tab === "clients") return "active";
-    return c.status;
+  function rowKey(r: Row): string {
+    return `${r.kind}:${r.id}`;
   }
 
-  const byColumn = useMemo(() => {
-    const map: Record<string, Contact[]> = {};
-    for (const col of kanbanColumns) map[col.key] = [];
-    for (const c of filtered) {
-      const k = kanbanKeyOf(c);
-      (map[k] ?? (map[k] = [])).push(c);
-    }
-    return map;
-  }, [filtered, kanbanColumns]);
+  function toggle(r: Row) {
+    const k = rowKey(r);
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  }
 
-  // ---- Sélection multiple ----
-  const selectedIds = Object.keys(selected).filter((k) => selected[k]);
-  const allSelected =
-    filtered.length > 0 && filtered.every((c) => selected[c.id]);
   function toggleAll() {
-    if (allSelected) {
-      setSelected({});
+    if (selected.size === filtered.length && filtered.length > 0) {
+      setSelected(new Set());
     } else {
-      const next: Record<string, boolean> = {};
-      for (const c of filtered) next[c.id] = true;
-      setSelected(next);
+      setSelected(new Set(filtered.map(rowKey)));
     }
   }
 
   async function bulkDelete() {
-    const ok = await confirm({
-      title: `Supprimer ${selectedIds.length} contact(s) ?`,
-      description: "Cette action est irréversible.",
-      confirmLabel: "Supprimer",
-      destructive: true
-    });
-    if (!ok) return;
-    const toDelete = filtered.filter((c) => selected[c.id]);
-    try {
-      await Promise.all(
-        toDelete.map((c) =>
-          authedFetch(
-            c.kind === "client"
-              ? `/api/v1/devlog/clients/${c.raw_id}`
-              : `/api/v1/devlog/leads/${c.raw_id}`,
-            { method: "DELETE" }
-          )
-        )
-      );
-      setSelected({});
-      await loadAll();
-    } catch {
-      setError("Suppression partielle ou impossible");
+    if (selected.size === 0) return;
+    if (
+      !confirm(
+        `Supprimer définitivement ${selected.size} fiche${
+          selected.size > 1 ? "s" : ""
+        } ? Cette action est irréversible.`
+      )
+    )
+      return;
+    const keys = Array.from(selected);
+    let failed = 0;
+    for (const k of keys) {
+      const [kind, id] = k.split(":");
+      const url =
+        kind === "client"
+          ? `/api/v1/devlog/clients/${id}`
+          : `/api/v1/devlog/leads/${id}`;
+      try {
+        const res = await authedFetch(url, { method: "DELETE" });
+        if (!res.ok && res.status !== 204) failed += 1;
+      } catch {
+        failed += 1;
+      }
     }
+    // Optimistically remove the successful ones.
+    setClients((xs) =>
+      xs.filter((c) => !selected.has(`client:${c.id}`))
+    );
+    setProspects((xs) =>
+      xs.filter((p) => !selected.has(`prospect:${p.id}`))
+    );
+    setSelected(new Set());
+    if (failed > 0) setError(`${failed} suppression(s) ont échoué.`);
   }
 
-  // ---- Client create/edit drawer ----
-  function openNewClient() {
-    setDraft(EMPTY_DRAFT);
-    setEditing("new");
-  }
-
-  function openEditClient(c: Client) {
-    setDraft({
-      name: c.name,
-      company: c.company ?? "",
-      email: c.email ?? "",
-      phone: c.phone ?? "",
-      address: c.address ?? "",
-      website: c.website ?? "",
-      status: c.status,
-      notes: c.notes ?? ""
-    });
-    setEditing(c.id);
-  }
-
-  function openContact(c: Contact) {
-    if (c.kind === "client") {
-      const cl = clients.find((x) => x.id === c.raw_id);
-      if (cl) openEditClient(cl);
-    }
-    // Les leads s'éditent depuis le CRM — on ne fait que cliquer ici.
-  }
-
-  async function saveDraft() {
-    if (!draft.name.trim()) return;
-    setSaving(true);
-    try {
-      const payload = {
-        name: draft.name.trim(),
-        company: draft.company.trim() || null,
-        email: draft.email.trim() || null,
-        phone: draft.phone.trim() || null,
-        address: draft.address.trim() || null,
-        website: draft.website.trim() || null,
-        status: draft.status,
-        notes: draft.notes.trim() || null
-      };
-      const r =
-        editing === "new"
-          ? await authedFetch("/api/v1/devlog/clients", {
-              method: "POST",
-              body: JSON.stringify(payload)
-            })
-          : await authedFetch(`/api/v1/devlog/clients/${editing}`, {
-              method: "PATCH",
-              body: JSON.stringify(payload)
-            });
-      if (!r.ok) throw new Error();
-      setEditing(null);
-      await loadAll();
-    } catch {
-      setError("Enregistrement impossible");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function deleteClient(id: number) {
-    const ok = await confirm({
-      title: "Supprimer ce client ?",
-      description: "Cette action est irréversible.",
-      confirmLabel: "Supprimer",
-      destructive: true
-    });
-    if (!ok) return;
-    try {
-      const r = await authedFetch(`/api/v1/devlog/clients/${id}`, {
-        method: "DELETE"
-      });
-      if (!r.ok) throw new Error();
-      setEditing(null);
-      await loadAll();
-    } catch {
-      setError("Suppression impossible");
-    }
-  }
+  const allChecked =
+    filtered.length > 0 && selected.size === filtered.length;
+  const someChecked = selected.size > 0 && !allChecked;
 
   return (
-    <div className="min-h-screen bg-brand-950">
+    <>
       <AppTopbar
         breadcrumbs={[
           { label: "Développement logiciel", href: "/dev-logiciel" as any },
           { label: "Clients" }
         ]}
         onOpenSidebar={onOpenSidebar}
-        searchPlaceholder="Chercher un contact…"
         onSearch={setSearch}
+        searchPlaceholder="Nom, courriel, téléphone, adresse…"
         rightSlot={
           <div className="flex items-center gap-2">
-            {selectedIds.length > 0 ? (
+            {selected.size > 0 ? (
               <button
                 type="button"
                 onClick={bulkDelete}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-sm font-semibold text-rose-300 hover:bg-rose-500/20"
+                className="inline-flex items-center gap-1 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200 hover:bg-rose-500/20"
               >
-                <Trash2 className="h-4 w-4" />
-                Supprimer ({selectedIds.length})
+                <Trash2 className="h-3.5 w-3.5" /> Supprimer ({selected.size})
               </button>
             ) : null}
-            <button
-              type="button"
-              onClick={openNewClient}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-400"
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/dev-logiciel/clients/new" as any}
+              className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm"
             >
-              <Plus className="h-4 w-4" />
-              Nouveau client
-            </button>
+              <Plus className="mr-1.5 h-4 w-4" /> Nouveau client
+            </Link>
           </div>
         }
       />
 
-      <div className="mx-auto max-w-6xl px-4 py-4 lg:px-6">
+      <div className="p-4 lg:p-6">
         {error ? (
-          <div className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+          <p className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
             {error}
-          </div>
+          </p>
         ) : null}
 
-        {/* Onglets + toggle vue */}
-        <div className="mb-4 flex items-center justify-between gap-2">
-          <div className="flex flex-wrap gap-1">
-            {TABS.map((t) => (
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <div className="flex flex-1 rounded-lg border border-brand-800 bg-brand-900 p-1 text-sm">
+            {(
+              [
+                {
+                  id: "clients" as TabKey,
+                  label: `Clients (${clients.length})`
+                },
+                {
+                  id: "prospects" as TabKey,
+                  label: `Prospects (${
+                    prospects.filter(
+                      (p) => p.status !== "won" && p.status !== "lost"
+                    ).length
+                  })`
+                },
+                {
+                  id: "lost" as TabKey,
+                  label: `Perdu (${
+                    prospects.filter((p) => p.status === "lost").length
+                  })`
+                },
+                {
+                  id: "all" as TabKey,
+                  label: `Tous (${
+                    clients.length +
+                    prospects.filter((p) => p.status !== "won").length
+                  })`
+                }
+              ]
+            ).map((t) => (
               <button
-                key={t.key}
+                key={t.id}
                 type="button"
                 onClick={() => {
-                  setTab(t.key);
-                  setSelected({});
+                  setTab(t.id);
+                  setSelected(new Set());
                 }}
-                className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition ${
-                  tab === t.key
+                className={`flex-1 rounded-md px-3 py-1.5 font-semibold transition ${
+                  tab === t.id
                     ? "bg-blue-500 text-white"
-                    : "bg-brand-900 text-white/70 hover:bg-brand-800 hover:text-white"
+                    : "text-white/70 hover:text-white"
                 }`}
               >
                 {t.label}
-                <span className="ml-1.5 rounded-full bg-black/20 px-1.5 text-[11px]">
-                  {counts[t.key]}
-                </span>
               </button>
             ))}
           </div>
-          <div className="flex gap-1 rounded-lg border border-brand-800 bg-brand-900 p-1">
+
+          {/* Liste ↔ Kanban toggle. Preference persisted in localStorage
+              so the chosen view sticks across reloads. */}
+          <div
+            className="flex rounded-lg border border-brand-800 bg-brand-900 p-1"
+            role="group"
+            aria-label="Mode d'affichage"
+          >
             <button
               type="button"
               onClick={() => setView("list")}
+              aria-pressed={view === "list"}
               title="Vue liste"
-              className={`rounded-md p-1.5 ${
+              className={`rounded-md p-1.5 transition ${
                 view === "list"
                   ? "bg-blue-500 text-white"
-                  : "text-white/60 hover:text-white"
+                  : "text-white/70 hover:text-white"
               }`}
             >
-              <ListIcon className="h-4 w-4" />
+              <List className="h-4 w-4" />
             </button>
             <button
               type="button"
               onClick={() => setView("kanban")}
+              aria-pressed={view === "kanban"}
               title="Vue kanban"
-              className={`rounded-md p-1.5 ${
+              className={`rounded-md p-1.5 transition ${
                 view === "kanban"
                   ? "bg-blue-500 text-white"
-                  : "text-white/60 hover:text-white"
+                  : "text-white/70 hover:text-white"
               }`}
             >
               <LayoutGrid className="h-4 w-4" />
@@ -488,323 +417,260 @@ export default function DevlogClientsPage() {
         </div>
 
         {loading ? (
-          <div className="mt-10 flex justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
+          <div className="flex min-h-[40vh] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
           </div>
         ) : filtered.length === 0 ? (
-          <p className="mt-10 text-center text-sm text-white/40">
-            Aucun contact ne correspond.
-          </p>
-        ) : view === "list" ? (
-          <div className="overflow-hidden rounded-2xl border border-brand-800">
+          <EmptyState />
+        ) : view === "kanban" ? (
+          <KanbanBoard
+            columns={columnsForTab(tab)}
+            rows={filtered}
+          />
+        ) : (
+          <div className="overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
             <table className="w-full text-sm">
-              <thead className="border-b border-brand-800 bg-brand-900 text-left text-xs uppercase tracking-wider text-white/50">
+              <thead className="border-b border-brand-800 text-xs uppercase tracking-wider text-white/50">
                 <tr>
-                  <th className="px-3 py-2">
+                  <th className="px-4 py-3 w-10">
                     <input
                       type="checkbox"
-                      checked={allSelected}
+                      checked={allChecked}
+                      ref={(el) => {
+                        if (el) el.indeterminate = someChecked;
+                      }}
                       onChange={toggleAll}
+                      className="h-4 w-4 accent-blue-500"
+                      aria-label="Tout sélectionner"
                     />
                   </th>
-                  <th className="px-2 py-2">Type</th>
-                  <th className="px-3 py-2">Nom</th>
-                  <th className="px-3 py-2">Courriel</th>
-                  <th className="px-3 py-2">Téléphone</th>
-                  <th className="px-3 py-2">Source / statut</th>
+                  <th className="px-3 py-3 text-left">Type</th>
+                  <th className="px-3 py-3 text-left">Nom</th>
+                  <th className="px-3 py-3 text-left">Courriel</th>
+                  <th className="px-3 py-3 text-left">Téléphone</th>
+                  <th className="px-3 py-3"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-brand-800">
-                {filtered.map((c) => (
-                  <tr
-                    key={c.id}
-                    className="hover:bg-brand-900/50"
-                  >
-                    <td className="px-3 py-2">
-                      <input
-                        type="checkbox"
-                        checked={!!selected[c.id]}
-                        onChange={(e) =>
-                          setSelected({ ...selected, [c.id]: e.target.checked })
-                        }
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      {c.kind === "client" ? (
-                        <UserCheck className="h-4 w-4 text-emerald-400" />
-                      ) : (
-                        <Users className="h-4 w-4 text-sky-400" />
-                      )}
-                    </td>
-                    <td className="px-3 py-2 font-semibold text-white">
-                      <button
-                        type="button"
-                        onClick={() => openContact(c)}
-                        className="text-left hover:underline"
-                      >
-                        {c.name}
-                        {c.company ? (
-                          <span className="ml-1 text-white/40">
-                            · {c.company}
+                {filtered.map((r) => {
+                  const k = rowKey(r);
+                  const href =
+                    r.kind === "client"
+                      ? `/dev-logiciel/clients/${r.id}`
+                      : `/dev-logiciel/leads/${r.id}`;
+                  return (
+                    <tr
+                      key={k}
+                      className="group transition hover:bg-brand-950/50"
+                    >
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(k)}
+                          onChange={() => toggle(r)}
+                          className="h-4 w-4 accent-blue-500"
+                          aria-label="Sélectionner"
+                        />
+                      </td>
+                      <td className="px-3 py-3">
+                        {r.kind === "client" ? (
+                          <span
+                            title="Client"
+                            className="inline-flex rounded-md bg-emerald-500/15 p-1.5 text-emerald-400"
+                          >
+                            <UserCheck className="h-3.5 w-3.5" />
                           </span>
-                        ) : null}
-                      </button>
-                    </td>
-                    <td className="px-3 py-2 text-white/70">
-                      {c.email || "—"}
-                    </td>
-                    <td className="px-3 py-2 text-white/70">
-                      {c.phone || "—"}
-                    </td>
-                    <td className="px-3 py-2 text-xs text-white/50">
-                      {c.kind === "client" ? c.source : c.status}
-                    </td>
-                  </tr>
-                ))}
+                        ) : (
+                          <span
+                            title="Prospect"
+                            className="inline-flex rounded-md bg-sky-500/15 p-1.5 text-sky-400"
+                          >
+                            <Users className="h-3.5 w-3.5" />
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-3">
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={href as any}
+                          className="font-semibold text-white hover:text-blue-400"
+                        >
+                          {r.name}
+                        </Link>
+                      </td>
+                      <td className="px-3 py-3 text-white/70">
+                        {r.email || "—"}
+                      </td>
+                      <td className="px-3 py-3 text-white/70">
+                        {r.phone ? formatPhone(r.phone) : "—"}
+                      </td>
+                      <td className="px-3 py-3 text-right text-xs text-white/40">
+                        {r.extra}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-        ) : (
-          <div className="flex gap-3 overflow-x-auto pb-4">
-            {kanbanColumns.map((col) => {
-              const list = byColumn[col.key] ?? [];
-              return (
-                <div
-                  key={col.key}
-                  className="flex w-72 flex-shrink-0 flex-col rounded-xl border border-brand-800 bg-brand-900/60"
-                >
-                  <div className="flex items-center gap-2 border-b border-brand-800 px-3 py-2">
-                    <span className="text-sm font-semibold text-white">
-                      {col.label}
-                    </span>
-                    <span className="rounded-full bg-white/5 px-2 text-xs font-bold text-white/60">
-                      {list.length}
-                    </span>
-                  </div>
-                  <div className="flex flex-1 flex-col gap-2 p-2">
-                    {list.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => openContact(c)}
-                        className="rounded-lg border border-brand-800 bg-brand-950 p-2.5 text-left transition hover:border-blue-500/60"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="line-clamp-2 text-sm font-semibold text-white">
-                            {c.name}
-                          </p>
-                          {c.kind === "client" ? (
-                            <UserCheck className="h-3.5 w-3.5 flex-shrink-0 text-emerald-400" />
-                          ) : (
-                            <Users className="h-3.5 w-3.5 flex-shrink-0 text-sky-400" />
-                          )}
-                        </div>
-                        {c.company ? (
-                          <p className="mt-0.5 truncate text-xs text-white/50">
-                            {c.company}
-                          </p>
-                        ) : null}
-                        <div className="mt-2 space-y-0.5 text-[11px] text-white/40">
-                          {c.email ? (
-                            <p className="inline-flex items-center gap-1">
-                              <Mail className="h-3 w-3" />
-                              {c.email}
-                            </p>
-                          ) : null}
-                          {c.phone ? (
-                            <p className="inline-flex items-center gap-1">
-                              <Phone className="h-3 w-3" />
-                              {c.phone}
-                            </p>
-                          ) : null}
-                          {c.address ? (
-                            <p className="inline-flex items-center gap-1">
-                              <MapPin className="h-3 w-3" />
-                              {c.address}
-                            </p>
-                          ) : null}
-                        </div>
-                      </button>
-                    ))}
-                    {list.length === 0 ? (
-                      <p className="px-1 py-2 text-[11px] text-white/30">
-                        Aucun.
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
         )}
       </div>
+    </>
+  );
+}
 
-      {editing != null ? (
-        <ClientDrawer
-          isNew={editing === "new"}
-          draft={draft}
-          setDraft={setDraft}
-          saving={saving}
-          onClose={() => setEditing(null)}
-          onSave={saveDraft}
-          onDelete={
-            typeof editing === "number"
-              ? () => deleteClient(editing)
-              : undefined
-          }
-        />
+function KanbanBoard({
+  columns,
+  rows
+}: {
+  columns: ColumnDef[];
+  rows: Row[];
+}) {
+  // Bucket rows into columns; anything that doesn't match any column
+  // lands in a fallback "Autres" column so nothing disappears.
+  const buckets = columns.map((c) => ({
+    col: c,
+    cards: rows.filter((r) => c.match(r))
+  }));
+  const assigned = new Set(
+    buckets.flatMap((b) => b.cards.map((r) => `${r.kind}:${r.id}`))
+  );
+  const orphans = rows.filter(
+    (r) => !assigned.has(`${r.kind}:${r.id}`)
+  );
+
+  return (
+    <div className="flex gap-4 overflow-x-auto pb-4">
+      {buckets.map(({ col, cards }) => (
+        <KanbanColumn
+          key={col.id}
+          label={col.label}
+          dot={col.dot}
+          count={cards.length}
+        >
+          {cards.map((r) => (
+            <KanbanCard key={`${r.kind}:${r.id}`} row={r} />
+          ))}
+        </KanbanColumn>
+      ))}
+      {orphans.length > 0 ? (
+        <KanbanColumn
+          label="Autres"
+          dot="bg-white/20"
+          count={orphans.length}
+        >
+          {orphans.map((r) => (
+            <KanbanCard key={`${r.kind}:${r.id}`} row={r} />
+          ))}
+        </KanbanColumn>
       ) : null}
     </div>
   );
 }
 
-function ClientDrawer({
-  isNew,
-  draft,
-  setDraft,
-  saving,
-  onClose,
-  onSave,
-  onDelete
+function KanbanColumn({
+  label,
+  dot,
+  count,
+  children
 }: {
-  isNew: boolean;
-  draft: DraftClient;
-  setDraft: (d: DraftClient) => void;
-  saving: boolean;
-  onClose: () => void;
-  onSave: () => void;
-  onDelete?: () => void;
+  label: string;
+  dot: string;
+  count: number;
+  children: React.ReactNode;
 }) {
-  const set = (k: keyof DraftClient, v: string) =>
-    setDraft({ ...draft, [k]: v });
-  const inputCls = "input text-sm";
-
+  const isEmpty =
+    !children ||
+    (Array.isArray(children) && children.filter(Boolean).length === 0);
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <button
-        type="button"
-        aria-label="Fermer"
-        onClick={onClose}
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-      />
-      <div className="relative flex h-full w-full max-w-md flex-col border-l border-brand-800 bg-brand-950">
-        <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
-          <h2 className="text-sm font-bold text-white">
-            {isNew ? "Nouveau client" : "Modifier le client"}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md p-1 text-white/50 hover:bg-brand-900 hover:text-white"
-          >
-            <X className="h-5 w-5" />
-          </button>
+    <div className="flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border border-brand-800 bg-brand-900/60">
+      <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className={`h-2 w-2 rounded-full ${dot}`} />
+          <h2 className="text-sm font-semibold text-white">{label}</h2>
         </div>
-
-        <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
-          <Field label="Nom *">
-            <input
-              value={draft.name}
-              onChange={(e) => set("name", e.target.value)}
-              className={inputCls}
-            />
-          </Field>
-          <Field label="Entreprise">
-            <input
-              value={draft.company}
-              onChange={(e) => set("company", e.target.value)}
-              className={inputCls}
-            />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Courriel">
-              <input
-                value={draft.email}
-                onChange={(e) => set("email", e.target.value)}
-                className={inputCls}
-              />
-            </Field>
-            <Field label="Téléphone">
-              <input
-                value={draft.phone}
-                onChange={(e) => set("phone", e.target.value)}
-                className={inputCls}
-              />
-            </Field>
-          </div>
-          <Field label="Adresse">
-            <input
-              value={draft.address}
-              onChange={(e) => set("address", e.target.value)}
-              className={inputCls}
-            />
-          </Field>
-          <Field label="Site web">
-            <input
-              value={draft.website}
-              onChange={(e) => set("website", e.target.value)}
-              className={inputCls}
-            />
-          </Field>
-          <Field label="Statut">
-            <select
-              value={draft.status}
-              onChange={(e) => set("status", e.target.value)}
-              className={inputCls}
-            >
-              <option value="active">Actif</option>
-              <option value="archived">Archivé</option>
-            </select>
-          </Field>
-          <Field label="Notes">
-            <textarea
-              value={draft.notes}
-              onChange={(e) => set("notes", e.target.value)}
-              rows={4}
-              className={inputCls}
-            />
-          </Field>
-        </div>
-
-        <div className="flex items-center gap-2 border-t border-brand-800 px-4 py-3">
-          <button
-            type="button"
-            onClick={onSave}
-            disabled={saving || !draft.name.trim()}
-            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-blue-500 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
-          >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Enregistrer
-          </button>
-          {onDelete ? (
-            <button
-              type="button"
-              onClick={onDelete}
-              title="Supprimer"
-              className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-2 text-rose-300 hover:bg-rose-500/20"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
-          ) : null}
-        </div>
+        <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
+          {count}
+        </span>
+      </div>
+      <div className="flex-1 space-y-3 p-3">
+        {isEmpty ? (
+          <p className="py-8 text-center text-xs text-white/40">
+            Aucun élément
+          </p>
+        ) : (
+          children
+        )}
       </div>
     </div>
   );
 }
 
-function Field({
-  label,
-  children
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
+function KanbanCard({ row: r }: { row: Row }) {
+  const href =
+    r.kind === "client" ? `/dev-logiciel/clients/${r.id}` : `/dev-logiciel/leads/${r.id}`;
+  const Icon = r.kind === "client" ? UserCheck : Users;
+  const iconClass =
+    r.kind === "client"
+      ? "bg-emerald-500/15 text-emerald-400"
+      : "bg-sky-500/15 text-sky-400";
   return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-medium text-white/60">
-        {label}
-      </span>
-      {children}
-    </label>
+    <Link
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      href={href as any}
+      className="block rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-blue-500"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <h3 className="truncate text-sm font-semibold text-white">
+          {r.name}
+        </h3>
+        <span
+          title={r.kind === "client" ? "Client" : "Prospect"}
+          className={`flex-shrink-0 rounded-md p-1 ${iconClass}`}
+        >
+          <Icon className="h-3.5 w-3.5" />
+        </span>
+      </div>
+      {r.phone ? (
+        <p className="mt-1 flex items-center gap-1.5 text-xs text-white/60">
+          <Phone className="h-3 w-3" />
+          <span className="truncate">{formatPhone(r.phone)}</span>
+        </p>
+      ) : null}
+      {r.email ? (
+        <p className="mt-1 flex items-center gap-1.5 text-xs text-white/60">
+          <Mail className="h-3 w-3" />
+          <span className="truncate">{r.email}</span>
+        </p>
+      ) : null}
+      {r.address ? (
+        <p className="mt-1 flex items-center gap-1.5 text-xs text-white/50">
+          <MapPin className="h-3 w-3" />
+          <span className="truncate">{r.address}</span>
+        </p>
+      ) : null}
+    </Link>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="mx-auto mt-16 max-w-md rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 p-10 text-center">
+      <Briefcase className="mx-auto h-10 w-10 text-blue-400" />
+      <h2 className="mt-4 text-lg font-semibold text-white">
+        Aucune fiche
+      </h2>
+      <p className="mt-2 text-sm text-white/60">
+        Les clients se créent automatiquement quand un prospect accepte
+        une soumission, ou manuellement avec le bouton ci-dessous.
+      </p>
+      <Link
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        href={"/dev-logiciel/clients/new" as any}
+        className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 mt-6 inline-flex text-sm"
+      >
+        <Plus className="mr-1.5 h-4 w-4" /> Nouveau client
+      </Link>
+    </div>
   );
 }
