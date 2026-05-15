@@ -65,10 +65,11 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const PROJECT_LABEL: Record<string, string> = {
-  salle_bain: "Salle de bain",
-  cuisine: "Cuisine",
-  multilogement: "Multilogement",
-  renovation_complete: "Rénovation complète",
+  web_app: "Application web",
+  mobile_app: "Application mobile",
+  automation: "Automatisation",
+  integration: "Intégration",
+  consulting: "Consultation",
   autre: "Autre"
 };
 
@@ -85,7 +86,7 @@ const TABS = [
   { id: "apercu", label: "Aperçu", icon: FileText },
   { id: "client", label: "Client", icon: User },
   { id: "rendez-vous", label: "Rendez-vous", icon: Calendar },
-  { id: "mesures", label: "Mesures", icon: Ruler },
+  { id: "mesures", label: "Besoins du client", icon: Ruler },
   { id: "documents", label: "Documents", icon: FileText },
   { id: "employes", label: "Employés", icon: Users },
   { id: "taches", label: "Tâches", icon: CheckCircle2 }
@@ -406,42 +407,6 @@ export default function ProspectDetailPage() {
                     value={p.budget_range ? BUDGET_LABEL[p.budget_range] || p.budget_range : "—"}
                   />
                   <InfoCard title="Source" value={p.source || "—"} />
-                  {/* Adresse(s) du lieu de soumission — peut différer de
-                      l'adresse client si le projet est ailleurs. Une carte
-                      par soumission distincte (référence + adresse). */}
-                  <div className="lg:col-span-3 rounded-xl border border-brand-800 bg-brand-900 p-5">
-                    <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
-                      Adresse du lieu de soumission
-                    </h3>
-                    {prospectSoumissions.length === 0 ? (
-                      <p className="mt-3 text-sm text-white/50">
-                        Aucune soumission encore créée pour ce prospect.
-                      </p>
-                    ) : (
-                      <ul className="mt-3 space-y-2">
-                        {prospectSoumissions.map((s) => (
-                          <li
-                            key={s.id}
-                            className="flex items-start gap-2 text-sm"
-                          >
-                            <MapPin className="mt-0.5 h-4 w-4 flex-shrink-0 text-blue-400" />
-                            <span className="flex-1">
-                              <span className="text-white/90">
-                                {s.property_address || (
-                                  <span className="text-white/40">
-                                    (adresse non renseignée)
-                                  </span>
-                                )}
-                              </span>
-                              <span className="ml-2 text-[11px] text-white/50">
-                                · {s.reference}
-                              </span>
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
                   <div className="lg:col-span-3 rounded-xl border border-brand-800 bg-brand-900 p-5">
                     <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
                       Message du client
@@ -505,7 +470,7 @@ export default function ProspectDetailPage() {
                   />
                   <EditableAddress
                     icon={MapPin}
-                    label="Adresse du projet"
+                    label="Nom de l'entreprise"
                     value={p.address || ""}
                     onSave={(v) => patchProspect({ address: v || null })}
                   />
@@ -1279,12 +1244,33 @@ function AppointmentScheduler({
   const [employes, setEmployes] = useState<Employe[]>([]);
 
   // Form state
-  const [title, setTitle] = useState(`Visite — ${prospectName}`);
+  const [eventType, setEventType] = useState("rencontre_exploratoire");
+  const eventTypeLabel = (t: string): string =>
+    ({
+      rencontre_exploratoire: "Rencontre exploratoire",
+      etablissement_besoins: "Établissement des besoins",
+      presentation_soumission: "Présentation de la soumission",
+      kickoff: "Kickoff de projet",
+      suivi_projet: "Suivi de projet",
+      demo_livraison: "Démo / livraison",
+      formation_client: "Formation client",
+      retro: "Rétrospective",
+      autre: "Rencontre"
+    }[t] || "Rencontre");
+  const [title, setTitle] = useState(
+    `${eventTypeLabel("rencontre_exploratoire")} — ${prospectName}`
+  );
+  // Auto-met-à-jour le titre quand le type de RDV change (utile pour
+  // que « Kickoff de projet — Acme » soit suggéré au passage en
+  // mode kickoff). L'utilisateur peut quand même tout réécrire.
+  useEffect(() => {
+    setTitle(`${eventTypeLabel(eventType)} — ${prospectName}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventType, prospectName]);
   const [date, setDate] = useState(todayIso());
   const [startHm, setStartHm] = useState("10:00");
   const [endHm, setEndHm] = useState("11:00");
-  const [location, setLocation] = useState(prospectAddress || "");
-  const [eventType, setEventType] = useState("visite");
+  const [location, setLocation] = useState("");
   const [assigneeId, setAssigneeId] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
@@ -1392,10 +1378,15 @@ function AppointmentScheduler({
               onChange={(e) => setEventType(e.target.value)}
               className="input"
             >
-              <option value="visite">Visite / soumission</option>
-              <option value="reunion">Réunion</option>
-              <option value="livraison">Livraison</option>
-              <option value="chantier">Chantier</option>
+              <option value="rencontre_exploratoire">Rencontre exploratoire</option>
+              <option value="etablissement_besoins">Établissement des besoins</option>
+              <option value="presentation_soumission">Présentation de la soumission</option>
+              <option value="kickoff">Kickoff de projet</option>
+              <option value="suivi_projet">Suivi de projet</option>
+              <option value="demo_livraison">Démo / livraison</option>
+              <option value="formation_client">Formation client</option>
+              <option value="retro">Rétrospective</option>
+              <option value="autre">Autre</option>
             </select>
           </div>
           <div>
@@ -1426,14 +1417,18 @@ function AppointmentScheduler({
             />
           </div>
           <div className="sm:col-span-2">
-            <label className="label">Adresse / lieu</label>
+            <label className="label">Lien Teams / Meet / Zoom</label>
             <input
               type="text"
               value={location}
               onChange={(e) => setLocation(e.target.value)}
-              placeholder="Adresse de la visite"
+              placeholder="https://teams.microsoft.com/…"
               className="input"
             />
+            <p className="mt-1 text-[11px] text-white/40">
+              L&apos;intégration Teams native sera branchée plus tard —
+              pour l&apos;instant, colle l&apos;URL manuellement.
+            </p>
           </div>
           <div className="sm:col-span-2">
             <label className="label">Assigné à</label>

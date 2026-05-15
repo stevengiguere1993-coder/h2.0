@@ -926,43 +926,6 @@ export default function SoumissionDetailPage() {
               </div>
             ) : null}
 
-            {/* Type de soumission — devis (tableau d'items) ou
-                contrat d'entreprise (formulaire structuré). */}
-            <div className="mt-8 rounded-xl border border-brand-800 bg-brand-900 px-5 py-4">
-              <p className="text-sm font-semibold uppercase tracking-wider text-blue-400">
-                Type de soumission
-              </p>
-              <div className="mt-2 inline-flex rounded-lg border border-brand-700 bg-brand-950/40 p-0.5">
-                <button
-                  type="button"
-                  onClick={() => void changeKind("quote")}
-                  className={`rounded-md px-4 py-1.5 text-xs font-semibold transition ${
-                    kind === "quote"
-                      ? "bg-blue-500 text-brand-950 shadow"
-                      : "text-white/70 hover:text-white"
-                  }`}
-                >
-                  Devis
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void changeKind("contract")}
-                  className={`rounded-md px-4 py-1.5 text-xs font-semibold transition ${
-                    kind === "contract"
-                      ? "bg-blue-500 text-brand-950 shadow"
-                      : "text-white/70 hover:text-white"
-                  }`}
-                >
-                  Contrat
-                </button>
-              </div>
-              <p className="mt-2 text-xs text-white/50">
-                {kind === "quote"
-                  ? "Devis classique : tableau d'items, prix et taxes."
-                  : "Contrat d'entreprise à prix coûtant majoré — formulaire structuré (le tableau d'items est masqué)."}
-              </p>
-            </div>
-
             {kind === "quote" ? (
             <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brand-800 px-5 py-4">
@@ -970,14 +933,6 @@ export default function SoumissionDetailPage() {
                   Items de la soumission
                 </h2>
                 <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setTemplatePickerOpen(true)}
-                    className="inline-flex items-center rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-1.5 text-xs font-semibold text-blue-200 hover:bg-blue-500/20"
-                  >
-                    <Briefcase className="mr-1.5 h-3.5 w-3.5" />
-                    Insérer un service du catalogue
-                  </button>
                   <button
                     type="button"
                     onClick={() => addItem("service")}
@@ -1224,7 +1179,7 @@ export default function SoumissionDetailPage() {
 
                 <div>
                   <label htmlFor="property_address" className="label">
-                    Adresse du chantier
+                    Nom de l'entreprise
                   </label>
                   <AddressInput
                     id="property_address"
