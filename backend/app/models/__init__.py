@@ -22,6 +22,7 @@ from app.models.contact_request import ContactRequest
 from app.models.contact_request_photo import ContactRequestPhoto
 from app.models.devlog_client import DevlogClient  # noqa: F401
 from app.models.devlog_lead import DevlogLead  # noqa: F401
+from app.models.devlog_soumission import DevlogSoumission  # noqa: F401
 from app.models.email_template import EmailTemplate
 from app.models.employe import Employe
 from app.models.entreprise import Entreprise, EntrepriseLink, EntreprisePartner  # noqa: F401
@@ -181,6 +182,7 @@ __all__ = [
     "ContactRequestPhoto",
     "DevlogClient",
     "DevlogLead",
+    "DevlogSoumission",
     "EmailTemplate",
     "Employe",
     "Facture",

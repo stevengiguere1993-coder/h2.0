@@ -1,22 +1,26 @@
 """Endpoints — pôle Développement logiciel.
 
-Deux ressources :
+Ressources :
   * /api/v1/devlog/clients — clients du pôle (boîtes pour qui on
     développe des plateformes / logiciels) ;
-  * /api/v1/devlog/leads — pipeline kanban du closer.
+  * /api/v1/devlog/leads — pipeline kanban du closer ;
+  * /api/v1/devlog/soumissions — devis envoyés aux leads / clients.
 
 Accessible à tout utilisateur authentifié : nouveau pôle interne,
 petite équipe (closer / PM / devs partagent l'outil).
 """
 
-from typing import List
+from typing import List, Type
 
 from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
+from app.db.base import Base
 from app.models.devlog_client import DevlogClient
 from app.models.devlog_lead import LEAD_STATUSES, DevlogLead
+from app.models.devlog_soumission import DevlogSoumission
 from app.repositories.generic import GenericCrud
 from app.schemas.devlog import (
     DevlogClientCreate,
@@ -26,7 +30,70 @@ from app.schemas.devlog import (
     DevlogLeadRead,
     DevlogLeadStatusUpdate,
     DevlogLeadUpdate,
+    DevlogSoumissionCreate,
+    DevlogSoumissionRead,
+    DevlogSoumissionUpdate,
 )
+
+
+def _make_crud_router(
+    *,
+    prefix: str,
+    model: Type[Base],
+    create_schema: Type[BaseModel],
+    update_schema: Type[BaseModel],
+    read_schema: Type[BaseModel],
+    not_found: str,
+) -> APIRouter:
+    """CRUD générique du pôle — ouvert à tout utilisateur authentifié.
+
+    Diffère de ``business.make_crud_router`` : ici les écritures ne
+    sont pas réservées aux managers (petit pôle interne partagé)."""
+    router = APIRouter(prefix=prefix, tags=["devlog"])
+
+    @router.post(
+        "", response_model=read_schema, status_code=status.HTTP_201_CREATED
+    )
+    async def create(data: create_schema, db: DBSession, _: CurrentUser):  # type: ignore[valid-type]
+        obj = await GenericCrud(db, model).create(data)
+        return read_schema.model_validate(obj)
+
+    @router.get("", response_model=List[read_schema])  # type: ignore[valid-type]
+    async def list_items(
+        db: DBSession,
+        _: CurrentUser,
+        skip: int = Query(0, ge=0),
+        limit: int = Query(200, ge=1, le=500),
+    ):
+        return list(await GenericCrud(db, model).list(skip=skip, limit=limit))
+
+    @router.get("/{item_id}", response_model=read_schema)
+    async def get_item(item_id: int, db: DBSession, _: CurrentUser):
+        obj = await GenericCrud(db, model).get(item_id)
+        if obj is None:
+            raise HTTPException(status_code=404, detail=not_found)
+        return read_schema.model_validate(obj)
+
+    @router.patch("/{item_id}", response_model=read_schema)
+    async def update_item(
+        item_id: int, data: update_schema, db: DBSession, _: CurrentUser  # type: ignore[valid-type]
+    ):
+        crud = GenericCrud(db, model)
+        obj = await crud.get(item_id)
+        if obj is None:
+            raise HTTPException(status_code=404, detail=not_found)
+        obj = await crud.update(obj, data)
+        return read_schema.model_validate(obj)
+
+    @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_item(item_id: int, db: DBSession, _: CurrentUser):
+        crud = GenericCrud(db, model)
+        obj = await crud.get(item_id)
+        if obj is None:
+            raise HTTPException(status_code=404, detail=not_found)
+        await crud.delete(obj)
+
+    return router
 
 # --------------------------------------------------------------------------
 # Clients
@@ -214,3 +281,17 @@ async def delete_lead(lead_id: int, db: DBSession, _: CurrentUser):
     if obj is None:
         raise HTTPException(status_code=404, detail="Lead introuvable")
     await crud.delete(obj)
+
+
+# --------------------------------------------------------------------------
+# Soumissions (devis)
+# --------------------------------------------------------------------------
+
+soumissions_router = _make_crud_router(
+    prefix="/devlog/soumissions",
+    model=DevlogSoumission,
+    create_schema=DevlogSoumissionCreate,
+    update_schema=DevlogSoumissionUpdate,
+    read_schema=DevlogSoumissionRead,
+    not_found="Soumission introuvable",
+)

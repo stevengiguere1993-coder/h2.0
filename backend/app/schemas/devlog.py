@@ -107,3 +107,43 @@ class DevlogLeadRead(BaseModel):
     client_id: Optional[int]
     created_at: datetime
     updated_at: datetime
+
+
+# --------------------------------------------------------------------------
+# DevlogSoumission
+# --------------------------------------------------------------------------
+
+
+class DevlogSoumissionCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    lead_id: Optional[int] = None
+    client_id: Optional[int] = None
+    amount: Optional[float] = Field(default=None, ge=0)
+    status: str = Field(default="brouillon", max_length=16)
+    summary: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class DevlogSoumissionUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    lead_id: Optional[int] = None
+    client_id: Optional[int] = None
+    amount: Optional[float] = Field(default=None, ge=0)
+    status: Optional[str] = None
+    summary: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class DevlogSoumissionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    lead_id: Optional[int]
+    client_id: Optional[int]
+    amount: Optional[float]
+    status: str
+    summary: Optional[str]
+    notes: Optional[str]
+    created_at: datetime
+    updated_at: datetime

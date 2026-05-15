@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import {
   Code2,
+  FileText,
   Home,
   LogOut,
   Trello,
@@ -36,6 +37,11 @@ const DEVLOG_SECTIONS: NavSection[] = [
     label: "Closer",
     items: [
       { href: "/dev-logiciel/leads", label: "Pipeline (leads)", icon: Trello },
+      {
+        href: "/dev-logiciel/soumissions",
+        label: "Soumissions",
+        icon: FileText
+      },
       { href: "/dev-logiciel/clients", label: "Clients", icon: Users }
     ]
   }
