@@ -125,6 +125,9 @@ from app.models.payment import Payment
 from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.project_phase import ProjectPhase
+from app.models.project_subcontractor_contract import (  # noqa: F401
+    ProjectSubcontractorContract,
+)
 from app.models.purchase_order import PurchaseOrder
 from app.models.purchase_order_item import PurchaseOrderItem
 from app.models.project_assignees import (
@@ -219,6 +222,7 @@ __all__ = [
     "Project",
     "ProjectMember",
     "ProjectPhase",
+    "ProjectSubcontractorContract",
     "ProjectPhaseAssignee",
     "ProjectPhoto",
     "ProjectTask",

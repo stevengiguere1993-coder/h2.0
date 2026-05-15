@@ -16,9 +16,43 @@ from app.models.achat import Achat
 from app.models.employe import Employe
 from app.models.facture import Facture
 from app.models.facture_item import FactureItem
+from app.models.project_subcontractor_contract import (
+    ProjectSubcontractorContract,
+)
 from app.models.punch import Punch
 from app.models.soumission import Soumission, SoumissionStatus
 from app.models.soumission_item import SoumissionItem
+
+
+def _compute_billed_amount(
+    ac: Achat,
+    markup_overrides: dict[int, float],
+    contracts_by_st: dict[int, ProjectSubcontractorContract],
+) -> tuple[float, str]:
+    """Calcule le montant à facturer + un label décrivant la règle
+    appliquée. Centralise la logique pour les deux endpoints d'import."""
+    cost = float(ac.amount or 0)
+    if ac.kind == "sub_invoice" and ac.sous_traitant_id:
+        contract = contracts_by_st.get(ac.sous_traitant_id)
+        if contract is not None:
+            if contract.billing_mode == "markup_pct":
+                m = float(contract.markup_percent or 0)
+                return round(cost * (1 + m / 100.0), 2), f"contrat +{m:g} %"
+            if contract.billing_mode == "flat_hourly":
+                rate = float(contract.flat_hourly_rate or 0)
+                hours = float(ac.hours or 0)
+                return round(hours * rate, 2), f"contrat {rate:g} $/h × {hours:g} h"
+            if contract.billing_mode == "lump_sum":
+                amt = float(contract.lump_sum_amount or 0)
+                return round(amt, 2), "contrat forfait"
+        # Pas de contrat → on retombe sur le coûtant (pas de markup
+        # caché : l'admin verra qu'il manque un contrat).
+        return round(cost, 2), "sans contrat (coûtant)"
+    # Achat « material » — markup individuel (override > champ achat > 0).
+    pct = float(markup_overrides.get(ac.id, ac.markup_percent or 0))
+    return round(cost * (1 + pct / 100.0), 2), (
+        f"+{pct:g} %" if pct > 0 else "coûtant"
+    )
 
 
 router = APIRouter(prefix="/factures", tags=["facture-import"])
@@ -197,9 +231,9 @@ async def import_into_facture(
                     p.invoiced_at = now
                     p.facture_item_id = item.id
 
-    # 3) Achats — refacturation avec markup et flag anti-doublon.
-    #    On ne tire QUE les achats marqués refacturables et qui n'ont
-    #    pas encore été versés sur une facture (invoiced_at IS NULL).
+    # 3) Achats — refacturation avec markup OU contrat sous-traitant et
+    #    flag anti-doublon. On ne tire QUE les achats refacturables non
+    #    encore facturés (invoiced_at IS NULL).
     if data.include_achats and fa.project_id:
         stmt = (
             select(Achat)
@@ -212,25 +246,63 @@ async def import_into_facture(
             stmt = stmt.where(Achat.id.in_(data.achat_ids))
         achats = (await db.execute(stmt)).scalars().all()
 
+        # Pré-charge les contrats sous-traitants du projet pour les
+        # achats de type sub_invoice. Un seul round-trip.
+        sub_ids = {a.sous_traitant_id for a in achats if a.sous_traitant_id}
+        contracts_by_st: dict[int, ProjectSubcontractorContract] = {}
+        if sub_ids:
+            ctr_rows = (
+                await db.execute(
+                    select(ProjectSubcontractorContract)
+                    .where(
+                        ProjectSubcontractorContract.project_id == fa.project_id
+                    )
+                    .where(
+                        ProjectSubcontractorContract.sous_traitant_id.in_(sub_ids)
+                    )
+                )
+            ).scalars().all()
+            contracts_by_st = {c.sous_traitant_id: c for c in ctr_rows}
+
         new_items: list[tuple[Achat, FactureItem]] = []
         for ac in achats:
-            cost = float(ac.amount or 0)
-            markup_pct = float(
-                data.achat_markup_overrides.get(ac.id, ac.markup_percent or 0)
+            billed, rule_label = _compute_billed_amount(
+                ac, data.achat_markup_overrides, contracts_by_st
             )
-            billed = round(cost * (1 + markup_pct / 100.0), 2)
-            desc = ac.description or f"Achat {ac.reference or ac.id}"
-            if markup_pct > 0:
-                # Trace interne du markup dans la description — invisible
-                # au client si l'admin réécrit la ligne avant l'envoi.
-                desc = f"{desc} (+{markup_pct:g} %)"
+            base_desc = ac.description or f"Achat {ac.reference or ac.id}"
+            line_prefix = (
+                "Sous-traitant" if ac.kind == "sub_invoice" else "Matériel"
+            )
+            desc = f"{base_desc} ({rule_label})" if rule_label != "coûtant" else base_desc
             item = FactureItem(
                 facture_id=fa.id,
                 position=pos,
-                description=f"Matériel — {desc}",
-                unit="lot",
-                quantity=1,
-                unit_price=billed,
+                description=f"{line_prefix} — {desc}",
+                unit="h" if (
+                    ac.kind == "sub_invoice"
+                    and contracts_by_st.get(ac.sous_traitant_id or 0)
+                    and contracts_by_st[ac.sous_traitant_id].billing_mode
+                    == "flat_hourly"
+                ) else "lot",
+                quantity=(
+                    float(ac.hours or 0)
+                    if ac.kind == "sub_invoice"
+                    and contracts_by_st.get(ac.sous_traitant_id or 0)
+                    and contracts_by_st[ac.sous_traitant_id].billing_mode
+                    == "flat_hourly"
+                    else 1
+                ),
+                unit_price=(
+                    float(
+                        contracts_by_st[ac.sous_traitant_id].flat_hourly_rate
+                        or 0
+                    )
+                    if ac.kind == "sub_invoice"
+                    and contracts_by_st.get(ac.sous_traitant_id or 0)
+                    and contracts_by_st[ac.sous_traitant_id].billing_mode
+                    == "flat_hourly"
+                    else billed
+                ),
                 total=billed,
             )
             db.add(item)

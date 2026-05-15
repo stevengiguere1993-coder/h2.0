@@ -445,6 +445,9 @@ class AchatCreate(BaseModel):
     status: Optional[str] = Field(default=None, max_length=32)
     is_billable: Optional[bool] = None
     markup_percent: Optional[float] = Field(default=None, ge=0, le=500)
+    sous_traitant_id: Optional[int] = None
+    kind: Optional[str] = Field(default=None, max_length=16)
+    hours: Optional[float] = Field(default=None, ge=0)
 
 
 class AchatUpdate(BaseModel):
@@ -463,6 +466,9 @@ class AchatUpdate(BaseModel):
     invoice_date: Optional[date] = None
     is_billable: Optional[bool] = None
     markup_percent: Optional[float] = Field(default=None, ge=0, le=500)
+    sous_traitant_id: Optional[int] = None
+    kind: Optional[str] = Field(default=None, max_length=16)
+    hours: Optional[float] = Field(default=None, ge=0)
 
 
 class AchatRead(_Base):
@@ -489,4 +495,7 @@ class AchatRead(_Base):
     markup_percent: Optional[float] = None
     invoiced_at: Optional[datetime] = None
     facture_item_id: Optional[int] = None
+    sous_traitant_id: Optional[int] = None
+    kind: str = "material"
+    hours: Optional[float] = None
     created_at: datetime

@@ -88,10 +88,32 @@ class Achat(Base, TimestampUpdateMixin):
         nullable=True,
         index=True,
     )
+    # Sous-traitant qui a émis la facture (mutuellement exclusif avec
+    # `fournisseur_id` en pratique : un achat est soit du matériel chez
+    # un fournisseur, soit une facture de main-d'œuvre sous-traitée).
+    sous_traitant_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("sous_traitants.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     project_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("projects.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+    # Nature de l'achat — détermine la logique de refacturation au
+    # client : 'material' (matériel/marchandise, refacturé au coûtant +
+    # markup), 'sub_invoice' (facture de sous-traitant, refacturée
+    # selon le contrat de projet).
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="material",
+        server_default="material", index=True,
+    )
+    # Pour les factures sous-traitant facturables à l'heure : nombre
+    # d'heures à appliquer au flat_hourly_rate du contrat. Ignoré en
+    # mode markup_pct / lump_sum.
+    hours: Mapped[Optional[float]] = mapped_column(
+        Numeric(6, 2), nullable=True
     )
 
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

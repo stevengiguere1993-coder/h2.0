@@ -459,6 +459,14 @@ async def init_db() -> None:
             ("employes", "billing_rate", "NUMERIC(10, 2)"),
             ("punches", "invoiced_at", "TIMESTAMP WITH TIME ZONE"),
             ("punches", "facture_item_id", "INTEGER"),
+            # Phase C — facture sous-traitant + contrat de projet.
+            ("achats", "sous_traitant_id", "INTEGER"),
+            (
+                "achats",
+                "kind",
+                "VARCHAR(16) NOT NULL DEFAULT 'material'",
+            ),
+            ("achats", "hours", "NUMERIC(6, 2)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

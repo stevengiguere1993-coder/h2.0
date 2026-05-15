@@ -13,11 +13,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
+from app.api.v1.endpoints.facture_import import _compute_billed_amount
 from app.models.achat import Achat
 from app.models.employe import Employe
 from app.models.facture import Facture, FactureStatus
 from app.models.facture_item import FactureItem
 from app.models.project import Project
+from app.models.project_subcontractor_contract import (
+    ProjectSubcontractorContract,
+)
 from app.models.punch import Punch
 from app.models.soumission import Soumission, SoumissionStatus
 from app.models.soumission_item import SoumissionItem
@@ -222,9 +226,9 @@ async def convert_project_to_facture(
                     p.invoiced_at = now_h
                     p.facture_item_id = item.id
 
-    # 3) Matériel — Achats refacturables liés à ce projet, avec markup
-    #    et flag anti-doublon. Seuls les achats `is_billable=True` et
-    #    non encore facturés sont importés.
+    # 3) Achats — refacturation avec markup OU contrat sous-traitant et
+    #    flag anti-doublon. Seuls les achats `is_billable=True` non
+    #    encore facturés sont importés.
     if data.include_achats:
         stmt = (
             select(Achat)
@@ -237,23 +241,52 @@ async def convert_project_to_facture(
             stmt = stmt.where(Achat.id.in_(data.achat_ids))
         achats = (await db.execute(stmt)).scalars().all()
 
+        sub_ids = {a.sous_traitant_id for a in achats if a.sous_traitant_id}
+        contracts_by_st: dict[int, ProjectSubcontractorContract] = {}
+        if sub_ids:
+            ctr_rows = (
+                await db.execute(
+                    select(ProjectSubcontractorContract)
+                    .where(
+                        ProjectSubcontractorContract.project_id == project_id
+                    )
+                    .where(
+                        ProjectSubcontractorContract.sous_traitant_id.in_(sub_ids)
+                    )
+                )
+            ).scalars().all()
+            contracts_by_st = {c.sous_traitant_id: c for c in ctr_rows}
+
         new_items: list[tuple[Achat, FactureItem]] = []
         for ac in achats:
-            cost = float(ac.amount or 0)
-            markup_pct = float(
-                data.achat_markup_overrides.get(ac.id, ac.markup_percent or 0)
+            billed, rule_label = _compute_billed_amount(
+                ac, data.achat_markup_overrides, contracts_by_st
             )
-            billed = round(cost * (1 + markup_pct / 100.0), 2)
-            desc = ac.description or f"Achat {ac.reference or ac.id}"
-            if markup_pct > 0:
-                desc = f"{desc} (+{markup_pct:g} %)"
+            base_desc = ac.description or f"Achat {ac.reference or ac.id}"
+            line_prefix = (
+                "Sous-traitant" if ac.kind == "sub_invoice" else "Matériel"
+            )
+            desc = f"{base_desc} ({rule_label})" if rule_label != "coûtant" else base_desc
+            contract = (
+                contracts_by_st.get(ac.sous_traitant_id or 0)
+                if ac.kind == "sub_invoice"
+                else None
+            )
+            if contract is not None and contract.billing_mode == "flat_hourly":
+                unit = "h"
+                qty = float(ac.hours or 0)
+                up = float(contract.flat_hourly_rate or 0)
+            else:
+                unit = "lot"
+                qty = 1
+                up = billed
             item = FactureItem(
                 facture_id=facture.id,
                 position=pos,
-                description=f"Matériel — {desc}",
-                unit="lot",
-                quantity=1,
-                unit_price=billed,
+                description=f"{line_prefix} — {desc}",
+                unit=unit,
+                quantity=qty,
+                unit_price=up,
                 total=billed,
             )
             db.add(item)
