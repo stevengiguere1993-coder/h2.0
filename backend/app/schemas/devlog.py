@@ -187,3 +187,37 @@ class DevlogProjectRead(BaseModel):
     due_date: Optional[date]
     created_at: datetime
     updated_at: datetime
+
+
+# --------------------------------------------------------------------------
+# DevlogTimeEntry
+# --------------------------------------------------------------------------
+
+
+class DevlogTimeEntryCreate(BaseModel):
+    project_id: Optional[int] = None
+    user_id: Optional[int] = None
+    work_date: date
+    hours: float = Field(..., ge=0)
+    description: Optional[str] = None
+
+
+class DevlogTimeEntryUpdate(BaseModel):
+    project_id: Optional[int] = None
+    user_id: Optional[int] = None
+    work_date: Optional[date] = None
+    hours: Optional[float] = Field(default=None, ge=0)
+    description: Optional[str] = None
+
+
+class DevlogTimeEntryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: Optional[int]
+    user_id: Optional[int]
+    work_date: date
+    hours: float
+    description: Optional[str]
+    created_at: datetime
+    updated_at: datetime

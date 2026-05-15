@@ -22,6 +22,7 @@ from app.models.devlog_client import DevlogClient
 from app.models.devlog_lead import LEAD_STATUSES, DevlogLead
 from app.models.devlog_project import DevlogProject
 from app.models.devlog_soumission import DevlogSoumission
+from app.models.devlog_time_entry import DevlogTimeEntry
 from app.repositories.generic import GenericCrud
 from app.schemas.devlog import (
     DevlogClientCreate,
@@ -37,6 +38,9 @@ from app.schemas.devlog import (
     DevlogSoumissionCreate,
     DevlogSoumissionRead,
     DevlogSoumissionUpdate,
+    DevlogTimeEntryCreate,
+    DevlogTimeEntryRead,
+    DevlogTimeEntryUpdate,
 )
 
 
@@ -312,4 +316,18 @@ projects_router = _make_crud_router(
     update_schema=DevlogProjectUpdate,
     read_schema=DevlogProjectRead,
     not_found="Projet introuvable",
+)
+
+
+# --------------------------------------------------------------------------
+# Saisie d'heures
+# --------------------------------------------------------------------------
+
+time_entries_router = _make_crud_router(
+    prefix="/devlog/time-entries",
+    model=DevlogTimeEntry,
+    create_schema=DevlogTimeEntryCreate,
+    update_schema=DevlogTimeEntryUpdate,
+    read_schema=DevlogTimeEntryRead,
+    not_found="Saisie d'heures introuvable",
 )

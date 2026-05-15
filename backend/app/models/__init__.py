@@ -24,6 +24,7 @@ from app.models.devlog_client import DevlogClient  # noqa: F401
 from app.models.devlog_lead import DevlogLead  # noqa: F401
 from app.models.devlog_project import DevlogProject  # noqa: F401
 from app.models.devlog_soumission import DevlogSoumission  # noqa: F401
+from app.models.devlog_time_entry import DevlogTimeEntry  # noqa: F401
 from app.models.email_template import EmailTemplate
 from app.models.employe import Employe
 from app.models.entreprise import Entreprise, EntrepriseLink, EntreprisePartner  # noqa: F401
@@ -185,6 +186,7 @@ __all__ = [
     "DevlogLead",
     "DevlogProject",
     "DevlogSoumission",
+    "DevlogTimeEntry",
     "EmailTemplate",
     "Employe",
     "Facture",

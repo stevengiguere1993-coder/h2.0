@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import {
+  Clock,
   Code2,
   FileText,
   FolderKanban,
@@ -53,6 +54,11 @@ const DEVLOG_SECTIONS: NavSection[] = [
         href: "/dev-logiciel/projets",
         label: "Projets",
         icon: FolderKanban
+      },
+      {
+        href: "/dev-logiciel/heures",
+        label: "Heures",
+        icon: Clock
       }
     ]
   }
