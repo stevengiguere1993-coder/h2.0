@@ -25,6 +25,7 @@ from app.models.devlog_lead import LEAD_STATUSES, DevlogLead
 from app.models.devlog_project import DevlogProject
 from app.models.devlog_soumission import DevlogSoumission
 from app.models.devlog_soumission_item import DevlogSoumissionItem
+from app.models.devlog_soumission_section import DevlogSoumissionSection
 from app.models.devlog_sous_traitant import DevlogSousTraitant
 from app.models.devlog_time_entry import DevlogTimeEntry
 from app.repositories.generic import GenericCrud
@@ -52,6 +53,9 @@ from app.schemas.devlog import (
     DevlogSoumissionItemRead,
     DevlogSoumissionItemUpdate,
     DevlogSoumissionRead,
+    DevlogSoumissionSectionCreate,
+    DevlogSoumissionSectionRead,
+    DevlogSoumissionSectionUpdate,
     DevlogSoumissionUpdate,
     DevlogSousTraitantCreate,
     DevlogSousTraitantRead,
@@ -572,13 +576,56 @@ def _compute_item_total(quantity: float, unit_price: float) -> float:
     return round(float(quantity or 0) * float(unit_price or 0), 2)
 
 
-async def _refresh_soumission_amount(db, soumission_id: int) -> None:
-    """Recalcule `DevlogSoumission.amount` à partir de ses items et le
-    persiste — le total de la soumission est toujours la somme des items."""
+def _apply_markup(cost: float, markup_percent: Optional[float]) -> float:
+    """Calcule le prix unitaire client à partir du coût et du markup
+    de la section (en %). Markup NULL ou 0 → prix = coût."""
+    m = float(markup_percent or 0)
+    return round(float(cost or 0) * (1 + m / 100.0), 2)
+
+
+async def _section_markup(db, section_id: Optional[int]) -> Optional[float]:
+    if section_id is None:
+        return None
+    section = await GenericCrud(db, DevlogSoumissionSection).get(section_id)
+    return float(section.markup_percent or 0) if section else None
+
+
+async def _refresh_section_items(db, section_id: int) -> None:
+    """Recalcule unit_price et total de tous les items d'une section
+    quand le markup_percent change."""
+    section = await GenericCrud(db, DevlogSoumissionSection).get(section_id)
+    if section is None:
+        return
+    markup = float(section.markup_percent or 0)
     items = (
         await db.execute(
             select(DevlogSoumissionItem).where(
-                DevlogSoumissionItem.soumission_id == soumission_id
+                DevlogSoumissionItem.section_id == section_id
+            )
+        )
+    ).scalars().all()
+    for it in items:
+        it.unit_price = _apply_markup(it.cost_per_unit, markup)
+        it.total = _compute_item_total(it.quantity, it.unit_price)
+    await db.flush()
+
+
+async def _refresh_soumission_amount(db, soumission_id: int) -> None:
+    """Recalcule `DevlogSoumission.amount` à partir de ses items
+    `initial` (frais one-shot). Le total mensuel est exposé séparément
+    côté API quand demandé — `amount` reste le « prix de soumission »
+    one-shot pour rester compatible avec les listes / kanbans existants."""
+    items = (
+        await db.execute(
+            select(DevlogSoumissionItem)
+            .outerjoin(
+                DevlogSoumissionSection,
+                DevlogSoumissionItem.section_id == DevlogSoumissionSection.id,
+            )
+            .where(DevlogSoumissionItem.soumission_id == soumission_id)
+            .where(
+                (DevlogSoumissionSection.billing_kind == "initial")
+                | (DevlogSoumissionItem.section_id.is_(None))
             )
         )
     ).scalars().all()
@@ -617,8 +664,14 @@ async def create_soumission_item(
     if await GenericCrud(db, DevlogSoumission).get(data.soumission_id) is None:
         raise HTTPException(status_code=404, detail="Soumission introuvable")
     payload = data.model_dump(exclude_unset=True)
+    # Si l'item appartient à une section, le markup s'applique sur
+    # cost_per_unit pour calculer unit_price. Sinon (item legacy sans
+    # section), unit_price = celui fourni.
+    markup = await _section_markup(db, data.section_id)
+    if markup is not None and (data.cost_per_unit or 0) > 0:
+        payload["unit_price"] = _apply_markup(data.cost_per_unit, markup)
     payload["total"] = _compute_item_total(
-        data.quantity, data.unit_price
+        data.quantity, payload.get("unit_price", data.unit_price)
     )
     obj = DevlogSoumissionItem(**payload)
     db.add(obj)
@@ -645,6 +698,12 @@ async def update_soumission_item(
     update_data = data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(obj, field, value)
+    # Si l'item est dans une section et que le coût a été modifié,
+    # re-applique le markup de la section.
+    if obj.section_id is not None:
+        markup = await _section_markup(db, obj.section_id)
+        if markup is not None and obj.cost_per_unit > 0:
+            obj.unit_price = _apply_markup(obj.cost_per_unit, markup)
     obj.total = _compute_item_total(obj.quantity, obj.unit_price)
     await db.flush()
     await db.refresh(obj)
@@ -666,6 +725,127 @@ async def delete_soumission_item(
     soumission_id = obj.soumission_id
     await crud.delete(obj)
     await _refresh_soumission_amount(db, soumission_id)
+
+
+# --------------------------------------------------------------------------
+# Sections de soumission (pôles)
+# --------------------------------------------------------------------------
+
+soumission_sections_router = APIRouter(prefix="/devlog", tags=["devlog"])
+
+
+@soumission_sections_router.get(
+    "/soumissions/{soumission_id}/sections",
+    response_model=List[DevlogSoumissionSectionRead],
+)
+async def list_sections(
+    soumission_id: int, db: DBSession, _: CurrentUser
+):
+    rows = (
+        await db.execute(
+            select(DevlogSoumissionSection)
+            .where(DevlogSoumissionSection.soumission_id == soumission_id)
+            .order_by(
+                DevlogSoumissionSection.position.asc(),
+                DevlogSoumissionSection.id.asc(),
+            )
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+@soumission_sections_router.post(
+    "/soumission-sections",
+    response_model=DevlogSoumissionSectionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_section(
+    data: DevlogSoumissionSectionCreate, db: DBSession, _: CurrentUser
+):
+    if await GenericCrud(db, DevlogSoumission).get(data.soumission_id) is None:
+        raise HTTPException(status_code=404, detail="Soumission introuvable")
+    obj = await GenericCrud(db, DevlogSoumissionSection).create(data)
+    return DevlogSoumissionSectionRead.model_validate(obj)
+
+
+@soumission_sections_router.patch(
+    "/soumission-sections/{section_id}",
+    response_model=DevlogSoumissionSectionRead,
+)
+async def update_section(
+    section_id: int,
+    data: DevlogSoumissionSectionUpdate,
+    db: DBSession,
+    _: CurrentUser,
+):
+    crud = GenericCrud(db, DevlogSoumissionSection)
+    obj = await crud.get(section_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Section introuvable")
+    markup_changed = (
+        data.markup_percent is not None
+        and float(data.markup_percent or 0)
+        != float(obj.markup_percent or 0)
+    )
+    obj = await crud.update(obj, data)
+    # Si le markup a changé, recalcule tous les items de la section
+    # (unit_price et total) et le total de la soumission.
+    if markup_changed:
+        await _refresh_section_items(db, section_id)
+        await _refresh_soumission_amount(db, obj.soumission_id)
+    return DevlogSoumissionSectionRead.model_validate(obj)
+
+
+@soumission_sections_router.delete(
+    "/soumission-sections/{section_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_section(
+    section_id: int, db: DBSession, _: CurrentUser
+):
+    crud = GenericCrud(db, DevlogSoumissionSection)
+    obj = await crud.get(section_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Section introuvable")
+    soumission_id = obj.soumission_id
+    # Les items de la section sont détachés (section_id → NULL) via le
+    # ON DELETE SET NULL du modèle.
+    await crud.delete(obj)
+    await _refresh_soumission_amount(db, soumission_id)
+
+
+@soumission_sections_router.get(
+    "/soumissions/{soumission_id}/totals",
+    summary="Totaux séparés frais initiaux vs mensuels",
+)
+async def get_soumission_totals(
+    soumission_id: int, db: DBSession, _: CurrentUser
+):
+    """Retourne `{ initial: total_one_shot, monthly: total_mensuel }`
+    pour afficher les deux totaux côté UI."""
+    rows = (
+        await db.execute(
+            select(
+                DevlogSoumissionItem.total,
+                DevlogSoumissionSection.billing_kind,
+            )
+            .outerjoin(
+                DevlogSoumissionSection,
+                DevlogSoumissionItem.section_id
+                == DevlogSoumissionSection.id,
+            )
+            .where(DevlogSoumissionItem.soumission_id == soumission_id)
+        )
+    ).all()
+    initial = 0.0
+    monthly = 0.0
+    for total, kind in rows:
+        t = float(total or 0)
+        if kind == "recurring":
+            monthly += t
+        else:
+            initial += t
+    return {"initial": round(initial, 2), "monthly": round(monthly, 2)}
 
 
 # --------------------------------------------------------------------------

@@ -473,6 +473,14 @@ async def init_db() -> None:
             ("org_nodes", "state_note", "TEXT"),
             # DevlogLead — alignement structurel sur ContactRequest pour
             # permettre le clonage 1:1 de la page CRM côté frontend.
+            # Soumission rebuild : sections par pôle (Frontend, Backend,
+            # Hosting…) avec markup interne et items associés.
+            ("devlog_soumission_items", "section_id", "INTEGER"),
+            (
+                "devlog_soumission_items",
+                "cost_per_unit",
+                "DOUBLE PRECISION NOT NULL DEFAULT 0",
+            ),
             ("devlog_leads", "address", "VARCHAR(500)"),
             (
                 "devlog_leads",
