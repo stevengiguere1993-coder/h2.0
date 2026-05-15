@@ -18,6 +18,7 @@ type Employe = {
   phone: string | null;
   role: string | null;
   hourly_rate: number | string | null;
+  billing_rate: number | string | null;
   is_partner: boolean;
   active: boolean;
   notes: string | null;
@@ -50,6 +51,7 @@ export default function EmployeDetailPage() {
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("");
   const [hourlyRate, setHourlyRate] = useState("");
+  const [billingRate, setBillingRate] = useState("");
   const [isPartner, setIsPartner] = useState(false);
   const [active, setActive] = useState(true);
   const [notes, setNotes] = useState("");
@@ -78,6 +80,7 @@ export default function EmployeDetailPage() {
         setPhone(data.phone || "");
         setRole(data.role || "");
         setHourlyRate(data.hourly_rate != null ? String(data.hourly_rate) : "");
+        setBillingRate(data.billing_rate != null ? String(data.billing_rate) : "");
         setIsPartner(data.is_partner);
         setActive(data.active);
         setNotes(data.notes || "");
@@ -111,6 +114,7 @@ export default function EmployeDetailPage() {
       phone !== (emp.phone || "") ||
       role !== (emp.role || "") ||
       hourlyRate !== (emp.hourly_rate != null ? String(emp.hourly_rate) : "") ||
+      billingRate !== (emp.billing_rate != null ? String(emp.billing_rate) : "") ||
       isPartner !== emp.is_partner ||
       active !== emp.active ||
       notes !== (emp.notes || "") ||
@@ -130,6 +134,7 @@ export default function EmployeDetailPage() {
     phone,
     role,
     hourlyRate,
+    billingRate,
     isPartner,
     active,
     notes,
@@ -166,6 +171,7 @@ export default function EmployeDetailPage() {
         phone: phone.trim() || null,
         role: role.trim() || null,
         hourly_rate: hourlyRate ? Number(hourlyRate) : null,
+        billing_rate: billingRate ? Number(billingRate) : null,
         is_partner: isPartner,
         active,
         notes: notes.trim() || null,
@@ -359,7 +365,9 @@ export default function EmployeDetailPage() {
                 </h2>
                 <div className="mt-4 grid gap-4 sm:grid-cols-2">
                   <div>
-                    <label htmlFor="e_rate" className="label">Taux horaire (CAD)</label>
+                    <label htmlFor="e_rate" className="label">
+                      Taux horaire — coûtant (CAD)
+                    </label>
                     <input
                       id="e_rate"
                       type="number"
@@ -369,6 +377,27 @@ export default function EmployeDetailPage() {
                       onChange={(e) => setHourlyRate(e.target.value)}
                       className="input"
                     />
+                    <p className="mt-1 text-xs text-white/40">
+                      Ce qu&apos;Horizon paie à l&apos;employé.
+                    </p>
+                  </div>
+                  <div>
+                    <label htmlFor="e_brate" className="label">
+                      Taux facturable — client (CAD)
+                    </label>
+                    <input
+                      id="e_brate"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={billingRate}
+                      onChange={(e) => setBillingRate(e.target.value)}
+                      className="input"
+                    />
+                    <p className="mt-1 text-xs text-white/40">
+                      Utilisé à l&apos;import facture. Vide = même que le
+                      coûtant.
+                    </p>
                   </div>
                   <label className="flex items-center gap-2 pt-6 text-sm text-white/80">
                     <input

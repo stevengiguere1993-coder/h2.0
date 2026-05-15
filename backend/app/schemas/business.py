@@ -19,6 +19,7 @@ class EmployeCreate(BaseModel):
     phone: Optional[str] = Field(default=None, max_length=50)
     role: Optional[str] = Field(default=None, max_length=64)
     hourly_rate: Optional[float] = Field(default=None, ge=0)
+    billing_rate: Optional[float] = Field(default=None, ge=0)
     is_partner: bool = False
     notes: Optional[str] = None
     address: Optional[str] = Field(default=None, max_length=500)
@@ -37,6 +38,7 @@ class EmployeUpdate(BaseModel):
     phone: Optional[str] = None
     role: Optional[str] = None
     hourly_rate: Optional[float] = None
+    billing_rate: Optional[float] = Field(default=None, ge=0)
     is_partner: Optional[bool] = None
     active: Optional[bool] = None
     notes: Optional[str] = None
@@ -57,6 +59,7 @@ class EmployeRead(_Base):
     phone: Optional[str]
     role: Optional[str]
     hourly_rate: Optional[float]
+    billing_rate: Optional[float] = None
     is_partner: bool
     active: bool
     notes: Optional[str]

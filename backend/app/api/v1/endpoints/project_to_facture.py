@@ -157,13 +157,15 @@ async def convert_project_to_facture(
                 )
                 pos += 1
 
-    # 2) T&M — heures punchées approuvées x taux horaire, groupées par
-    #    (employé, taux).
+    # 2) T&M — heures punchées approuvées (non encore facturées) au
+    #    `billing_rate` de l'employé (fallback hourly_rate), groupées
+    #    par (employé, taux). Marquage des punches après création.
     if data.include_hours:
         stmt = select(Punch).where(Punch.project_id == project_id)
         if data.only_approved:
             stmt = stmt.where(Punch.approved.is_(True))
         stmt = stmt.where(Punch.hours.is_not(None))
+        stmt = stmt.where(Punch.invoiced_at.is_(None))
         punches = (await db.execute(stmt)).scalars().all()
 
         if punches:
@@ -177,29 +179,48 @@ async def convert_project_to_facture(
                 ).scalars().all()
             }
 
-            buckets: dict[tuple[int, float], float] = {}
+            buckets: dict[tuple[int, float], dict] = {}
             for p in punches:
                 emp = emps.get(p.employe_id)
-                rate = float(emp.hourly_rate) if (emp and emp.hourly_rate) else 0.0
+                if emp and emp.billing_rate is not None:
+                    rate = float(emp.billing_rate)
+                elif emp and emp.hourly_rate:
+                    rate = float(emp.hourly_rate)
+                else:
+                    rate = 0.0
                 key = (p.employe_id, rate)
-                buckets[key] = buckets.get(key, 0.0) + float(p.hours or 0)
+                bucket = buckets.setdefault(
+                    key, {"hours": 0.0, "punches": []}
+                )
+                bucket["hours"] += float(p.hours or 0)
+                bucket["punches"].append(p)
 
-            for (emp_id, rate), hours in buckets.items():
+            bucket_items: list[tuple[FactureItem, list[Punch]]] = []
+            for (emp_id, rate), bucket in buckets.items():
                 emp = emps.get(emp_id)
                 label = emp.full_name if emp else f"Employé #{emp_id}"
+                hours = bucket["hours"]
                 amount = round(hours * rate, 2)
-                db.add(
-                    FactureItem(
-                        facture_id=facture.id,
-                        position=pos,
-                        description=f"Main-d'œuvre — {label}",
-                        unit="h",
-                        quantity=round(hours, 2),
-                        unit_price=rate,
-                        total=amount,
-                    )
+                item = FactureItem(
+                    facture_id=facture.id,
+                    position=pos,
+                    description=f"Main-d'œuvre — {label}",
+                    unit="h",
+                    quantity=round(hours, 2),
+                    unit_price=rate,
+                    total=amount,
                 )
+                db.add(item)
+                bucket_items.append((item, bucket["punches"]))
                 pos += 1
+
+            await db.flush()
+            from datetime import datetime as _dt2, timezone as _tz2
+            now_h = _dt2.now(_tz2.utc)
+            for item, p_list in bucket_items:
+                for p in p_list:
+                    p.invoiced_at = now_h
+                    p.facture_item_id = item.id
 
     # 3) Matériel — Achats refacturables liés à ce projet, avec markup
     #    et flag anti-doublon. Seuls les achats `is_billable=True` et

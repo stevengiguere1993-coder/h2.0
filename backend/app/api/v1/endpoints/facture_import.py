@@ -131,12 +131,16 @@ async def import_into_facture(
                     pos += 1
                     added += 1
 
-    # 2) Punched hours
+    # 2) Heures punchées — facturées au `billing_rate` de l'employé
+    #    (fallback `hourly_rate` si non défini). Punches déjà facturés
+    #    ignorés. Marquage des punches après création des items pour
+    #    traçabilité et garde-fou anti-doublon.
     if data.include_hours and fa.project_id:
         stmt = select(Punch).where(Punch.project_id == fa.project_id)
         if data.only_approved:
             stmt = stmt.where(Punch.approved.is_(True))
         stmt = stmt.where(Punch.hours.is_not(None))
+        stmt = stmt.where(Punch.invoiced_at.is_(None))
         punches = (await db.execute(stmt)).scalars().all()
         if punches:
             emp_ids = {p.employe_id for p in punches}
@@ -146,29 +150,52 @@ async def import_into_facture(
                     await db.execute(select(Employe).where(Employe.id.in_(emp_ids)))
                 ).scalars().all()
             }
-            buckets: dict[tuple[int, float], float] = {}
+            # Regroupement par (employé, taux facturable). On garde la
+            # liste des punches dans chaque bucket pour les marquer
+            # individuellement après le flush.
+            buckets: dict[
+                tuple[int, float], dict
+            ] = {}
             for p in punches:
                 emp = emps.get(p.employe_id)
-                rate = float(emp.hourly_rate) if (emp and emp.hourly_rate) else 0.0
-                buckets[(p.employe_id, rate)] = (
-                    buckets.get((p.employe_id, rate), 0.0) + float(p.hours or 0)
+                if emp and emp.billing_rate is not None:
+                    rate = float(emp.billing_rate)
+                elif emp and emp.hourly_rate:
+                    rate = float(emp.hourly_rate)
+                else:
+                    rate = 0.0
+                key = (p.employe_id, rate)
+                bucket = buckets.setdefault(
+                    key, {"hours": 0.0, "punches": []}
                 )
-            for (emp_id, rate), hours in buckets.items():
+                bucket["hours"] += float(p.hours or 0)
+                bucket["punches"].append(p)
+
+            bucket_items: list[tuple[FactureItem, list[Punch]]] = []
+            for (emp_id, rate), bucket in buckets.items():
                 emp = emps.get(emp_id)
                 label = emp.full_name if emp else f"Employé #{emp_id}"
-                db.add(
-                    FactureItem(
-                        facture_id=fa.id,
-                        position=pos,
-                        description=f"Main-d'œuvre — {label}",
-                        unit="h",
-                        quantity=round(hours, 2),
-                        unit_price=rate,
-                        total=round(hours * rate, 2),
-                    )
+                hours = bucket["hours"]
+                item = FactureItem(
+                    facture_id=fa.id,
+                    position=pos,
+                    description=f"Main-d'œuvre — {label}",
+                    unit="h",
+                    quantity=round(hours, 2),
+                    unit_price=rate,
+                    total=round(hours * rate, 2),
                 )
+                db.add(item)
+                bucket_items.append((item, bucket["punches"]))
                 pos += 1
                 added += 1
+
+            await db.flush()
+            now = datetime.now(timezone.utc)
+            for item, p_list in bucket_items:
+                for p in p_list:
+                    p.invoiced_at = now
+                    p.facture_item_id = item.id
 
     # 3) Achats — refacturation avec markup et flag anti-doublon.
     #    On ne tire QUE les achats marqués refacturables et qui n'ont
