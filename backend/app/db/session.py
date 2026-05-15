@@ -467,6 +467,10 @@ async def init_db() -> None:
                 "VARCHAR(16) NOT NULL DEFAULT 'material'",
             ),
             ("achats", "hours", "NUMERIC(6, 2)"),
+            # Organigramme : suivi de mise en œuvre du plan canonique
+            # (planifie | en_cours | fait | bloque | non_applicable).
+            ("org_nodes", "state", "VARCHAR(16)"),
+            ("org_nodes", "state_note", "TEXT"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

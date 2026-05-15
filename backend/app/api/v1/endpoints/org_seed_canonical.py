@@ -81,8 +81,25 @@ PROPOSAL_PREFIX = "💡 Proposition Claude — à valider. "
 HIRE_NOTE = "🪑 Poste à pourvoir."
 
 # Pour économiser la verbosité, helpers de construction.
-def task(label: str, *, tier: Optional[str] = None, note: Optional[str] = None) -> dict:
-    return {"label": label, "kind": "task", "tier": tier, "note": note, "owner": None, "ent_match": None, "children": []}
+def task(
+    label: str,
+    *,
+    tier: Optional[str] = None,
+    note: Optional[str] = None,
+    state: Optional[str] = None,
+    state_note: Optional[str] = None,
+) -> dict:
+    return {
+        "label": label,
+        "kind": "task",
+        "tier": tier,
+        "note": note,
+        "owner": None,
+        "ent_match": None,
+        "state": state,
+        "state_note": state_note,
+        "children": [],
+    }
 
 
 def role(
@@ -100,6 +117,8 @@ def role(
         "owner": owner,
         "note": note,
         "ent_match": None,
+        "state": None,
+        "state_note": None,
         "children": children or [],
     }
 
@@ -112,8 +131,17 @@ def dept(label: str, *, ent_match: Optional[List[str]] = None, children: Optiona
         "owner": None,
         "note": note,
         "ent_match": ent_match,
+        "state": None,
+        "state_note": None,
         "children": children or [],
     }
+
+
+# Helper short-form pour les tâches couvertes par le portail —
+# pré-remplit state=fait et state_note. C'est l'audit Phase 3 :
+# qu'est-ce qui est DÉJÀ construit dans le portail.
+def done(label: str, where: str, **kwargs) -> dict:
+    return task(label, state="fait", state_note=f"✓ {where}", **kwargs)
 
 
 # --------------------------------------------------------------------------
@@ -140,16 +168,16 @@ CANONICAL_STRUCTURE: List[dict] = [
                     task("Entrer en contact avec le client"),
                     task("Effectuer le suivi des clients"),
                     task("Identifier les besoins des clients"),
-                    task("Prendre rendez-vous avec le client"),
-                    task("Prise de photos sur place"),
-                    task("Prise de mesures sur place"),
-                    task("Saisir l'information dans Kratos"),
-                    task("Préparer les soumissions"),
-                    task("Effectuer le suivi des soumissions"),
+                    done("Prendre rendez-vous avec le client", "Module Agenda /app/agenda"),
+                    done("Prise de photos sur place", "Mobile /m/ (capture photos)"),
+                    done("Prise de mesures sur place", "Mobile /m/measurements"),
+                    done("Saisir l'information dans Kratos", "Module Kratos · Cerveau"),
+                    done("Préparer les soumissions", "/app/soumissions (numérotation auto + items)"),
+                    done("Effectuer le suivi des soumissions", "Kanban statuts /app/soumissions"),
                     task("Valider les soumissions avec le chargé de projet (en attendant l'autonomie complète)"),
                     task("Gérer les extras avant chantier (si applicable)"),
-                    task("Préparer le contrat"),
-                    task("Faire signer le contrat"),
+                    done("Préparer le contrat", "/app/contrats (PDF + envoi)"),
+                    done("Faire signer le contrat", "Signature électronique /app/contrats"),
                     task("Transmettre le dossier fermé au chargé de projet"),
                     # Mes propositions
                     task("Préparer la trousse de vente (brochure, photos avant/après, témoignages)", note=PROPOSAL_PREFIX + "Outil de closing — réutilisable pour chaque pôle."),
@@ -167,27 +195,27 @@ CANONICAL_STRUCTURE: List[dict] = [
                 tier="adjoint",
                 note="KPI : respect du budget · échéancier · satisfaction client. Rémunération : salaire + bonus de performance.",
                 children=[
-                    task("Ouvrir le projet dans le système"),
-                    task("Planifier les chantiers"),
+                    done("Ouvrir le projet dans le système", "/app/projets (conversion soumission → projet)"),
+                    done("Planifier les chantiers", "/app/projets/{id}/agenda"),
                     task("Organiser ses équipes"),
                     task("Demander les permis"),
                     task("Aviser la RBQ"),
-                    task("Gérer les fournisseurs"),
-                    task("Gérer les sous-traitants"),
-                    task("Gérer le staff"),
+                    done("Gérer les fournisseurs", "/app/fournisseurs"),
+                    done("Gérer les sous-traitants", "/app/sous-traitants"),
+                    done("Gérer le staff", "/app/employes"),
                     task("Acheter le matériel"),
-                    task("Faire les bons de commande (PO)"),
-                    task("Effectuer le suivi des chantiers"),
+                    done("Faire les bons de commande (PO)", "/app/po (numérotation auto + QBO)"),
+                    done("Effectuer le suivi des chantiers", "Kanban /app/projets (5 colonnes)"),
                     task("Gérer les extras et changements"),
                     task("Gérer les imprévus"),
                     task("Gérer les garanties et déficiences"),
                     task("Assurer la communication avec le client pendant le chantier"),
-                    task("Gérer les budgets"),
-                    task("Approuver les dépenses"),
-                    task("Suivre les coûts"),
+                    done("Gérer les budgets", "/app/projets/{id}/finances"),
+                    done("Approuver les dépenses", "/app/achats (statut received/paid)"),
+                    done("Suivre les coûts", "/app/projets/{id}/finances"),
                     task("Suivre les échéanciers"),
-                    task("Approuver les factures"),
-                    task("Transmettre les pièces à la comptabilité"),
+                    done("Approuver les factures", "/app/facturation + sync QBO"),
+                    done("Transmettre les pièces à la comptabilité", "Sync QBO automatique sur factures + achats"),
                     task("Assurer la satisfaction client"),
                     task("Fermer le projet"),
                     # Mes propositions
@@ -231,7 +259,7 @@ CANONICAL_STRUCTURE: List[dict] = [
                     task("Générer de nouveaux leads", tier="direction"),
                     task("Bâtir le réseau de sous-traitants", tier="direction"),
                     task("Superviser le closer et le chargé de projet", tier="direction"),
-                    task("Vérifier la facturation", tier="direction"),
+                    done("Vérifier la facturation", "Dashboard /app/facturation", tier="direction"),
                     task("Valider les paies", tier="direction"),
                     task("Vérifier le suivi de la qualité", tier="direction"),
                     task("Gérer la performance des équipes", tier="direction"),
@@ -258,20 +286,20 @@ CANONICAL_STRUCTURE: List[dict] = [
                 tier="adjoint",
                 note=HIRE_NOTE + " KPI : conversion · valeur vendue · délai de suivi. Rémunération : salaire + commission.",
                 children=[
-                    task("Trouver des leads"),
-                    task("Qualifier les leads"),
-                    task("Gérer le pipeline de ventes"),
+                    done("Trouver des leads", "/dev-logiciel/leads (CRM kanban)"),
+                    done("Qualifier les leads", "/dev-logiciel/leads"),
+                    done("Gérer le pipeline de ventes", "Kanban /dev-logiciel/leads"),
                     task("Entrer en contact avec les clients"),
                     task("Comprendre les besoins du client"),
                     task("Définir le scope du projet"),
                     task("Organiser les appels découverte"),
                     task("Préparer les démos et présentations"),
                     task("Faire les estimations préliminaires"),
-                    task("Préparer les soumissions"),
-                    task("Effectuer le suivi des soumissions"),
+                    done("Préparer les soumissions", "/dev-logiciel/soumissions"),
+                    done("Effectuer le suivi des soumissions", "Kanban /dev-logiciel/soumissions"),
                     task("Négocier les contrats"),
                     task("Faire signer les contrats"),
-                    task("Transmettre le dossier complet au chargé de projet"),
+                    done("Transmettre le dossier complet au chargé de projet", "Conversion lead → client + projet"),
                     task("Assurer la relation client avant le kickoff"),
                     task("Identifier les opportunités d'upsell"),
                     # Mes propositions
@@ -287,15 +315,15 @@ CANONICAL_STRUCTURE: List[dict] = [
                 note=HIRE_NOTE + " KPI : budget · échéancier · satisfaction. Salaire + bonus.",
                 children=[
                     task("Organiser le kickoff client"),
-                    task("Créer le planning du projet"),
+                    done("Créer le planning du projet", "/dev-logiciel/projets"),
                     task("Décomposer les tâches techniques"),
                     task("Assigner les tâches aux sous-traitants"),
                     task("Gérer les développeurs, designers et QA"),
-                    task("Suivre l'avancement des tâches"),
+                    done("Suivre l'avancement des tâches", "Kanban /dev-logiciel/projets (5 colonnes)"),
                     task("Gérer les échéanciers"),
-                    task("Gérer les budgets et les heures"),
+                    done("Gérer les budgets et les heures", "/dev-logiciel/heures (saisie + total)"),
                     task("Prioriser les demandes"),
-                    task("Maintenir Kratos à jour"),
+                    done("Maintenir Kratos à jour", "Module Kratos · Cerveau"),
                     task("Valider les livrables avant livraison"),
                     task("Tester les fonctionnalités principales"),
                     task("Gérer les changements de scope"),
@@ -373,7 +401,7 @@ CANONICAL_STRUCTURE: List[dict] = [
                     task("Optimisation énergétique des immeubles (audit annuel)", note=PROPOSAL_PREFIX),
                     task("Veille réglementaire TAL / Loi 31 / Régie", note=PROPOSAL_PREFIX),
                     # Tâches Kratos
-                    task("Alertes automatiques retards de loyer", tier="adjoint_virtuel", note=KRATOS_NOTE),
+                    done("Alertes automatiques retards de loyer", "Module loyers — alertes déjà branchées", tier="adjoint_virtuel", note=KRATOS_NOTE),
                     task("Génération avis (augmentation, renouvellement) à partir de templates", tier="adjoint_virtuel", note=KRATOS_NOTE),
                     task("Dispatch des urgences locataires (formulaire → notification)", tier="adjoint_virtuel", note=KRATOS_NOTE),
                 ],
@@ -391,7 +419,7 @@ CANONICAL_STRUCTURE: List[dict] = [
                 tier="direction",
                 note="KPI à ajouter : taux d'occupation · délai moyen de relocation · dépense d'entretien par porte · marge nette par immeuble.",
                 children=[
-                    task("S'assurer que les loyers rentrent", tier="direction"),
+                    done("S'assurer que les loyers rentrent", "Module loyers + alertes retards", tier="direction"),
                     task("Vérifier les vacances", tier="direction"),
                     task("S'assurer des augmentations de loyer", tier="direction"),
                     task("Gérer l'optimisation du parc", tier="direction"),
@@ -419,19 +447,19 @@ CANONICAL_STRUCTURE: List[dict] = [
                 tier="adjoint",
                 note="Rémunération : salaire + commission. À terme, sera promu Bras droit (pôle 05) ; ses tâches prospection passent au prospecteur externe / courtiers.",
                 children=[
-                    task("Trouver des leads"),
-                    task("Faire des routes"),
-                    task("Faire du porte-à-porte"),
+                    done("Trouver des leads", "Volet /prospection (carte + listes)"),
+                    done("Faire des routes", "/prospection (carte) + /m/prospection (drive-by)"),
+                    done("Faire du porte-à-porte", "Mobile /m/prospection (capture terrain)"),
                     task("Faire des cold calls"),
-                    task("Établir le premier contact"),
-                    task("Qualifier les leads"),
+                    done("Établir le premier contact", "/prospection/leads"),
+                    done("Qualifier les leads", "/prospection/leads (kanban)"),
                     task("Identifier la motivation du vendeur"),
                     task("Recueillir les informations de base"),
-                    task("Faire les suivis avec les vendeurs"),
+                    done("Faire les suivis avec les vendeurs", "/prospection/leads"),
                     task("Obtenir les documents préliminaires"),
                     task("Relancer les vendeurs"),
-                    task("Alimenter Kratos"),
-                    task("Assurer le suivi des leads"),
+                    done("Alimenter Kratos", "Module Kratos · Cerveau"),
+                    done("Assurer le suivi des leads", "Kanban /prospection/leads"),
                     task("Transférer les leads qualifiés à l'analyste"),
                     task("Assurer le suivi documentaire avec l'analyste"),
                     # Mes propositions
@@ -456,9 +484,9 @@ CANONICAL_STRUCTURE: List[dict] = [
                 tier="adjoint",
                 note=HIRE_NOTE + " À pourvoir quand volume de deals le justifie. KPI à ajouter : nombre de deals analysés · taux d'offres acceptées · rendement projeté vs réalisé.",
                 children=[
-                    task("Analyse financière des deals"),
+                    done("Analyse financière des deals", "/prospection/analyse + /prospection/analyses-leads"),
                     task("Analyse des loyers et optimisation"),
-                    task("Analyse de rentabilité"),
+                    done("Analyse de rentabilité", "/prospection/analyse (modèle financier)"),
                     task("Analyse du marché"),
                     task("Validation des hypothèses"),
                     task("Préparation des modèles financiers"),
@@ -476,7 +504,7 @@ CANONICAL_STRUCTURE: List[dict] = [
                     task("Suivi post-acquisition (KPI projection vs réalisé à 6/12 mois)", note=PROPOSAL_PREFIX),
                     # Tâches Kratos
                     task("Alertes nouveaux listings correspondant aux critères", tier="adjoint_virtuel", note=KRATOS_NOTE),
-                    task("Calcul automatique cap rate / IRR à partir d'un brief", tier="adjoint_virtuel", note=KRATOS_NOTE),
+                    done("Calcul automatique cap rate / IRR à partir d'un brief", "/prospection/analyse — calculs auto", tier="adjoint_virtuel", note=KRATOS_NOTE),
                     task("Data room — checklist automatique des documents manquants", tier="adjoint_virtuel", note=KRATOS_NOTE),
                 ],
             ),
@@ -574,9 +602,9 @@ CANONICAL_STRUCTURE: List[dict] = [
                     task("Superviser le bras droit", tier="direction"),
                     task("Superviser l'adjoint administratif", tier="direction"),
                     task("Superviser la comptabilité", tier="direction"),
-                    task("Vérifier les KPI des entreprises", tier="direction"),
+                    done("Vérifier les KPI des entreprises", "/entreprises/tableaux-de-bord", tier="direction"),
                     task("Vérifier les rapports financiers", tier="direction"),
-                    task("Vérifier la mise à jour de Kratos", tier="direction"),
+                    done("Vérifier la mise à jour de Kratos", "Module Kratos · Cerveau", tier="direction"),
                     task("Vérifier les suivis importants", tier="direction"),
                     task("Vérifier les contrats", tier="direction"),
                     task("Développer les systèmes internes", tier="direction"),
@@ -622,7 +650,7 @@ CANONICAL_STRUCTURE: List[dict] = [
                     task("Coordonner les comptables"),
                     task("Superviser la refacturation intercompagnies"),
                     task("Vérifier les contrats"),
-                    task("Coordonner les signatures"),
+                    done("Coordonner les signatures", "Signature électronique /app/contrats"),
                     task("Gérer les renouvellements importants"),
                     task("Vérifier les documents corporatifs"),
                     task("Vérifier numéros d'entreprise, ClicSÉQUR, accès gouvernementaux, taxes"),
@@ -633,7 +661,7 @@ CANONICAL_STRUCTURE: List[dict] = [
                     task("Suivre les renouvellements"),
                     task("Suivre les déclarations"),
                     task("Assurer le maintien de Kratos"),
-                    task("Faire les suivis des tâches importantes"),
+                    done("Faire les suivis des tâches importantes", "/entreprises/taches"),
                     task("Ouvrir le courrier"),
                     task("Traiter les courriels"),
                     task("Organiser les documents"),
@@ -642,8 +670,8 @@ CANONICAL_STRUCTURE: List[dict] = [
                     task("Numériser les documents"),
                     task("Archiver les documents"),
                     task("Envoyer les documents à la comptabilité"),
-                    task("Gérer les calendriers"),
-                    task("Organiser les réunions"),
+                    done("Gérer les calendriers", "Module agenda + sync Google/Apple"),
+                    done("Organiser les réunions", "/entreprises/rencontres"),
                     task("Effectuer le suivi des échéances"),
                     task("Faire les relances administratives"),
                     task("Gérer les tâches administratives récurrentes"),
@@ -652,7 +680,7 @@ CANONICAL_STRUCTURE: List[dict] = [
                     task("Réponses-type aux courriels standards", tier="adjoint_virtuel", note=KRATOS_NOTE),
                     task("Saisie automatique dans Kratos depuis pièces jointes", tier="adjoint_virtuel", note=KRATOS_NOTE),
                     task("Alertes contextuelles sur échéances (refi / assurance / hypothèque / taxes)", tier="adjoint_virtuel", note=KRATOS_NOTE),
-                    task("Génération comptes-rendus à partir de la dictée des rencontres", tier="adjoint_virtuel", note=KRATOS_NOTE),
+                    done("Génération comptes-rendus à partir de la dictée des rencontres", "/entreprises/rencontres + dictée + résumer + nettoyer", tier="adjoint_virtuel", note=KRATOS_NOTE),
                     task("Vérification mensuelle cartes de crédit (alertes paiement)", tier="adjoint_virtuel", note=KRATOS_NOTE),
                 ],
             ),
@@ -806,6 +834,10 @@ async def seed_poles_canonical(
                     or node.assignee_user_id
                 ):
                     node.assignee_external_name = item["owner"]
+                if item.get("state") and not node.state:
+                    node.state = item["state"]
+                if item.get("state_note") and not node.state_note:
+                    node.state_note = item["state_note"]
                 reused += 1
             else:
                 ent_id = find_ent(item.get("ent_match"))
@@ -818,6 +850,8 @@ async def seed_poles_canonical(
                     entreprise_id=ent_id,
                     assignee_external_name=item.get("owner"),
                     execution_tier=item.get("tier"),
+                    state=item.get("state"),
+                    state_note=item.get("state_note"),
                 )
                 db.add(node)
                 await db.flush()
