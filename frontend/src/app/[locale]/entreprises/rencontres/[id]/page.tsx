@@ -10,7 +10,8 @@ import {
   Plus,
   Sparkles,
   Trash2,
-  Upload
+  Upload,
+  Wand2
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
@@ -406,6 +407,7 @@ function SectionCard({
   const [title, setTitle] = useState(section.title);
   const [transcript, setTranscript] = useState(section.transcript || "");
   const [summarizing, setSummarizing] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [listening, setListening] = useState(false);
   const recogRef = useRef<unknown>(null);
@@ -443,6 +445,38 @@ function SectionCard({
       onChanged((await r.json()) as Section);
     } finally {
       setSummarizing(false);
+    }
+  }
+
+  // Nettoyage du transcript brut de la dictée par Claude : corrige les
+  // homophones, accents, mots mal entendus, et la ponctuation. Le
+  // transcript existant est remplacé par la version corrigée.
+  async function cleanRawTranscript() {
+    if (!confirm(
+      "Réécrire le transcript de cette section en français québécois "
+      + "propre (corrige les homophones, accents, mots mal entendus) ? "
+      + "Le texte actuel sera remplacé."
+    )) return;
+    setCleaning(true);
+    try {
+      // Sauve d'abord la version courante au cas où la dictée live a
+      // produit du nouveau texte non encore persisté.
+      if (transcript !== (section.transcript || "")) {
+        await patchSection({ transcript });
+      }
+      const r = await authedFetch(
+        `/api/v1/rencontres/${rencontreId}/sections/${section.id}/clean-transcript`,
+        { method: "POST" }
+      );
+      if (!r.ok) return;
+      const updated = (await r.json()) as Section;
+      // Reflète la version nettoyée localement (et coupe la dictée
+      // en cours pour éviter d'écraser la correction).
+      accumulatedRef.current = updated.transcript || "";
+      setTranscript(updated.transcript || "");
+      onChanged(updated);
+    } finally {
+      setCleaning(false);
     }
   }
 
@@ -683,19 +717,35 @@ function SectionCard({
               }}
             />
         </div>
-        <button
-          type="button"
-          onClick={() => void summarize()}
-          disabled={summarizing || !(section.transcript || transcript)}
-          className="btn-accent inline-flex items-center gap-1.5 text-[11px] disabled:opacity-50"
-        >
-          {summarizing ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            <Sparkles className="h-3 w-3" />
-          )}
-          {summary ? "Re-résumer" : "Résumer cette section"}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void cleanRawTranscript()}
+            disabled={cleaning || !(section.transcript || transcript)}
+            title="Réécrit le transcript brut en français québécois propre (homophones, accents, mots mal entendus)"
+            className="inline-flex items-center gap-1.5 rounded-md border border-violet-500/40 bg-violet-500/10 px-2 py-1 text-[11px] font-semibold text-violet-300 transition hover:bg-violet-500/20 disabled:opacity-50"
+          >
+            {cleaning ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Wand2 className="h-3 w-3" />
+            )}
+            Nettoyer la dictée
+          </button>
+          <button
+            type="button"
+            onClick={() => void summarize()}
+            disabled={summarizing || !(section.transcript || transcript)}
+            className="btn-accent inline-flex items-center gap-1.5 text-[11px] disabled:opacity-50"
+          >
+            {summarizing ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Sparkles className="h-3 w-3" />
+            )}
+            {summary ? "Re-résumer" : "Résumer cette section"}
+          </button>
+        </div>
       </div>
 
       {summary ? (

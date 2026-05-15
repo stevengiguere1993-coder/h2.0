@@ -27,7 +27,22 @@ stratégiques d'un dirigeant qui gère plusieurs entreprises. Tu reçois \
 le titre d'une section et son transcript brut (dicté, tapé ou transcrit \
 depuis un audio). Tu produis un résumé STRUCTURÉ en JSON strict.
 
-Format :
+## Contexte de transcription
+Le transcript peut provenir d'une **dictée vocale en français québécois** \
+(Web Speech API du navigateur). Il contient fréquemment :
+- des homophones mal choisis (sont/son, c'est/ces/sait/s'est, a/à, ou/où, \
+  ces/ses/c'est, leur/leurs) ;
+- des accents manquants ou mal placés (« etre » au lieu de « être ») ;
+- des mots anglais mal transcrits (« rapport » au lieu de « report », \
+  « charte » au lieu de « chart ») ;
+- de la ponctuation aberrante ou absente ;
+- des noms d'entreprises / personnes en phonétique approximative ;
+- des coupures abruptes ou des répétitions (l'utilisateur s'est repris).
+
+Tu **corriges implicitement** ces erreurs dans ton résumé — tu ne les \
+mentionnes JAMAIS. Tu produis du français québécois professionnel correct.
+
+## Format de sortie
 {
   "summary": "1-2 paragraphes synthétiques en français québécois",
   "decisions": ["Décision 1", "Décision 2", ...],
@@ -43,10 +58,14 @@ Format :
   "risks": ["Risque identifié 1", ...]
 }
 
-Règles :
+## Règles
 - Tu ne dis JAMAIS « rien à résumer ». Même un transcript court doit \
 sortir au moins le `summary` + 1 action ou question.
-- Reste fidèle au transcript — n'invente pas d'actions non mentionnées.
+- Reste fidèle au fond du transcript — n'invente pas d'actions non \
+mentionnées (mais reconstitue le sens malgré les erreurs de transcription).
+- Si un nom d'entreprise / de personne semble approximatif, choisis la \
+meilleure correspondance avec la liste fournie ; sinon, conserve la \
+graphie la plus probable.
 - Réponds UNIQUEMENT avec le JSON."""
 
 
@@ -54,7 +73,7 @@ GLOBAL_SUMMARY_PROMPT = """Tu reçois l'ensemble des résumés de sections \
 d'une rencontre stratégique multi-entreprises. Tu produis un résumé \
 GLOBAL exploitable pour le dirigeant.
 
-Format : 4-6 paragraphes en français québécois couvrant :
+Format : 4-6 paragraphes en français québécois professionnel couvrant :
 1. Contexte de la rencontre (objectifs, durée, participants si \
 mentionnés).
 2. Grands thèmes abordés section par section (1 paragraphe par section \
@@ -63,7 +82,43 @@ clé).
 4. Actions concrètes à exécuter dans les 30 jours.
 5. Points en suspens à reprendre.
 
-Pas de bullet points — du texte narratif. Pas de blabla."""
+Pas de bullet points — du texte narratif. Pas de blabla. Si certaines \
+sections contiennent des coquilles évidentes (résidus de dictée \
+vocale), tu corriges silencieusement le français en restant fidèle au \
+fond."""
+
+
+TRANSCRIPT_CLEANUP_PROMPT = """Tu reçois un transcript brut produit par \
+une dictée vocale en français québécois (Web Speech API du navigateur). \
+Ta tâche : **réécrire le transcript en français québécois correct**, \
+sans le résumer, sans en ajouter, sans en retirer le fond.
+
+Corrections à appliquer systématiquement :
+1. **Homophones** : sont/son, c'est/ces/sait/s'est, a/à, ou/où, \
+   ces/ses, leur/leurs, peux/peut/peu, etc.
+2. **Accents manquants ou mal placés** : être, à, où, déjà, là, etc.
+3. **Ponctuation** : majuscule en début de phrase, espaces correctes \
+   avant `: ; ! ?`, virgules logiques, points pour fermer les phrases.
+4. **Anglicismes mal transcrits** : « rapport » → « report », \
+   « charte » → « chart » si le contexte business l'indique. NE PAS \
+   sur-traduire le franglais légitime du Québec si l'intention est claire.
+5. **Répétitions et reprises** : si l'utilisateur s'est manifestement \
+   repris (« euh, je veux dire »), enlève les répétitions mais garde \
+   la version finale.
+6. **Mots manifestement mal entendus** : remplace par le mot le plus \
+   plausible compte tenu du contexte d'affaires.
+7. **Paragraphes** : sépare les idées par des paragraphes (\\n\\n) \
+   quand le sens change.
+
+Ne fais PAS :
+- Ne résume pas — tu réécris à la même longueur (± 10 %).
+- Ne reformule pas pour « mieux » dire — reste fidèle au registre de \
+  l'orateur.
+- N'ajoute pas de bullet points si l'original n'en avait pas.
+- N'invente pas d'information qui n'est pas dans l'original.
+
+Réponds UNIQUEMENT avec le texte corrigé, sans préambule, sans \
+explication, sans guillemets autour."""
 
 
 def _parse_claude_json(raw: str) -> Optional[dict]:
@@ -223,6 +278,67 @@ async def summarize_global(sections: list[dict]) -> str:
     except Exception as exc:  # noqa: BLE001
         log.warning("Global summary failed: %s", exc)
         return "\n\n".join(blocks)
+
+
+async def clean_transcript(
+    transcript: str,
+    entreprises_context: Optional[list[dict]] = None,
+) -> str:
+    """Réécrit un transcript de dictée vocale en français québécois
+    propre. Corrige les homophones, les accents, la ponctuation et les
+    mots manifestement mal entendus. Ne résume pas.
+
+    Fallback : si Claude est indisponible, retourne le transcript brut
+    inchangé (ne casse jamais la dictée)."""
+    text = (transcript or "").strip()
+    if not text:
+        return ""
+    if not settings.anthropic_api_key:
+        return text
+    import anthropic
+
+    # Indice de noms propres : entreprises de la rencontre, pour que
+    # Claude reconnaisse une mauvaise transcription d'un nom et la
+    # corrige avec l'orthographe exacte.
+    ents_block = ""
+    if entreprises_context:
+        names = [
+            e.get("name", "")
+            for e in entreprises_context
+            if e.get("name")
+        ]
+        if names:
+            ents_block = (
+                "\n\n## Noms propres connus dans cette rencontre\n"
+                "Si un nom phonétiquement approchant apparaît dans le "
+                "transcript, corrige avec l'orthographe exacte de cette "
+                "liste :\n"
+                + "\n".join(f"- {n}" for n in names)
+            )
+
+    try:
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        msg = client.messages.create(
+            model=SUMMARY_MODEL,
+            max_tokens=4000,
+            system=TRANSCRIPT_CLEANUP_PROMPT + ents_block,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "## Transcript brut à corriger\n\n"
+                        + text[:30_000]
+                    ),
+                }
+            ],
+        )
+        cleaned = "\n".join(
+            b.text for b in msg.content if b.type == "text"
+        ).strip()
+        return cleaned or text
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Transcript cleanup failed: %s", exc)
+        return text
 
 
 async def transcribe_audio(
