@@ -47,12 +47,13 @@ function contractEstimate(s: Soumission): number | null {
 
 type Column = { id: string; label: string; dot: string };
 
+// IDs alignés sur les valeurs backend DevlogSoumission.status (français).
 const COLUMNS: Column[] = [
-  { id: "draft", label: "Brouillons", dot: "bg-white/40" },
-  { id: "sent", label: "Envoyées", dot: "bg-blue-400" },
-  { id: "accepted", label: "Acceptées", dot: "bg-emerald-400" },
-  { id: "rejected", label: "Refusées", dot: "bg-rose-500" },
-  { id: "expired", label: "Expirées", dot: "bg-amber-400" }
+  { id: "brouillon", label: "Brouillons", dot: "bg-white/40" },
+  { id: "envoyee", label: "Envoyées", dot: "bg-blue-400" },
+  { id: "acceptee", label: "Acceptées", dot: "bg-emerald-400" },
+  { id: "refusee", label: "Refusées", dot: "bg-rose-500" },
+  { id: "expiree", label: "Expirées", dot: "bg-amber-400" }
 ];
 
 function fmtMoney(n: number | null): string {
@@ -224,7 +225,7 @@ export default function SoumissionsPage() {
       COLUMNS.map((c) => [c.id, [] as Soumission[]])
     );
     for (const s of filtered) {
-      const target = COLUMNS.find((c) => c.id === s.status) ? s.status : "draft";
+      const target = COLUMNS.find((c) => c.id === s.status) ? s.status : "brouillon";
       map[target].push(s);
     }
     return map;

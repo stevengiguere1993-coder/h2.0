@@ -10,10 +10,10 @@ Accessible à tout utilisateur authentifié : nouveau pôle interne,
 petite équipe (closer / PM / devs partagent l'outil).
 """
 
-from typing import List, Type
+from typing import List, Optional, Type
 
 from fastapi import APIRouter, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
@@ -304,7 +304,7 @@ async def convert_lead_to_client(
     await db.refresh(client)
 
     lead.client_id = client.id
-    lead.status = "gagne"
+    lead.status = "won"
     await db.flush()
 
     return DevlogClientRead.model_validate(client)
@@ -331,6 +331,182 @@ soumissions_router = _make_crud_router(
     read_schema=DevlogSoumissionRead,
     not_found="Soumission introuvable",
 )
+
+
+# --------------------------------------------------------------------------
+# Automatisations soumission → client / projet
+# --------------------------------------------------------------------------
+
+soumission_automations_router = APIRouter(
+    prefix="/devlog/soumissions", tags=["devlog"]
+)
+
+
+async def _ensure_client_for_soumission(
+    db, soumission: DevlogSoumission
+) -> Optional[DevlogClient]:
+    """Si la soumission est rattachée à un lead sans client, crée le
+    client à partir du lead et lie le lead au client. Idempotent."""
+    if soumission.client_id is not None:
+        return await GenericCrud(db, DevlogClient).get(soumission.client_id)
+    if soumission.lead_id is None:
+        return None
+    lead = await GenericCrud(db, DevlogLead).get(soumission.lead_id)
+    if lead is None:
+        return None
+    if lead.client_id is not None:
+        client = await GenericCrud(db, DevlogClient).get(lead.client_id)
+        if client is not None:
+            soumission.client_id = client.id
+            await db.flush()
+            return client
+    client = DevlogClient(
+        name=lead.name,
+        company=lead.company,
+        email=lead.email,
+        phone=lead.phone,
+        notes=lead.project_summary,
+        status="active",
+    )
+    db.add(client)
+    await db.flush()
+    await db.refresh(client)
+    lead.client_id = client.id
+    lead.status = "won"
+    soumission.client_id = client.id
+    await db.flush()
+    return client
+
+
+async def _provision_project_for_soumission(
+    db, soumission: DevlogSoumission
+) -> DevlogProject:
+    """Crée le projet Dev logiciel rattaché à une soumission acceptée.
+    Idempotent : si un projet existe déjà pour cette soumission, on le
+    retourne tel quel."""
+    existing = (
+        await db.execute(
+            select(DevlogProject).where(
+                DevlogProject.soumission_id == soumission.id
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+
+    client = await _ensure_client_for_soumission(db, soumission)
+    project = DevlogProject(
+        name=soumission.title,
+        client_id=client.id if client else soumission.client_id,
+        soumission_id=soumission.id,
+        description=soumission.summary,
+        status="planifie",
+    )
+    db.add(project)
+    await db.flush()
+    await db.refresh(project)
+    return project
+
+
+@soumission_automations_router.patch(
+    "/{soumission_id}", response_model=DevlogSoumissionRead
+)
+async def update_soumission_with_automations(
+    soumission_id: int,
+    data: DevlogSoumissionUpdate,
+    db: DBSession,
+    _: CurrentUser,
+):
+    """Override de la mise à jour générique : si le statut passe à
+    « acceptee », on provisionne automatiquement le projet (+ client
+    si nécessaire) et on met à jour le lead lié."""
+    crud = GenericCrud(db, DevlogSoumission)
+    obj = await crud.get(soumission_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Soumission introuvable")
+    previous_status = obj.status
+    obj = await crud.update(obj, data)
+    if (
+        obj.status == "acceptee"
+        and previous_status != "acceptee"
+    ):
+        await _provision_project_for_soumission(db, obj)
+    return DevlogSoumissionRead.model_validate(obj)
+
+
+_SOUMISSION_STATUS_TO_LEAD: dict[str, str] = {
+    "envoyee": "quoted",
+    "acceptee": "won",
+    "refusee": "lost",
+    "expiree": "lost",
+}
+
+
+class _SoumissionStatusBody(BaseModel):
+    status: str = Field(..., max_length=16)
+
+
+@soumission_automations_router.patch(
+    "/{soumission_id}/status", response_model=DevlogSoumissionRead
+)
+async def update_soumission_status(
+    soumission_id: int,
+    body: _SoumissionStatusBody,
+    db: DBSession,
+    _: CurrentUser,
+):
+    """Change le statut de la soumission ET propage côté lead + crée
+    le projet si on passe à « acceptee ». Endpoint utilisé par le
+    kanban /dev-logiciel/soumissions."""
+    soumission = await GenericCrud(db, DevlogSoumission).get(soumission_id)
+    if soumission is None:
+        raise HTTPException(status_code=404, detail="Soumission introuvable")
+    previous_status = soumission.status
+    soumission.status = body.status
+    await db.flush()
+
+    # Propagation vers le lead (sauf si lead déjà en état terminal).
+    if soumission.lead_id is not None:
+        lead = await GenericCrud(db, DevlogLead).get(soumission.lead_id)
+        if lead is not None:
+            new_lead_status = _SOUMISSION_STATUS_TO_LEAD.get(body.status)
+            if (
+                new_lead_status is not None
+                and lead.status not in ("won", "lost")
+            ):
+                lead.status = new_lead_status
+                await db.flush()
+
+    if (
+        soumission.status == "acceptee"
+        and previous_status != "acceptee"
+    ):
+        await _provision_project_for_soumission(db, soumission)
+
+    await db.refresh(soumission)
+    return DevlogSoumissionRead.model_validate(soumission)
+
+
+@soumission_automations_router.post(
+    "/{soumission_id}/convert-to-project",
+    response_model=DevlogProjectRead,
+    summary="Crée le projet rattaché à une soumission acceptée",
+)
+async def convert_soumission_to_project(
+    soumission_id: int, db: DBSession, _: CurrentUser
+):
+    """Conversion explicite (idempotente) : si la soumission n'est pas
+    encore acceptée, on la passe à `acceptee` puis on provisionne le
+    projet + client. Retourne le projet créé (ou existant)."""
+    soumission = await GenericCrud(db, DevlogSoumission).get(soumission_id)
+    if soumission is None:
+        raise HTTPException(status_code=404, detail="Soumission introuvable")
+    if soumission.status != "acceptee":
+        soumission.status = "acceptee"
+        await db.flush()
+    project = await _provision_project_for_soumission(db, soumission)
+    return DevlogProjectRead.model_validate(project)
+
 
 
 # --------------------------------------------------------------------------

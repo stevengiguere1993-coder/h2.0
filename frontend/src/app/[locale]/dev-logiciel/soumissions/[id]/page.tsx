@@ -236,6 +236,19 @@ export default function SoumissionDetailPage() {
     }
   }
 
+  async function changeStatus(newStatus: string) {
+    try {
+      const r = await authedFetch(
+        `/api/v1/devlog/soumissions/${id}/status`,
+        { method: "PATCH", body: JSON.stringify({ status: newStatus }) }
+      );
+      if (!r.ok) throw new Error();
+      await loadAll();
+    } catch {
+      setError("Changement de statut impossible");
+    }
+  }
+
   const initialSections = sections.filter((x) => x.billing_kind === "initial");
   const recurringSections = sections.filter((x) => x.billing_kind === "recurring");
   const itemsBySection = useMemo(() => {
@@ -326,6 +339,7 @@ export default function SoumissionDetailPage() {
                   Créée le{" "}
                   {new Date(s.created_at).toLocaleDateString("fr-CA")}
                 </span>
+                <StatusActions status={s.status} onChange={changeStatus} />
               </div>
             </header>
 
@@ -707,6 +721,51 @@ function SectionCard({
         <Plus className="h-3 w-3" />
         Ajouter une ligne
       </button>
+    </div>
+  );
+}
+
+function StatusActions({
+  status,
+  onChange
+}: {
+  status: string;
+  onChange: (newStatus: string) => void;
+}) {
+  // Transitions possibles selon le statut actuel. Le passage à
+  // « acceptee » provisionne automatiquement le projet côté backend.
+  const transitions: Array<{ to: string; label: string; cls: string }> = [];
+  if (status === "brouillon")
+    transitions.push({
+      to: "envoyee",
+      label: "Marquer envoyée",
+      cls: "border-blue-500/40 bg-blue-500/10 text-blue-200"
+    });
+  if (status === "envoyee" || status === "brouillon") {
+    transitions.push({
+      to: "acceptee",
+      label: "Marquer acceptée (→ projet)",
+      cls: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+    });
+    transitions.push({
+      to: "refusee",
+      label: "Marquer refusée",
+      cls: "border-rose-500/40 bg-rose-500/10 text-rose-200"
+    });
+  }
+  if (transitions.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {transitions.map((t) => (
+        <button
+          key={t.to}
+          type="button"
+          onClick={() => onChange(t.to)}
+          className={`rounded-md border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${t.cls} hover:brightness-110`}
+        >
+          {t.label}
+        </button>
+      ))}
     </div>
   );
 }
