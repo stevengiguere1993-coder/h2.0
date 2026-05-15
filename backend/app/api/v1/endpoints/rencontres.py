@@ -40,6 +40,7 @@ from app.models.rencontre import (
     RencontreStatus,
 )
 from app.services.rencontre_ai import (
+    clean_transcript,
     summarize_global,
     summarize_section,
     transcribe_audio,
@@ -437,6 +438,51 @@ async def summarize_global_endpoint(
     out = RencontreRead.model_validate(r)
     out.sections = [SectionRead.model_validate(s) for s in sections]
     return out
+
+
+@router.post(
+    "/{rencontre_id}/sections/{section_id}/clean-transcript",
+    response_model=SectionRead,
+    summary=(
+        "Réécrit le transcript brut de la dictée en français québécois "
+        "propre (homophones, accents, ponctuation, mots mal entendus)."
+    ),
+)
+async def clean_transcript_endpoint(
+    rencontre_id: int,
+    section_id: int,
+    db: DBSession,
+    _: CurrentUser,
+) -> SectionRead:
+    s = await _get_section_or_404(db, rencontre_id, section_id)
+    # Contexte entreprises (mêmes infos que pour le summarize) pour que
+    # Claude corrige les noms propres mal transcrits.
+    r = await _get_rencontre_or_404(db, rencontre_id)
+    ent_ids: list[int] = []
+    if r.entreprise_ids_json:
+        try:
+            v = json.loads(r.entreprise_ids_json)
+            if isinstance(v, list):
+                ent_ids = [int(x) for x in v if isinstance(x, (int, str))]
+        except Exception:  # noqa: BLE001
+            ent_ids = []
+    entreprises_context: list[dict] = []
+    if ent_ids:
+        from app.models.entreprise import Entreprise as _Ent
+
+        rows = (
+            await db.execute(select(_Ent).where(_Ent.id.in_(ent_ids)))
+        ).scalars().all()
+        entreprises_context = [
+            {"id": e.id, "name": e.name} for e in rows
+        ]
+    cleaned = await clean_transcript(
+        s.transcript or "", entreprises_context=entreprises_context
+    )
+    s.transcript = cleaned
+    await db.commit()
+    await db.refresh(s)
+    return SectionRead.model_validate(s)
 
 
 @router.post(
