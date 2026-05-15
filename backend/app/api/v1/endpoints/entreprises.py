@@ -383,7 +383,23 @@ async def list_taches(
     if status_filter:
         stmt = stmt.where(EntrepriseTache.status == status_filter)
     if mine:
-        stmt = stmt.where(EntrepriseTache.assignee_user_id == user.id)
+        # Inclut les tâches dont le user est l'assignee principal OU
+        # un co-assignee (table de jointure entreprise_tache_assignees).
+        # Sans le second branche on rate toutes les tâches collectives
+        # où l'utilisateur courant n'est pas le primaire.
+        from app.models.entreprise_tache_assignee import (
+            EntrepriseTacheAssignee,
+        )
+
+        co_ids_subq = (
+            select(EntrepriseTacheAssignee.tache_id)
+            .where(EntrepriseTacheAssignee.user_id == user.id)
+            .scalar_subquery()
+        )
+        stmt = stmt.where(
+            (EntrepriseTache.assignee_user_id == user.id)
+            | (EntrepriseTache.id.in_(co_ids_subq))
+        )
     elif assignee_user_id is not None:
         stmt = stmt.where(
             EntrepriseTache.assignee_user_id == assignee_user_id

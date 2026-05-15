@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { useCurrentUser } from "@/hooks/use-current-user";
 import { Link } from "@/i18n/navigation";
 import { QGTopbar } from "../layout";
 import {
@@ -114,6 +115,7 @@ function ownerKey(o: TaskOwner): string {
 }
 
 export default function MesTachesPage() {
+  const { user: currentUser } = useCurrentUser();
   const [tachesEnt, setTachesEnt] = useState<TacheEnt[]>([]);
   const [tachesDeal, setTachesDeal] = useState<TacheDeal[]>([]);
   const [entreprises, setEntreprises] = useState<Entreprise[]>([]);
@@ -200,7 +202,20 @@ export default function MesTachesPage() {
             }
           })
         );
-        if (!cancelled) setTachesDeal(dealTaskLists.flat());
+        // En mode « Mes tâches », filtre les tâches de deals
+        // (l'endpoint deals/{id}/tasks ne supporte pas `mine` côté
+        // serveur, donc on filtre côté client). Inclut le user comme
+        // primary ET comme co-assignee.
+        let dealTasksFlat = dealTaskLists.flat();
+        if (scope === "mine" && currentUser?.id) {
+          const myId = currentUser.id;
+          dealTasksFlat = dealTasksFlat.filter((t) => {
+            const ids = t.assignee_user_ids || [];
+            if (t.assignee_user_id === myId) return true;
+            return ids.includes(myId);
+          });
+        }
+        if (!cancelled) setTachesDeal(dealTasksFlat);
       } catch (err) {
         if (!cancelled) setError((err as Error).message);
       } finally {
@@ -210,7 +225,7 @@ export default function MesTachesPage() {
     return () => {
       cancelled = true;
     };
-  }, [scope]);
+  }, [scope, currentUser?.id]);
 
   // En mode « Mes tâches » côté deal, filtrage client-side.
   // L'utilisateur courant est implicite dans le filtre serveur des
