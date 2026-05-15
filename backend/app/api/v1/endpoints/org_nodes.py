@@ -48,6 +48,8 @@ class OrgNodeRead(BaseModel):
     pos_x: Optional[float] = None
     pos_y: Optional[float] = None
     execution_tier: Optional[str] = None
+    state: Optional[str] = None
+    state_note: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -79,6 +81,8 @@ class OrgNodeCreate(BaseModel):
         default=None, max_length=255
     )
     execution_tier: Optional[str] = None
+    state: Optional[str] = None
+    state_note: Optional[str] = None
 
 
 class OrgNodeMove(BaseModel):
@@ -104,6 +108,8 @@ class OrgNodeUpdate(BaseModel):
     pos_x: Optional[float] = None
     pos_y: Optional[float] = None
     execution_tier: Optional[str] = None
+    state: Optional[str] = None
+    state_note: Optional[str] = None
 
 
 @router.get("", response_model=List[OrgNodeRead])

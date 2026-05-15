@@ -124,3 +124,19 @@ class OrgNode(Base, TimestampUpdateMixin):
     execution_tier: Mapped[Optional[str]] = mapped_column(
         String(24), nullable=True, index=True
     )
+
+    # État d'avancement (suivi de la mise en œuvre du plan canonique) :
+    #   "planifie"       — pas encore commencé
+    #   "en_cours"       — en train d'être fait
+    #   "fait"           — couvert (souvent par une feature du portail —
+    #                      voir state_note pour la trace)
+    #   "bloque"         — bloqué (dépendance externe, décision en attente)
+    #   "non_applicable" — explicitement hors-scope (ex. sous-traité,
+    #                      remplacé par autre chose)
+    # NULL = état neutre, pas encore évalué.
+    state: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True, index=True
+    )
+    # Note contextuelle libre liée à l'état (ex. "Couvert par
+    # /entreprises/rencontres", "En attente recrutement closer").
+    state_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
