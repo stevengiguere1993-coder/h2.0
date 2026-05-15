@@ -20,6 +20,9 @@ type Achat = {
   received_at: string | null;
   receipt_url: string | null;
   notes: string | null;
+  is_billable?: boolean;
+  markup_percent?: number | null;
+  invoiced_at?: string | null;
   created_at: string;
 };
 
@@ -267,6 +270,7 @@ export default function AchatsPage() {
                   <th className="px-4 py-3">Description</th>
                   <th className="px-4 py-3 text-right">Montant</th>
                   <th className="px-4 py-3">Commandé</th>
+                  <th className="px-4 py-3 text-center">Refact.</th>
                   <th className="px-4 py-3 text-center">Statut</th>
                 </tr>
               </thead>
@@ -297,6 +301,24 @@ export default function AchatsPage() {
                       </td>
                       <td className="px-4 py-3 text-white/70">
                         {fmtDate(a.ordered_at)}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {a.is_billable === false ? (
+                          <span className="text-[10px] uppercase tracking-wider text-white/30">
+                            —
+                          </span>
+                        ) : a.invoiced_at ? (
+                          <span className="rounded-md bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                            ✓ Refacturé
+                          </span>
+                        ) : (
+                          <span className="rounded-md bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
+                            À refacturer
+                            {a.markup_percent
+                              ? ` (+${Number(a.markup_percent)}%)`
+                              : ""}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-center">
                         <span

@@ -21,6 +21,7 @@ from enum import Enum
 from typing import Optional
 
 from sqlalchemy import (
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -87,10 +88,32 @@ class Achat(Base, TimestampUpdateMixin):
         nullable=True,
         index=True,
     )
+    # Sous-traitant qui a émis la facture (mutuellement exclusif avec
+    # `fournisseur_id` en pratique : un achat est soit du matériel chez
+    # un fournisseur, soit une facture de main-d'œuvre sous-traitée).
+    sous_traitant_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("sous_traitants.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     project_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("projects.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+    # Nature de l'achat — détermine la logique de refacturation au
+    # client : 'material' (matériel/marchandise, refacturé au coûtant +
+    # markup), 'sub_invoice' (facture de sous-traitant, refacturée
+    # selon le contrat de projet).
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="material",
+        server_default="material", index=True,
+    )
+    # Pour les factures sous-traitant facturables à l'heure : nombre
+    # d'heures à appliquer au flat_hourly_rate du contrat. Ignoré en
+    # mode markup_pct / lump_sum.
+    hours: Mapped[Optional[float]] = mapped_column(
+        Numeric(6, 2), nullable=True
     )
 
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -146,6 +169,35 @@ class Achat(Base, TimestampUpdateMixin):
     )
     qbo_sync_token: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True
+    )
+
+    # ---- Refacturation client ----
+    # `is_billable` = cet achat sera-t-il refacturé au client final ? Par
+    # défaut OUI (tout achat sur un projet est présumé refacturable). On
+    # peut le passer à False pour un achat absorbé par Horizon (ex. erreur
+    # ou achat hors projet).
+    is_billable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    # Pourcentage de majoration appliqué au moment d'inscrire l'achat sur
+    # une facture client. NULL = pas encore défini (l'admin saisira au
+    # moment de l'import, ou utilise le défaut du projet plus tard).
+    # Exemple : 15.0 = +15 %.
+    markup_percent: Mapped[Optional[float]] = mapped_column(
+        Numeric(6, 2), nullable=True
+    )
+    # Date où l'achat a été versé sur une facture client. Sert de garde-
+    # fou anti-double-facturation. Null = pas encore refacturé.
+    invoiced_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    # Ligne de facture qui a refacturé cet achat. Permet de remonter à la
+    # facture pour la traçabilité et de débloquer l'achat si la ligne
+    # est supprimée. SET NULL pour éviter de bloquer les suppressions.
+    facture_item_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("facture_items.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     @property

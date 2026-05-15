@@ -19,6 +19,7 @@ class EmployeCreate(BaseModel):
     phone: Optional[str] = Field(default=None, max_length=50)
     role: Optional[str] = Field(default=None, max_length=64)
     hourly_rate: Optional[float] = Field(default=None, ge=0)
+    billing_rate: Optional[float] = Field(default=None, ge=0)
     is_partner: bool = False
     notes: Optional[str] = None
     address: Optional[str] = Field(default=None, max_length=500)
@@ -37,6 +38,7 @@ class EmployeUpdate(BaseModel):
     phone: Optional[str] = None
     role: Optional[str] = None
     hourly_rate: Optional[float] = None
+    billing_rate: Optional[float] = Field(default=None, ge=0)
     is_partner: Optional[bool] = None
     active: Optional[bool] = None
     notes: Optional[str] = None
@@ -57,6 +59,7 @@ class EmployeRead(_Base):
     phone: Optional[str]
     role: Optional[str]
     hourly_rate: Optional[float]
+    billing_rate: Optional[float] = None
     is_partner: bool
     active: bool
     notes: Optional[str]
@@ -440,6 +443,11 @@ class AchatCreate(BaseModel):
     payment_method: Optional[str] = Field(default=None, max_length=32)
     notes: Optional[str] = None
     status: Optional[str] = Field(default=None, max_length=32)
+    is_billable: Optional[bool] = None
+    markup_percent: Optional[float] = Field(default=None, ge=0, le=500)
+    sous_traitant_id: Optional[int] = None
+    kind: Optional[str] = Field(default=None, max_length=16)
+    hours: Optional[float] = Field(default=None, ge=0)
 
 
 class AchatUpdate(BaseModel):
@@ -456,6 +464,11 @@ class AchatUpdate(BaseModel):
     payment_method: Optional[str] = Field(default=None, max_length=32)
     supplier_invoice_number: Optional[str] = Field(default=None, max_length=64)
     invoice_date: Optional[date] = None
+    is_billable: Optional[bool] = None
+    markup_percent: Optional[float] = Field(default=None, ge=0, le=500)
+    sous_traitant_id: Optional[int] = None
+    kind: Optional[str] = Field(default=None, max_length=16)
+    hours: Optional[float] = Field(default=None, ge=0)
 
 
 class AchatRead(_Base):
@@ -478,4 +491,11 @@ class AchatRead(_Base):
     qbo_bill_id: Optional[str] = None
     qbo_doc_number: Optional[str] = None
     notes: Optional[str]
+    is_billable: bool = True
+    markup_percent: Optional[float] = None
+    invoiced_at: Optional[datetime] = None
+    facture_item_id: Optional[int] = None
+    sous_traitant_id: Optional[int] = None
+    kind: str = "material"
+    hours: Optional[float] = None
     created_at: datetime

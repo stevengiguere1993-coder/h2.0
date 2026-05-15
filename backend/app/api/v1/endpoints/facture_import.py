@@ -4,6 +4,7 @@ exists and the admin wants to pull in additional sources (progress
 billing, extras, materials) without recreating it from scratch.
 """
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, status
@@ -15,9 +16,43 @@ from app.models.achat import Achat
 from app.models.employe import Employe
 from app.models.facture import Facture
 from app.models.facture_item import FactureItem
+from app.models.project_subcontractor_contract import (
+    ProjectSubcontractorContract,
+)
 from app.models.punch import Punch
 from app.models.soumission import Soumission, SoumissionStatus
 from app.models.soumission_item import SoumissionItem
+
+
+def _compute_billed_amount(
+    ac: Achat,
+    markup_overrides: dict[int, float],
+    contracts_by_st: dict[int, ProjectSubcontractorContract],
+) -> tuple[float, str]:
+    """Calcule le montant à facturer + un label décrivant la règle
+    appliquée. Centralise la logique pour les deux endpoints d'import."""
+    cost = float(ac.amount or 0)
+    if ac.kind == "sub_invoice" and ac.sous_traitant_id:
+        contract = contracts_by_st.get(ac.sous_traitant_id)
+        if contract is not None:
+            if contract.billing_mode == "markup_pct":
+                m = float(contract.markup_percent or 0)
+                return round(cost * (1 + m / 100.0), 2), f"contrat +{m:g} %"
+            if contract.billing_mode == "flat_hourly":
+                rate = float(contract.flat_hourly_rate or 0)
+                hours = float(ac.hours or 0)
+                return round(hours * rate, 2), f"contrat {rate:g} $/h × {hours:g} h"
+            if contract.billing_mode == "lump_sum":
+                amt = float(contract.lump_sum_amount or 0)
+                return round(amt, 2), "contrat forfait"
+        # Pas de contrat → on retombe sur le coûtant (pas de markup
+        # caché : l'admin verra qu'il manque un contrat).
+        return round(cost, 2), "sans contrat (coûtant)"
+    # Achat « material » — markup individuel (override > champ achat > 0).
+    pct = float(markup_overrides.get(ac.id, ac.markup_percent or 0))
+    return round(cost * (1 + pct / 100.0), 2), (
+        f"+{pct:g} %" if pct > 0 else "coûtant"
+    )
 
 
 router = APIRouter(prefix="/factures", tags=["facture-import"])
@@ -36,6 +71,14 @@ class ImportRequest(BaseModel):
     include_hours: bool = False
     only_approved: bool = True
     include_achats: bool = False
+    # Phase A — refacturation des achats avec markup et traçabilité.
+    # Si fourni, restreint les achats importés à cette liste. Sinon,
+    # tous les achats refacturables (`is_billable=True`) non encore
+    # facturés du projet sont importés.
+    achat_ids: Optional[list[int]] = Field(default=None)
+    # Surcharges de markup par achat : { achat_id: markup_percent }.
+    # Si absent, utilise `Achat.markup_percent` (ou 0 si null).
+    achat_markup_overrides: dict[int, float] = Field(default_factory=dict)
 
 
 class ImportResult(BaseModel):
@@ -122,12 +165,16 @@ async def import_into_facture(
                     pos += 1
                     added += 1
 
-    # 2) Punched hours
+    # 2) Heures punchées — facturées au `billing_rate` de l'employé
+    #    (fallback `hourly_rate` si non défini). Punches déjà facturés
+    #    ignorés. Marquage des punches après création des items pour
+    #    traçabilité et garde-fou anti-doublon.
     if data.include_hours and fa.project_id:
         stmt = select(Punch).where(Punch.project_id == fa.project_id)
         if data.only_approved:
             stmt = stmt.where(Punch.approved.is_(True))
         stmt = stmt.where(Punch.hours.is_not(None))
+        stmt = stmt.where(Punch.invoiced_at.is_(None))
         punches = (await db.execute(stmt)).scalars().all()
         if punches:
             emp_ids = {p.employe_id for p in punches}
@@ -137,55 +184,139 @@ async def import_into_facture(
                     await db.execute(select(Employe).where(Employe.id.in_(emp_ids)))
                 ).scalars().all()
             }
-            buckets: dict[tuple[int, float], float] = {}
+            # Regroupement par (employé, taux facturable). On garde la
+            # liste des punches dans chaque bucket pour les marquer
+            # individuellement après le flush.
+            buckets: dict[
+                tuple[int, float], dict
+            ] = {}
             for p in punches:
                 emp = emps.get(p.employe_id)
-                rate = float(emp.hourly_rate) if (emp and emp.hourly_rate) else 0.0
-                buckets[(p.employe_id, rate)] = (
-                    buckets.get((p.employe_id, rate), 0.0) + float(p.hours or 0)
+                if emp and emp.billing_rate is not None:
+                    rate = float(emp.billing_rate)
+                elif emp and emp.hourly_rate:
+                    rate = float(emp.hourly_rate)
+                else:
+                    rate = 0.0
+                key = (p.employe_id, rate)
+                bucket = buckets.setdefault(
+                    key, {"hours": 0.0, "punches": []}
                 )
-            for (emp_id, rate), hours in buckets.items():
+                bucket["hours"] += float(p.hours or 0)
+                bucket["punches"].append(p)
+
+            bucket_items: list[tuple[FactureItem, list[Punch]]] = []
+            for (emp_id, rate), bucket in buckets.items():
                 emp = emps.get(emp_id)
                 label = emp.full_name if emp else f"Employé #{emp_id}"
-                db.add(
-                    FactureItem(
-                        facture_id=fa.id,
-                        position=pos,
-                        description=f"Main-d'œuvre — {label}",
-                        unit="h",
-                        quantity=round(hours, 2),
-                        unit_price=rate,
-                        total=round(hours * rate, 2),
-                    )
+                hours = bucket["hours"]
+                item = FactureItem(
+                    facture_id=fa.id,
+                    position=pos,
+                    description=f"Main-d'œuvre — {label}",
+                    unit="h",
+                    quantity=round(hours, 2),
+                    unit_price=rate,
+                    total=round(hours * rate, 2),
                 )
+                db.add(item)
+                bucket_items.append((item, bucket["punches"]))
                 pos += 1
                 added += 1
 
-    # 3) Achats
+            await db.flush()
+            now = datetime.now(timezone.utc)
+            for item, p_list in bucket_items:
+                for p in p_list:
+                    p.invoiced_at = now
+                    p.facture_item_id = item.id
+
+    # 3) Achats — refacturation avec markup OU contrat sous-traitant et
+    #    flag anti-doublon. On ne tire QUE les achats refacturables non
+    #    encore facturés (invoiced_at IS NULL).
     if data.include_achats and fa.project_id:
-        achats = (
-            await db.execute(
-                select(Achat)
-                .where(Achat.project_id == fa.project_id)
-                .order_by(Achat.id.asc())
-            )
-        ).scalars().all()
-        for ac in achats:
-            amount = float(ac.amount or 0)
-            desc = ac.description or f"Achat {ac.reference}"
-            db.add(
-                FactureItem(
-                    facture_id=fa.id,
-                    position=pos,
-                    description=f"Matériel — {desc}",
-                    unit="lot",
-                    quantity=1,
-                    unit_price=amount,
-                    total=amount,
+        stmt = (
+            select(Achat)
+            .where(Achat.project_id == fa.project_id)
+            .where(Achat.is_billable.is_(True))
+            .where(Achat.invoiced_at.is_(None))
+            .order_by(Achat.id.asc())
+        )
+        if data.achat_ids:
+            stmt = stmt.where(Achat.id.in_(data.achat_ids))
+        achats = (await db.execute(stmt)).scalars().all()
+
+        # Pré-charge les contrats sous-traitants du projet pour les
+        # achats de type sub_invoice. Un seul round-trip.
+        sub_ids = {a.sous_traitant_id for a in achats if a.sous_traitant_id}
+        contracts_by_st: dict[int, ProjectSubcontractorContract] = {}
+        if sub_ids:
+            ctr_rows = (
+                await db.execute(
+                    select(ProjectSubcontractorContract)
+                    .where(
+                        ProjectSubcontractorContract.project_id == fa.project_id
+                    )
+                    .where(
+                        ProjectSubcontractorContract.sous_traitant_id.in_(sub_ids)
+                    )
                 )
+            ).scalars().all()
+            contracts_by_st = {c.sous_traitant_id: c for c in ctr_rows}
+
+        new_items: list[tuple[Achat, FactureItem]] = []
+        for ac in achats:
+            billed, rule_label = _compute_billed_amount(
+                ac, data.achat_markup_overrides, contracts_by_st
             )
+            base_desc = ac.description or f"Achat {ac.reference or ac.id}"
+            line_prefix = (
+                "Sous-traitant" if ac.kind == "sub_invoice" else "Matériel"
+            )
+            desc = f"{base_desc} ({rule_label})" if rule_label != "coûtant" else base_desc
+            item = FactureItem(
+                facture_id=fa.id,
+                position=pos,
+                description=f"{line_prefix} — {desc}",
+                unit="h" if (
+                    ac.kind == "sub_invoice"
+                    and contracts_by_st.get(ac.sous_traitant_id or 0)
+                    and contracts_by_st[ac.sous_traitant_id].billing_mode
+                    == "flat_hourly"
+                ) else "lot",
+                quantity=(
+                    float(ac.hours or 0)
+                    if ac.kind == "sub_invoice"
+                    and contracts_by_st.get(ac.sous_traitant_id or 0)
+                    and contracts_by_st[ac.sous_traitant_id].billing_mode
+                    == "flat_hourly"
+                    else 1
+                ),
+                unit_price=(
+                    float(
+                        contracts_by_st[ac.sous_traitant_id].flat_hourly_rate
+                        or 0
+                    )
+                    if ac.kind == "sub_invoice"
+                    and contracts_by_st.get(ac.sous_traitant_id or 0)
+                    and contracts_by_st[ac.sous_traitant_id].billing_mode
+                    == "flat_hourly"
+                    else billed
+                ),
+                total=billed,
+            )
+            db.add(item)
+            new_items.append((ac, item))
             pos += 1
             added += 1
+
+        # Flush pour récupérer les IDs des FactureItem, puis verrouiller
+        # les achats avec la date de facturation et le lien retour.
+        await db.flush()
+        now = datetime.now(timezone.utc)
+        for ac, item in new_items:
+            ac.invoiced_at = now
+            ac.facture_item_id = item.id
 
     await db.flush()
     return ImportResult(added=added)

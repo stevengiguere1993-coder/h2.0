@@ -47,6 +47,7 @@ from app.api.v1.endpoints import (
     sales_tasks,
     service_templates,
     users,
+    project_billables,
     project_finances,
     project_members,
     project_phases,
@@ -89,6 +90,7 @@ from app.api.v1.endpoints import (
     soumission_to_client,
     soumission_to_project,
     soumissions_aggregates,
+    subcontractor_contracts,
     webhooks,
 )
 from app.api.v1.endpoints.business import (
@@ -123,6 +125,8 @@ api_router.include_router(project_phases.router)
 api_router.include_router(project_phases.phases_router)
 api_router.include_router(project_members.router)
 api_router.include_router(project_finances.router)
+api_router.include_router(project_billables.router)
+api_router.include_router(subcontractor_contracts.router)
 api_router.include_router(projects.router)
 api_router.include_router(contact.router)
 api_router.include_router(blog.router)

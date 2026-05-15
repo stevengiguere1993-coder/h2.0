@@ -56,6 +56,10 @@ type Achat = {
   qbo_bill_id: string | null;
   qbo_doc_number: string | null;
   payment_method: string | null;
+  is_billable: boolean;
+  markup_percent: number | null;
+  invoiced_at: string | null;
+  facture_item_id: number | null;
 };
 
 type Project = { id: number; name: string };
@@ -92,6 +96,8 @@ export default function AchatDetailPage() {
   const [fournisseurId, setFournisseurId] = useState("");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
+  const [isBillable, setIsBillable] = useState(true);
+  const [markupPercent, setMarkupPercent] = useState("");
   const [statusStr, setStatusStr] = useState("received");
   const [invoiceDate, setInvoiceDate] = useState("");
   const [supplierInvoiceNumber, setSupplierInvoiceNumber] = useState("");
@@ -125,6 +131,10 @@ export default function AchatDetailPage() {
         );
         setDescription(data.description || "");
         setAmount(data.amount != null ? String(data.amount) : "");
+        setIsBillable(data.is_billable !== false);
+        setMarkupPercent(
+          data.markup_percent != null ? String(data.markup_percent) : ""
+        );
         setStatusStr(data.status);
         setInvoiceDate(
           data.invoice_date ? data.invoice_date.slice(0, 10) : ""
@@ -187,6 +197,8 @@ export default function AchatDetailPage() {
         notes: notes.trim() || null,
         fournisseur_id: fournisseurId ? Number(fournisseurId) : null,
         project_id: projectId ? Number(projectId) : null,
+        is_billable: isBillable,
+        markup_percent: markupPercent.trim() ? Number(markupPercent) : null,
         payment_method: paymentMethod || null
       };
       const res = await authedFetch(`/api/v1/achats/${id}`, {
@@ -470,6 +482,59 @@ export default function AchatDetailPage() {
                       </select>
                     </div>
                   </div>
+
+                  {/* Refacturation client */}
+                  <div className="rounded-xl border border-brand-800 bg-brand-900/40 p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-white/60">
+                        Refacturation au client
+                      </p>
+                      {a?.invoiced_at ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">
+                          ✓ Refacturé
+                          {a.facture_item_id ? ` · ligne #${a.facture_item_id}` : ""}
+                        </span>
+                      ) : isBillable ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+                          À refacturer
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                          Non refacturable
+                        </span>
+                      )}
+                    </div>
+                    <label className="mb-3 flex items-center gap-2 text-sm text-white/80">
+                      <input
+                        type="checkbox"
+                        checked={isBillable}
+                        onChange={(e) => setIsBillable(e.target.checked)}
+                        disabled={!!a?.invoiced_at}
+                      />
+                      Refacturable au client
+                    </label>
+                    <label htmlFor="amarkup" className="label">
+                      Majoration (%) — appliquée à l&apos;import facture
+                    </label>
+                    <input
+                      id="amarkup"
+                      type="number"
+                      step="0.5"
+                      min="0"
+                      max="500"
+                      value={markupPercent}
+                      onChange={(e) => setMarkupPercent(e.target.value)}
+                      placeholder="0"
+                      disabled={!isBillable || !!a?.invoiced_at}
+                      className="input"
+                    />
+                    {a?.invoiced_at ? (
+                      <p className="mt-1 text-xs text-white/40">
+                        Cet achat est déjà refacturé. Les champs sont verrouillés.
+                      </p>
+                    ) : null}
+                  </div>
+
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div>
                       <label htmlFor="aidate" className="label">

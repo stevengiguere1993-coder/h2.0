@@ -53,8 +53,18 @@ export default function NewAchatPage() {
   const [purchaseOrderId, setPurchaseOrderId] = useState("");
   const [projectId, setProjectId] = useState(prefilledProjectId || "");
   const [fournisseurId, setFournisseurId] = useState("");
+  // Phase C — facture sous-traitant.
+  const [kind, setKind] = useState<"material" | "sub_invoice">("material");
+  const [sousTraitantId, setSousTraitantId] = useState("");
+  const [hours, setHours] = useState("");
+  const [sousTraitants, setSousTraitants] = useState<
+    { id: number; full_name: string }[]
+  >([]);
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
+  // Refacturation client.
+  const [isBillable, setIsBillable] = useState(true);
+  const [markupPercent, setMarkupPercent] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
   const [supplierInvoiceNumber, setSupplierInvoiceNumber] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(() => todayIso());
@@ -71,15 +81,20 @@ export default function NewAchatPage() {
     let cancelled = false;
     async function load() {
       try {
-        const [pRes, frRes, poRes] = await Promise.all([
+        const [pRes, frRes, poRes, stRes] = await Promise.all([
           authedFetch("/api/v1/projects?limit=500"),
           authedFetch("/api/v1/fournisseurs?limit=500"),
-          authedFetch("/api/v1/purchase-orders?limit=500")
+          authedFetch("/api/v1/purchase-orders?limit=500"),
+          authedFetch("/api/v1/sous-traitants?limit=500")
         ]);
         if (!cancelled) {
           if (pRes.ok) setProjects((await pRes.json()) as Project[]);
           if (frRes.ok)
             setFournisseurs((await frRes.json()) as Fournisseur[]);
+          if (stRes.ok)
+            setSousTraitants(
+              (await stRes.json()) as { id: number; full_name: string }[]
+            );
           if (poRes.ok) {
             const pos = (await poRes.json()) as POMini[];
             // Filtre : seulement les POs encore actifs (pas annulés
@@ -115,8 +130,17 @@ export default function NewAchatPage() {
         payload.purchase_order_id = Number(purchaseOrderId);
       if (projectId) payload.project_id = Number(projectId);
       if (fournisseurId) payload.fournisseur_id = Number(fournisseurId);
+      payload.kind = kind;
+      if (kind === "sub_invoice" && sousTraitantId) {
+        payload.sous_traitant_id = Number(sousTraitantId);
+      }
+      if (hours.trim()) payload.hours = Number(hours);
       if (description.trim()) payload.description = description.trim();
       if (amount) payload.amount = Number(amount);
+      payload.is_billable = isBillable;
+      if (markupPercent.trim()) {
+        payload.markup_percent = Number(markupPercent);
+      }
       if (paymentMethod) payload.payment_method = paymentMethod;
       if (supplierInvoiceNumber.trim()) {
         payload.supplier_invoice_number = supplierInvoiceNumber.trim();
@@ -378,6 +402,123 @@ export default function NewAchatPage() {
                 ))}
               </select>
             </div>
+          </div>
+
+          {/* Nature de l'achat — matériel ou facture sous-traitant */}
+          <div className="rounded-xl border border-brand-800 bg-brand-900/40 p-4">
+            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-white/60">
+              Nature de l&apos;achat
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label
+                className={`flex cursor-pointer items-center gap-2 rounded-lg border p-2 text-sm ${
+                  kind === "material"
+                    ? "border-accent-500 bg-accent-500/10 text-white"
+                    : "border-brand-800 bg-brand-900 text-white/70"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="kind"
+                  value="material"
+                  checked={kind === "material"}
+                  onChange={() => setKind("material")}
+                />
+                Matériel / Marchandise
+              </label>
+              <label
+                className={`flex cursor-pointer items-center gap-2 rounded-lg border p-2 text-sm ${
+                  kind === "sub_invoice"
+                    ? "border-accent-500 bg-accent-500/10 text-white"
+                    : "border-brand-800 bg-brand-900 text-white/70"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="kind"
+                  value="sub_invoice"
+                  checked={kind === "sub_invoice"}
+                  onChange={() => setKind("sub_invoice")}
+                />
+                Facture sous-traitant
+              </label>
+            </div>
+            {kind === "sub_invoice" ? (
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="ast" className="label">
+                    Sous-traitant
+                  </label>
+                  <select
+                    id="ast"
+                    value={sousTraitantId}
+                    onChange={(e) => setSousTraitantId(e.target.value)}
+                    className="input"
+                  >
+                    <option value="">— Sélectionne —</option>
+                    {sousTraitants.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.full_name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="ahrs" className="label">
+                    Heures (si facturation au taux horaire)
+                  </label>
+                  <input
+                    id="ahrs"
+                    type="number"
+                    step="0.25"
+                    min="0"
+                    value={hours}
+                    onChange={(e) => setHours(e.target.value)}
+                    placeholder="0"
+                    className="input"
+                  />
+                </div>
+                <p className="text-xs text-white/40 sm:col-span-2">
+                  Le montant facturé au client sera calculé selon le contrat
+                  de projet (markup, taux horaire ou forfait). Configure le
+                  contrat sur la page du projet.
+                </p>
+              </div>
+            ) : null}
+          </div>
+
+          {/* Refacturation au client final */}
+          <div className="rounded-xl border border-brand-800 bg-brand-900/40 p-4">
+            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-white/60">
+              Refacturation au client
+            </p>
+            <label className="mb-3 flex items-center gap-2 text-sm text-white/80">
+              <input
+                type="checkbox"
+                checked={isBillable}
+                onChange={(e) => setIsBillable(e.target.checked)}
+              />
+              Refacturable au client (apparaît dans « À refacturer »)
+            </label>
+            <label htmlFor="markup" className="label">
+              Majoration (%) — appliquée au montant à l&apos;import facture
+            </label>
+            <input
+              id="markup"
+              type="number"
+              step="0.5"
+              min="0"
+              max="500"
+              value={markupPercent}
+              onChange={(e) => setMarkupPercent(e.target.value)}
+              placeholder="0"
+              disabled={!isBillable}
+              className="input"
+            />
+            <p className="mt-1 text-xs text-white/40">
+              Laissé vide = aucun markup (le client paie le coûtant). Modifiable
+              au moment de l&apos;import.
+            </p>
           </div>
 
           <div>

@@ -16,7 +16,14 @@ class Employe(Base, TimestampUpdateMixin):
     email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True, index=True)
     phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     role: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # e.g. foreman, plumber, electrician
+    # Taux coûtant (ce qu'Horizon paie à l'employé).
     hourly_rate: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    # Taux facturé au client final. Sert à l'import des punches sur une
+    # facture. NULL = on retombe sur `hourly_rate` (rétrocompat). Permet
+    # de découpler le coût interne du prix vendu au client.
+    billing_rate: Mapped[Optional[float]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
     is_partner: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     notes: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)

@@ -20,6 +20,7 @@ export default function NewEmployePage() {
   const [role, setRole] = useState("");
   const [address, setAddress] = useState("");
   const [hourlyRate, setHourlyRate] = useState("");
+  const [billingRate, setBillingRate] = useState("");
   const [isPartner, setIsPartner] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +43,7 @@ export default function NewEmployePage() {
       if (role.trim()) payload.role = role.trim();
       if (address.trim()) payload.address = address.trim();
       if (hourlyRate) payload.hourly_rate = Number(hourlyRate);
+      if (billingRate) payload.billing_rate = Number(billingRate);
 
       const res = await authedFetch("/api/v1/employes", {
         method: "POST",
@@ -167,18 +169,43 @@ export default function NewEmployePage() {
             />
           </div>
 
-          <div>
-            <label htmlFor="hourly_rate" className="label">Taux horaire (CAD)</label>
-            <input
-              id="hourly_rate"
-              type="number"
-              step="0.01"
-              min="0"
-              value={hourlyRate}
-              onChange={(e) => setHourlyRate(e.target.value)}
-              placeholder="0.00"
-              className="input sm:w-48"
-            />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor="hourly_rate" className="label">
+                Taux horaire — coûtant (CAD)
+              </label>
+              <input
+                id="hourly_rate"
+                type="number"
+                step="0.01"
+                min="0"
+                value={hourlyRate}
+                onChange={(e) => setHourlyRate(e.target.value)}
+                placeholder="0.00"
+                className="input"
+              />
+              <p className="mt-1 text-xs text-white/40">
+                Ce qu&apos;Horizon paie à l&apos;employé.
+              </p>
+            </div>
+            <div>
+              <label htmlFor="billing_rate" className="label">
+                Taux facturable — client (CAD)
+              </label>
+              <input
+                id="billing_rate"
+                type="number"
+                step="0.01"
+                min="0"
+                value={billingRate}
+                onChange={(e) => setBillingRate(e.target.value)}
+                placeholder="0.00"
+                className="input"
+              />
+              <p className="mt-1 text-xs text-white/40">
+                Vide = même que le coûtant (rétrocompat).
+              </p>
+            </div>
           </div>
 
           <label className="flex items-center gap-2 text-sm text-white/80">
