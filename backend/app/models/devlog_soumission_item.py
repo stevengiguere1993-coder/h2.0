@@ -23,6 +23,14 @@ class DevlogSoumissionItem(Base, TimestampUpdateMixin):
         nullable=False,
         index=True,
     )
+    # Section parente (rebuild soumission : items dans des sections par
+    # pôle). NULL = item « racine » (héritage des soumissions créées
+    # avant le rebuild — affichées en bloc « Sans section » côté UI).
+    section_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("devlog_soumission_sections.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     position: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
@@ -32,6 +40,12 @@ class DevlogSoumissionItem(Base, TimestampUpdateMixin):
     unit: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     quantity: Mapped[float] = mapped_column(
         Float, nullable=False, default=1, server_default="1"
+    )
+    # Coût interne unitaire (admin only — JAMAIS exposé côté client).
+    # Le prix client (unit_price) est dérivé de cost × (1 + markup/100)
+    # où markup est porté par la section parente.
+    cost_per_unit: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0, server_default="0"
     )
     unit_price: Mapped[float] = mapped_column(
         Float, nullable=False, default=0, server_default="0"
