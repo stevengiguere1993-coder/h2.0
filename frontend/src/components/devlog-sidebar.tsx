@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import {
   Code2,
   FileText,
+  FolderKanban,
   Home,
   LogOut,
   Trello,
@@ -43,6 +44,16 @@ const DEVLOG_SECTIONS: NavSection[] = [
         icon: FileText
       },
       { href: "/dev-logiciel/clients", label: "Clients", icon: Users }
+    ]
+  },
+  {
+    label: "Livraison",
+    items: [
+      {
+        href: "/dev-logiciel/projets",
+        label: "Projets",
+        icon: FolderKanban
+      }
     ]
   }
 ];

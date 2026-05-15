@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -145,5 +145,45 @@ class DevlogSoumissionRead(BaseModel):
     status: str
     summary: Optional[str]
     notes: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+# --------------------------------------------------------------------------
+# DevlogProject
+# --------------------------------------------------------------------------
+
+
+class DevlogProjectCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    client_id: Optional[int] = None
+    soumission_id: Optional[int] = None
+    description: Optional[str] = None
+    status: str = Field(default="a_demarrer", max_length=16)
+    start_date: Optional[date] = None
+    due_date: Optional[date] = None
+
+
+class DevlogProjectUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    client_id: Optional[int] = None
+    soumission_id: Optional[int] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    start_date: Optional[date] = None
+    due_date: Optional[date] = None
+
+
+class DevlogProjectRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    client_id: Optional[int]
+    soumission_id: Optional[int]
+    description: Optional[str]
+    status: str
+    start_date: Optional[date]
+    due_date: Optional[date]
     created_at: datetime
     updated_at: datetime

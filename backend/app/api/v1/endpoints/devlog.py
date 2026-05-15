@@ -20,6 +20,7 @@ from app.api.deps import CurrentUser, DBSession
 from app.db.base import Base
 from app.models.devlog_client import DevlogClient
 from app.models.devlog_lead import LEAD_STATUSES, DevlogLead
+from app.models.devlog_project import DevlogProject
 from app.models.devlog_soumission import DevlogSoumission
 from app.repositories.generic import GenericCrud
 from app.schemas.devlog import (
@@ -30,6 +31,9 @@ from app.schemas.devlog import (
     DevlogLeadRead,
     DevlogLeadStatusUpdate,
     DevlogLeadUpdate,
+    DevlogProjectCreate,
+    DevlogProjectRead,
+    DevlogProjectUpdate,
     DevlogSoumissionCreate,
     DevlogSoumissionRead,
     DevlogSoumissionUpdate,
@@ -294,4 +298,18 @@ soumissions_router = _make_crud_router(
     update_schema=DevlogSoumissionUpdate,
     read_schema=DevlogSoumissionRead,
     not_found="Soumission introuvable",
+)
+
+
+# --------------------------------------------------------------------------
+# Projets de développement
+# --------------------------------------------------------------------------
+
+projects_router = _make_crud_router(
+    prefix="/devlog/projects",
+    model=DevlogProject,
+    create_schema=DevlogProjectCreate,
+    update_schema=DevlogProjectUpdate,
+    read_schema=DevlogProjectRead,
+    not_found="Projet introuvable",
 )
