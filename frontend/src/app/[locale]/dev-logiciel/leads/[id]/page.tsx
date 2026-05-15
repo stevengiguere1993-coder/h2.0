@@ -1,540 +1,1543 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useParams, useRouter as useNextRouter } from "next/navigation";
 import {
   ArrowLeft,
+  Briefcase,
+  Calendar,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  DollarSign,
   FileText,
+  Image as ImageIcon,
   Loader2,
-  Plus,
+  Mail,
+  MapPin,
+  Pencil,
+  Phone,
+  Ruler,
   Trash2,
-  UserPlus
+  User,
+  Users
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
-import { useConfirm } from "@/components/confirm-dialog";
+import { AddressInput } from "@/components/address-input";
+import { FollowUpTimeline } from "@/components/follow-up-timeline";
+import { MeasurementsPanel } from "@/components/measurements-panel";
+import { SalesTasksPanel } from "@/components/sales-tasks-panel";
 import { Link } from "@/i18n/navigation";
-import { authedFetch } from "@/lib/auth";
 import { useDevlogLayout } from "../../layout";
+import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
+import { formatPhone } from "@/lib/utils";
 
-type Lead = {
+type Prospect = {
   id: number;
   name: string;
-  company: string | null;
-  email: string | null;
+  email: string;
   phone: string | null;
-  source: string;
-  status: string;
-  position: number;
-  project_summary: string | null;
+  address: string | null;
+  project_type: string;
   budget_range: string | null;
-  notes: string | null;
-  client_id: number | null;
+  message: string;
+  locale: string;
+  source: string | null;
+  status: string;
+  internal_notes: string | null;
+  assigned_to_user_id: number | null;
+  gdpr_consent: boolean;
+  marketing_consent: boolean;
   created_at: string;
   updated_at: string;
 };
 
-type Soumission = {
-  id: number;
-  title: string;
-  amount: number | null;
-  status: string;
-  created_at: string;
+const STATUS_LABELS: Record<string, string> = {
+  new: "Nouveau",
+  contacted: "À rappeler",
+  qualified: "Qualifié",
+  quoted: "Soumission envoyée",
+  won: "Soumission acceptée",
+  lost: "Soumission refusée",
+  spam: "Spam"
 };
 
-const STATUS_OPTIONS = [
-  { key: "nouveau", label: "Nouveau" },
-  { key: "contacte", label: "Contacté" },
-  { key: "rdv", label: "Rendez-vous" },
-  { key: "presentation", label: "Présentation" },
-  { key: "soumission", label: "Soumission" },
-  { key: "gagne", label: "Gagné" },
-  { key: "perdu", label: "Perdu" }
-];
-
-const STATUS_CLS: Record<string, string> = {
-  nouveau: "bg-white/5 text-white/60",
-  contacte: "bg-blue-500/15 text-blue-300",
-  rdv: "bg-violet-500/15 text-violet-300",
-  presentation: "bg-amber-500/15 text-amber-300",
-  soumission: "bg-orange-500/15 text-orange-300",
-  gagne: "bg-emerald-500/15 text-emerald-300",
-  perdu: "bg-rose-500/15 text-rose-300"
+const PROJECT_LABEL: Record<string, string> = {
+  salle_bain: "Salle de bain",
+  cuisine: "Cuisine",
+  multilogement: "Multilogement",
+  renovation_complete: "Rénovation complète",
+  autre: "Autre"
 };
 
-const SOUM_CLS: Record<string, string> = {
-  brouillon: "bg-white/5 text-white/60",
-  envoyee: "bg-blue-500/15 text-blue-300",
-  acceptee: "bg-emerald-500/15 text-emerald-300",
-  refusee: "bg-rose-500/15 text-rose-300",
-  expiree: "bg-amber-500/15 text-amber-300"
+const BUDGET_LABEL: Record<string, string> = {
+  under_10k: "Moins de 10 000 $",
+  "10_25": "10 000 $ – 25 000 $",
+  "25_50": "25 000 $ – 50 000 $",
+  "50_100": "50 000 $ – 100 000 $",
+  over_100: "Plus de 100 000 $",
+  unsure: "Indéterminé"
 };
 
-function fmtAmount(n: number | null): string {
-  if (n == null) return "—";
-  return n.toLocaleString("fr-CA", {
-    style: "currency",
-    currency: "CAD",
-    maximumFractionDigits: 0
-  });
-}
+const TABS = [
+  { id: "apercu", label: "Aperçu", icon: FileText },
+  { id: "client", label: "Client", icon: User },
+  { id: "rendez-vous", label: "Rendez-vous", icon: Calendar },
+  { id: "mesures", label: "Mesures", icon: Ruler },
+  { id: "documents", label: "Documents", icon: FileText },
+  { id: "employes", label: "Employés", icon: Users },
+  { id: "taches", label: "Tâches", icon: CheckCircle2 }
+] as const;
 
-export default function DevlogLeadDetailPage() {
+type TabId = (typeof TABS)[number]["id"];
+
+export default function ProspectDetailPage() {
+  const confirm = useConfirm();
   const { onOpenSidebar } = useDevlogLayout();
   const params = useParams<{ id: string }>();
-  const leadId = Number(params?.id);
-  const confirm = useConfirm();
+  const id = Number(params.id);
+  const router = useNextRouter();
 
-  const [lead, setLead] = useState<Lead | null>(null);
-  const [soumissions, setSoumissions] = useState<Soumission[]>([]);
+  const [p, setP] = useState<Prospect | null>(null);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Form draft (inline edit).
-  const [name, setName] = useState("");
-  const [company, setCompany] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [source, setSource] = useState("interne");
-  const [statusStr, setStatusStr] = useState("nouveau");
-  const [projectSummary, setProjectSummary] = useState("");
-  const [budgetRange, setBudgetRange] = useState("");
+  const [tab, setTab] = useState<TabId>("apercu");
   const [notes, setNotes] = useState("");
+  const [savingNotes, setSavingNotes] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [users, setUsers] = useState<
+    { id: number; email: string; first_name?: string | null; last_name?: string | null }[]
+  >([]);
+  // Adresse(s) du / des lieu(x) de soumission associé(s) au prospect.
+  // Affiché dans l'onglet Aperçu pour donner d'un coup d'œil le lieu
+  // où le travail aura lieu (souvent ≠ adresse du client).
+  const [prospectSoumissions, setProspectSoumissions] = useState<
+    ProspectSoumission[]
+  >([]);
 
-  async function loadAll() {
+  useEffect(() => {
+    // Charge la liste des managers/admins pour le menu d'assignation.
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authedFetch("/api/v1/users");
+        if (!r.ok) return;
+        const data = (await r.json()) as typeof users;
+        if (!cancelled) setUsers(data);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Charge les soumissions associées au prospect — sert à afficher
+  // les adresses des lieux de soumission dans l'onglet Aperçu.
+  useEffect(() => {
+    if (!Number.isFinite(id) || id <= 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authedFetch("/api/v1/devlog/soumissions?limit=500");
+        if (!r.ok) return;
+        const all = (await r.json()) as ProspectSoumission[];
+        if (cancelled) return;
+        setProspectSoumissions(
+          all.filter((s) => s.lead_id === id)
+        );
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  async function updateAssignee(userId: number | null) {
+    if (!p) return;
+    const prev = p.assigned_to_user_id ?? null;
+    setP({ ...p, assigned_to_user_id: userId });
     try {
-      const [lr, sr] = await Promise.all([
-        authedFetch(`/api/v1/devlog/leads/${leadId}`),
-        authedFetch(`/api/v1/devlog/leads/${leadId}/soumissions`)
-      ]);
-      if (!lr.ok) throw new Error("Lead introuvable");
-      const data = (await lr.json()) as Lead;
-      setLead(data);
-      setName(data.name);
-      setCompany(data.company ?? "");
-      setEmail(data.email ?? "");
-      setPhone(data.phone ?? "");
-      setSource(data.source);
-      setStatusStr(data.status);
-      setProjectSummary(data.project_summary ?? "");
-      setBudgetRange(data.budget_range ?? "");
-      setNotes(data.notes ?? "");
-      if (sr.ok) setSoumissions((await sr.json()) as Soumission[]);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Erreur");
-    } finally {
-      setLoading(false);
+      const res = await authedFetch(`/api/v1/devlog/leads/${p.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ assigned_to_user_id: userId })
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      // Revert
+      setP({ ...p, assigned_to_user_id: prev });
     }
   }
 
   useEffect(() => {
-    if (Number.isFinite(leadId)) void loadAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leadId]);
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await authedFetch(`/api/v1/devlog/leads/${id}`);
+        if (!res.ok) throw new Error(`http_${res.status}`);
+        const data = (await res.json()) as Prospect;
+        if (!cancelled) {
+          setP(data);
+          setNotes(data.internal_notes || "");
+        }
+      } catch {
+        if (!cancelled) setError("Prospect introuvable.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    if (id) load();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
 
-  const isDirty = useMemo(() => {
-    if (!lead) return false;
-    return (
-      name !== lead.name ||
-      company !== (lead.company ?? "") ||
-      email !== (lead.email ?? "") ||
-      phone !== (lead.phone ?? "") ||
-      source !== lead.source ||
-      statusStr !== lead.status ||
-      projectSummary !== (lead.project_summary ?? "") ||
-      budgetRange !== (lead.budget_range ?? "") ||
-      notes !== (lead.notes ?? "")
-    );
-  }, [lead, name, company, email, phone, source, statusStr, projectSummary, budgetRange, notes]);
-
-  async function save() {
-    if (!isDirty) return;
-    setSaving(true);
+  async function updateStatus(newStatus: string) {
+    if (!p) return;
+    const prev = p;
+    setP({ ...p, status: newStatus });
     try {
-      const r = await authedFetch(`/api/v1/devlog/leads/${leadId}`, {
+      const res = await authedFetch(`/api/v1/devlog/leads/${id}`, {
         method: "PATCH",
-        body: JSON.stringify({
-          name: name.trim(),
-          company: company.trim() || null,
-          email: email.trim() || null,
-          phone: phone.trim() || null,
-          source,
-          status: statusStr,
-          project_summary: projectSummary.trim() || null,
-          budget_range: budgetRange.trim() || null,
-          notes: notes.trim() || null
-        })
+        body: JSON.stringify({ status: newStatus })
       });
-      if (!r.ok) throw new Error();
-      setLead(await r.json());
+      if (!res.ok) throw new Error();
     } catch {
-      setError("Enregistrement impossible");
+      setP(prev);
+      setError("Mise à jour du statut échouée.");
+    }
+  }
+
+  async function patchProspect(patch: Partial<Prospect>) {
+    if (!p) return;
+    const prev = p;
+    setP({ ...p, ...patch });
+    try {
+      const res = await authedFetch(`/api/v1/devlog/leads/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch)
+      });
+      if (!res.ok) throw new Error();
+      const updated = (await res.json()) as Prospect;
+      setP(updated);
+    } catch {
+      setP(prev);
+      setError("Mise à jour échouée.");
+    }
+  }
+
+  async function saveNotes() {
+    if (!p) return;
+    setSavingNotes(true);
+    try {
+      const res = await authedFetch(`/api/v1/devlog/leads/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ internal_notes: notes })
+      });
+      if (!res.ok) throw new Error();
+      const updated = (await res.json()) as Prospect;
+      setP(updated);
+    } catch {
+      setError("Sauvegarde des notes échouée.");
     } finally {
-      setSaving(false);
+      setSavingNotes(false);
     }
   }
 
-  async function convertToClient() {
-    const ok = await confirm({
-      title: "Convertir en client ?",
-      description:
-        "Crée un client à partir de ce lead. Le lead passera en « Gagné ».",
-      confirmLabel: "Convertir"
-    });
-    if (!ok) return;
+  async function deleteProspect() {
+    if (!p) return;
+    if (!(await confirm(`Supprimer définitivement le prospect « ${p.name} » ?`))) return;
+    setDeleting(true);
     try {
-      const r = await authedFetch(
-        `/api/v1/devlog/leads/${leadId}/convert`,
-        { method: "POST" }
-      );
-      if (!r.ok) throw new Error();
-      await loadAll();
+      const res = await authedFetch(`/api/v1/devlog/leads/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      router.back();
     } catch {
-      setError("Conversion impossible");
+      setDeleting(false);
+      setError("Suppression échouée.");
     }
   }
-
-  async function createSoumission() {
-    const title = window.prompt("Titre de la soumission ?");
-    if (!title || !title.trim()) return;
-    try {
-      const r = await authedFetch("/api/v1/devlog/soumissions", {
-        method: "POST",
-        body: JSON.stringify({
-          title: title.trim(),
-          lead_id: leadId,
-          client_id: lead?.client_id ?? null,
-          status: "brouillon"
-        })
-      });
-      if (!r.ok) throw new Error();
-      const created = (await r.json()) as { id: number };
-      window.location.href = `/dev-logiciel/soumissions/${created.id}`;
-    } catch {
-      setError("Création soumission impossible");
-    }
-  }
-
-  async function deleteLead() {
-    const ok = await confirm({
-      title: "Supprimer ce lead ?",
-      description: "Cette action est irréversible.",
-      confirmLabel: "Supprimer",
-      destructive: true
-    });
-    if (!ok) return;
-    try {
-      const r = await authedFetch(`/api/v1/devlog/leads/${leadId}`, {
-        method: "DELETE"
-      });
-      if (!r.ok) throw new Error();
-      window.location.href = "/dev-logiciel/leads";
-    } catch {
-      setError("Suppression impossible");
-    }
-  }
-
-  const inputCls = "input text-sm";
 
   return (
-    <div className="min-h-screen bg-brand-950">
+    <>
       <AppTopbar
-        breadcrumbs={[
-          { label: "Développement logiciel", href: "/dev-logiciel" as any },
-          { label: "CRM", href: "/dev-logiciel/leads" as any },
-          { label: lead?.name ?? `Lead #${leadId}` }
-        ]}
+        breadcrumbs={[{ label: "Développement logiciel", href: "/dev-logiciel" as any }, { label: "CRM / Prospects" }]}
         onOpenSidebar={onOpenSidebar}
       />
 
-      <div className="mx-auto max-w-5xl px-4 py-5 lg:px-6">
-        <div className="mb-4">
-          <Link
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/dev-logiciel/leads" as any}
-            className="inline-flex items-center gap-1.5 text-xs text-white/50 hover:text-white"
-          >
-            <ArrowLeft className="h-3 w-3" /> Retour au pipeline
-          </Link>
-        </div>
-
-        {error ? (
-          <div className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
-            {error}
-          </div>
-        ) : null}
+      <div className="p-4 lg:p-6">
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={"/dev-logiciel/leads" as any}
+          className="inline-flex items-center text-sm text-white/70 hover:text-blue-400"
+        >
+          <ArrowLeft className="mr-1 h-4 w-4" /> Retour au pipeline
+        </Link>
 
         {loading ? (
-          <div className="mt-10 flex justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
+          <div className="flex min-h-[40vh] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
           </div>
-        ) : !lead ? (
-          <p className="text-center text-sm text-white/40">Lead introuvable.</p>
-        ) : (
+        ) : error ? (
+          <p className="mt-6 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
+            {error}
+          </p>
+        ) : p ? (
           <>
             {/* Header */}
-            <header className="mb-5 flex flex-wrap items-start justify-between gap-3">
+            <header className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <h1 className="text-2xl font-bold text-white">{lead.name}</h1>
-                <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-white/50">
-                  {lead.company ? <span>{lead.company}</span> : null}
-                  <span
-                    className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                      STATUS_CLS[lead.status] ?? "bg-white/5 text-white/50"
-                    }`}
-                  >
-                    {STATUS_OPTIONS.find((s) => s.key === lead.status)
-                      ?.label ?? lead.status}
-                  </span>
-                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-white/40">
-                    {lead.source}
-                  </span>
-                  {lead.client_id ? (
-                    <Link
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                      href={`/dev-logiciel/clients/${lead.client_id}` as any}
-                      className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300 hover:bg-emerald-500/25"
-                    >
-                      ✓ Client #{lead.client_id}
-                    </Link>
-                  ) : null}
+                <h1 className="text-2xl font-bold text-white">{p.name}</h1>
+                <p className="mt-1 text-sm text-blue-400">
+                  {STATUS_LABELS[p.status] || p.status}
+                </p>
+                <p className="mt-1 text-xs text-white/50">
+                  Créé le{" "}
+                  {new Date(p.created_at).toLocaleDateString("fr-CA", {
+                    day: "numeric",
+                    month: "long",
+                    year: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit"
+                  })}
                 </p>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={createSoumission}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-1.5 text-xs font-semibold text-blue-300 hover:bg-blue-500/20"
-                >
-                  <FileText className="h-3.5 w-3.5" />
-                  Nouvelle soumission
-                </button>
-                {!lead.client_id ? (
-                  <button
-                    type="button"
-                    onClick={convertToClient}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20"
+              <div className="flex flex-wrap items-end gap-3">
+                <div>
+                  <label className="label">Statut</label>
+                  <select
+                    value={p.status}
+                    onChange={(e) => updateStatus(e.target.value)}
+                    className="input w-56"
                   >
-                    <UserPlus className="h-3.5 w-3.5" />
-                    Convertir en client
-                  </button>
-                ) : null}
+                    {Object.entries(STATUS_LABELS).map(([k, v]) => (
+                      <option key={k} value={k}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Assigné à</label>
+                  <select
+                    value={p.assigned_to_user_id ?? ""}
+                    onChange={(e) =>
+                      updateAssignee(
+                        e.target.value ? Number(e.target.value) : null
+                      )
+                    }
+                    className="input w-56"
+                  >
+                    <option value="">— Non assigné —</option>
+                    {users.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.first_name || u.last_name
+                          ? `${u.first_name || ""} ${u.last_name || ""}`.trim()
+                          : u.email}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <Link
+                  // Prefilled with the prospect ID so the form auto-
+                  // links the new soumission. eslint disable for the
+                  // i18n-typed Link.
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  href={
+                    `/dev-logiciel/soumissions/new?lead_id=${p.id}` as any
+                  }
+                  className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm"
+                >
+                  <FileText className="mr-1.5 h-4 w-4" />
+                  Créer soumission
+                </Link>
                 <button
                   type="button"
-                  onClick={deleteLead}
-                  title="Supprimer le lead"
-                  className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-1.5 text-rose-300 hover:bg-rose-500/20"
+                  onClick={deleteProspect}
+                  disabled={deleting}
+                  className="inline-flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300 transition hover:bg-rose-500/20 hover:text-rose-200 disabled:opacity-50"
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  {deleting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                  Supprimer
                 </button>
               </div>
             </header>
 
-            <div className="grid gap-4 lg:grid-cols-3">
-              {/* Colonne principale : édition */}
-              <section className="lg:col-span-2 space-y-4">
-                <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-                  <h2 className="mb-3 text-sm font-bold text-white">
-                    Informations
-                  </h2>
-                  <div className="space-y-3">
-                    <Field label="Nom *">
-                      <input
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        className={inputCls}
-                      />
-                    </Field>
-                    <Field label="Entreprise">
-                      <input
-                        value={company}
-                        onChange={(e) => setCompany(e.target.value)}
-                        className={inputCls}
-                      />
-                    </Field>
-                    <div className="grid grid-cols-2 gap-3">
-                      <Field label="Courriel">
-                        <input
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          className={inputCls}
-                        />
-                      </Field>
-                      <Field label="Téléphone">
-                        <input
-                          value={phone}
-                          onChange={(e) => setPhone(e.target.value)}
-                          className={inputCls}
-                        />
-                      </Field>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <Field label="Étape">
-                        <select
-                          value={statusStr}
-                          onChange={(e) => setStatusStr(e.target.value)}
-                          className={inputCls}
-                        >
-                          {STATUS_OPTIONS.map((s) => (
-                            <option key={s.key} value={s.key}>
-                              {s.label}
-                            </option>
-                          ))}
-                        </select>
-                      </Field>
-                      <Field label="Source">
-                        <select
-                          value={source}
-                          onChange={(e) => setSource(e.target.value)}
-                          className={inputCls}
-                        >
-                          <option value="interne">Interne</option>
-                          <option value="web">Web</option>
-                        </select>
-                      </Field>
-                    </div>
-                    <Field label="Budget estimé">
-                      <input
-                        value={budgetRange}
-                        onChange={(e) => setBudgetRange(e.target.value)}
-                        className={inputCls}
-                        placeholder="ex. 10 000 $ - 25 000 $"
-                      />
-                    </Field>
-                    <Field label="Projet souhaité">
-                      <textarea
-                        value={projectSummary}
-                        onChange={(e) => setProjectSummary(e.target.value)}
-                        rows={3}
-                        className={inputCls}
-                      />
-                    </Field>
-                    <Field label="Notes internes">
-                      <textarea
-                        value={notes}
-                        onChange={(e) => setNotes(e.target.value)}
-                        rows={4}
-                        className={inputCls}
-                      />
-                    </Field>
-                  </div>
-                  {isDirty ? (
-                    <div className="mt-4 flex items-center justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void loadAll()}
-                        className="rounded-md border border-white/15 px-3 py-1.5 text-xs text-white/60 hover:bg-brand-800"
-                      >
-                        Annuler
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void save()}
-                        disabled={saving}
-                        className="inline-flex items-center gap-1.5 rounded-md bg-blue-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
-                      >
-                        {saving ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : null}
-                        Enregistrer
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              </section>
+            {/* Tabs */}
+            <div className="mt-8 flex flex-wrap gap-1 border-b border-brand-800">
+              {TABS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setTab(t.id)}
+                  className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition ${
+                    tab === t.id
+                      ? "border-blue-500 text-white"
+                      : "border-transparent text-white/60 hover:text-white"
+                  }`}
+                >
+                  <t.icon className="h-4 w-4" />
+                  {t.label}
+                </button>
+              ))}
+            </div>
 
-              {/* Colonne secondaire : soumissions liées */}
-              <section className="space-y-4">
-                <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h2 className="text-sm font-bold text-white">
-                      Soumissions
-                    </h2>
+            {/* Tab panels */}
+            <div className="mt-6">
+              {tab === "apercu" ? (
+                <div className="grid gap-6 lg:grid-cols-3">
+                  <InfoCard
+                    title="Type de projet"
+                    value={PROJECT_LABEL[p.project_type] || p.project_type}
+                  />
+                  <InfoCard
+                    title="Budget approximatif"
+                    value={p.budget_range ? BUDGET_LABEL[p.budget_range] || p.budget_range : "—"}
+                  />
+                  <InfoCard title="Source" value={p.source || "—"} />
+                  {/* Adresse(s) du lieu de soumission — peut différer de
+                      l'adresse client si le projet est ailleurs. Une carte
+                      par soumission distincte (référence + adresse). */}
+                  <div className="lg:col-span-3 rounded-xl border border-brand-800 bg-brand-900 p-5">
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+                      Adresse du lieu de soumission
+                    </h3>
+                    {prospectSoumissions.length === 0 ? (
+                      <p className="mt-3 text-sm text-white/50">
+                        Aucune soumission encore créée pour ce prospect.
+                      </p>
+                    ) : (
+                      <ul className="mt-3 space-y-2">
+                        {prospectSoumissions.map((s) => (
+                          <li
+                            key={s.id}
+                            className="flex items-start gap-2 text-sm"
+                          >
+                            <MapPin className="mt-0.5 h-4 w-4 flex-shrink-0 text-blue-400" />
+                            <span className="flex-1">
+                              <span className="text-white/90">
+                                {s.property_address || (
+                                  <span className="text-white/40">
+                                    (adresse non renseignée)
+                                  </span>
+                                )}
+                              </span>
+                              <span className="ml-2 text-[11px] text-white/50">
+                                · {s.reference}
+                              </span>
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                  <div className="lg:col-span-3 rounded-xl border border-brand-800 bg-brand-900 p-5">
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+                      Message du client
+                    </h3>
+                    <p className="mt-3 whitespace-pre-wrap text-sm text-white/90">
+                      {p.message || "(aucun)"}
+                    </p>
+                  </div>
+                  <div className="lg:col-span-3 rounded-xl border border-brand-800 bg-brand-900 p-5">
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+                      Notes internes
+                    </h3>
+                    <textarea
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      rows={5}
+                      placeholder="Notes privées sur ce prospect (non visibles par le client)…"
+                      className="input mt-3"
+                    />
                     <button
                       type="button"
-                      onClick={createSoumission}
-                      title="Nouvelle soumission"
-                      className="rounded-md p-1 text-white/40 hover:bg-brand-800 hover:text-white"
+                      onClick={saveNotes}
+                      disabled={savingNotes || notes === (p.internal_notes || "")}
+                      className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 mt-3 text-sm"
                     >
-                      <Plus className="h-3.5 w-3.5" />
+                      {savingNotes ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Sauvegarde…
+                        </>
+                      ) : (
+                        "Sauvegarder les notes"
+                      )}
                     </button>
                   </div>
-                  {soumissions.length === 0 ? (
-                    <p className="text-xs text-white/40">
-                      Aucune soumission pour ce lead.
-                    </p>
-                  ) : (
-                    <ul className="space-y-1.5">
-                      {soumissions.map((s) => (
-                        <li key={s.id}>
-                          <Link
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                            href={`/dev-logiciel/soumissions/${s.id}` as any}
-                            className="flex items-center justify-between gap-2 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 hover:border-blue-500/40"
-                          >
-                            <div className="min-w-0">
-                              <p className="truncate text-xs font-semibold text-white">
-                                {s.title}
-                              </p>
-                              <p className="text-[10px] text-white/40">
-                                {fmtAmount(s.amount)}
-                              </p>
-                            </div>
-                            <span
-                              className={`flex-shrink-0 rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wide ${
-                                SOUM_CLS[s.status] ?? "bg-white/5 text-white/50"
-                              }`}
-                            >
-                              {s.status}
-                            </span>
-                          </Link>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
                 </div>
+              ) : null}
 
-                <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
-                  <h2 className="mb-2 text-sm font-bold text-white">Métadonnées</h2>
-                  <dl className="space-y-1 text-xs text-white/50">
-                    <div className="flex justify-between gap-2">
-                      <dt>Créé</dt>
-                      <dd className="text-right text-white/70">
-                        {new Date(lead.created_at).toLocaleString("fr-CA")}
-                      </dd>
-                    </div>
-                    <div className="flex justify-between gap-2">
-                      <dt>Modifié</dt>
-                      <dd className="text-right text-white/70">
-                        {new Date(lead.updated_at).toLocaleString("fr-CA")}
-                      </dd>
-                    </div>
-                  </dl>
+              {tab === "client" ? (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <EditableField
+                    icon={User}
+                    label="Nom complet"
+                    value={p.name}
+                    onSave={(v) => patchProspect({ name: v })}
+                  />
+                  <EditableField
+                    icon={Mail}
+                    label="Courriel"
+                    type="email"
+                    value={p.email}
+                    onSave={(v) => patchProspect({ email: v })}
+                  />
+                  <EditableField
+                    icon={Phone}
+                    label="Téléphone"
+                    type="tel"
+                    value={p.phone || ""}
+                    displayValue={p.phone ? formatPhone(p.phone) : "—"}
+                    onSave={(v) => patchProspect({ phone: v || null })}
+                  />
+                  <EditableAddress
+                    icon={MapPin}
+                    label="Adresse du projet"
+                    value={p.address || ""}
+                    onSave={(v) => patchProspect({ address: v || null })}
+                  />
+                  <EditableSelect
+                    icon={CheckCircle2}
+                    label="Consentement marketing"
+                    value={p.marketing_consent ? "true" : "false"}
+                    options={[
+                      { value: "true", label: "Oui" },
+                      { value: "false", label: "Non" }
+                    ]}
+                    onSave={(v) =>
+                      patchProspect({ marketing_consent: v === "true" })
+                    }
+                  />
+                  <EditableSelect
+                    icon={CheckCircle2}
+                    label="Langue"
+                    value={p.locale}
+                    options={[
+                      { value: "fr", label: "Français" },
+                      { value: "en", label: "Anglais" }
+                    ]}
+                    onSave={(v) => patchProspect({ locale: v })}
+                  />
+                  <EditableSelect
+                    icon={Briefcase}
+                    label="Type de projet"
+                    value={p.project_type}
+                    options={Object.entries(PROJECT_LABEL).map(
+                      ([k, v]) => ({ value: k, label: v })
+                    )}
+                    onSave={(v) => patchProspect({ project_type: v })}
+                  />
+                  <EditableSelect
+                    icon={DollarSign}
+                    label="Budget"
+                    value={p.budget_range || ""}
+                    options={[
+                      { value: "", label: "— Non précisé —" },
+                      { value: "under_10k", label: "Moins de 10 000 $" },
+                      { value: "10_25", label: "10 000 $ – 25 000 $" },
+                      { value: "25_50", label: "25 000 $ – 50 000 $" },
+                      { value: "50_100", label: "50 000 $ – 100 000 $" },
+                      { value: "over_100", label: "Plus de 100 000 $" },
+                      { value: "unsure", label: "Indéterminé" }
+                    ]}
+                    onSave={(v) => patchProspect({ budget_range: v || null })}
+                  />
+                  <div className="lg:col-span-3">
+                    <FollowUpTimeline
+                      subjectType="prospect"
+                      subjectId={p.id}
+                    />
+                  </div>
                 </div>
-              </section>
+              ) : null}
+
+              {tab === "rendez-vous" ? (
+                <AppointmentScheduler
+                  contactRequestId={p.id}
+                  prospectName={p.name}
+                  prospectAddress={p.address || null}
+                />
+              ) : null}
+              {tab === "mesures" ? (
+                <MeasurementsPanel
+                  contactRequestId={p.id}
+                  defaultAddress={p.address || null}
+                />
+              ) : null}
+              {tab === "documents" ? (
+                <ProspectDocuments contactRequestId={p.id} />
+              ) : null}
+              {tab === "employes" ? (
+                <Placeholder label="Employés assignés — module à venir avec la phase Projets/Agenda." />
+              ) : null}
+              {tab === "taches" ? (
+                <SalesTasksPanel contactRequestId={p.id} />
+              ) : null}
             </div>
           </>
-        )}
+        ) : null}
       </div>
+    </>
+  );
+}
+
+function InfoCard({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+      <p className="text-xs font-semibold uppercase tracking-wider text-blue-400">
+        {title}
+      </p>
+      <p className="mt-2 text-lg font-semibold text-white">{value}</p>
     </div>
   );
 }
 
-function Field({
+function InfoRow({
+  icon: Icon,
   label,
-  children
+  value
 }: {
+  icon: React.ComponentType<{ className?: string }>;
   label: string;
-  children: React.ReactNode;
+  value: string;
 }) {
   return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-medium text-white/60">
-        {label}
-      </span>
-      {children}
-    </label>
+    <div className="rounded-lg border border-brand-800 bg-brand-900 p-4">
+      <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-white/50">
+        <Icon className="h-3.5 w-3.5 text-blue-400" /> {label}
+      </p>
+      <p className="mt-1.5 break-words text-sm text-white">{value}</p>
+    </div>
+  );
+}
+
+// Champ éditable inline : affiche la valeur + un crayon discret au
+// hover ; click → input qui prend la main, blur ou Enter pour
+// sauvegarder, Escape pour annuler.
+function EditableField({
+  icon: Icon,
+  label,
+  value,
+  displayValue,
+  type = "text",
+  onSave
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  value: string;
+  displayValue?: string;
+  type?: "text" | "email" | "tel";
+  onSave: (v: string) => void | Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  function commit() {
+    setEditing(false);
+    const trimmed = draft.trim();
+    if (trimmed !== value) onSave(trimmed);
+  }
+
+  return (
+    <div className="group rounded-lg border border-brand-800 bg-brand-900 p-4">
+      <p className="flex items-center justify-between gap-2 text-xs font-medium uppercase tracking-wider text-white/50">
+        <span className="inline-flex items-center gap-2">
+          <Icon className="h-3.5 w-3.5 text-blue-400" /> {label}
+        </span>
+        {!editing ? (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="opacity-0 transition group-hover:opacity-100 hover:text-white"
+            title="Modifier"
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+        ) : null}
+      </p>
+      {editing ? (
+        <input
+          autoFocus
+          type={type}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            if (e.key === "Escape") {
+              setDraft(value);
+              setEditing(false);
+            }
+          }}
+          className="mt-1.5 w-full rounded border border-blue-500 bg-brand-950 px-2 py-1 text-sm text-white focus:outline-none"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="mt-1.5 block w-full break-words text-left text-sm text-white"
+        >
+          {displayValue ?? value || "—"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Variante avec AddressInput (autocomplete Photon) pour le champ
+// adresse du projet.
+function EditableAddress({
+  icon: Icon,
+  label,
+  value,
+  onSave
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  value: string;
+  onSave: (v: string) => void | Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  return (
+    <div className="group rounded-lg border border-brand-800 bg-brand-900 p-4">
+      <p className="flex items-center justify-between gap-2 text-xs font-medium uppercase tracking-wider text-white/50">
+        <span className="inline-flex items-center gap-2">
+          <Icon className="h-3.5 w-3.5 text-blue-400" /> {label}
+        </span>
+        {!editing ? (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="opacity-0 transition group-hover:opacity-100 hover:text-white"
+            title="Modifier"
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setEditing(false);
+              if (draft.trim() !== value) onSave(draft.trim());
+            }}
+            className="text-[10px] text-blue-400 hover:text-blue-300"
+          >
+            Sauvegarder
+          </button>
+        )}
+      </p>
+      {editing ? (
+        <div className="mt-1.5">
+          <AddressInput value={draft} onChange={setDraft} />
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="mt-1.5 block w-full break-words text-left text-sm text-white"
+        >
+          {value || "—"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Variante avec un select pour les valeurs énumérées (langue,
+// budget, type de projet, consentement marketing).
+function EditableSelect({
+  icon: Icon,
+  label,
+  value,
+  options,
+  onSave
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onSave: (v: string) => void | Promise<void>;
+}) {
+  const current = options.find((o) => o.value === value);
+  return (
+    <div className="rounded-lg border border-brand-800 bg-brand-900 p-4">
+      <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-white/50">
+        <Icon className="h-3.5 w-3.5 text-blue-400" /> {label}
+      </p>
+      <select
+        value={value}
+        onChange={(e) => onSave(e.target.value)}
+        className="mt-1.5 w-full cursor-pointer rounded border border-transparent bg-transparent text-sm text-white hover:border-brand-700 focus:border-blue-500 focus:outline-none"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {current === undefined && value ? (
+        <p className="mt-0.5 text-[10px] text-white/40">Valeur : {value}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function Placeholder({ label }: { label: string }) {
+  return (
+    <div className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 p-10 text-center">
+      <p className="text-sm text-white/50">{label}</p>
+    </div>
+  );
+}
+
+// ---------- Prospect documents (photos uploaded with the contact form) ----
+
+type ProspectPhoto = {
+  id: number;
+  content_type: string;
+  filename: string | null;
+  created_at: string;
+};
+
+type ProspectSoumission = {
+  id: number;
+  reference: string;
+  title: string;
+  status: string;
+  total: number | string | null;
+  accepted_at: string | null;
+  signed_name: string | null;
+  lead_id: number | null;
+  property_address: string | null;
+};
+
+function DocSection({
+  title,
+  count,
+  icon,
+  defaultOpen = false,
+  children
+}: {
+  title: string;
+  count: number;
+  icon: React.ReactNode;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-white/70 transition hover:bg-brand-950/40"
+      >
+        {open ? (
+          <ChevronDown className="h-3.5 w-3.5 text-blue-400" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 text-white/40" />
+        )}
+        <span className="text-blue-400">{icon}</span>
+        <span className="text-white">{title}</span>
+        <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/70">
+          {count}
+        </span>
+      </button>
+      {open ? <div className="border-t border-brand-800 p-4">{children}</div> : null}
+    </div>
+  );
+}
+
+function ProspectDocuments({
+  contactRequestId
+}: {
+  contactRequestId: number;
+}) {
+  const confirm = useConfirm();
+  const [files, setFiles] = useState<ProspectPhoto[]>([]);
+  const [soumissions, setSoumissions] = useState<ProspectSoumission[]>([]);
+  const [urls, setUrls] = useState<Record<number, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const [fRes, sRes] = await Promise.all([
+          authedFetch(`/api/v1/devlog/leads/${contactRequestId}/photos`),
+          authedFetch("/api/v1/devlog/soumissions?limit=500")
+        ]);
+        if (cancelled) return;
+        if (fRes.ok) setFiles((await fRes.json()) as ProspectPhoto[]);
+        if (sRes.ok) {
+          const all = (await sRes.json()) as ProspectSoumission[];
+          setSoumissions(
+            all.filter((s) => s.lead_id === contactRequestId)
+          );
+        }
+      } catch {
+        if (!cancelled) setError("Chargement échoué.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [contactRequestId]);
+
+  // Split images vs. other documents based on MIME type.
+  const photos = files.filter((f) => f.content_type.startsWith("image/"));
+  const otherDocs = files.filter(
+    (f) => !f.content_type.startsWith("image/")
+  );
+  const signedSoumissions = soumissions.filter(
+    (s) => s.status === "accepted" || s.accepted_at
+  );
+  const pendingSoumissions = soumissions.filter(
+    (s) => s.status === "sent" && !s.accepted_at
+  );
+
+  // Lazy-load blob URLs for both photos (thumbnail preview) and
+  // other documents (PDF download link). The endpoint requires a
+  // Bearer token, so a plain <a href> would 401 — we fetch via
+  // authedFetch and create an object URL the browser can render.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      for (const f of files) {
+        if (urls[f.id]) continue;
+        const res = await authedFetch(
+          `/api/v1/devlog/leads/${contactRequestId}/photos/${f.id}/image`
+        );
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        setUrls((prev) => ({ ...prev, [f.id]: url }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [files, contactRequestId, urls]);
+
+  useEffect(() => {
+    return () => {
+      for (const url of Object.values(urls)) URL.revokeObjectURL(url);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function remove(pid: number) {
+    if (!(await confirm("Supprimer ce document ?"))) return;
+    const res = await authedFetch(
+      `/api/v1/devlog/leads/${contactRequestId}/photos/${pid}`,
+      { method: "DELETE" }
+    );
+    if (res.ok || res.status === 204) {
+      setFiles((xs) => xs.filter((x) => x.id !== pid));
+    }
+  }
+
+  async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const picked = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (picked.length === 0) return;
+    setUploading(true);
+    setError(null);
+    try {
+      for (const f of picked) {
+        const form = new FormData();
+        form.append("file", f);
+        const res = await authedFetch(
+          `/api/v1/devlog/leads/${contactRequestId}/photos`,
+          { method: "POST", body: form }
+        );
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(txt.slice(0, 240) || `http_${res.status}`);
+        }
+        const created = (await res.json()) as ProspectPhoto;
+        setFiles((xs) => [...xs, created]);
+      }
+    } catch (e) {
+      setError(`Envoi échoué : ${(e as Error).message}`);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function fmtMoney(n: number | string | null): string {
+    return new Intl.NumberFormat("fr-CA", {
+      style: "currency",
+      currency: "CAD",
+      maximumFractionDigits: 2
+    }).format(Number(n || 0));
+  }
+
+  return (
+    <section className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+            Documents du prospect
+          </h3>
+          <p className="mt-1 text-xs text-white/60">
+            Tout ce qu&apos;on reçoit ou produit pour ce prospect, classé
+            par type.
+          </p>
+        </div>
+        <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-brand-800 bg-brand-900 px-3 py-1.5 text-xs text-white hover:border-blue-500">
+          {uploading ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <ImageIcon className="h-3.5 w-3.5" />
+          )}
+          Ajouter un fichier
+          <input
+            type="file"
+            accept="image/*,application/pdf"
+            multiple
+            hidden
+            onChange={onUpload}
+            disabled={uploading}
+          />
+        </label>
+      </div>
+
+      {error ? (
+        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {error}
+        </p>
+      ) : null}
+
+      {loading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-5 w-5 animate-spin text-white/40" />
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {/* ---- Photos ---- */}
+          <DocSection
+            title="Photos"
+            count={photos.length}
+            icon={<ImageIcon className="h-3.5 w-3.5" />}
+            defaultOpen={false}
+          >
+            {photos.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
+                Aucune photo jointe.
+              </p>
+            ) : (
+              <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {photos.map((p) => (
+                  <li
+                    key={p.id}
+                    className="group overflow-hidden rounded-xl border border-brand-800 bg-brand-900"
+                  >
+                    <a
+                      href={urls[p.id] || "#"}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block aspect-video w-full overflow-hidden bg-black"
+                    >
+                      {urls[p.id] ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          alt={p.filename || "Photo"}
+                          src={urls[p.id]}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-full items-center justify-center">
+                          <Loader2 className="h-4 w-4 animate-spin text-white/40" />
+                        </div>
+                      )}
+                    </a>
+                    <div className="flex items-center justify-between gap-2 p-2">
+                      <div className="min-w-0 text-xs">
+                        <p className="truncate text-white">
+                          {p.filename || `photo-${p.id}`}
+                        </p>
+                        <p className="text-white/40">
+                          {new Date(p.created_at).toLocaleDateString("fr-CA")}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => remove(p.id)}
+                        className="rounded p-1 text-white/40 hover:text-rose-300"
+                        aria-label="Supprimer"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </DocSection>
+
+          {/* ---- Soumissions envoyées (en attente de signature) ---- */}
+          <DocSection
+            title="Soumissions envoyées (en attente)"
+            count={pendingSoumissions.length}
+            icon={<FileText className="h-3.5 w-3.5" />}
+            defaultOpen={false}
+          >
+            {pendingSoumissions.length === 0 ? (
+              <p className="text-xs text-white/40">
+                Aucune soumission en attente.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {pendingSoumissions.map((s) => (
+                  <li key={s.id}>
+                    <Link
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      href={`/dev-logiciel/soumissions/${s.id}` as any}
+                      className="flex items-start justify-between gap-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm hover:border-amber-500/50"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-white">
+                          {s.reference} — {s.title}
+                        </p>
+                        <p className="text-[11px] text-amber-200/80">
+                          Envoyée — pas encore signée
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-sm font-semibold text-amber-300">
+                        {fmtMoney(s.total)}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </DocSection>
+
+          {/* ---- Soumissions signées ---- */}
+          <DocSection
+            title="Soumissions signées"
+            count={signedSoumissions.length}
+            icon={<FileText className="h-3.5 w-3.5" />}
+            defaultOpen={false}
+          >
+            {signedSoumissions.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
+                Aucune soumission signée par ce prospect.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {signedSoumissions.map((s) => (
+                  <li key={s.id}>
+                    <Link
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      href={`/dev-logiciel/soumissions/${s.id}` as any}
+                      className="flex items-start justify-between gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-sm hover:border-emerald-500/50"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-white">
+                          {s.reference} — {s.title}
+                        </p>
+                        <p className="text-[11px] text-white/50">
+                          Signée
+                          {s.signed_name ? ` par ${s.signed_name}` : ""}
+                          {s.accepted_at
+                            ? ` le ${new Date(s.accepted_at).toLocaleDateString("fr-CA")}`
+                            : ""}
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-sm font-semibold text-emerald-300">
+                        {fmtMoney(s.total)}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </DocSection>
+
+          {/* ---- Autres documents (PDF, plans, devis concurrents…) ---- */}
+          <DocSection
+            title="Autres documents"
+            count={otherDocs.length}
+            icon={<FileText className="h-3.5 w-3.5" />}
+            defaultOpen={false}
+          >
+            {otherDocs.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-brand-800 bg-brand-900/40 px-4 py-6 text-center text-xs text-white/40">
+                Aucun PDF ou autre document. Utilise « Ajouter un
+                fichier » plus haut pour déposer un plan, un devis
+                concurrent, un rapport d&apos;inspection, etc.
+              </p>
+            ) : (
+              <ul className="space-y-1.5">
+                {otherDocs.map((d) => (
+                  <li
+                    key={d.id}
+                    className="flex items-center justify-between gap-3 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm"
+                  >
+                    <a
+                      href={urls[d.id] || "#"}
+                      target="_blank"
+                      rel="noreferrer"
+                      download={d.filename || `document-${d.id}`}
+                      className="flex min-w-0 items-center gap-2 text-white hover:text-blue-400"
+                    >
+                      <FileText className="h-4 w-4 shrink-0 text-blue-400" />
+                      <div className="min-w-0">
+                        <p className="truncate">
+                          {d.filename || `document-${d.id}`}
+                        </p>
+                        <p className="text-[10px] text-white/40">
+                          {d.content_type} ·{" "}
+                          {new Date(d.created_at).toLocaleDateString("fr-CA")}
+                        </p>
+                      </div>
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => remove(d.id)}
+                      className="rounded p-1 text-white/40 hover:text-rose-300"
+                      aria-label="Supprimer"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </DocSection>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---------- Appointment scheduler (Phase C) ----------
+
+type Appointment = {
+  id: number;
+  title: string;
+  start_at: string;
+  end_at: string | null;
+  lead_id: number | null;
+  assignee_id: number | null;
+  event_type: string;
+  confirmation_sent_at?: string | null;
+};
+
+function todayIso(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+type Employe = { id: number; full_name: string };
+
+function AppointmentScheduler({
+  contactRequestId,
+  prospectName,
+  prospectAddress
+}: {
+  contactRequestId: number;
+  prospectName: string;
+  prospectAddress: string | null;
+}) {
+  const [past, setPast] = useState<Appointment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [employes, setEmployes] = useState<Employe[]>([]);
+
+  // Form state
+  const [title, setTitle] = useState(`Visite — ${prospectName}`);
+  const [date, setDate] = useState(todayIso());
+  const [startHm, setStartHm] = useState("10:00");
+  const [endHm, setEndHm] = useState("11:00");
+  const [location, setLocation] = useState(prospectAddress || "");
+  const [eventType, setEventType] = useState("visite");
+  const [assigneeId, setAssigneeId] = useState<string>("");
+  const [submitting, setSubmitting] = useState(false);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const [agendaRes, empRes] = await Promise.all([
+          authedFetch("/api/v1/agenda?limit=500"),
+          authedFetch("/api/v1/employes?limit=200")
+        ]);
+        if (!agendaRes.ok) throw new Error();
+        const all = (await agendaRes.json()) as Appointment[];
+        const emps = empRes.ok ? ((await empRes.json()) as Employe[]) : [];
+        if (!cancelled) {
+          setPast(
+            all
+              .filter((a) => a.lead_id === contactRequestId)
+              .sort(
+                (a, b) =>
+                  new Date(b.start_at).getTime() -
+                  new Date(a.start_at).getTime()
+              )
+          );
+          setEmployes(emps);
+        }
+      } catch {
+        if (!cancelled) setError("Chargement des RDV échoué.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [contactRequestId]);
+
+  async function submit() {
+    if (!title.trim() || !date || !startHm || !endHm) {
+      setError("Tous les champs sont requis.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const startIso = new Date(`${date}T${startHm}:00`).toISOString();
+      const endIso = new Date(`${date}T${endHm}:00`).toISOString();
+      const res = await authedFetch("/api/v1/appointments", {
+        method: "POST",
+        body: JSON.stringify({
+          lead_id: contactRequestId,
+          title: title.trim(),
+          start_at: startIso,
+          end_at: endIso,
+          location: location.trim() || null,
+          event_type: eventType,
+          assignee_id: assigneeId ? Number(assigneeId) : null
+        })
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt.slice(0, 240));
+      }
+      const created = (await res.json()) as Appointment;
+      setPast((xs) => [created, ...xs]);
+      setSuccess(
+        "RDV créé. Un courriel de confirmation a été envoyé au prospect."
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <section className="rounded-2xl border border-blue-500/30 bg-blue-500/5 p-5">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+          Planifier un rendez-vous
+        </h3>
+        <p className="mt-1 text-xs text-white/60">
+          Le prospect reçoit un courriel de confirmation immédiat + un
+          rappel 24 h avant.
+        </p>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <label className="label">Titre</label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className="input"
+            />
+          </div>
+          <div>
+            <label className="label">Type</label>
+            <select
+              value={eventType}
+              onChange={(e) => setEventType(e.target.value)}
+              className="input"
+            >
+              <option value="visite">Visite / soumission</option>
+              <option value="reunion">Réunion</option>
+              <option value="livraison">Livraison</option>
+              <option value="chantier">Chantier</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">Date</label>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="input"
+            />
+          </div>
+          <div>
+            <label className="label">Début</label>
+            <input
+              type="time"
+              value={startHm}
+              onChange={(e) => setStartHm(e.target.value)}
+              className="input"
+            />
+          </div>
+          <div>
+            <label className="label">Fin</label>
+            <input
+              type="time"
+              value={endHm}
+              onChange={(e) => setEndHm(e.target.value)}
+              className="input"
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label">Adresse / lieu</label>
+            <input
+              type="text"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="Adresse de la visite"
+              className="input"
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label">Assigné à</label>
+            <select
+              value={assigneeId}
+              onChange={(e) => setAssigneeId(e.target.value)}
+              className="input"
+            >
+              <option value="">— Personne assignée —</option>
+              {employes.map((e) => (
+                <option key={e.id} value={String(e.id)}>
+                  {e.full_name}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-[11px] text-white/40">
+              La personne assignée reçoit le RDV dans son calendrier
+              (lien .ics personnel dans son profil) + un courriel.
+            </p>
+          </div>
+        </div>
+
+        {error ? (
+          <p className="mt-3 text-sm text-rose-300">{error}</p>
+        ) : null}
+        {success ? (
+          <p className="mt-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+            {success}
+          </p>
+        ) : null}
+
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={submit}
+            disabled={submitting}
+            className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm disabled:opacity-60"
+          >
+            {submitting ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : null}
+            Planifier + envoyer la confirmation
+          </button>
+        </div>
+      </section>
+
+      <section>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-blue-400">
+          Historique
+        </h3>
+        {loading ? (
+          <div className="flex items-center justify-center py-6">
+            <Loader2 className="h-5 w-5 animate-spin text-white/40" />
+          </div>
+        ) : past.length === 0 ? (
+          <p className="mt-2 text-xs text-white/50">
+            Aucun rendez-vous planifié.
+          </p>
+        ) : (
+          <ul className="mt-3 space-y-2">
+            {past.map((a) => (
+              <li
+                key={a.id}
+                className="rounded-xl border border-brand-800 bg-brand-900 p-3"
+              >
+                <p className="text-sm font-semibold text-white">
+                  {a.title}
+                </p>
+                <p className="mt-0.5 text-xs text-white/60">
+                  {new Date(a.start_at).toLocaleString("fr-CA", {
+                    weekday: "short",
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit"
+                  })}
+                  {a.end_at
+                    ? ` → ${new Date(a.end_at).toLocaleTimeString(
+                        "fr-CA",
+                        { hour: "2-digit", minute: "2-digit" }
+                      )}`
+                    : ""}
+                </p>
+                <span className="mt-1 inline-flex rounded bg-white/5 px-1.5 py-0.5 text-[10px] uppercase text-white/50">
+                  {a.event_type}
+                </span>
+                {a.assignee_id ? (
+                  <span className="ml-1 inline-flex rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-200">
+                    👤{" "}
+                    {employes.find((e) => e.id === a.assignee_id)
+                      ?.full_name || `#${a.assignee_id}`}
+                  </span>
+                ) : null}
+                {a.confirmation_sent_at ? (
+                  <span className="ml-1 inline-flex rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] uppercase text-emerald-300">
+                    courriel envoyé
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
   );
 }
