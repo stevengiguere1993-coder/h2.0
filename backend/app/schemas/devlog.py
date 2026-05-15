@@ -412,3 +412,60 @@ class DevlogInvoiceImportRequest(BaseModel):
 
 class DevlogInvoiceImportResult(BaseModel):
     added: int
+
+
+# --------------------------------------------------------------------------
+# DevlogContract
+# --------------------------------------------------------------------------
+
+
+class DevlogContractCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    body: Optional[str] = None
+    status: str = Field(default="brouillon", max_length=16)
+    soumission_id: Optional[int] = None
+    client_id: Optional[int] = None
+    project_id: Optional[int] = None
+
+
+class DevlogContractUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    body: Optional[str] = None
+    status: Optional[str] = None
+    soumission_id: Optional[int] = None
+    client_id: Optional[int] = None
+    project_id: Optional[int] = None
+
+
+class DevlogContractRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    body: Optional[str]
+    status: str
+    soumission_id: Optional[int]
+    client_id: Optional[int]
+    project_id: Optional[int]
+    signature_token: Optional[str]
+    sent_at: Optional[datetime]
+    signed_at: Optional[datetime]
+    signed_name: Optional[str]
+    signed_ip: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class DevlogContractPublicRead(BaseModel):
+    """Vue publique servie sur la page de signature — pas d'IDs internes
+    ni de champs admin."""
+
+    title: str
+    body: Optional[str]
+    status: str
+    signed_at: Optional[datetime]
+    signed_name: Optional[str]
+
+
+class DevlogContractSignRequest(BaseModel):
+    name: str = Field(..., min_length=2, max_length=255)
