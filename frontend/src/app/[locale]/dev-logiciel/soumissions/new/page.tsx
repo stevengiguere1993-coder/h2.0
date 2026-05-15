@@ -271,61 +271,25 @@ export default function NewSoumissionPage() {
               required
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Ex. Rénovation salle de bain — 123 rue Example"
+              placeholder="Ex. Plateforme de réservation v1 — Acme inc."
               className="input"
             />
           </div>
 
           <div>
             <label htmlFor="property_address" className="label">
-              Adresse du chantier
+              Nom de l&apos;entreprise
             </label>
             <input
               id="property_address"
               type="text"
               value={propertyAddress}
               onChange={(e) => setPropertyAddress(e.target.value)}
-              placeholder="Ex. 32 Croissant d'Avaugour, Laval, QC"
+              placeholder="Ex. Acme inc."
               className="input"
             />
             <p className="mt-1 text-xs text-white/50">
-              Pré-remplie depuis le prospect si disponible. Street View
-              disponible après création sur la page de la soumission.
-            </p>
-          </div>
-
-          {/* Type de soumission : devis classique ou contrat
-              d'entreprise (formulaire APCHQ rempli ensuite). */}
-          <div>
-            <label className="label">Type de soumission</label>
-            <div className="inline-flex rounded-lg border border-brand-700 bg-brand-950/40 p-0.5">
-              <button
-                type="button"
-                onClick={() => setKind("quote")}
-                className={`rounded-md px-4 py-1.5 text-xs font-semibold transition ${
-                  kind === "quote"
-                    ? "bg-blue-500 text-brand-950 shadow"
-                    : "text-white/70 hover:text-white"
-                }`}
-              >
-                Devis
-              </button>
-              <button
-                type="button"
-                onClick={() => setKind("contract")}
-                className={`rounded-md px-4 py-1.5 text-xs font-semibold transition ${
-                  kind === "contract"
-                    ? "bg-blue-500 text-brand-950 shadow"
-                    : "text-white/70 hover:text-white"
-                }`}
-              >
-                Contrat
-              </button>
-            </div>
-            <p className="mt-1 text-xs text-white/50">
-              {kind === "quote"
-                ? "Devis classique : tableau d'items, prix et taxes. Le mode forfaitaire / estimé se règle ensuite sur la soumission."
-                : "Contrat d'entreprise à prix coûtant majoré — formulaire structuré rempli sur la page suivante."}
+              Pré-rempli depuis le prospect si disponible.
             </p>
           </div>
 
@@ -355,8 +319,6 @@ export default function NewSoumissionPage() {
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Création…
                 </>
-              ) : kind === "contract" ? (
-                "Créer → remplir le contrat"
               ) : (
                 "Créer → ajouter les items"
               )}

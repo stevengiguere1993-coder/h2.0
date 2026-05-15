@@ -21,6 +21,7 @@ const PORTAL_PREFIXES = [
   "/prospection",
   "/investisseur",
   "/dev",
+  "/dev-logiciel",
   "/changer-mot-de-passe",
   "/profil"
 ];
