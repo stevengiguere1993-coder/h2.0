@@ -197,6 +197,56 @@ export default function FactureDetailPage() {
   const [importOnlyApproved, setImportOnlyApproved] = useState(true);
   const [importIncludeAchats, setImportIncludeAchats] = useState(false);
 
+  // Phase A — sélection ligne-par-ligne des achats refacturables.
+  type BillableAchat = {
+    id: number;
+    reference: string | null;
+    description: string | null;
+    amount: number | null;
+    markup_percent: number | null;
+    fournisseur_name: string | null;
+    supplier_invoice_number: string | null;
+    projected_billed_amount: number;
+  };
+  const [billableAchats, setBillableAchats] = useState<BillableAchat[]>([]);
+  const [achatSelected, setAchatSelected] = useState<Record<number, boolean>>(
+    {}
+  );
+  const [achatMarkupOverride, setAchatMarkupOverride] = useState<
+    Record<number, string>
+  >({});
+  const [billablesLoading, setBillablesLoading] = useState(false);
+
+  // Charge la liste « à refacturer » du projet à l'ouverture du dialogue
+  // d'import. Achats refacturables non encore facturés uniquement.
+  useEffect(() => {
+    if (!importOpen || !f?.project_id) return;
+    let cancelled = false;
+    setBillablesLoading(true);
+    (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/projects/${f.project_id}/billables`
+        );
+        if (!r.ok || cancelled) return;
+        const data = (await r.json()) as { achats: BillableAchat[] };
+        if (cancelled) return;
+        setBillableAchats(data.achats || []);
+        // Coche tout par défaut.
+        const pre: Record<number, boolean> = {};
+        for (const a of data.achats || []) pre[a.id] = true;
+        setAchatSelected(pre);
+      } catch {
+        /* silencieux — l'utilisateur peut décocher l'import achats */
+      } finally {
+        if (!cancelled) setBillablesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [importOpen, f?.project_id]);
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -335,6 +385,21 @@ export default function FactureDetailPage() {
     setImportBusy(true);
     setError(null);
     try {
+      // Phase A : sélection ligne-par-ligne des achats + markup
+      // overrides. Si rien n'est coché, l'API ne retourne aucun achat.
+      const selectedAchatIds = importIncludeAchats
+        ? billableAchats.filter((a) => achatSelected[a.id]).map((a) => a.id)
+        : [];
+      const markupOverrides: Record<number, number> = {};
+      if (importIncludeAchats) {
+        for (const a of billableAchats) {
+          const raw = achatMarkupOverride[a.id];
+          if (raw !== undefined && raw.trim() !== "") {
+            const n = Number(raw);
+            if (!Number.isNaN(n)) markupOverrides[a.id] = n;
+          }
+        }
+      }
       const res = await authedFetch(
         `/api/v1/factures/${id}/import-sources`,
         {
@@ -347,7 +412,10 @@ export default function FactureDetailPage() {
             ),
             include_hours: importIncludeHours,
             only_approved: importOnlyApproved,
-            include_achats: importIncludeAchats
+            include_achats:
+              importIncludeAchats && selectedAchatIds.length > 0,
+            achat_ids: selectedAchatIds.length > 0 ? selectedAchatIds : null,
+            achat_markup_overrides: markupOverrides
           })
         }
       );
@@ -1215,13 +1283,113 @@ export default function FactureDetailPage() {
                   }
                   className="mt-0.5"
                 />
-                <div>
+                <div className="min-w-0 flex-1">
                   <div className="font-semibold text-white">
-                    Achats du projet{" "}
+                    Achats à refacturer{" "}
                     <span className="text-xs font-normal text-white/50">
-                      (matériel)
+                      (refacturables non encore facturés)
                     </span>
                   </div>
+                  {importIncludeAchats ? (
+                    <div className="mt-3 space-y-1">
+                      {billablesLoading ? (
+                        <p className="text-xs text-white/40">Chargement…</p>
+                      ) : billableAchats.length === 0 ? (
+                        <p className="text-xs text-white/40">
+                          Aucun achat à refacturer pour ce projet.
+                        </p>
+                      ) : (
+                        <>
+                          <div className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-2 border-b border-brand-800 pb-1 text-[10px] uppercase tracking-wider text-white/40">
+                            <span></span>
+                            <span>Achat</span>
+                            <span className="text-right">Coûtant</span>
+                            <span className="text-right">+%</span>
+                            <span className="text-right">Facturé</span>
+                          </div>
+                          {billableAchats.map((a) => {
+                            const overrideStr = achatMarkupOverride[a.id];
+                            const markupNum =
+                              overrideStr !== undefined && overrideStr.trim() !== ""
+                                ? Number(overrideStr)
+                                : a.markup_percent ?? 0;
+                            const billed = Number.isFinite(markupNum)
+                              ? Number(
+                                  ((a.amount ?? 0) * (1 + markupNum / 100)).toFixed(2)
+                                )
+                              : a.projected_billed_amount;
+                            return (
+                              <div
+                                key={a.id}
+                                className="grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-2 text-xs"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={!!achatSelected[a.id]}
+                                  onChange={(e) =>
+                                    setAchatSelected({
+                                      ...achatSelected,
+                                      [a.id]: e.target.checked
+                                    })
+                                  }
+                                />
+                                <span className="truncate text-white/80">
+                                  {a.description ||
+                                    a.reference ||
+                                    `Achat #${a.id}`}
+                                  {a.fournisseur_name ? (
+                                    <span className="text-white/40">
+                                      {" "}
+                                      · {a.fournisseur_name}
+                                    </span>
+                                  ) : null}
+                                </span>
+                                <span className="text-right text-white/60">
+                                  {(a.amount ?? 0).toLocaleString("fr-CA", {
+                                    style: "currency",
+                                    currency: "CAD",
+                                    maximumFractionDigits: 2
+                                  })}
+                                </span>
+                                <input
+                                  type="number"
+                                  step="0.5"
+                                  min="0"
+                                  max="500"
+                                  value={
+                                    overrideStr !== undefined
+                                      ? overrideStr
+                                      : a.markup_percent != null
+                                      ? String(a.markup_percent)
+                                      : ""
+                                  }
+                                  onChange={(e) =>
+                                    setAchatMarkupOverride({
+                                      ...achatMarkupOverride,
+                                      [a.id]: e.target.value
+                                    })
+                                  }
+                                  placeholder="0"
+                                  className="w-14 rounded border border-brand-700 bg-brand-950 px-1.5 py-0.5 text-right text-xs text-white"
+                                />
+                                <span className="w-20 text-right font-semibold text-white">
+                                  {billed.toLocaleString("fr-CA", {
+                                    style: "currency",
+                                    currency: "CAD",
+                                    maximumFractionDigits: 2
+                                  })}
+                                </span>
+                              </div>
+                            );
+                          })}
+                          <p className="mt-2 text-[10px] text-white/40">
+                            Une fois importés, ces achats seront marqués
+                            « refacturés » et ne réapparaîtront plus.
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               </label>
             </div>

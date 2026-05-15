@@ -440,6 +440,8 @@ class AchatCreate(BaseModel):
     payment_method: Optional[str] = Field(default=None, max_length=32)
     notes: Optional[str] = None
     status: Optional[str] = Field(default=None, max_length=32)
+    is_billable: Optional[bool] = None
+    markup_percent: Optional[float] = Field(default=None, ge=0, le=500)
 
 
 class AchatUpdate(BaseModel):
@@ -456,6 +458,8 @@ class AchatUpdate(BaseModel):
     payment_method: Optional[str] = Field(default=None, max_length=32)
     supplier_invoice_number: Optional[str] = Field(default=None, max_length=64)
     invoice_date: Optional[date] = None
+    is_billable: Optional[bool] = None
+    markup_percent: Optional[float] = Field(default=None, ge=0, le=500)
 
 
 class AchatRead(_Base):
@@ -478,4 +482,8 @@ class AchatRead(_Base):
     qbo_bill_id: Optional[str] = None
     qbo_doc_number: Optional[str] = None
     notes: Optional[str]
+    is_billable: bool = True
+    markup_percent: Optional[float] = None
+    invoiced_at: Optional[datetime] = None
+    facture_item_id: Optional[int] = None
     created_at: datetime

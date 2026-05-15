@@ -442,6 +442,19 @@ async def init_db() -> None:
             # Organigramme : niveau d'exécution (direction / adjoint /
             # adjoint_virtuel) — qui doit faire ce rôle / cette tâche.
             ("org_nodes", "execution_tier", "VARCHAR(24)"),
+            # Refacturation des achats — Phase A.
+            # `is_billable` indique si l'achat doit être refacturé au
+            # client. `markup_percent` : majoration appliquée à
+            # l'import. `invoiced_at` + `facture_item_id` : garde-fous
+            # contre la double-facturation.
+            (
+                "achats",
+                "is_billable",
+                "BOOLEAN NOT NULL DEFAULT TRUE",
+            ),
+            ("achats", "markup_percent", "NUMERIC(6, 2)"),
+            ("achats", "invoiced_at", "TIMESTAMP WITH TIME ZONE"),
+            ("achats", "facture_item_id", "INTEGER"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

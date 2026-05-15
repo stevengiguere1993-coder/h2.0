@@ -55,6 +55,22 @@ class ConvertToFactureRequest(BaseModel):
         default=False,
         description="Seed line items from the Achats linked to this project.",
     )
+    # Phase A — refacturation des achats avec markup et traçabilité.
+    achat_ids: Optional[list[int]] = Field(
+        default=None,
+        description=(
+            "Si fourni, restreint les achats importés à cette liste. "
+            "Sinon, tous les achats refacturables non encore facturés "
+            "du projet."
+        ),
+    )
+    achat_markup_overrides: dict[int, float] = Field(
+        default_factory=dict,
+        description=(
+            "Markup à appliquer par achat (achat_id -> %). Surcharge "
+            "Achat.markup_percent ; 0 si non renseigné."
+        ),
+    )
     due_in_days: Optional[int] = Field(
         default=30, ge=0, le=365,
         description="Days from today to the invoice due date.",
@@ -185,31 +201,50 @@ async def convert_project_to_facture(
                 )
                 pos += 1
 
-    # 3) Matériel — Achats liés à ce projet (chaque achat devient une
-    #    ligne quantité 1 au montant de l'achat).
+    # 3) Matériel — Achats refacturables liés à ce projet, avec markup
+    #    et flag anti-doublon. Seuls les achats `is_billable=True` et
+    #    non encore facturés sont importés.
     if data.include_achats:
-        achats = (
-            await db.execute(
-                select(Achat)
-                .where(Achat.project_id == project_id)
-                .order_by(Achat.id.asc())
-            )
-        ).scalars().all()
+        stmt = (
+            select(Achat)
+            .where(Achat.project_id == project_id)
+            .where(Achat.is_billable.is_(True))
+            .where(Achat.invoiced_at.is_(None))
+            .order_by(Achat.id.asc())
+        )
+        if data.achat_ids:
+            stmt = stmt.where(Achat.id.in_(data.achat_ids))
+        achats = (await db.execute(stmt)).scalars().all()
+
+        new_items: list[tuple[Achat, FactureItem]] = []
         for ac in achats:
-            amount = float(ac.amount or 0)
-            desc = ac.description or f"Achat {ac.reference}"
-            db.add(
-                FactureItem(
-                    facture_id=facture.id,
-                    position=pos,
-                    description=f"Matériel — {desc}",
-                    unit="lot",
-                    quantity=1,
-                    unit_price=amount,
-                    total=amount,
-                )
+            cost = float(ac.amount or 0)
+            markup_pct = float(
+                data.achat_markup_overrides.get(ac.id, ac.markup_percent or 0)
             )
+            billed = round(cost * (1 + markup_pct / 100.0), 2)
+            desc = ac.description or f"Achat {ac.reference or ac.id}"
+            if markup_pct > 0:
+                desc = f"{desc} (+{markup_pct:g} %)"
+            item = FactureItem(
+                facture_id=facture.id,
+                position=pos,
+                description=f"Matériel — {desc}",
+                unit="lot",
+                quantity=1,
+                unit_price=billed,
+                total=billed,
+            )
+            db.add(item)
+            new_items.append((ac, item))
             pos += 1
+
+        await db.flush()
+        from datetime import datetime as _dt, timezone as _tz
+        now = _dt.now(_tz.utc)
+        for ac, item in new_items:
+            ac.invoiced_at = now
+            ac.facture_item_id = item.id
 
     await db.flush()
     await db.refresh(facture)

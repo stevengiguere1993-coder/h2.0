@@ -55,6 +55,9 @@ export default function NewAchatPage() {
   const [fournisseurId, setFournisseurId] = useState("");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
+  // Refacturation client.
+  const [isBillable, setIsBillable] = useState(true);
+  const [markupPercent, setMarkupPercent] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
   const [supplierInvoiceNumber, setSupplierInvoiceNumber] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(() => todayIso());
@@ -117,6 +120,10 @@ export default function NewAchatPage() {
       if (fournisseurId) payload.fournisseur_id = Number(fournisseurId);
       if (description.trim()) payload.description = description.trim();
       if (amount) payload.amount = Number(amount);
+      payload.is_billable = isBillable;
+      if (markupPercent.trim()) {
+        payload.markup_percent = Number(markupPercent);
+      }
       if (paymentMethod) payload.payment_method = paymentMethod;
       if (supplierInvoiceNumber.trim()) {
         payload.supplier_invoice_number = supplierInvoiceNumber.trim();
@@ -378,6 +385,40 @@ export default function NewAchatPage() {
                 ))}
               </select>
             </div>
+          </div>
+
+          {/* Refacturation au client final */}
+          <div className="rounded-xl border border-brand-800 bg-brand-900/40 p-4">
+            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-white/60">
+              Refacturation au client
+            </p>
+            <label className="mb-3 flex items-center gap-2 text-sm text-white/80">
+              <input
+                type="checkbox"
+                checked={isBillable}
+                onChange={(e) => setIsBillable(e.target.checked)}
+              />
+              Refacturable au client (apparaît dans « À refacturer »)
+            </label>
+            <label htmlFor="markup" className="label">
+              Majoration (%) — appliquée au montant à l&apos;import facture
+            </label>
+            <input
+              id="markup"
+              type="number"
+              step="0.5"
+              min="0"
+              max="500"
+              value={markupPercent}
+              onChange={(e) => setMarkupPercent(e.target.value)}
+              placeholder="0"
+              disabled={!isBillable}
+              className="input"
+            />
+            <p className="mt-1 text-xs text-white/40">
+              Laissé vide = aucun markup (le client paie le coûtant). Modifiable
+              au moment de l&apos;import.
+            </p>
           </div>
 
           <div>
