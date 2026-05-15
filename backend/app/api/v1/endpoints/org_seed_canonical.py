@@ -35,7 +35,6 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DBSession
 from app.models.entreprise import Entreprise
 from app.models.org_node import OrgNode
-from app.schemas.org_node import OrgNodeRead
 
 
 router = APIRouter(prefix="/org-nodes", tags=["org-nodes-seed-canonical"])
