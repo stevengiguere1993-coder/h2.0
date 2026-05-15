@@ -16,6 +16,7 @@ from app.api.v1.endpoints import (
     blog,
     calendar,
     clients,
+    devlog,
     employes,
     entreprises,
     extension,
@@ -108,6 +109,8 @@ api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(users.router)
 api_router.include_router(clients.router)
+api_router.include_router(devlog.clients_router)
+api_router.include_router(devlog.leads_router)
 # Nested project routes MUST be registered before projects.router so
 # /projects/{id}/photos etc. are matched before /projects/{item_id}.
 api_router.include_router(project_photos.router)

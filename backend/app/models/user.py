@@ -51,8 +51,9 @@ VALID_VOLETS = (
     "entreprises",
     "immobilier",
     "investisseur",
+    "developpement_logiciel",
 )
-DEFAULT_VOLETS = ["construction", "prospection"]
+DEFAULT_VOLETS = ["construction", "prospection", "developpement_logiciel"]
 
 #: Whitelists temporaires pour les volets en développement. Mis à jour
 #: au cas par cas en attendant la généralisation. Comparaison

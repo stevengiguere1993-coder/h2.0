@@ -1,0 +1,109 @@
+"""Pydantic schemas — pôle Développement logiciel (clients & leads)."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+# --------------------------------------------------------------------------
+# DevlogClient
+# --------------------------------------------------------------------------
+
+
+class DevlogClientCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    company: Optional[str] = Field(default=None, max_length=255)
+    email: Optional[str] = Field(default=None, max_length=320)
+    phone: Optional[str] = Field(default=None, max_length=50)
+    address: Optional[str] = Field(default=None, max_length=500)
+    website: Optional[str] = Field(default=None, max_length=255)
+    status: str = Field(default="active", max_length=16)
+    notes: Optional[str] = None
+
+
+class DevlogClientUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    company: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    website: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class DevlogClientRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    company: Optional[str]
+    email: Optional[str]
+    phone: Optional[str]
+    address: Optional[str]
+    website: Optional[str]
+    status: str
+    notes: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+# --------------------------------------------------------------------------
+# DevlogLead
+# --------------------------------------------------------------------------
+
+
+class DevlogLeadCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    company: Optional[str] = Field(default=None, max_length=255)
+    email: Optional[str] = Field(default=None, max_length=320)
+    phone: Optional[str] = Field(default=None, max_length=50)
+    source: str = Field(default="interne", max_length=16)
+    status: str = Field(default="nouveau", max_length=20)
+    assigned_to_user_id: Optional[int] = None
+    project_summary: Optional[str] = None
+    budget_range: Optional[str] = Field(default=None, max_length=64)
+    notes: Optional[str] = None
+
+
+class DevlogLeadUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    company: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    source: Optional[str] = None
+    status: Optional[str] = None
+    position: Optional[int] = None
+    assigned_to_user_id: Optional[int] = None
+    project_summary: Optional[str] = None
+    budget_range: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class DevlogLeadStatusUpdate(BaseModel):
+    """Déplacement d'un lead dans le kanban du closer."""
+
+    status: str = Field(..., max_length=20)
+    position: Optional[int] = None
+
+
+class DevlogLeadRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    company: Optional[str]
+    email: Optional[str]
+    phone: Optional[str]
+    source: str
+    status: str
+    position: int
+    assigned_to_user_id: Optional[int]
+    project_summary: Optional[str]
+    budget_range: Optional[str]
+    notes: Optional[str]
+    client_id: Optional[int]
+    created_at: datetime
+    updated_at: datetime
