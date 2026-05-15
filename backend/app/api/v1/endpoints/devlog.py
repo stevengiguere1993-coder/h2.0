@@ -24,6 +24,7 @@ from app.models.devlog_lead import LEAD_STATUSES, DevlogLead
 from app.models.devlog_project import DevlogProject
 from app.models.devlog_soumission import DevlogSoumission
 from app.models.devlog_soumission_item import DevlogSoumissionItem
+from app.models.devlog_sous_traitant import DevlogSousTraitant
 from app.models.devlog_time_entry import DevlogTimeEntry
 from app.repositories.generic import GenericCrud
 from app.schemas.devlog import (
@@ -46,6 +47,9 @@ from app.schemas.devlog import (
     DevlogSoumissionItemUpdate,
     DevlogSoumissionRead,
     DevlogSoumissionUpdate,
+    DevlogSousTraitantCreate,
+    DevlogSousTraitantRead,
+    DevlogSousTraitantUpdate,
     DevlogTimeEntryCreate,
     DevlogTimeEntryRead,
     DevlogTimeEntryUpdate,
@@ -352,6 +356,20 @@ invoices_router = _make_crud_router(
     update_schema=DevlogInvoiceUpdate,
     read_schema=DevlogInvoiceRead,
     not_found="Facture introuvable",
+)
+
+
+# --------------------------------------------------------------------------
+# Sous-traitants
+# --------------------------------------------------------------------------
+
+sous_traitants_router = _make_crud_router(
+    prefix="/devlog/sous-traitants",
+    model=DevlogSousTraitant,
+    create_schema=DevlogSousTraitantCreate,
+    update_schema=DevlogSousTraitantUpdate,
+    read_schema=DevlogSousTraitantRead,
+    not_found="Sous-traitant introuvable",
 )
 
 

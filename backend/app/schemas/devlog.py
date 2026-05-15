@@ -190,6 +190,52 @@ class DevlogSoumissionItemRead(BaseModel):
 
 
 # --------------------------------------------------------------------------
+# DevlogSousTraitant
+# --------------------------------------------------------------------------
+
+
+class DevlogSousTraitantCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    company: Optional[str] = Field(default=None, max_length=255)
+    email: Optional[str] = Field(default=None, max_length=320)
+    phone: Optional[str] = Field(default=None, max_length=50)
+    specialty: Optional[str] = Field(default=None, max_length=255)
+    hourly_rate: Optional[float] = Field(default=None, ge=0)
+    active: bool = True
+    rating: Optional[int] = Field(default=None, ge=1, le=5)
+    notes: Optional[str] = None
+
+
+class DevlogSousTraitantUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    company: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    specialty: Optional[str] = None
+    hourly_rate: Optional[float] = Field(default=None, ge=0)
+    active: Optional[bool] = None
+    rating: Optional[int] = Field(default=None, ge=1, le=5)
+    notes: Optional[str] = None
+
+
+class DevlogSousTraitantRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    company: Optional[str]
+    email: Optional[str]
+    phone: Optional[str]
+    specialty: Optional[str]
+    hourly_rate: Optional[float]
+    active: bool
+    rating: Optional[int]
+    notes: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+# --------------------------------------------------------------------------
 # DevlogProject
 # --------------------------------------------------------------------------
 
