@@ -82,12 +82,18 @@ def _to_public(sm: Soumission) -> PublicContract:
 )
 async def public_contract_read(token: str, db: DBSession) -> PublicContract:
     sm = await _load_by_token(db, token)
-    # Suivi d'ouverture côté entrepreneur (chargé de projet).
+    # Suivi d'ouverture côté entrepreneur (chargé de projet). Débounce
+    # de 5 min pour éviter de compter les re-fetchs rapprochés (page
+    # + PDF + rechargement).
     try:
-        if sm.contractor_opened_at is None:
-            sm.contractor_opened_at = datetime.now(timezone.utc)
-        sm.contractor_open_count = (sm.contractor_open_count or 0) + 1
-        await db.flush()
+        now = datetime.now(timezone.utc)
+        last = sm.contractor_last_opened_at
+        if last is None or (now - last).total_seconds() > 300:
+            if sm.contractor_opened_at is None:
+                sm.contractor_opened_at = now
+            sm.contractor_last_opened_at = now
+            sm.contractor_open_count = (sm.contractor_open_count or 0) + 1
+            await db.flush()
     except Exception:  # noqa: BLE001
         pass
     return _to_public(sm)

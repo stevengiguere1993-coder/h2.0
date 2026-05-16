@@ -124,13 +124,20 @@ async def _load_by_token(
 async def public_read(token: str, db: DBSession) -> PublicSoumission:
     sm = await _load_by_token(db, token)
     # Suivi d'ouverture : marque la première visite + incrémente le
-    # compteur. Best-effort — n'interrompt jamais le rendu si l'écriture
-    # échoue.
+    # compteur, MAIS avec un débounce de 5 min pour éviter de compter
+    # plusieurs visites quand la page web déclenche des re-fetchs
+    # rapprochés (React StrictMode, embed PDF, rechargement mobile,
+    # navigation arrière/avant). Best-effort — n'interrompt jamais
+    # le rendu.
     try:
-        if sm.client_opened_at is None:
-            sm.client_opened_at = datetime.now(timezone.utc)
-        sm.client_open_count = (sm.client_open_count or 0) + 1
-        await db.flush()
+        now = datetime.now(timezone.utc)
+        last = sm.client_last_opened_at
+        if last is None or (now - last).total_seconds() > 300:
+            if sm.client_opened_at is None:
+                sm.client_opened_at = now
+            sm.client_last_opened_at = now
+            sm.client_open_count = (sm.client_open_count or 0) + 1
+            await db.flush()
     except Exception:  # noqa: BLE001
         pass
     rows = list(

@@ -93,12 +93,22 @@ async def init_db() -> None:
             ),
             (
                 "soumissions",
+                "client_last_opened_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
+            (
+                "soumissions",
                 "client_open_count",
                 "INTEGER NOT NULL DEFAULT 0",
             ),
             (
                 "soumissions",
                 "contractor_opened_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
+            (
+                "soumissions",
+                "contractor_last_opened_at",
                 "TIMESTAMP WITH TIME ZONE",
             ),
             (
