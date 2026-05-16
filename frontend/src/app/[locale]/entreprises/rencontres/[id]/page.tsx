@@ -15,7 +15,8 @@ import {
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
-import { Link } from "@/i18n/navigation";
+import { useConfirm } from "@/components/confirm-dialog";
+import { Link, useRouter } from "@/i18n/navigation";
 import { QGTopbar, useEntreprisesLayout } from "../../layout";
 
 /**
@@ -86,6 +87,8 @@ export default function RencontreDetailPage() {
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
   const { entreprises } = useEntreprisesLayout();
+  const confirm = useConfirm();
+  const router = useRouter();
 
   const [data, setData] = useState<Rencontre | null>(null);
   const [loading, setLoading] = useState(true);
@@ -93,6 +96,7 @@ export default function RencontreDetailPage() {
   const [generatingGlobal, setGeneratingGlobal] = useState(false);
   const [newSectionTitle, setNewSectionTitle] = useState("");
   const [creatingSection, setCreatingSection] = useState(false);
+  const [deletingRencontre, setDeletingRencontre] = useState(false);
   // Quand on clique « Lancer l'enregistrement » au niveau de la rencontre,
   // on crée une section avec un titre par défaut et on note son id ici
   // pour que sa SectionCard démarre automatiquement la dictée à son
@@ -183,6 +187,32 @@ export default function RencontreDetailPage() {
     }
   }
 
+  async function deleteRencontre() {
+    if (!data) return;
+    const ok = await confirm({
+      title: `Supprimer « ${data.title} » ?`,
+      description:
+        "Toutes les sections, transcripts et résumés associés seront perdus. Cette action est irréversible.",
+      confirmLabel: "Supprimer définitivement",
+      destructive: true
+    });
+    if (!ok) return;
+    setDeletingRencontre(true);
+    try {
+      const r = await authedFetch(`/api/v1/rencontres/${id}`, {
+        method: "DELETE"
+      });
+      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      router.push({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        pathname: "/entreprises/rencontres" as any
+      });
+    } catch (e) {
+      setError(`Suppression échouée : ${(e as Error).message}`);
+      setDeletingRencontre(false);
+    }
+  }
+
   async function deleteSection(sectionId: number) {
     try {
       const r = await authedFetch(
@@ -239,6 +269,24 @@ export default function RencontreDetailPage() {
           data?.meeting_date
             ? `${data.meeting_date}${data.location ? ` · ${data.location}` : ""}`
             : undefined
+        }
+        rightSlot={
+          data ? (
+            <button
+              type="button"
+              onClick={() => void deleteRencontre()}
+              disabled={deletingRencontre}
+              className="inline-flex items-center gap-1.5 rounded-md border border-rose-500/40 bg-rose-500/10 px-2.5 py-1.5 text-xs font-semibold text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
+              title="Supprimer cette rencontre"
+            >
+              {deletingRencontre ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5" />
+              )}
+              Supprimer
+            </button>
+          ) : undefined
         }
       />
 

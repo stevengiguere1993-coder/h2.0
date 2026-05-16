@@ -7,10 +7,12 @@ import {
   Loader2,
   MapPin,
   Plus,
+  Trash2,
   Users
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
 import { Link } from "@/i18n/navigation";
 import { QGTopbar, useEntreprisesLayout } from "../layout";
 
@@ -44,9 +46,11 @@ function parseIds(json: string | null): number[] {
 
 export default function RencontresListPage() {
   const { entreprises } = useEntreprisesLayout();
+  const confirm = useConfirm();
   const [rows, setRows] = useState<Rencontre[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   // Filtre depuis URL.
   const filterEntId = useMemo(() => {
@@ -81,6 +85,29 @@ export default function RencontresListPage() {
       setLoading(false);
     }
   }, [filterEntId]);
+
+  async function deleteRencontre(r: Rencontre) {
+    const ok = await confirm({
+      title: `Supprimer « ${r.title} » ?`,
+      description:
+        "Toutes les sections, transcripts et résumés associés seront perdus. Cette action est irréversible.",
+      confirmLabel: "Supprimer définitivement",
+      destructive: true
+    });
+    if (!ok) return;
+    setDeletingId(r.id);
+    try {
+      const res = await authedFetch(`/api/v1/rencontres/${r.id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      setRows((xs) => xs.filter((x) => x.id !== r.id));
+    } catch (e) {
+      setError(`Suppression échouée : ${(e as Error).message}`);
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   useEffect(() => {
     void load();
@@ -190,16 +217,20 @@ export default function RencontresListPage() {
               const entNames = entIds
                 .map((id) => entreprises.find((e) => e.id === id)?.name)
                 .filter(Boolean) as string[];
+              const isDeleting = deletingId === r.id;
               return (
-                <li key={r.id}>
+                <li
+                  key={r.id}
+                  className="group flex items-stretch gap-2 rounded-xl border transition hover:border-accent-500"
+                  style={{
+                    borderColor: "var(--qg-border)",
+                    backgroundColor: "var(--qg-card-bg)"
+                  }}
+                >
                   <Link
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     href={`/entreprises/rencontres/${r.id}` as any}
-                    className="flex items-center gap-3 rounded-xl border p-3 transition hover:border-accent-500"
-                    style={{
-                      borderColor: "var(--qg-border)",
-                      backgroundColor: "var(--qg-card-bg)"
-                    }}
+                    className="flex flex-1 items-center gap-3 p-3"
                   >
                     <span
                       className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent-500/15 text-accent-300"
@@ -244,6 +275,20 @@ export default function RencontresListPage() {
                     </div>
                     <ChevronRight className="h-4 w-4 opacity-40" />
                   </Link>
+                  <button
+                    type="button"
+                    onClick={() => void deleteRencontre(r)}
+                    disabled={isDeleting}
+                    className="flex shrink-0 items-center justify-center px-3 text-white/40 transition hover:bg-rose-500/15 hover:text-rose-300 disabled:opacity-50"
+                    title="Supprimer cette rencontre"
+                    aria-label={`Supprimer ${r.title}`}
+                  >
+                    {isDeleting ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4" />
+                    )}
+                  </button>
                 </li>
               );
             })}
