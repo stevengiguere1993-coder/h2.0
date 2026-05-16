@@ -24,6 +24,7 @@ import {
   Star,
   Trash2,
   User as UserIcon,
+  Table2,
   Users,
   Workflow,
   X
@@ -31,6 +32,7 @@ import {
 
 import { authedFetch } from "@/lib/auth";
 import { MultiSelectDropdown } from "@/components/multi-select-dropdown";
+import { RolesResponsibilitiesView } from "@/components/roles-responsibilities-view";
 import { QGTopbar, useEntreprisesLayout } from "../layout";
 
 /**
@@ -150,11 +152,13 @@ export default function OrganigrammePage() {
   const [seeding, setSeeding] = useState(false);
   const [importing, setImporting] = useState(false);
 
-  // Vue : arbre en colonnes (édition fine) ou canvas libre type Miro
-  // (bulles déplaçables + flèches). Les deux partagent les mêmes
+  // Vue : tableau « Rôles & responsabilités » (par défaut, lisible),
+  // arbre en colonnes (édition fine de la hiérarchie complète) ou
+  // canvas libre type Miro (bulles déplaçables + flèches, idéal pour
+  // entreprises + investisseurs). Les trois vues partagent les mêmes
   // données (parent_id / co_owner_node_ids) → toujours synchronisées.
-  const [viewMode, setViewMode] = useState<"columns" | "canvas">(
-    "columns"
+  const [viewMode, setViewMode] = useState<"roles" | "columns" | "canvas">(
+    "roles"
   );
 
   // Zoom de la vue colonnes (le canvas a son propre zoom interne) —
@@ -509,21 +513,22 @@ export default function OrganigrammePage() {
           >
             <button
               type="button"
-              onClick={() => setViewMode("columns")}
+              onClick={() => setViewMode("roles")}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold transition"
               style={{
                 backgroundColor:
-                  viewMode === "columns"
+                  viewMode === "roles"
                     ? "var(--qg-accent)"
                     : "var(--qg-card-bg)",
                 color:
-                  viewMode === "columns"
+                  viewMode === "roles"
                     ? "var(--qg-accent-ink, #0a0a0b)"
                     : "var(--qg-text-soft)"
               }}
+              title="Tableau des rôles + responsabilités (dispatch)"
             >
-              <LayoutGrid className="h-3.5 w-3.5" />
-              Colonnes
+              <Table2 className="h-3.5 w-3.5" />
+              Rôles
             </button>
             <button
               type="button"
@@ -539,9 +544,29 @@ export default function OrganigrammePage() {
                     ? "var(--qg-accent-ink, #0a0a0b)"
                     : "var(--qg-text-soft)"
               }}
+              title="Canvas libre — organigramme entreprises + investisseurs"
             >
               <Workflow className="h-3.5 w-3.5" />
-              Canvas
+              Organigramme
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("columns")}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold transition"
+              style={{
+                backgroundColor:
+                  viewMode === "columns"
+                    ? "var(--qg-accent)"
+                    : "var(--qg-card-bg)",
+                color:
+                  viewMode === "columns"
+                    ? "var(--qg-accent-ink, #0a0a0b)"
+                    : "var(--qg-text-soft)"
+              }}
+              title="Arbre complet en colonnes (édition fine de la hiérarchie)"
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+              Arbre complet
             </button>
           </div>
         }
@@ -688,6 +713,27 @@ export default function OrganigrammePage() {
                   ou ajoute manuellement une branche ci-dessus
                 </span>
               </div>
+            ) : viewMode === "roles" ? (
+              <>
+                <p
+                  className="mb-3 text-[11px]"
+                  style={{ color: "var(--qg-text-soft)" }}
+                >
+                  Liste tous les rôles du groupe. Filtre par pôle / statut
+                  / tier, ou cherche par nom. Sélectionne une ligne pour
+                  attribuer le titulaire et éditer ses responsabilités
+                  (anciennement « tâches » du seed canonique). Bascule
+                  sur <strong>Organigramme</strong> pour la vue canvas
+                  des entreprises + investisseurs.
+                </p>
+                <RolesResponsibilitiesView
+                  nodes={nodes}
+                  employes={employes}
+                  onPatch={patchNode}
+                  onDelete={deleteNode}
+                  onCreate={createNode}
+                />
+              </>
             ) : viewMode === "columns" ? (
               <>
                 <div className="mb-2 flex justify-end">
@@ -743,7 +789,12 @@ export default function OrganigrammePage() {
               </>
             ) : (
               <CanvasView
-                nodes={nodes}
+                /* Vue canvas = organigramme structurel des entreprises +
+                   investisseurs. On retire les nœuds kind="task" (qui
+                   sont les responsabilités d'un rôle) pour ne pas
+                   surcharger le plan. Ces responsabilités vivent dans
+                   le panneau latéral de l'onglet « Rôles ». */
+                nodes={nodes.filter((n) => n.kind !== "task")}
                 entreprises={entreprises}
                 employes={employes}
                 parentEntId={parentEntId}
