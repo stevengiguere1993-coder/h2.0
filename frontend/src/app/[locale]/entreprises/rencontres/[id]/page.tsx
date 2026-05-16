@@ -93,6 +93,14 @@ export default function RencontreDetailPage() {
   const [generatingGlobal, setGeneratingGlobal] = useState(false);
   const [newSectionTitle, setNewSectionTitle] = useState("");
   const [creatingSection, setCreatingSection] = useState(false);
+  // Quand on clique « Lancer l'enregistrement » au niveau de la rencontre,
+  // on crée une section avec un titre par défaut et on note son id ici
+  // pour que sa SectionCard démarre automatiquement la dictée à son
+  // mount. La SectionCard reset cette intention via `onAutoStartConsumed`
+  // pour qu'on ne re-déclenche pas à chaque rerender.
+  const [autoStartSectionId, setAutoStartSectionId] = useState<number | null>(
+    null
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -137,6 +145,39 @@ export default function RencontreDetailPage() {
       const s = (await r.json()) as Section;
       setData((d) => (d ? { ...d, sections: [...d.sections, s] } : d));
       setNewSectionTitle("");
+    } finally {
+      setCreatingSection(false);
+    }
+  }
+
+  // Démarre une nouvelle section + lance immédiatement la dictée.
+  // Le titre par défaut peut être renommé après-coup. Le scroll
+  // amène la section fraîchement créée à l'écran.
+  async function quickStartRecording() {
+    setCreatingSection(true);
+    try {
+      const now = new Date();
+      const defaultTitle = `Enregistrement — ${now.toLocaleDateString(
+        "fr-CA"
+      )} ${now.toLocaleTimeString("fr-CA", {
+        hour: "2-digit",
+        minute: "2-digit"
+      })}`;
+      const r = await authedFetch(`/api/v1/rencontres/${id}/sections`, {
+        method: "POST",
+        body: JSON.stringify({ title: defaultTitle })
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const s = (await r.json()) as Section;
+      setData((d) => (d ? { ...d, sections: [...d.sections, s] } : d));
+      setAutoStartSectionId(s.id);
+      // Scroll vers la section fraîchement créée (laisse React monter).
+      setTimeout(() => {
+        const el = document.getElementById(`section-${s.id}`);
+        el?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 50);
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setCreatingSection(false);
     }
@@ -284,12 +325,64 @@ export default function RencontreDetailPage() {
                 Sections ({data.sections.length})
               </h2>
 
+              {/* Lance une nouvelle section + démarre la dictée en un
+                  clic — pas besoin de taper un titre d'abord. */}
+              <div
+                className="mt-3 rounded-2xl border p-4"
+                style={{
+                  borderColor: "var(--qg-border)",
+                  backgroundColor: "var(--qg-card-bg)"
+                }}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-white">
+                      🎙 Lancer un enregistrement
+                    </p>
+                    <p
+                      className="mt-0.5 text-[11px]"
+                      style={{ color: "var(--qg-text-soft)" }}
+                    >
+                      Crée une section et démarre la dictée en un clic
+                      (titre par défaut = date + heure, modifiable ensuite).
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void quickStartRecording()}
+                    disabled={creatingSection}
+                    className="btn-accent inline-flex items-center gap-2 text-sm disabled:opacity-50"
+                  >
+                    {creatingSection ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Mic className="h-4 w-4" />
+                    )}
+                    Lancer l&apos;enregistrement
+                  </button>
+                </div>
+                <p
+                  className="mt-2 border-t pt-2 text-[11px]"
+                  style={{
+                    borderColor: "var(--qg-border-soft)",
+                    color: "var(--qg-text-soft)"
+                  }}
+                >
+                  💡 Tu peux ouvrir cette rencontre sur ton téléphone
+                  <em> en même temps</em> et lancer un autre enregistrement
+                  en parallèle — chacun sera une section distincte,
+                  fusionnée par le résumé global.
+                </p>
+              </div>
+
               <div className="mt-3 space-y-3">
                 {data.sections.map((s) => (
                   <SectionCard
                     key={s.id}
                     rencontreId={id}
                     section={s}
+                    autoStartDictation={autoStartSectionId === s.id}
+                    onAutoStartConsumed={() => setAutoStartSectionId(null)}
                     onChanged={(updated) =>
                       setData((d) =>
                         d
@@ -397,12 +490,16 @@ function SectionCard({
   rencontreId,
   section,
   onChanged,
-  onDelete
+  onDelete,
+  autoStartDictation = false,
+  onAutoStartConsumed
 }: {
   rencontreId: number;
   section: Section;
   onChanged: (s: Section) => void;
   onDelete: () => void;
+  autoStartDictation?: boolean;
+  onAutoStartConsumed?: () => void;
 }) {
   const [title, setTitle] = useState(section.title);
   const [transcript, setTranscript] = useState(section.transcript || "");
@@ -417,6 +514,24 @@ function SectionCard({
     setTitle(section.title);
     setTranscript(section.transcript || "");
   }, [section]);
+
+  // Auto-démarrage de la dictée quand la section vient d'être créée via
+  // le bouton « Lancer l'enregistrement » de la page rencontre. On
+  // déclenche toggleMic une seule fois, puis on prévient le parent qui
+  // remet l'intention à null pour ne plus re-déclencher.
+  const autoStartFiredRef = useRef(false);
+  useEffect(() => {
+    if (!autoStartDictation || autoStartFiredRef.current) return;
+    autoStartFiredRef.current = true;
+    // Petit délai pour laisser le DOM se stabiliser (et au cas où la
+    // permission micro doit être demandée par le navigateur).
+    const t = setTimeout(() => {
+      toggleMic();
+      onAutoStartConsumed?.();
+    }, 100);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStartDictation]);
 
   async function patchSection(patch: Partial<Section>) {
     try {
@@ -643,7 +758,8 @@ function SectionCard({
 
   return (
     <article
-      className="rounded-xl border p-4"
+      id={`section-${section.id}`}
+      className="rounded-xl border p-4 scroll-mt-4"
       style={{
         borderColor: "var(--qg-border)",
         backgroundColor: "var(--qg-card-bg)"
