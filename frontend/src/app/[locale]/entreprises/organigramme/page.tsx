@@ -166,8 +166,8 @@ export default function OrganigrammePage() {
   // entreprises + investisseurs). Les trois vues partagent les mêmes
   // données (parent_id / co_owner_node_ids) → toujours synchronisées.
   const [viewMode, setViewMode] = useState<
-    "roles" | "ressources" | "columns" | "canvas"
-  >("roles");
+    "canvas" | "columns" | "roles" | "ressources"
+  >("canvas");
 
   // Zoom de la vue colonnes (le canvas a son propre zoom interne) —
   // pour une vue plus globale au besoin. Ajustable via les boutons
@@ -270,10 +270,23 @@ export default function OrganigrammePage() {
     }
   }
 
-  // Index : parent_id → enfants triés par position
+  // Sous-ensemble « structurel » : entreprises + investisseurs + nœuds
+  // libres. On exclut explicitement les départements, rôles et tâches
+  // — ils vivent dans les vues « Rôles » et « Ressources » (panneau
+  // de dispatch), pas dans l'arbre d'investissement / le canvas.
+  const structuralNodes = useMemo(
+    () =>
+      nodes.filter(
+        (n) => n.kind !== "dept" && n.kind !== "role" && n.kind !== "task"
+      ),
+    [nodes]
+  );
+
+  // Index : parent_id → enfants triés par position (vues canvas + colonnes,
+  // donc à partir du sous-ensemble structurel uniquement).
   const byParent = useMemo(() => {
     const m = new Map<number | null, OrgNode[]>();
-    for (const n of nodes) {
+    for (const n of structuralNodes) {
       const arr = m.get(n.parent_id) || [];
       arr.push(n);
       m.set(n.parent_id, arr);
@@ -282,7 +295,7 @@ export default function OrganigrammePage() {
       arr.sort((a, b) => a.position - b.position);
     }
     return m;
-  }, [nodes]);
+  }, [structuralNodes]);
 
   // Placement dans l'arbre par « détenteur principal » :
   //  • détenteur principal d'un nœud = son parent_id si défini, sinon
@@ -295,15 +308,12 @@ export default function OrganigrammePage() {
   const { byPrimary, bySecondary } = useMemo(() => {
     const prim = new Map<number | null, OrgNode[]>();
     const sec = new Map<number, OrgNode[]>();
-    for (const n of nodes) {
+    for (const n of structuralNodes) {
       const co = n.co_owner_node_ids || [];
       const primary = n.parent_id ?? (co.length > 0 ? co[0] : null);
       const pArr = prim.get(primary);
       if (pArr) pArr.push(n);
       else prim.set(primary, [n]);
-      // Co-détenteurs « secondaires » = tous sauf celui déjà utilisé
-      // comme détenteur principal (le 1er, quand il n'y a pas de
-      // parent_id).
       const secondaries = n.parent_id != null ? co : co.slice(1);
       for (const h of secondaries) {
         const sArr = sec.get(h);
@@ -316,7 +326,7 @@ export default function OrganigrammePage() {
     for (const arr of sec.values())
       arr.sort((a, b) => a.position - b.position);
     return { byPrimary: prim, bySecondary: sec };
-  }, [nodes]);
+  }, [structuralNodes]);
 
   // Racines de l'arbre : les vrais top-level (aucun détenteur) + un
   // filet de sécurité — si des co-détentions forment un cycle
@@ -333,9 +343,11 @@ export default function OrganigrammePage() {
       reachable.add(id);
       for (const c of byPrimary.get(id) || []) stack.push(c.id);
     }
-    const orphans = nodes.filter((n) => !reachable.has(n.id));
+    const orphans = structuralNodes.filter(
+      (n) => !reachable.has(n.id)
+    );
     return orphans.length > 0 ? [...roots, ...orphans] : roots;
-  }, [byPrimary, nodes]);
+  }, [byPrimary, structuralNodes]);
 
   // Sous-arbre du nœud en cours de glissement — on l'exclut des cibles
   // de dépôt valides (un nœud ne peut pas atterrir sur lui-même ni
@@ -513,12 +525,50 @@ export default function OrganigrammePage() {
             Organigramme
           </span>
         }
-        subtitle="Entreprises, départements, rôles — qui détient quoi, qui fait quoi"
+        subtitle="Entreprises & investisseurs (structure du groupe) — voir les rôles et le dispatch des ressources dans les onglets dédiés"
         rightSlot={
           <div
             className="inline-flex overflow-hidden rounded-lg border"
             style={{ borderColor: "var(--qg-border)" }}
           >
+            <button
+              type="button"
+              onClick={() => setViewMode("canvas")}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold transition"
+              style={{
+                backgroundColor:
+                  viewMode === "canvas"
+                    ? "var(--qg-accent)"
+                    : "var(--qg-card-bg)",
+                color:
+                  viewMode === "canvas"
+                    ? "var(--qg-accent-ink, #0a0a0b)"
+                    : "var(--qg-text-soft)"
+              }}
+              title="Canvas libre — organigramme entreprises + investisseurs"
+            >
+              <Workflow className="h-3.5 w-3.5" />
+              Organigramme
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("columns")}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold transition"
+              style={{
+                backgroundColor:
+                  viewMode === "columns"
+                    ? "var(--qg-accent)"
+                    : "var(--qg-card-bg)",
+                color:
+                  viewMode === "columns"
+                    ? "var(--qg-accent-ink, #0a0a0b)"
+                    : "var(--qg-text-soft)"
+              }}
+              title="Arbre des entreprises + investisseurs en colonnes (édition hiérarchie)"
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+              Arbre complet
+            </button>
             <button
               type="button"
               onClick={() => setViewMode("roles")}
@@ -556,44 +606,6 @@ export default function OrganigrammePage() {
             >
               <UserCog className="h-3.5 w-3.5" />
               Ressources
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("canvas")}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold transition"
-              style={{
-                backgroundColor:
-                  viewMode === "canvas"
-                    ? "var(--qg-accent)"
-                    : "var(--qg-card-bg)",
-                color:
-                  viewMode === "canvas"
-                    ? "var(--qg-accent-ink, #0a0a0b)"
-                    : "var(--qg-text-soft)"
-              }}
-              title="Canvas libre — organigramme entreprises + investisseurs"
-            >
-              <Workflow className="h-3.5 w-3.5" />
-              Organigramme
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("columns")}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold transition"
-              style={{
-                backgroundColor:
-                  viewMode === "columns"
-                    ? "var(--qg-accent)"
-                    : "var(--qg-card-bg)",
-                color:
-                  viewMode === "columns"
-                    ? "var(--qg-accent-ink, #0a0a0b)"
-                    : "var(--qg-text-soft)"
-              }}
-              title="Arbre complet en colonnes (édition fine de la hiérarchie)"
-            >
-              <LayoutGrid className="h-3.5 w-3.5" />
-              Arbre complet
             </button>
           </div>
         }
@@ -834,12 +846,11 @@ export default function OrganigrammePage() {
               </>
             ) : (
               <CanvasView
-                /* Vue canvas = organigramme structurel des entreprises +
-                   investisseurs. On retire les nœuds kind="task" (qui
-                   sont les responsabilités d'un rôle) pour ne pas
-                   surcharger le plan. Ces responsabilités vivent dans
-                   le panneau latéral de l'onglet « Rôles ». */
-                nodes={nodes.filter((n) => n.kind !== "task")}
+                /* Vue canvas = organigramme structurel : seulement les
+                   entreprises et investisseurs. Les départements, rôles
+                   et responsabilités vivent dans les onglets « Rôles »
+                   et « Ressources ». */
+                nodes={structuralNodes}
                 entreprises={entreprises}
                 employes={employes}
                 parentEntId={parentEntId}
