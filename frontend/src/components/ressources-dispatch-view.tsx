@@ -161,9 +161,88 @@ export function RessourcesDispatchView({
     });
   }
 
+  // ─── Drag & drop (HTML5) ─────────────────────────────────────
+  // Sources : un rôle (vacant ou tenu) OU un employé.
+  // Cibles  : une carte employé (= attribuer le rôle traîné) /
+  //           la zone des vacants (= libérer le rôle traîné) /
+  //           un rôle vacant (= attribuer cet employé traîné).
+  // Les boutons cliquables restent disponibles partout — drag-drop
+  // est uniquement un raccourci desktop.
+  const [drag, setDrag] = useState<
+    | { kind: "role"; id: number; fromEmployeId: number | null }
+    | { kind: "employe"; id: number }
+    | null
+  >(null);
+
+  function onRoleDragStart(
+    e: React.DragEvent,
+    roleId: number,
+    fromEmployeId: number | null
+  ) {
+    setDrag({ kind: "role", id: roleId, fromEmployeId });
+    try {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", `role:${roleId}`);
+    } catch {
+      /* Safari throws on some shapes — ignore. */
+    }
+  }
+  function onEmployeDragStart(e: React.DragEvent, employeId: number) {
+    setDrag({ kind: "employe", id: employeId });
+    try {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", `employe:${employeId}`);
+    } catch {
+      /* ignore */
+    }
+  }
+  function onDragEnd() {
+    setDrag(null);
+  }
+
+  // Cible « employé » accepte un drag de type rôle (= assigne).
+  const employeAcceptsDrag = drag?.kind === "role";
+  // Cible « rôle vacant » accepte un drag de type employé (= assigne).
+  const vacantRoleAcceptsDrag = drag?.kind === "employe";
+  // Cible « zone vacants » accepte un drag de type rôle tenu (= libère).
+  const releaseAcceptsDrag =
+    drag?.kind === "role" && drag.fromEmployeId != null;
+
+  function onDropOnEmploye(targetEmployeId: number) {
+    if (drag?.kind === "role") {
+      // Évite le no-op si déjà tenu par cet employé.
+      if (drag.fromEmployeId !== targetEmployeId) {
+        assignRole(drag.id, targetEmployeId);
+      }
+    }
+    setDrag(null);
+  }
+  function onDropOnVacantRole(roleId: number) {
+    if (drag?.kind === "employe") {
+      assignRole(roleId, drag.id);
+    }
+    setDrag(null);
+  }
+  function onDropOnReleaseZone() {
+    if (drag?.kind === "role" && drag.fromEmployeId != null) {
+      releaseRole(drag.id);
+    }
+    setDrag(null);
+  }
+
   return (
     <div className="space-y-4">
       <StatsBanner stats={stats} />
+
+      {drag ? (
+        <p className="rounded-md border border-dashed border-emerald-500/40 bg-emerald-500/5 px-3 py-1.5 text-[11px] text-emerald-200">
+          {drag.kind === "role"
+            ? drag.fromEmployeId != null
+              ? "Dépose ce rôle sur un autre employé pour réassigner, ou sur la zone « Rôles à pourvoir » pour libérer."
+              : "Dépose ce rôle sur un employé pour l'attribuer."
+            : "Dépose cet employé sur un rôle à pourvoir pour l'attribuer."}
+        </p>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[20rem_1fr]">
         {/* Liste employés */}
@@ -188,15 +267,33 @@ export function RessourcesDispatchView({
               const pct = Math.min(100, (roleCount / maxCharge) * 100);
               const overloaded = roleCount >= OVERLOAD_THRESHOLD;
               const isActive = employe.id === selectedEmpId;
+              const isDropTarget = employeAcceptsDrag;
+              const beingDragged =
+                drag?.kind === "employe" && drag.id === employe.id;
               return (
                 <li key={employe.id}>
                   <button
                     type="button"
                     onClick={() => setSelectedEmpId(employe.id)}
-                    className={`w-full rounded-lg px-2.5 py-2 text-left transition ${
+                    draggable
+                    onDragStart={(e) => onEmployeDragStart(e, employe.id)}
+                    onDragEnd={onDragEnd}
+                    onDragOver={(e) => {
+                      if (isDropTarget) e.preventDefault();
+                    }}
+                    onDrop={(e) => {
+                      if (!isDropTarget) return;
+                      e.preventDefault();
+                      onDropOnEmploye(employe.id);
+                    }}
+                    className={`w-full cursor-grab rounded-lg px-2.5 py-2 text-left transition active:cursor-grabbing ${
+                      beingDragged ? "opacity-50" : ""
+                    } ${
                       isActive
                         ? "bg-accent-500/15 ring-1 ring-accent-500/40"
-                        : "hover:bg-white/[0.04]"
+                        : isDropTarget
+                          ? "ring-1 ring-dashed ring-emerald-500/40 hover:bg-emerald-500/10"
+                          : "hover:bg-white/[0.04]"
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -254,6 +351,9 @@ export function RessourcesDispatchView({
               roles={selectedEntry.roles}
               findPole={findPole}
               onRelease={releaseRole}
+              dragState={drag}
+              onRoleDragStart={onRoleDragStart}
+              onDragEnd={onDragEnd}
             />
           ) : (
             <div
@@ -274,6 +374,13 @@ export function RessourcesDispatchView({
             findPole={findPole}
             selectedEmploye={selectedEntry?.employe || null}
             onAssign={assignRole}
+            dragState={drag}
+            onRoleDragStart={onRoleDragStart}
+            onDragEnd={onDragEnd}
+            onDropOnVacantRole={onDropOnVacantRole}
+            onDropOnReleaseZone={onDropOnReleaseZone}
+            vacantRoleAcceptsDrag={vacantRoleAcceptsDrag}
+            releaseAcceptsDrag={releaseAcceptsDrag}
           />
         </div>
       </div>
@@ -372,12 +479,25 @@ function EmployeDetail({
   employe,
   roles,
   findPole,
-  onRelease
+  onRelease,
+  dragState,
+  onRoleDragStart,
+  onDragEnd
 }: {
   employe: Employe;
   roles: OrgNode[];
   findPole: (n: OrgNode) => OrgNode | null;
   onRelease: (roleId: number) => void;
+  dragState:
+    | { kind: "role"; id: number; fromEmployeId: number | null }
+    | { kind: "employe"; id: number }
+    | null;
+  onRoleDragStart: (
+    e: React.DragEvent,
+    roleId: number,
+    fromEmployeId: number | null
+  ) => void;
+  onDragEnd: () => void;
 }) {
   const distribution = useMemo(() => {
     const m = new Map<string, number>();
@@ -428,14 +548,22 @@ function EmployeDetail({
           <ul className="space-y-1.5">
             {roles.map((r) => {
               const p = findPole(r);
+              const beingDragged =
+                dragState?.kind === "role" && dragState.id === r.id;
               return (
                 <li
                   key={r.id}
-                  className="flex items-center justify-between gap-2 rounded border px-3 py-2"
+                  draggable
+                  onDragStart={(e) => onRoleDragStart(e, r.id, employe.id)}
+                  onDragEnd={onDragEnd}
+                  className={`flex cursor-grab items-center justify-between gap-2 rounded border px-3 py-2 active:cursor-grabbing ${
+                    beingDragged ? "opacity-50" : ""
+                  }`}
                   style={{
                     borderColor: "var(--qg-border-soft)",
                     backgroundColor: "var(--qg-card-bg-hover, transparent)"
                   }}
+                  title="Glisser sur un autre employé pour réassigner, ou sur « Rôles à pourvoir » pour libérer"
                 >
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-semibold text-white">
@@ -505,12 +633,33 @@ function VacantRolesPanel({
   vacantRoles,
   findPole,
   selectedEmploye,
-  onAssign
+  onAssign,
+  dragState,
+  onRoleDragStart,
+  onDragEnd,
+  onDropOnVacantRole,
+  onDropOnReleaseZone,
+  vacantRoleAcceptsDrag,
+  releaseAcceptsDrag
 }: {
   vacantRoles: OrgNode[];
   findPole: (n: OrgNode) => OrgNode | null;
   selectedEmploye: Employe | null;
   onAssign: (roleId: number, employeId: number) => void;
+  dragState:
+    | { kind: "role"; id: number; fromEmployeId: number | null }
+    | { kind: "employe"; id: number }
+    | null;
+  onRoleDragStart: (
+    e: React.DragEvent,
+    roleId: number,
+    fromEmployeId: number | null
+  ) => void;
+  onDragEnd: () => void;
+  onDropOnVacantRole: (roleId: number) => void;
+  onDropOnReleaseZone: () => void;
+  vacantRoleAcceptsDrag: boolean;
+  releaseAcceptsDrag: boolean;
 }) {
   const [poleFilter, setPoleFilter] = useState<string>("all");
 
@@ -534,23 +683,39 @@ function VacantRolesPanel({
 
   return (
     <div
-      className="rounded-2xl border p-4"
+      className={`rounded-2xl border p-4 transition ${
+        releaseAcceptsDrag
+          ? "ring-2 ring-dashed ring-amber-500/50"
+          : ""
+      }`}
       style={{
         borderColor: "var(--qg-border)",
         backgroundColor: "var(--qg-card-bg)"
       }}
+      onDragOver={(e) => {
+        if (releaseAcceptsDrag) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        if (!releaseAcceptsDrag) return;
+        e.preventDefault();
+        onDropOnReleaseZone();
+      }}
     >
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b pb-3"
-        style={{ borderColor: "var(--qg-border-soft)" }}>
+      <header
+        className="flex flex-wrap items-center justify-between gap-2 border-b pb-3"
+        style={{ borderColor: "var(--qg-border-soft)" }}
+      >
         <div>
           <h3 className="text-base font-bold text-white">
             Rôles à pourvoir
           </h3>
           <p className="text-[11px]" style={{ color: "var(--qg-text-soft)" }}>
             {filtered.length} sur {vacantRoles.length} affichés
-            {selectedEmploye
-              ? ` · sélection active : ${selectedEmploye.full_name}`
-              : " · sélectionne un employé pour pouvoir attribuer"}
+            {releaseAcceptsDrag
+              ? " · dépose ici pour libérer le rôle"
+              : selectedEmploye
+                ? ` · sélection active : ${selectedEmploye.full_name}`
+                : " · sélectionne un employé pour pouvoir attribuer"}
           </p>
         </div>
         <select
@@ -579,14 +744,35 @@ function VacantRolesPanel({
         <ul className="mt-3 space-y-1.5">
           {filtered.map((r) => {
             const p = findPole(r);
+            const beingDragged =
+              dragState?.kind === "role" && dragState.id === r.id;
             return (
               <li
                 key={r.id}
-                className="flex items-center justify-between gap-2 rounded border px-3 py-2"
+                draggable
+                onDragStart={(e) => onRoleDragStart(e, r.id, null)}
+                onDragEnd={onDragEnd}
+                onDragOver={(e) => {
+                  if (vacantRoleAcceptsDrag) e.preventDefault();
+                }}
+                onDrop={(e) => {
+                  if (!vacantRoleAcceptsDrag) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onDropOnVacantRole(r.id);
+                }}
+                className={`flex cursor-grab items-center justify-between gap-2 rounded border px-3 py-2 transition active:cursor-grabbing ${
+                  beingDragged ? "opacity-50" : ""
+                } ${
+                  vacantRoleAcceptsDrag
+                    ? "ring-1 ring-dashed ring-emerald-500/40 hover:bg-emerald-500/10"
+                    : ""
+                }`}
                 style={{
                   borderColor: "var(--qg-border-soft)",
                   backgroundColor: "var(--qg-card-bg-hover, transparent)"
                 }}
+                title="Glisser sur un employé pour attribuer, ou utiliser le bouton →"
               >
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold text-white">
