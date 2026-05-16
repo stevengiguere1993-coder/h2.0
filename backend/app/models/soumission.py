@@ -149,12 +149,21 @@ class Soumission(Base, TimestampUpdateMixin):
     client_opened_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Dernière ouverture (debounce des bursts : page principale + PDF +
+    # rechargements en quelques secondes ne comptent qu'une seule
+    # visite).
+    client_last_opened_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     client_open_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
     # Suivi d'ouverture du lien public par le chargé de projet
     # (signature entrepreneur). Même usage que ci-dessus côté Horizon.
     contractor_opened_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    contractor_last_opened_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     contractor_open_count: Mapped[int] = mapped_column(

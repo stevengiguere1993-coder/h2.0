@@ -189,8 +189,10 @@ class SoumissionRead(_Base):
     contractor_signature_token: Optional[str] = None
     signed_name: Optional[str] = None
     client_opened_at: Optional[datetime] = None
+    client_last_opened_at: Optional[datetime] = None
     client_open_count: int = 0
     contractor_opened_at: Optional[datetime] = None
+    contractor_last_opened_at: Optional[datetime] = None
     contractor_open_count: int = 0
     created_at: datetime
 

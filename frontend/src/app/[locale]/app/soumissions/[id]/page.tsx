@@ -62,8 +62,10 @@ type Soumission = {
   contractor_signature_token?: string | null;
   signed_name?: string | null;
   client_opened_at?: string | null;
+  client_last_opened_at?: string | null;
   client_open_count?: number;
   contractor_opened_at?: string | null;
+  contractor_last_opened_at?: string | null;
   contractor_open_count?: number;
   created_at: string;
   qbo_estimate_id?: string | null;
@@ -112,6 +114,21 @@ function fmtMoney(n: number | null): string {
     currency: "CAD",
     maximumFractionDigits: 2
   }).format(n);
+}
+
+function fmtDateTime(iso: string): string {
+  // Affiche « 16 mai 2026 à 14:43 » dans la locale du navigateur.
+  const d = new Date(iso);
+  const date = d.toLocaleDateString("fr-CA", {
+    day: "numeric",
+    month: "short",
+    year: "numeric"
+  });
+  const time = d.toLocaleTimeString("fr-CA", {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+  return `${date} à ${time}`;
 }
 function isoToDateInput(iso: string | null): string {
   if (!iso) return "";
@@ -822,13 +839,17 @@ export default function SoumissionDetailPage() {
             {s.sent_at ? (
               <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
                 {s.client_opened_at ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-md border border-blue-500/40 bg-blue-500/10 px-2.5 py-1 font-semibold text-blue-200">
+                  <span
+                    className="inline-flex items-center gap-1.5 rounded-md border border-blue-500/40 bg-blue-500/10 px-2.5 py-1 font-semibold text-blue-200"
+                    title={
+                      s.client_last_opened_at &&
+                      s.client_last_opened_at !== s.client_opened_at
+                        ? `Dernière visite : ${fmtDateTime(s.client_last_opened_at)}`
+                        : undefined
+                    }
+                  >
                     <Eye className="h-3 w-3" />
-                    Ouverte le{" "}
-                    {new Date(s.client_opened_at).toLocaleDateString(
-                      "fr-CA",
-                      { day: "numeric", month: "short", year: "numeric" }
-                    )}
+                    Ouverte le {fmtDateTime(s.client_opened_at)}
                     {s.client_open_count && s.client_open_count > 1
                       ? ` · ${s.client_open_count} visites`
                       : ""}
@@ -843,11 +864,7 @@ export default function SoumissionDetailPage() {
                   <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 font-semibold text-emerald-200">
                     <Check className="h-3 w-3" />
                     Signée par {s.signed_name} le{" "}
-                    {new Date(s.accepted_at).toLocaleDateString("fr-CA", {
-                      day: "numeric",
-                      month: "short",
-                      year: "numeric"
-                    })}
+                    {fmtDateTime(s.accepted_at)}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1.5 rounded-md border border-white/15 bg-white/5 px-2.5 py-1 font-semibold text-white/60">
@@ -1189,16 +1206,19 @@ export default function SoumissionDetailPage() {
                       </p>
                       {s.contractor_signature_token &&
                       s.contractor_opened_at ? (
-                        <p className="inline-flex items-center gap-1.5 rounded-md border border-blue-500/40 bg-blue-500/10 px-2.5 py-1 text-[11px] font-semibold text-blue-200">
+                        <p
+                          className="inline-flex items-center gap-1.5 rounded-md border border-blue-500/40 bg-blue-500/10 px-2.5 py-1 text-[11px] font-semibold text-blue-200"
+                          title={
+                            s.contractor_last_opened_at &&
+                            s.contractor_last_opened_at !==
+                              s.contractor_opened_at
+                              ? `Dernière visite : ${fmtDateTime(s.contractor_last_opened_at)}`
+                              : undefined
+                          }
+                        >
                           <Eye className="h-3 w-3" />
                           Lien ouvert le{" "}
-                          {new Date(
-                            s.contractor_opened_at
-                          ).toLocaleDateString("fr-CA", {
-                            day: "numeric",
-                            month: "short",
-                            year: "numeric"
-                          })}
+                          {fmtDateTime(s.contractor_opened_at)}
                           {s.contractor_open_count &&
                           s.contractor_open_count > 1
                             ? ` · ${s.contractor_open_count} visites`
