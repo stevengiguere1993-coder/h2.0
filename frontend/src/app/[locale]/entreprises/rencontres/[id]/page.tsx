@@ -97,12 +97,12 @@ export default function RencontreDetailPage() {
   const [newSectionTitle, setNewSectionTitle] = useState("");
   const [creatingSection, setCreatingSection] = useState(false);
   const [deletingRencontre, setDeletingRencontre] = useState(false);
-  // Quand on clique « Lancer l'enregistrement » au niveau de la rencontre,
-  // on crée une section avec un titre par défaut et on note son id ici
-  // pour que sa SectionCard démarre automatiquement la dictée à son
-  // mount. La SectionCard reset cette intention via `onAutoStartConsumed`
-  // pour qu'on ne re-déclenche pas à chaque rerender.
-  const [autoStartSectionId, setAutoStartSectionId] = useState<number | null>(
+  // ID de la section fraîchement créée par « Lancer un enregistrement ».
+  // Sert à mettre en valeur son bouton « Dicter » (pulse) pendant
+  // quelques secondes — l'utilisateur doit cliquer manuellement pour
+  // démarrer la dictée. NE PAS auto-déclencher : Web Speech API
+  // requiert un geste utilisateur direct, perdu après un await fetch.
+  const [highlightSectionId, setHighlightSectionId] = useState<number | null>(
     null
   );
 
@@ -154,9 +154,12 @@ export default function RencontreDetailPage() {
     }
   }
 
-  // Démarre une nouvelle section + lance immédiatement la dictée.
-  // Le titre par défaut peut être renommé après-coup. Le scroll
-  // amène la section fraîchement créée à l'écran.
+  // Crée une nouvelle section avec un titre par défaut, scroll vers
+  // elle, et met en surbrillance son bouton « Dicter » pour 6 s.
+  // L'utilisateur clique ensuite sur Dicter — c'est OBLIGATOIRE pour
+  // que Web Speech API démarre (le navigateur exige un geste user
+  // direct, perdu si on auto-déclenche après un await réseau,
+  // particulièrement sur iOS Safari et PWA qui peuvent freezer).
   async function quickStartRecording() {
     setCreatingSection(true);
     try {
@@ -174,12 +177,14 @@ export default function RencontreDetailPage() {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const s = (await r.json()) as Section;
       setData((d) => (d ? { ...d, sections: [...d.sections, s] } : d));
-      setAutoStartSectionId(s.id);
+      setHighlightSectionId(s.id);
       // Scroll vers la section fraîchement créée (laisse React monter).
       setTimeout(() => {
         const el = document.getElementById(`section-${s.id}`);
         el?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 50);
+      // Retire le highlight après 6 s.
+      setTimeout(() => setHighlightSectionId(null), 6000);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -391,8 +396,9 @@ export default function RencontreDetailPage() {
                       className="mt-0.5 text-[11px]"
                       style={{ color: "var(--qg-text-soft)" }}
                     >
-                      Crée une section et démarre la dictée en un clic
-                      (titre par défaut = date + heure, modifiable ensuite).
+                      Crée une section avec titre par défaut (date + heure,
+                      modifiable). Appuie ensuite sur <strong>🎙 Dicter</strong>
+                      {" "}dans la section pour démarrer l&apos;enregistrement.
                     </p>
                   </div>
                   <button
@@ -429,8 +435,7 @@ export default function RencontreDetailPage() {
                     key={s.id}
                     rencontreId={id}
                     section={s}
-                    autoStartDictation={autoStartSectionId === s.id}
-                    onAutoStartConsumed={() => setAutoStartSectionId(null)}
+                    highlightDictation={highlightSectionId === s.id}
                     onChanged={(updated) =>
                       setData((d) =>
                         d
@@ -539,15 +544,16 @@ function SectionCard({
   section,
   onChanged,
   onDelete,
-  autoStartDictation = false,
-  onAutoStartConsumed
+  highlightDictation = false
 }: {
   rencontreId: number;
   section: Section;
   onChanged: (s: Section) => void;
   onDelete: () => void;
-  autoStartDictation?: boolean;
-  onAutoStartConsumed?: () => void;
+  // Met en surbrillance (pulse) le bouton Dicter pendant quelques
+  // secondes — utilisé après la création via « Lancer un
+  // enregistrement » pour montrer la prochaine action à l'user.
+  highlightDictation?: boolean;
 }) {
   const [title, setTitle] = useState(section.title);
   const [transcript, setTranscript] = useState(section.transcript || "");
@@ -562,24 +568,6 @@ function SectionCard({
     setTitle(section.title);
     setTranscript(section.transcript || "");
   }, [section]);
-
-  // Auto-démarrage de la dictée quand la section vient d'être créée via
-  // le bouton « Lancer l'enregistrement » de la page rencontre. On
-  // déclenche toggleMic une seule fois, puis on prévient le parent qui
-  // remet l'intention à null pour ne plus re-déclencher.
-  const autoStartFiredRef = useRef(false);
-  useEffect(() => {
-    if (!autoStartDictation || autoStartFiredRef.current) return;
-    autoStartFiredRef.current = true;
-    // Petit délai pour laisser le DOM se stabiliser (et au cas où la
-    // permission micro doit être demandée par le navigateur).
-    const t = setTimeout(() => {
-      toggleMic();
-      onAutoStartConsumed?.();
-    }, 100);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoStartDictation]);
 
   async function patchSection(patch: Partial<Section>) {
     try {
@@ -855,13 +843,17 @@ function SectionCard({
             className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-semibold transition ${
               listening
                 ? "border-rose-500/40 bg-rose-500/15 text-rose-300"
-                : "border-accent-500/40 bg-accent-500/10 text-accent-300 hover:bg-accent-500/20"
+                : highlightDictation && !listening
+                  ? "border-accent-500 bg-accent-500/30 text-accent-200 ring-2 ring-accent-500/60 animate-pulse"
+                  : "border-accent-500/40 bg-accent-500/10 text-accent-300 hover:bg-accent-500/20"
             }`}
           >
             <Mic className={`h-3 w-3 ${listening ? "animate-pulse" : ""}`} />
             {listening
               ? "Écoute… (clique pour arrêter)"
-              : "Dicter (mode persistant + auto-save)"}
+              : highlightDictation
+                ? "👉 Clique ici pour démarrer"
+                : "Dicter (mode persistant + auto-save)"}
           </button>
           <span
             className="text-[10px]"
