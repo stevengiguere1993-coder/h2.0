@@ -25,6 +25,7 @@ import {
   Trash2,
   User as UserIcon,
   Table2,
+  UserCog,
   Users,
   Workflow,
   X
@@ -32,6 +33,7 @@ import {
 
 import { authedFetch } from "@/lib/auth";
 import { MultiSelectDropdown } from "@/components/multi-select-dropdown";
+import { RessourcesDispatchView } from "@/components/ressources-dispatch-view";
 import { RolesResponsibilitiesView } from "@/components/roles-responsibilities-view";
 import { QGTopbar, useEntreprisesLayout } from "../layout";
 
@@ -74,7 +76,13 @@ type OrgNode = {
   updated_at: string;
 };
 
-type Employe = { id: number; full_name: string };
+type Employe = {
+  id: number;
+  full_name: string;
+  email?: string | null;
+  role?: string | null;
+  active?: boolean;
+};
 
 type DropTarget = { id: number; mode: "into" | "before" };
 
@@ -157,9 +165,9 @@ export default function OrganigrammePage() {
   // canvas libre type Miro (bulles déplaçables + flèches, idéal pour
   // entreprises + investisseurs). Les trois vues partagent les mêmes
   // données (parent_id / co_owner_node_ids) → toujours synchronisées.
-  const [viewMode, setViewMode] = useState<"roles" | "columns" | "canvas">(
-    "roles"
-  );
+  const [viewMode, setViewMode] = useState<
+    "roles" | "ressources" | "columns" | "canvas"
+  >("roles");
 
   // Zoom de la vue colonnes (le canvas a son propre zoom interne) —
   // pour une vue plus globale au besoin. Ajustable via les boutons
@@ -532,6 +540,25 @@ export default function OrganigrammePage() {
             </button>
             <button
               type="button"
+              onClick={() => setViewMode("ressources")}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold transition"
+              style={{
+                backgroundColor:
+                  viewMode === "ressources"
+                    ? "var(--qg-accent)"
+                    : "var(--qg-card-bg)",
+                color:
+                  viewMode === "ressources"
+                    ? "var(--qg-accent-ink, #0a0a0b)"
+                    : "var(--qg-text-soft)"
+              }}
+              title="Dispatch des rôles par employé — voir la charge et les disponibilités"
+            >
+              <UserCog className="h-3.5 w-3.5" />
+              Ressources
+            </button>
+            <button
+              type="button"
               onClick={() => setViewMode("canvas")}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold transition"
               style={{
@@ -732,6 +759,24 @@ export default function OrganigrammePage() {
                   onPatch={patchNode}
                   onDelete={deleteNode}
                   onCreate={createNode}
+                />
+              </>
+            ) : viewMode === "ressources" ? (
+              <>
+                <p
+                  className="mb-3 text-[11px]"
+                  style={{ color: "var(--qg-text-soft)" }}
+                >
+                  Vue inverse : qui tient quoi. Liste des employés
+                  triés par charge (rouge = ≥ 4 rôles), sélectionne pour
+                  voir leur portefeuille et libérer des rôles. Le
+                  panneau « Rôles à pourvoir » en bas permet d&apos;attribuer
+                  les vacants à l&apos;employé sélectionné en un clic.
+                </p>
+                <RessourcesDispatchView
+                  nodes={nodes}
+                  employes={employes}
+                  onPatch={patchNode}
                 />
               </>
             ) : viewMode === "columns" ? (
