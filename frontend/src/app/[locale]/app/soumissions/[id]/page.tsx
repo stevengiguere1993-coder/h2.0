@@ -6,6 +6,8 @@ import {
   ArrowLeft,
   Briefcase,
   Check,
+  Eye,
+  EyeOff,
   FileText,
   Users,
   Loader2,
@@ -58,6 +60,11 @@ type Soumission = {
   contractor_signed_name?: string | null;
   contractor_signed_at?: string | null;
   contractor_signature_token?: string | null;
+  signed_name?: string | null;
+  client_opened_at?: string | null;
+  client_open_count?: number;
+  contractor_opened_at?: string | null;
+  contractor_open_count?: number;
   created_at: string;
   qbo_estimate_id?: string | null;
   qbo_doc_number?: string | null;
@@ -810,6 +817,46 @@ export default function SoumissionDetailPage() {
               </div>
             </header>
 
+            {/* Suivi côté client : ouverture du lien + signature.
+                S'affiche dès que la soumission a été envoyée. */}
+            {s.sent_at ? (
+              <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
+                {s.client_opened_at ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-md border border-blue-500/40 bg-blue-500/10 px-2.5 py-1 font-semibold text-blue-200">
+                    <Eye className="h-3 w-3" />
+                    Ouverte le{" "}
+                    {new Date(s.client_opened_at).toLocaleDateString(
+                      "fr-CA",
+                      { day: "numeric", month: "short", year: "numeric" }
+                    )}
+                    {s.client_open_count && s.client_open_count > 1
+                      ? ` · ${s.client_open_count} visites`
+                      : ""}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 rounded-md border border-white/15 bg-white/5 px-2.5 py-1 font-semibold text-white/60">
+                    <EyeOff className="h-3 w-3" />
+                    Pas encore ouverte par le client
+                  </span>
+                )}
+                {s.signed_name && s.accepted_at ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 font-semibold text-emerald-200">
+                    <Check className="h-3 w-3" />
+                    Signée par {s.signed_name} le{" "}
+                    {new Date(s.accepted_at).toLocaleDateString("fr-CA", {
+                      day: "numeric",
+                      month: "short",
+                      year: "numeric"
+                    })}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 rounded-md border border-white/15 bg-white/5 px-2.5 py-1 font-semibold text-white/60">
+                    Non signée par le client
+                  </span>
+                )}
+              </div>
+            ) : null}
+
             {error ? (
               <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
                 {error}
@@ -1128,8 +1175,8 @@ export default function SoumissionDetailPage() {
                             s.contractor_signed_at
                           ).toLocaleDateString("fr-CA")}`
                         : ""}
-                      . Le contrat peut être envoyé au client pour
-                      signature.
+                      . Le contrat a été envoyé automatiquement au
+                      client pour signature.
                     </div>
                   ) : (
                     <div className="mt-3 space-y-3">
@@ -1137,9 +1184,27 @@ export default function SoumissionDetailPage() {
                         Le chargé de projet signe le contrat pour la
                         compagnie. Cliquez ci-dessous pour lui envoyer
                         par courriel un lien de signature. Une fois
-                        signé, vous pourrez envoyer le contrat au
-                        client.
+                        signé, le contrat est envoyé automatiquement
+                        au client.
                       </p>
+                      {s.contractor_signature_token &&
+                      s.contractor_opened_at ? (
+                        <p className="inline-flex items-center gap-1.5 rounded-md border border-blue-500/40 bg-blue-500/10 px-2.5 py-1 text-[11px] font-semibold text-blue-200">
+                          <Eye className="h-3 w-3" />
+                          Lien ouvert le{" "}
+                          {new Date(
+                            s.contractor_opened_at
+                          ).toLocaleDateString("fr-CA", {
+                            day: "numeric",
+                            month: "short",
+                            year: "numeric"
+                          })}
+                          {s.contractor_open_count &&
+                          s.contractor_open_count > 1
+                            ? ` · ${s.contractor_open_count} visites`
+                            : ""}
+                        </p>
+                      ) : null}
                       <button
                         type="button"
                         onClick={sendForContractorSignature}
