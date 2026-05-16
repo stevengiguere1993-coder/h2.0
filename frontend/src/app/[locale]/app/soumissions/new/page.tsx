@@ -1,10 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter as useNextRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Info, Loader2 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import {
+  TargetPicker,
+  type TargetPickerOption
+} from "@/components/target-picker";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -65,6 +69,24 @@ export default function NewSoumissionPage() {
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const targetOptions = useMemo<TargetPickerOption[]>(
+    () => [
+      ...prospects.map((p) => ({
+        value: `prospect:${p.id}`,
+        label: p.name,
+        sub: p.email || null,
+        kind: "prospect" as const
+      })),
+      ...clients.map((c) => ({
+        value: `client:${c.id}`,
+        label: c.name,
+        sub: c.email || null,
+        kind: "client" as const
+      }))
+    ],
+    [prospects, clients]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -200,14 +222,15 @@ export default function NewSoumissionPage() {
 
         <form onSubmit={onSubmit} className="mt-6 max-w-3xl space-y-5">
           <div>
-            <label htmlFor="target" className="label">
+            <label htmlFor="target-search" className="label">
               Prospect ou client (optionnel)
             </label>
-            <select
-              id="target"
+            <TargetPicker
+              id="target-search"
+              options={targetOptions}
               value={target}
-              onChange={(e) => {
-                const val = e.target.value;
+              loading={loadingTargets}
+              onChange={(val) => {
                 setTarget(val);
                 if (val.startsWith("prospect:")) {
                   const id = val.slice("prospect:".length);
@@ -229,35 +252,13 @@ export default function NewSoumissionPage() {
                   }
                 }
               }}
-              className="input"
-              disabled={loadingTargets}
-            >
-              <option value="">— Soumission sans destinataire associé —</option>
-              {prospects.length > 0 ? (
-                <optgroup label="Prospects">
-                  {prospects.map((p) => (
-                    <option key={`p-${p.id}`} value={`prospect:${p.id}`}>
-                      {p.name} · {p.email}
-                    </option>
-                  ))}
-                </optgroup>
-              ) : null}
-              {clients.length > 0 ? (
-                <optgroup label="Clients existants">
-                  {clients.map((c) => (
-                    <option key={`c-${c.id}`} value={`client:${c.id}`}>
-                      {c.name}
-                      {c.email ? ` · ${c.email}` : ""}
-                    </option>
-                  ))}
-                </optgroup>
-              ) : null}
-            </select>
+            />
             <p className="mt-1 text-xs text-white/50">
-              Un prospect devient un client une fois sa soumission acceptée —
-              choisis un <strong>client existant</strong> pour ajouter une
-              soumission complémentaire (travaux additionnels, second projet,
-              etc.).
+              Tape les premières lettres du nom ou du courriel — les
+              résultats s'affichent au fur et à mesure. Un prospect
+              devient un client une fois sa soumission acceptée — choisis
+              un <strong>client existant</strong> pour ajouter une
+              soumission complémentaire.
             </p>
           </div>
 
@@ -374,3 +375,4 @@ export default function NewSoumissionPage() {
     </>
   );
 }
+
