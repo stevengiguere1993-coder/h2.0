@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, LargeBinary, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, LargeBinary, Numeric, String, Text
 from sqlalchemy.orm import Mapped, deferred, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -140,5 +140,24 @@ class Soumission(Base, TimestampUpdateMixin):
     # pour signer le contrat AVANT son envoi au client.
     contractor_signature_token: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, unique=True, index=True
+    )
+
+    # Suivi d'ouverture du lien public par le client (premier accès +
+    # compteur de visites). Sert à afficher « Ouverte le {date} » côté
+    # admin pour savoir si le client a regardé la soumission avant de
+    # signer.
+    client_opened_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    client_open_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    # Suivi d'ouverture du lien public par le chargé de projet
+    # (signature entrepreneur). Même usage que ci-dessus côté Horizon.
+    contractor_opened_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    contractor_open_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
     )
 

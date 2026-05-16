@@ -123,6 +123,16 @@ async def _load_by_token(
 )
 async def public_read(token: str, db: DBSession) -> PublicSoumission:
     sm = await _load_by_token(db, token)
+    # Suivi d'ouverture : marque la première visite + incrémente le
+    # compteur. Best-effort — n'interrompt jamais le rendu si l'écriture
+    # échoue.
+    try:
+        if sm.client_opened_at is None:
+            sm.client_opened_at = datetime.now(timezone.utc)
+        sm.client_open_count = (sm.client_open_count or 0) + 1
+        await db.flush()
+    except Exception:  # noqa: BLE001
+        pass
     rows = list(
         (
             await db.execute(

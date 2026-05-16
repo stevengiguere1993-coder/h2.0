@@ -86,6 +86,26 @@ async def init_db() -> None:
             ("soumissions", "qbo_estimate_id", "VARCHAR(64)"),
             ("soumissions", "qbo_doc_number", "VARCHAR(64)"),
             ("soumissions", "qbo_sync_token", "VARCHAR(32)"),
+            (
+                "soumissions",
+                "client_opened_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
+            (
+                "soumissions",
+                "client_open_count",
+                "INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "soumissions",
+                "contractor_opened_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
+            (
+                "soumissions",
+                "contractor_open_count",
+                "INTEGER NOT NULL DEFAULT 0",
+            ),
             ("factures", "qbo_invoice_id", "VARCHAR(64)"),
             ("factures", "qbo_doc_number", "VARCHAR(64)"),
             ("factures", "qbo_sync_token", "VARCHAR(32)"),

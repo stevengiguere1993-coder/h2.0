@@ -82,6 +82,14 @@ def _to_public(sm: Soumission) -> PublicContract:
 )
 async def public_contract_read(token: str, db: DBSession) -> PublicContract:
     sm = await _load_by_token(db, token)
+    # Suivi d'ouverture côté entrepreneur (chargé de projet).
+    try:
+        if sm.contractor_opened_at is None:
+            sm.contractor_opened_at = datetime.now(timezone.utc)
+        sm.contractor_open_count = (sm.contractor_open_count or 0) + 1
+        await db.flush()
+    except Exception:  # noqa: BLE001
+        pass
     return _to_public(sm)
 
 
@@ -145,12 +153,93 @@ async def public_contractor_sign(
             title=f"Contrat signé par Horizon — {sm.reference}",
             body=(
                 f"Signé par {sm.contractor_signed_name}. "
-                "Le contrat peut être envoyé au client."
+                "Envoi automatique au client en cours."
             ),
             href=f"/app/soumissions/{sm.id}",
         )
     except Exception:  # noqa: BLE001
         pass
 
+    # Auto-envoi au client : dès que le chargé de projet signe pour
+    # Horizon, le contrat part directement chez le client (qui n'a plus
+    # qu'à ouvrir + signer à son tour). Best-effort — un échec d'envoi
+    # est logué mais n'interrompt pas la signature entrepreneur.
+    await _autosend_contract_to_client(db, sm)
+
     await db.refresh(sm)
     return _to_public(sm)
+
+
+async def _autosend_contract_to_client(
+    db: AsyncSession, sm: Soumission
+) -> None:
+    """Envoie le contrat signé au client (best-effort)."""
+    if (sm.kind or "quote") != "contract":
+        return
+    # Résout l'adresse email du client : Client lié d'abord, sinon
+    # contact_request (prospect) — premier non-vide.
+    to_email: Optional[str] = None
+    try:
+        from app.models.client import Client as _Client
+        from app.models.contact_request import ContactRequest as _CR
+
+        if sm.client_id is not None:
+            c = (
+                await db.execute(
+                    select(_Client).where(_Client.id == sm.client_id)
+                )
+            ).scalar_one_or_none()
+            if c and c.email:
+                to_email = c.email
+        if not to_email and sm.contact_request_id is not None:
+            cr = (
+                await db.execute(
+                    select(_CR).where(_CR.id == sm.contact_request_id)
+                )
+            ).scalar_one_or_none()
+            if cr and cr.email:
+                to_email = cr.email
+    except Exception:  # noqa: BLE001
+        to_email = None
+    if not to_email:
+        # Pas d'adresse : on n'envoie pas, on notifie pour action manuelle.
+        try:
+            from app.services.notifications import notify_role
+
+            await notify_role(
+                db,
+                min_role="manager",
+                kind="contract.autosend_skipped",
+                title=f"Contrat {sm.reference} : envoi manuel requis",
+                body=(
+                    "Aucune adresse courriel client. Ouvre la soumission "
+                    "et clique « Renvoyer au client »."
+                ),
+                href=f"/app/soumissions/{sm.id}",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return
+
+    try:
+        from app.services.soumission_send import send_soumission
+
+        await send_soumission(db, sm.id, to=[to_email])
+    except Exception as exc:  # noqa: BLE001
+        # Échec d'envoi : on notifie pour action manuelle, sans casser
+        # la signature qui a déjà réussi.
+        try:
+            from app.services.notifications import notify_role
+
+            await notify_role(
+                db,
+                min_role="manager",
+                kind="contract.autosend_failed",
+                title=f"Contrat {sm.reference} : envoi auto échoué",
+                body=(
+                    f"Tente de renvoyer manuellement. Détail : {exc}"
+                ),
+                href=f"/app/soumissions/{sm.id}",
+            )
+        except Exception:  # noqa: BLE001
+            pass
