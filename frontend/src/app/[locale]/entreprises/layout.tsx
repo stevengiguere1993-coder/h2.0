@@ -15,7 +15,6 @@ import {
   Calendar,
   ChevronDown,
   ChevronRight,
-  ClipboardList,
   Compass,
   Contact as ContactIcon,
   ExternalLink,
@@ -26,7 +25,6 @@ import {
   Menu,
   Plus,
   Settings,
-  Sparkles,
   Target,
   Users,
   X
@@ -260,15 +258,13 @@ export default function EntreprisesLayout({
       icon: Target,
       badge: openTasksCount || undefined
     },
-    { href: "/entreprises/resumes", label: "Résumés IA", icon: Sparkles },
-    { href: "/entreprises/rencontres", label: "Rencontres", icon: Calendar },
-    { href: "/entreprises/contacts", label: "Contacts", icon: ContactIcon },
-    { href: "/entreprises/organigramme", label: "Organigramme", icon: Users },
-    { href: "/entreprises/plan-suivi", label: "Plan & Suivi", icon: ClipboardList },
     { href: "/entreprises/kratos", label: "Kratos · Cerveau", icon: Brain },
+    { href: "/entreprises/rencontres", label: "Rencontres", icon: Calendar },
+    { href: "/entreprises/organigramme", label: "Organigramme", icon: Users },
     { href: "/entreprises/vision", label: "Vision & Stratégie", icon: BarChart3 },
     { href: "/entreprises/comparatif", label: "Comparatif", icon: BarChart3 },
-    { href: "/entreprises/projets", label: "Projets", icon: Briefcase }
+    { href: "/entreprises/projets", label: "Projets", icon: Briefcase },
+    { href: "/entreprises/contacts", label: "Contacts", icon: ContactIcon }
   ];
 
   const REGLAGES: NavItem[] = [
