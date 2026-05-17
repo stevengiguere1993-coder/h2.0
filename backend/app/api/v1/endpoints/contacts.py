@@ -18,7 +18,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete, select
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.contact import Contact
@@ -258,17 +258,20 @@ async def delete_contact(contact_id: int, db: DBSession, _: CurrentUser):
 # minuscules + accents stripés (cf. _norm_header). Les en-têtes Gmail
 # (« E-mail 1 - Value ») et Monday (« Email ») sont tous couverts.
 _HEADER_MAPPING: dict[str, str] = {
-    # Nom
+    # Nom complet (Gmail "Name" est le merge officiel given+family)
     "name": "full_name",
     "full name": "full_name",
-    "given name": "full_name",  # Gmail
-    "first name": "full_name",
     "nom complet": "full_name",
     "nom": "full_name",
     "person": "full_name",  # Monday person column
+    # NOTE : "given name" / "family name" sont traités à part dans
+    # _row_to_contact (combinaison first + last → full_name).
     # Entreprise / organisation
     "organization name": "company",
     "organization 1 - name": "company",  # Gmail
+    "organization 1 - title": "company",  # fallback Gmail
+    "organization 2 - name": "company",  # Gmail
+    "organization": "company",
     "company": "company",
     "company name": "company",
     "entreprise": "company",
@@ -278,11 +281,14 @@ _HEADER_MAPPING: dict[str, str] = {
     "e-mail": "email",
     "e-mail 1 - value": "email",  # Gmail
     "email 1 - value": "email",
+    "e-mail 2 - value": "email",  # fallback Gmail
+    "email 2 - value": "email",
     "email address": "email",
     "courriel": "email",
     # Téléphone
     "phone": "phone",
     "phone 1 - value": "phone",  # Gmail
+    "phone 2 - value": "phone",  # fallback Gmail
     "phone number": "phone",
     "telephone": "phone",
     "tel": "phone",
@@ -296,6 +302,15 @@ _HEADER_MAPPING: dict[str, str] = {
     "notes": "notes",
     "note": "notes",
 }
+
+# Headers traités séparément (combinés en `full_name`).
+_FIRST_NAME_HEADERS = frozenset(
+    ["given name", "first name", "prenom", "first"]
+)
+_LAST_NAME_HEADERS = frozenset(
+    ["family name", "last name", "surname", "nom de famille", "last"]
+)
+_MIDDLE_NAME_HEADERS = frozenset(["additional name", "middle name"])
 
 
 def _norm_header(h: str) -> str:
@@ -323,11 +338,20 @@ def _parse_csv(raw: bytes) -> tuple[list[str], list[dict]]:
             status_code=400,
             detail="Encodage du fichier non reconnu (utf-8, cp1252, latin-1).",
         )
-    # Sniffer le séparateur sur les 4 KiB premiers.
-    try:
-        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
-    except csv.Error:
+    # Détection du séparateur : on regarde la 1ère ligne. Si elle
+    # ressemble à un en-tête Gmail/Outlook (présence de « Name » et
+    # plein de virgules) → on force la dialecte excel (`,` + `"`)
+    # qui est plus tolérante aux quotes mal échappées. Sinon, on
+    # tente le sniffer pour les autres formats.
+    first_line = text.splitlines()[0] if text else ""
+    looks_like_excel = first_line.count(",") > first_line.count(";") + 2
+    if looks_like_excel:
         dialect = csv.get_dialect("excel")
+    else:
+        try:
+            dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
+        except csv.Error:
+            dialect = csv.get_dialect("excel")
     reader = csv.DictReader(io.StringIO(text), dialect=dialect)
     headers = list(reader.fieldnames or [])
     rows = [dict(r) for r in reader]
@@ -336,27 +360,76 @@ def _parse_csv(raw: bytes) -> tuple[list[str], list[dict]]:
 
 def _row_to_contact(row: dict) -> Optional[dict]:
     """Convertit une ligne CSV en payload Contact partiel. Retourne
-    None si la ligne n'a ni nom ni email (ligne ignorable)."""
+    None si la ligne n'a ni nom ni email (ligne ignorable), ou si la
+    ligne est manifestement corrompue (CSV mal échappé)."""
     out: dict = {}
+    first_name = ""
+    middle_name = ""
+    last_name = ""
+
     for h, raw_val in row.items():
-        key = _HEADER_MAPPING.get(_norm_header(h))
-        if not key:
-            continue
+        nh = _norm_header(h)
         val = (raw_val or "").strip()
         if not val:
+            continue
+
+        # Cas spécial : nom décomposé Gmail (« Given Name » + « Family
+        # Name »). On les combine en fin pour reconstruire `full_name`.
+        if nh in _FIRST_NAME_HEADERS:
+            if not first_name:
+                first_name = val
+            continue
+        if nh in _LAST_NAME_HEADERS:
+            if not last_name:
+                last_name = val
+            continue
+        if nh in _MIDDLE_NAME_HEADERS:
+            if not middle_name:
+                middle_name = val
+            continue
+
+        key = _HEADER_MAPPING.get(nh)
+        if not key:
             continue
         if key in out and out[key]:
             # Gmail répète parfois plusieurs colonnes (email 1, 2…).
             # On garde la première non vide rencontrée.
             continue
-        # Gmail concatène "given + family" via Name. Si Given Name +
-        # Family Name dans des colonnes séparées, on les laisse aller
-        # dans full_name dans l'ordre (first seen wins).
         out[key] = val[:500]
+
+    # Construction du `full_name` :
+    # 1. Si la colonne « Name » (déjà mappée vers full_name) est
+    #    présente et non vide → on la garde telle quelle (c'est le
+    #    nom final attendu côté Gmail).
+    # 2. Sinon → on assemble first + middle + last.
+    if not out.get("full_name"):
+        full = " ".join(
+            filter(None, [first_name, middle_name, last_name])
+        ).strip()
+        if full:
+            out["full_name"] = full[:500]
+    elif last_name and last_name not in out["full_name"]:
+        # Edge case : « Name » contient juste le prénom, mais
+        # « Family Name » a un last name réel → on l'ajoute.
+        candidate = f"{out['full_name']} {last_name}".strip()
+        out["full_name"] = candidate[:500]
+
     name = out.get("full_name", "").strip()
     email = out.get("email", "").strip()
     if not name and not email:
         return None
+
+    # Garde-fou : si le nom semble être une ligne CSV mal échappée
+    # (beaucoup de virgules consécutives, présence du tag Gmail
+    # `* myContacts`, etc.), on rejette la ligne — mieux vaut perdre
+    # 1 contact que d'avoir une saleté dans la liste.
+    if name and (
+        name.count(",,") >= 1
+        or "myContacts" in name
+        or name.count(",") >= 5
+    ):
+        return None
+
     if not name:
         out["full_name"] = email.split("@", 1)[0]
     return out
@@ -382,6 +455,7 @@ async def import_contacts_csv(
     default_kind: str = Query(default="professional", max_length=32),
     dry_run: bool = Query(default=False),
     skip_duplicates_by_email: bool = Query(default=True),
+    replace_existing: bool = Query(default=False),
 ):
     raw = await file.read()
     if not raw:
@@ -396,14 +470,29 @@ async def import_contacts_csv(
     headers, rows = _parse_csv(raw)
 
     # Liste des en-têtes effectivement mappés (pour feedback UI).
+    # On inclut aussi les colonnes first/last name qui ne sont pas dans
+    # _HEADER_MAPPING mais qui sont bien traitées en spécial.
     matched: list[str] = []
     for h in headers:
-        if _HEADER_MAPPING.get(_norm_header(h)):
+        nh = _norm_header(h)
+        if (
+            _HEADER_MAPPING.get(nh)
+            or nh in _FIRST_NAME_HEADERS
+            or nh in _LAST_NAME_HEADERS
+            or nh in _MIDDLE_NAME_HEADERS
+        ):
             matched.append(h)
+
+    # Mode « remplacer » : on vide d'abord la table contacts purs avant
+    # d'importer (utile pour ré-importer après avoir corrigé le parser
+    # — évite de devoir supprimer 100+ lignes à la main).
+    if replace_existing and not dry_run:
+        await db.execute(sa_delete(Contact))
+        await db.flush()
 
     # Précharge les emails existants pour la dédup.
     existing_emails: set[str] = set()
-    if skip_duplicates_by_email:
+    if skip_duplicates_by_email and not replace_existing:
         rs = (
             await db.execute(
                 select(Contact.email).where(Contact.email.is_not(None))

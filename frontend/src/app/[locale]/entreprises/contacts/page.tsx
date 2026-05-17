@@ -1084,6 +1084,7 @@ function ImportCsvModal({
   const [file, setFile] = useState<File | null>(null);
   const [defaultKind, setDefaultKind] = useState("professional");
   const [skipDup, setSkipDup] = useState(true);
+  const [replaceExisting, setReplaceExisting] = useState(false);
   const [preview, setPreview] = useState<ImportResult | null>(null);
   const [committing, setCommitting] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1103,7 +1104,8 @@ function ImportCsvModal({
       const params = new URLSearchParams({
         default_kind: defaultKind,
         dry_run: dryRun ? "true" : "false",
-        skip_duplicates_by_email: skipDup ? "true" : "false"
+        skip_duplicates_by_email: skipDup ? "true" : "false",
+        replace_existing: replaceExisting ? "true" : "false"
       });
       const r = await authedFetch(
         `/api/v1/contacts/import-csv?${params.toString()}`,
@@ -1201,8 +1203,25 @@ function ImportCsvModal({
             type="checkbox"
             checked={skipDup}
             onChange={(e) => setSkipDup(e.target.checked)}
+            disabled={replaceExisting}
           />
           Ignorer les contacts dont le courriel existe déjà
+        </label>
+
+        <label className="flex items-start gap-2 rounded-md border border-rose-500/40 bg-rose-500/5 px-2 py-1.5 text-xs text-rose-200">
+          <input
+            type="checkbox"
+            checked={replaceExisting}
+            onChange={(e) => setReplaceExisting(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            <strong>⚠️ Remplacer mes contacts purs existants</strong>{" "}
+            — vide d'abord la table des contacts purs avant l'import
+            (utile pour ré-importer proprement après un mauvais import).
+            <em> Ne touche PAS</em> aux sous-traitants, fournisseurs ni
+            employés.
+          </span>
         </label>
 
         {err ? <p className="text-xs text-rose-300">{err}</p> : null}
