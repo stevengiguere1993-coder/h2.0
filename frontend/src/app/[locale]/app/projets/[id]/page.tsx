@@ -2312,12 +2312,46 @@ function FinancesTab({ projectId }: { projectId: number }) {
           Facturation
         </h3>
         <dl className="mt-3 space-y-1 text-sm">
+          {data.projected_revenue > 0 ? (
+            <div className="flex justify-between">
+              <dt className="text-white/60">Total du contrat</dt>
+              <dd className="font-semibold text-white/80">
+                {fmtMoney(data.projected_revenue)}
+              </dd>
+            </div>
+          ) : null}
           <div className="flex justify-between">
             <dt className="text-white/60">Facturé</dt>
             <dd className="font-semibold text-white">
               {fmtMoney(data.invoiced_amount)}
+              {data.projected_revenue > 0 ? (
+                <span className="ml-1.5 text-[11px] font-normal text-white/40">
+                  ({Math.round(
+                    (data.invoiced_amount / data.projected_revenue) * 100
+                  )}{" "}
+                  %)
+                </span>
+              ) : null}
             </dd>
           </div>
+          {data.projected_revenue > 0 ? (() => {
+            const remaining = Math.max(
+              0,
+              data.projected_revenue - data.invoiced_amount
+            );
+            return (
+              <div className="flex justify-between">
+                <dt className="text-white/60">Reste à facturer</dt>
+                <dd
+                  className={`font-bold ${
+                    remaining > 0 ? "text-amber-300" : "text-emerald-300"
+                  }`}
+                >
+                  {fmtMoney(remaining)}
+                </dd>
+              </div>
+            );
+          })() : null}
           <div className="flex justify-between">
             <dt className="text-white/60">Reçu</dt>
             <dd className="font-semibold text-emerald-300">
