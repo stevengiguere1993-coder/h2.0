@@ -1,22 +1,23 @@
-"""Endpoints — Contacts (rolodex transverse + vue agrégée).
+"""Endpoints — Contacts (rolodex transverse + vue agrégée + import CSV).
 
-Deux familles d'endpoints :
+Trois familles d'endpoints :
 
 1. **CRUD de la table `contacts` purs** :
    - GET/POST/PATCH/DELETE /api/v1/contacts
 
 2. **Vue agrégée** (lecture seule, fédère plusieurs sources) :
-   - GET /api/v1/contacts/all → liste unifiée incluant les contacts
-     purs + sous-traitants Construction + fournisseurs + employés
-     partenaires + sous-traitants Dev logiciel.
+   - GET /api/v1/contacts/all
 
-L'édition fine des entités fédérées reste sur leurs pages
-spécialisées (/app/sous-traitants/{id}, /app/fournisseurs/{id}, …).
+3. **Import CSV** depuis Gmail / Monday / autre :
+   - POST /api/v1/contacts/import-csv (preview + commit)
 """
 
-from typing import List
+import csv
+import io
+from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, UploadFile, status
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
@@ -227,3 +228,200 @@ async def delete_contact(contact_id: int, db: DBSession, _: CurrentUser):
     if obj is None:
         raise HTTPException(status_code=404, detail="Contact introuvable")
     await crud.delete(obj)
+
+
+# --------------------------------------------------------------------------
+# Import CSV (Gmail / Outlook / Monday / autre)
+# --------------------------------------------------------------------------
+
+
+# Mapping des en-têtes courants → champ Contact. La clé est en
+# minuscules + accents stripés (cf. _norm_header). Les en-têtes Gmail
+# (« E-mail 1 - Value ») et Monday (« Email ») sont tous couverts.
+_HEADER_MAPPING: dict[str, str] = {
+    # Nom
+    "name": "full_name",
+    "full name": "full_name",
+    "given name": "full_name",  # Gmail
+    "first name": "full_name",
+    "nom complet": "full_name",
+    "nom": "full_name",
+    "person": "full_name",  # Monday person column
+    # Entreprise / organisation
+    "organization name": "company",
+    "organization 1 - name": "company",  # Gmail
+    "company": "company",
+    "company name": "company",
+    "entreprise": "company",
+    "organisation": "company",
+    # Email
+    "email": "email",
+    "e-mail": "email",
+    "e-mail 1 - value": "email",  # Gmail
+    "email 1 - value": "email",
+    "email address": "email",
+    "courriel": "email",
+    # Téléphone
+    "phone": "phone",
+    "phone 1 - value": "phone",  # Gmail
+    "phone number": "phone",
+    "telephone": "phone",
+    "tel": "phone",
+    # Adresse
+    "address": "address",
+    "address 1 - formatted": "address",  # Gmail
+    "address 1 - street": "address",
+    "home address": "address",
+    "adresse": "address",
+    # Notes
+    "notes": "notes",
+    "note": "notes",
+}
+
+
+def _norm_header(h: str) -> str:
+    """Normalise un en-tête : strip, lowercase, retire les accents."""
+    import unicodedata
+
+    s = (h or "").strip().lower()
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    return s
+
+
+def _parse_csv(raw: bytes) -> tuple[list[str], list[dict]]:
+    """Parse un CSV en (headers, rows). Détecte automatiquement le
+    séparateur , vs ; et l'encodage (utf-8 / cp1252 fallback)."""
+    text: Optional[str] = None
+    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Encodage du fichier non reconnu (utf-8, cp1252, latin-1).",
+        )
+    # Sniffer le séparateur sur les 4 KiB premiers.
+    try:
+        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
+    except csv.Error:
+        dialect = csv.get_dialect("excel")
+    reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+    headers = list(reader.fieldnames or [])
+    rows = [dict(r) for r in reader]
+    return headers, rows
+
+
+def _row_to_contact(row: dict) -> Optional[dict]:
+    """Convertit une ligne CSV en payload Contact partiel. Retourne
+    None si la ligne n'a ni nom ni email (ligne ignorable)."""
+    out: dict = {}
+    for h, raw_val in row.items():
+        key = _HEADER_MAPPING.get(_norm_header(h))
+        if not key:
+            continue
+        val = (raw_val or "").strip()
+        if not val:
+            continue
+        if key in out and out[key]:
+            # Gmail répète parfois plusieurs colonnes (email 1, 2…).
+            # On garde la première non vide rencontrée.
+            continue
+        # Gmail concatène "given + family" via Name. Si Given Name +
+        # Family Name dans des colonnes séparées, on les laisse aller
+        # dans full_name dans l'ordre (first seen wins).
+        out[key] = val[:500]
+    name = out.get("full_name", "").strip()
+    email = out.get("email", "").strip()
+    if not name and not email:
+        return None
+    if not name:
+        out["full_name"] = email.split("@", 1)[0]
+    return out
+
+
+class CsvImportResult(BaseModel):
+    detected_rows: int
+    inserted: int
+    skipped_existing: int
+    skipped_empty: int
+    headers_matched: list[str]
+
+
+@router.post(
+    "/import-csv",
+    response_model=CsvImportResult,
+    summary="Import en masse de contacts depuis un CSV (Gmail / Monday / autre)",
+)
+async def import_contacts_csv(
+    db: DBSession,
+    _: CurrentUser,
+    file: UploadFile,
+    default_kind: str = Query(default="professional", max_length=32),
+    dry_run: bool = Query(default=False),
+    skip_duplicates_by_email: bool = Query(default=True),
+):
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(
+            status_code=400, detail="Fichier vide."
+        )
+    if len(raw) > 5_000_000:
+        raise HTTPException(
+            status_code=400,
+            detail="Fichier trop volumineux (max 5 MB).",
+        )
+    headers, rows = _parse_csv(raw)
+
+    # Liste des en-têtes effectivement mappés (pour feedback UI).
+    matched: list[str] = []
+    for h in headers:
+        if _HEADER_MAPPING.get(_norm_header(h)):
+            matched.append(h)
+
+    # Précharge les emails existants pour la dédup.
+    existing_emails: set[str] = set()
+    if skip_duplicates_by_email:
+        rs = (
+            await db.execute(
+                select(Contact.email).where(Contact.email.is_not(None))
+            )
+        ).all()
+        existing_emails = {
+            (e[0] or "").strip().lower() for e in rs if e[0]
+        }
+
+    inserted = 0
+    skipped_existing = 0
+    skipped_empty = 0
+    for row in rows:
+        payload = _row_to_contact(row)
+        if payload is None:
+            skipped_empty += 1
+            continue
+        email = (payload.get("email") or "").strip().lower()
+        if (
+            skip_duplicates_by_email
+            and email
+            and email in existing_emails
+        ):
+            skipped_existing += 1
+            continue
+        payload.setdefault("kind", default_kind)
+        if not dry_run:
+            db.add(Contact(**payload))
+            if email:
+                existing_emails.add(email)
+        inserted += 1
+    if not dry_run:
+        await db.flush()
+    return CsvImportResult(
+        detected_rows=len(rows),
+        inserted=inserted,
+        skipped_existing=skipped_existing,
+        skipped_empty=skipped_empty,
+        headers_matched=matched,
+    )
