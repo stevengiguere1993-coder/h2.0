@@ -170,24 +170,74 @@ export default function ContactsPage() {
 
   const selected = items.find((c) => c.id === selectedId) || null;
 
-  async function deletePureContact(id: number) {
+  // Mappe la source d'un contact unifié vers l'endpoint DELETE
+  // approprié + un message de confirmation contextualisé.
+  function deleteEndpointFor(c: UnifiedContact): {
+    url: string;
+    title: string;
+    description: string;
+  } {
+    switch (c.source) {
+      case "contact":
+        return {
+          url: `/api/v1/contacts/${c.source_id}`,
+          title: `Supprimer « ${c.full_name} » ?`,
+          description:
+            "Ce contact (rolodex pur) sera retiré définitivement."
+        };
+      case "sous_traitant":
+        return {
+          url: `/api/v1/sous-traitants/${c.source_id}`,
+          title: `Supprimer le sous-traitant « ${c.full_name} » ?`,
+          description:
+            "⚠️ Cette suppression touche le module Construction (RBQ, assurances, taux…). Le sous-traitant disparaît partout. Si tu veux juste le retirer du rolodex, modifie-le pour le marquer « inactif » depuis sa fiche complète."
+        };
+      case "devlog_sous_traitant":
+        return {
+          url: `/api/v1/devlog/sous-traitants/${c.source_id}`,
+          title: `Supprimer le sous-traitant dev « ${c.full_name} » ?`,
+          description:
+            "⚠️ Cette suppression touche le module Dev logiciel. Le sous-traitant disparaît partout."
+        };
+      case "fournisseur":
+        return {
+          url: `/api/v1/fournisseurs/${c.source_id}`,
+          title: `Supprimer le fournisseur « ${c.full_name} » ?`,
+          description:
+            "⚠️ Cette suppression touche le module Construction. Le fournisseur disparaît partout (et de QuickBooks si lié). Si tu veux juste le cacher, marque-le « inactif » depuis sa fiche."
+        };
+      case "employe_partner":
+        return {
+          url: `/api/v1/employes/${c.source_id}`,
+          title: `Supprimer le partenaire employé « ${c.full_name} » ?`,
+          description:
+            "⚠️ Cette suppression touche le module Construction / paie. Préfère « marquer inactif » depuis sa fiche dans la plupart des cas."
+        };
+    }
+  }
+
+  async function deleteContact(c: UnifiedContact) {
+    const cfg = deleteEndpointFor(c);
     const ok = await confirm({
-      title: "Supprimer ce contact ?",
-      description:
-        "Le contact sera retiré du rolodex. Les sous-traitants, fournisseurs et employés ne sont jamais supprimés depuis ici.",
-      confirmLabel: "Supprimer",
+      title: cfg.title,
+      description: cfg.description,
+      confirmLabel: "Supprimer définitivement",
       destructive: true
     });
     if (!ok) return;
     try {
-      const r = await authedFetch(`/api/v1/contacts/${id}`, {
-        method: "DELETE"
-      });
-      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+      const r = await authedFetch(cfg.url, { method: "DELETE" });
+      if (!r.ok && r.status !== 204) {
+        const txt = await r.text().catch(() => "");
+        throw new Error(
+          txt ||
+            `HTTP ${r.status} — peut-être référencé par d'autres données.`
+        );
+      }
       setSelectedId(null);
       await load();
     } catch (e) {
-      setError((e as Error).message);
+      setError(`Suppression échouée : ${(e as Error).message}`);
     }
   }
 
@@ -370,20 +420,24 @@ export default function ContactsPage() {
                           {c.phone || "—"}
                         </td>
                         <td className="px-2 py-2 text-right">
-                          {isPure ? (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                void deletePureContact(c.source_id);
-                              }}
-                              className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
-                              title="Supprimer ce contact"
-                              aria-label={`Supprimer ${c.full_name}`}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          ) : null}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void deleteContact(c);
+                            }}
+                            className={`rounded p-1 hover:bg-rose-500/15 hover:text-rose-300 ${
+                              isPure ? "text-white/30" : "text-white/20"
+                            }`}
+                            title={
+                              isPure
+                                ? "Supprimer ce contact"
+                                : "Supprimer (touche le module d'origine — confirmation demandée)"
+                            }
+                            aria-label={`Supprimer ${c.full_name}`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
                         </td>
                       </tr>
                     );
@@ -407,7 +461,7 @@ export default function ContactsPage() {
                   contactId={selected.source_id}
                   onChanged={() => void load()}
                   onClose={() => setSelectedId(null)}
-                  onDelete={() => void deletePureContact(selected.source_id)}
+                  onDelete={() => void deleteContact(selected)}
                 />
               ) : (
                 <FederatedDetail
