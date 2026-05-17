@@ -1,25 +1,39 @@
 """Service IA pour les rencontres : résumé structuré par section +
-résumé global, transcription audio via Whisper (OpenAI).
+résumé global + nettoyage du transcript.
 
-Tout est défensif : si l'IA est indisponible, on retourne un fallback
-qui garde le transcript brut + un résumé heuristique court."""
+Design fault-tolerant : on cascade les providers IA via
+``app.integrations.ai.complete()`` (Gemini → Anthropic → Groq selon la
+config), et si AUCUN provider IA ne répond, on retombe sur un
+fallback 100 % local (TextRank-light) qui produit malgré tout un
+résumé extractif décent. L'app n'est JAMAIS bloquée.
+
+Stratégie de coût :
+  - Provider primaire recommandé : **Gemini Flash** (gratuit, 1 500
+    req/jour, qualité équivalente à Claude pour ce cas d'usage).
+  - Fallback automatique : Anthropic Claude (payant), Groq Llama 70B
+    (gratuit, 14 k req/jour).
+  - Dernier recours : extraction TextRank locale, zéro réseau.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
 import re
+from collections import Counter
 from typing import Optional
 
-import httpx
-
-from app.core.config import settings
+from app.integrations.ai import AIProviderError, complete, is_configured
 
 
 log = logging.getLogger(__name__)
 
 
-SUMMARY_MODEL = "claude-sonnet-4-6"
+# Suggestion de modèle (les providers ont leurs propres défauts ; on
+# laisse `complete()` choisir le sien quand model=None). On force ici
+# un modèle léger uniquement si AI_MODEL env var n'est pas définie
+# côté provider.
+SUMMARY_TEMPERATURE = 0.2
 
 
 SECTION_SUMMARY_PROMPT = """Tu es l'assistant qui résume les rencontres \
@@ -42,7 +56,7 @@ Le transcript peut provenir d'une **dictée vocale en français québécois** \
 Tu **corriges implicitement** ces erreurs dans ton résumé — tu ne les \
 mentionnes JAMAIS. Tu produis du français québécois professionnel correct.
 
-## Format de sortie
+## Format de sortie (STRICT)
 {
   "summary": "1-2 paragraphes synthétiques en français québécois",
   "decisions": ["Décision 1", "Décision 2", ...],
@@ -66,7 +80,7 @@ mentionnées (mais reconstitue le sens malgré les erreurs de transcription).
 - Si un nom d'entreprise / de personne semble approximatif, choisis la \
 meilleure correspondance avec la liste fournie ; sinon, conserve la \
 graphie la plus probable.
-- Réponds UNIQUEMENT avec le JSON."""
+- Réponds UNIQUEMENT avec le JSON brut, sans ``` autour."""
 
 
 GLOBAL_SUMMARY_PROMPT = """Tu reçois l'ensemble des résumés de sections \
@@ -121,37 +135,163 @@ Réponds UNIQUEMENT avec le texte corrigé, sans préambule, sans \
 explication, sans guillemets autour."""
 
 
-def _parse_claude_json(raw: str) -> Optional[dict]:
+# --------------------------------------------------------------------------
+# Parsing / utilitaires
+# --------------------------------------------------------------------------
+
+
+def _parse_ai_json(raw: str) -> Optional[dict]:
+    """Extrait un JSON depuis la réponse IA — tolérant aux fences
+    markdown que certains modèles ajoutent malgré tout."""
     s = raw.strip()
+    # Strip fences ```json ... ```
     if s.startswith("```"):
         s = re.sub(r"^```(?:json)?\s*", "", s)
         s = re.sub(r"\s*```\s*$", "", s)
     try:
         return json.loads(s)
     except Exception:  # noqa: BLE001
+        # Fallback : essayer de récupérer le 1er { au dernier }.
+        start = s.find("{")
+        end = s.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(s[start : end + 1])
+            except Exception:  # noqa: BLE001
+                return None
         return None
 
 
+# --------------------------------------------------------------------------
+# Fallback 100 % local : TextRank-light
+# --------------------------------------------------------------------------
+
+# Stopwords français courants — utilisés pour ignorer les mots vides
+# dans le scoring. Liste minimale embarquée pour éviter une dépendance
+# externe (nltk). Aussi efficace pour des transcripts business courts.
+_FR_STOPWORDS = frozenset(
+    """
+    a à au aux avec ce ces dans de des du elle en et eux il ils je la
+    le les leur lui ma mais me même mes moi mon ne nos notre nous on
+    ou par pas pour qu que qui sa se ses son sur ta te tes toi ton tu
+    un une vos votre vous c d j l à è ç m n s t y est sont être
+    avoir fait fait faire dit dire être étais étaient j'ai j'avais
+    j'étais cela ça ceci celui-ci celle-ci ceux celles donc alors
+    aussi très plus moins comme bien après avant pendant si oui non
+    """.split()
+)
+
+
+def _split_sentences(text: str) -> list[str]:
+    """Découpe un texte en phrases. Tolère la ponctuation aléatoire
+    d'une dictée vocale (retours à la ligne = séparateurs)."""
+    # Normalise les sauts de ligne + ponctuation.
+    t = re.sub(r"\s+", " ", text.strip())
+    if not t:
+        return []
+    # Split sur . ! ? suivi d'espace + majuscule, ou retour de ligne.
+    raw = re.split(r"(?<=[.!?])\s+(?=[A-ZÀ-Ý])", t)
+    out = [s.strip(" .!?,") for s in raw if len(s.strip()) > 5]
+    return out
+
+
+def _tokenize(s: str) -> list[str]:
+    return [
+        w
+        for w in re.findall(r"[a-zà-ÿ0-9'-]{2,}", s.lower())
+        if w not in _FR_STOPWORDS
+    ]
+
+
+def _textrank_summary(text: str, max_sentences: int = 4) -> str:
+    """TextRank-light : score chaque phrase par la somme TF-IDF de ses
+    mots-clés. Retient les top-N. Pas de matrice de similarité (trop
+    lourd pour le bénéfice), juste un ranking par densité d'info."""
+    sentences = _split_sentences(text)
+    if not sentences:
+        return text[:300]
+    if len(sentences) <= max_sentences:
+        return ". ".join(sentences) + "."
+
+    # Fréquence globale des mots-clés.
+    global_freq: Counter = Counter()
+    sent_tokens: list[list[str]] = []
+    for s in sentences:
+        toks = _tokenize(s)
+        sent_tokens.append(toks)
+        global_freq.update(toks)
+
+    # Score = somme des fréquences (mots fréquents = thèmes centraux),
+    # normalisée par sqrt(longueur) pour ne pas favoriser les longues.
+    import math
+
+    scored = []
+    for idx, (s, toks) in enumerate(zip(sentences, sent_tokens)):
+        if not toks:
+            continue
+        score = sum(global_freq[t] for t in toks) / math.sqrt(len(toks))
+        scored.append((score, idx, s))
+    if not scored:
+        return ". ".join(sentences[:max_sentences]) + "."
+
+    # Top-N par score, mais on les remet dans l'ordre du transcript.
+    top = sorted(scored, key=lambda x: -x[0])[:max_sentences]
+    top.sort(key=lambda x: x[1])
+    return ". ".join(t[2] for t in top) + "."
+
+
+def _extract_action_items(text: str) -> list[dict]:
+    """Repère des phrases ressemblant à des actions : verbes d'action
+    en début / impératif. Heuristique simple, sans IA."""
+    action_starters = re.compile(
+        r"^(faire|envoyer|contacter|appeler|relancer|signer|"
+        r"rédiger|valider|vérifier|finaliser|préparer|organiser|"
+        r"planifier|réserver|acheter|vendre|négocier|confirmer|"
+        r"il faut|on doit|je dois|on va|je vais)\b",
+        re.IGNORECASE,
+    )
+    out: list[dict] = []
+    for s in _split_sentences(text):
+        if action_starters.match(s):
+            out.append(
+                {
+                    "title": s[:120],
+                    "owner": None,
+                    "entreprise_hint": None,
+                    "due": None,
+                }
+            )
+        if len(out) >= 5:
+            break
+    return out
+
+
 def _heuristic_section_summary(title: str, transcript: str) -> dict:
-    """Fallback : sans IA, on extrait juste les phrases clés et on
-    propose un résumé minimal."""
+    """Fallback purement local quand AUCUN provider IA n'est dispo.
+    Produit un résumé extractif TextRank + une heuristique d'actions."""
     t = (transcript or "").strip()
-    first_para = t.split("\n\n", 1)[0] if t else ""
-    summary = first_para[:500] or f"Section « {title} » sans contenu."
+    if not t:
+        return {
+            "summary": f"Section « {title} » vide.",
+            "decisions": [],
+            "action_items": [],
+            "open_questions": [],
+            "risks": [],
+        }
+    summary = _textrank_summary(t, max_sentences=4)
+    actions = _extract_action_items(t)
     return {
         "summary": summary,
         "decisions": [],
-        "action_items": [
-            {
-                "title": f"Relire et structurer la section « {title }»",
-                "owner": None,
-                "entreprise_hint": None,
-                "due": None,
-            }
-        ],
+        "action_items": actions,
         "open_questions": [],
         "risks": [],
     }
+
+
+# --------------------------------------------------------------------------
+# Public API — appelle le factory IA, fallback heuristique automatique
+# --------------------------------------------------------------------------
 
 
 async def summarize_section(
@@ -159,19 +299,15 @@ async def summarize_section(
     transcript: str,
     entreprises_context: Optional[list[dict]] = None,
 ) -> dict:
-    """Résume une section. Retourne toujours un dict valide
-    (fallback heuristique si Claude indisponible).
+    """Résume une section. Retourne toujours un dict valide.
 
-    `entreprises_context` : liste optionnelle [{id, name}, ...] des
-    entreprises concernées par la rencontre. Permet à Claude de tagger
-    chaque action_item avec le nom exact de l'entreprise (utile quand
-    une rencontre couvre plusieurs sociétés)."""
+    Cascade : Gemini → Anthropic → Groq (selon AI_PROVIDER env).
+    Fallback final : TextRank local 100 % offline."""
     text = (transcript or "").strip()
     if not text:
         return _heuristic_section_summary(title, "")
-    if not settings.anthropic_api_key:
+    if not is_configured():
         return _heuristic_section_summary(title, text)
-    import anthropic
 
     ents_block = ""
     if entreprises_context:
@@ -189,50 +325,47 @@ async def summarize_section(
                 "Si transverse, laisse null.\n\n"
             )
 
+    prompt = (
+        f"## Section\n{title}\n\n"
+        + ents_block
+        + f"## Transcript brut\n{text[:30_000]}\n\n"
+        "Génère le JSON selon le schéma."
+    )
+
     try:
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        msg = client.messages.create(
-            model=SUMMARY_MODEL,
-            max_tokens=2000,
+        res = await complete(
+            prompt=prompt,
             system=SECTION_SUMMARY_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        f"## Section\n{title}\n\n"
-                        + ents_block
-                        + f"## Transcript brut\n{text[:30_000]}\n\n"
-                        "Génère le JSON selon le schéma."
-                    ),
-                }
-            ],
+            max_tokens=2000,
+            temperature=SUMMARY_TEMPERATURE,
         )
-        raw = "\n".join(
-            b.text for b in msg.content if b.type == "text"
-        ).strip()
+    except AIProviderError as exc:
+        log.warning("Section summary failed (all AI providers): %s", exc)
+        return _heuristic_section_summary(title, text)
     except Exception as exc:  # noqa: BLE001
-        log.warning("Section summary failed (Claude): %s", exc)
+        log.warning("Section summary unexpected error: %s", exc)
         return _heuristic_section_summary(title, text)
 
-    parsed = _parse_claude_json(raw)
+    parsed = _parse_ai_json(res.text)
     if parsed is None:
+        log.warning(
+            "Section summary unparseable (%s) — fallback heuristique",
+            res.provider,
+        )
         return _heuristic_section_summary(title, text)
     return parsed
 
 
 async def summarize_global(sections: list[dict]) -> str:
     """sections = [{ title, summary, decisions, action_items, ... }]
-    Retourne un résumé global texte. Fallback : concaténation."""
+    Retourne un résumé global texte (narratif).
+
+    Fallback final : concaténation propre des résumés de section
+    (sans IA, pas idéal mais lisible)."""
     if not sections:
         return ""
-    if not settings.anthropic_api_key:
-        # Fallback : assemblage simple
-        parts: list[str] = []
-        for s in sections:
-            parts.append(f"## {s.get('title')}\n{s.get('summary') or ''}")
-        return "\n\n".join(parts)
-    import anthropic
 
+    # Assemblage du prompt à partir des résumés structurés.
     blocks: list[str] = []
     for s in sections:
         block = [f"### {s.get('title', '(sans titre)')}"]
@@ -260,24 +393,25 @@ async def summarize_global(sections: list[dict]) -> str:
             block.append("Risques : " + " ; ".join(s["risks"]))
         blocks.append("\n".join(block))
 
-    user_prompt = (
-        "## Sections de la rencontre\n\n" + "\n\n---\n\n".join(blocks)
-    )
+    fallback_text = "\n\n---\n\n".join(blocks)
+
+    if not is_configured():
+        return fallback_text
+
     try:
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        msg = client.messages.create(
-            model=SUMMARY_MODEL,
-            max_tokens=3000,
+        res = await complete(
+            prompt="## Sections de la rencontre\n\n" + fallback_text,
             system=GLOBAL_SUMMARY_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
+            max_tokens=3000,
+            temperature=SUMMARY_TEMPERATURE,
         )
-        raw = "\n".join(
-            b.text for b in msg.content if b.type == "text"
-        ).strip()
-        return raw
+        return res.text.strip() or fallback_text
+    except AIProviderError as exc:
+        log.warning("Global summary failed (all AI providers): %s", exc)
+        return fallback_text
     except Exception as exc:  # noqa: BLE001
-        log.warning("Global summary failed: %s", exc)
-        return "\n\n".join(blocks)
+        log.warning("Global summary unexpected error: %s", exc)
+        return fallback_text
 
 
 async def clean_transcript(
@@ -285,21 +419,17 @@ async def clean_transcript(
     entreprises_context: Optional[list[dict]] = None,
 ) -> str:
     """Réécrit un transcript de dictée vocale en français québécois
-    propre. Corrige les homophones, les accents, la ponctuation et les
-    mots manifestement mal entendus. Ne résume pas.
+    propre. Corrige les homophones, accents, ponctuation, mots mal
+    entendus. Ne résume pas.
 
-    Fallback : si Claude est indisponible, retourne le transcript brut
-    inchangé (ne casse jamais la dictée)."""
+    Fallback : si aucun provider IA n'est dispo, retourne le transcript
+    brut inchangé (ne casse jamais la dictée)."""
     text = (transcript or "").strip()
     if not text:
         return ""
-    if not settings.anthropic_api_key:
+    if not is_configured():
         return text
-    import anthropic
 
-    # Indice de noms propres : entreprises de la rencontre, pour que
-    # Claude reconnaisse une mauvaise transcription d'un nom et la
-    # corrige avec l'orthographe exacte.
     ents_block = ""
     if entreprises_context:
         names = [
@@ -317,27 +447,18 @@ async def clean_transcript(
             )
 
     try:
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        msg = client.messages.create(
-            model=SUMMARY_MODEL,
-            max_tokens=4000,
+        res = await complete(
+            prompt="## Transcript brut à corriger\n\n" + text[:30_000],
             system=TRANSCRIPT_CLEANUP_PROMPT + ents_block,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        "## Transcript brut à corriger\n\n"
-                        + text[:30_000]
-                    ),
-                }
-            ],
+            max_tokens=4000,
+            temperature=SUMMARY_TEMPERATURE,
         )
-        cleaned = "\n".join(
-            b.text for b in msg.content if b.type == "text"
-        ).strip()
-        return cleaned or text
+        return res.text.strip() or text
+    except AIProviderError as exc:
+        log.warning("Transcript cleanup failed (all AI providers): %s", exc)
+        return text
     except Exception as exc:  # noqa: BLE001
-        log.warning("Transcript cleanup failed: %s", exc)
+        log.warning("Transcript cleanup unexpected error: %s", exc)
         return text
 
 
