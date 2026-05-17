@@ -8,6 +8,7 @@ import {
   Loader2,
   MapPin,
   Monitor,
+  Phone,
   Smartphone,
   Terminal,
   TrendingUp
@@ -22,6 +23,14 @@ const DEV_ALLOWED_EMAILS = [
   "sgiguere@immohorizon.com",
   "philippe.meuser@immohorizon.com",
   "pmeuser@immohorizon.com"
+];
+
+// Volet « Téléphonie / Secrétaire d'appels » — en développement,
+// visible pour l'instant uniquement par sgiguere@immohorizon.com.
+// Étendre cette liste pour donner accès à d'autres comptes au fur
+// et à mesure que le volet mûrit.
+const TELEPHONIE_ALLOWED_EMAILS = [
+  "sgiguere@immohorizon.com"
 ];
 
 /**
@@ -190,6 +199,11 @@ export function LoginForm() {
     const role = (userRole || "").toLowerCase().trim();
     const isOwner = role === "owner";
     const isAdminOrOwner = role === "owner" || role === "admin";
+    const showTelephonie =
+      !!userEmail &&
+      TELEPHONIE_ALLOWED_EMAILS.includes(
+        userEmail.toLowerCase().trim()
+      );
     return (
       <div className="relative space-y-4">
         {showDev ? (
@@ -223,6 +237,38 @@ export function LoginForm() {
         </header>
 
         <div className="grid gap-3">
+          {/* Téléphonie / Secrétaire d'appels — gated par email
+              (sgiguere@immohorizon.com uniquement pour l'instant).
+              Affiché EN PREMIER pour signaler que c'est le chantier
+              en cours. */}
+          {showTelephonie ? (
+            <button
+              type="button"
+              onClick={() => {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                router.replace("/telephonie" as any);
+              }}
+              className="group relative flex items-center gap-4 rounded-2xl border border-brand-800 bg-brand-900 p-5 text-left transition hover:border-teal-400 hover:bg-brand-800"
+            >
+              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-teal-500/15 text-teal-300 group-hover:bg-teal-500 group-hover:text-white">
+                <Phone className="h-6 w-6" />
+              </span>
+              <span className="flex-1">
+                <span className="block text-base font-bold text-white">
+                  Téléphonie
+                </span>
+                <span className="mt-0.5 block text-xs text-white/60">
+                  Secrétaire IA d&apos;appels — numéro 514, qualifier
+                  les leads entrants, filtrer les indésirables,
+                  transférer au bon user.
+                </span>
+              </span>
+              <span className="absolute right-3 top-3 inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+                En développement
+              </span>
+            </button>
+          ) : null}
+
           {has("construction") ? (
             <button
               type="button"
