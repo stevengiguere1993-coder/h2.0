@@ -22,6 +22,7 @@ from app.api.v1.endpoints import (
     extension,
     follow_ups,
     contact,
+    contacts,
     entreprise_extras,
     entreprise_partners_links,
     immobilier,
@@ -140,6 +141,7 @@ api_router.include_router(project_billables.router)
 api_router.include_router(subcontractor_contracts.router)
 api_router.include_router(projects.router)
 api_router.include_router(contact.router)
+api_router.include_router(contacts.router)
 api_router.include_router(blog.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(public_soumission.router)
