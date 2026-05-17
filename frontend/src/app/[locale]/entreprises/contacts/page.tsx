@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Briefcase,
   ExternalLink,
+  FileUp,
   Hammer,
   Handshake,
   Loader2,
@@ -13,6 +14,7 @@ import {
   Search,
   Trash2,
   TrendingUp,
+  Upload,
   UserPlus2,
   Users,
   Wrench,
@@ -122,6 +124,7 @@ export default function ContactsPage() {
   const [specialtyFilter, setSpecialtyFilter] = useState<string>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -194,14 +197,29 @@ export default function ContactsPage() {
         greeting="Contacts"
         subtitle="Rolodex transverse — sous-traitants, fournisseurs, professionnels, partenaires, investisseurs potentiels"
         rightSlot={
-          <button
-            type="button"
-            onClick={() => setCreateOpen(true)}
-            className="btn-accent inline-flex items-center gap-1.5 text-xs"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Nouveau contact
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setImportOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition hover:bg-white/5"
+              style={{
+                borderColor: "var(--qg-border)",
+                color: "var(--qg-text-soft)"
+              }}
+              title="Importer un CSV (Gmail, Monday, Outlook)"
+            >
+              <FileUp className="h-3.5 w-3.5" />
+              Importer CSV
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              className="btn-accent inline-flex items-center gap-1.5 text-xs"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Nouveau contact
+            </button>
+          </div>
         }
       />
 
@@ -402,6 +420,16 @@ export default function ContactsPage() {
           onClose={() => setCreateOpen(false)}
           onCreated={() => {
             setCreateOpen(false);
+            void load();
+          }}
+        />
+      ) : null}
+
+      {importOpen ? (
+        <ImportCsvModal
+          onClose={() => setImportOpen(false)}
+          onImported={() => {
+            setImportOpen(false);
             void load();
           }}
         />
@@ -929,6 +957,222 @@ function CreateContactModal({
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+
+type ImportResult = {
+  detected_rows: number;
+  inserted: number;
+  skipped_existing: number;
+  skipped_empty: number;
+  headers_matched: string[];
+};
+
+function ImportCsvModal({
+  onClose,
+  onImported
+}: {
+  onClose: () => void;
+  onImported: () => void;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [defaultKind, setDefaultKind] = useState("professional");
+  const [skipDup, setSkipDup] = useState(true);
+  const [preview, setPreview] = useState<ImportResult | null>(null);
+  const [committing, setCommitting] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function run(dryRun: boolean) {
+    if (!file) {
+      setErr("Choisis un fichier CSV.");
+      return;
+    }
+    setErr(null);
+    setBusy(true);
+    if (!dryRun) setCommitting(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const params = new URLSearchParams({
+        default_kind: defaultKind,
+        dry_run: dryRun ? "true" : "false",
+        skip_duplicates_by_email: skipDup ? "true" : "false"
+      });
+      const r = await authedFetch(
+        `/api/v1/contacts/import-csv?${params.toString()}`,
+        { method: "POST", body: fd }
+      );
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(t || `HTTP ${r.status}`);
+      }
+      const result = (await r.json()) as ImportResult;
+      if (dryRun) {
+        setPreview(result);
+      } else {
+        onImported();
+      }
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+      setCommitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={() => !busy && onClose()}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-lg space-y-3 rounded-2xl border border-brand-800 bg-brand-900 p-5"
+      >
+        <header className="flex items-center justify-between">
+          <h3 className="text-base font-bold text-white">
+            <Upload className="mr-1.5 inline h-4 w-4" />
+            Importer des contacts (CSV)
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="rounded p-1 text-white/40 hover:bg-white/5 hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <p
+          className="rounded border border-dashed px-3 py-2 text-[11px]"
+          style={{
+            borderColor: "var(--qg-border-soft)",
+            color: "var(--qg-text-soft)"
+          }}
+        >
+          Compatible avec les exports <strong>Google Contacts</strong> (CSV
+          Google), <strong>Outlook</strong> et <strong>Monday</strong>. Le
+          parser détecte automatiquement le séparateur, l'encodage et les
+          colonnes (Name / Email / Phone / Organization / Address / Notes).
+        </p>
+
+        <Field
+          label="Fichier CSV"
+          value={
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(e) => {
+                setFile(e.target.files?.[0] || null);
+                setPreview(null);
+              }}
+              className="block w-full text-xs file:mr-3 file:rounded file:border-0 file:bg-accent-500/20 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-accent-300 hover:file:bg-accent-500/30"
+            />
+          }
+        />
+
+        <Field
+          label="Type par défaut"
+          value={
+            <select
+              value={defaultKind}
+              onChange={(e) => setDefaultKind(e.target.value)}
+              className="input w-full text-xs"
+            >
+              {KINDS_FOR_NEW.map((k) => (
+                <option key={k} value={k}>
+                  {KIND_LABEL[k] || k}
+                </option>
+              ))}
+            </select>
+          }
+        />
+
+        <label className="flex items-center gap-2 text-xs text-white/70">
+          <input
+            type="checkbox"
+            checked={skipDup}
+            onChange={(e) => setSkipDup(e.target.checked)}
+          />
+          Ignorer les contacts dont le courriel existe déjà
+        </label>
+
+        {err ? <p className="text-xs text-rose-300">{err}</p> : null}
+
+        {preview ? (
+          <div
+            className="rounded-lg border p-3 text-xs"
+            style={{
+              borderColor: "var(--qg-border)",
+              backgroundColor: "rgba(255,255,255,0.02)",
+              color: "var(--qg-text-soft)"
+            }}
+          >
+            <p className="mb-1 font-semibold text-white">
+              Aperçu — rien n'est encore sauvegardé
+            </p>
+            <ul className="space-y-0.5">
+              <li>
+                Lignes détectées : <strong>{preview.detected_rows}</strong>
+              </li>
+              <li>
+                À importer : <strong>{preview.inserted}</strong>
+              </li>
+              <li>Doublons ignorés : {preview.skipped_existing}</li>
+              <li>Lignes vides ignorées : {preview.skipped_empty}</li>
+              <li className="pt-1">
+                Colonnes reconnues :{" "}
+                <span className="text-white/80">
+                  {preview.headers_matched.length > 0
+                    ? preview.headers_matched.join(", ")
+                    : "aucune"}
+                </span>
+              </li>
+            </ul>
+          </div>
+        ) : null}
+
+        <div className="flex items-center justify-end gap-2 border-t border-brand-800 pt-3">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="btn-secondary text-xs"
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={() => void run(true)}
+            disabled={!file || busy}
+            className="inline-flex items-center gap-1.5 rounded-md border border-white/15 px-3 py-1.5 text-xs font-semibold text-white/70 hover:bg-white/5 disabled:opacity-50"
+          >
+            {busy && !committing ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : null}
+            Aperçu
+          </button>
+          <button
+            type="button"
+            onClick={() => void run(false)}
+            disabled={!file || busy}
+            className="btn-accent inline-flex items-center gap-1.5 text-xs disabled:opacity-50"
+          >
+            {committing ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Upload className="h-3 w-3" />
+            )}
+            Importer
+            {preview ? ` ${preview.inserted} contacts` : ""}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
