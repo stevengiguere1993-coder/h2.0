@@ -80,6 +80,7 @@ class LeadRead(BaseModel):
     owner_neq: Optional[str]
     last_contacted_at: Optional[datetime]
     contact_attempts_count: int
+    recontact_at: Optional[DateT] = None
     assigned_to_user_id: Optional[int]
     converted_to_contact_request_id: Optional[int]
     converted_to_project_id: Optional[int]
@@ -150,6 +151,10 @@ class LeadUpdate(BaseModel):
     assignment_price: Optional[float] = Field(default=None, ge=0)
     # Drive : URL du dossier Google Drive du lead.
     drive_folder_url: Optional[str] = Field(default=None, max_length=1024)
+    # Date de relance — set quand on dépose le lead dans la colonne
+    # « À recontacter ». Si None et que le status passe à a_recontacter,
+    # le serveur auto-set à today + 6 mois.
+    recontact_at: Optional[DateT] = None
 
 
 _ALLOWED_PHOTO_CONTENT = {
@@ -231,6 +236,7 @@ def _serialize(
         "contact_attempts_count": _safe_attr(
             lead, "contact_attempts_count", 0
         ),
+        "recontact_at": _safe_attr(lead, "recontact_at"),
         "assigned_to_user_id": _safe_attr(lead, "assigned_to_user_id"),
         "converted_to_contact_request_id": _safe_attr(
             lead, "converted_to_contact_request_id"
@@ -307,6 +313,39 @@ def _serialize(
 # ------------------------------ Endpoints ------------------------------
 
 
+async def _promote_due_recontacts(db) -> int:
+    """Lazy promotion : tout lead en status=a_recontacter dont la
+    `recontact_at` est passée (ou aujourd'hui) repasse en a_contacter
+    pour réapparaître dans la file active. Idempotent — appelé sur
+    chaque liste (coût négligeable, 1 UPDATE conditionnel).
+    Retourne le nombre de leads promus."""
+    from datetime import date as _date
+
+    today = _date.today()
+    try:
+        from sqlalchemy import update as _sql_update
+
+        result = await db.execute(
+            _sql_update(ProspectionLead)
+            .where(
+                ProspectionLead.status
+                == ProspectionLeadStatus.A_RECONTACTER.value
+            )
+            .where(ProspectionLead.recontact_at.is_not(None))
+            .where(ProspectionLead.recontact_at <= today)
+            .values(
+                status=ProspectionLeadStatus.A_CONTACTER.value,
+                recontact_at=None,
+            )
+        )
+        await db.flush()
+        return int(getattr(result, "rowcount", 0) or 0)
+    except Exception:  # noqa: BLE001
+        # Migration pas encore tournée (colonne recontact_at absente)
+        # ou autre — on ne bloque pas la liste.
+        return 0
+
+
 @router.get("", response_model=List[LeadRead])
 async def list_leads(
     db: DBSession,
@@ -316,6 +355,9 @@ async def list_leads(
     archived: bool = False,
     limit: int = 500,
 ) -> List[LeadRead]:
+    # Réveille en passant tout lead dont la date de recontact est due.
+    await _promote_due_recontacts(db)
+
     stmt = select(ProspectionLead).where(ProspectionLead.archived == archived)
     if status_filter:
         stmt = stmt.where(ProspectionLead.status == status_filter)
@@ -634,6 +676,17 @@ async def update_lead(
         new_status == ProspectionLeadStatus.HOT_LEAD.value
         and previous_status != ProspectionLeadStatus.HOT_LEAD.value
     )
+    # Si le lead bascule en « À recontacter » sans date de relance
+    # explicite → on auto-set à +6 mois pour ne pas l'oublier.
+    if (
+        new_status == ProspectionLeadStatus.A_RECONTACTER.value
+        and previous_status != ProspectionLeadStatus.A_RECONTACTER.value
+        and update.get("recontact_at") is None
+        and getattr(lead, "recontact_at", None) is None
+    ):
+        from datetime import date as _date, timedelta as _td
+
+        update["recontact_at"] = _date.today() + _td(days=183)
     for k, v in update.items():
         setattr(lead, k, v)
     apply_score(lead)

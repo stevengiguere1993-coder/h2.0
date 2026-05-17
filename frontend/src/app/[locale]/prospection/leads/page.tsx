@@ -48,6 +48,7 @@ type Lead = {
   tags: string[];
   photos_count: number;
   created_at: string;
+  recontact_at?: string | null;
 };
 
 // Doit matcher _normalize_owner_name() côté backend pour que le lien
@@ -92,6 +93,8 @@ const STATUS_LABEL: Record<string, string> = {
   a_contacter: "À contacter",
   contacte: "Contacté",
   hot_lead: "🔥 Hot Lead",
+  cold_lead: "🧊 Cold Lead",
+  a_recontacter: "📅 À recontacter",
   soumissionne: "Offre soumise",
   offre_acceptee: "Offre acceptée",
   en_inspection: "Inspection",
@@ -108,6 +111,8 @@ const STATUS_COLOR: Record<string, string> = {
   a_contacter: "bg-amber-500/20 text-amber-300",
   contacte: "bg-violet-500/20 text-violet-300",
   hot_lead: "bg-orange-500/25 text-orange-300",
+  cold_lead: "bg-sky-500/25 text-sky-200",
+  a_recontacter: "bg-slate-500/25 text-slate-200",
   soumissionne: "bg-pink-500/20 text-pink-300",
   offre_acceptee: "bg-fuchsia-500/25 text-fuchsia-200",
   en_inspection: "bg-cyan-500/20 text-cyan-300",
@@ -1170,6 +1175,8 @@ function KanbanBoard({
     { key: "a_contacter", label: "À contacter" },
     { key: "contacte", label: "Contacté" },
     { key: "hot_lead", label: "🔥 Hot Lead" },
+    { key: "cold_lead", label: "🧊 Cold Lead" },
+    { key: "a_recontacter", label: "📅 À recontacter" },
     { key: "soumissionne", label: "Offre soumise" },
     { key: "offre_acceptee", label: "Offre acceptée" },
     { key: "en_inspection", label: "Inspection" },
@@ -1221,7 +1228,11 @@ function KanbanBoard({
                   ? "border-emerald-500/60 bg-emerald-500/5"
                   : col.key === "hot_lead"
                     ? "hot-lead-column border-orange-400/60"
-                    : "border-brand-800"
+                    : col.key === "cold_lead"
+                      ? "cold-lead-column border-sky-400/60"
+                      : col.key === "a_recontacter"
+                        ? "recontact-column border-slate-400/40"
+                        : "border-brand-800"
               }`}
             >
               <header className="sticky top-0 z-10 flex items-center justify-between rounded-t-xl border-b border-brand-800 bg-brand-900 px-3 py-2 text-xs font-semibold uppercase tracking-wider">
@@ -1230,6 +1241,16 @@ function KanbanBoard({
                     <>
                       <span className="hot-lead-flame mr-1">🔥</span>
                       <span className="text-orange-300">Hot Lead</span>
+                    </>
+                  ) : col.key === "cold_lead" ? (
+                    <>
+                      <span className="cold-lead-frost mr-1">🧊</span>
+                      <span className="text-sky-300">Cold Lead</span>
+                    </>
+                  ) : col.key === "a_recontacter" ? (
+                    <>
+                      <span className="mr-1">📅</span>
+                      <span className="text-slate-200">À recontacter</span>
                     </>
                   ) : (
                     col.label
@@ -1297,6 +1318,17 @@ function KanbanBoard({
                           <span> · {l.nb_logements} unité{l.nb_logements > 1 ? "s" : ""}</span>
                         ) : null}
                       </p>
+
+                      {/* Date de recontact (colonne « À recontacter »). */}
+                      {l.recontact_at && col.key === "a_recontacter" ? (
+                        <p className="mt-1 truncate text-[10px] text-slate-300">
+                          📅 Relance le{" "}
+                          {new Date(l.recontact_at).toLocaleDateString(
+                            "fr-CA",
+                            { day: "numeric", month: "short", year: "numeric" }
+                          )}
+                        </p>
+                      ) : null}
 
                       {/* Valeur foncière à droite (légère, en bas). */}
                       <div className="mt-1 flex items-center justify-end text-[10px] text-white/40 tabular-nums">

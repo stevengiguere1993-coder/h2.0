@@ -74,6 +74,7 @@ type Lead = {
   estimated_equity: number | null;
   estimated_equity_pct: number | null;
   drive_folder_url: string | null;
+  recontact_at: string | null;
 };
 
 type Transaction = {
@@ -124,6 +125,8 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "a_contacter", label: "À contacter" },
   { value: "contacte", label: "Contacté" },
   { value: "hot_lead", label: "🔥 Hot Lead" },
+  { value: "cold_lead", label: "🧊 Cold Lead" },
+  { value: "a_recontacter", label: "📅 À recontacter" },
   { value: "soumissionne", label: "Offre soumise" },
   { value: "offre_acceptee", label: "Offre acceptée" },
   { value: "en_inspection", label: "Inspection" },
@@ -185,6 +188,7 @@ export default function ProspectionDetailPage() {
   const [kind, setKind] = useState("multilogement");
   const [status, setStatus] = useState("a_visiter");
   const [priority, setPriority] = useState(3);
+  const [recontactAt, setRecontactAt] = useState<string>("");
   const [address, setAddress] = useState("");
   const [city, setCity] = useState("");
   const [postal, setPostal] = useState("");
@@ -214,6 +218,7 @@ export default function ProspectionDetailPage() {
       setKind(data.kind);
       setStatus(data.status);
       setPriority(data.priority);
+      setRecontactAt(data.recontact_at || "");
       setAddress(data.address || "");
       setCity(data.city || "");
       setPostal(data.postal_code || "");
@@ -294,6 +299,7 @@ export default function ProspectionDetailPage() {
         kind,
         status,
         priority,
+        recontact_at: recontactAt || null,
         address: address.trim() || null,
         city: city.trim() || null,
         postal_code: postal.trim() || null,
@@ -738,6 +744,30 @@ export default function ProspectionDetailPage() {
                       </select>
                     </div>
                   </div>
+
+                  {/* Date de relance — visible quand le statut est
+                      "À recontacter". Si laissé vide, le serveur
+                      auto-set à today + 6 mois au prochain save. */}
+                  {status === "a_recontacter" ? (
+                    <div>
+                      <label htmlFor="lrecontact" className="label">
+                        📅 Recontacter le
+                      </label>
+                      <input
+                        id="lrecontact"
+                        type="date"
+                        value={recontactAt}
+                        onChange={(e) => setRecontactAt(e.target.value)}
+                        className="input sm:w-60"
+                      />
+                      <p className="mt-1 text-[11px] text-white/50">
+                        Vide → relance automatique dans 6 mois. Le jour
+                        venu, le lead revient automatiquement dans la
+                        colonne « À contacter ».
+                      </p>
+                    </div>
+                  ) : null}
+
                   <div>
                     <label className="label">Priorité (1-5 ★)</label>
                     <div className="flex items-center gap-1">

@@ -259,6 +259,7 @@ async def init_db() -> None:
             ("prospection_leads", "tax_year_paid", "INTEGER"),
             ("prospection_leads", "tax_amount", "NUMERIC(10, 2)"),
             ("prospection_leads", "mailing_address", "VARCHAR(500)"),
+            ("prospection_leads", "recontact_at", "DATE"),
             (
                 "prospection_leads",
                 "deal_strategy",
