@@ -376,6 +376,7 @@ export default function ContactsPage() {
                     style={{ borderColor: "var(--qg-border)" }}
                   >
                     <th className="px-3 py-2">Nom</th>
+                    <th className="px-3 py-2">Entreprise</th>
                     <th className="px-3 py-2">Type</th>
                     <th className="px-3 py-2">Spécialité</th>
                     <th className="px-3 py-2">Téléphone</th>
@@ -404,11 +405,12 @@ export default function ContactsPage() {
                           <div className="font-semibold text-white">
                             {c.full_name}
                           </div>
-                          {c.company ? (
-                            <div className="text-[11px] text-white/50">
-                              {c.company}
-                            </div>
-                          ) : null}
+                        </td>
+                        <td
+                          className="px-3 py-2 text-xs"
+                          style={{ color: "var(--qg-text-soft)" }}
+                        >
+                          {c.company || "—"}
                         </td>
                         <td className="px-3 py-2">
                           <span
