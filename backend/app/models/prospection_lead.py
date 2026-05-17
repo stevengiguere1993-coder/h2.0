@@ -53,6 +53,8 @@ class ProspectionLeadStatus(str, Enum):
     A_CONTACTER = "a_contacter"  # proprio identifié, à contacter
     CONTACTE = "contacte"  # contact initial fait
     HOT_LEAD = "hot_lead"  # lead très chaud — notification équipe
+    COLD_LEAD = "cold_lead"  # lead refroidi — à laisser de côté pour l'instant
+    A_RECONTACTER = "a_recontacter"  # snooze avec date — relance automatique
     SOUMISSIONNE = "soumissionne"  # OFFRE SOUMISE (renamed in UI)
     OFFRE_ACCEPTEE = "offre_acceptee"  # promesse d'achat acceptée
     EN_INSPECTION = "en_inspection"  # inspection en cours (path keep)
@@ -228,6 +230,15 @@ class ProspectionLead(Base, TimestampUpdateMixin):
     )
     contact_attempts_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
+    )
+    # Date à laquelle ce lead doit être recontacté (status =
+    # `a_recontacter`). Quand cette date arrive ou est dépassée, un
+    # processus de réveil (lazy promotion sur l'endpoint list) bascule
+    # le lead vers `a_contacter` pour qu'il réapparaisse dans la file
+    # active. Si NULL au moment du drop dans « À recontacter », on
+    # auto-set à +6 mois côté API.
+    recontact_at: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True, index=True
     )
     assigned_to_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),

@@ -46,6 +46,8 @@ const STATUS_LABEL: Record<string, string> = {
   a_contacter: "À contacter",
   contacte: "Contacté",
   hot_lead: "🔥 Hot Lead",
+  cold_lead: "🧊 Cold Lead",
+  a_recontacter: "📅 À recontacter",
   soumissionne: "Offre soumise",
   offre_acceptee: "Offre acceptée",
   en_inspection: "Inspection",
