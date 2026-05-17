@@ -19,6 +19,7 @@ from app.models.centris_listing import CentrisListing
 from app.models.client import Client
 from app.models.client_document import ClientDocument  # noqa: F401
 from app.models.contact import Contact  # noqa: F401
+from app.models.contact_hide import ContactHide  # noqa: F401
 from app.models.contact_request import ContactRequest
 from app.models.contact_request_photo import ContactRequestPhoto
 from app.models.devlog_client import DevlogClient  # noqa: F401

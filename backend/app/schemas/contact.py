@@ -85,3 +85,14 @@ class UnifiedContact(BaseModel):
     # URL relative de la fiche dédiée (None pour les contacts purs qui
     # s'éditent inline dans la sidebar de /entreprises/contacts).
     detail_url: Optional[str] = None
+    # True quand le contact est dans la table contact_hides et que
+    # l'utilisateur a demandé include_hidden=true. Sert à l'UI pour
+    # le griser et proposer un bouton « démasquer ».
+    hidden: bool = False
+
+
+class ContactHideRequest(BaseModel):
+    """Body de POST /api/v1/contacts/hide — masque un fédéré."""
+
+    source: str = Field(..., min_length=1, max_length=64)
+    source_id: int

@@ -22,6 +22,7 @@ from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.contact import Contact
+from app.models.contact_hide import ContactHide
 from app.models.devlog_sous_traitant import DevlogSousTraitant
 from app.models.employe import Employe
 from app.models.fournisseur import Fournisseur
@@ -29,6 +30,7 @@ from app.models.sous_traitant import SousTraitant
 from app.repositories.generic import GenericCrud
 from app.schemas.contact import (
     ContactCreate,
+    ContactHideRequest,
     ContactRead,
     ContactUpdate,
     UnifiedContact,
@@ -53,8 +55,25 @@ async def list_all_contacts(
     db: DBSession,
     _: CurrentUser,
     only_active: bool = Query(default=True),
+    include_hidden: bool = Query(default=False),
 ):
+    # Précharge la set des (source, source_id) masqués pour filtrer
+    # rapidement en mémoire. Petit volume attendu, OK de tout charger.
+    hidden_rows = (await db.execute(select(ContactHide))).scalars().all()
+    hidden_set = {(h.source, h.source_id) for h in hidden_rows}
+
     out: List[UnifiedContact] = []
+
+    def _emit(uc: UnifiedContact) -> None:
+        """Ajoute le contact à `out`, sauf s'il est masqué et qu'on
+        n'a pas demandé `include_hidden=true`. Marque `hidden=true`
+        sur les masqués gardés (pour affichage UI grisé)."""
+        key = (uc.source, uc.source_id)
+        if key in hidden_set:
+            if not include_hidden:
+                return
+            uc.hidden = True
+        out.append(uc)
 
     # 1) Contacts purs (table contacts)
     q = select(Contact)
@@ -62,7 +81,7 @@ async def list_all_contacts(
         q = q.where(Contact.active.is_(True))
     rows = (await db.execute(q)).scalars().all()
     for c in rows:
-        out.append(
+        _emit(
             UnifiedContact(
                 id=f"contact:{c.id}",
                 source="contact",
@@ -85,7 +104,7 @@ async def list_all_contacts(
         q = q.where(SousTraitant.active.is_(True))
     rows = (await db.execute(q)).scalars().all()
     for s in rows:
-        out.append(
+        _emit(
             UnifiedContact(
                 id=f"sous_traitant:{s.id}",
                 source="sous_traitant",
@@ -108,7 +127,7 @@ async def list_all_contacts(
         q = q.where(DevlogSousTraitant.active.is_(True))
     rows = (await db.execute(q)).scalars().all()
     for s in rows:
-        out.append(
+        _emit(
             UnifiedContact(
                 id=f"devlog_sous_traitant:{s.id}",
                 source="devlog_sous_traitant",
@@ -130,7 +149,7 @@ async def list_all_contacts(
         q = q.where(Fournisseur.active.is_(True))
     rows = (await db.execute(q)).scalars().all()
     for f in rows:
-        out.append(
+        _emit(
             UnifiedContact(
                 id=f"fournisseur:{f.id}",
                 source="fournisseur",
@@ -153,7 +172,7 @@ async def list_all_contacts(
         q = q.where(Employe.active.is_(True))
     rows = (await db.execute(q)).scalars().all()
     for e in rows:
-        out.append(
+        _emit(
             UnifiedContact(
                 id=f"employe_partner:{e.id}",
                 source="employe_partner",
@@ -425,3 +444,60 @@ async def import_contacts_csv(
         skipped_empty=skipped_empty,
         headers_matched=matched,
     )
+
+
+# --------------------------------------------------------------------------
+# Masquage (hide) des contacts fédérés — purement cosmétique, l'entité
+# d'origine (sous-traitant, fournisseur, employé) reste intacte.
+# --------------------------------------------------------------------------
+
+
+@router.post(
+    "/hide",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Masquer un contact fédéré de la vue /entreprises/contacts",
+)
+async def hide_contact(
+    data: ContactHideRequest, db: DBSession, user: CurrentUser
+):
+    # Idempotent : si déjà masqué, on no-op.
+    existing = (
+        await db.execute(
+            select(ContactHide).where(
+                ContactHide.source == data.source,
+                ContactHide.source_id == data.source_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return
+    db.add(
+        ContactHide(
+            source=data.source,
+            source_id=data.source_id,
+            hidden_by_user_id=getattr(user, "id", None),
+        )
+    )
+    await db.flush()
+
+
+@router.delete(
+    "/hide/{source}/{source_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Démasquer un contact fédéré",
+)
+async def unhide_contact(
+    source: str, source_id: int, db: DBSession, _: CurrentUser
+):
+    existing = (
+        await db.execute(
+            select(ContactHide).where(
+                ContactHide.source == source,
+                ContactHide.source_id == source_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        return
+    await db.delete(existing)
+    await db.flush()

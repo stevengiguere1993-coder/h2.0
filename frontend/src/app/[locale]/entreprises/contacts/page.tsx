@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Briefcase,
+  EyeOff,
   ExternalLink,
   FileUp,
   Hammer,
@@ -11,6 +12,7 @@ import {
   Mail,
   Phone,
   Plus,
+  RotateCcw,
   Search,
   Trash2,
   TrendingUp,
@@ -49,6 +51,7 @@ type UnifiedContact = {
   specialty: string | null;
   active: boolean;
   detail_url: string | null;
+  hidden?: boolean;
 };
 
 type PureContact = {
@@ -125,11 +128,15 @@ export default function ContactsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [showHidden, setShowHidden] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await authedFetch("/api/v1/contacts/all");
+      const url = showHidden
+        ? "/api/v1/contacts/all?include_hidden=true"
+        : "/api/v1/contacts/all";
+      const r = await authedFetch(url);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setItems((await r.json()) as UnifiedContact[]);
       setError(null);
@@ -138,7 +145,7 @@ export default function ContactsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showHidden]);
 
   useEffect(() => {
     void load();
@@ -170,21 +177,63 @@ export default function ContactsPage() {
 
   const selected = items.find((c) => c.id === selectedId) || null;
 
-  async function deletePureContact(id: number) {
+  // Action « poubelle » : pour un contact pur → vraie suppression
+  // (table contacts). Pour un fédéré (sous-traitant, fournisseur,
+  // employé partenaire) → masquage seulement, l'entité reste intacte
+  // dans son module d'origine.
+  async function removeFromList(c: UnifiedContact) {
+    if (c.source === "contact") {
+      const ok = await confirm({
+        title: `Supprimer « ${c.full_name} » ?`,
+        description:
+          "Ce contact (créé manuellement ou importé) sera retiré définitivement du rolodex.",
+        confirmLabel: "Supprimer définitivement",
+        destructive: true
+      });
+      if (!ok) return;
+      try {
+        const r = await authedFetch(`/api/v1/contacts/${c.source_id}`, {
+          method: "DELETE"
+        });
+        if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
+        setSelectedId(null);
+        await load();
+      } catch (e) {
+        setError((e as Error).message);
+      }
+      return;
+    }
+    // Fédéré : masquage seulement.
     const ok = await confirm({
-      title: "Supprimer ce contact ?",
+      title: `Retirer « ${c.full_name} » du rolodex ?`,
       description:
-        "Le contact sera retiré du rolodex. Les sous-traitants, fournisseurs et employés ne sont jamais supprimés depuis ici.",
-      confirmLabel: "Supprimer",
-      destructive: true
+        "Le contact disparaît de cette liste, mais reste actif dans son module d'origine (sous-traitants, fournisseurs ou employés). Tu peux le ré-afficher plus tard via « Afficher les masqués ».",
+      confirmLabel: "Retirer de la liste"
     });
     if (!ok) return;
     try {
-      const r = await authedFetch(`/api/v1/contacts/${id}`, {
-        method: "DELETE"
+      const r = await authedFetch("/api/v1/contacts/hide", {
+        method: "POST",
+        body: JSON.stringify({
+          source: c.source,
+          source_id: c.source_id
+        })
       });
       if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
       setSelectedId(null);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function unhideContact(c: UnifiedContact) {
+    try {
+      const r = await authedFetch(
+        `/api/v1/contacts/hide/${c.source}/${c.source_id}`,
+        { method: "DELETE" }
+      );
+      if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}`);
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -276,8 +325,20 @@ export default function ContactsPage() {
               ))}
             </select>
           ) : null}
+          <label
+            className="ml-auto inline-flex cursor-pointer items-center gap-1.5 text-[11px]"
+            style={{ color: "var(--qg-text-soft)" }}
+            title="Afficher aussi les contacts fédérés que tu as masqués"
+          >
+            <input
+              type="checkbox"
+              checked={showHidden}
+              onChange={(e) => setShowHidden(e.target.checked)}
+            />
+            Afficher les masqués
+          </label>
           <span
-            className="ml-auto text-[11px]"
+            className="text-[11px]"
             style={{ color: "var(--qg-text-soft)" }}
           >
             {filtered.length} / {items.length} contacts
@@ -331,6 +392,8 @@ export default function ContactsPage() {
                         key={c.id}
                         onClick={() => setSelectedId(c.id)}
                         className={`cursor-pointer border-b transition ${
+                          c.hidden ? "opacity-50" : ""
+                        } ${
                           isActive
                             ? "bg-accent-500/10"
                             : "hover:bg-white/[0.03]"
@@ -370,20 +433,42 @@ export default function ContactsPage() {
                           {c.phone || "—"}
                         </td>
                         <td className="px-2 py-2 text-right">
-                          {isPure ? (
+                          {c.hidden ? (
                             <button
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                void deletePureContact(c.source_id);
+                                void unhideContact(c);
+                              }}
+                              className="inline-flex items-center gap-1 rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-300 hover:bg-emerald-500/20"
+                              title="Ré-afficher dans la liste"
+                              aria-label={`Démasquer ${c.full_name}`}
+                            >
+                              <RotateCcw className="h-3 w-3" />
+                              Démasquer
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void removeFromList(c);
                               }}
                               className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
-                              title="Supprimer ce contact"
-                              aria-label={`Supprimer ${c.full_name}`}
+                              title={
+                                isPure
+                                  ? "Supprimer ce contact"
+                                  : "Retirer ce contact de la liste (l'entité reste dans son module d'origine)"
+                              }
+                              aria-label={`Retirer ${c.full_name}`}
                             >
-                              <Trash2 className="h-3.5 w-3.5" />
+                              {isPure ? (
+                                <Trash2 className="h-3.5 w-3.5" />
+                              ) : (
+                                <EyeOff className="h-3.5 w-3.5" />
+                              )}
                             </button>
-                          ) : null}
+                          )}
                         </td>
                       </tr>
                     );
@@ -407,7 +492,7 @@ export default function ContactsPage() {
                   contactId={selected.source_id}
                   onChanged={() => void load()}
                   onClose={() => setSelectedId(null)}
-                  onDelete={() => void deletePureContact(selected.source_id)}
+                  onDelete={() => void removeFromList(selected)}
                 />
               ) : (
                 <FederatedDetail
