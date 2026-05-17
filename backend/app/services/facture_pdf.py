@@ -1,15 +1,9 @@
 """Generate a PDF for a Facture — mirrors soumission_pdf layout with
 the word FACTURE and an optional due date / balance block.
 
-When the facture is linked to a project that comes from an accepted
-soumission, the PDF includes a « Récapitulatif du contrat » block
-showing the soumission total, the cumulative billed-to-date and
-paid-to-date across siblings factures, and the remaining contract
-balance.
-
 When ``include_statement=True`` is passed to :func:`render_facture_pdf`,
 an « État de compte » page (full project ledger) is appended after
-the facture page so the client receives a single PDF.
+the facture page so the client receives un seul PDF.
 """
 
 from __future__ import annotations
@@ -494,43 +488,6 @@ def _render_bytes(
     totals_wrap.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
     story.append(totals_wrap)
     story.append(Spacer(1, 18))
-
-    # Récapitulatif du contrat — affiché quand la facture est liée à
-    # une soumission acceptée. Permet au client de voir d'un coup
-    # d'œil le total contracté, le déjà facturé/payé et le solde
-    # restant à venir sur le contrat global.
-    if contract is not None:
-        story.append(Paragraph(
-            f"RÉCAPITULATIF DU CONTRAT — Soumission {contract.soumission_reference}",
-            s["accent"],
-        ))
-        recap_rows = [
-            ["Total du contrat", _money(contract.contract_total)],
-            ["Total déjà facturé", _money(contract.billed_to_date)],
-            ["Total déjà payé", _money(contract.paid_to_date)],
-            ["Solde du contrat", _money(contract.remaining_balance)],
-        ]
-        recap_tbl = Table(
-            recap_rows,
-            colWidths=[doc.width * 0.30, doc.width * 0.20],
-        )
-        recap_tbl.setStyle(TableStyle([
-            ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
-            ("FONTSIZE", (0, 0), (-1, -1), 9.5),
-            ("TEXTCOLOR", (0, 0), (-1, -2), MUTED),
-            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-            ("TEXTCOLOR", (0, -1), (-1, -1), DARK),
-            ("LINEABOVE", (0, -1), (-1, -1), 0.5, LINE),
-            ("TOPPADDING", (0, 0), (-1, -1), 3),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ]))
-        recap_wrap = Table(
-            [["", recap_tbl]],
-            colWidths=[doc.width * 0.50, doc.width * 0.50],
-        )
-        recap_wrap.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
-        story.append(recap_wrap)
-        story.append(Spacer(1, 14))
 
     # Note client-facing (facultative) — mention libre à afficher sur
     # la facture (ex. « Merci pour votre confiance », « Paiement net
