@@ -1212,14 +1212,14 @@ async def mtl_diagnostics(
     pour vérifier si Montréal proper / les villes liées sont bien
     importées."""
     total = (
-        await db.execute(select(func.count(MontrealPropertyUnit.id)))
+        await db.execute(select(func.count(MontrealPropertyUnit.matricule)))
     ).scalar_one()
 
     by_region_rows = (
         await db.execute(
             select(
                 MontrealPropertyUnit.region,
-                func.count(MontrealPropertyUnit.id),
+                func.count(MontrealPropertyUnit.matricule),
             ).group_by(MontrealPropertyUnit.region)
         )
     ).all()
@@ -1229,13 +1229,13 @@ async def mtl_diagnostics(
             select(
                 MontrealPropertyUnit.municipalite,
                 MontrealPropertyUnit.region,
-                func.count(MontrealPropertyUnit.id).label("c"),
+                func.count(MontrealPropertyUnit.matricule).label("c"),
             )
             .group_by(
                 MontrealPropertyUnit.municipalite,
                 MontrealPropertyUnit.region,
             )
-            .order_by(func.count(MontrealPropertyUnit.id).desc())
+            .order_by(func.count(MontrealPropertyUnit.matricule).desc())
             .limit(30)
         )
     ).all()
@@ -1244,13 +1244,13 @@ async def mtl_diagnostics(
         await db.execute(
             select(
                 MontrealPropertyUnit.arrondissement,
-                func.count(MontrealPropertyUnit.id),
+                func.count(MontrealPropertyUnit.matricule),
             )
             .where(
                 func.lower(MontrealPropertyUnit.municipalite) == "montréal"
             )
             .group_by(MontrealPropertyUnit.arrondissement)
-            .order_by(func.count(MontrealPropertyUnit.id).desc())
+            .order_by(func.count(MontrealPropertyUnit.matricule).desc())
         )
     ).all()
 
@@ -1300,11 +1300,11 @@ async def mtl_health(db: DBSession, _: CurrentAdmin) -> MtlHealth:
     from app.integrations import scraping_proxy
 
     total = (
-        await db.execute(select(func.count(MontrealPropertyUnit.id)))
+        await db.execute(select(func.count(MontrealPropertyUnit.matricule)))
     ).scalar_one()
     mtl_count = (
         await db.execute(
-            select(func.count(MontrealPropertyUnit.id)).where(
+            select(func.count(MontrealPropertyUnit.matricule)).where(
                 func.lower(MontrealPropertyUnit.municipalite) == "montréal"
             )
         )
