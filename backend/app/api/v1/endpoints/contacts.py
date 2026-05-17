@@ -104,13 +104,21 @@ async def list_all_contacts(
         q = q.where(SousTraitant.active.is_(True))
     rows = (await db.execute(q)).scalars().all()
     for s in rows:
+        # Si un `contact_name` (personne) existe, on l'affiche comme
+        # nom principal et l'entité `full_name` part dans `company`
+        # (ex. Philippe Gauthier → nom ; Construction CPG → entreprise).
+        # Sinon, on garde l'entité comme nom (cas d'un sous-traitant
+        # sans personne contact identifiée).
+        person = (getattr(s, "contact_name", None) or "").strip()
+        display_name = person or s.full_name
+        company = s.full_name if person else None
         _emit(
             UnifiedContact(
                 id=f"sous_traitant:{s.id}",
                 source="sous_traitant",
                 source_id=s.id,
-                full_name=s.full_name,
-                company=getattr(s, "contact_name", None),
+                full_name=display_name,
+                company=company,
                 email=s.email,
                 phone=s.phone,
                 address=getattr(s, "address", None),
@@ -143,19 +151,23 @@ async def list_all_contacts(
             )
         )
 
-    # 4) Fournisseurs
+    # 4) Fournisseurs (même logique : si contact_name existe, c'est la
+    # personne ; sinon on garde le nom d'entreprise comme nom principal)
     q = select(Fournisseur)
     if only_active:
         q = q.where(Fournisseur.active.is_(True))
     rows = (await db.execute(q)).scalars().all()
     for f in rows:
+        person = (getattr(f, "contact_name", None) or "").strip()
+        display_name = person or f.name
+        company = f.name if person else None
         _emit(
             UnifiedContact(
                 id=f"fournisseur:{f.id}",
                 source="fournisseur",
                 source_id=f.id,
-                full_name=f.name,
-                company=getattr(f, "contact_name", None),
+                full_name=display_name,
+                company=company,
                 email=f.email,
                 phone=f.phone,
                 kind="supplier",
