@@ -1,0 +1,116 @@
+name: Cleanup stale branches
+
+# Workflow manuel pour supprimer en masse les vieilles branches
+# `claude/*` après merge. Déclenchement : onglet Actions →
+# « Cleanup stale branches » → « Run workflow ».
+#
+# Options :
+#   - dry_run (true par défaut) : liste les branches qui SERAIENT
+#     supprimées sans rien toucher. À utiliser en premier pour vérifier.
+#   - pattern : préfixe à matcher (défaut "claude/").
+#
+# Branches préservées automatiquement :
+#   - main
+#   - toute branche avec un PR ouvert (head ref)
+#   - toute branche explicitement listée dans `keep`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Simulation seulement (true) ou suppression réelle (false)"
+        required: true
+        type: boolean
+        default: true
+      pattern:
+        description: "Préfixe de branches à cibler"
+        required: true
+        type: string
+        default: "claude/"
+      keep:
+        description: "Branches à préserver (séparées par des virgules, en plus de main + PR ouvertes)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run cleanup
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          PATTERN: ${{ inputs.pattern }}
+          KEEP: ${{ inputs.keep }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          echo "→ Repo:    $REPO"
+          echo "→ Pattern: $PATTERN"
+          echo "→ Dry run: $DRY_RUN"
+
+          # 1. Branches préservées : main + manuellement listées
+          KEEP_SET=$(mktemp)
+          echo "main" > "$KEEP_SET"
+          if [ -n "${KEEP:-}" ]; then
+            echo "$KEEP" | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' >> "$KEEP_SET" || true
+          fi
+
+          # 2. Branches associées à un PR ouvert (jamais supprimées)
+          gh pr list --repo "$REPO" --state open --json headRefName --jq '.[].headRefName' >> "$KEEP_SET" || true
+
+          echo "→ Branches préservées :"
+          sort -u "$KEEP_SET" | sed 's/^/   • /'
+          echo
+
+          # 3. Branches candidates = matchent le pattern, ne sont pas préservées
+          ALL=$(mktemp)
+          gh api "repos/$REPO/branches" --paginate --jq '.[].name' > "$ALL"
+
+          CANDIDATES=$(mktemp)
+          grep "^$PATTERN" "$ALL" | sort -u > "$CANDIDATES" || true
+
+          TO_DELETE=$(mktemp)
+          comm -23 "$CANDIDATES" <(sort -u "$KEEP_SET") > "$TO_DELETE" || true
+
+          count=$(wc -l < "$TO_DELETE" | tr -d ' ')
+          echo "→ $count branches à supprimer"
+          echo
+
+          if [ "$count" -eq 0 ]; then
+            echo "✓ Rien à faire."
+            exit 0
+          fi
+
+          ok=0
+          fail=0
+          while IFS= read -r branch; do
+            [ -z "$branch" ] && continue
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "[dry-run] would delete: $branch"
+              ok=$((ok + 1))
+              continue
+            fi
+            if gh api -X DELETE "repos/$REPO/git/refs/heads/$branch" --silent 2>/dev/null; then
+              echo "✓ deleted: $branch"
+              ok=$((ok + 1))
+            else
+              echo "✗ failed:  $branch"
+              fail=$((fail + 1))
+            fi
+          done < "$TO_DELETE"
+
+          echo
+          echo "──────────────────────────────────────────"
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "Dry-run terminé : $ok branches seraient supprimées."
+            echo "Relance avec dry_run=false pour exécuter."
+          else
+            echo "Terminé : $ok supprimées, $fail échecs."
+          fi
