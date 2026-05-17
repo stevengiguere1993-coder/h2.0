@@ -1269,3 +1269,83 @@ async def mtl_diagnostics(
             for a, c in arrond_rows
         ],
     )
+
+
+# --------------------------------------------------------------------------
+# Health check : statut combiné BD + lien VPS Hetzner (scraping EvalWeb)
+# --------------------------------------------------------------------------
+
+
+class MtlHealth(BaseModel):
+    db_total_units: int
+    db_montreal_units: int
+    db_has_data: bool
+    vps_configured: bool
+    vps_url_set: bool
+    vps_key_set: bool
+    vps_reachable: bool
+    summary: str
+
+
+@router.get(
+    "/health",
+    response_model=MtlHealth,
+    summary="Diagnostic combiné BD + lien VPS Hetzner (scraping)",
+)
+async def mtl_health(db: DBSession, _: CurrentAdmin) -> MtlHealth:
+    """Identifie en 1 appel si le problème vient :
+    - de la BD vide (montreal_property_units sans rows), OU
+    - du VPS Hetzner non joignable (URL/clé manquantes ou serveur down).
+    """
+    from app.integrations import scraping_proxy
+
+    total = (
+        await db.execute(select(func.count(MontrealPropertyUnit.id)))
+    ).scalar_one()
+    mtl_count = (
+        await db.execute(
+            select(func.count(MontrealPropertyUnit.id)).where(
+                func.lower(MontrealPropertyUnit.municipalite) == "montréal"
+            )
+        )
+    ).scalar_one()
+
+    vps_url_set = bool(scraping_proxy.VPS_URL)
+    vps_key_set = bool(scraping_proxy.VPS_KEY)
+    vps_configured = vps_url_set and vps_key_set
+    vps_reachable = False
+    if vps_configured:
+        try:
+            vps_reachable = await scraping_proxy.is_vps_healthy()
+        except Exception:  # noqa: BLE001
+            vps_reachable = False
+
+    db_has_data = int(total or 0) > 0
+    # Résumé humain pour debug rapide
+    parts: list[str] = []
+    if not db_has_data:
+        parts.append("⚠️ BD vide (aucune unité importée)")
+    else:
+        parts.append(
+            f"✓ BD : {int(total)} unités ({int(mtl_count)} à Montréal)"
+        )
+    if not vps_url_set:
+        parts.append("⚠️ SCRAPING_VPS_URL non configurée")
+    elif not vps_key_set:
+        parts.append("⚠️ SCRAPING_VPS_KEY non configurée")
+    elif not vps_reachable:
+        parts.append("⚠️ VPS injoignable (URL ok mais /health KO)")
+    else:
+        parts.append("✓ VPS Hetzner joignable")
+    summary = " · ".join(parts)
+
+    return MtlHealth(
+        db_total_units=int(total or 0),
+        db_montreal_units=int(mtl_count or 0),
+        db_has_data=db_has_data,
+        vps_configured=vps_configured,
+        vps_url_set=vps_url_set,
+        vps_key_set=vps_key_set,
+        vps_reachable=vps_reachable,
+        summary=summary,
+    )
