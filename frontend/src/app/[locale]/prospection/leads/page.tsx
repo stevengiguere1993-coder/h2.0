@@ -1250,7 +1250,7 @@ function KanbanBoard({
                   ) : col.key === "a_recontacter" ? (
                     <>
                       <span className="mr-1">📅</span>
-                      <span className="text-slate-200">À recontacter</span>
+                      À recontacter
                     </>
                   ) : (
                     col.label
