@@ -318,12 +318,14 @@ export default function ContactsPage() {
                     <th className="px-3 py-2">Type</th>
                     <th className="px-3 py-2">Spécialité</th>
                     <th className="px-3 py-2">Téléphone</th>
+                    <th className="px-2 py-2 text-right"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.map((c) => {
                     const Icon = KIND_ICON[c.kind] || Users;
                     const isActive = c.id === selectedId;
+                    const isPure = c.source === "contact";
                     return (
                       <tr
                         key={c.id}
@@ -366,6 +368,22 @@ export default function ContactsPage() {
                           style={{ color: "var(--qg-text-soft)" }}
                         >
                           {c.phone || "—"}
+                        </td>
+                        <td className="px-2 py-2 text-right">
+                          {isPure ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void deletePureContact(c.source_id);
+                              }}
+                              className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+                              title="Supprimer ce contact"
+                              aria-label={`Supprimer ${c.full_name}`}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          ) : null}
                         </td>
                       </tr>
                     );
