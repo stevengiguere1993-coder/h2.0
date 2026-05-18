@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import json
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -264,6 +265,283 @@ async def _create_lead_from_callback(db, *, call: Call) -> Optional[int]:
     call.contact_request_id = cr.id
     await db.flush()
     return cr.id
+
+
+# ---------------------------------------------------------------------
+# Helpers : intake construction + routage suivi projet (Phase 8)
+# ---------------------------------------------------------------------
+
+
+async def _create_intake_contact_request(
+    db, *, call: "Call", intake_data: dict
+) -> Optional[int]:
+    """Crée un ContactRequest depuis l'intake construction collecté
+    par Léa au téléphone. Génère un `validation_token` unique,
+    déclenche l'envoi du courriel récapitulatif au client (en
+    BackgroundTask via httpx pour ne pas bloquer la réponse TwiML).
+    """
+    import secrets
+
+    from app.models.contact_request import (
+        ContactRequest,
+        ContactRequestStatus,
+        ProjectType,
+    )
+
+    if call.contact_request_id is not None:
+        return call.contact_request_id
+
+    name = (
+        (call.lead_name or "").strip()
+        or f"Appelant {call.from_e164}"
+    )[:255]
+
+    intake_email = (intake_data or {}).get("email", "").strip()
+    callback_phone = (
+        (call.lead_callback_phone or "").strip()
+        or call.from_e164
+    )
+
+    if intake_email and "@" in intake_email:
+        email = intake_email[:320]
+    else:
+        # Email synthétique stable par numéro — l'équipe pourra
+        # mettre à jour quand le client validera.
+        sanitized = "".join(
+            c for c in callback_phone if c.isalnum()
+        ) or "anon"
+        email = f"tel{sanitized}@telephonie.local"
+
+    project_type_raw = (intake_data or {}).get("type_travaux", "").lower()
+    project_type_map = {
+        "cuisine": ProjectType.CUISINE.value,
+        "salle_bain": ProjectType.SALLE_BAIN.value,
+        "salle de bain": ProjectType.SALLE_BAIN.value,
+        "multilogement": ProjectType.MULTILOGEMENT.value,
+        "complete": ProjectType.RENOVATION_COMPLETE.value,
+    }
+    project_type = project_type_map.get(
+        project_type_raw, ProjectType.AUTRE.value
+    )
+
+    # Message lisible pour la fiche CRM — résumé visuel des champs
+    # collectés (utilisé aussi dans le courriel HTML).
+    bits: list[str] = ["Demande captée par Léa (secrétaire IA) au téléphone.", ""]
+    labels = {
+        "type_travaux": "Type de travaux",
+        "adresse": "Adresse du projet",
+        "echeancier": "Échéancier souhaité",
+        "budget": "Budget envisagé",
+        "best_callback_time": "Meilleur moment pour rappeler",
+    }
+    for key, label in labels.items():
+        v = (intake_data or {}).get(key)
+        if v:
+            bits.append(f"- {label} : {v}")
+    if call.lead_reason:
+        bits.append("")
+        bits.append(f"Note : {call.lead_reason}")
+    message = "\n".join(bits) or "Intake téléphonique."
+
+    token = secrets.token_urlsafe(32)
+
+    cr = ContactRequest(
+        name=name,
+        email=email,
+        phone=callback_phone[:50],
+        address=(intake_data or {}).get("adresse"),
+        project_type=project_type,
+        budget_range=(intake_data or {}).get("budget"),
+        message=message[:5000],
+        locale="fr" if call.lang.startswith("fr") else "en",
+        source="telephonie_intake_ia",
+        gdpr_consent=True,
+        marketing_consent=False,
+        status=ContactRequestStatus.NEW.value,
+        intake_data=json.dumps(intake_data or {}, ensure_ascii=False),
+        validation_token=token,
+    )
+    db.add(cr)
+    await db.flush()
+    call.contact_request_id = cr.id
+    await db.flush()
+
+    # Envoi du courriel récapitulatif au client (best-effort — si
+    # Microsoft Graph est down, on log et on continue, le staff
+    # rappellera de toute façon).
+    if intake_email and "@" in intake_email:
+        try:
+            await _send_intake_validation_email(
+                to_email=intake_email,
+                name=name,
+                token=token,
+                intake_data=intake_data or {},
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "Intake validation email failed (cr=%s): %s", cr.id, exc
+            )
+
+    return cr.id
+
+
+async def _send_intake_validation_email(
+    *, to_email: str, name: str, token: str, intake_data: dict
+) -> None:
+    """Envoie au prospect le courriel récapitulatif de l'intake
+    téléphonique avec lien vers la page de validation publique."""
+    from app.integrations.email_graph import get_mailer
+    from app.core.config import settings
+
+    base_url = (
+        getattr(settings, "frontend_base_url", None)
+        or os.getenv("FRONTEND_BASE_URL")
+        or os.getenv("PUBLIC_BASE_URL")
+        or "https://horizonservicesimmobiliers.com"
+    ).rstrip("/")
+    validation_url = f"{base_url}/fr/valider-demande/{token}"
+
+    labels = {
+        "type_travaux": "Type de travaux",
+        "adresse": "Adresse du projet",
+        "echeancier": "Échéancier souhaité",
+        "budget": "Budget envisagé",
+        "best_callback_time": "Meilleur moment pour vous rappeler",
+    }
+    rows = []
+    for key, label in labels.items():
+        v = (intake_data or {}).get(key)
+        if v:
+            rows.append(
+                f'<tr><td style="padding:6px 12px;color:#666;">{label}</td>'
+                f'<td style="padding:6px 12px;color:#111;"><strong>{v}</strong></td></tr>'
+            )
+    rows_html = "\n".join(rows) or '<tr><td colspan="2" style="padding:12px;color:#666;">Aucun détail capté.</td></tr>'
+
+    html_body = f"""\
+<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:auto;padding:24px;">
+  <h2 style="color:#0b3d2e;margin:0 0 12px;">Bonjour {name},</h2>
+  <p style="color:#333;line-height:1.5;">
+    Merci pour votre appel à Horizon Services Immobiliers. Voici le
+    résumé de votre demande tel que captée par notre secrétaire IA.
+    Pouvez-vous vérifier que tout est correct&nbsp;? Vous pouvez aussi
+    <strong>ajouter des photos</strong> de l'espace concerné — ça
+    nous aide énormément à préparer un devis précis.
+  </p>
+  <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;background:#f6f7f9;border-radius:8px;margin:18px 0;">
+    {rows_html}
+  </table>
+  <p style="text-align:center;margin:28px 0;">
+    <a href="{validation_url}"
+       style="display:inline-block;background:#d4af37;color:#0b1f1a;text-decoration:none;
+              padding:14px 28px;border-radius:8px;font-weight:700;font-size:15px;">
+      Valider ma demande &amp; ajouter des photos →
+    </a>
+  </p>
+  <p style="color:#555;line-height:1.5;font-size:14px;">
+    Nous vous rappellerons sous peu pour fixer un rendez-vous sur place.<br>
+    Si une information n'est pas correcte, modifiez-la directement
+    depuis le lien ci-dessus.
+  </p>
+  <hr style="border:none;border-top:1px solid #eee;margin:24px 0;">
+  <p style="color:#999;font-size:12px;text-align:center;">
+    Horizon Services Immobiliers — Montréal, Québec<br>
+    Cet email vous a été envoyé suite à votre appel téléphonique.
+  </p>
+</div>
+"""
+    subject = f"Votre demande à Horizon — résumé à valider ({name})"
+    mailer = get_mailer()
+    await mailer.send(to=[to_email], subject=subject, html_body=html_body)
+
+
+async def _find_project_lead_phone(
+    db, *, call: "Call"
+) -> Optional[str]:
+    """Renvoie le téléphone du premier ProjectMember actif du projet
+    lié à l'appelant. Utilisé pour transfer_project_lead."""
+    project = await _find_project_for_call(db, call)
+    if not project:
+        return None
+    from app.models.employe import Employe
+    from app.models.project_member import ProjectMember
+    from app.models.user import User
+
+    rows = (
+        await db.execute(
+            select(User.email)
+            .join(ProjectMember, ProjectMember.user_id == User.id)
+            .where(
+                ProjectMember.project_id == project.id,
+                User.is_active.is_(True),
+            )
+        )
+    ).all()
+    emails = [r[0] for r in rows if r[0]]
+    if not emails:
+        return None
+    emp = (
+        await db.execute(
+            select(Employe.phone)
+            .where(Employe.email.in_(emails), Employe.phone.is_not(None))
+            .limit(1)
+        )
+    ).first()
+    return (emp[0] if emp else None) or None
+
+
+async def _find_project_lead_online_user_ids(
+    db, *, call: "Call"
+) -> List[int]:
+    """Renvoie les `user_id` des membres du projet ACTUELLEMENT
+    « online » dans le portail (Voice SDK heartbeat). On ring d'abord
+    ceux-là via WebRTC (gratuit + reach instantané)."""
+    project = await _find_project_for_call(db, call)
+    if not project:
+        return []
+    from app.models.project_member import ProjectMember
+
+    member_ids = (
+        await db.execute(
+            select(ProjectMember.user_id).where(
+                ProjectMember.project_id == project.id
+            )
+        )
+    ).scalars().all()
+    if not member_ids:
+        return []
+    online = await list_online_user_ids(db)
+    return [uid for uid in online if uid in set(member_ids)]
+
+
+async def _find_project_for_call(db, call: "Call"):
+    """Trouve un projet ACTIF pour l'appelant identifié (CLIENT ou
+    LOCATAIRE avec projet en cours). Renvoie None sinon."""
+    if not call.entity_type or not call.entity_id:
+        return None
+    from app.models.project import Project
+
+    if call.entity_type == "client":
+        proj = (
+            await db.execute(
+                select(Project)
+                .where(Project.client_id == call.entity_id)
+                .order_by(Project.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        return proj
+    if call.entity_type == "contact_request":
+        proj = (
+            await db.execute(
+                select(Project)
+                .where(Project.contact_request_id == call.entity_id)
+                .order_by(Project.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        return proj
+    return None
 
 
 # ---------------------------------------------------------------------
@@ -659,6 +937,95 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
     await _record_turn(
         db, call_id=call.id, role="assistant", text=decision.say
     )
+
+    # ─── Routage spécialisé Phase 8 ───
+    #
+    # 1) Urgence locataire : on transfère TOUT DE SUITE vers le numéro
+    #    gestionnaire (env URGENCY_FORWARD_E164, sinon TWILIO_FORWARD_TO
+    #    en dernier recours pour ne jamais raccrocher un cas urgent).
+    if decision.next_action == "transfer_emergency":
+        emergency_to = (
+            os.getenv("URGENCY_FORWARD_E164")
+            or os.getenv("TWILIO_FORWARD_TO")
+            or ""
+        ).strip()
+        if not emergency_to:
+            # Pas de cible configurée → on ne raccroche pas sec : on
+            # capture en callback urgent pour rappel manuel.
+            call.intent = "urgence_locataire"
+            call.lead_reason = (
+                (decision.lead_reason or "") + " [URGENCE LOCATAIRE]"
+            ).strip()
+            await _create_lead_from_callback(db, call=call)
+            twiml = provider.build_say_and_hangup(
+                say=decision.say, lang=decision.lang
+            )
+            return Response(content=twiml, media_type="application/xml")
+        call.forwarded_to_e164 = emergency_to
+        call.intent = "urgence_locataire"
+        twiml = provider.build_say_and_dial(
+            say=decision.say, lang=decision.lang, dial_to_e164=emergency_to
+        )
+        return Response(content=twiml, media_type="application/xml")
+
+    # 2) Suivi projet : on essaye d'abord de joindre les membres
+    #    online du projet via Voice SDK (browser ringing — gratuit),
+    #    sinon fallback mobile.
+    if decision.next_action == "transfer_project_lead":
+        project_lead_to = await _find_project_lead_phone(
+            db, call=call
+        )
+        if voice_sdk_configured():
+            online_uids = await _find_project_lead_online_user_ids(
+                db, call=call
+            )
+            if online_uids:
+                clients_xml = build_dial_clients_xml(online_uids)
+                fallback_url = (
+                    f"{_secretary_base_url()}/api/v1/voice/twilio/"
+                    f"clients-fallback?call_id={call.id}"
+                )
+                call.intent = "suivi_projet"
+                call.forwarded_to_e164 = project_lead_to or None
+                twiml = provider.build_say_dial_clients_then_mobile(
+                    say=decision.say,
+                    lang=decision.lang,
+                    clients_xml=clients_xml,
+                    fallback_action_url=fallback_url,
+                    timeout_sec=15,
+                )
+                return Response(content=twiml, media_type="application/xml")
+        if project_lead_to:
+            call.forwarded_to_e164 = project_lead_to
+            call.intent = "suivi_projet"
+            twiml = provider.build_say_and_dial(
+                say=decision.say,
+                lang=decision.lang,
+                dial_to_e164=project_lead_to,
+            )
+            return Response(content=twiml, media_type="application/xml")
+        # Personne disponible → callback poli (le chargé sera notifié
+        # via la fiche projet → onglet Communications).
+        call.intent = "suivi_projet"
+        await _create_lead_from_callback(db, call=call)
+        twiml = provider.build_say_and_hangup(
+            say=decision.say, lang=decision.lang
+        )
+        return Response(content=twiml, media_type="application/xml")
+
+    # 3) Intake construction terminé : on persiste la collecte de Léa
+    #    dans un ContactRequest avec un token de validation, on envoie
+    #    le courriel récap, puis on raccroche poliment.
+    if decision.next_action == "intake_complete":
+        cr_id = await _create_intake_contact_request(
+            db, call=call, intake_data=decision.intake_data
+        )
+        call.intent = "intake_construction"
+        call.contact_request_id = cr_id
+        twiml = provider.build_say_and_hangup(
+            say=decision.say, lang=decision.lang
+        )
+        return Response(content=twiml, media_type="application/xml")
 
     # Branche selon l'action décidée.
     if decision.next_action == "transfer":

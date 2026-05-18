@@ -2012,13 +2012,15 @@ function PlanSection() {
 
       <PhaseCard
         num={8}
-        title="Activation progressive du rappel auto leads"
-        status="todo"
+        title="Routage intelligent inbound + intake construction IA"
+        status="done"
         items={[
-          "Toggle « Rappel auto leads » reste OFF par défaut (déjà en place)",
-          "À flip dans Numéros une fois la secrétaire IA testée à 100 %",
-          "Quand activé : tout nouveau ContactRequest avec téléphone reçoit un appel Léa dans les 60 sec — qualification automatique, RDV agenda auto, kanban_column auto-rangée",
-          "Plan de retour arrière : il suffit de re-toggle OFF pour stopper instantanément"
+          "Urgence locataire : Léa détecte les mots-clés (dégât, fuite, panne chauffage…) et hot-transfère vers URGENCY_FORWARD_E164",
+          "Suivi de projet : appelant identifié comme client/contact d'un projet actif → ring les membres online via Voice SDK + fallback mobile",
+          "Intake construction conversationnel : Léa collecte type travaux, adresse, échéancier, budget, courriel, meilleur moment de rappel",
+          "À la fin de l'intake : ContactRequest auto-créé + courriel récap envoyé via Microsoft Graph avec lien tokenisé /valider-demande/{token}",
+          "Page publique de validation : client édite les infos, ajoute des photos, confirme — la fiche CRM est synchronisée automatiquement",
+          "Toggle « Rappel auto leads » (appels SORTANTS vers nouveaux ContactRequests web) reste OFF par défaut — à flip seulement quand l'intake inbound aura été validé en prod"
         ]}
       />
 
