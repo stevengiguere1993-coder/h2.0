@@ -433,6 +433,8 @@ export default function TelephonieHome() {
             usage={usage}
             onOpenCall={openDrawer}
             onJumpTo={setSection}
+            onToggleSecretary={toggleSecretary}
+            onToggleAutoCallback={toggleAutoCallback}
           />
         ) : null}
 
@@ -552,13 +554,17 @@ function DashboardSection({
   calls,
   usage,
   onOpenCall,
-  onJumpTo
+  onJumpTo,
+  onToggleSecretary,
+  onToggleAutoCallback
 }: {
   numbers: PhoneNumberRow[];
   calls: CallRow[];
   usage: UsageDay | null;
   onOpenCall: (id: number) => void;
   onJumpTo: (s: Section) => void;
+  onToggleSecretary: (n: PhoneNumberRow) => void;
+  onToggleAutoCallback: (n: PhoneNumberRow) => void;
 }) {
   // Calculs KPI sur les calls (sans filtrage côté serveur, on a déjà le top 100).
   const todayStart = useMemo(() => {
@@ -615,7 +621,13 @@ function DashboardSection({
               on={secretaryOn}
               icon={<Sparkles className="h-3 w-3" />}
               label={secretaryOn ? "Secrétaire IA active" : "Secrétaire IA off"}
-              onClick={() => onJumpTo("numeros")}
+              onClick={() => primary && onToggleSecretary(primary)}
+              disabled={!primary}
+              title={
+                secretaryOn
+                  ? "Cliquer pour désactiver — retour au transfert direct"
+                  : "Cliquer pour activer — Léa décroche et qualifie"
+              }
             />
             <StatusPill
               on={autoOn}
@@ -623,9 +635,20 @@ function DashboardSection({
               label={
                 autoOn ? "Rappel auto leads actif" : "Rappel auto leads off"
               }
-              onClick={() => onJumpTo("numeros")}
+              onClick={() => primary && onToggleAutoCallback(primary)}
+              disabled={!primary}
+              title={
+                autoOn
+                  ? "Cliquer pour désactiver — les nouveaux leads ne seront plus rappelés"
+                  : "Cliquer pour activer — Léa rappellera chaque nouveau lead 60 sec après création"
+              }
             />
           </div>
+        </div>
+        <div className="mt-3 text-[11px] text-white/40">
+          Astuce : clique sur les pastilles ci-dessus pour activer ou
+          désactiver. Les changements sont appliqués immédiatement et
+          partagés entre toi et toute l&apos;équipe.
         </div>
       </section>
 
@@ -2234,18 +2257,24 @@ function StatusPill({
   on,
   icon,
   label,
-  onClick
+  onClick,
+  disabled,
+  title
 }: {
   on: boolean;
   icon: React.ReactNode;
   label: string;
   onClick: () => void;
+  disabled?: boolean;
+  title?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-wider transition ${
+      disabled={disabled}
+      title={title}
+      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-wider transition disabled:cursor-not-allowed disabled:opacity-50 ${
         on
           ? "bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30"
           : "bg-white/10 text-white/50 hover:bg-white/15"

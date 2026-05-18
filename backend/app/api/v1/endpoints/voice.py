@@ -289,8 +289,16 @@ async def twilio_incoming_call(request: Request, db: DBSession) -> Response:
     TwiML poli en français au lieu du message d'erreur Twilio."""
     try:
         return await _twilio_incoming_call_impl(request, db)
-    except HTTPException:
-        raise
+    except HTTPException as _http_exc:
+        # On préfère un TwiML poli en français à la lecture du message
+        # d'erreur anglais par défaut de Twilio. Les 401 signature
+        # mismatch + 503 provider not configured sont loggés mais
+        # l'appelant entend « Désolée, souci technique ».
+        log.warning(
+            "twilio webhook rejected: %d %s",
+            _http_exc.status_code, _http_exc.detail,
+        )
+        return _safe_error_twiml()
     except Exception:
         log.exception("twilio_incoming_call failed")
         return _safe_error_twiml()
@@ -501,8 +509,16 @@ async def _twilio_incoming_call_impl(request: Request, db: DBSession) -> Respons
 async def twilio_secretary_turn(request: Request, db: DBSession) -> Response:
     try:
         return await _twilio_secretary_turn_impl(request, db)
-    except HTTPException:
-        raise
+    except HTTPException as _http_exc:
+        # On préfère un TwiML poli en français à la lecture du message
+        # d'erreur anglais par défaut de Twilio. Les 401 signature
+        # mismatch + 503 provider not configured sont loggés mais
+        # l'appelant entend « Désolée, souci technique ».
+        log.warning(
+            "twilio webhook rejected: %d %s",
+            _http_exc.status_code, _http_exc.detail,
+        )
+        return _safe_error_twiml()
     except Exception:
         log.exception("twilio_secretary_turn failed")
         return _safe_error_twiml()
@@ -740,8 +756,16 @@ async def twilio_call_status(request: Request, db: DBSession) -> Response:
 async def twilio_voicemail(request: Request, db: DBSession) -> Response:
     try:
         return await _twilio_voicemail_impl(request, db)
-    except HTTPException:
-        raise
+    except HTTPException as _http_exc:
+        # On préfère un TwiML poli en français à la lecture du message
+        # d'erreur anglais par défaut de Twilio. Les 401 signature
+        # mismatch + 503 provider not configured sont loggés mais
+        # l'appelant entend « Désolée, souci technique ».
+        log.warning(
+            "twilio webhook rejected: %d %s",
+            _http_exc.status_code, _http_exc.detail,
+        )
+        return _safe_error_twiml()
     except Exception:
         log.exception("twilio_voicemail failed")
         return _safe_error_twiml()
@@ -979,8 +1003,16 @@ async def twilio_sdk_outbound(request: Request) -> Response:
 async def twilio_clients_fallback(request: Request, db: DBSession) -> Response:
     try:
         return await _twilio_clients_fallback_impl(request, db)
-    except HTTPException:
-        raise
+    except HTTPException as _http_exc:
+        # On préfère un TwiML poli en français à la lecture du message
+        # d'erreur anglais par défaut de Twilio. Les 401 signature
+        # mismatch + 503 provider not configured sont loggés mais
+        # l'appelant entend « Désolée, souci technique ».
+        log.warning(
+            "twilio webhook rejected: %d %s",
+            _http_exc.status_code, _http_exc.detail,
+        )
+        return _safe_error_twiml()
     except Exception:
         log.exception("twilio_clients_fallback failed")
         return _safe_error_twiml()
@@ -1154,8 +1186,16 @@ async def create_outbound_call(
 async def twilio_lead_outbound(request: Request, db: DBSession) -> Response:
     try:
         return await _twilio_lead_outbound_impl(request, db)
-    except HTTPException:
-        raise
+    except HTTPException as _http_exc:
+        # On préfère un TwiML poli en français à la lecture du message
+        # d'erreur anglais par défaut de Twilio. Les 401 signature
+        # mismatch + 503 provider not configured sont loggés mais
+        # l'appelant entend « Désolée, souci technique ».
+        log.warning(
+            "twilio webhook rejected: %d %s",
+            _http_exc.status_code, _http_exc.detail,
+        )
+        return _safe_error_twiml()
     except Exception:
         log.exception("twilio_lead_outbound failed")
         return _safe_error_twiml()
@@ -1434,8 +1474,16 @@ async def trigger_lead_qualification(
 async def twilio_outbound_bridge(request: Request, db: DBSession) -> Response:
     try:
         return await _twilio_outbound_bridge_impl(request, db)
-    except HTTPException:
-        raise
+    except HTTPException as _http_exc:
+        # On préfère un TwiML poli en français à la lecture du message
+        # d'erreur anglais par défaut de Twilio. Les 401 signature
+        # mismatch + 503 provider not configured sont loggés mais
+        # l'appelant entend « Désolée, souci technique ».
+        log.warning(
+            "twilio webhook rejected: %d %s",
+            _http_exc.status_code, _http_exc.detail,
+        )
+        return _safe_error_twiml()
     except Exception:
         log.exception("twilio_outbound_bridge failed")
         return _safe_error_twiml()
@@ -1735,8 +1783,16 @@ async def twilio_incoming_sms(request: Request, db: DBSession) -> Response:
     """
     try:
         return await _twilio_incoming_sms_impl(request, db)
-    except HTTPException:
-        raise
+    except HTTPException as _http_exc:
+        # On préfère un TwiML poli en français à la lecture du message
+        # d'erreur anglais par défaut de Twilio. Les 401 signature
+        # mismatch + 503 provider not configured sont loggés mais
+        # l'appelant entend « Désolée, souci technique ».
+        log.warning(
+            "twilio webhook rejected: %d %s",
+            _http_exc.status_code, _http_exc.detail,
+        )
+        return _safe_error_twiml()
     except Exception:
         log.exception("twilio_incoming_sms failed")
         return Response(
