@@ -718,7 +718,7 @@ function EditableField({
           onClick={() => setEditing(true)}
           className="mt-1.5 block w-full break-words text-left text-sm text-white"
         >
-          {displayValue ?? value || "—"}
+          {(displayValue ?? value) || "—"}
         </button>
       )}
     </div>
