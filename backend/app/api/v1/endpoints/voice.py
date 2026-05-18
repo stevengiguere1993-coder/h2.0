@@ -32,6 +32,13 @@ from app.integrations.voice.secretary import (
     decide_initial_greeting,
     decide_next_turn,
 )
+from app.integrations.voice.spam_filter import (
+    SpamCheckResult,
+    check_incoming,
+    maybe_mark_honeypot,
+    record_call_cost,
+    record_spam_block,
+)
 from app.integrations.voice.twilio_provider import TwilioVoiceProvider
 from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.models.voice import (
@@ -42,6 +49,7 @@ from app.models.voice import (
     PhoneNumber,
     VoiceBusinessHours,
     VoiceFilter,
+    VoiceUsageDaily,
 )
 
 log = logging.getLogger(__name__)
@@ -276,6 +284,39 @@ async def twilio_incoming_call(request: Request, db: DBSession) -> Response:
         )
         db.add(existing)
         await db.flush()
+
+    # ----- Anti-spam (6 couches) -----
+    # Évalué AVANT toute action coûteuse. Si bloqué, on Reject ou on
+    # bascule en voicemail-only sans facturer Polly + Claude.
+    verstat = params.get("StirVerstat") or params.get("VerStat") or None
+    spam = await check_incoming(db, from_e164=from_e164, verstat=verstat)
+    if spam.result != SpamCheckResult.ALLOW:
+        existing.was_blocked = True
+        existing.intent = "spam"
+        await record_spam_block(db)
+        await db.flush()
+        log.info(
+            "Spam blocked from=%s reason=%s (%s)",
+            from_e164, spam.result.value, spam.reason,
+        )
+        if spam.result == SpamCheckResult.BLOCK_CAP:
+            # Cost cap atteint : on garde le canal ouvert mais on
+            # bascule sur voicemail (au cas où c'est un vrai client).
+            twiml = provider.build_voicemail(
+                intro_say=(
+                    "Bonjour, vous avez joint Horizon Services Immobiliers. "
+                    "Laissez votre message après le bip, nous vous "
+                    "rappellerons dès que possible."
+                ),
+                lang="fr-CA",
+                action_url=_voicemail_action_url(),
+                transcribe_callback_url=_voicemail_transcribe_url(),
+            )
+            return Response(content=twiml, media_type="application/xml")
+        # Tous les autres motifs : raccrochage poli (Reject = tonalité
+        # occupé, le robot ne saura pas qu'on l'a démasqué).
+        twiml = provider.build_reject_response("busy")
+        return Response(content=twiml, media_type="application/xml")
 
     # ----- Routage Phase 3 : blocklist / VIP / heures / secrétaire -----
     action = await decide_routing(
@@ -519,6 +560,26 @@ async def twilio_call_status(request: Request, db: DBSession) -> Response:
     if rec_url:
         call.recording_url = rec_url
         call.recording_sid = params.get("RecordingSid")
+
+    # Anti-spam : compteurs de coût + honeypot.
+    if call_status == "completed" and call.duration_sec:
+        try:
+            await record_call_cost(
+                db,
+                duration_sec=call.duration_sec,
+                direction=call.direction,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("record_call_cost failed: %s", exc)
+        if call.direction == "inbound":
+            try:
+                await maybe_mark_honeypot(
+                    db,
+                    from_e164=call.from_e164,
+                    duration_sec=call.duration_sec,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("honeypot check failed: %s", exc)
 
     await db.flush()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -1061,6 +1122,73 @@ async def get_call_turns(
         )
     ).scalars().all()
     return [CallTurnRead.model_validate(r) for r in rows]
+
+
+# ---------- Anti-spam : stats + intel (admin) ------------
+
+
+class UsageDayRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    usage_date: str
+    cents_spent: int
+    calls_count: int
+    spam_blocked: int
+
+
+class CallerIntelRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    from_e164: str
+    line_type: Optional[str]
+    caller_name: Optional[str]
+    spam_hangup_count: int
+    banned_until: Optional[datetime]
+    last_verstat: Optional[str]
+    notes: Optional[str]
+
+
+@router.get(
+    "/usage/today",
+    response_model=UsageDayRead,
+    summary="Usage Twilio du jour (cents dépensés, appels, spam bloqué)",
+)
+async def get_usage_today(_: CurrentAdmin, db: DBSession) -> UsageDayRead:
+    from datetime import date as _date
+
+    today = _date.today().isoformat()
+    row = (
+        await db.execute(
+            select(VoiceUsageDaily).where(VoiceUsageDaily.usage_date == today)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return UsageDayRead(
+            usage_date=today, cents_spent=0, calls_count=0, spam_blocked=0
+        )
+    return UsageDayRead.model_validate(row)
+
+
+from app.models.voice import VoiceCallerIntel as _VCI  # for the next endpoint
+
+
+@router.get(
+    "/caller-intel",
+    response_model=List[CallerIntelRead],
+    summary="Renseignements anti-spam par numéro (admin)",
+)
+async def list_caller_intel(
+    _: CurrentAdmin,
+    db: DBSession,
+    limit: int = Query(default=50, ge=1, le=200),
+    banned_only: bool = Query(default=False),
+) -> List[CallerIntelRead]:
+    stmt = select(_VCI)
+    if banned_only:
+        from datetime import datetime as _dt, timezone as _tz
+
+        stmt = stmt.where(_VCI.banned_until > _dt.now(_tz.utc))
+    stmt = stmt.order_by(_VCI.updated_at.desc()).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
+    return [CallerIntelRead.model_validate(r) for r in rows]
 
 
 # ---------- Filtres (blocklist + whitelist VIP) Phase 3 ------------

@@ -556,6 +556,14 @@ async def init_db() -> None:
             ("voice_calls", "entity_type", "VARCHAR(32)"),
             ("voice_calls", "entity_id", "INTEGER"),
             ("voice_calls", "followup_suggestion", "TEXT"),
+            # Anti-spam — VoiceUsageDaily peut être créée vide par
+            # create_all, mais on ajoute spam_blocked au cas où la
+            # table existait sans cette colonne (bootstrap progressif).
+            (
+                "voice_usage_daily",
+                "spam_blocked",
+                "INTEGER NOT NULL DEFAULT 0",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
@@ -786,6 +794,14 @@ async def init_db() -> None:
         # Sans ces index, les filtres déclenchent des seq-scans (plusieurs
         # secondes par requête).
         additive_indexes = (
+            # Téléphonie anti-spam : rate-limit compte les appels
+            # récents par from_e164 — sans cet index, scan complet de
+            # voice_calls à chaque appel entrant.
+            (
+                "ix_voice_calls_from_started",
+                "voice_calls",
+                "(from_e164, started_at DESC)",
+            ),
             (
                 "ix_mtl_units_nombre_logement",
                 "mtl_property_units",
