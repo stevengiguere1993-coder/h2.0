@@ -184,6 +184,24 @@ async def submit_contact(
     except Exception:
         pass
 
+    # AI outbound : Léa rappelle automatiquement le lead dans 60 sec
+    # pour qualifier et proposer un RDV. Best-effort — la création du
+    # ContactRequest n'échoue jamais à cause de ça.
+    try:
+        if record.phone:
+            from app.integrations.voice.lead_outbound import (
+                start_lead_qualification_call,
+            )
+            import asyncio as _asyncio
+
+            _asyncio.create_task(
+                start_lead_qualification_call(
+                    contact_request_id=record.id, delay_sec=60
+                )
+            )
+    except Exception:
+        pass
+
     return ContactRequestPublicAck(reference=reference)
 
 

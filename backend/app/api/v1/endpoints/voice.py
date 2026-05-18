@@ -16,6 +16,7 @@ HMAC X-Twilio-Signature. Les endpoints admin requièrent `CurrentAdmin`.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -28,6 +29,10 @@ from sqlalchemy import select
 from app.api.deps import CurrentAdmin, DBSession
 from app.integrations.voice import get_voice_provider
 from app.integrations.voice.routing import RoutingAction, decide_routing
+from app.integrations.voice.lead_outbound import (
+    build_outbound_system_prompt,
+    decide_lead_outbound_turn,
+)
 from app.integrations.voice.secretary import (
     decide_initial_greeting,
     decide_next_turn,
@@ -847,6 +852,274 @@ async def create_outbound_call(
         bridge_to_e164=bridge_to,
         target_e164=target,
     )
+
+
+@router.post(
+    "/twilio/lead-outbound",
+    summary="Webhook Twilio : conversation IA outbound (qualification lead)",
+    response_class=Response,
+)
+async def twilio_lead_outbound(request: Request, db: DBSession) -> Response:
+    """Drive la conversation IA sortante de qualification d'un lead.
+
+    Premier appel (sans turns) : greeting personnalisé + Gather du
+    premier énoncé du lead. Tours suivants : on alimente Claude avec
+    l'historique + le contexte ContactRequest, on persiste la réponse,
+    et on dispatch selon `next_action` (rdv_*, callback, lost, etc.).
+
+    À la fin : on met à jour la fiche ContactRequest (status='contacted',
+    kanban_column, internal_notes avec le résumé IA).
+    """
+    params = await _validate_twilio_signature(request)
+    provider = _twilio_provider()
+
+    call_id_raw = request.query_params.get("call_id", "")
+    call_id = int(call_id_raw) if call_id_raw.isdigit() else 0
+    if not call_id:
+        twiml = provider.build_say_and_hangup(
+            say="Désolée, une erreur est survenue. Au revoir.",
+            lang="fr-CA",
+        )
+        return Response(content=twiml, media_type="application/xml")
+
+    call = (
+        await db.execute(select(Call).where(Call.id == call_id))
+    ).scalar_one_or_none()
+    if call is None:
+        twiml = provider.build_say_and_hangup(
+            say="Désolée, une erreur est survenue. Au revoir.",
+            lang="fr-CA",
+        )
+        return Response(content=twiml, media_type="application/xml")
+
+    # Met à jour le CallSid si on le voit pour la 1re fois.
+    sid = params.get("CallSid", "")
+    if sid and not call.provider_sid.startswith("CA"):
+        call.provider_sid = sid
+
+    cr = None
+    if call.entity_type == "contact_request" and call.entity_id:
+        cr = (
+            await db.execute(
+                select(ContactRequest).where(ContactRequest.id == call.entity_id)
+            )
+        ).scalar_one_or_none()
+
+    speech_result = (params.get("SpeechResult") or "").strip()
+    confidence_raw = params.get("Confidence")
+    confidence = None
+    try:
+        if confidence_raw:
+            confidence = float(confidence_raw)
+    except ValueError:
+        pass
+
+    if speech_result:
+        await _record_turn(
+            db, call_id=call.id, role="user", text=speech_result,
+            confidence=confidence,
+        )
+
+    turns = (
+        await db.execute(
+            select(CallTurn)
+            .where(CallTurn.call_id == call.id)
+            .order_by(CallTurn.turn_index)
+        )
+    ).scalars().all()
+
+    # Tour 0 — greeting personnalisé.
+    if not turns and cr is not None:
+        greeting = _build_outbound_greeting(cr)
+        call.lang = greeting.lang
+        await _record_turn(
+            db, call_id=call.id, role="assistant", text=greeting.say
+        )
+        twiml = provider.build_say_and_gather(
+            say=greeting.say,
+            lang=greeting.lang,
+            action_url=f"{_secretary_base_url()}/api/v1/voice/twilio/lead-outbound?call_id={call.id}",
+        )
+        return Response(content=twiml, media_type="application/xml")
+
+    # Tours suivants — pilotage Claude.
+    if cr is None:
+        # Cas dégénéré : pas de contexte → on raccroche poliment.
+        twiml = provider.build_say_and_hangup(
+            say="Merci pour votre appel. Au revoir.", lang=call.lang or "fr-CA"
+        )
+        return Response(content=twiml, media_type="application/xml")
+
+    system_prompt = build_outbound_system_prompt(
+        lead_name=cr.name,
+        project_type=cr.project_type,
+        message=cr.message or "",
+        budget_range=cr.budget_range,
+        address=cr.address,
+        lang=call.lang or "fr-CA",
+    )
+    history = [(t.role, t.text) for t in turns]
+    decision = await decide_lead_outbound_turn(
+        history=history,
+        system_prompt=system_prompt,
+        turn_count=len(turns),
+    )
+
+    call.lang = decision.lang
+    if decision.summary:
+        call.lead_reason = decision.summary
+    await _record_turn(
+        db, call_id=call.id, role="assistant", text=decision.say
+    )
+
+    # Dispatch final.
+    if decision.next_action == "continue":
+        twiml = provider.build_say_and_gather(
+            say=decision.say,
+            lang=decision.lang,
+            action_url=f"{_secretary_base_url()}/api/v1/voice/twilio/lead-outbound?call_id={call.id}",
+        )
+        return Response(content=twiml, media_type="application/xml")
+
+    # Persistance finale dans la fiche CRM.
+    await _commit_lead_outcome(
+        db, cr=cr, call=call, decision=decision,
+    )
+
+    twiml = provider.build_say_and_hangup(say=decision.say, lang=decision.lang)
+    return Response(content=twiml, media_type="application/xml")
+
+
+def _build_outbound_greeting(cr: ContactRequest) -> "type('G', (), {})":  # type: ignore[valid-type]
+    """Greeting statique court qui mentionne le contexte du lead."""
+    lang = "en-US" if (cr.locale or "fr").startswith("en") else "fr-CA"
+    project_fr = {
+        "salle_bain": "salle de bain",
+        "cuisine": "cuisine",
+        "multilogement": "multilogement",
+        "renovation_complete": "rénovation complète",
+    }.get(cr.project_type, "rénovation")
+
+    first_name = (cr.name or "").split(" ")[0] if cr.name else ""
+    if lang.startswith("en"):
+        say = (
+            f"Hello{' ' + first_name if first_name else ''}, this is Léa from "
+            f"Horizon Services Immobiliers. I'm calling about the {cr.project_type} "
+            "request you just submitted on our website. Is now a good time?"
+        )
+    else:
+        say = (
+            f"Bonjour{' ' + first_name if first_name else ''}, c'est Léa "
+            f"d'Horizon Services Immobiliers. Je vous appelle suite à "
+            f"votre demande pour {project_fr} sur notre site. "
+            "Vous avez 2 minutes pour qu'on en parle ?"
+        )
+
+    # Wrap in a small object compat avec ce que la fonction appelante attend.
+    class _G:
+        pass
+    g = _G()
+    g.lang = lang
+    g.say = say
+    return g  # type: ignore[return-value]
+
+
+async def _commit_lead_outcome(
+    db,
+    *,
+    cr: ContactRequest,
+    call: Call,
+    decision,
+) -> None:
+    """Met à jour ContactRequest selon le résultat de l'appel IA outbound
+    + crée un AgendaEvent si RDV demandé."""
+    from app.models.contact_request import ContactRequestStatus as _CRS
+
+    cr.status = _CRS.CONTACTED.value
+    bits: list[str] = []
+    if decision.summary:
+        bits.append(decision.summary)
+    if decision.qualified_budget:
+        bits.append(f"Budget : {decision.qualified_budget}")
+    if decision.qualified_timeline:
+        bits.append(f"Échéancier : {decision.qualified_timeline}")
+    if decision.callback_when:
+        bits.append(f"Rappel demandé : {decision.callback_when}")
+    summary_text = " — ".join(bits) or "Appel IA effectué."
+    cr.internal_notes = (
+        (cr.internal_notes or "") + f"\n\n[IA outbound {call.id}] {summary_text}"
+    ).strip()
+
+    if decision.next_action == "lost":
+        cr.kanban_column = "lost"
+        cr.status = _CRS.LOST.value
+        return
+    if decision.next_action == "callback":
+        cr.kanban_column = "rappel"
+        return
+    if decision.next_action == "complete_no_action":
+        cr.kanban_column = "qualified"
+        return
+
+    # RDV — crée un AgendaEvent à l'heure choisie.
+    if decision.next_action in ("rdv_demain_am", "rdv_demain_pm", "rdv_apres_demain"):
+        from datetime import datetime as _dt, time as _time, timedelta as _td
+        from zoneinfo import ZoneInfo
+        from app.models.agenda_event import AgendaEvent
+
+        tz = ZoneInfo("America/Montreal")
+        today = _dt.now(tz).date()
+        if decision.next_action == "rdv_demain_am":
+            start_date = today + _td(days=1)
+            start_time = _time(10, 0)
+        elif decision.next_action == "rdv_demain_pm":
+            start_date = today + _td(days=1)
+            start_time = _time(14, 0)
+        else:
+            start_date = today + _td(days=2)
+            start_time = _time(10, 0)
+        start = _dt.combine(start_date, start_time, tz)
+        end = start + _td(hours=1)
+        ev = AgendaEvent(
+            title=f"RDV qualification : {cr.name}",
+            description=(
+                f"RDV auto-créé par Léa (IA outbound). Budget : "
+                f"{decision.qualified_budget or 'n/c'}. Échéancier : "
+                f"{decision.qualified_timeline or 'n/c'}."
+            ),
+            start_at=start,
+            end_at=end,
+            scope="construction",
+            event_type="rdv",
+            contact_request_id=cr.id,
+        )
+        db.add(ev)
+        cr.kanban_column = "rdv_pris"
+        await db.flush()
+        log.info(
+            "RDV auto-créé : contact=%d agenda=%d at %s",
+            cr.id, ev.id, start.isoformat(),
+        )
+
+
+@router.post(
+    "/calls/{contact_request_id}/qualify",
+    summary="Lance manuellement la qualification IA outbound d'un lead (admin)",
+)
+async def trigger_lead_qualification(
+    contact_request_id: int, _: CurrentAdmin, db: DBSession
+) -> dict:
+    """Permet de relancer l'appel IA depuis le CRM (utile si auto a échoué
+    ou si on a édité le numéro du lead après coup)."""
+    from app.integrations.voice.lead_outbound import start_lead_qualification_call
+
+    # Fire-and-forget, sans délai cette fois (manuel).
+    asyncio.create_task(
+        start_lead_qualification_call(
+            contact_request_id=contact_request_id, delay_sec=0
+        )
+    )
+    return {"queued": True, "contact_request_id": contact_request_id}
 
 
 @router.post(
