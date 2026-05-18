@@ -22,6 +22,7 @@ const PORTAL_PREFIXES = [
   "/investisseur",
   "/dev",
   "/dev-logiciel",
+  "/telephonie",
   "/changer-mot-de-passe",
   "/profil"
 ];
