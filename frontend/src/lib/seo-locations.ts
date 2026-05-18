@@ -43,7 +43,45 @@ export const SEO_CITIES: SeoCity[] = [
   { slug: "villeray", name: "Villeray", region: "île de Montréal", area: "Villeray", nearby: ["plateau-mont-royal", "rosemont", "mile-end"] },
   { slug: "mile-end", name: "Mile End", region: "île de Montréal", area: "le Mile End", nearby: ["plateau-mont-royal", "outremont", "villeray"] },
   { slug: "griffintown", name: "Griffintown", region: "île de Montréal", area: "Griffintown", nearby: ["montreal", "verdun", "westmount"] },
-  { slug: "hochelaga", name: "Hochelaga", region: "île de Montréal", area: "Hochelaga", nearby: ["montreal", "anjou", "rosemont"] }
+  { slug: "hochelaga", name: "Hochelaga", region: "île de Montréal", area: "Hochelaga", nearby: ["montreal", "anjou", "rosemont"] },
+  // ---- Île de Montréal — quartiers et arrondissements additionnels
+  { slug: "ahuntsic", name: "Ahuntsic", region: "île de Montréal", area: "Ahuntsic", nearby: ["villeray", "saint-laurent", "montreal-nord"] },
+  { slug: "ville-marie", name: "Ville-Marie", region: "île de Montréal", area: "Ville-Marie", nearby: ["griffintown", "plateau-mont-royal", "westmount"] },
+  { slug: "sud-ouest", name: "Sud-Ouest", region: "île de Montréal", area: "le Sud-Ouest", nearby: ["verdun", "lasalle", "griffintown"] },
+  { slug: "mercier", name: "Mercier", region: "île de Montréal", area: "Mercier", nearby: ["hochelaga", "anjou", "rosemont"] },
+  { slug: "ndg", name: "Notre-Dame-de-Grâce", region: "île de Montréal", area: "Notre-Dame-de-Grâce", nearby: ["westmount", "cote-des-neiges", "montreal"] },
+  { slug: "cote-des-neiges", name: "Côte-des-Neiges", region: "île de Montréal", area: "Côte-des-Neiges", nearby: ["ndg", "outremont", "westmount"] },
+  { slug: "saint-leonard", name: "Saint-Léonard", region: "île de Montréal", area: "Saint-Léonard", nearby: ["anjou", "ahuntsic", "rosemont"] },
+  { slug: "montreal-nord", name: "Montréal-Nord", region: "île de Montréal", area: "Montréal-Nord", nearby: ["ahuntsic", "saint-leonard", "laval"] },
+  { slug: "pierrefonds", name: "Pierrefonds", region: "West Island", area: "Pierrefonds", nearby: ["dollard-des-ormeaux", "ile-bizard", "kirkland"] },
+  { slug: "beaconsfield", name: "Beaconsfield", region: "West Island", area: "Beaconsfield", nearby: ["pointe-claire", "kirkland", "baie-durfe"] },
+  { slug: "kirkland", name: "Kirkland", region: "West Island", area: "Kirkland", nearby: ["beaconsfield", "pointe-claire", "pierrefonds"] },
+  { slug: "lachine", name: "Lachine", region: "île de Montréal", area: "Lachine", nearby: ["lasalle", "dorval", "saint-laurent"] },
+  { slug: "dorval", name: "Dorval", region: "West Island", area: "Dorval", nearby: ["pointe-claire", "lachine", "saint-laurent"] },
+  { slug: "ile-bizard", name: "L'Île-Bizard", region: "West Island", area: "L'Île-Bizard", nearby: ["pierrefonds", "kirkland", "dollard-des-ormeaux"] },
+  // ---- Rive-Sud — couronne sud
+  { slug: "la-prairie", name: "La Prairie", region: "Rive-Sud", area: "La Prairie", nearby: ["candiac", "saint-constant", "brossard"] },
+  { slug: "candiac", name: "Candiac", region: "Rive-Sud", area: "Candiac", nearby: ["la-prairie", "saint-constant", "brossard"] },
+  { slug: "chambly", name: "Chambly", region: "Rive-Sud", area: "Chambly", nearby: ["saint-bruno", "longueuil", "carignan"] },
+  { slug: "saint-bruno", name: "Saint-Bruno-de-Montarville", region: "Rive-Sud", area: "Saint-Bruno", nearby: ["chambly", "boucherville", "longueuil"] },
+  { slug: "saint-hubert", name: "Saint-Hubert", region: "Rive-Sud", area: "Saint-Hubert", nearby: ["longueuil", "brossard", "saint-bruno"] },
+  { slug: "saint-constant", name: "Saint-Constant", region: "Rive-Sud", area: "Saint-Constant", nearby: ["la-prairie", "candiac", "delson"] },
+  { slug: "chateauguay", name: "Châteauguay", region: "Rive-Sud", area: "Châteauguay", nearby: ["mercier-rs", "la-prairie", "kahnawake"] },
+  { slug: "delson", name: "Delson", region: "Rive-Sud", area: "Delson", nearby: ["saint-constant", "candiac", "la-prairie"] },
+  // ---- Rive-Nord — Laurentides + Lanaudière
+  { slug: "terrebonne", name: "Terrebonne", region: "Rive-Nord", area: "Terrebonne", nearby: ["mascouche", "repentigny", "laval"] },
+  { slug: "repentigny", name: "Repentigny", region: "Rive-Nord", area: "Repentigny", nearby: ["terrebonne", "mascouche", "lassomption"] },
+  { slug: "mascouche", name: "Mascouche", region: "Rive-Nord", area: "Mascouche", nearby: ["terrebonne", "repentigny", "laval"] },
+  { slug: "blainville", name: "Blainville", region: "Rive-Nord", area: "Blainville", nearby: ["sainte-therese", "boisbriand", "mirabel"] },
+  { slug: "sainte-therese", name: "Sainte-Thérèse", region: "Rive-Nord", area: "Sainte-Thérèse", nearby: ["blainville", "boisbriand", "rosemere"] },
+  { slug: "saint-eustache", name: "Saint-Eustache", region: "Rive-Nord", area: "Saint-Eustache", nearby: ["boisbriand", "deux-montagnes", "mirabel"] },
+  { slug: "boisbriand", name: "Boisbriand", region: "Rive-Nord", area: "Boisbriand", nearby: ["blainville", "sainte-therese", "rosemere"] },
+  { slug: "mirabel", name: "Mirabel", region: "Rive-Nord", area: "Mirabel", nearby: ["blainville", "saint-eustache", "saint-jerome"] },
+  { slug: "rosemere", name: "Rosemère", region: "Rive-Nord", area: "Rosemère", nearby: ["sainte-therese", "boisbriand", "laval"] },
+  // ---- Vaudreuil-Soulanges — couronne ouest
+  { slug: "vaudreuil", name: "Vaudreuil-Dorion", region: "Vaudreuil-Soulanges", area: "Vaudreuil-Dorion", nearby: ["pincourt", "hudson", "ile-perrot"] },
+  { slug: "pincourt", name: "Pincourt", region: "Vaudreuil-Soulanges", area: "Pincourt", nearby: ["vaudreuil", "ile-perrot", "hudson"] },
+  { slug: "ile-perrot", name: "L'Île-Perrot", region: "Vaudreuil-Soulanges", area: "L'Île-Perrot", nearby: ["pincourt", "vaudreuil", "beaconsfield"] }
 ];
 
 export const SEO_SERVICES: SeoService[] = [
@@ -180,6 +218,145 @@ export const SEO_SERVICES: SeoService[] = [
       {
         q: "Comment se passe la gestion des permis à {city}?",
         a: "Nous gérons toute la paperasse avec la ville de {city} : permis de construction, demandes d'inspection, conformité RBQ. Tu restes informé à chaque étape sans avoir à t'occuper de l'administratif."
+      }
+    ]
+  },
+  // -----------------------------------------------------------------
+  // Services additionnels — programmatic SEO Phase 2 (50 villes × 8 = 400 pages)
+  // -----------------------------------------------------------------
+  {
+    slug: "agrandissement",
+    name: "agrandissement",
+    nameCap: "Agrandissement",
+    description:
+      "Agrandissement de maison : ajout d'étage, surélévation, annexe arrière, garage attenant. Conception, structure, permis, finitions intégrales.",
+    scope: [
+      "Plans d'architecte ou techniques",
+      "Demande de permis avec la ville",
+      "Excavation et fondations (si annexe au sol)",
+      "Charpente et toiture neuves",
+      "Plomberie, électricité et CVC intégrés",
+      "Finitions intérieures et harmonisation avec l'existant"
+    ],
+    priceRanges: [
+      { label: "Annexe 1 étage (300-500 pi²)", range: "150 000 $ – 250 000 $" },
+      { label: "Ajout d'étage complet", range: "200 000 $ – 400 000 $" },
+      { label: "Surélévation de toit", range: "180 000 $ – 350 000 $" }
+    ],
+    faq: [
+      {
+        q: "Quel est le délai pour un agrandissement à {city} ?",
+        a: "Comptez 4 à 6 mois à {city} : 1-2 mois de plans et permis, puis 3-4 mois de chantier. La période d'obtention du permis dépend de l'arrondissement et peut être raccourcie si vous avez déjà un architecte avec plans validés."
+      },
+      {
+        q: "Faut-il un architecte pour agrandir à {city} ?",
+        a: "Oui, pour toute modification structurelle (ajout d'étage, surélévation, annexe). À {city}, les municipalités exigent des plans signés par un architecte ou un technologue en architecture pour le permis. Nous travaillons avec plusieurs cabinets locaux."
+      },
+      {
+        q: "Combien coûte un agrandissement à {city} en 2026 ?",
+        a: "À {city}, une annexe d'un étage de 300-500 pi² coûte 150 000 – 250 000 $ clé en main. Un ajout d'étage complet sur maison unifamiliale : 200 000 – 400 000 $. Le coût varie selon les fondations existantes et la complexité du raccord à la maison actuelle."
+      }
+    ]
+  },
+  {
+    slug: "sous-sol",
+    name: "finition de sous-sol",
+    nameCap: "Finition de sous-sol",
+    description:
+      "Finition complète de sous-sol : isolation, gypse, plancher, salle de bain, cuisine d'appoint, salle de jeux ou logement secondaire.",
+    scope: [
+      "Inspection humidité et drainage",
+      "Isolation murs et plafond aux normes",
+      "Cadrage, gypse et plafonds suspendus",
+      "Plomberie (salle de bain secondaire, cuisine d'appoint)",
+      "Électricité et éclairage encastré",
+      "Plancher (vinyle de luxe, céramique, époxy)"
+    ],
+    priceRanges: [
+      { label: "Sous-sol ouvert (espace de vie)", range: "25 000 $ – 45 000 $" },
+      { label: "Avec salle de bain complète", range: "45 000 $ – 70 000 $" },
+      { label: "Logement secondaire (bachelor)", range: "70 000 $ – 110 000 $" }
+    ],
+    faq: [
+      {
+        q: "Le sous-sol peut-il être loué comme logement à {city} ?",
+        a: "À {city}, un sous-sol peut devenir un logement secondaire (bachelor ou 3½) si les critères sont respectés : hauteur sous plafond min 2,1 m, fenêtres conformes pour évacuation, sortie indépendante. Le zonage municipal doit également l'autoriser. Nous vérifions cela en amont."
+      },
+      {
+        q: "Comment gérer l'humidité dans un sous-sol à {city} ?",
+        a: "À {city}, les sous-sols anciens (avant 1985) ont souvent des problèmes de drainage périphérique. Avant la finition, nous inspectons les fondations, ajoutons une membrane d'étanchéité si nécessaire, et installons systématiquement un déshumidificateur connecté au drain. Sans cette étape, le gypse moisit en 5 ans."
+      },
+      {
+        q: "Quel revêtement de sol choisir pour un sous-sol à {city} ?",
+        a: "Vinyle de luxe (LVT) : meilleur choix pour {city} — étanche, chaud au pied, résistant aux inondations mineures, 5-9 $/pi² posé. Céramique : plus froide mais éternelle. Évitez le bois flottant et le tapis dans un sous-sol."
+      }
+    ]
+  },
+  {
+    slug: "fenetres",
+    name: "changement de fenêtres",
+    nameCap: "Changement de fenêtres",
+    description:
+      "Remplacement de fenêtres et portes patio : PVC, hybride PVC-aluminium, bois-aluminium. Pose certifiée, garantie manufacturier et installation.",
+    scope: [
+      "Inspection et mesure des cadres existants",
+      "Choix du type (PVC, hybride, bois-aluminium)",
+      "Retrait sécuritaire des fenêtres anciennes",
+      "Pose avec scellement complet (intérieur + extérieur)",
+      "Habillage des cadres (intérieur)",
+      "Garantie installation 1 an + manufacturier 25 ans"
+    ],
+    priceRanges: [
+      { label: "Fenêtre PVC standard (par unité)", range: "650 $ – 1 200 $" },
+      { label: "Hybride PVC-aluminium (par unité)", range: "1 200 $ – 1 800 $" },
+      { label: "Maison complète (15-20 fenêtres)", range: "20 000 $ – 45 000 $" }
+    ],
+    faq: [
+      {
+        q: "Quand changer les fenêtres d'une maison à {city} ?",
+        a: "Si vos fenêtres ont plus de 25 ans, ne se ferment plus correctement, laissent passer du froid (condensation entre les vitres), ou affichent du bois pourri sur les cadres, c'est le moment. À {city}, des fenêtres neuves homologuées ENERGY STAR réduisent typiquement la facture de chauffage de 15-25 %."
+      },
+      {
+        q: "PVC ou hybride à {city} ?",
+        a: "PVC : meilleur rapport qualité-prix, bonne performance énergétique, 650-1 200 $/fenêtre. Hybride PVC-aluminium : aluminium côté extérieur (résiste au climat de {city}, plus durable), PVC côté intérieur, 1 200-1 800 $/fenêtre. Pour un duplex/triplex {city}, l'hybride est préférable côté façade."
+      },
+      {
+        q: "Y a-t-il des subventions à {city} ?",
+        a: "Oui. Rénoclimat (Québec) offre des montants par fenêtre remplacée si elle remplace une fenêtre simple ou double vitrage non scellée. Hydro-Québec donne aussi des crédits via son programme ÉcoPerformance. Nous fournissons les attestations nécessaires pour appliquer."
+      }
+    ]
+  },
+  {
+    slug: "terrasse",
+    name: "terrasse et patio",
+    nameCap: "Terrasse et patio",
+    description:
+      "Construction de terrasses, patios surélevés et galeries arrière. Composite, bois traité, ipé, accès et garde-corps conformes au code.",
+    scope: [
+      "Excavation et fondations (sonotubes ou vis hélicoïdales)",
+      "Structure portante bois traité",
+      "Plancher en composite, bois traité, cèdre ou ipé",
+      "Garde-corps en aluminium, verre ou bois conforme",
+      "Escalier d'accès",
+      "Finitions et étanchéité contre murs"
+    ],
+    priceRanges: [
+      { label: "Patio au sol (12×16)", range: "8 000 $ – 14 000 $" },
+      { label: "Terrasse surélevée (16×20)", range: "18 000 $ – 32 000 $" },
+      { label: "Terrasse multi-niveaux avec pergola", range: "32 000 $ – 60 000 $" }
+    ],
+    faq: [
+      {
+        q: "Composite, bois traité ou ipé pour une terrasse à {city} ?",
+        a: "Composite (Trex, TimberTech) : aucun entretien annuel, durée 25-30 ans, 14-22 $/pi². Bois traité : 4-7 $/pi², à teindre tous les 2-3 ans, durée 15-20 ans. Ipé : magnifique, ultra-durable (30+ ans), 12-18 $/pi², à huiler annuellement. Pour {city} qui a des hivers rigoureux et des étés humides, le composite est le meilleur rapport effort/longévité."
+      },
+      {
+        q: "Faut-il un permis pour une terrasse à {city} ?",
+        a: "À {city}, un permis est généralement requis pour toute terrasse surélevée de plus de 60 cm du sol, ou pour les terrasses avec garde-corps obligatoire. Nous vérifions avec l'arrondissement et obtenons le permis. Pour un patio au sol simple, souvent aucun permis n'est requis."
+      },
+      {
+        q: "Quel est le délai pour construire une terrasse à {city} ?",
+        a: "Comptez 2 à 4 semaines de chantier après l'obtention du permis. Excavation et fondations : 3-5 jours. Structure et plancher : 5-10 jours selon la taille. Garde-corps et escalier : 2-3 jours. À {city}, la haute saison étant mai-octobre, réservez au moins 2 mois d'avance."
       }
     ]
   }
