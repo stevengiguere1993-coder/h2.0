@@ -185,6 +185,7 @@ from app.models.voice import (  # noqa: F401
     CallRouteAction,
     CallStatus,
     CallTranscript,
+    CallTurn,
     PhoneNumber,
 )
 
@@ -277,5 +278,6 @@ __all__ = [
     "Call",
     "CallRoute",
     "CallTranscript",
+    "CallTurn",
     "PhoneNumber",
 ]

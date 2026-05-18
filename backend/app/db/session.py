@@ -524,6 +524,20 @@ async def init_db() -> None:
                 "locale",
                 "VARCHAR(8) NOT NULL DEFAULT 'fr'",
             ),
+            # Téléphonie Phase 2 — secrétaire IA. La table CallTurn est
+            # créée par create_all ; les colonnes ci-dessous étendent
+            # PhoneNumber et Call (créés en Phase 1).
+            (
+                "voice_phone_numbers",
+                "secretary_mode_active",
+                "BOOLEAN NOT NULL DEFAULT FALSE",
+            ),
+            ("voice_calls", "lang", "VARCHAR(8) NOT NULL DEFAULT 'fr-CA'"),
+            ("voice_calls", "intent", "VARCHAR(64)"),
+            ("voice_calls", "lead_name", "VARCHAR(255)"),
+            ("voice_calls", "lead_callback_phone", "VARCHAR(50)"),
+            ("voice_calls", "lead_reason", "TEXT"),
+            ("voice_calls", "contact_request_id", "INTEGER"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

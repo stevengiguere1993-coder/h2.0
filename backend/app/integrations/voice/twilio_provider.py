@@ -149,3 +149,92 @@ class TwilioVoiceProvider(VoiceProvider):
             '<?xml version="1.0" encoding="UTF-8"?>'
             f'<Response><Reject reason="{r}"/></Response>'
         )
+
+    # ------------------------------------------------------------------
+    # TwiML — Secrétaire IA (Phase 2)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _voice_for_lang(lang: str) -> str:
+        """Polly Neural voice ID pour la langue donnée.
+
+        Polly.Léa-Neural (FR-CA) et Polly.Joanna-Neural (EN-US) sont les
+        voix neuronales les plus naturelles dispo dans Twilio sans
+        surcoût. Vérifié sur la doc Twilio TTS 2025.
+        """
+        if lang.startswith("en"):
+            return "Polly.Joanna-Neural"
+        return "Polly.Léa-Neural"
+
+    def build_say_and_gather(
+        self,
+        *,
+        say: str,
+        lang: str,
+        action_url: str,
+        gather_timeout_sec: int = 5,
+        max_speech_sec: int = 12,
+    ) -> str:
+        """TwiML : la secrétaire parle, puis écoute la réponse.
+
+        Twilio renvoie `SpeechResult` (transcription) + `Confidence` à
+        `action_url` quand l'appelant s'arrête de parler ou quand le
+        timeout est atteint. `actionOnEmptyResult=true` garantit qu'on
+        est rappelé même si l'appelant n'a rien dit (silence) — sinon
+        Twilio raccroche.
+        """
+        voice = self._voice_for_lang(lang)
+        say_xml = xml_escape(say)
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            f'<Gather input="speech" language="{lang}" '
+            f'speechTimeout="auto" '
+            f'timeout="{int(gather_timeout_sec)}" '
+            f'speechModel="phone_call" '
+            f'actionOnEmptyResult="true" '
+            f'action="{xml_escape(action_url)}" method="POST">'
+            f'<Say voice="{voice}" language="{lang}">{say_xml}</Say>'
+            "</Gather>"
+            # Fallback si Gather sort sans rappel (cas rares) — on
+            # raccroche poliment plutôt que de boucler.
+            f'<Say voice="{voice}" language="{lang}">'
+            f'{xml_escape(_GOODBYE.get(lang, _GOODBYE["fr-CA"]))}</Say>'
+            "<Hangup/>"
+            "</Response>"
+        )
+
+    def build_say_and_dial(
+        self,
+        *,
+        say: str,
+        lang: str,
+        dial_to_e164: str,
+        timeout_sec: int = 20,
+    ) -> str:
+        """TwiML : la secrétaire annonce le transfert puis <Dial>."""
+        voice = self._voice_for_lang(lang)
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            f'<Say voice="{voice}" language="{lang}">{xml_escape(say)}</Say>'
+            f'<Dial timeout="{int(timeout_sec)}">{xml_escape(dial_to_e164)}</Dial>'
+            "</Response>"
+        )
+
+    def build_say_and_hangup(self, *, say: str, lang: str) -> str:
+        """TwiML : la secrétaire dit quelque chose puis raccroche."""
+        voice = self._voice_for_lang(lang)
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            f'<Say voice="{voice}" language="{lang}">{xml_escape(say)}</Say>'
+            "<Hangup/>"
+            "</Response>"
+        )
+
+
+_GOODBYE = {
+    "fr-CA": "Désolée, je n'ai rien entendu. Bonne journée.",
+    "en-US": "Sorry, I didn't catch that. Have a good day.",
+}
