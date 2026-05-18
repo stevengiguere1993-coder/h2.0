@@ -1613,6 +1613,74 @@ function PlanSection() {
           "Voice SDK browser WebRTC + fallback mobile 15 sec"
         ]}
       />
+      <PhaseCard
+        num={6}
+        title="SMS bidirectionnel + petit téléphone CRM"
+        status="done"
+        items={[
+          "SMS entrants + sortants via le 438 (inbox threadée)",
+          "Auto-identification CRM des SMS (client / locataire / lead)",
+          "Petit téléphone à côté des numéros : prospect, client, lead",
+          "Tous les appels CRM enregistrés dans /telephonie (entity_type/id)"
+        ]}
+      />
+
+      {/* ============ Prochaines étapes ============ */}
+      <h2 className="mt-8 text-sm font-bold uppercase tracking-wider text-amber-300">
+        Prochaines étapes
+      </h2>
+      <p className="text-[12px] text-white/60">
+        Notes pour quand on sera prêt à fusionner davantage la téléphonie
+        avec les autres volets. Aucun de ces items n&apos;est en cours,
+        ils attendent ton feu vert.
+      </p>
+
+      <PhaseCard
+        num={7}
+        title="Onglet « Communications » dans chaque fiche CRM"
+        status="todo"
+        items={[
+          "Dans /prospection/[id], /app/crm/[id], /app/clients/[id] : ajouter un onglet « Communications » qui montre tout (appels entrants/sortants + SMS) pour ce contact, chronologiquement",
+          "Lecture seule au début, avec lien direct vers le drawer détaillé de /telephonie",
+          "Filtre par type (appel / SMS / voicemail) + recherche dans les transcriptions"
+        ]}
+      />
+
+      <PhaseCard
+        num={8}
+        title="Activation progressive du rappel auto leads"
+        status="todo"
+        items={[
+          "Toggle « Rappel auto leads » reste OFF par défaut (déjà en place)",
+          "À flip dans Numéros une fois la secrétaire IA testée à 100 %",
+          "Quand activé : tout nouveau ContactRequest avec téléphone reçoit un appel Léa dans les 60 sec — qualification automatique, RDV agenda auto, kanban_column auto-rangée",
+          "Plan de retour arrière : il suffit de re-toggle OFF pour stopper instantanément"
+        ]}
+      />
+
+      <PhaseCard
+        num={9}
+        title="Fusion CRM ↔ Téléphonie (vue 360 contact)"
+        status="todo"
+        items={[
+          "Quand on ouvre une fiche client, voir : appels + SMS + factures + soumissions + projets en un seul écran chronologique",
+          "Notifications en temps réel (cloche du portail construction) : « SMS de Marie Tremblay », « Voicemail de Jean Dupont »",
+          "Quick-reply SMS direct depuis la fiche prospect (sans aller dans /telephonie)",
+          "Re-réintégrer VoiceConsole dans /app/layout.tsx pour que les appels entrants sonnent dans tous les volets connectés (pas juste /telephonie)"
+        ]}
+      />
+
+      <PhaseCard
+        num={10}
+        title="App mobile dédiée + dial pad"
+        status="todo"
+        items={[
+          "PWA mobile installable : dial pad pour composer un numéro depuis ton cell, l'appel passe par le 438 d'Horizon (le destinataire voit toujours Horizon, jamais ton perso)",
+          "Recording obligatoire de tous les appels (avec annonce de consentement Québec)",
+          "Résumé IA automatique de chaque appel : décisions, actions, follow-up",
+          "Optionnel : push notification natif pour les SMS + appels manqués"
+        ]}
+      />
     </section>
   );
 }
