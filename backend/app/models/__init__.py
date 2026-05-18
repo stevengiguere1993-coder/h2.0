@@ -130,6 +130,7 @@ from app.models.notification import Notification
 from app.models.numbering_counter import NumberingCounter
 from app.models.payment import Payment
 from app.models.project import Project
+from app.models.push_subscription import PushSubscription  # noqa: F401
 from app.models.project_member import ProjectMember
 from app.models.project_phase import ProjectPhase
 from app.models.project_subcontractor_contract import (  # noqa: F401

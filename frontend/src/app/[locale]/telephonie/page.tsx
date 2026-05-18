@@ -29,6 +29,7 @@ import { authedFetch, getMe, getToken } from "@/lib/auth";
 import { Link, useRouter } from "@/i18n/navigation";
 import { AppTopbar } from "@/components/app-topbar";
 import { CallButton } from "@/components/call-button";
+import { PushNotificationsToggle } from "@/components/push-notifications-toggle";
 import { useTelephonieLayout } from "./layout";
 
 // Volet « Téléphonie / Secrétaire d'appels » — interface premium.
@@ -649,6 +650,9 @@ function DashboardSection({
           Astuce : clique sur les pastilles ci-dessus pour activer ou
           désactiver. Les changements sont appliqués immédiatement et
           partagés entre toi et toute l&apos;équipe.
+        </div>
+        <div className="mt-3 border-t border-brand-800 pt-3">
+          <PushNotificationsToggle />
         </div>
       </section>
 
@@ -2037,13 +2041,15 @@ function PlanSection() {
 
       <PhaseCard
         num={10}
-        title="App mobile dédiée + dial pad"
-        status="todo"
+        title="App mobile dédiée + dial pad + push"
+        status="in_progress"
         items={[
-          "PWA mobile installable : dial pad pour composer un numéro depuis ton cell, l'appel passe par le 438 d'Horizon (le destinataire voit toujours Horizon, jamais ton perso)",
-          "Recording obligatoire de tous les appels (avec annonce de consentement Québec)",
-          "Résumé IA automatique de chaque appel : décisions, actions, follow-up",
-          "Optionnel : push notification natif pour les SMS + appels manqués"
+          "✅ PWA installable (manifest + service worker) — bouton « Installer l'app » dispo, ajoute Horizon à l'écran d'accueil iPhone et Android",
+          "✅ WebPush bout-en-bout : pywebpush + VAPID côté backend, pushManager côté frontend, sw.js gère push/notificationclick. Réveille le téléphone pour les urgences locataires (broadcast tous owners) — à étendre aux SMS et appels manqués",
+          "🟡 Dial pad mobile (composer un numéro depuis le cell, appel via le 438) — à venir",
+          "🟡 Recording avec consentement Québec — à venir",
+          "🟡 Résumé IA automatique post-appel (followup_suggestion existe déjà mais à exposer dans la fiche) — à venir",
+          "🟡 App Android native (APK direct download, hors PWA) si l'expérience push iOS reste limitée"
         ]}
       />
     </section>

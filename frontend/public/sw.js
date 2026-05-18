@@ -10,7 +10,7 @@
  *   in the background when the network returns.
  */
 
-const VERSION = "hsi-v3";
+const VERSION = "hsi-v4";
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 const SHELL_CACHE = `${VERSION}-shell`;
 
@@ -139,4 +139,58 @@ self.addEventListener("fetch", (event) => {
 // version is available and the user clicks "Recharger").
 self.addEventListener("message", (event) => {
   if (event.data === "SKIP_WAITING") self.skipWaiting();
+});
+
+// ─── WebPush — réveille l'app pour les urgences, SMS, appels ───
+//
+// Payload attendu (JSON) :
+//   { title, body, href, tag, icon }
+//
+// `tag` permet de regrouper / remplacer les notifications similaires
+// (ex. plusieurs SMS du même contact → on remplace au lieu d'empiler).
+self.addEventListener("push", (event) => {
+  if (!event.data) return;
+  let data = {};
+  try {
+    data = event.data.json();
+  } catch {
+    data = { title: "Horizon", body: event.data.text() };
+  }
+  const title = data.title || "Horizon Services Immobiliers";
+  const options = {
+    body: data.body || "",
+    icon: data.icon || "/pwa/icon-192.png",
+    badge: "/pwa/icon-192.png",
+    tag: data.tag || "horizon",
+    renotify: true,
+    data: { href: data.href || "/" }
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// Clic sur une notification → focus une fenêtre Horizon existante OU
+// en ouvre une nouvelle sur l'URL fournie.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetHref = (event.notification.data && event.notification.data.href) || "/";
+  event.waitUntil(
+    (async () => {
+      const all = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true
+      });
+      for (const c of all) {
+        try {
+          await c.focus();
+          if ("navigate" in c) {
+            await c.navigate(targetHref);
+          }
+          return;
+        } catch {
+          /* keep trying */
+        }
+      }
+      await self.clients.openWindow(targetHref);
+    })()
+  );
 });
