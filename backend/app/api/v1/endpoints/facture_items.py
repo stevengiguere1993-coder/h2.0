@@ -60,12 +60,16 @@ async def _recompute_facture_totals(db, facture_id: int) -> None:
     await db.flush()
 
 
+_KIND_PATTERN = "^(service|extra|rabais|frais)$"
+
+
 class FactureItemCreate(BaseModel):
     position: int = Field(default=0, ge=0)
     description: str = Field(..., min_length=1, max_length=500)
     unit: Optional[str] = Field(default=None, max_length=32)
     quantity: float = Field(default=1, ge=0)
     unit_price: float = Field(default=0, ge=0)
+    kind: str = Field(default="service", pattern=_KIND_PATTERN)
 
 
 class FactureItemUpdate(BaseModel):
@@ -74,6 +78,7 @@ class FactureItemUpdate(BaseModel):
     unit: Optional[str] = Field(default=None, max_length=32)
     quantity: Optional[float] = Field(default=None, ge=0)
     unit_price: Optional[float] = Field(default=None, ge=0)
+    kind: Optional[str] = Field(default=None, pattern=_KIND_PATTERN)
 
 
 class FactureItemRead(BaseModel):
@@ -86,6 +91,7 @@ class FactureItemRead(BaseModel):
     quantity: float
     unit_price: float
     total: float
+    kind: str = "service"
 
 
 async def _ensure_facture(db, facture_id: int) -> Facture:
@@ -131,15 +137,21 @@ async def create_item(
     _: CurrentUser,
 ) -> FactureItemRead:
     await _ensure_facture(db, facture_id)
-    total = round(data.quantity * data.unit_price, 2)
+    # « rabais » = ligne négative obligatoire.
+    qty = data.quantity
+    unit_price = data.unit_price
+    if data.kind == "rabais" and unit_price > 0:
+        unit_price = -abs(unit_price)
+    total = round(qty * unit_price, 2)
     item = FactureItem(
         facture_id=facture_id,
         position=data.position,
         description=data.description.strip(),
         unit=(data.unit or None),
-        quantity=data.quantity,
-        unit_price=data.unit_price,
+        quantity=qty,
+        unit_price=unit_price,
         total=total,
+        kind=data.kind,
     )
     db.add(item)
     await db.flush()
@@ -218,3 +230,43 @@ async def recompute_all_factures(db: DBSession, _: CurrentUser) -> dict:
     for fid in ids:
         await _recompute_facture_totals(db, int(fid))
     return {"recomputed": len(ids)}
+
+
+# Autocomplete : descriptions déjà utilisées dans les factures pour
+# accélérer la saisie. Filtre optionnel par préfixe `q`. Distinctes,
+# triées par fréquence d'usage (plus utilisées en premier).
+@router.get(
+    "/items/suggestions",
+    summary="Suggestions de descriptions d'items déjà utilisées",
+)
+async def item_suggestions(
+    db: DBSession,
+    _: CurrentUser,
+    q: Optional[str] = None,
+    limit: int = 20,
+) -> list[str]:
+    from sqlalchemy import func as _f
+
+    stmt = (
+        select(
+            FactureItem.description,
+            _f.count(FactureItem.id).label("n"),
+        )
+        .group_by(FactureItem.description)
+        .order_by(_f.count(FactureItem.id).desc(), FactureItem.description.asc())
+        .limit(max(1, min(100, limit)))
+    )
+    if q:
+        like = f"%{q.strip().lower()}%"
+        stmt = (
+            select(
+                FactureItem.description,
+                _f.count(FactureItem.id).label("n"),
+            )
+            .where(_f.lower(FactureItem.description).like(like))
+            .group_by(FactureItem.description)
+            .order_by(_f.count(FactureItem.id).desc(), FactureItem.description.asc())
+            .limit(max(1, min(100, limit)))
+        )
+    rows = (await db.execute(stmt)).all()
+    return [r[0] for r in rows if r[0]]

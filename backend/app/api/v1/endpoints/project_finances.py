@@ -73,6 +73,10 @@ class FinancesResponse(BaseModel):
     service_lines: List[CostLine]   # from soumission items
     material_lines: List[CostLine]  # from achats
     invoiced_amount: float
+    # Sous-total facturé en EXTRAS (FactureItem.kind == 'extra') — ne
+    # compte pas dans le « reste à facturer » du contrat. Sert de
+    # revenu additionnel dans le calcul du profit réel.
+    extras_billed_amount: float = 0.0
     paid_amount: float
     balance_due: float
     invoices: List[InvoiceLine]
@@ -396,7 +400,35 @@ async def _compute_finances(
             )
         ).scalars().all()
 
+    # Sépare l'invoiced en 2 buckets : « contrat » (items kind=service|
+    # rabais|frais) et « extras » (items kind=extra). Les extras n'ont
+    # pas à compter dans le « reste à facturer » du contrat car ils
+    # sont hors-soumission.
+    extras_subtotal = 0.0
+    contract_subtotal = 0.0
+    if factures:
+        from app.models.facture_item import FactureItem as _FI
+
+        items_rows = (
+            await db.execute(
+                select(_FI.facture_id, _FI.total, _FI.kind).where(
+                    _FI.facture_id.in_([f.id for f in factures])
+                )
+            )
+        ).all()
+        for _fid, _it_total, _it_kind in items_rows:
+            v = float(_it_total or 0)
+            if _it_kind == "extra":
+                extras_subtotal += v
+            else:
+                contract_subtotal += v
+    # Les taxes ne changent pas la répartition contrat/extras au
+    # niveau sous-total ; on calcule l'invoiced TTC total comme avant
+    # pour les KPI cash-flow (Facturé / Reçu / Solde).
     invoiced = sum(float(f.total or 0) for f in factures)
+
+    # Extras facturés (avant taxes) — exposé séparément à l'UI.
+    extras_billed_amount = round(extras_subtotal, 2)
 
     # Paiements par facture (un seul SELECT, on group puis on lookup).
     paid_by_facture: dict[int, float] = {}
@@ -444,16 +476,14 @@ async def _compute_finances(
 
     balance = max(0.0, invoiced - paid_sum)
 
-    # Profit réel = revenu contractuel (soumission / projected_revenue)
-    # - coûts engagés réels. Donne la marge théorique sur le contrat
-    # complet, indépendamment du % facturé / payé à ce stade.
-    # Avant : on faisait paid_sum - actual_cost qui rendait le profit
-    # extrêmement négatif tant que la facturation n'avait pas suivi le
-    # rythme des dépenses (cas usuel en cours de chantier).
-    actual_profit = round(projected_revenue - actual_total_cost, 2)
+    # Profit réel = (revenu contractuel + extras facturés) - coûts
+    # engagés réels. Les extras bonifient le profit puisqu'ils sont
+    # de nouveaux revenus hors-contrat (ex. travaux ajoutés).
+    revenue_base = projected_revenue + extras_billed_amount
+    actual_profit = round(revenue_base - actual_total_cost, 2)
     actual_margin_pct = (
-        round(actual_profit / projected_revenue * 100, 1)
-        if projected_revenue > 0 else 0.0
+        round(actual_profit / revenue_base * 100, 1)
+        if revenue_base > 0 else 0.0
     )
 
     return FinancesResponse(
@@ -473,6 +503,7 @@ async def _compute_finances(
         service_lines=service_lines,
         material_lines=material_lines,
         invoiced_amount=round(invoiced, 2),
+        extras_billed_amount=extras_billed_amount,
         paid_amount=round(paid_sum, 2),
         balance_due=round(balance, 2),
         invoices=invoices_out,

@@ -51,6 +51,21 @@ type Item = {
   quantity: number;
   unit_price: number;
   total: number;
+  kind: string;
+};
+
+const KIND_LABELS: Record<string, string> = {
+  service: "Service",
+  extra: "Extra",
+  rabais: "Rabais",
+  frais: "Frais"
+};
+
+const KIND_BADGE_CLASS: Record<string, string> = {
+  service: "bg-white/10 text-white/70",
+  extra: "bg-amber-500/20 text-amber-300",
+  rabais: "bg-rose-500/20 text-rose-300",
+  frais: "bg-blue-500/20 text-blue-300"
 };
 
 type Client = { id: number; name: string; email: string | null };
@@ -141,6 +156,7 @@ export default function FactureDetailPage() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [itemBusy, setItemBusy] = useState<number | "new" | null>(null);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
 
   const [qboBusy, setQboBusy] = useState(false);
   const [qboNotice, setQboNotice] = useState<string | null>(null);
@@ -253,10 +269,19 @@ export default function FactureDetailPage() {
       setLoading(true);
       setError(null);
       try {
-        const [fRes, iRes] = await Promise.all([
+        const [fRes, iRes, sRes] = await Promise.all([
           authedFetch(`/api/v1/factures/${id}`),
-          authedFetch(`/api/v1/factures/${id}/items`)
+          authedFetch(`/api/v1/factures/${id}/items`),
+          authedFetch(`/api/v1/factures/items/suggestions?limit=50`)
         ]);
+        if (sRes.ok && !cancelled) {
+          try {
+            const sData = (await sRes.json()) as string[];
+            setSuggestions(Array.isArray(sData) ? sData : []);
+          } catch {
+            /* ignore */
+          }
+        }
         if (!fRes.ok) throw new Error(`http_${fRes.status}`);
         const fd = (await fRes.json()) as Facture;
         const iData = iRes.ok ? ((await iRes.json()) as Item[]) : [];
@@ -1127,6 +1152,7 @@ export default function FactureDetailPage() {
                       busy={itemBusy === it.id}
                       onPatch={(patch) => patchItem(it.id, patch)}
                       onDelete={() => deleteItem(it.id)}
+                      suggestions={suggestions}
                     />
                   ))}
                 </div>
@@ -1551,24 +1577,28 @@ function ItemRow({
   item,
   busy,
   onPatch,
-  onDelete
+  onDelete,
+  suggestions
 }: {
   item: Item;
   busy: boolean;
   onPatch: (patch: Partial<Item>) => void;
   onDelete: () => void;
+  suggestions: string[];
 }) {
   const [description, setDescription] = useState(item.description);
   const [unit, setUnit] = useState(item.unit || "");
   const [quantity, setQuantity] = useState(String(item.quantity));
   const [unitPrice, setUnitPrice] = useState(String(item.unit_price));
+  const [kind, setKind] = useState<string>(item.kind || "service");
 
   useEffect(() => {
     setDescription(item.description);
     setUnit(item.unit || "");
     setQuantity(String(item.quantity));
     setUnitPrice(String(item.unit_price));
-  }, [item.id, item.description, item.unit, item.quantity, item.unit_price]);
+    setKind(item.kind || "service");
+  }, [item.id, item.description, item.unit, item.quantity, item.unit_price, item.kind]);
 
   const computedTotal = useMemo(
     () => +(Number(quantity || 0) * Number(unitPrice || 0)).toFixed(2),
@@ -1579,11 +1609,48 @@ function ItemRow({
     onPatch({ [field]: value } as Partial<Item>);
   }
 
-  // Étiquettes mobile pour distinguer Description / Unité / Quantité /
-  // Prix unitaire / Total quand le grid se déstacke verticalement
-  // (mêmes étiquettes que sur la page bons de travail).
+  const datalistId = `facture-item-suggestions-${item.id}`;
+
+  function changeKind(next: string) {
+    setKind(next);
+    if (next !== (item.kind || "service")) persist("kind", next);
+  }
+
   return (
-    <div className="grid gap-2 px-5 py-3 text-sm sm:grid-cols-[1fr_80px_80px_120px_120px_32px] sm:items-center">
+    <div className="px-5 py-3 text-sm">
+      <div className="mb-2 flex flex-wrap items-center gap-1.5">
+        {(["service", "extra", "rabais", "frais"] as const).map((k) => {
+          const active = kind === k;
+          return (
+            <button
+              key={k}
+              type="button"
+              disabled={busy}
+              onClick={() => changeKind(k)}
+              className={`rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition ${
+                active
+                  ? KIND_BADGE_CLASS[k]
+                  : "bg-white/5 text-white/40 hover:bg-white/10"
+              } disabled:opacity-50`}
+              title={
+                k === "extra"
+                  ? "Hors soumission de base — n'affecte pas le « reste à facturer »"
+                  : k === "rabais"
+                  ? "Montant négatif appliqué automatiquement"
+                  : KIND_LABELS[k]
+              }
+            >
+              {KIND_LABELS[k]}
+            </button>
+          );
+        })}
+        {kind === "extra" ? (
+          <span className="ml-1 text-[10px] text-amber-300/80">
+            (hors soumission de base)
+          </span>
+        ) : null}
+      </div>
+      <div className="grid gap-2 sm:grid-cols-[1fr_80px_80px_120px_120px_32px] sm:items-center">
       <div>
         <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-white/40 sm:hidden">
           Description
@@ -1596,8 +1663,16 @@ function ItemRow({
             if (description !== item.description) persist("description", description);
           }}
           disabled={busy}
+          list={datalistId}
           className="input text-sm w-full"
         />
+        {suggestions.length > 0 ? (
+          <datalist id={datalistId}>
+            {suggestions.map((s) => (
+              <option key={s} value={s} />
+            ))}
+          </datalist>
+        ) : null}
       </div>
       <div>
         <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-white/40 sm:hidden">
@@ -1674,6 +1749,7 @@ function ItemRow({
         )}
         <span className="text-xs sm:hidden">Supprimer</span>
       </button>
+      </div>
     </div>
   );
 }
