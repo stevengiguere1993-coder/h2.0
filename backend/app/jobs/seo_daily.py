@@ -25,7 +25,7 @@ from typing import Any, Optional
 
 from sqlalchemy import select
 
-from app.db.session import AsyncSessionLocal, close_db, init_db
+from app.db.session import AsyncSessionLocal, close_db
 from app.integrations.ai import complete
 from app.models.seo_article import SeoArticle
 
@@ -350,11 +350,12 @@ async def generate_one(
 
 
 async def run_once() -> int:
-    try:
-        await init_db()
-    except Exception as exc:
-        log.warning("init_db soft-failed: %s", exc)
-
+    # Pas d'init_db ici : le cron n'a pas à gérer le schéma. Le web
+    # service h2-0 (FastAPI) exécute create_all + ALTER COLUMN au
+    # démarrage dans son lifespan. Le cron suppose que le schéma est
+    # déjà à jour. Évite des re-runs lourds + crashes du cron quand
+    # une ALTER plante (qui ne devrait jamais faire échouer un cron
+    # de génération d'articles).
     slots = await pick_next_slots(ARTICLES_PER_RUN)
     if not slots:
         log.info("Aucun slot non-couvert — rotation terminée")
