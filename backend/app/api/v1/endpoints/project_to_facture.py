@@ -43,17 +43,29 @@ class ConvertToFactureRequest(BaseModel):
     soumission_percentage: int = Field(
         default=100, ge=1, le=100,
         description=(
-            "Percentage of the soumission to invoice — supports progress "
-            "billing (ex. 30% acompte, 50% mi-projet, 20% livraison). "
-            "Ignoré si `soumission_amount` est fourni."
+            "Pourcentage cumulatif visé de la soumission à facturer "
+            "(progressive billing par défaut : soustrait ce qui a déjà "
+            "été facturé pour ce projet). Ex. déjà facturé 30 %, "
+            "demande 90 % → la nouvelle facture sera de 60 %."
         ),
     )
     soumission_amount: Optional[float] = Field(
         default=None, ge=0,
         description=(
-            "Montant fixe $ à facturer depuis la soumission (avant taxes). "
-            "Si fourni, surcharge soumission_percentage. Utile pour la "
-            "facturation à montant convenu plutôt qu'à pourcentage exact."
+            "Montant fixe $ à facturer (avant taxes). Surcharge "
+            "soumission_percentage. En mode progressive (défaut), "
+            "représente le total cumulatif visé — la nouvelle facture "
+            "couvrira (montant - déjà facturé)."
+        ),
+    )
+    progressive_billing: bool = Field(
+        default=True,
+        description=(
+            "Si True (défaut), soumission_percentage et "
+            "soumission_amount sont CUMULATIFS — on soustrait ce qui a "
+            "déjà été facturé pour ce projet pour éviter de double-"
+            "facturer. Si False, on facture le % ou le $ tel quel "
+            "(ancien comportement)."
         ),
     )
     include_hours: bool = Field(
@@ -150,28 +162,66 @@ async def convert_project_to_facture(
                     .order_by(SoumissionItem.position.asc(), SoumissionItem.id.asc())
                 )
             ).scalars().all()
-            # Détermine le ratio : si l'admin a fourni un montant $
-            # personnalisé, on calcule le ratio basé sur le subtotal
-            # de la soumission (avant taxes). Sinon, on utilise le %.
-            if data.soumission_amount is not None and data.soumission_amount > 0:
-                sm_base = float(sm.subtotal or 0)
-                if sm_base <= 0:
-                    sm_base = sum(
-                        float(it.quantity) * float(it.unit_price)
-                        for it in sm_items
+
+            sm_base = float(sm.subtotal or 0)
+            if sm_base <= 0:
+                sm_base = sum(
+                    float(it.quantity) * float(it.unit_price) for it in sm_items
+                )
+
+            # Progressive billing : combien a déjà été facturé pour ce
+            # projet (subtotal des factures existantes, exclut la
+            # courante qu'on vient de créer). On soustrait pour ne pas
+            # double-facturer ; le user donne un % / $ CUMULATIF visé.
+            already_billed = 0.0
+            if data.progressive_billing:
+                from app.models.facture import Facture as _Fac
+
+                prev = (
+                    await db.execute(
+                        select(_Fac).where(
+                            _Fac.project_id == project_id,
+                            _Fac.id != facture.id,
+                        )
                     )
-                if sm_base > 0:
-                    ratio = min(1.0, float(data.soumission_amount) / sm_base)
-                    pct = max(1, min(100, round(ratio * 100)))
-                    prefix = f"{int(round(float(data.soumission_amount)))} $ — "
-                else:
-                    ratio = 1.0
-                    pct = 100
-                    prefix = ""
+                ).scalars().all()
+                already_billed = round(
+                    sum(float(f.subtotal or 0) for f in prev), 2
+                )
+
+            # Détermine le ratio cible cumulatif.
+            if data.soumission_amount is not None and data.soumission_amount > 0:
+                target_amount = float(data.soumission_amount)
+                prefix_value = target_amount
+                prefix_kind = "amount"
             else:
-                pct = max(1, min(100, int(data.soumission_percentage)))
-                ratio = pct / 100.0
-                prefix = f"{pct}% — " if pct != 100 else ""
+                target_pct = max(1, min(100, int(data.soumission_percentage)))
+                target_amount = sm_base * (target_pct / 100.0)
+                prefix_value = float(target_pct)
+                prefix_kind = "pct"
+
+            # Soustrait le déjà-facturé pour obtenir ce qu'on facture
+            # MAINTENANT (delta). En mode non-progressive, delta = target.
+            delta_amount = round(max(0.0, target_amount - already_billed), 2)
+
+            if delta_amount <= 0 and sm_base > 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Cible cumulative ({target_amount:.2f} $) déjà "
+                        f"atteinte ou dépassée par les factures "
+                        f"existantes ({already_billed:.2f} $). Rien à "
+                        f"facturer cette fois."
+                    ),
+                )
+
+            ratio = (delta_amount / sm_base) if sm_base > 0 else 1.0
+            pct = max(1, min(100, round(ratio * 100)))
+
+            if prefix_kind == "amount":
+                prefix = f"{int(round(prefix_value))} $ — "
+            else:
+                prefix = f"{int(round(prefix_value))}% — " if pct != 100 else ""
             for it in sm_items:
                 qty = float(it.quantity)
                 unit_price = round(float(it.unit_price) * ratio, 2)
@@ -329,5 +379,11 @@ async def convert_project_to_facture(
             ac.facture_item_id = item.id
 
     await db.flush()
+    # Recompute totaux facture depuis les items qu'on vient de créer
+    # (subtotal / tps / tvq / total). Sans ça, Facture.total reste à
+    # NULL → KPI projet « Facturé » affiche 0 $ même après création.
+    from app.api.v1.endpoints.facture_items import _recompute_facture_totals
+
+    await _recompute_facture_totals(db, facture.id)
     await db.refresh(facture)
     return FactureRead.model_validate(facture)
