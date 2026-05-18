@@ -123,19 +123,33 @@ async def _find_with_phone(
 ):
     """Cherche `model` avec la colonne `attr` dont les 10 derniers
     chiffres matchent. Utilise une fonction SQL pour faire la comparaison
-    côté DB (évite de charger toute la table en mémoire)."""
+    côté DB (évite de charger toute la table en mémoire).
+
+    Best-effort : si la table n'existe pas encore ou si la requête
+    plante (colonne typo, etc.), retourne None plutôt que de faire
+    crasher tout le flow inbound.
+    """
     if not last10:
         return None
     col = getattr(model, attr, None)
     if col is None:
         return None
-    # PostgreSQL : regexp_replace pour ne garder que les chiffres,
-    # right(...) pour les 10 derniers. Index-less mais correct sur
-    # nos volumes (< 10k lignes par table).
-    digits_expr = func.regexp_replace(col, r"[^0-9]", "", "g")
-    last10_expr = func.right(digits_expr, 10)
-    stmt = select(model).where(last10_expr == last10).limit(1)
-    return (await db.execute(stmt)).scalar_one_or_none()
+    try:
+        # PostgreSQL : regexp_replace pour ne garder que les chiffres,
+        # right(...) pour les 10 derniers. Index-less mais correct sur
+        # nos volumes (< 10k lignes par table).
+        digits_expr = func.regexp_replace(col, r"[^0-9]", "", "g")
+        last10_expr = func.right(digits_expr, 10)
+        stmt = select(model).where(last10_expr == last10).limit(1)
+        return (await db.execute(stmt)).scalar_one_or_none()
+    except Exception as exc:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "caller_identity lookup failed on %s.%s: %s",
+            getattr(model, "__tablename__", "?"), attr, exc,
+        )
+        return None
 
 
 # ---------------------------------------------------------------------

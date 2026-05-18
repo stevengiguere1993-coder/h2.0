@@ -242,6 +242,38 @@ async def _create_lead_from_callback(db, *, call: Call) -> Optional[int]:
 
 
 # ---------------------------------------------------------------------
+# Helper : fallback TwiML en cas d'erreur inattendue
+# ---------------------------------------------------------------------
+
+
+def _safe_error_twiml(lang: str = "fr-CA") -> Response:
+    """TwiML servi quand un handler webhook lève une exception. Évite
+    le « We are sorry, an application error has occurred » par défaut
+    de Twilio qui sonne très moche pour l'appelant."""
+    if lang.startswith("en"):
+        say = (
+            "Sorry, we are experiencing a technical issue. "
+            "Please try again in a few minutes. Goodbye."
+        )
+        voice = "Polly.Joanna-Neural"
+    else:
+        say = (
+            "Désolée, nous rencontrons un souci technique. "
+            "Réessayez dans quelques minutes ou laissez-nous un message "
+            "par texto. Au revoir."
+        )
+        voice = "Polly.Léa-Neural"
+    twiml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Response>"
+        f'<Say voice="{voice}" language="{lang}">{say}</Say>'
+        "<Hangup/>"
+        "</Response>"
+    )
+    return Response(content=twiml, media_type="application/xml")
+
+
+# ---------------------------------------------------------------------
 # Webhook : appel entrant
 # ---------------------------------------------------------------------
 
@@ -252,6 +284,18 @@ async def _create_lead_from_callback(db, *, call: Call) -> Optional[int]:
     response_class=Response,
 )
 async def twilio_incoming_call(request: Request, db: DBSession) -> Response:
+    """Wrapper défensif : toute exception non-HTTPException renvoie un
+    TwiML poli en français au lieu du message d'erreur Twilio."""
+    try:
+        return await _twilio_incoming_call_impl(request, db)
+    except HTTPException:
+        raise
+    except Exception:
+        log.exception("twilio_incoming_call failed")
+        return _safe_error_twiml()
+
+
+async def _twilio_incoming_call_impl(request: Request, db: DBSession) -> Response:
     """Décroche un appel entrant.
 
     Selon `PhoneNumber.secretary_mode_active` :
@@ -454,6 +498,16 @@ async def twilio_incoming_call(request: Request, db: DBSession) -> Response:
     response_class=Response,
 )
 async def twilio_secretary_turn(request: Request, db: DBSession) -> Response:
+    try:
+        return await _twilio_secretary_turn_impl(request, db)
+    except HTTPException:
+        raise
+    except Exception:
+        log.exception("twilio_secretary_turn failed")
+        return _safe_error_twiml()
+
+
+async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Response:
     """Reçoit la transcription du tour de l'appelant + renvoie le TwiML
     suivant (continue / transfer / callback / end_spam)."""
     params = await _validate_twilio_signature(request)
@@ -683,6 +737,16 @@ async def twilio_call_status(request: Request, db: DBSession) -> Response:
     response_class=Response,
 )
 async def twilio_voicemail(request: Request, db: DBSession) -> Response:
+    try:
+        return await _twilio_voicemail_impl(request, db)
+    except HTTPException:
+        raise
+    except Exception:
+        log.exception("twilio_voicemail failed")
+        return _safe_error_twiml()
+
+
+async def _twilio_voicemail_impl(request: Request, db: DBSession) -> Response:
     """Twilio appelle ici quand l'enregistrement est terminé.
 
     On stocke `RecordingUrl` immédiatement (utilisable de suite pour
@@ -912,6 +976,16 @@ async def twilio_sdk_outbound(request: Request) -> Response:
     response_class=Response,
 )
 async def twilio_clients_fallback(request: Request, db: DBSession) -> Response:
+    try:
+        return await _twilio_clients_fallback_impl(request, db)
+    except HTTPException:
+        raise
+    except Exception:
+        log.exception("twilio_clients_fallback failed")
+        return _safe_error_twiml()
+
+
+async def _twilio_clients_fallback_impl(request: Request, db: DBSession) -> Response:
     """Twilio appelle ici si :
     - aucun Client n'a répondu dans le timeout (15 sec)
     - tous les Clients ont décliné
@@ -1077,6 +1151,16 @@ async def create_outbound_call(
     response_class=Response,
 )
 async def twilio_lead_outbound(request: Request, db: DBSession) -> Response:
+    try:
+        return await _twilio_lead_outbound_impl(request, db)
+    except HTTPException:
+        raise
+    except Exception:
+        log.exception("twilio_lead_outbound failed")
+        return _safe_error_twiml()
+
+
+async def _twilio_lead_outbound_impl(request: Request, db: DBSession) -> Response:
     """Drive la conversation IA sortante de qualification d'un lead.
 
     Premier appel (sans turns) : greeting personnalisé + Gather du
@@ -1347,6 +1431,16 @@ async def trigger_lead_qualification(
     response_class=Response,
 )
 async def twilio_outbound_bridge(request: Request, db: DBSession) -> Response:
+    try:
+        return await _twilio_outbound_bridge_impl(request, db)
+    except HTTPException:
+        raise
+    except Exception:
+        log.exception("twilio_outbound_bridge failed")
+        return _safe_error_twiml()
+
+
+async def _twilio_outbound_bridge_impl(request: Request, db: DBSession) -> Response:
     """TwiML servi quand l'utilisateur interne décroche : <Dial> vers
     la cible CRM. Le query-string contient `call_id` pour nous permettre
     de log la cible exacte (Twilio ne renvoie pas le `To` original).
@@ -1619,6 +1713,155 @@ async def get_call_turns(
         )
     ).scalars().all()
     return [CallTurnRead.model_validate(r) for r in rows]
+
+
+# ---------- Diagnostic infra téléphonie (admin) ------------
+
+
+@router.get(
+    "/diag",
+    summary="État du système téléphonie pour troubleshooting (admin)",
+)
+async def voice_diag(_: CurrentAdmin, db: DBSession) -> dict:
+    """Reporte tout ce qui peut faire planter le webhook entrant :
+    env vars, tables DB, provider IA, état Twilio. Sert quand l'appelant
+    tombe sur le TwiML d'erreur poli (`_safe_error_twiml`).
+    """
+    from sqlalchemy import text as _text
+
+    out: dict = {}
+
+    # 1) Env vars (présence seulement, pas de valeur pour les secrets)
+    out["env"] = {
+        "TWILIO_ACCOUNT_SID": bool(os.getenv("TWILIO_ACCOUNT_SID")),
+        "TWILIO_AUTH_TOKEN": bool(os.getenv("TWILIO_AUTH_TOKEN")),
+        "TWILIO_PHONE_NUMBER": os.getenv("TWILIO_PHONE_NUMBER") or None,
+        "TWILIO_FORWARD_TO": os.getenv("TWILIO_FORWARD_TO") or None,
+        "VOICE_WEBHOOK_BASE_URL": os.getenv("VOICE_WEBHOOK_BASE_URL")
+        or "https://h2-0.onrender.com",
+        "TWILIO_TWIML_APP_SID": bool(os.getenv("TWILIO_TWIML_APP_SID")),
+        "TWILIO_API_KEY_SID": bool(os.getenv("TWILIO_API_KEY_SID")),
+        "TWILIO_API_KEY_SECRET": bool(os.getenv("TWILIO_API_KEY_SECRET")),
+        "voice_sdk_configured": voice_sdk_configured(),
+        "GEMINI_API_KEY": bool(os.getenv("GEMINI_API_KEY")),
+        "ANTHROPIC_API_KEY": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "GROQ_API_KEY": bool(os.getenv("GROQ_API_KEY")),
+    }
+
+    # 2) Provider IA actif (chat) — on essaie de l'initialiser sans
+    #    déclencher d'appel API.
+    try:
+        from app.integrations.ai import current_provider, is_configured
+
+        out["ai"] = {
+            "configured": is_configured(),
+            "provider": current_provider(),
+        }
+    except Exception as exc:  # noqa: BLE001
+        out["ai"] = {"error": str(exc)}
+
+    # 3) Tables téléphonie présentes ?
+    required_tables = [
+        "voice_phone_numbers",
+        "voice_calls",
+        "voice_call_routes",
+        "voice_call_transcripts",
+        "voice_call_turns",
+        "voice_filters",
+        "voice_business_hours",
+        "voice_caller_intel",
+        "voice_usage_daily",
+        "voice_client_presence",
+    ]
+    tables_status: dict[str, str] = {}
+    for tbl in required_tables:
+        try:
+            res = await db.execute(
+                _text(f"SELECT to_regclass('public.{tbl}')")
+            )
+            present = res.scalar() is not None
+            tables_status[tbl] = "ok" if present else "MISSING"
+        except Exception as exc:  # noqa: BLE001
+            tables_status[tbl] = f"error: {exc}"
+    out["tables"] = tables_status
+
+    # 4) Colonnes critiques ajoutées via ALTER (les plus récentes)
+    columns_to_check = [
+        ("voice_phone_numbers", "secretary_mode_active"),
+        ("voice_phone_numbers", "lead_auto_callback_enabled"),
+        ("voice_calls", "lang"),
+        ("voice_calls", "intent"),
+        ("voice_calls", "caller_kind"),
+        ("voice_calls", "entity_type"),
+        ("voice_calls", "entity_id"),
+        ("voice_calls", "was_blocked"),
+        ("voice_calls", "was_voicemail"),
+        ("voice_calls", "voicemail_transcription"),
+        ("voice_calls", "followup_suggestion"),
+    ]
+    cols_status: dict[str, str] = {}
+    for tbl, col in columns_to_check:
+        key = f"{tbl}.{col}"
+        try:
+            res = await db.execute(
+                _text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = :t AND column_name = :c"
+                ),
+                {"t": tbl, "c": col},
+            )
+            cols_status[key] = "ok" if res.scalar() else "MISSING"
+        except Exception as exc:  # noqa: BLE001
+            cols_status[key] = f"error: {exc}"
+    out["columns"] = cols_status
+
+    # 5) PhoneNumber configuré ?
+    try:
+        rows = (
+            await db.execute(select(PhoneNumber).order_by(PhoneNumber.id))
+        ).scalars().all()
+        out["phone_numbers"] = [
+            {
+                "id": r.id,
+                "e164": r.e164,
+                "provider_sid": r.provider_sid,
+                "active": r.active,
+                "secretary_mode_active": r.secretary_mode_active,
+                "lead_auto_callback_enabled": getattr(
+                    r, "lead_auto_callback_enabled", None
+                ),
+                "forward_to_e164": r.forward_to_e164,
+            }
+            for r in rows
+        ]
+    except Exception as exc:  # noqa: BLE001
+        out["phone_numbers"] = {"error": str(exc)}
+
+    # 6) Compteur usage du jour
+    try:
+        from datetime import date as _date
+
+        today = _date.today().isoformat()
+        usage = (
+            await db.execute(
+                select(VoiceUsageDaily).where(
+                    VoiceUsageDaily.usage_date == today
+                )
+            )
+        ).scalar_one_or_none()
+        out["usage_today"] = (
+            {
+                "cents": usage.cents_spent,
+                "calls": usage.calls_count,
+                "spam_blocked": usage.spam_blocked,
+            }
+            if usage
+            else {"cents": 0, "calls": 0, "spam_blocked": 0}
+        )
+    except Exception as exc:  # noqa: BLE001
+        out["usage_today"] = {"error": str(exc)}
+
+    return out
 
 
 # ---------- Anti-spam : stats + intel (admin) ------------
