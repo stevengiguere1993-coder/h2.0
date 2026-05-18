@@ -353,3 +353,68 @@ class VoiceBusinessHours(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class VoiceCallerIntel(Base):
+    """Renseignements et compteurs anti-spam par numéro appelant.
+
+    Une ligne par `from_e164` jamais vu. Sert à :
+    - Cacher le résultat Twilio Lookup (`line_type`, `caller_name`) 30j
+    - Compter les raccrochages-honeypot (<2 sec après greeting)
+    - Stocker un ban manuel ou automatique (`banned_until`)
+    - Mémoriser le dernier statut STIR/SHAKEN reçu
+
+    Les compteurs glissants (calls/h, calls/jour) sont calculés à la
+    volée depuis `voice_calls` (index sur `from_e164` + `started_at`).
+    """
+
+    __tablename__ = "voice_caller_intel"
+
+    from_e164: Mapped[str] = mapped_column(
+        String(20), primary_key=True, index=True
+    )
+    line_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    caller_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    last_lookup_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    spam_hangup_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    banned_until: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    last_verstat: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class VoiceUsageDaily(Base):
+    """Compteur de coût journalier — pour le cost cap automatique.
+
+    Incrementé à chaque appel terminé (depuis le webhook /twilio/status).
+    Si `cents_spent > DAILY_COST_CAP_CENTS` (env, défaut 500 = 5 $), on
+    refuse les nouveaux appels en répondant un voicemail-only pour la
+    journée. Auto-reset au changement de date (clé = `usage_date`).
+    """
+
+    __tablename__ = "voice_usage_daily"
+
+    usage_date: Mapped[str] = mapped_column(String(10), primary_key=True)  # YYYY-MM-DD
+    cents_spent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    calls_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    spam_blocked: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
