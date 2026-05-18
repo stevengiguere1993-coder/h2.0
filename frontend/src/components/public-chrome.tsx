@@ -24,7 +24,13 @@ const PORTAL_PREFIXES = [
   "/dev-logiciel",
   "/telephonie",
   "/changer-mot-de-passe",
-  "/profil"
+  "/profil",
+  // Pages publiques tokenisées : pas de chrome public (pas de header/
+  // footer marketing) — le destinataire arrive depuis un lien courriel
+  // dédié et ne doit pas être pollué par la nav du site.
+  "/valider-demande",
+  "/contrat-signature",
+  "/promesse-achat"
 ];
 
 function stripLocale(pathname: string): string {

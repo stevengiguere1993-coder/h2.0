@@ -5,10 +5,18 @@ This is the CRM table that receives every contact request submitted from
 the public website. It replaces the Monday.com "Demande de contact" board.
 """
 
+from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -88,6 +96,23 @@ class ContactRequest(Base, TimestampUpdateMixin):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+
+    # ─── Intake téléphonique IA ───
+    # Quand la secrétaire IA Léa collecte les besoins en construction
+    # par téléphone (type travaux, échéancier, budget, etc.), on
+    # stocke :
+    #   - `intake_data` : JSON brut des champs collectés
+    #   - `validation_token` : URL signée envoyée au client par
+    #     courriel pour qu'il valide les infos + ajoute des photos
+    #     (page publique non-authentifiée)
+    #   - `validated_at` : timestamp de validation client
+    intake_data: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    validation_token: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    validated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     def __repr__(self) -> str:

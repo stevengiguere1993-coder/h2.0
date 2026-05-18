@@ -432,3 +432,243 @@ async def delete_contact_photo(
         )
     await db.delete(p)
     await db.flush()
+
+
+# ─── Validation publique (token) — page de validation post-appel ───
+# Quand la secrétaire IA collecte les besoins en construction au
+# téléphone, on génère un `validation_token` pour le ContactRequest
+# et on envoie un courriel au client avec le lien :
+#   https://horizon.../valider-demande/{token}
+# La page publique (sans auth) appelle ces endpoints :
+#   GET  /api/v1/contact/by-token/{token}                  -> infos
+#   PATCH /api/v1/contact/by-token/{token}                 -> édite infos
+#   POST  /api/v1/contact/by-token/{token}/photos          -> upload
+#   GET   /api/v1/contact/by-token/{token}/photos          -> liste
+#   GET   /api/v1/contact/by-token/{token}/photos/{id}/image -> stream
+#   DELETE /api/v1/contact/by-token/{token}/photos/{id}    -> supprime
+#   POST  /api/v1/contact/by-token/{token}/confirm         -> validé
+#
+# Aucune authentification : le token est secret. La portée d'écriture
+# est strictement limitée aux champs édités par le client (jamais
+# status, assigned_to_user_id, internal_notes, intake_data brut).
+from app.models.contact_request import ContactRequest
+
+
+class ContactPublicRead(BaseModel):
+    """Vue publique d'un ContactRequest — utilisée par la page
+    de validation. On expose UNIQUEMENT les champs visibles au
+    client, jamais les notes internes ni l'assignation CRM."""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    email: str
+    phone: Optional[str]
+    address: Optional[str]
+    project_type: str
+    budget_range: Optional[str]
+    message: str
+    locale: str
+    intake_data: Optional[str]
+    validated_at: Optional[datetime]
+
+
+class ContactPublicUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    project_type: Optional[str] = None
+    budget_range: Optional[str] = None
+    message: Optional[str] = None
+
+
+async def _load_by_token(db, token: str) -> ContactRequest:
+    if not token or len(token) < 10:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Lien invalide.")
+    cr = (
+        await db.execute(
+            select(ContactRequest).where(
+                ContactRequest.validation_token == token
+            )
+        )
+    ).scalar_one_or_none()
+    if cr is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "Lien introuvable ou expiré.",
+        )
+    return cr
+
+
+@router.get(
+    "/by-token/{token}",
+    response_model=ContactPublicRead,
+    summary="(Public) Récupère un ContactRequest par son token de validation",
+)
+async def get_by_token(token: str, db: DBSession) -> ContactPublicRead:
+    cr = await _load_by_token(db, token)
+    return ContactPublicRead.model_validate(cr)
+
+
+@router.patch(
+    "/by-token/{token}",
+    response_model=ContactPublicRead,
+    summary="(Public) Édite les infos client d'un ContactRequest via son token",
+)
+async def patch_by_token(
+    token: str, payload: ContactPublicUpdate, db: DBSession
+) -> ContactPublicRead:
+    cr = await _load_by_token(db, token)
+    data = payload.model_dump(exclude_unset=True)
+    for k, v in data.items():
+        if v is not None and isinstance(v, str):
+            v = v.strip() or None
+        setattr(cr, k, v)
+    await db.flush()
+    return ContactPublicRead.model_validate(cr)
+
+
+@router.post(
+    "/by-token/{token}/photos",
+    response_model=ContactPhotoRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="(Public) Upload une photo via le token",
+)
+async def upload_photo_by_token(
+    token: str, db: DBSession, file: UploadFile = File(...)
+) -> ContactPhotoRead:
+    cr = await _load_by_token(db, token)
+    ct = (file.content_type or "").lower()
+    if ct not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Format image non supporté (JPG, PNG, WEBP, HEIC).",
+        )
+    # Cap dur — évite qu'un visiteur uploade des Go via le lien public.
+    existing = (
+        await db.execute(
+            select(ContactRequestPhoto).where(
+                ContactRequestPhoto.contact_request_id == cr.id
+            )
+        )
+    ).scalars().all()
+    if len(existing) >= MAX_PHOTOS * 4:  # public a un peu plus de marge
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Limite atteinte : max {MAX_PHOTOS * 4} photos par demande.",
+        )
+    blob = await file.read(MAX_PHOTO_BYTES + 1)
+    if not blob:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Fichier vide."
+        )
+    if len(blob) > MAX_PHOTO_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Fichier trop gros (>{MAX_PHOTO_BYTES // (1024 * 1024)} Mo).",
+        )
+    photo = ContactRequestPhoto(
+        contact_request_id=cr.id,
+        image=blob,
+        content_type=ct,
+        filename=file.filename,
+    )
+    db.add(photo)
+    await db.flush()
+    await db.refresh(photo)
+    return ContactPhotoRead.model_validate(photo)
+
+
+@router.get(
+    "/by-token/{token}/photos",
+    response_model=List[ContactPhotoRead],
+    summary="(Public) Liste des photos déjà uploadées",
+)
+async def list_photos_by_token(
+    token: str, db: DBSession
+) -> List[ContactPhotoRead]:
+    cr = await _load_by_token(db, token)
+    rows = (
+        await db.execute(
+            select(ContactRequestPhoto)
+            .where(ContactRequestPhoto.contact_request_id == cr.id)
+            .order_by(ContactRequestPhoto.created_at.asc())
+        )
+    ).scalars().all()
+    return [ContactPhotoRead.model_validate(r) for r in rows]
+
+
+@router.get(
+    "/by-token/{token}/photos/{photo_id}/image",
+    summary="(Public) Affiche une photo via le token",
+)
+async def stream_photo_by_token(
+    token: str, photo_id: int, db: DBSession
+) -> Response:
+    cr = await _load_by_token(db, token)
+    p = (
+        await db.execute(
+            select(ContactRequestPhoto).where(
+                ContactRequestPhoto.id == photo_id,
+                ContactRequestPhoto.contact_request_id == cr.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if p is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Photo introuvable."
+        )
+    await db.refresh(p, attribute_names=["image"])
+    if not p.image:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Photo vide."
+        )
+    return Response(
+        content=bytes(p.image),
+        media_type=p.content_type,
+        headers={
+            "Content-Disposition": (
+                f'inline; filename="{p.filename or f"photo-{p.id}"}"'
+            )
+        },
+    )
+
+
+@router.delete(
+    "/by-token/{token}/photos/{photo_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="(Public) Supprime une photo via le token",
+)
+async def delete_photo_by_token(
+    token: str, photo_id: int, db: DBSession
+) -> None:
+    cr = await _load_by_token(db, token)
+    p = (
+        await db.execute(
+            select(ContactRequestPhoto).where(
+                ContactRequestPhoto.id == photo_id,
+                ContactRequestPhoto.contact_request_id == cr.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if p is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Photo introuvable."
+        )
+    await db.delete(p)
+    await db.flush()
+
+
+@router.post(
+    "/by-token/{token}/confirm",
+    response_model=ContactPublicRead,
+    summary="(Public) Confirme la demande après relecture — verrouille l'édition côté client",
+)
+async def confirm_by_token(
+    token: str, db: DBSession
+) -> ContactPublicRead:
+    cr = await _load_by_token(db, token)
+    if cr.validated_at is None:
+        cr.validated_at = datetime.utcnow()
+    await db.flush()
+    return ContactPublicRead.model_validate(cr)

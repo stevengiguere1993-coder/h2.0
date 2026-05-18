@@ -577,6 +577,16 @@ async def init_db() -> None:
                 "spam_blocked",
                 "INTEGER NOT NULL DEFAULT 0",
             ),
+            # Intake téléphonique IA — collecte de besoins en
+            # construction par Léa au téléphone, avec validation par
+            # le client via lien courriel (page publique).
+            ("contact_requests", "intake_data", "TEXT"),
+            ("contact_requests", "validation_token", "VARCHAR(64)"),
+            (
+                "contact_requests",
+                "validated_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
