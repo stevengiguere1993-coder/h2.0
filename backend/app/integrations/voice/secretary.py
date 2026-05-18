@@ -110,13 +110,27 @@ class SecretaryDecision:
     lead_reason: Optional[str] = None
 
 
-async def decide_initial_greeting(lang: str = "fr-CA") -> SecretaryDecision:
+async def decide_initial_greeting(
+    lang: str = "fr-CA",
+    *,
+    personalized_say: Optional[str] = None,
+) -> SecretaryDecision:
     """Phrase d'accueil — pas besoin d'IA, on a une formulation fixe.
+
+    Si `personalized_say` est fourni (issu de l'identification CRM),
+    on l'utilise tel quel. Sinon, greeting générique.
 
     Conserver une greeting statique fait gagner ~1 sec de latence sur le
     premier décroché (pas d'appel API à attendre) et donne une expérience
     plus prévisible à l'appelant.
     """
+    if personalized_say:
+        return SecretaryDecision(
+            lang=lang,
+            intent="unclear",
+            next_action="continue",
+            say=personalized_say,
+        )
     if lang.startswith("en"):
         return SecretaryDecision(
             lang="en-US",
@@ -143,6 +157,7 @@ async def decide_next_turn(
     *,
     current_turn_count: int,
     caller_e164: str,
+    identity_context: Optional[str] = None,
 ) -> SecretaryDecision:
     """Demande à Claude la prochaine action de la secrétaire.
 
@@ -150,14 +165,25 @@ async def decide_next_turn(
         history: liste de (role, text). `role` ∈ {'assistant', 'user'}.
         current_turn_count: nombre de tours déjà échangés (assistant+user).
         caller_e164: numéro de l'appelant — sert d'indice (préfixe = pays).
+        identity_context: ligne décrivant l'identité CRM si reconnu
+            (sortie de `build_identity_context_block`). Injectée dans
+            le system prompt pour adapter le ton.
 
     Returns:
         Une `SecretaryDecision`. En cas d'échec IA, retombe sur un
         callback poli — on ne plante jamais l'appel.
     """
-    # Limite dure
     if current_turn_count >= MAX_TURNS:
         return _fallback_callback("max_turns_reached")
+
+    system = SECRETARY_SYSTEM_PROMPT
+    if identity_context:
+        system = (
+            f"{SECRETARY_SYSTEM_PROMPT}\n\n--- CONTEXTE APPELANT ---\n"
+            f"{identity_context}\n\nUtilise ce contexte pour personnaliser "
+            "tes réponses (mentionner leur projet en cours, leur logement, "
+            "etc.) et adapter le routage."
+        )
 
     user_prompt = _build_user_prompt(history, caller_e164)
     messages = [Message(role="user", content=user_prompt)]
@@ -165,7 +191,7 @@ async def decide_next_turn(
     try:
         result = await chat(
             messages=messages,
-            system=SECRETARY_SYSTEM_PROMPT,
+            system=system,
             max_tokens=400,
             temperature=0.4,
         )

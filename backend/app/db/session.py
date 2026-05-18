@@ -556,6 +556,7 @@ async def init_db() -> None:
             ("voice_calls", "entity_type", "VARCHAR(32)"),
             ("voice_calls", "entity_id", "INTEGER"),
             ("voice_calls", "followup_suggestion", "TEXT"),
+            ("voice_calls", "caller_kind", "VARCHAR(32)"),
             # Anti-spam — VoiceUsageDaily peut être créée vide par
             # create_all, mais on ajoute spam_blocked au cas où la
             # table existait sans cette colonne (bootstrap progressif).
