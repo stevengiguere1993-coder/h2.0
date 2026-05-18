@@ -58,6 +58,30 @@ type CallRow = {
   lead_callback_phone: string | null;
   lead_reason: string | null;
   contact_request_id: number | null;
+  was_blocked: boolean;
+  was_vip: boolean;
+  was_voicemail: boolean;
+  voicemail_transcription: string | null;
+  voicemail_summary: string | null;
+  recording_url: string | null;
+};
+
+type FilterRow = {
+  id: number;
+  phone_number_id: number;
+  kind: "block" | "vip" | string;
+  pattern: string | null;
+  label: string | null;
+  active: boolean;
+};
+
+type BusinessHoursRow = {
+  id: number;
+  phone_number_id: number;
+  day_of_week: number;
+  open_time: string;
+  close_time: string;
+  timezone: string;
 };
 
 type CallTurnRow = {
@@ -76,6 +100,8 @@ export default function TelephonieHome() {
 
   const [numbers, setNumbers] = useState<PhoneNumberRow[]>([]);
   const [calls, setCalls] = useState<CallRow[]>([]);
+  const [filters, setFilters] = useState<FilterRow[]>([]);
+  const [hours, setHours] = useState<BusinessHoursRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedCallId, setExpandedCallId] = useState<number | null>(null);
@@ -129,20 +155,81 @@ export default function TelephonieHome() {
     setLoading(true);
     setLoadError(null);
     try {
-      const [nRes, cRes] = await Promise.all([
+      const [nRes, cRes, fRes] = await Promise.all([
         authedFetch("/api/v1/voice/phone-numbers"),
-        authedFetch("/api/v1/voice/calls?limit=30")
+        authedFetch("/api/v1/voice/calls?limit=30"),
+        authedFetch("/api/v1/voice/filters")
       ]);
       if (!nRes.ok) throw new Error(`numbers http_${nRes.status}`);
       if (!cRes.ok) throw new Error(`calls http_${cRes.status}`);
-      setNumbers((await nRes.json()) as PhoneNumberRow[]);
+      if (!fRes.ok) throw new Error(`filters http_${fRes.status}`);
+      const nums = (await nRes.json()) as PhoneNumberRow[];
+      setNumbers(nums);
       setCalls((await cRes.json()) as CallRow[]);
+      setFilters((await fRes.json()) as FilterRow[]);
+      // Heures : on charge celles du 1er numéro (Phase 3 = 1 numéro).
+      if (nums.length > 0) {
+        const hRes = await authedFetch(
+          `/api/v1/voice/business-hours?phone_number_id=${nums[0].id}`
+        );
+        if (hRes.ok) setHours((await hRes.json()) as BusinessHoursRow[]);
+      }
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const addFilter = useCallback(
+    async (phoneNumberId: number, kind: "block" | "vip", pattern: string, label: string) => {
+      const res = await authedFetch("/api/v1/voice/filters", {
+        method: "POST",
+        body: JSON.stringify({
+          phone_number_id: phoneNumberId,
+          kind,
+          pattern: pattern.trim() || null,
+          label: label.trim() || null
+        })
+      });
+      if (!res.ok) {
+        setLoadError(`add filter http_${res.status}`);
+        return;
+      }
+      const f = (await res.json()) as FilterRow;
+      setFilters((prev) => [...prev, f]);
+    },
+    []
+  );
+
+  const deleteFilter = useCallback(async (filterId: number) => {
+    const res = await authedFetch(`/api/v1/voice/filters/${filterId}`, {
+      method: "DELETE"
+    });
+    if (!res.ok && res.status !== 204) {
+      setLoadError(`del filter http_${res.status}`);
+      return;
+    }
+    setFilters((prev) => prev.filter((f) => f.id !== filterId));
+  }, []);
+
+  const saveHours = useCallback(
+    async (phoneNumberId: number, rows: { day_of_week: number; open_time: string; close_time: string }[]) => {
+      const res = await authedFetch("/api/v1/voice/business-hours", {
+        method: "PUT",
+        body: JSON.stringify({
+          phone_number_id: phoneNumberId,
+          hours: rows.map((r) => ({ ...r, timezone: "America/Montreal" }))
+        })
+      });
+      if (!res.ok) {
+        setLoadError(`save hours http_${res.status}`);
+        return;
+      }
+      setHours((await res.json()) as BusinessHoursRow[]);
+    },
+    []
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -233,8 +320,8 @@ export default function TelephonieHome() {
               transfert direct).
             </p>
           </div>
-          <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
-            Phase 2 active
+          <span className="shrink-0 rounded-full border border-violet-500/40 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-violet-300">
+            Phase 3 active
           </span>
         </header>
 
@@ -323,6 +410,23 @@ export default function TelephonieHome() {
             </table>
           ) : null}
         </section>
+
+        {/* Filtres + Heures (Phase 3) */}
+        {numbers.length > 0 ? (
+          <>
+            <FiltersSection
+              phoneNumberId={numbers[0].id}
+              filters={filters.filter((f) => f.phone_number_id === numbers[0].id)}
+              onAdd={addFilter}
+              onDelete={deleteFilter}
+            />
+            <BusinessHoursSection
+              phoneNumberId={numbers[0].id}
+              hours={hours}
+              onSave={saveHours}
+            />
+          </>
+        ) : null}
 
         {/* Call log */}
         <section className="mt-4 rounded-2xl border border-white/10 bg-white/[0.02] p-5">
@@ -439,22 +543,30 @@ export default function TelephonieHome() {
             title="Filtres & règles intelligentes"
             icon={<Filter className="h-4 w-4 text-violet-300" />}
             scope="1-2 PR"
-            status="todo"
+            status="done"
           >
             <ul className="space-y-1">
               <li>
-                Heures d&apos;ouverture (hors heures → voicemail IA).
+                Heures d&apos;ouverture par jour de semaine (timezone
+                Montréal) — hors heures → voicemail IA. ✓
               </li>
               <li>
-                Blocklist (spam / démarchage / robocalls) — raccroche
-                poliment ou met en boîte vocale.
+                Blocklist : pattern E.164 exact ou préfixe (<code>+1438*</code>),
+                rejet immédiat (tonalité d&apos;occupation). ✓
               </li>
               <li>
-                Whitelist VIP (clients existants, partenaires) — sonne
-                direct sans passer par l&apos;IA.
+                Whitelist VIP : sonne direct sans passer par la secrétaire
+                IA, même si elle est activée. ✓
               </li>
-              <li>File d&apos;attente si tous les users sont occupés.</li>
-              <li>Voicemail IA qui transcrit + résume + notifie.</li>
+              <li>
+                Voicemail IA : <code>&lt;Record&gt;</code> + transcription
+                Twilio + résumé Claude + notification cloche +
+                ContactRequest CRM. ✓
+              </li>
+              <li>
+                Reste à faire : file d&apos;attente si tous les users sont
+                occupés (Phase 3.5 si besoin).
+              </li>
             </ul>
           </PhaseCard>
 
@@ -563,7 +675,24 @@ function CallRowItem({
     <>
       <tr className="cursor-pointer hover:bg-white/[0.03]" onClick={onToggle}>
         <td className="py-2 text-white/60">{formatDateTime(call.started_at)}</td>
-        <td className="py-2 font-mono text-white">{call.from_e164}</td>
+        <td className="py-2 font-mono text-white">
+          {call.from_e164}
+          {call.was_blocked ? (
+            <span className="ml-1.5 rounded bg-rose-500/20 px-1 text-[9px] uppercase tracking-wide text-rose-300">
+              blocked
+            </span>
+          ) : null}
+          {call.was_vip ? (
+            <span className="ml-1.5 rounded bg-emerald-500/20 px-1 text-[9px] uppercase tracking-wide text-emerald-300">
+              vip
+            </span>
+          ) : null}
+          {call.was_voicemail ? (
+            <span className="ml-1.5 rounded bg-amber-500/20 px-1 text-[9px] uppercase tracking-wide text-amber-300">
+              voicemail
+            </span>
+          ) : null}
+        </td>
         <td className="py-2 text-white/80">
           {call.intent ? (
             <IntentBadge intent={call.intent} />
@@ -584,6 +713,38 @@ function CallRowItem({
       {expanded ? (
         <tr>
           <td colSpan={6} className="bg-white/[0.02] p-3">
+            {call.was_voicemail ? (
+              <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-[11px] text-white/80">
+                <div className="mb-1 font-semibold text-amber-200">
+                  Voicemail
+                </div>
+                {call.voicemail_summary ? (
+                  <div className="mb-2 italic text-amber-100">
+                    Résumé IA : {call.voicemail_summary}
+                  </div>
+                ) : null}
+                {call.voicemail_transcription ? (
+                  <div className="whitespace-pre-wrap">
+                    {call.voicemail_transcription}
+                  </div>
+                ) : (
+                  <div className="text-white/40">
+                    Transcription en cours… (Twilio prend 5-15 sec après
+                    l&apos;enregistrement)
+                  </div>
+                )}
+                {call.recording_url ? (
+                  <a
+                    href={call.recording_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-2 inline-block rounded-md border border-amber-500/40 px-2 py-1 text-[10px] text-amber-200 hover:bg-amber-500/10"
+                  >
+                    ▶ Écouter
+                  </a>
+                ) : null}
+              </div>
+            ) : null}
             {call.lead_name || call.lead_callback_phone || call.lead_reason ? (
               <div className="mb-3 rounded-md border border-teal-500/30 bg-teal-500/5 p-3 text-[11px] text-white/80">
                 <div className="mb-1 font-semibold text-teal-200">
@@ -687,6 +848,226 @@ function formatDateTime(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+const DAY_LABELS = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
+
+function FiltersSection({
+  phoneNumberId,
+  filters,
+  onAdd,
+  onDelete
+}: {
+  phoneNumberId: number;
+  filters: FilterRow[];
+  onAdd: (
+    phoneNumberId: number,
+    kind: "block" | "vip",
+    pattern: string,
+    label: string
+  ) => void;
+  onDelete: (filterId: number) => void;
+}) {
+  const [kind, setKind] = useState<"block" | "vip">("block");
+  const [pattern, setPattern] = useState("");
+  const [label, setLabel] = useState("");
+
+  const blocks = filters.filter((f) => f.kind === "block");
+  const vips = filters.filter((f) => f.kind === "vip");
+
+  return (
+    <section className="mt-4 rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+      <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+        <Filter className="h-4 w-4 text-violet-300" />
+        Filtres (blocklist + VIP)
+      </h2>
+      <p className="mt-1 text-[11px] text-white/40">
+        Pattern : numéro exact (<code>+14385551234</code>), préfixe avec
+        astérisque (<code>+1438*</code>) ou vide = match-tout.
+      </p>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <div>
+          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-rose-300">
+            Blocklist ({blocks.length})
+          </h3>
+          {blocks.length === 0 ? (
+            <p className="mt-2 text-[11px] text-white/40">Aucun blocage.</p>
+          ) : (
+            <ul className="mt-2 space-y-1">
+              {blocks.map((f) => (
+                <FilterItem key={f.id} f={f} onDelete={() => onDelete(f.id)} />
+              ))}
+            </ul>
+          )}
+        </div>
+        <div>
+          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-emerald-300">
+            VIP — ring direct ({vips.length})
+          </h3>
+          {vips.length === 0 ? (
+            <p className="mt-2 text-[11px] text-white/40">Aucun VIP.</p>
+          ) : (
+            <ul className="mt-2 space-y-1">
+              {vips.map((f) => (
+                <FilterItem key={f.id} f={f} onDelete={() => onDelete(f.id)} />
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-end gap-2 border-t border-white/5 pt-4">
+        <select
+          value={kind}
+          onChange={(e) => setKind(e.target.value as "block" | "vip")}
+          className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-white"
+        >
+          <option value="block">Bloquer</option>
+          <option value="vip">VIP</option>
+        </select>
+        <input
+          type="text"
+          placeholder="Pattern (ex: +14385551234)"
+          value={pattern}
+          onChange={(e) => setPattern(e.target.value)}
+          className="min-w-[180px] flex-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-white placeholder-white/30"
+        />
+        <input
+          type="text"
+          placeholder="Libellé (optionnel)"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          className="min-w-[140px] flex-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-white placeholder-white/30"
+        />
+        <button
+          type="button"
+          onClick={() => {
+            if (!pattern.trim() && !confirm("Sans pattern, ce filtre s'applique à TOUS les appels. Continuer ?")) return;
+            onAdd(phoneNumberId, kind, pattern, label);
+            setPattern("");
+            setLabel("");
+          }}
+          className="rounded-md border border-teal-500/40 bg-teal-500/10 px-3 py-1 text-xs font-semibold text-teal-200 hover:bg-teal-500/20"
+        >
+          Ajouter
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function FilterItem({ f, onDelete }: { f: FilterRow; onDelete: () => void }) {
+  return (
+    <li className="flex items-center justify-between gap-2 rounded-md bg-white/5 px-2 py-1 text-[11px]">
+      <div className="min-w-0">
+        <div className="font-mono text-white">{f.pattern || "(tous)"}</div>
+        {f.label ? (
+          <div className="truncate text-white/40">{f.label}</div>
+        ) : null}
+      </div>
+      <button
+        type="button"
+        onClick={onDelete}
+        className="text-white/40 hover:text-rose-300"
+        title="Supprimer"
+      >
+        ✕
+      </button>
+    </li>
+  );
+}
+
+function BusinessHoursSection({
+  phoneNumberId,
+  hours,
+  onSave
+}: {
+  phoneNumberId: number;
+  hours: BusinessHoursRow[];
+  onSave: (
+    phoneNumberId: number,
+    rows: { day_of_week: number; open_time: string; close_time: string }[]
+  ) => void;
+}) {
+  // État local par jour : enabled + open + close.
+  type DayState = { enabled: boolean; open: string; close: string };
+  const init = (): DayState[] =>
+    DAY_LABELS.map((_, dow) => {
+      const existing = hours.find((h) => h.day_of_week === dow);
+      return existing
+        ? { enabled: true, open: existing.open_time, close: existing.close_time }
+        : { enabled: false, open: "09:00", close: "17:00" };
+    });
+
+  const [days, setDays] = useState<DayState[]>(init);
+
+  // Re-sync si les heures fetched changent (après reload).
+  useEffect(() => {
+    setDays(init());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hours]);
+
+  const update = (i: number, patch: Partial<DayState>) =>
+    setDays((prev) => prev.map((d, idx) => (idx === i ? { ...d, ...patch } : d)));
+
+  const save = () => {
+    const rows = days
+      .map((d, dow) => ({ enabled: d.enabled, day_of_week: dow, open_time: d.open, close_time: d.close }))
+      .filter((r) => r.enabled)
+      .map(({ enabled: _ignore, ...rest }) => rest);
+    onSave(phoneNumberId, rows);
+  };
+
+  return (
+    <section className="mt-4 rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+      <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+        <Workflow className="h-4 w-4 text-blue-300" />
+        Heures d&apos;ouverture (timezone Montréal)
+      </h2>
+      <p className="mt-1 text-[11px] text-white/40">
+        Hors heures → voicemail IA (enregistrement + transcription + résumé).
+        Aucun jour activé = ouvert 24/7.
+      </p>
+      <div className="mt-3 space-y-1.5">
+        {days.map((d, i) => (
+          <div key={i} className="flex items-center gap-3 text-xs">
+            <label className="flex w-20 items-center gap-2 text-white/80">
+              <input
+                type="checkbox"
+                checked={d.enabled}
+                onChange={(e) => update(i, { enabled: e.target.checked })}
+                className="h-3 w-3"
+              />
+              {DAY_LABELS[i]}
+            </label>
+            <input
+              type="time"
+              value={d.open}
+              onChange={(e) => update(i, { open: e.target.value })}
+              disabled={!d.enabled}
+              className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-white disabled:opacity-40"
+            />
+            <span className="text-white/40">→</span>
+            <input
+              type="time"
+              value={d.close}
+              onChange={(e) => update(i, { close: e.target.value })}
+              disabled={!d.enabled}
+              className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-white disabled:opacity-40"
+            />
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={save}
+        className="mt-3 rounded-md border border-teal-500/40 bg-teal-500/10 px-3 py-1 text-xs font-semibold text-teal-200 hover:bg-teal-500/20"
+      >
+        Enregistrer les heures
+      </button>
+    </section>
+  );
 }
 
 function PhaseCard({

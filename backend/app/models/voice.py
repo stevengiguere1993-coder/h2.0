@@ -1,6 +1,6 @@
-"""Téléphonie — modèles SQL Phase 1.
+"""Téléphonie — modèles SQL Phases 1-3.
 
-Quatre tables :
+Tables :
 
 - **PhoneNumber** : un numéro qu'on possède chez le provider (Twilio
   pour l'instant, autre provider possible plus tard). Porte la stratégie
@@ -20,7 +20,7 @@ Quatre tables :
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time
 from enum import Enum
 from typing import Optional
 
@@ -31,6 +31,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    Time,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -170,6 +171,17 @@ class Call(Base):
         ForeignKey("contact_requests.id", ondelete="SET NULL"), nullable=True
     )
 
+    # Phase 3 — flags de routage pris à la décision initiale. Utiles
+    # pour les stats (combien de spam bloqué, combien de VIP sonnés
+    # direct, combien de voicemail hors heures).
+    was_blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    was_vip: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    was_voicemail: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Transcription brute Twilio (Phase 3 voicemail) — distincte du
+    # transcript IA de Phase 2 qui agrège les tours secrétaire.
+    voicemail_transcription: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    voicemail_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     phone_number: Mapped[PhoneNumber] = relationship(back_populates="calls")
     transcript: Mapped[Optional["CallTranscript"]] = relationship(
         back_populates="call",
@@ -270,3 +282,65 @@ class CallTurn(Base):
     )
 
     call: Mapped[Call] = relationship(back_populates="turns")
+
+
+class VoiceFilter(Base):
+    """Filtre de routage Phase 3 — blocklist ou whitelist VIP.
+
+    `kind = 'block'` : on rejette l'appel (Reject TwiML) avec une raison
+    de busy. `kind = 'vip'` : on sonne direct chez `forward_to_e164`
+    sans passer par la secrétaire IA.
+
+    `pattern` = numéro E.164 exact (`+14385551234`) OU préfixe terminant
+    par `*` (`+1438*` = tout 438) OU NULL = match-tout (utilisé pour
+    une blocklist globale future, par défaut on l'évite). On compare
+    avec `from_e164` de l'appel entrant.
+    """
+
+    __tablename__ = "voice_filters"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    phone_number_id: Mapped[int] = mapped_column(
+        ForeignKey("voice_phone_numbers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, index=True)  # block|vip
+    pattern: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class VoiceBusinessHours(Base):
+    """Heures d'ouverture Phase 3 (par numéro, par jour de semaine).
+
+    `day_of_week` : 0 = lundi … 6 = dimanche (convention ISO Python
+    `datetime.weekday()`). Une ligne = une plage horaire ; on peut en
+    avoir plusieurs par jour (ex. 9h-12h + 13h-17h) en mettant deux
+    lignes avec le même `day_of_week`.
+
+    Si **aucune** ligne n'existe pour un PhoneNumber : ouvert 24/7
+    (rétro-compat Phase 1/2). Sinon : ouvert seulement quand l'heure
+    courante (`America/Montreal`) tombe dans au moins une plage du jour.
+    """
+
+    __tablename__ = "voice_business_hours"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    phone_number_id: Mapped[int] = mapped_column(
+        ForeignKey("voice_phone_numbers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    day_of_week: Mapped[int] = mapped_column(Integer, nullable=False)
+    open_time: Mapped[time] = mapped_column(Time, nullable=False)
+    close_time: Mapped[time] = mapped_column(Time, nullable=False)
+    timezone: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="America/Montreal"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

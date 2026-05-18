@@ -187,6 +187,8 @@ from app.models.voice import (  # noqa: F401
     CallTranscript,
     CallTurn,
     PhoneNumber,
+    VoiceBusinessHours,
+    VoiceFilter,
 )
 
 __all__ = [
@@ -280,4 +282,6 @@ __all__ = [
     "CallTranscript",
     "CallTurn",
     "PhoneNumber",
+    "VoiceBusinessHours",
+    "VoiceFilter",
 ]
