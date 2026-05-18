@@ -8,7 +8,6 @@ import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
 import { KratosFloating } from "@/components/kratos-floating";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
-import { VoiceConsole } from "@/components/voice-console";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -44,7 +43,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   chaque page (statique, ne chevauche plus le contenu). */}
               <KratosFloating />
               <HelpButton />
-              <VoiceConsole />
             </ConfirmProvider>
           </AppLayoutContextProvider>
         </div>
