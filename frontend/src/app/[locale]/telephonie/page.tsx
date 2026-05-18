@@ -16,6 +16,7 @@ import {
 
 import { authedFetch, getMe, getToken } from "@/lib/auth";
 import { Link, useRouter } from "@/i18n/navigation";
+import { CallButton } from "@/components/call-button";
 
 // Volet « Téléphonie / Secrétaire d'appels ».
 //
@@ -64,6 +65,9 @@ type CallRow = {
   voicemail_transcription: string | null;
   voicemail_summary: string | null;
   recording_url: string | null;
+  entity_type: string | null;
+  entity_id: number | null;
+  followup_suggestion: string | null;
 };
 
 type FilterRow = {
@@ -92,6 +96,7 @@ type CallTurnRow = {
   confidence: number | null;
   created_at: string;
 };
+
 
 export default function TelephonieHome() {
   const router = useRouter();
@@ -320,8 +325,8 @@ export default function TelephonieHome() {
               transfert direct).
             </p>
           </div>
-          <span className="shrink-0 rounded-full border border-violet-500/40 bg-violet-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-violet-300">
-            Phase 3 active
+          <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">
+            Toutes phases livrées
           </span>
         </header>
 
@@ -410,6 +415,21 @@ export default function TelephonieHome() {
             </table>
           ) : null}
         </section>
+
+        {/* Test click-to-call (Phase 4) */}
+        {numbers.length > 0 ? (
+          <section className="mt-4 rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+            <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+              <PhoneForwarded className="h-4 w-4 text-emerald-300" />
+              Test sortant (click-to-call)
+            </h2>
+            <p className="mt-1 text-[11px] text-white/40">
+              Twilio appellera d&apos;abord ton mobile interne, puis
+              bridgera vers la cible.
+            </p>
+            <OutboundTester />
+          </section>
+        ) : null}
 
         {/* Filtres + Heures (Phase 3) */}
         {numbers.length > 0 ? (
@@ -575,20 +595,29 @@ export default function TelephonieHome() {
             title="Sortant + intégration CRM"
             icon={<PhoneForwarded className="h-4 w-4 text-emerald-300" />}
             scope="1-2 PR"
-            status="todo"
+            status="done"
           >
             <ul className="space-y-1">
               <li>
-                Bouton « click-to-call » depuis n&apos;importe quelle
-                fiche prospect / client / contact.
+                Composant <code>&lt;CallButton&gt;</code> réutilisable :
+                click-to-call qui sonne ton mobile puis bridge vers la
+                cible. Wired sur la fiche Prospection (à côté du
+                téléphone propriétaire). ✓
               </li>
               <li>
-                Journalisation automatique de l&apos;appel sortant dans
-                la fiche concernée (durée, transcription, résumé).
+                Journalisation : chaque appel sortant est créé dans{" "}
+                <code>voice_calls</code> avec <code>entity_type</code> +
+                <code>entity_id</code> → filtrable par fiche via
+                <code>GET /voice/calls?entity_type=&amp;entity_id=</code>. ✓
               </li>
               <li>
-                Suggestion automatique d&apos;une action de suivi
-                post-appel (créer un follow-up, planifier RDV…).
+                Bouton « Suggérer un suivi » par appel : Claude analyse
+                le contexte (intent, voicemail, tours secrétaire) et
+                propose une action en 2 phrases. ✓
+              </li>
+              <li>
+                Reste à faire : créer un Follow-up agenda d&apos;un clic
+                depuis la suggestion (Phase 4.5 si besoin).
               </li>
             </ul>
           </PhaseCard>
@@ -694,11 +723,19 @@ function CallRowItem({
           ) : null}
         </td>
         <td className="py-2 text-white/80">
+          <span className="mr-1 text-[9px] uppercase tracking-wide text-white/40">
+            {call.direction === "outbound" ? "↗" : "↘"}
+          </span>
           {call.intent ? (
             <IntentBadge intent={call.intent} />
           ) : (
             <span className="text-white/30">—</span>
           )}
+          {call.entity_type ? (
+            <span className="ml-1.5 rounded bg-violet-500/15 px-1 text-[9px] uppercase tracking-wide text-violet-300">
+              {call.entity_type}#{call.entity_id}
+            </span>
+          ) : null}
         </td>
         <td className="py-2">
           <StatusBadge status={call.status} />
@@ -788,10 +825,62 @@ function CallRowItem({
                 ))}
               </ul>
             )}
+            <SuggestFollowupBlock call={call} />
           </td>
         </tr>
       ) : null}
     </>
+  );
+}
+
+function SuggestFollowupBlock({ call }: { call: CallRow }) {
+  const [suggestion, setSuggestion] = useState<string | null>(
+    call.followup_suggestion
+  );
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function ask() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/voice/calls/${call.id}/suggest-followup`,
+        { method: "POST" }
+      );
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      const data = (await res.json()) as { suggestion: string };
+      setSuggestion(data.suggestion);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-md border border-violet-500/20 bg-violet-500/5 p-3 text-[11px] text-white/80">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="font-semibold text-violet-200">Suivi suggéré (IA)</span>
+        <button
+          type="button"
+          onClick={ask}
+          disabled={busy}
+          className="rounded-md border border-violet-500/40 px-2 py-0.5 text-[10px] text-violet-200 hover:bg-violet-500/10 disabled:opacity-50"
+        >
+          {busy ? "…" : suggestion ? "Régénérer" : "Générer"}
+        </button>
+      </div>
+      {suggestion ? (
+        <p className="whitespace-pre-wrap">{suggestion}</p>
+      ) : (
+        <p className="text-white/40">
+          Pas encore de suggestion. Clique sur Générer pour demander à
+          l&apos;IA quoi faire après cet appel.
+        </p>
+      )}
+      {err ? <p className="mt-1 text-rose-300">{err}</p> : null}
+    </div>
   );
 }
 
@@ -851,6 +940,22 @@ function formatDateTime(iso: string): string {
 }
 
 const DAY_LABELS = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
+
+function OutboundTester() {
+  const [target, setTarget] = useState("");
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2">
+      <input
+        type="tel"
+        placeholder="+15146191111"
+        value={target}
+        onChange={(e) => setTarget(e.target.value)}
+        className="flex-1 min-w-[200px] rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-white placeholder-white/30"
+      />
+      <CallButton targetE164={target} />
+    </div>
+  );
+}
 
 function FiltersSection({
   phoneNumberId,

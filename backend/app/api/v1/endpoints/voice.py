@@ -88,6 +88,21 @@ def _voicemail_transcribe_url() -> str:
     return f"{_secretary_base_url()}/api/v1/voice/twilio/voicemail-transcript"
 
 
+def _outbound_bridge_url(call_id: int) -> str:
+    return (
+        f"{_secretary_base_url()}"
+        f"/api/v1/voice/twilio/outbound-bridge?call_id={int(call_id)}"
+    )
+
+
+SUPPORTED_ENTITY_TYPES = {
+    "prospection_lead",
+    "contact_request",
+    "client",
+    "contact",
+}
+
+
 async def _validate_twilio_signature(request: Request) -> dict[str, str]:
     """Lit le body form-encoded, vérifie la signature, retourne les params."""
     try:
@@ -660,6 +675,251 @@ async def twilio_voicemail_transcript(request: Request, db: DBSession) -> Respon
 
 
 # ---------------------------------------------------------------------
+# Sortant + lien CRM (Phase 4)
+# ---------------------------------------------------------------------
+
+
+class OutboundCallRequest(BaseModel):
+    target_e164: str = Field(min_length=4, max_length=20)
+    entity_type: Optional[str] = Field(default=None, max_length=32)
+    entity_id: Optional[int] = None
+    # Si non fourni, on prend le 1er PhoneNumber actif comme caller ID.
+    from_phone_number_id: Optional[int] = None
+
+
+class OutboundCallResponse(BaseModel):
+    call_id: int
+    provider_sid: str
+    bridge_to_e164: str
+    target_e164: str
+
+
+@router.post(
+    "/calls/outbound",
+    response_model=OutboundCallResponse,
+    summary="Initie un appel sortant click-to-call (admin)",
+)
+async def create_outbound_call(
+    payload: OutboundCallRequest, _: CurrentAdmin, db: DBSession
+) -> OutboundCallResponse:
+    """Click-to-call : Twilio appelle d'abord le mobile interne
+    (`TWILIO_FORWARD_TO`), puis bridge vers la cible une fois qu'on a
+    décroché. Crée la ligne `Call` AVANT l'API call pour pouvoir
+    référencer `call_id` dans l'URL du bridge TwiML.
+    """
+    target = payload.target_e164.strip()
+    if not target.startswith("+"):
+        raise HTTPException(status_code=400, detail="target must be E.164 (+...)")
+    if payload.entity_type and payload.entity_type not in SUPPORTED_ENTITY_TYPES:
+        raise HTTPException(status_code=400, detail="unsupported entity_type")
+
+    # PhoneNumber source : explicite ou le 1er actif.
+    if payload.from_phone_number_id:
+        pn = (
+            await db.execute(
+                select(PhoneNumber).where(
+                    PhoneNumber.id == payload.from_phone_number_id,
+                    PhoneNumber.active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+    else:
+        pn = (
+            await db.execute(
+                select(PhoneNumber)
+                .where(PhoneNumber.active.is_(True))
+                .order_by(PhoneNumber.id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if pn is None:
+        raise HTTPException(status_code=400, detail="no_active_phone_number")
+
+    bridge_to = (
+        (pn.forward_to_e164 or os.getenv("TWILIO_FORWARD_TO") or "").strip()
+    )
+    if not bridge_to:
+        raise HTTPException(
+            status_code=400,
+            detail="no_bridge_target (set forward_to_e164 or TWILIO_FORWARD_TO)",
+        )
+
+    # On crée la ligne d'abord pour avoir l'ID dispo dans l'URL TwiML.
+    call = Call(
+        phone_number_id=pn.id,
+        # Sera remplacé par le vrai CallSid juste après.
+        provider_sid=f"pending-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
+        direction=CallDirection.OUTBOUND.value,
+        status=CallStatus.QUEUED.value,
+        from_e164=pn.e164,
+        to_e164=target,
+        forwarded_to_e164=bridge_to,
+        entity_type=payload.entity_type,
+        entity_id=payload.entity_id,
+        lang="fr-CA",
+    )
+    db.add(call)
+    await db.flush()
+
+    provider = _twilio_provider()
+    base_status_url = f"{_secretary_base_url()}/api/v1/voice/twilio/status"
+    try:
+        sid = await provider.initiate_outbound_call(
+            from_e164=pn.e164,
+            to_e164=bridge_to,
+            twiml_url=_outbound_bridge_url(call.id),
+            status_callback_url=base_status_url,
+        )
+    except Exception as exc:
+        # Rollback la ligne pour ne pas garder une row orpheline.
+        await db.delete(call)
+        await db.flush()
+        log.exception("Outbound call initiation failed")
+        raise HTTPException(status_code=502, detail=f"twilio_error: {exc}")
+
+    call.provider_sid = sid or call.provider_sid
+    await db.flush()
+
+    return OutboundCallResponse(
+        call_id=call.id,
+        provider_sid=call.provider_sid,
+        bridge_to_e164=bridge_to,
+        target_e164=target,
+    )
+
+
+@router.post(
+    "/twilio/outbound-bridge",
+    summary="Webhook Twilio : TwiML du bridge pour un appel sortant",
+    response_class=Response,
+)
+async def twilio_outbound_bridge(request: Request, db: DBSession) -> Response:
+    """TwiML servi quand l'utilisateur interne décroche : <Dial> vers
+    la cible CRM. Le query-string contient `call_id` pour nous permettre
+    de log la cible exacte (Twilio ne renvoie pas le `To` original).
+    """
+    params = await _validate_twilio_signature(request)
+    provider = _twilio_provider()
+
+    call_id_raw = request.query_params.get("call_id", "")
+    target = ""
+    if call_id_raw and call_id_raw.isdigit():
+        call = (
+            await db.execute(
+                select(Call).where(Call.id == int(call_id_raw))
+            )
+        ).scalar_one_or_none()
+        if call is not None:
+            target = call.to_e164
+            # Met à jour le provider_sid avec le CallSid réel si on l'a
+            # raté à l'init (latence d'API).
+            sid = params.get("CallSid", "")
+            if sid and not call.provider_sid.startswith("CA"):
+                call.provider_sid = sid
+                await db.flush()
+
+    if not target:
+        twiml = provider.build_say_and_hangup(
+            say="Désolée, cible introuvable. Au revoir.", lang="fr-CA"
+        )
+        return Response(content=twiml, media_type="application/xml")
+
+    twiml = provider.build_forward_response(forward_to_e164=target)
+    return Response(content=twiml, media_type="application/xml")
+
+
+@router.post(
+    "/calls/{call_id}/suggest-followup",
+    summary="Génère une suggestion de suivi via Claude (admin)",
+)
+async def suggest_followup(
+    call_id: int, _: CurrentAdmin, db: DBSession
+) -> dict:
+    """Demande à Claude une suggestion d'action de suivi post-appel.
+
+    Lit le contexte disponible (intent, transcription voicemail, tours
+    secrétaire) et propose 1 action concrète (créer follow-up, planifier
+    RDV, envoyer soumission, etc.). Persiste dans Call.followup_suggestion
+    pour pouvoir le ré-afficher sans refacturer l'IA.
+    """
+    call = (
+        await db.execute(select(Call).where(Call.id == call_id))
+    ).scalar_one_or_none()
+    if call is None:
+        raise HTTPException(status_code=404, detail="call_not_found")
+
+    # Construit un contexte compact.
+    parts: list[str] = [
+        f"Direction : {call.direction}",
+        f"De : {call.from_e164} → vers : {call.to_e164}",
+    ]
+    if call.intent:
+        parts.append(f"Intent détecté : {call.intent}")
+    if call.duration_sec:
+        parts.append(f"Durée : {call.duration_sec}s")
+    if call.lead_name:
+        parts.append(f"Nom appelant : {call.lead_name}")
+    if call.lead_reason:
+        parts.append(f"Raison : {call.lead_reason}")
+    if call.voicemail_transcription:
+        parts.append(f"Voicemail : {call.voicemail_transcription}")
+    if call.voicemail_summary:
+        parts.append(f"Résumé voicemail : {call.voicemail_summary}")
+
+    # Tours secrétaire (si y en a).
+    turns = (
+        await db.execute(
+            select(CallTurn)
+            .where(CallTurn.call_id == call.id)
+            .order_by(CallTurn.turn_index)
+        )
+    ).scalars().all()
+    if turns:
+        parts.append("Échange secrétaire IA :")
+        for t in turns:
+            tag = "Secrétaire" if t.role == "assistant" else "Appelant"
+            parts.append(f"- {tag} : {t.text}")
+
+    context = "\n".join(parts) or "Aucune information disponible."
+
+    try:
+        from app.integrations.ai import chat, Message
+
+        res = await chat(
+            messages=[
+                Message(
+                    role="user",
+                    content=(
+                        "Contexte d'un appel téléphonique chez Horizon "
+                        "Services Immobiliers :\n\n"
+                        f"{context}\n\n"
+                        "Propose UNE action de suivi concrète (max 2 "
+                        "phrases) : rappel, envoi de soumission, "
+                        "planification de RDV, ajout au CRM, etc. "
+                        "Si aucun suivi n'est nécessaire (spam, "
+                        "démarchage…), dis-le simplement."
+                    ),
+                )
+            ],
+            system=(
+                "Tu aides un entrepreneur québécois à décider quoi faire "
+                "après un appel. Réponds en français, 2 phrases max, pas "
+                "de markdown. Sois actionnable et direct."
+            ),
+            max_tokens=200,
+            temperature=0.4,
+        )
+        suggestion = (res.text or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Suggest followup IA failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"ai_error: {exc}")
+
+    call.followup_suggestion = suggestion
+    await db.flush()
+    return {"call_id": call.id, "suggestion": suggestion}
+
+
+# ---------------------------------------------------------------------
 # Admin
 # ---------------------------------------------------------------------
 
@@ -708,6 +968,9 @@ class CallRead(BaseModel):
     voicemail_transcription: Optional[str] = None
     voicemail_summary: Optional[str] = None
     recording_url: Optional[str] = None
+    entity_type: Optional[str] = None
+    entity_id: Optional[int] = None
+    followup_suggestion: Optional[str] = None
 
 
 class CallTurnRead(BaseModel):
@@ -763,18 +1026,22 @@ async def patch_phone_number(
 @router.get(
     "/calls",
     response_model=List[CallRead],
-    summary="Journal d'appels récent (admin)",
+    summary="Journal d'appels récent (admin) — optionnel : filtre par entité",
 )
 async def list_calls(
     _: CurrentAdmin,
     db: DBSession,
     limit: int = Query(default=50, ge=1, le=200),
+    entity_type: Optional[str] = Query(default=None),
+    entity_id: Optional[int] = Query(default=None),
 ) -> List[CallRead]:
-    rows = (
-        await db.execute(
-            select(Call).order_by(Call.started_at.desc()).limit(limit)
-        )
-    ).scalars().all()
+    stmt = select(Call)
+    if entity_type:
+        stmt = stmt.where(Call.entity_type == entity_type)
+    if entity_id is not None:
+        stmt = stmt.where(Call.entity_id == entity_id)
+    stmt = stmt.order_by(Call.started_at.desc()).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
     return [CallRead.model_validate(r) for r in rows]
 
 

@@ -98,6 +98,36 @@ class TwilioVoiceProvider(VoiceProvider):
             return None
         return numbers[0].get("sid")
 
+    async def initiate_outbound_call(
+        self,
+        *,
+        from_e164: str,
+        to_e164: str,
+        twiml_url: str,
+        status_callback_url: Optional[str] = None,
+    ) -> str:
+        """Lance un appel sortant via l'API REST Twilio.
+
+        Twilio appelle d'abord `from_e164` (le mobile interne) ; quand
+        on décroche, il exécute le TwiML servi par `twiml_url` (typiquement
+        un `<Dial>` vers la cible). Retourne le CallSid résultant.
+        """
+        url = f"{TWILIO_API_BASE}/Accounts/{self.account_sid}/Calls.json"
+        form: dict[str, str] = {
+            "From": from_e164,
+            "To": to_e164,
+            "Url": twiml_url,
+        }
+        if status_callback_url:
+            form["StatusCallback"] = status_callback_url
+            form["StatusCallbackMethod"] = "POST"
+            form["StatusCallbackEvent"] = "initiated ringing answered completed"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(url, data=form, auth=self._auth())
+            resp.raise_for_status()
+            data = resp.json()
+        return str(data.get("sid") or "")
+
     async def configure_number_webhook(
         self,
         provider_sid: str,

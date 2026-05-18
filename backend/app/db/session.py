@@ -552,6 +552,10 @@ async def init_db() -> None:
             ),
             ("voice_calls", "voicemail_transcription", "TEXT"),
             ("voice_calls", "voicemail_summary", "TEXT"),
+            # Phase 4 — sortant + lien CRM générique.
+            ("voice_calls", "entity_type", "VARCHAR(32)"),
+            ("voice_calls", "entity_id", "INTEGER"),
+            ("voice_calls", "followup_suggestion", "TEXT"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

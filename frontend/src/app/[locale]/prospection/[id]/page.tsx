@@ -28,6 +28,7 @@ import { authedFetch } from "@/lib/auth";
 import { useProspectionLayout } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
 import { DriveButton } from "@/components/drive-button";
+import { CallButton } from "@/components/call-button";
 import { ActivityTimeline } from "./_activity-timeline";
 import { AddressAutocomplete } from "./_address-autocomplete";
 import { AnalysesSection } from "./_analyses-section";
@@ -1018,6 +1019,15 @@ export default function ProspectionDetailPage() {
                         onChange={(e) => setOwnerPhone(e.target.value)}
                         className="input"
                       />
+                      {ownerPhone ? (
+                        <div className="mt-1">
+                          <CallButton
+                            targetE164={ownerPhone}
+                            entityType="prospection_lead"
+                            entityId={Number(id)}
+                          />
+                        </div>
+                      ) : null}
                       {ownerName && !ownerPhone ? (
                         <Canada411LookupButton
                           leadId={id}
