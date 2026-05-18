@@ -7,7 +7,13 @@ const BASE = process.env.NEXT_PUBLIC_SITE_URL || "https://immohorizon.com";
 
 const CORE_PAGES = [
   "",
+  // Pages pilier SEO — chacune cible un mot-clé concurrentiel
+  // distinct (Montréal). Toutes en priority=1.0, weekly.
   "/construction-renovation-montreal",
+  "/entrepreneur-general-montreal",
+  "/renovation-cuisine-montreal",
+  "/renovation-salle-de-bain-montreal",
+  "/renovation-multilogement-montreal",
   "/services",
   "/services/salle-de-bain",
   "/services/cuisine",
@@ -18,7 +24,14 @@ const CORE_PAGES = [
 ];
 
 // Pages stratégiques SEO : priorité 1.0, freq weekly.
-const HIGH_PRIORITY_PAGES = new Set(["", "/construction-renovation-montreal"]);
+const HIGH_PRIORITY_PAGES = new Set([
+  "",
+  "/construction-renovation-montreal",
+  "/entrepreneur-general-montreal",
+  "/renovation-cuisine-montreal",
+  "/renovation-salle-de-bain-montreal",
+  "/renovation-multilogement-montreal"
+]);
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const now = new Date();

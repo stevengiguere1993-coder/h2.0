@@ -529,6 +529,52 @@ export default async function PillarPage({ params }: Props) {
         </div>
       </section>
 
+      {/* Cluster cross-link vers les 4 autres piliers SEO */}
+      <section className="border-b border-brand-800">
+        <div className="mx-auto max-w-6xl px-4 py-12 lg:px-6">
+          <h2 className="text-xl font-bold text-white sm:text-2xl">
+            Autres pages détaillées
+          </h2>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-2">
+            {[
+              {
+                href: "/entrepreneur-general-montreal",
+                label: "Entrepreneur général à Montréal",
+                desc: "Coordination de chantier RBQ, CMMTQ, CMEQ."
+              },
+              {
+                href: "/renovation-cuisine-montreal",
+                label: "Rénovation de cuisine à Montréal",
+                desc: "Armoires, comptoirs, plomberie, électroménagers."
+              },
+              {
+                href: "/renovation-salle-de-bain-montreal",
+                label: "Rénovation de salle de bain à Montréal",
+                desc: "Plomberie CMMTQ, céramique, vanité, douche vitrée."
+              },
+              {
+                href: "/renovation-multilogement-montreal",
+                label: "Rénovation de multilogement à Montréal",
+                desc: "Plex et immeubles à logements pour investisseurs."
+              }
+            ].map((l) => (
+              <Link
+                key={l.href}
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={l.href as any}
+                className="group rounded-xl border border-brand-800 bg-brand-900 p-4 transition hover:border-accent-500 hover:bg-brand-800"
+              >
+                <div className="text-sm font-bold text-white">{l.label}</div>
+                <div className="mt-1 text-[12px] text-white/60">{l.desc}</div>
+                <span className="mt-2 inline-flex items-center gap-1 text-[11px] text-accent-300 group-hover:underline">
+                  En savoir plus <ArrowRight className="h-3 w-3" />
+                </span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* CTA — contact form */}
       <section>
         <div className="mx-auto max-w-3xl px-4 py-16 lg:px-6">
