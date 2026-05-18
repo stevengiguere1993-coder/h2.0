@@ -2027,12 +2027,11 @@ function PlanSection() {
       <PhaseCard
         num={9}
         title="Fusion CRM ↔ Téléphonie (vue 360 contact)"
-        status="todo"
+        status="done"
         items={[
-          "Quand on ouvre une fiche client, voir : appels + SMS + factures + soumissions + projets en un seul écran chronologique",
-          "Notifications en temps réel (cloche du portail construction) : « SMS de Marie Tremblay », « Voicemail de Jean Dupont »",
-          "Quick-reply SMS direct depuis la fiche prospect (sans aller dans /telephonie)",
-          "Re-réintégrer VoiceConsole dans /app/layout.tsx pour que les appels entrants sonnent dans tous les volets connectés (pas juste /telephonie)"
+          "VoiceConsole actif dans tout le portail construction (/app) — les appels entrants ring via WebRTC quel que soit l'écran ouvert",
+          "Quick-reply SMS depuis la fiche prospect/client/lead, envoyé directement via le 438 d'Horizon (timeline auto-refresh)",
+          "Notifications cloche : voicemails (déjà en place), SMS entrants (déjà en place), URGENCES locataires (nouveau — broadcast à tous les owners avec lien direct vers l'appel)"
         ]}
       />
 

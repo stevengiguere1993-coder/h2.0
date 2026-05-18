@@ -495,6 +495,7 @@ function ClientTabs({
           entityId={client.id}
           title="Appels & SMS"
           emptyHint="Aucun appel ni SMS lié à ce client pour le moment."
+          replyToE164={client.phone || null}
         />
       ) : null}
 

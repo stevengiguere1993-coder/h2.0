@@ -1386,6 +1386,7 @@ export default function ProspectionDetailPage() {
                 entityId={id}
                 title="Communications (téléphonie)"
                 emptyHint="Aucun appel ni SMS lié à ce lead. Utilise le bouton « Appeler » ci-dessus pour démarrer."
+                replyToE164={lead.owner_phone || null}
               />
 
               <ActivityTimeline leadId={id} />

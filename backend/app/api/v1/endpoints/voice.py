@@ -514,6 +514,36 @@ async def _find_project_lead_online_user_ids(
     return [uid for uid in online if uid in set(member_ids)]
 
 
+async def _notify_owners_urgence(db, *, call: "Call", reason: str) -> None:
+    """Notif cloche urgente envoyée à TOUS les owners — un appel
+    URGENCE LOCATAIRE doit toujours déclencher une alerte visible
+    dans le portail, peu importe qui répond au transfert."""
+    try:
+        from app.models.notification import Notification
+        from app.models.user import User
+
+        owners = (
+            await db.execute(
+                select(User.id).where(User.role.in_(("owner", "admin")))
+            )
+        ).scalars().all()
+        title = f"🚨 URGENCE — {call.from_e164}"
+        body = (reason or "Urgence détectée par Léa")[:500]
+        for uid in owners:
+            db.add(
+                Notification(
+                    user_id=uid,
+                    kind="urgence_locataire",
+                    title=title,
+                    body=body,
+                    href=f"/telephonie?call={call.id}",
+                )
+            )
+        await db.flush()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Urgence notification failed: %s", exc)
+
+
 async def _find_project_for_call(db, call: "Call"):
     """Trouve un projet ACTIF pour l'appelant identifié (CLIENT ou
     LOCATAIRE avec projet en cours). Renvoie None sinon."""
@@ -949,6 +979,13 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
             or os.getenv("TWILIO_FORWARD_TO")
             or ""
         ).strip()
+        # Notif cloche urgente — TOUS les owners reçoivent pour qu'au
+        # moins une personne soit avertie même si la cible ne décroche pas.
+        await _notify_owners_urgence(
+            db,
+            call=call,
+            reason=decision.lead_reason or "Urgence détectée",
+        )
         if not emergency_to:
             # Pas de cible configurée → on ne raccroche pas sec : on
             # capture en callback urgent pour rappel manuel.

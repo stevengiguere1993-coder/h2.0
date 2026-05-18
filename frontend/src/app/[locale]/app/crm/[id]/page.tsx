@@ -586,6 +586,7 @@ export default function ProspectDetailPage() {
                   entityId={p.id}
                   title="Appels & SMS"
                   emptyHint="Aucun appel ni SMS lié à ce prospect. Utilise « Appeler » dans la fiche pour démarrer."
+                  replyToE164={p.phone || null}
                 />
               ) : null}
               {tab === "rendez-vous" ? (
