@@ -925,6 +925,7 @@ function DiagnosticPanel() {
             >
               {busy ? "Chargement…" : "Rafraîchir"}
             </button>
+            <BootstrapButton onDone={() => void fetchDiag()} />
             {err ? (
               <span className="text-[11px] text-rose-300">{err}</span>
             ) : null}
@@ -1056,6 +1057,58 @@ function DiagBlock({
       </h3>
       {children}
     </div>
+  );
+}
+
+function BootstrapButton({ onDone }: { onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={async () => {
+          setBusy(true);
+          setResult(null);
+          try {
+            const res = await authedFetch("/api/v1/voice/diag/bootstrap", {
+              method: "POST"
+            });
+            const data = (await res.json()) as {
+              ok: boolean;
+              return_code?: number;
+              error?: string;
+            };
+            if (data.ok) {
+              setResult("✓ Bootstrap réussi");
+              onDone();
+            } else {
+              setResult(
+                `✗ Échec : ${data.error || `code ${data.return_code}`}`
+              );
+            }
+          } catch (e) {
+            setResult(`✗ ${e instanceof Error ? e.message : String(e)}`);
+          } finally {
+            setBusy(false);
+          }
+        }}
+        disabled={busy}
+        title="Relance le bootstrap Twilio : crée la ligne PhoneNumber + pousse l'URL webhook sur le numéro"
+        className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
+      >
+        {busy ? "Bootstrap en cours…" : "Relancer le bootstrap"}
+      </button>
+      {result ? (
+        <span
+          className={`text-[11px] ${
+            result.startsWith("✓") ? "text-emerald-300" : "text-rose-300"
+          }`}
+        >
+          {result}
+        </span>
+      ) : null}
+    </>
   );
 }
 
