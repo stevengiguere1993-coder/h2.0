@@ -402,6 +402,36 @@ class VoiceCallerIntel(Base):
     )
 
 
+class VoiceClientPresence(Base):
+    """Présence d'un user sur le Voice SDK (browser h2.0 ouvert).
+
+    Le frontend POST `/voice/presence/ping` toutes les 30 sec quand le
+    portail est ouvert. On considère qu'un user est "online et joignable"
+    si `last_seen_at > now - 60s` ET `is_accepting_calls=True`.
+
+    Au moment d'un transfert secrétaire → utilisateur humain, on liste
+    les users online et on les ring tous via Twilio Voice SDK
+    (`<Dial><Client>user_X</Client>...</Dial>`). Premier qui répond
+    gagne. Si personne ne répond en 15 sec, fallback `forward_to_e164`.
+    """
+
+    __tablename__ = "voice_client_presence"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+    is_accepting_calls: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
+
+
 class VoiceUsageDaily(Base):
     """Compteur de coût journalier — pour le cost cap automatique.
 
