@@ -2197,6 +2197,110 @@ async def trigger_bootstrap(_: CurrentAdmin) -> dict:
         return {"ok": False, "error": str(exc)}
 
 
+@router.post(
+    "/diag/dedupe",
+    summary="Fusionne les PhoneNumber doublons (admin)",
+)
+async def trigger_dedupe(_: CurrentAdmin, db: DBSession) -> dict:
+    """Cherche les lignes PhoneNumber qui ont les mêmes 10 derniers
+    chiffres mais des e164 différents (ex. « 14388002979 » vs
+    « +14388002979 ») et les fusionne. Retourne un rapport détaillé."""
+    from sqlalchemy import func, update
+
+    from app.models.voice import VoiceBusinessHours, VoiceFilter, VoiceSms
+
+    try:
+        env_raw = (os.getenv("TWILIO_PHONE_NUMBER") or "").strip()
+        canonical_e164 = _normalize_e164(env_raw) if env_raw else ""
+        if not canonical_e164:
+            return {"ok": False, "error": "TWILIO_PHONE_NUMBER env vide"}
+
+        digits_canonical = "".join(c for c in canonical_e164 if c.isdigit())[-10:]
+
+        rows = (
+            await db.execute(
+                select(PhoneNumber).where(
+                    func.right(
+                        func.regexp_replace(
+                            PhoneNumber.e164, r"[^0-9]", "", "g"
+                        ),
+                        10,
+                    )
+                    == digits_canonical
+                )
+            )
+        ).scalars().all()
+
+        report: dict = {
+            "ok": True,
+            "canonical_e164": canonical_e164,
+            "matched_rows": [
+                {
+                    "id": r.id,
+                    "e164": r.e164,
+                    "secretary_mode_active": r.secretary_mode_active,
+                    "lead_auto_callback_enabled": r.lead_auto_callback_enabled,
+                    "forward_to_e164": r.forward_to_e164,
+                    "provider_sid": r.provider_sid,
+                }
+                for r in rows
+            ],
+            "deleted_count": 0,
+        }
+
+        if len(rows) <= 1:
+            report["message"] = "Aucun doublon trouvé"
+            return report
+
+        # Élit la canonique : celle dont e164 == canonical_e164, sinon
+        # la 1re créée.
+        keep = next((r for r in rows if r.e164 == canonical_e164), None)
+        if keep is None:
+            keep = min(rows, key=lambda r: r.id)
+            keep.e164 = canonical_e164
+        dups = [r for r in rows if r.id != keep.id]
+
+        for dup in dups:
+            keep.secretary_mode_active = (
+                keep.secretary_mode_active or dup.secretary_mode_active
+            )
+            keep.lead_auto_callback_enabled = (
+                keep.lead_auto_callback_enabled or dup.lead_auto_callback_enabled
+            )
+            keep.active = keep.active or dup.active
+            if not keep.forward_to_e164 and dup.forward_to_e164:
+                keep.forward_to_e164 = dup.forward_to_e164
+            if not keep.provider_sid and dup.provider_sid:
+                keep.provider_sid = dup.provider_sid
+            if not keep.label and dup.label:
+                keep.label = dup.label
+
+            for cls in (Call, VoiceSms, VoiceFilter, VoiceBusinessHours):
+                await db.execute(
+                    update(cls)
+                    .where(cls.phone_number_id == dup.id)
+                    .values(phone_number_id=keep.id)
+                )
+            await db.delete(dup)
+
+        await db.flush()
+        report["deleted_count"] = len(dups)
+        report["kept_id"] = keep.id
+        report["kept_state"] = {
+            "secretary_mode_active": keep.secretary_mode_active,
+            "lead_auto_callback_enabled": keep.lead_auto_callback_enabled,
+            "active": keep.active,
+        }
+        report["message"] = (
+            f"{len(dups)} doublon(s) fusionné(s) vers id={keep.id} "
+            f"(e164={keep.e164})"
+        )
+        return report
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Dedupe failed")
+        return {"ok": False, "error": str(exc)}
+
+
 @router.get(
     "/diag",
     summary="État du système téléphonie pour troubleshooting (admin)",

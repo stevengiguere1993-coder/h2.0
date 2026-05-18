@@ -926,6 +926,7 @@ function DiagnosticPanel() {
               {busy ? "Chargement…" : "Rafraîchir"}
             </button>
             <BootstrapButton onDone={() => void fetchDiag()} />
+            <DedupeButton onDone={() => void fetchDiag()} />
             {err ? (
               <span className="text-[11px] text-rose-300">{err}</span>
             ) : null}
@@ -1057,6 +1058,66 @@ function DiagBlock({
       </h3>
       {children}
     </div>
+  );
+}
+
+function DedupeButton({ onDone }: { onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={async () => {
+          setBusy(true);
+          setResult(null);
+          try {
+            const res = await authedFetch("/api/v1/voice/diag/dedupe", {
+              method: "POST"
+            });
+            const data = (await res.json()) as {
+              ok: boolean;
+              message?: string;
+              error?: string;
+              matched_rows?: { id: number; e164: string }[];
+              deleted_count?: number;
+            };
+            if (data.ok) {
+              const found = data.matched_rows?.length || 0;
+              const deleted = data.deleted_count || 0;
+              setResult(
+                deleted > 0
+                  ? `✓ ${data.message}`
+                  : `ℹ️ ${found} ligne(s), aucun doublon`
+              );
+              onDone();
+            } else {
+              setResult(`✗ Échec : ${data.error || "inconnu"}`);
+            }
+          } catch (e) {
+            setResult(`✗ ${e instanceof Error ? e.message : String(e)}`);
+          } finally {
+            setBusy(false);
+          }
+        }}
+        disabled={busy}
+        title="Fusionne les lignes PhoneNumber doublons (mêmes 10 derniers chiffres) en une seule"
+        className="rounded-md border border-violet-500/40 bg-violet-500/10 px-2.5 py-1 text-[11px] font-semibold text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
+      >
+        {busy ? "Fusion…" : "Fusionner les doublons"}
+      </button>
+      {result ? (
+        <span
+          className={`text-[11px] ${
+            result.startsWith("✓") || result.startsWith("ℹ️")
+              ? "text-emerald-300"
+              : "text-rose-300"
+          }`}
+        >
+          {result}
+        </span>
+      ) : null}
+    </>
   );
 }
 
