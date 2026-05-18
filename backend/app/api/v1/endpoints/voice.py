@@ -134,6 +134,30 @@ SUPPORTED_ENTITY_TYPES = {
 }
 
 
+def _normalize_e164(raw: str) -> str:
+    """Normalise un numéro en format E.164 NANP (+1XXXXXXXXXX).
+
+    Tolérant aux env vars mal saisies (sans `+`, avec espaces ou
+    parenthèses) : `14388002979` → `+14388002979`, `(438) 800-2979` →
+    `+14388002979`, `+14388002979` → `+14388002979`.
+    """
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    if s.startswith("+"):
+        # Garde le + initial, ne garde que les chiffres après.
+        digits = "".join(c for c in s[1:] if c.isdigit())
+        return f"+{digits}" if digits else ""
+    digits = "".join(c for c in s if c.isdigit())
+    if len(digits) == 10:
+        return f"+1{digits}"
+    if len(digits) == 11 and digits.startswith("1"):
+        return f"+{digits}"
+    if len(digits) >= 8:
+        return f"+{digits}"
+    return ""
+
+
 async def _validate_twilio_signature(request: Request) -> dict[str, str]:
     """Lit le body form-encoded, vérifie la signature, retourne les params."""
     try:
@@ -336,7 +360,9 @@ async def _twilio_incoming_call_impl(request: Request, db: DBSession) -> Respons
         # n'a pas encore tourné. On crée la ligne à la volée pour que
         # l'appel ne soit pas perdu — ça évite de devoir relancer un
         # bootstrap manuel quand quelque chose foire au démarrage.
-        env_number = (os.getenv("TWILIO_PHONE_NUMBER") or "").strip()
+        # Normalisation E.164 tolérante pour rattraper les env vars
+        # mal saisies (sans `+`, avec espaces, etc.).
+        env_number = _normalize_e164(os.getenv("TWILIO_PHONE_NUMBER") or "")
         if to_e164 == env_number and env_number:
             log.warning(
                 "Self-heal : aucune ligne PhoneNumber pour %s, création à la volée",

@@ -43,7 +43,24 @@ async def bootstrap_twilio(force: bool = False) -> int:
         0 si tout est OK / déjà à jour ; 1 si le numéro n'a pas été
         trouvé chez Twilio ; 2 si la configuration env est incomplète.
     """
-    e164 = (os.getenv("TWILIO_PHONE_NUMBER") or "").strip()
+    raw_env = (os.getenv("TWILIO_PHONE_NUMBER") or "").strip()
+    # Normalisation E.164 : si l'utilisateur saisit "14388002979" sans
+    # le `+` initial, on l'ajoute. Sinon Twilio renvoie 404 sur le
+    # lookup et le bootstrap échoue sans raison apparente.
+    if raw_env and not raw_env.startswith("+"):
+        digits = "".join(c for c in raw_env if c.isdigit())
+        if len(digits) == 10:
+            e164 = f"+1{digits}"
+        elif len(digits) == 11 and digits.startswith("1"):
+            e164 = f"+{digits}"
+        else:
+            e164 = f"+{digits}" if digits else ""
+        log.info(
+            "TWILIO_PHONE_NUMBER normalisé : %r → %r (ajoute le « + » à ton env Render quand tu peux)",
+            raw_env, e164,
+        )
+    else:
+        e164 = raw_env
     if not e164:
         log.info("TWILIO_PHONE_NUMBER vide — bootstrap Twilio sauté.")
         return 2
