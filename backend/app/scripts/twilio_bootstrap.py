@@ -85,6 +85,14 @@ async def bootstrap_twilio(force: bool = False) -> int:
         voice_url=voice_url,
         status_callback_url=status_url,
     )
+    # SMS — webhook bidirectionnel sur le même numéro.
+    sms_url = f"{base_url}/api/v1/voice/twilio/sms"
+    try:
+        await provider.configure_number_sms_webhook(
+            provider_sid=sid, sms_url=sms_url
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("SMS webhook config failed (non bloquant) : %s", exc)
 
     forward_to = (os.getenv("TWILIO_FORWARD_TO") or "").strip() or None
     async with AsyncSessionLocal() as db:

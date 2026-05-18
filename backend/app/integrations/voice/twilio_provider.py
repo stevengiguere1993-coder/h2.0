@@ -98,6 +98,51 @@ class TwilioVoiceProvider(VoiceProvider):
             return None
         return numbers[0].get("sid")
 
+    async def send_sms(
+        self,
+        *,
+        from_e164: str,
+        to_e164: str,
+        body: str,
+        status_callback_url: Optional[str] = None,
+    ) -> dict:
+        """Envoie un SMS via l'API REST Twilio. Retourne le payload
+        complet (dont MessageSid pour idempotence)."""
+        url = f"{TWILIO_API_BASE}/Accounts/{self.account_sid}/Messages.json"
+        form: dict[str, str] = {
+            "From": from_e164,
+            "To": to_e164,
+            "Body": body[:1600],  # Twilio segmente automatiquement
+        }
+        if status_callback_url:
+            form["StatusCallback"] = status_callback_url
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(url, data=form, auth=self._auth())
+            resp.raise_for_status()
+            return resp.json()
+
+    async def configure_number_sms_webhook(
+        self,
+        provider_sid: str,
+        sms_url: str,
+    ) -> None:
+        """Pointe le numéro sur notre webhook SMS entrant."""
+        url = (
+            f"{TWILIO_API_BASE}/Accounts/{self.account_sid}"
+            f"/IncomingPhoneNumbers/{provider_sid}.json"
+        )
+        form = {
+            "SmsUrl": sms_url,
+            "SmsMethod": "POST",
+        }
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(url, data=form, auth=self._auth())
+            resp.raise_for_status()
+            log.info(
+                "Twilio number %s SMS webhook configuré (%s)",
+                provider_sid, sms_url,
+            )
+
     async def initiate_outbound_call(
         self,
         *,

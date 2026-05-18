@@ -67,6 +67,7 @@ from app.models.voice import (
     PhoneNumber,
     VoiceBusinessHours,
     VoiceFilter,
+    VoiceSms,
     VoiceUsageDaily,
 )
 
@@ -1715,6 +1716,357 @@ async def get_call_turns(
     return [CallTurnRead.model_validate(r) for r in rows]
 
 
+# ---------------------------------------------------------------------
+# SMS (Phase 6) — bidirectionnel via le même numéro 438
+# ---------------------------------------------------------------------
+
+
+@router.post(
+    "/twilio/sms",
+    summary="Webhook Twilio : SMS entrant",
+    response_class=Response,
+)
+async def twilio_incoming_sms(request: Request, db: DBSession) -> Response:
+    """Twilio POST ici à chaque SMS entrant. On stocke + on identifie
+    l'expéditeur via le CRM. Notif cloche aux owners.
+
+    Réponse : `<Response/>` vide (pas de réponse SMS auto pour l'instant —
+    un futur SMS bot IA pourrait répondre ici).
+    """
+    try:
+        return await _twilio_incoming_sms_impl(request, db)
+    except HTTPException:
+        raise
+    except Exception:
+        log.exception("twilio_incoming_sms failed")
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response/>',
+            media_type="application/xml",
+        )
+
+
+async def _twilio_incoming_sms_impl(request: Request, db: DBSession) -> Response:
+    params = await _validate_twilio_signature(request)
+
+    message_sid = params.get("MessageSid", "")
+    from_e164 = params.get("From", "")
+    to_e164 = params.get("To", "")
+    body = params.get("Body", "")
+    num_media = int(params.get("NumMedia", "0") or 0)
+
+    if not (message_sid and from_e164 and to_e164):
+        raise HTTPException(status_code=400, detail="Missing MessageSid / From / To")
+
+    pn = (
+        await db.execute(
+            select(PhoneNumber).where(
+                PhoneNumber.e164 == to_e164, PhoneNumber.active.is_(True)
+            )
+        )
+    ).scalar_one_or_none()
+    if pn is None:
+        log.warning("Inbound SMS to unknown number %s", to_e164)
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response/>',
+            media_type="application/xml",
+        )
+
+    # Idempotent : Twilio peut rejouer.
+    existing = (
+        await db.execute(
+            select(VoiceSms).where(VoiceSms.provider_sid == message_sid)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response/>',
+            media_type="application/xml",
+        )
+
+    # Récupère les media URLs si MMS.
+    import json as _json
+
+    media_urls: list[str] = []
+    for i in range(num_media):
+        url = params.get(f"MediaUrl{i}")
+        if url:
+            media_urls.append(url)
+
+    # Identification CRM (même logique que les appels).
+    identified = await identify_caller(db, from_e164)
+    entity_type: Optional[str] = None
+    entity_id: Optional[int] = None
+    if identified.kind != CallerKind.UNKNOWN and identified.entity_id:
+        from app.integrations.voice.caller_identity import CallerKind as _CK
+
+        kind_to_entity = {
+            _CK.CLIENT: "client",
+            _CK.LOCATAIRE: "locataire",
+            _CK.LEAD_PROSPECTION: "prospection_lead",
+            _CK.LEAD_WEB: "contact_request",
+        }
+        entity_type = kind_to_entity.get(identified.kind)
+        entity_id = identified.entity_id
+
+    sms = VoiceSms(
+        phone_number_id=pn.id,
+        provider_sid=message_sid,
+        direction="inbound",
+        status="received",
+        from_e164=from_e164,
+        to_e164=to_e164,
+        body=body or None,
+        media_urls=_json.dumps(media_urls) if media_urls else None,
+        num_media=num_media,
+        caller_kind=identified.kind.value,
+        entity_type=entity_type,
+        entity_id=entity_id,
+    )
+    db.add(sms)
+    await db.flush()
+
+    # Notif cloche aux owners (ou à l'owner du numéro si défini).
+    try:
+        from app.models.notification import Notification
+        from app.models.user import User
+
+        if pn.owner_user_id:
+            user_ids = [pn.owner_user_id]
+        else:
+            user_ids = list(
+                (
+                    await db.execute(
+                        select(User.id).where(User.role == "owner")
+                    )
+                ).scalars().all()
+            )
+        preview = (body or "")[:140]
+        for uid in user_ids:
+            db.add(
+                Notification(
+                    user_id=uid,
+                    kind="sms_received",
+                    title=f"SMS de {identified.name or from_e164}",
+                    body=preview or "(MMS sans texte)",
+                    href=f"/telephonie?sms={sms.id}",
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("SMS notification failed: %s", exc)
+
+    await db.flush()
+    return Response(
+        content='<?xml version="1.0" encoding="UTF-8"?><Response/>',
+        media_type="application/xml",
+    )
+
+
+# ---------- SMS admin (envoi + liste threadée) ----------
+
+
+class SmsRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    phone_number_id: int
+    provider_sid: str
+    direction: str
+    status: str
+    from_e164: str
+    to_e164: str
+    body: Optional[str]
+    media_urls: Optional[str]
+    num_media: int
+    received_at: datetime
+    sent_at: Optional[datetime]
+    caller_kind: Optional[str]
+    entity_type: Optional[str]
+    entity_id: Optional[int]
+    sent_by_user_id: Optional[int]
+    read_at: Optional[datetime]
+
+
+class SmsSend(BaseModel):
+    to_e164: str = Field(min_length=4, max_length=20)
+    body: str = Field(min_length=1, max_length=1600)
+    from_phone_number_id: Optional[int] = None
+
+
+@router.get(
+    "/sms",
+    response_model=List[SmsRead],
+    summary="Liste les SMS (admin, optionnel filtre par contact)",
+)
+async def list_sms(
+    _: CurrentAdmin,
+    db: DBSession,
+    limit: int = Query(default=100, ge=1, le=500),
+    peer_e164: Optional[str] = Query(default=None, description="Filtre par numéro pair (entrant ou sortant)"),
+    entity_type: Optional[str] = Query(default=None),
+    entity_id: Optional[int] = Query(default=None),
+) -> List[SmsRead]:
+    from sqlalchemy import or_
+
+    stmt = select(VoiceSms)
+    if peer_e164:
+        stmt = stmt.where(
+            or_(VoiceSms.from_e164 == peer_e164, VoiceSms.to_e164 == peer_e164)
+        )
+    if entity_type:
+        stmt = stmt.where(VoiceSms.entity_type == entity_type)
+    if entity_id is not None:
+        stmt = stmt.where(VoiceSms.entity_id == entity_id)
+    stmt = stmt.order_by(VoiceSms.received_at.desc()).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
+    return [SmsRead.model_validate(r) for r in rows]
+
+
+@router.get(
+    "/sms/threads",
+    summary="Threads SMS : groupe par numéro pair avec last message + unread count",
+)
+async def list_sms_threads(
+    _: CurrentAdmin,
+    db: DBSession,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> List[dict]:
+    """Pour la vue Messages (inbox). Renvoie une ligne par contact
+    pair (numéro extérieur à Horizon), avec son dernier SMS, le nombre
+    de non-lus et l'identification CRM si reconnue.
+    """
+    rows = (
+        await db.execute(
+            select(VoiceSms).order_by(VoiceSms.received_at.desc()).limit(limit * 4)
+        )
+    ).scalars().all()
+    # Group by peer (extérieur).
+    threads: dict[str, dict] = {}
+    for r in rows:
+        peer = r.from_e164 if r.direction == "inbound" else r.to_e164
+        if peer in threads:
+            t = threads[peer]
+            if r.direction == "inbound" and r.read_at is None:
+                t["unread"] += 1
+            continue
+        threads[peer] = {
+            "peer_e164": peer,
+            "last_message": {
+                "id": r.id,
+                "direction": r.direction,
+                "body": r.body,
+                "received_at": r.received_at.isoformat(),
+                "num_media": r.num_media,
+            },
+            "caller_kind": r.caller_kind,
+            "entity_type": r.entity_type,
+            "entity_id": r.entity_id,
+            "unread": (1 if (r.direction == "inbound" and r.read_at is None) else 0),
+        }
+        if len(threads) >= limit:
+            break
+    return list(threads.values())
+
+
+@router.post(
+    "/sms",
+    response_model=SmsRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Envoie un SMS via notre numéro (admin)",
+)
+async def send_sms(
+    payload: SmsSend, user: CurrentUser, db: DBSession
+) -> SmsRead:
+    target = payload.to_e164.strip()
+    if not target.startswith("+"):
+        raise HTTPException(status_code=400, detail="to_e164 must be E.164 (+...)")
+
+    if payload.from_phone_number_id:
+        pn = (
+            await db.execute(
+                select(PhoneNumber).where(
+                    PhoneNumber.id == payload.from_phone_number_id,
+                    PhoneNumber.active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+    else:
+        pn = (
+            await db.execute(
+                select(PhoneNumber)
+                .where(PhoneNumber.active.is_(True))
+                .order_by(PhoneNumber.id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if pn is None:
+        raise HTTPException(status_code=400, detail="no_active_phone_number")
+
+    provider = _twilio_provider()
+    try:
+        data = await provider.send_sms(
+            from_e164=pn.e164, to_e164=target, body=payload.body
+        )
+    except Exception as exc:
+        log.exception("Twilio SMS send failed")
+        raise HTTPException(status_code=502, detail=f"twilio_error: {exc}")
+
+    msg_sid = str(data.get("sid") or "")
+    if not msg_sid:
+        raise HTTPException(status_code=502, detail="twilio_no_sid")
+
+    # Identification CRM (au cas où le destinataire est connu).
+    identified = await identify_caller(db, target)
+    entity_type: Optional[str] = None
+    entity_id: Optional[int] = None
+    if identified.kind != CallerKind.UNKNOWN and identified.entity_id:
+        from app.integrations.voice.caller_identity import CallerKind as _CK
+
+        kind_to_entity = {
+            _CK.CLIENT: "client",
+            _CK.LOCATAIRE: "locataire",
+            _CK.LEAD_PROSPECTION: "prospection_lead",
+            _CK.LEAD_WEB: "contact_request",
+        }
+        entity_type = kind_to_entity.get(identified.kind)
+        entity_id = identified.entity_id
+
+    sms = VoiceSms(
+        phone_number_id=pn.id,
+        provider_sid=msg_sid,
+        direction="outbound",
+        status=str(data.get("status") or "queued"),
+        from_e164=pn.e164,
+        to_e164=target,
+        body=payload.body,
+        sent_at=datetime.now(timezone.utc),
+        caller_kind=identified.kind.value,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        sent_by_user_id=user.id,
+    )
+    db.add(sms)
+    await db.flush()
+    return SmsRead.model_validate(sms)
+
+
+@router.post(
+    "/sms/{sms_id}/read",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Marque un SMS entrant comme lu",
+)
+async def mark_sms_read(
+    sms_id: int, _: CurrentUser, db: DBSession
+) -> Response:
+    sms = (
+        await db.execute(select(VoiceSms).where(VoiceSms.id == sms_id))
+    ).scalar_one_or_none()
+    if sms is None:
+        raise HTTPException(status_code=404, detail="sms_not_found")
+    if sms.read_at is None:
+        sms.read_at = datetime.now(timezone.utc)
+        await db.flush()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 # ---------- Diagnostic infra téléphonie (admin) ------------
 
 
@@ -1772,6 +2124,7 @@ async def voice_diag(_: CurrentAdmin, db: DBSession) -> dict:
         "voice_caller_intel",
         "voice_usage_daily",
         "voice_client_presence",
+        "voice_sms",
     ]
     tables_status: dict[str, str] = {}
     for tbl in required_tables:

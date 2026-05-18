@@ -410,6 +410,66 @@ class VoiceCallerIntel(Base):
     )
 
 
+class VoiceSms(Base):
+    """SMS entrant ou sortant via notre numéro Twilio.
+
+    Stocké de la même manière que `voice_calls` :
+    - `provider_sid` = Twilio MessageSid (clé naturelle pour idempotence)
+    - `direction` = inbound | outbound
+    - `entity_type` + `entity_id` + `caller_kind` : auto-renseignés via
+      `caller_identity.identify_caller()` au moment du webhook
+    - `media_urls` : JSON array de string si MMS, sinon NULL
+
+    Le webhook Twilio MessagingResponse est servi à /twilio/sms.
+    L'envoi se fait via la REST API Twilio (Messages.json), idempotent
+    par construction grâce au CallSid retourné.
+    """
+
+    __tablename__ = "voice_sms"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    phone_number_id: Mapped[int] = mapped_column(
+        ForeignKey("voice_phone_numbers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    provider_sid: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
+    direction: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="received", index=True)
+
+    from_e164: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    to_e164: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+
+    body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    media_urls: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON array
+    num_media: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+    # Identification CRM (mêmes valeurs que voice_calls.caller_kind /
+    # entity_type / entity_id).
+    caller_kind: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    entity_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    entity_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+
+    # User qui a envoyé le SMS (pour les outbound). NULL pour les inbound.
+    sent_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Marqué lu par un user du portail (pour le compteur cloche).
+    read_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+
+
 class VoiceClientPresence(Base):
     """Présence d'un user sur le Voice SDK (browser h2.0 ouvert).
 
