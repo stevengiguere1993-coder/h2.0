@@ -1601,6 +1601,7 @@ type Finances = {
   service_lines: { label: string; quantity: number; unit_cost: number; total: number }[];
   material_lines: { label: string; quantity: number; unit_cost: number; total: number }[];
   invoiced_amount: number;
+  extras_billed_amount: number;
   paid_amount: number;
   balance_due: number;
   invoices?: InvoiceLine[];
@@ -2410,10 +2411,27 @@ function FinancesTab({ projectId }: { projectId: number }) {
               ) : null}
             </dd>
           </div>
+          {data.extras_billed_amount > 0 ? (
+            <div className="flex justify-between text-[12px]">
+              <dt className="text-white/50">
+                dont extras (hors soumission)
+              </dt>
+              <dd className="text-amber-300">
+                {fmtMoney(data.extras_billed_amount)}
+              </dd>
+            </div>
+          ) : null}
           {data.projected_revenue > 0 ? (() => {
+            // Le « reste à facturer » porte uniquement sur le contrat
+            // (soumission). On retire la part extras du facturé pour
+            // ne pas fausser le calcul.
+            const contractInvoiced = Math.max(
+              0,
+              data.invoiced_amount - (data.extras_billed_amount || 0)
+            );
             const remaining = Math.max(
               0,
-              data.projected_revenue - data.invoiced_amount
+              data.projected_revenue - contractInvoiced
             );
             return (
               <div className="flex justify-between">
