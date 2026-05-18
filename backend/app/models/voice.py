@@ -86,6 +86,14 @@ class PhoneNumber(Base):
     secretary_mode_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
+    # Phase outbound : si True, Léa rappelle automatiquement les
+    # nouveaux ContactRequest dans les 60 sec. Désactivé par défaut
+    # (safety) — on ne veut pas appeler un vrai client avant d'avoir
+    # validé en interne que tout fonctionne. À activer manuellement
+    # depuis le toggle « Rappel auto des leads » de la page /telephonie.
+    lead_auto_callback_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
     # Optionnel : user_id à qui ce numéro « appartient » (statistiques,
     # affichage dans son tableau, etc.). NULL = pool partagé.
     owner_user_id: Mapped[Optional[int]] = mapped_column(

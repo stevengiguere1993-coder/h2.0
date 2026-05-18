@@ -1331,9 +1331,11 @@ async def trigger_lead_qualification(
     from app.integrations.voice.lead_outbound import start_lead_qualification_call
 
     # Fire-and-forget, sans délai cette fois (manuel).
+    # force=True : le déclencheur manuel admin outrepasse le toggle
+    # `lead_auto_callback_enabled` puisque l'admin agit explicitement.
     asyncio.create_task(
         start_lead_qualification_call(
-            contact_request_id=contact_request_id, delay_sec=0
+            contact_request_id=contact_request_id, delay_sec=0, force=True,
         )
     )
     return {"queued": True, "contact_request_id": contact_request_id}
@@ -1483,6 +1485,7 @@ class PhoneNumberRead(BaseModel):
     label: Optional[str]
     forward_to_e164: Optional[str]
     secretary_mode_active: bool
+    lead_auto_callback_enabled: bool = False
     owner_user_id: Optional[int]
     active: bool
 
@@ -1491,6 +1494,7 @@ class PhoneNumberPatch(BaseModel):
     label: Optional[str] = Field(default=None, max_length=128)
     forward_to_e164: Optional[str] = Field(default=None, max_length=20)
     secretary_mode_active: Optional[bool] = None
+    lead_auto_callback_enabled: Optional[bool] = None
     active: Optional[bool] = None
 
 
@@ -1569,6 +1573,8 @@ async def patch_phone_number(
         pn.forward_to_e164 = payload.forward_to_e164.strip() or None
     if payload.secretary_mode_active is not None:
         pn.secretary_mode_active = payload.secretary_mode_active
+    if payload.lead_auto_callback_enabled is not None:
+        pn.lead_auto_callback_enabled = payload.lead_auto_callback_enabled
     if payload.active is not None:
         pn.active = payload.active
     await db.flush()

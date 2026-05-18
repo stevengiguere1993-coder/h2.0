@@ -532,6 +532,11 @@ async def init_db() -> None:
                 "secretary_mode_active",
                 "BOOLEAN NOT NULL DEFAULT FALSE",
             ),
+            (
+                "voice_phone_numbers",
+                "lead_auto_callback_enabled",
+                "BOOLEAN NOT NULL DEFAULT FALSE",
+            ),
             ("voice_calls", "lang", "VARCHAR(8) NOT NULL DEFAULT 'fr-CA'"),
             ("voice_calls", "intent", "VARCHAR(64)"),
             ("voice_calls", "lead_name", "VARCHAR(255)"),
