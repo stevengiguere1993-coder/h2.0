@@ -75,6 +75,15 @@ services:
         sync: false
       - key: VOICE_WEBHOOK_BASE_URL
         value: "https://h2-0.onrender.com"
+      # Voice SDK hybride (browser via WebRTC). Setup manuel dans
+      # Twilio console : TwiML App + API Key. Sans ces 3 vars, le
+      # portail tombe sur le mode mobile-only (compat Phase 1).
+      - key: TWILIO_TWIML_APP_SID
+        sync: false
+      - key: TWILIO_API_KEY_SID
+        sync: false
+      - key: TWILIO_API_KEY_SECRET
+        sync: false
 
   # --------------------------------------------------------------
   # Frontend — Next.js 15 (public site + internal portal)

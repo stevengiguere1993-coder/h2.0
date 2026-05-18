@@ -263,6 +263,31 @@ class TwilioVoiceProvider(VoiceProvider):
             "</Response>"
         )
 
+    def build_say_dial_clients_then_mobile(
+        self,
+        *,
+        say: str,
+        lang: str,
+        clients_xml: str,
+        fallback_action_url: str,
+        timeout_sec: int = 15,
+    ) -> str:
+        """TwiML : Léa annonce le transfert, puis <Dial> ring tous les
+        Twilio Clients en parallèle. Si timeout sans réponse OU décline,
+        Twilio appelle `fallback_action_url` qui sert un TwiML
+        secondaire (typiquement `<Dial>+1mobile</Dial>`)."""
+        voice = self._voice_for_lang(lang)
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            f'<Say voice="{voice}" language="{lang}">{xml_escape(say)}</Say>'
+            f'<Dial timeout="{int(timeout_sec)}" '
+            f'action="{xml_escape(fallback_action_url)}" method="POST">'
+            f"{clients_xml}"
+            "</Dial>"
+            "</Response>"
+        )
+
     def build_voicemail(
         self,
         *,

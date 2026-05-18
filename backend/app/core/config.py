@@ -113,6 +113,12 @@ class Settings(BaseSettings):
     # bootstrap (`python -m app.scripts.twilio_bootstrap`) la pousse
     # sur le numéro via l'API Twilio.
     voice_webhook_base_url: str = "https://h2-0.onrender.com"
+    # Twilio Voice SDK (hybride web + mobile). Setup manuel dans la
+    # console Twilio : voir app/integrations/voice/voice_sdk.py.
+    # Sans ces 3 vars, le portail tombe sur le mode mobile-only.
+    twilio_twiml_app_sid: Optional[str] = None
+    twilio_api_key_sid: Optional[str] = None
+    twilio_api_key_secret: Optional[str] = None
 
     @property
     def is_production(self) -> bool:

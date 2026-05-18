@@ -189,6 +189,7 @@ from app.models.voice import (  # noqa: F401
     PhoneNumber,
     VoiceBusinessHours,
     VoiceCallerIntel,
+    VoiceClientPresence,
     VoiceFilter,
     VoiceUsageDaily,
 )
@@ -286,6 +287,7 @@ __all__ = [
     "PhoneNumber",
     "VoiceBusinessHours",
     "VoiceCallerIntel",
+    "VoiceClientPresence",
     "VoiceFilter",
     "VoiceUsageDaily",
 ]

@@ -26,7 +26,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
-from app.api.deps import CurrentAdmin, DBSession
+from app.api.deps import CurrentAdmin, CurrentUser, DBSession
 from app.integrations.voice import get_voice_provider
 from app.integrations.voice.routing import RoutingAction, decide_routing
 from app.integrations.voice.caller_identity import (
@@ -49,6 +49,13 @@ from app.integrations.voice.spam_filter import (
     maybe_mark_honeypot,
     record_call_cost,
     record_spam_block,
+)
+from app.integrations.voice.voice_sdk import (
+    build_dial_clients_xml,
+    generate_access_token,
+    list_online_user_ids,
+    update_presence,
+    voice_sdk_configured,
 )
 from app.integrations.voice.twilio_provider import TwilioVoiceProvider
 from app.models.contact_request import ContactRequest, ContactRequestStatus
@@ -105,6 +112,10 @@ def _voicemail_action_url() -> str:
 
 def _voicemail_transcribe_url() -> str:
     return f"{_secretary_base_url()}/api/v1/voice/twilio/voicemail-transcript"
+
+
+def _voice_sdk_callback_url() -> str:
+    return f"{_secretary_base_url()}/api/v1/voice/twilio/sdk-outbound"
 
 
 def _outbound_bridge_url(call_id: int) -> str:
@@ -537,8 +548,30 @@ async def twilio_secretary_turn(request: Request, db: DBSession) -> Response:
             or os.getenv("TWILIO_FORWARD_TO")
             or ""
         ).strip()
+
+        # Voice SDK hybride : si des users sont online dans le portail,
+        # on les ring d'abord via WebRTC (gratuit). Fallback mobile
+        # après 15 sec via /twilio/clients-fallback.
+        if voice_sdk_configured():
+            online_uids = await list_online_user_ids(db)
+            if online_uids:
+                call.forwarded_to_e164 = forward_to or None
+                clients_xml = build_dial_clients_xml(online_uids)
+                fallback_url = (
+                    f"{_secretary_base_url()}/api/v1/voice/twilio/"
+                    f"clients-fallback?call_id={call.id}"
+                )
+                twiml = provider.build_say_dial_clients_then_mobile(
+                    say=decision.say,
+                    lang=decision.lang,
+                    clients_xml=clients_xml,
+                    fallback_action_url=fallback_url,
+                    timeout_sec=15,
+                )
+                return Response(content=twiml, media_type="application/xml")
+
         if not forward_to:
-            # Pas de cible de transfert → on bascule en callback.
+            # Pas de cible de transfert ni de client online → callback.
             await _create_lead_from_callback(db, call=call)
             twiml = provider.build_say_and_hangup(
                 say=decision.say, lang=decision.lang
@@ -786,6 +819,142 @@ async def twilio_voicemail_transcript(request: Request, db: DBSession) -> Respon
 
     await db.flush()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------
+# Voice SDK hybride (Phase 4+) — token / presence / dispatch
+# ---------------------------------------------------------------------
+
+
+class VoiceTokenResponse(BaseModel):
+    token: str
+    identity: str
+    ttl_sec: int = 3600
+
+
+@router.get(
+    "/sdk/token",
+    response_model=VoiceTokenResponse,
+    summary="Twilio Access Token pour le Voice SDK (login user)",
+)
+async def get_voice_sdk_token(user: CurrentUser) -> VoiceTokenResponse:
+    """Le frontend appelle cet endpoint au boot pour s'enregistrer
+    comme Twilio Client. Token valide 1h ; le client le re-fetch
+    automatiquement à expiration (ou avant en cas de Device error).
+    """
+    token = generate_access_token(user_id=user.id, ttl_sec=3600)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Voice SDK not configured. Set TWILIO_TWIML_APP_SID, "
+                "TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET in env."
+            ),
+        )
+    from app.integrations.voice.voice_sdk import client_identity_for_user
+
+    return VoiceTokenResponse(
+        token=token, identity=client_identity_for_user(user.id)
+    )
+
+
+@router.post(
+    "/sdk/presence/ping",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Heartbeat de présence (browser ouvert, accepting calls)",
+)
+async def presence_ping(
+    user: CurrentUser,
+    db: DBSession,
+    accepting: bool = Query(default=True),
+) -> Response:
+    await update_presence(db, user_id=user.id, accepting=accepting)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/twilio/sdk-outbound",
+    summary="TwiML servi à la TwiML App quand un browser fait device.connect()",
+    response_class=Response,
+)
+async def twilio_sdk_outbound(request: Request) -> Response:
+    """Twilio appelle ici quand un user du portail clique un bouton
+    « Appeler » qui passe par le Voice SDK (vs notre /calls/outbound
+    REST). Le frontend passe `To` dans les params de device.connect().
+
+    On valide la signature, on lit `To`, on renvoie un TwiML qui
+    appelle ce numéro avec notre numéro 438 comme callerId.
+    """
+    params = await _validate_twilio_signature(request)
+    provider = _twilio_provider()
+    to = (params.get("To") or "").strip()
+    if not to:
+        twiml = provider.build_say_and_hangup(
+            say="Numéro manquant. Au revoir.", lang="fr-CA"
+        )
+        return Response(content=twiml, media_type="application/xml")
+    # CallerID = notre numéro principal (1er PhoneNumber actif).
+    twiml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Response>"
+        f'<Dial callerId="{os.getenv("TWILIO_PHONE_NUMBER", "")}" '
+        'timeout="20">'
+        f"{to}"
+        "</Dial>"
+        "</Response>"
+    )
+    return Response(content=twiml, media_type="application/xml")
+
+
+@router.post(
+    "/twilio/clients-fallback",
+    summary="TwiML de fallback : appelé quand le dispatch <Client> a échoué",
+    response_class=Response,
+)
+async def twilio_clients_fallback(request: Request, db: DBSession) -> Response:
+    """Twilio appelle ici si :
+    - aucun Client n'a répondu dans le timeout (15 sec)
+    - tous les Clients ont décliné
+    - erreur réseau côté browser
+
+    On bascule sur le numéro mobile fallback (forward_to_e164 ou
+    TWILIO_FORWARD_TO). Si pas non plus configuré → voicemail.
+    """
+    params = await _validate_twilio_signature(request)
+    provider = _twilio_provider()
+    call_id_raw = request.query_params.get("call_id", "")
+    dial_status = (params.get("DialCallStatus") or "").lower()
+
+    # Si le Dial a réussi (answered/completed), Twilio ne va PAS rejouer
+    # le flow — il vient juste nous notifier. On répond vide.
+    if dial_status in ("answered", "completed"):
+        return Response(content="<Response/>", media_type="application/xml")
+
+    forward_to = ""
+    if call_id_raw.isdigit():
+        call = (
+            await db.execute(select(Call).where(Call.id == int(call_id_raw)))
+        ).scalar_one_or_none()
+        if call is not None:
+            forward_to = (call.forwarded_to_e164 or "").strip()
+
+    if not forward_to:
+        forward_to = (os.getenv("TWILIO_FORWARD_TO") or "").strip()
+
+    if not forward_to:
+        twiml = provider.build_voicemail(
+            intro_say=(
+                "Désolée, personne n'est disponible pour l'instant. "
+                "Laissez votre message après le bip."
+            ),
+            lang="fr-CA",
+            action_url=_voicemail_action_url(),
+            transcribe_callback_url=_voicemail_transcribe_url(),
+        )
+        return Response(content=twiml, media_type="application/xml")
+
+    twiml = provider.build_forward_response(forward_to_e164=forward_to)
+    return Response(content=twiml, media_type="application/xml")
 
 
 # ---------------------------------------------------------------------
