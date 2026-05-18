@@ -398,7 +398,7 @@ function ClientTabs({
                       variant="icon"
                       targetE164={phone}
                       entityType="client"
-                      entityId={id}
+                      entityId={client.id}
                     />
                   ) : null}
                 </div>
