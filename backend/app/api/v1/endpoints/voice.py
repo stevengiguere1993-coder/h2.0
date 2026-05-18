@@ -287,7 +287,9 @@ def _safe_error_twiml(lang: str = "fr-CA") -> Response:
             "Réessayez dans quelques minutes ou laissez-nous un message "
             "par texto. Au revoir."
         )
-        voice = "Polly.Léa-Neural"
+        # Voix française québécoise (fr-CA) — la voix Léa est fr-FR
+        # et provoque « application error » côté Twilio si mismatch.
+        voice = "Polly.Gabrielle-Neural"
     twiml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
