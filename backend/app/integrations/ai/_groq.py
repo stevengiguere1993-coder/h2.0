@@ -32,12 +32,7 @@ class GroqProvider:
     default_embedding_model = ""
 
     def __init__(self, api_key: Optional[str] = None) -> None:
-        self.api_key = (
-            api_key
-            or os.getenv("GROQ_API_KEY")
-            or os.getenv("groq_api_key")
-            or ""
-        ).strip()
+        self.api_key = (api_key or os.getenv("GROQ_API_KEY") or "").strip()
 
     def _check_key(self) -> None:
         if not self.api_key:
