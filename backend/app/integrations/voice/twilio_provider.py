@@ -233,13 +233,23 @@ class TwilioVoiceProvider(VoiceProvider):
     def _voice_for_lang(lang: str) -> str:
         """Polly Neural voice ID pour la langue donnée.
 
-        Polly.Léa-Neural (FR-CA) et Polly.Joanna-Neural (EN-US) sont les
-        voix neuronales les plus naturelles dispo dans Twilio sans
-        surcoût. Vérifié sur la doc Twilio TTS 2025.
+        Mapping AWS Polly Neural :
+          - fr-CA → Polly.Gabrielle-Neural (français québécois, féminin)
+          - fr-FR → Polly.Léa-Neural       (français de France, féminin)
+          - en-US → Polly.Joanna-Neural    (anglais américain, féminin)
+
+        ⚠ Important : la voix DOIT matcher la langue. Twilio rejette le
+        TwiML avec « application error » si on combine par exemple
+        Polly.Léa-Neural (fr-FR) avec language=« fr-CA ». C'est le bug
+        qui produisait le message d'erreur Twilio dans nos premiers
+        tests d'appels (réf. : AWS Polly voice catalog).
         """
         if lang.startswith("en"):
             return "Polly.Joanna-Neural"
-        return "Polly.Léa-Neural"
+        if lang == "fr-FR":
+            return "Polly.Léa-Neural"
+        # Défaut français = québécois (Horizon = Montréal).
+        return "Polly.Gabrielle-Neural"
 
     def build_say_and_gather(
         self,
