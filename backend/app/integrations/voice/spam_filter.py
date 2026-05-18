@@ -180,14 +180,23 @@ async def check_incoming(
 
     Le seul appel API externe (Twilio Lookup, ~0,005 $) n'est fait que
     si le numéro est nouveau ou si la dernière donnée a > 30 jours.
+
+    Defensive : si une table récente (voice_caller_intel /
+    voice_usage_daily) n'existe pas encore, on dégrade en ALLOW plutôt
+    que de planter tout l'inbound — la sécurité c'est mieux que rien,
+    mais zéro filtre c'est mieux qu'un crash qui passe le call à Twilio
+    en mode "application error".
     """
     # 1. Daily cap
-    exceeded, _ = await is_daily_cap_exceeded(db)
-    if exceeded:
-        return SpamCheck(
-            SpamCheckResult.BLOCK_CAP,
-            f"daily cap reached ({DAILY_COST_CAP_CENTS}¢) — voicemail only",
-        )
+    try:
+        exceeded, _ = await is_daily_cap_exceeded(db)
+        if exceeded:
+            return SpamCheck(
+                SpamCheckResult.BLOCK_CAP,
+                f"daily cap reached ({DAILY_COST_CAP_CENTS}¢) — voicemail only",
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("daily cap check failed (%s) — skipping", exc)
 
     # 2. Geo filter (NANP = +1 only)
     if not from_e164 or not from_e164.startswith("+1"):
@@ -205,7 +214,14 @@ async def check_incoming(
                 f"STIR/SHAKEN failed: {verstat}",
             )
 
-    intel = await get_or_create_intel(db, from_e164)
+    try:
+        intel = await get_or_create_intel(db, from_e164)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "voice_caller_intel unavailable (%s) — bypassing rate/honeypot",
+            exc,
+        )
+        return SpamCheck(SpamCheckResult.ALLOW, "intel table missing; allowed")
     if verstat:
         intel.last_verstat = verstat[:64]
 
