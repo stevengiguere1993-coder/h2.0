@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -9,20 +9,19 @@ import {
   PhoneCall,
   PhoneForwarded,
   PhoneIncoming,
+  RefreshCw,
   Sparkles,
   Workflow
 } from "lucide-react";
 
-import { getMe, getToken } from "@/lib/auth";
+import { authedFetch, getMe, getToken } from "@/lib/auth";
 import { Link, useRouter } from "@/i18n/navigation";
 
 // Volet « Téléphonie / Secrétaire d'appels ».
 //
-// Page d'accueil — état des lieux + plan que nous avons défini avec
-// l'utilisateur, en attendant le démarrage de la Phase 1 (intégration
-// Twilio). L'accès est gated par email côté front (login-form) et
-// peut être étendu côté back quand on commencera à exposer des
-// endpoints réels.
+// Phase 1 : page de pilotage minimal — numéros connus + journal
+// d'appels live + plan restant. Gated par email (sgiguere) en attendant
+// que les rôles d'accès au volet soient câblés côté back.
 
 const TELEPHONIE_ALLOWED_EMAILS = ["sgiguere@immohorizon.com"];
 
@@ -30,10 +29,58 @@ type Me = {
   email?: string | null;
 };
 
+type PhoneNumberRow = {
+  id: number;
+  e164: string;
+  provider: string;
+  label: string | null;
+  forward_to_e164: string | null;
+  owner_user_id: number | null;
+  active: boolean;
+};
+
+type CallRow = {
+  id: number;
+  phone_number_id: number;
+  direction: string;
+  status: string;
+  from_e164: string;
+  to_e164: string;
+  forwarded_to_e164: string | null;
+  started_at: string;
+  answered_at: string | null;
+  ended_at: string | null;
+  duration_sec: number | null;
+};
+
 export default function TelephonieHome() {
   const router = useRouter();
   const [checking, setChecking] = useState(true);
   const [allowed, setAllowed] = useState(false);
+
+  const [numbers, setNumbers] = useState<PhoneNumberRow[]>([]);
+  const [calls, setCalls] = useState<CallRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [nRes, cRes] = await Promise.all([
+        authedFetch("/api/v1/voice/phone-numbers"),
+        authedFetch("/api/v1/voice/calls?limit=30")
+      ]);
+      if (!nRes.ok) throw new Error(`numbers http_${nRes.status}`);
+      if (!cRes.ok) throw new Error(`calls http_${cRes.status}`);
+      setNumbers((await nRes.json()) as PhoneNumberRow[]);
+      setCalls((await cRes.json()) as CallRow[]);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -51,6 +98,7 @@ export default function TelephonieHome() {
         if (!cancelled) {
           setAllowed(ok);
           setChecking(false);
+          if (ok) void reload();
         }
       } catch {
         if (!cancelled) {
@@ -63,7 +111,7 @@ export default function TelephonieHome() {
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, [router, reload]);
 
   if (checking) {
     return (
@@ -118,67 +166,123 @@ export default function TelephonieHome() {
               Secrétaire IA d&apos;appels
             </h1>
             <p className="mt-1 text-sm text-white/60">
-              Numéro 514 unique, IA qui décroche en français, qualifie le
-              lead, filtre les indésirables et transfère au bon user.
+              Numéro 438 unique, appels entrants forwardés au mobile en
+              Phase 1. Secrétaire IA et qualification automatique en
+              Phase 2.
             </p>
           </div>
-          <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
-            En développement
+          <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">
+            Phase 1 active
           </span>
         </header>
 
-        {/* Bannière setup */}
-        <section className="mt-6 rounded-2xl border border-teal-500/40 bg-teal-500/5 p-5">
-          <h2 className="flex items-center gap-2 text-sm font-bold text-teal-200">
-            <Sparkles className="h-4 w-4" />
-            Prochaine étape
+        {/* Live data */}
+        <section className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+              <PhoneIncoming className="h-4 w-4 text-teal-300" />
+              Numéros configurés
+            </h2>
+            <button
+              type="button"
+              onClick={() => void reload()}
+              disabled={loading}
+              className="inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-white/70 hover:bg-white/10 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
+              Rafraîchir
+            </button>
+          </div>
+
+          {loadError ? (
+            <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-200">
+              Erreur de chargement : {loadError}
+            </p>
+          ) : null}
+
+          {numbers.length === 0 && !loading && !loadError ? (
+            <p className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+              Aucun numéro enregistré. Le bootstrap se déclenche au prochain
+              démarrage du backend si TWILIO_PHONE_NUMBER est configuré côté
+              Render.
+            </p>
+          ) : null}
+
+          {numbers.length > 0 ? (
+            <table className="mt-3 w-full text-xs">
+              <thead className="text-left text-white/40">
+                <tr>
+                  <th className="py-1.5 font-normal">Numéro</th>
+                  <th className="py-1.5 font-normal">Libellé</th>
+                  <th className="py-1.5 font-normal">Forward vers</th>
+                  <th className="py-1.5 text-right font-normal">État</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/10">
+                {numbers.map((n) => (
+                  <tr key={n.id}>
+                    <td className="py-2 font-mono text-white">{n.e164}</td>
+                    <td className="py-2 text-white/70">{n.label || "—"}</td>
+                    <td className="py-2 font-mono text-white/80">
+                      {n.forward_to_e164 || (
+                        <span className="text-white/30">non configuré</span>
+                      )}
+                    </td>
+                    <td className="py-2 text-right">
+                      {n.active ? (
+                        <span className="text-emerald-300">actif</span>
+                      ) : (
+                        <span className="text-white/40">inactif</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : null}
+        </section>
+
+        {/* Call log */}
+        <section className="mt-4 rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+            <PhoneCall className="h-4 w-4 text-teal-300" />
+            Journal d&apos;appels (30 derniers)
           </h2>
-          <p className="mt-2 text-xs text-white/70">
-            Avant qu&apos;on puisse écrire la première ligne de code
-            d&apos;intégration, j&apos;ai besoin de ton compte Twilio.
-          </p>
-          <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-xs text-white/80">
-            <li>
-              Créer un compte sur{" "}
-              <a
-                href="https://www.twilio.com/try-twilio"
-                target="_blank"
-                rel="noreferrer"
-                className="text-teal-300 underline hover:text-teal-200"
-              >
-                twilio.com/try-twilio
-              </a>{" "}
-              (~5 min, juste courriel + carte non-débitée pour
-              anti-fraude).
-            </li>
-            <li>
-              Console → Account → Récupérer{" "}
-              <code className="rounded bg-white/10 px-1 text-[11px]">
-                Account SID
-              </code>{" "}
-              +{" "}
-              <code className="rounded bg-white/10 px-1 text-[11px]">
-                Auth Token
-              </code>
-              .
-            </li>
-            <li>
-              Me les donner pour qu&apos;on les mette dans les variables
-              d&apos;env Render : <code>TWILIO_ACCOUNT_SID</code> +{" "}
-              <code>TWILIO_AUTH_TOKEN</code>.
-            </li>
-            <li>
-              Acheter 1 numéro 514 dans la console Twilio (~1 $ via le
-              crédit trial gratuit) ou laisser le système le faire via
-              l&apos;API en Phase 1.
-            </li>
-          </ol>
-          <p className="mt-3 rounded-md border border-white/10 bg-white/5 px-3 py-2 text-[11px] text-white/60">
-            💡 <strong>Pas de carte débitée tant qu&apos;on reste sur le
-            crédit trial</strong> (~15 USD offerts). Le numéro coûte
-            ~1,15 $/mois et les appels entrants ~0,01 $/min — on a des
-            mois d&apos;usage en bas volume avant de dépasser le trial.
-          </p>
+          {calls.length === 0 ? (
+            <p className="mt-3 text-[11px] text-white/40">
+              Aucun appel reçu pour l&apos;instant. Appelle le numéro
+              ci-dessus depuis un mobile vérifié sur Twilio pour tester.
+            </p>
+          ) : (
+            <table className="mt-3 w-full text-xs">
+              <thead className="text-left text-white/40">
+                <tr>
+                  <th className="py-1.5 font-normal">Date</th>
+                  <th className="py-1.5 font-normal">De</th>
+                  <th className="py-1.5 font-normal">Vers</th>
+                  <th className="py-1.5 font-normal">Statut</th>
+                  <th className="py-1.5 text-right font-normal">Durée</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/10">
+                {calls.map((c) => (
+                  <tr key={c.id}>
+                    <td className="py-2 text-white/60">
+                      {formatDateTime(c.started_at)}
+                    </td>
+                    <td className="py-2 font-mono text-white">{c.from_e164}</td>
+                    <td className="py-2 font-mono text-white/80">{c.to_e164}</td>
+                    <td className="py-2">
+                      <StatusBadge status={c.status} />
+                    </td>
+                    <td className="py-2 text-right text-white/80">
+                      {c.duration_sec != null ? `${c.duration_sec}s` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </section>
 
         {/* Plan en 4 phases */}
@@ -191,31 +295,28 @@ export default function TelephonieHome() {
             title="Fondations"
             icon={<PhoneIncoming className="h-4 w-4 text-teal-300" />}
             scope="1-2 PR"
-            status="todo"
+            status="done"
           >
             <ul className="space-y-1">
               <li>
                 Module backend <code>app/integrations/voice/</code>, abstraction
-                provider (Twilio par défaut, swap futur possible).
+                provider (Twilio par défaut). ✓
               </li>
               <li>
                 Modèles SQL : <code>PhoneNumber</code>, <code>Call</code>,{" "}
-                <code>CallRoute</code>, <code>CallTranscript</code>.
+                <code>CallRoute</code>, <code>CallTranscript</code>. ✓
               </li>
+              <li>Endpoint webhook Twilio (signature HMAC vérifiée). ✓</li>
               <li>
-                Endpoint webhook Twilio (signature HMAC vérifiée).
-              </li>
-              <li>
-                Achat / import des numéros 514 via l&apos;API Twilio +
-                attribution à un user.
+                Bootstrap automatique au démarrage du backend : numéro 438
+                enregistré + voice_url poussée chez Twilio. ✓
               </li>
               <li>
                 Dispatch simple : appel entrant →{" "}
-                <code>&lt;Dial&gt;</code> vers le mobile du user assigné.
+                <code>&lt;Dial&gt;</code> vers <code>TWILIO_FORWARD_TO</code>. ✓
               </li>
               <li>
-                Page <code>/telephonie</code> : liste des numéros, qui
-                répond à quoi, journal d&apos;appels minimal.
+                Page <code>/telephonie</code> : journal d&apos;appels live. ✓
               </li>
             </ul>
           </PhaseCard>
@@ -275,12 +376,8 @@ export default function TelephonieHome() {
                 Whitelist VIP (clients existants, partenaires) — sonne
                 direct sans passer par l&apos;IA.
               </li>
-              <li>
-                File d&apos;attente si tous les users sont occupés.
-              </li>
-              <li>
-                Voicemail IA qui transcrit + résume + notifie.
-              </li>
+              <li>File d&apos;attente si tous les users sont occupés.</li>
+              <li>Voicemail IA qui transcrit + résume + notifie.</li>
             </ul>
           </PhaseCard>
 
@@ -323,16 +420,12 @@ export default function TelephonieHome() {
                 </td>
               </tr>
               <tr>
-                <td className="py-2 text-white/70">Numéro 514 (prod)</td>
-                <td className="py-2 text-right text-white/90">
-                  ~1,15 $/mois
-                </td>
+                <td className="py-2 text-white/70">Numéro 438 (prod)</td>
+                <td className="py-2 text-right text-white/90">~1,15 $/mois</td>
               </tr>
               <tr>
                 <td className="py-2 text-white/70">Appels entrants</td>
-                <td className="py-2 text-right text-white/90">
-                  ~0,01 $/min
-                </td>
+                <td className="py-2 text-right text-white/90">~0,01 $/min</td>
               </tr>
               <tr>
                 <td className="py-2 text-white/70">
@@ -354,7 +447,7 @@ export default function TelephonieHome() {
           </table>
           <p className="mt-3 text-[11px] text-white/40">
             Alternative cheap (VoIP.ms) restera possible plus tard — le
-            module sera codé avec une abstraction provider pour qu&apos;on
+            module est déjà codé avec une abstraction provider pour qu&apos;on
             puisse swap sans réécrire le frontend.
           </p>
         </section>
@@ -363,17 +456,52 @@ export default function TelephonieHome() {
         <div className="mt-8 rounded-2xl border border-teal-500/40 bg-teal-500/10 p-4 text-center">
           <CheckCircle2 className="mx-auto mb-1.5 h-5 w-5 text-teal-300" />
           <p className="text-sm font-semibold text-white">
-            Prêt à démarrer la Phase 1
+            Phase 1 prête. Appelle le numéro pour tester.
           </p>
           <p className="mt-1 text-xs text-white/70">
-            Quand tu m&apos;auras donné tes credentials Twilio, je
-            commence l&apos;intégration backend + un premier numéro 514
-            qui sonne sur ton mobile.
+            Le journal ci-dessus se met à jour à chaque appel. Quand tu seras
+            prêt pour la secrétaire IA, dis-le et j&apos;enchaîne sur la
+            Phase 2.
           </p>
         </div>
       </div>
     </div>
   );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const known: Record<string, { label: string; cls: string }> = {
+    completed: { label: "terminé", cls: "bg-emerald-500/15 text-emerald-300" },
+    "in-progress": { label: "en cours", cls: "bg-amber-500/15 text-amber-300" },
+    ringing: { label: "sonne", cls: "bg-amber-500/15 text-amber-300" },
+    queued: { label: "queue", cls: "bg-white/10 text-white/60" },
+    "no-answer": { label: "non répondu", cls: "bg-rose-500/15 text-rose-300" },
+    busy: { label: "occupé", cls: "bg-rose-500/15 text-rose-300" },
+    failed: { label: "échec", cls: "bg-rose-500/15 text-rose-300" },
+    canceled: { label: "annulé", cls: "bg-white/10 text-white/60" }
+  };
+  const meta = known[status] || { label: status, cls: "bg-white/10 text-white/60" };
+  return (
+    <span
+      className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${meta.cls}`}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
+function formatDateTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString("fr-CA", {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  } catch {
+    return iso;
+  }
 }
 
 function PhaseCard({

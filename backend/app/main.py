@@ -55,6 +55,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:
         logger.warning("backfill_accepted_soumissions failed: %s", exc)
 
+    # Téléphonie — auto-bootstrap Twilio : si les credentials et le
+    # numéro sont configurés en env, on s'assure que la ligne existe en
+    # DB et que le webhook URL pointe sur ce backend. Idempotent ;
+    # fast-path < 5 ms quand déjà bootstrapé (juste un SELECT).
+    try:
+        from app.scripts.twilio_bootstrap import bootstrap_twilio
+
+        rc = await bootstrap_twilio()
+        if rc == 0:
+            logger.info("Twilio bootstrap OK")
+    except Exception as exc:
+        logger.warning("twilio bootstrap failed: %s", exc)
+
     yield
     await close_db()
 
