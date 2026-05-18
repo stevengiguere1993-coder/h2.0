@@ -61,6 +61,20 @@ services:
         value: "info@immohorizon.com"
       - key: MAIL_FROM_NAME
         value: "Horizon Services Immobiliers"
+      # Téléphonie (Twilio). Voir app/integrations/voice/ et
+      # app/api/v1/endpoints/voice.py. Le bootstrap se lance en
+      # one-shot via `python -m app.scripts.twilio_bootstrap` une
+      # fois ces vars en place et le numéro acheté.
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+      - key: TWILIO_FORWARD_TO
+        sync: false
+      - key: VOICE_WEBHOOK_BASE_URL
+        value: "https://h2-0.onrender.com"
 
   # --------------------------------------------------------------
   # Frontend — Next.js 15 (public site + internal portal)

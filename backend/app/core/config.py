@@ -100,6 +100,20 @@ class Settings(BaseSettings):
     # 18400565505 = CRM Soumissions (Horizon Construction workspace).
     monday_crm_board_id: Optional[int] = 18400565505
 
+    # Téléphonie — provider voix (Twilio par défaut). Voir
+    # app/integrations/voice/ et app/api/v1/endpoints/voice.py.
+    twilio_account_sid: Optional[str] = None
+    twilio_auth_token: Optional[str] = None
+    # Numéro principal (E.164, ex. "+14388002979") — pour le bootstrap.
+    twilio_phone_number: Optional[str] = None
+    # Mobile vers lequel forwarder les appels entrants en Phase 1, en
+    # attendant que la secrétaire IA prenne le relais (Phase 2).
+    twilio_forward_to: Optional[str] = None
+    # URL backend que Twilio appellera pour les webhooks. Le script de
+    # bootstrap (`python -m app.scripts.twilio_bootstrap`) la pousse
+    # sur le numéro via l'API Twilio.
+    voice_webhook_base_url: str = "https://h2-0.onrender.com"
+
     @property
     def is_production(self) -> bool:
         return self.env.lower() == "production"

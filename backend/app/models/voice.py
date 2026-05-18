@@ -1,0 +1,217 @@
+"""Téléphonie — modèles SQL Phase 1.
+
+Quatre tables :
+
+- **PhoneNumber** : un numéro qu'on possède chez le provider (Twilio
+  pour l'instant, autre provider possible plus tard). Porte la stratégie
+  de dispatch par défaut (`forward_to_e164` = mobile du user qui répond
+  pour cette ligne, en attendant la secrétaire IA de la Phase 2).
+- **Call** : une ligne par appel, entrant ou sortant. `provider_sid`
+  est l'identifiant côté Twilio (CallSid). On y ajoute `recording_url`,
+  `duration_sec`, `status` final, etc. quand Twilio nous notifie via le
+  webhook `status_callback`.
+- **CallRoute** : règles de routage par numéro (priorité décroissante).
+  Match sur pattern `from_e164` (vide = match-tout). Action :
+  `forward` / `voicemail` / `ai` (Phase 2). Non utilisé en Phase 1 sauf
+  pour stocker la configuration ; le dispatch lit `PhoneNumber.forward_to_e164`.
+- **CallTranscript** : transcription + résumé IA d'un appel. Vide en
+  Phase 1, rempli en Phase 2 quand la secrétaire IA décroche.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from enum import Enum
+from typing import Optional
+
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base
+
+
+class CallDirection(str, Enum):
+    INBOUND = "inbound"
+    OUTBOUND = "outbound"
+
+
+class CallStatus(str, Enum):
+    # Aligné sur les statuts Twilio :
+    # https://www.twilio.com/docs/voice/api/call-resource#call-status-values
+    QUEUED = "queued"
+    RINGING = "ringing"
+    IN_PROGRESS = "in-progress"
+    COMPLETED = "completed"
+    BUSY = "busy"
+    NO_ANSWER = "no-answer"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+
+class CallRouteAction(str, Enum):
+    FORWARD = "forward"        # <Dial> vers forward_to_e164
+    VOICEMAIL = "voicemail"    # boîte vocale IA (Phase 3)
+    AI = "ai"                  # secrétaire IA (Phase 2)
+    REJECT = "reject"          # raccroche poliment
+
+
+class PhoneNumber(Base):
+    """Un numéro qu'on possède chez le provider voix (Twilio)."""
+
+    __tablename__ = "voice_phone_numbers"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    # E.164 : "+14388002979"
+    e164: Mapped[str] = mapped_column(String(20), nullable=False, unique=True, index=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="twilio")
+    # Twilio IncomingPhoneNumber SID, ex. "PN…"
+    provider_sid: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
+    # Libellé interne (ex. "Ligne principale Horizon")
+    label: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # Phase 1 : numéro vers lequel on transfère les appels entrants
+    # quand aucune CallRoute ne matche. En Phase 2, la secrétaire IA
+    # prend le relais et ce champ devient un fallback.
+    forward_to_e164: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # Optionnel : user_id à qui ce numéro « appartient » (statistiques,
+    # affichage dans son tableau, etc.). NULL = pool partagé.
+    owner_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    calls: Mapped[list["Call"]] = relationship(
+        back_populates="phone_number",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class Call(Base):
+    """Une ligne par appel, entrant ou sortant."""
+
+    __tablename__ = "voice_calls"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    phone_number_id: Mapped[int] = mapped_column(
+        ForeignKey("voice_phone_numbers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Twilio CallSid, ex. "CA…"
+    provider_sid: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
+    direction: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued", index=True)
+
+    from_e164: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    to_e164: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    # Si on a forwardé l'appel à un mobile, on le note ici. Permet de
+    # savoir « qui a répondu » sans deviner depuis le statut.
+    forwarded_to_e164: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+    answered_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ended_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    duration_sec: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    recording_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    recording_sid: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # En Phase 2 : lien vers le user CRM dont on a deviné l'identité
+    # depuis le numéro entrant (match contact / prospect / client).
+    matched_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    phone_number: Mapped[PhoneNumber] = relationship(back_populates="calls")
+    transcript: Mapped[Optional["CallTranscript"]] = relationship(
+        back_populates="call",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
+
+
+class CallRoute(Base):
+    """Règle de routage par numéro (consultée en Phase 2+).
+
+    Phase 1 : table créée mais inutilisée. Le dispatch utilise simplement
+    `PhoneNumber.forward_to_e164`. On la garde pour ne pas avoir à
+    migrer le schéma quand la Phase 2 arrive.
+    """
+
+    __tablename__ = "voice_call_routes"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    phone_number_id: Mapped[int] = mapped_column(
+        ForeignKey("voice_phone_numbers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Priorité — plus grand = évalué en premier.
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Pattern E.164 ou préfixe ; NULL = match-tout (catch-all).
+    from_pattern: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    action: Mapped[str] = mapped_column(String(16), nullable=False, default="forward")
+    # Selon `action` :
+    #   forward   → numéro destinataire (E.164)
+    #   voicemail → boîte cible (id ou nom de mailbox)
+    #   ai        → identifiant de la persona IA à invoquer
+    target: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CallTranscript(Base):
+    """Transcription + résumé IA. Vide en Phase 1."""
+
+    __tablename__ = "voice_call_transcripts"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    call_id: Mapped[int] = mapped_column(
+        ForeignKey("voice_calls.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    transcript: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Intent détecté par l'IA (Phase 2) : "soumission" / "support" /
+    # "demarchage" / "rappel" / ...
+    intent: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    call: Mapped[Call] = relationship(back_populates="transcript")

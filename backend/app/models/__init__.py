@@ -178,6 +178,15 @@ from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
 from app.models.sous_traitant import SousTraitant
 from app.models.user import User
+from app.models.voice import (  # noqa: F401
+    Call,
+    CallDirection,
+    CallRoute,
+    CallRouteAction,
+    CallStatus,
+    CallTranscript,
+    PhoneNumber,
+)
 
 __all__ = [
     "Achat",
@@ -265,4 +274,8 @@ __all__ = [
     "SoumissionItem",
     "SousTraitant",
     "User",
+    "Call",
+    "CallRoute",
+    "CallTranscript",
+    "PhoneNumber",
 ]
