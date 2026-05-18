@@ -1586,6 +1586,7 @@ type InvoiceLine = {
 
 type Finances = {
   projected_revenue: number;
+  projected_revenue_ex_tax: number;
   projected_service_cost: number;
   projected_labour_cost: number;
   projected_labour_hours: number;
@@ -1601,9 +1602,13 @@ type Finances = {
   service_lines: { label: string; quantity: number; unit_cost: number; total: number }[];
   material_lines: { label: string; quantity: number; unit_cost: number; total: number }[];
   invoiced_amount: number;
+  invoiced_amount_ex_tax: number;
   extras_billed_amount: number;
   paid_amount: number;
   balance_due: number;
+  tps_collected: number;
+  tvq_collected: number;
+  taxes_collected: number;
   invoices?: InvoiceLine[];
 };
 
@@ -1612,6 +1617,7 @@ type Finances = {
 function RecapTab({ project }: { project: Project | null }) {
   const [finances, setFinances] = useState<{
     projected_revenue: number;
+    projected_revenue_ex_tax: number;
     projected_total_cost: number;
     projected_profit: number;
     projected_margin_pct: number;
@@ -1624,6 +1630,10 @@ function RecapTab({ project }: { project: Project | null }) {
     actual_labour_cost: number;
     paid_amount: number;
     invoiced_amount: number;
+    invoiced_amount_ex_tax: number;
+    tps_collected: number;
+    tvq_collected: number;
+    taxes_collected: number;
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1736,12 +1746,23 @@ function RecapTab({ project }: { project: Project | null }) {
               projectedProfit={finances.projected_profit}
               projectedMargin={finances.projected_margin_pct}
               actualCost={finances.actual_total_cost}
-              projectedRevenue={finances.projected_revenue}
+              projectedRevenueExTax={finances.projected_revenue_ex_tax}
               paidAmount={finances.paid_amount}
               invoicedAmount={finances.invoiced_amount}
+              invoicedAmountExTax={finances.invoiced_amount_ex_tax}
               isDelivered={isDelivered}
             />
           </div>
+
+          {/* Taxes à remettre au gouvernement — TPS (Receveur général)
+              + TVQ (Revenu Québec). Calculées sur le facturé. */}
+          {finances.taxes_collected > 0 ? (
+            <RecapTaxesCard
+              tps={finances.tps_collected}
+              tvq={finances.tvq_collected}
+              total={finances.taxes_collected}
+            />
+          ) : null}
 
           {/* Détail heures + ventilation coût réel */}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -1942,24 +1963,27 @@ function RecapProfitCard({
   projectedProfit,
   projectedMargin,
   actualCost,
-  projectedRevenue,
+  projectedRevenueExTax,
   paidAmount,
   invoicedAmount,
+  invoicedAmountExTax,
   isDelivered
 }: {
   projectedProfit: number;
   projectedMargin: number;
   actualCost: number;
-  projectedRevenue: number;
+  projectedRevenueExTax: number;
   paidAmount: number;
   invoicedAmount: number;
+  invoicedAmountExTax: number;
   isDelivered: boolean;
 }) {
-  // Profit réel : on prend ce qui a été FACTURÉ (engagement) plutôt
-  // que ce qui a été PAYÉ — sinon un projet livré mais pas encore
-  // payé a un « profit » négatif trompeur. Si rien n'a été facturé,
-  // on tombe sur la soumission initiale.
-  const revenueBase = invoicedAmount > 0 ? invoicedAmount : projectedRevenue;
+  // Profit réel calculé HORS TAXES : les TPS/TVQ ne sont pas un
+  // revenu (elles transitent vers le gouvernement). On prend le
+  // facturé HT s'il y a des factures, sinon la soumission HT. Évite
+  // de gonfler artificiellement le profit de ~15 % des taxes.
+  const revenueBase =
+    invoicedAmountExTax > 0 ? invoicedAmountExTax : projectedRevenueExTax;
   const actualProfit = revenueBase - actualCost;
   const actualMargin =
     revenueBase > 0 ? (actualProfit / revenueBase) * 100 : 0;
@@ -2006,7 +2030,67 @@ function RecapProfitCard({
           </span>
           <span className="font-mono font-semibold text-white">
             {fmtMoney(isDelivered ? paidAmount : invoicedAmount)}
+            <span className="ml-1 text-[10px] font-normal text-white/40">
+              TTC
+            </span>
           </span>
+        </div>
+        <p className="mt-1 text-[10px] text-white/40">
+          Profit calculé hors taxes (TPS/TVQ exclues).
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function RecapTaxesCard({
+  tps,
+  tvq,
+  total
+}: {
+  tps: number;
+  tvq: number;
+  total: number;
+}) {
+  return (
+    <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-[10px] uppercase tracking-wider text-blue-300/80">
+          🏛️ Taxes à remettre au gouvernement
+        </h3>
+        <span className="text-[10px] text-white/40">
+          Sur le facturé du projet (hors achats déductibles)
+        </span>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-white/50">
+            TPS (5 %)
+          </p>
+          <p className="mt-1 font-mono text-base font-semibold text-white">
+            {fmtMoney(tps)}
+          </p>
+          <p className="mt-0.5 text-[10px] text-white/40">Receveur général</p>
+        </div>
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-white/50">
+            TVQ (9,975 %)
+          </p>
+          <p className="mt-1 font-mono text-base font-semibold text-white">
+            {fmtMoney(tvq)}
+          </p>
+          <p className="mt-0.5 text-[10px] text-white/40">Revenu Québec</p>
+        </div>
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-blue-300">
+            Total à remettre
+          </p>
+          <p className="mt-1 font-mono text-base font-bold text-blue-300">
+            {fmtMoney(total)}
+          </p>
+          <p className="mt-0.5 text-[10px] text-white/40">
+            Avant déduction CTI/RTI
+          </p>
         </div>
       </div>
     </div>
@@ -2152,7 +2236,7 @@ function FinancesTab({ projectId }: { projectId: number }) {
         <FinanceKpi
           label="Profit projeté"
           value={fmtMoney(data.projected_profit)}
-          sub={`${data.projected_margin_pct.toFixed(1)} % marge · Revenu ${fmtMoney(data.projected_revenue)}`}
+          sub={`${data.projected_margin_pct.toFixed(1)} % marge · Revenu HT ${fmtMoney(data.projected_revenue_ex_tax)}`}
           tone={data.projected_profit >= 0 ? "emerald" : "rose"}
         />
         <FinanceKpi
@@ -2166,7 +2250,7 @@ function FinancesTab({ projectId }: { projectId: number }) {
         <FinanceKpi
           label="Profit réel"
           value={fmtMoney(data.actual_profit)}
-          sub={`${data.actual_margin_pct.toFixed(1)} % marge · Revenu contrat ${fmtMoney(data.projected_revenue)}`}
+          sub={`${data.actual_margin_pct.toFixed(1)} % marge · Revenu HT ${fmtMoney(data.projected_revenue_ex_tax)} (taxes exclues)`}
           tone={data.actual_profit >= 0 ? "emerald" : "rose"}
         />
       </div>
@@ -2463,6 +2547,53 @@ function FinancesTab({ projectId }: { projectId: number }) {
             </dd>
           </div>
         </dl>
+
+        {/* Taxes collectées sur les factures émises — somme à remettre
+            au Receveur général (TPS) et à Revenu Québec (TVQ). N'entre
+            jamais dans le calcul du profit du projet. */}
+        {data.taxes_collected > 0 ? (
+          <div className="mt-5 rounded-lg border border-blue-500/30 bg-blue-500/5 p-3">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h4 className="text-[11px] font-semibold uppercase tracking-wider text-blue-300">
+                🏛️ Taxes à remettre au gouvernement
+              </h4>
+              <span className="text-[10px] text-white/40">
+                Sur le facturé · hors CTI/RTI
+              </span>
+            </div>
+            <dl className="mt-2 space-y-1 text-sm">
+              <div className="flex justify-between">
+                <dt className="text-white/60">
+                  TPS (5 %) <span className="text-[10px] text-white/40">— Receveur général</span>
+                </dt>
+                <dd className="font-mono text-white/90">
+                  {fmtMoney(data.tps_collected)}
+                </dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-white/60">
+                  TVQ (9,975 %) <span className="text-[10px] text-white/40">— Revenu Québec</span>
+                </dt>
+                <dd className="font-mono text-white/90">
+                  {fmtMoney(data.tvq_collected)}
+                </dd>
+              </div>
+              <div className="flex justify-between border-t border-blue-500/20 pt-1">
+                <dt className="font-semibold text-blue-300">
+                  Total à remettre
+                </dt>
+                <dd className="font-mono font-bold text-blue-300">
+                  {fmtMoney(data.taxes_collected)}
+                </dd>
+              </div>
+            </dl>
+            <p className="mt-2 text-[10px] text-white/40">
+              Ces montants ne sont pas du revenu — ils sont perçus pour
+              le compte du gouvernement et n&apos;entrent pas dans le
+              calcul du profit.
+            </p>
+          </div>
+        ) : null}
 
         {/* Liste des factures réellement émises — statut visuel
             (brouillon / envoyée / en retard / payée / annulée), date
