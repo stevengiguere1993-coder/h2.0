@@ -331,12 +331,39 @@ async def _twilio_incoming_call_impl(request: Request, db: DBSession) -> Respons
     ).scalar_one_or_none()
 
     if pn is None:
-        log.warning("Incoming call to unknown number %s (CallSid=%s)", to_e164, call_sid)
-        twiml = provider.build_say_and_hangup(
-            say="Ce numéro n'est pas configuré. Au revoir.",
-            lang="fr-CA",
-        )
-        return Response(content=twiml, media_type="application/xml")
+        # Self-healing : si le numéro qu'on reçoit correspond à
+        # TWILIO_PHONE_NUMBER de l'env, le bootstrap a soit échoué soit
+        # n'a pas encore tourné. On crée la ligne à la volée pour que
+        # l'appel ne soit pas perdu — ça évite de devoir relancer un
+        # bootstrap manuel quand quelque chose foire au démarrage.
+        env_number = (os.getenv("TWILIO_PHONE_NUMBER") or "").strip()
+        if to_e164 == env_number and env_number:
+            log.warning(
+                "Self-heal : aucune ligne PhoneNumber pour %s, création à la volée",
+                to_e164,
+            )
+            pn = PhoneNumber(
+                e164=to_e164,
+                provider="twilio",
+                label="Ligne principale (auto-créée)",
+                forward_to_e164=(os.getenv("TWILIO_FORWARD_TO") or None),
+                active=True,
+            )
+            db.add(pn)
+            await db.flush()
+        else:
+            log.warning(
+                "Incoming call to unknown number %s (CallSid=%s, env=%s)",
+                to_e164, call_sid, env_number or "(non set)",
+            )
+            twiml = provider.build_say_and_hangup(
+                say=(
+                    "Ce numéro n'est pas configuré dans notre système. "
+                    "Au revoir."
+                ),
+                lang="fr-CA",
+            )
+            return Response(content=twiml, media_type="application/xml")
 
     forward_to = (
         (pn.forward_to_e164 or os.getenv("TWILIO_FORWARD_TO") or "").strip()
@@ -2124,6 +2151,24 @@ async def mark_sms_read(
 
 
 # ---------- Diagnostic infra téléphonie (admin) ------------
+
+
+@router.post(
+    "/diag/bootstrap",
+    summary="Relance manuellement le bootstrap Twilio (admin)",
+)
+async def trigger_bootstrap(_: CurrentAdmin) -> dict:
+    """Relance bootstrap_twilio() avec force=True pour reconfigurer
+    le webhook URL chez Twilio + créer/refresh la ligne PhoneNumber
+    en DB. Utile quand le bootstrap auto a échoué au démarrage."""
+    from app.scripts.twilio_bootstrap import bootstrap_twilio
+
+    try:
+        rc = await bootstrap_twilio(force=True)
+        return {"ok": rc == 0, "return_code": rc}
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Manual bootstrap failed")
+        return {"ok": False, "error": str(exc)}
 
 
 @router.get(
