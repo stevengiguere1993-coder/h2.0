@@ -538,6 +538,20 @@ async def init_db() -> None:
             ("voice_calls", "lead_callback_phone", "VARCHAR(50)"),
             ("voice_calls", "lead_reason", "TEXT"),
             ("voice_calls", "contact_request_id", "INTEGER"),
+            # Téléphonie Phase 3 — flags routage + voicemail.
+            (
+                "voice_calls",
+                "was_blocked",
+                "BOOLEAN NOT NULL DEFAULT FALSE",
+            ),
+            ("voice_calls", "was_vip", "BOOLEAN NOT NULL DEFAULT FALSE"),
+            (
+                "voice_calls",
+                "was_voicemail",
+                "BOOLEAN NOT NULL DEFAULT FALSE",
+            ),
+            ("voice_calls", "voicemail_transcription", "TEXT"),
+            ("voice_calls", "voicemail_summary", "TEXT"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

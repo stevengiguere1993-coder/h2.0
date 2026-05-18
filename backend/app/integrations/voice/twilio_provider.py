@@ -233,6 +233,35 @@ class TwilioVoiceProvider(VoiceProvider):
             "</Response>"
         )
 
+    def build_voicemail(
+        self,
+        *,
+        intro_say: str,
+        lang: str,
+        action_url: str,
+        transcribe_callback_url: str,
+        max_length_sec: int = 90,
+    ) -> str:
+        """TwiML voicemail (Phase 3) : annonce + enregistrement + transcription.
+
+        Twilio transcrit le message une fois l'enregistrement terminé
+        (~5-15 sec selon longueur) et POST le résultat sur
+        `transcribe_callback_url`. Les frais de transcription Twilio
+        sont minimes (~0.05 $/min de message).
+        """
+        voice = self._voice_for_lang(lang)
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            f'<Say voice="{voice}" language="{lang}">{xml_escape(intro_say)}</Say>'
+            f'<Record maxLength="{int(max_length_sec)}" '
+            f'finishOnKey="#" playBeep="true" '
+            f'transcribe="true" '
+            f'transcribeCallback="{xml_escape(transcribe_callback_url)}" '
+            f'action="{xml_escape(action_url)}" method="POST"/>'
+            "</Response>"
+        )
+
 
 _GOODBYE = {
     "fr-CA": "Désolée, je n'ai rien entendu. Bonne journée.",
