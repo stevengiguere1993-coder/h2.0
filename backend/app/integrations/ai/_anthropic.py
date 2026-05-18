@@ -36,7 +36,12 @@ class AnthropicProvider:
     default_embedding_model = ""
 
     def __init__(self, api_key: Optional[str] = None) -> None:
-        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "").strip()
+        self.api_key = (
+            api_key
+            or os.getenv("ANTHROPIC_API_KEY")
+            or os.getenv("anthropic_api_key")
+            or ""
+        ).strip()
 
     def _check_key(self) -> None:
         if not self.api_key:

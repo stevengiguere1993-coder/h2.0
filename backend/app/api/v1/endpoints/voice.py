@@ -2222,9 +2222,17 @@ async def voice_diag(_: CurrentAdmin, db: DBSession) -> dict:
         "TWILIO_API_KEY_SID": bool(os.getenv("TWILIO_API_KEY_SID")),
         "TWILIO_API_KEY_SECRET": bool(os.getenv("TWILIO_API_KEY_SECRET")),
         "voice_sdk_configured": voice_sdk_configured(),
-        "GEMINI_API_KEY": bool(os.getenv("GEMINI_API_KEY")),
-        "ANTHROPIC_API_KEY": bool(os.getenv("ANTHROPIC_API_KEY")),
-        "GROQ_API_KEY": bool(os.getenv("GROQ_API_KEY")),
+        # Case-insensitive : accepte les noms en majuscule (convention)
+        # ou en minuscule (parfois saisi par erreur dans Render UI).
+        "GEMINI_API_KEY": bool(
+            os.getenv("GEMINI_API_KEY") or os.getenv("gemini_api_key")
+        ),
+        "ANTHROPIC_API_KEY": bool(
+            os.getenv("ANTHROPIC_API_KEY") or os.getenv("anthropic_api_key")
+        ),
+        "GROQ_API_KEY": bool(
+            os.getenv("GROQ_API_KEY") or os.getenv("groq_api_key")
+        ),
     }
 
     # 2) Provider IA actif (chat) — on essaie de l'initialiser sans
