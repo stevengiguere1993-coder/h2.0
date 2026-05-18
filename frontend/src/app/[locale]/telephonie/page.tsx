@@ -9,12 +9,14 @@ import {
   Clock,
   Filter,
   Home,
+  MessageSquare,
   Phone,
   PhoneCall,
   PhoneForwarded,
   PhoneIncoming,
   PhoneOff,
   RefreshCw,
+  Send,
   ShieldCheck,
   Sparkles,
   TrendingUp,
@@ -45,7 +47,49 @@ const TELEPHONIE_ALLOWED_EMAILS = ["sgiguere@immohorizon.com"];
 
 type Me = { email?: string | null };
 
-type Section = "dashboard" | "appels" | "numeros" | "filtres" | "heures" | "plan";
+type Section =
+  | "dashboard"
+  | "appels"
+  | "messages"
+  | "numeros"
+  | "filtres"
+  | "heures"
+  | "plan";
+
+type SmsThread = {
+  peer_e164: string;
+  last_message: {
+    id: number;
+    direction: string;
+    body: string | null;
+    received_at: string;
+    num_media: number;
+  };
+  caller_kind: string | null;
+  entity_type: string | null;
+  entity_id: number | null;
+  unread: number;
+};
+
+type SmsRow = {
+  id: number;
+  phone_number_id: number;
+  provider_sid: string;
+  direction: string;
+  status: string;
+  from_e164: string;
+  to_e164: string;
+  body: string | null;
+  media_urls: string | null;
+  num_media: number;
+  received_at: string;
+  sent_at: string | null;
+  caller_kind: string | null;
+  entity_type: string | null;
+  entity_id: number | null;
+  sent_by_user_id: number | null;
+  read_at: string | null;
+};
 
 type PhoneNumberRow = {
   id: number;
@@ -135,6 +179,7 @@ export default function TelephonieHome() {
   const [filters, setFilters] = useState<FilterRow[]>([]);
   const [hours, setHours] = useState<BusinessHoursRow[]>([]);
   const [usage, setUsage] = useState<UsageDay | null>(null);
+  const [smsThreads, setSmsThreads] = useState<SmsThread[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [drawerCallId, setDrawerCallId] = useState<number | null>(null);
@@ -147,11 +192,12 @@ export default function TelephonieHome() {
     setLoading(true);
     setLoadError(null);
     try {
-      const [nRes, cRes, fRes, uRes] = await Promise.all([
+      const [nRes, cRes, fRes, uRes, sRes] = await Promise.all([
         authedFetch("/api/v1/voice/phone-numbers"),
         authedFetch("/api/v1/voice/calls?limit=100"),
         authedFetch("/api/v1/voice/filters"),
-        authedFetch("/api/v1/voice/usage/today")
+        authedFetch("/api/v1/voice/usage/today"),
+        authedFetch("/api/v1/voice/sms/threads?limit=80")
       ]);
       if (!nRes.ok) throw new Error(`numbers http_${nRes.status}`);
       if (!cRes.ok) throw new Error(`calls http_${cRes.status}`);
@@ -161,6 +207,7 @@ export default function TelephonieHome() {
       setCalls((await cRes.json()) as CallRow[]);
       setFilters((await fRes.json()) as FilterRow[]);
       if (uRes.ok) setUsage((await uRes.json()) as UsageDay);
+      if (sRes.ok) setSmsThreads((await sRes.json()) as SmsThread[]);
       if (nums.length > 0) {
         const hRes = await authedFetch(
           `/api/v1/voice/business-hours?phone_number_id=${nums[0].id}`
@@ -397,6 +444,10 @@ export default function TelephonieHome() {
           />
         ) : null}
 
+        {section === "messages" ? (
+          <MessagesSection threads={smsThreads} onReload={() => void reload()} />
+        ) : null}
+
         {section === "numeros" ? (
           <NumbersSection
             numbers={numbers}
@@ -456,6 +507,7 @@ function SectionTabs({
   const items: { key: Section; label: string; icon: React.ReactNode }[] = [
     { key: "dashboard", label: "Tableau de bord", icon: <Home className="h-3.5 w-3.5" /> },
     { key: "appels", label: "Appels", icon: <PhoneCall className="h-3.5 w-3.5" /> },
+    { key: "messages", label: "Messages", icon: <MessageSquare className="h-3.5 w-3.5" /> },
     { key: "numeros", label: "Numéros", icon: <Phone className="h-3.5 w-3.5" /> },
     { key: "filtres", label: "Filtres", icon: <Filter className="h-3.5 w-3.5" /> },
     { key: "heures", label: "Heures", icon: <Clock className="h-3.5 w-3.5" /> },
@@ -856,6 +908,248 @@ function CallsSection({
           </table>
         </div>
       )}
+    </section>
+  );
+}
+
+// ----------------------------------------------------------------------
+// Messages (SMS) section — inbox threadée + composeur
+// ----------------------------------------------------------------------
+
+function MessagesSection({
+  threads,
+  onReload
+}: {
+  threads: SmsThread[];
+  onReload: () => void;
+}) {
+  const [selected, setSelected] = useState<string | null>(
+    threads[0]?.peer_e164 || null
+  );
+  const [messages, setMessages] = useState<SmsRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [reply, setReply] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [composerTo, setComposerTo] = useState("");
+  const [showComposer, setShowComposer] = useState(threads.length === 0);
+
+  const loadThread = useCallback(async (peer: string) => {
+    setLoading(true);
+    setMessages([]);
+    try {
+      const res = await authedFetch(
+        `/api/v1/voice/sms?peer_e164=${encodeURIComponent(peer)}&limit=100`
+      );
+      if (res.ok) {
+        const data = (await res.json()) as SmsRow[];
+        // Chrono ascendant pour l'affichage type chat.
+        setMessages([...data].reverse());
+        // Mark all unread as read (best-effort).
+        for (const m of data) {
+          if (m.direction === "inbound" && m.read_at === null) {
+            void authedFetch(`/api/v1/voice/sms/${m.id}/read`, {
+              method: "POST"
+            });
+          }
+        }
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selected) void loadThread(selected);
+  }, [selected, loadThread]);
+
+  const sendReply = useCallback(
+    async (to: string, body: string) => {
+      if (!to || !body.trim()) return;
+      setSending(true);
+      setSendError(null);
+      try {
+        const res = await authedFetch("/api/v1/voice/sms", {
+          method: "POST",
+          body: JSON.stringify({ to_e164: to, body: body.trim() })
+        });
+        if (!res.ok) {
+          const t = await res.text().catch(() => "");
+          throw new Error(t || `http_${res.status}`);
+        }
+        setReply("");
+        // Recharge la thread + la liste pour voir le nouvel envoi.
+        await loadThread(to);
+        onReload();
+      } catch (err) {
+        setSendError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setSending(false);
+      }
+    },
+    [loadThread, onReload]
+  );
+
+  return (
+    <section className="mt-5 grid gap-4 lg:grid-cols-[320px_1fr]">
+      {/* Inbox */}
+      <div className="rounded-2xl border border-brand-800 bg-brand-900 p-3">
+        <div className="flex items-center justify-between gap-2 px-1 pb-2">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+            <MessageSquare className="h-4 w-4 text-teal-300" />
+            Inbox
+          </h2>
+          <button
+            type="button"
+            onClick={() => setShowComposer((v) => !v)}
+            className="rounded-md border border-teal-500/40 bg-teal-500/10 px-2 py-1 text-[10px] font-semibold text-teal-200 hover:bg-teal-500/20"
+          >
+            + Nouveau
+          </button>
+        </div>
+        {threads.length === 0 ? (
+          <EmptyHint compact>
+            Aucun SMS reçu pour l&apos;instant. Texte le numéro principal
+            depuis ton mobile pour tester l&apos;inbox.
+          </EmptyHint>
+        ) : (
+          <ul className="space-y-1">
+            {threads.map((t) => {
+              const isActive = selected === t.peer_e164;
+              return (
+                <li key={t.peer_e164}>
+                  <button
+                    type="button"
+                    onClick={() => setSelected(t.peer_e164)}
+                    className={`flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left transition ${
+                      isActive
+                        ? "bg-teal-500/10"
+                        : "hover:bg-brand-800/40"
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-xs font-semibold text-white">
+                          {t.peer_e164}
+                        </span>
+                        {t.caller_kind && t.caller_kind !== "unknown" ? (
+                          <CallerKindBadge kind={t.caller_kind} />
+                        ) : null}
+                      </div>
+                      <div className="truncate text-[11px] text-white/50">
+                        {t.last_message.direction === "outbound" ? "→ " : ""}
+                        {t.last_message.body || "(MMS)"}
+                      </div>
+                      <div className="text-[10px] text-white/30">
+                        {formatDateTime(t.last_message.received_at)}
+                      </div>
+                    </div>
+                    {t.unread > 0 ? (
+                      <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-teal-500 px-1 text-[9px] font-bold text-brand-950">
+                        {t.unread}
+                      </span>
+                    ) : null}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      {/* Conversation panel */}
+      <div className="rounded-2xl border border-brand-800 bg-brand-900 p-4 flex flex-col min-h-[400px]">
+        {showComposer && !selected ? (
+          <div className="space-y-3">
+            <h3 className="text-sm font-bold text-white">Nouveau SMS</h3>
+            <input
+              type="tel"
+              placeholder="+15146191111"
+              value={composerTo}
+              onChange={(e) => setComposerTo(e.target.value)}
+              className="w-full rounded-md border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white placeholder-white/30"
+            />
+            <textarea
+              placeholder="Message…"
+              value={reply}
+              onChange={(e) => setReply(e.target.value)}
+              rows={4}
+              className="w-full rounded-md border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white placeholder-white/30"
+            />
+            <button
+              type="button"
+              disabled={sending || !composerTo || !reply.trim()}
+              onClick={() => {
+                void sendReply(composerTo.trim(), reply);
+                setSelected(composerTo.trim());
+                setShowComposer(false);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-md border border-teal-500/40 bg-teal-500/10 px-3 py-2 text-xs font-semibold text-teal-200 hover:bg-teal-500/20 disabled:opacity-50"
+            >
+              <Send className="h-3.5 w-3.5" />
+              {sending ? "Envoi…" : "Envoyer"}
+            </button>
+            {sendError ? (
+              <p className="text-[11px] text-rose-300">Erreur : {sendError}</p>
+            ) : null}
+          </div>
+        ) : selected ? (
+          <>
+            <div className="flex items-center justify-between border-b border-brand-800 pb-2">
+              <div className="font-mono text-sm font-bold text-white">
+                {selected}
+              </div>
+              <CallButton targetE164={selected} label="Appeler" />
+            </div>
+            <div className="flex-1 overflow-y-auto py-3 space-y-2">
+              {loading ? (
+                <p className="text-[11px] text-white/40">Chargement…</p>
+              ) : messages.length === 0 ? (
+                <p className="text-[11px] text-white/40">Aucun message.</p>
+              ) : (
+                messages.map((m) => (
+                  <div
+                    key={m.id}
+                    className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm ${
+                      m.direction === "outbound"
+                        ? "ml-auto bg-teal-500/15 text-teal-100"
+                        : "mr-auto bg-brand-800 text-white/90"
+                    }`}
+                  >
+                    {m.body || (m.num_media > 0 ? "(MMS)" : "")}
+                    <div className="mt-1 text-[9px] text-white/40">
+                      {formatDateTime(m.received_at)}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="flex items-end gap-2 border-t border-brand-800 pt-3">
+              <textarea
+                placeholder="Réponse…"
+                value={reply}
+                onChange={(e) => setReply(e.target.value)}
+                rows={2}
+                className="flex-1 rounded-md border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white placeholder-white/30"
+              />
+              <button
+                type="button"
+                disabled={sending || !reply.trim()}
+                onClick={() => void sendReply(selected, reply)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-teal-500/40 bg-teal-500/10 px-3 py-2 text-xs font-semibold text-teal-200 hover:bg-teal-500/20 disabled:opacity-50"
+              >
+                <Send className="h-3.5 w-3.5" />
+                {sending ? "…" : "Envoyer"}
+              </button>
+            </div>
+            {sendError ? (
+              <p className="mt-2 text-[11px] text-rose-300">{sendError}</p>
+            ) : null}
+          </>
+        ) : (
+          <EmptyHint>Sélectionne une conversation à gauche.</EmptyHint>
+        )}
+      </div>
     </section>
   );
 }
