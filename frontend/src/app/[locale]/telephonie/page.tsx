@@ -805,6 +805,233 @@ function DashboardSection({
           </ol>
         </div>
       </section>
+
+      <DiagnosticPanel />
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------
+// Diagnostic panel — fetch /voice/diag avec le JWT admin
+// ----------------------------------------------------------------------
+
+type DiagPayload = {
+  env: Record<string, unknown>;
+  ai?: { configured?: boolean; provider?: string; error?: string };
+  tables: Record<string, string>;
+  columns: Record<string, string>;
+  phone_numbers?: unknown;
+  usage_today?: unknown;
+};
+
+function DiagnosticPanel() {
+  const [data, setData] = useState<DiagPayload | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+
+  const fetchDiag = useCallback(async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch("/api/v1/voice/diag");
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      setData((await res.json()) as DiagPayload);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  // Auto-load au premier déploiement de la card.
+  useEffect(() => {
+    if (open && data === null && !busy) void fetchDiag();
+  }, [open, data, busy, fetchDiag]);
+
+  const env = (data?.env || {}) as Record<string, unknown>;
+  const tables = data?.tables || {};
+  const columns = data?.columns || {};
+
+  // Compteurs pour vue d'ensemble rapide.
+  const tablesMissing = Object.entries(tables).filter(
+    ([, v]) => v !== "ok"
+  );
+  const columnsMissing = Object.entries(columns).filter(
+    ([, v]) => v !== "ok"
+  );
+  const allGreen =
+    data !== null &&
+    tablesMissing.length === 0 &&
+    columnsMissing.length === 0;
+
+  return (
+    <section className="mt-5 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-3"
+      >
+        <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+          🔧 Diagnostic infra téléphonie
+          {data ? (
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                allGreen
+                  ? "bg-emerald-500/15 text-emerald-300"
+                  : "bg-amber-500/15 text-amber-300"
+              }`}
+            >
+              {allGreen
+                ? "tout vert"
+                : `${tablesMissing.length + columnsMissing.length} alertes`}
+            </span>
+          ) : null}
+        </h2>
+        <span className="text-white/40">{open ? "▾" : "▸"}</span>
+      </button>
+
+      {open ? (
+        <div className="mt-4 space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void fetchDiag()}
+              disabled={busy}
+              className="rounded-md border border-teal-500/40 bg-teal-500/10 px-2.5 py-1 text-[11px] font-semibold text-teal-200 hover:bg-teal-500/20 disabled:opacity-50"
+            >
+              {busy ? "Chargement…" : "Rafraîchir"}
+            </button>
+            {err ? (
+              <span className="text-[11px] text-rose-300">{err}</span>
+            ) : null}
+          </div>
+
+          {data ? (
+            <>
+              {/* Variables d'environnement */}
+              <DiagBlock title="Variables d'environnement Render">
+                <ul className="grid gap-1 sm:grid-cols-2">
+                  {Object.entries(env).map(([k, v]) => {
+                    const ok =
+                      v === true ||
+                      (typeof v === "string" && v.length > 0 && v !== "null");
+                    const display =
+                      v === true ? "✓ configuré" : v == null ? "—" : String(v);
+                    return (
+                      <li
+                        key={k}
+                        className="flex items-center justify-between gap-2 rounded-md bg-brand-950 px-2 py-1.5 text-[11px]"
+                      >
+                        <code className="text-white/70">{k}</code>
+                        <span
+                          className={
+                            ok ? "text-emerald-300" : "text-amber-300"
+                          }
+                        >
+                          {display.length > 30
+                            ? display.slice(0, 27) + "…"
+                            : display}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </DiagBlock>
+
+              {/* Tables */}
+              <DiagBlock title="Tables téléphonie en DB">
+                <ul className="grid gap-1 sm:grid-cols-2">
+                  {Object.entries(tables).map(([k, v]) => {
+                    const ok = v === "ok";
+                    return (
+                      <li
+                        key={k}
+                        className="flex items-center justify-between gap-2 rounded-md bg-brand-950 px-2 py-1.5 text-[11px]"
+                      >
+                        <code className="text-white/70">{k}</code>
+                        <span
+                          className={
+                            ok ? "text-emerald-300" : "text-rose-300"
+                          }
+                        >
+                          {v}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </DiagBlock>
+
+              {/* Colonnes critiques */}
+              <DiagBlock title="Colonnes critiques (ALTER ADD COLUMN)">
+                <ul className="grid gap-1 sm:grid-cols-2">
+                  {Object.entries(columns).map(([k, v]) => {
+                    const ok = v === "ok";
+                    return (
+                      <li
+                        key={k}
+                        className="flex items-center justify-between gap-2 rounded-md bg-brand-950 px-2 py-1.5 text-[10px]"
+                      >
+                        <code className="text-white/70">{k}</code>
+                        <span
+                          className={
+                            ok ? "text-emerald-300" : "text-rose-300"
+                          }
+                        >
+                          {v}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </DiagBlock>
+
+              {/* IA */}
+              <DiagBlock title="Provider IA">
+                <p className="text-[11px] text-white/70">
+                  {data.ai?.configured
+                    ? `Actif : ${data.ai.provider}`
+                    : data.ai?.error
+                      ? `Erreur : ${data.ai.error}`
+                      : "Non configuré (Léa ne pourra pas répondre tour-par-tour, seul le greeting statique fonctionnera)"}
+                </p>
+              </DiagBlock>
+
+              {/* JSON brut (pour copier-coller en debug) */}
+              <details className="rounded-xl border border-brand-800 bg-brand-950 p-3">
+                <summary className="cursor-pointer text-[11px] font-semibold text-white/60">
+                  JSON brut (à coller en cas de bug)
+                </summary>
+                <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap text-[10px] text-white/70">
+                  {JSON.stringify(data, null, 2)}
+                </pre>
+              </details>
+            </>
+          ) : busy ? null : (
+            <p className="text-[11px] text-white/40">
+              Clique sur Rafraîchir pour charger le diagnostic.
+            </p>
+          )}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function DiagBlock({
+  title,
+  children
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <h3 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-white/40">
+        {title}
+      </h3>
+      {children}
     </div>
   );
 }
