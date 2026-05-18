@@ -47,12 +47,28 @@ export async function generateMetadata({
       siteName: t("siteName"),
       title: t("tagline"),
       description: t("defaultDescription"),
-      locale: locale === "fr" ? "fr_CA" : "en_CA"
+      locale: locale === "fr" ? "fr_CA" : "en_CA",
+      url: `${siteUrl}/${locale === "fr" ? "" : locale}`,
+      // /logo.png est carré 3600×3600 — pas idéal pour OG (recommandé
+      // 1200×630 landscape) mais largement mieux que rien : sans
+      // og:image les réseaux sociaux choisissent une image au hasard
+      // dans la page (souvent la photo Unsplash du hero, hors contrôle).
+      // TODO : remplacer par /og-image.jpg (1200×630, branding Horizon)
+      // quand on aura un asset dédié.
+      images: [
+        {
+          url: `${siteUrl}/logo.png`,
+          width: 1200,
+          height: 1200,
+          alt: `${t("siteName")} — ${t("tagline")}`
+        }
+      ]
     },
     twitter: {
       card: "summary_large_image",
       title: t("siteName"),
-      description: t("defaultDescription")
+      description: t("defaultDescription"),
+      images: [`${siteUrl}/logo.png`]
     },
     verification: verification ? { google: verification } : undefined,
     robots: { index: true, follow: true }
