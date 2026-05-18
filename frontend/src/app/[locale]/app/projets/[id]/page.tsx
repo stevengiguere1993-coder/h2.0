@@ -2165,7 +2165,7 @@ function FinancesTab({ projectId }: { projectId: number }) {
         <FinanceKpi
           label="Profit réel"
           value={fmtMoney(data.actual_profit)}
-          sub={`${data.actual_margin_pct.toFixed(1)} % marge · Encaissé ${fmtMoney(data.paid_amount)}`}
+          sub={`${data.actual_margin_pct.toFixed(1)} % marge · Revenu contrat ${fmtMoney(data.projected_revenue)}`}
           tone={data.actual_profit >= 0 ? "emerald" : "rose"}
         />
       </div>
