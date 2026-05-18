@@ -2002,11 +2002,11 @@ function PlanSection() {
       <PhaseCard
         num={7}
         title="Onglet « Communications » dans chaque fiche CRM"
-        status="todo"
+        status="done"
         items={[
-          "Dans /prospection/[id], /app/crm/[id], /app/clients/[id] : ajouter un onglet « Communications » qui montre tout (appels entrants/sortants + SMS) pour ce contact, chronologiquement",
-          "Lecture seule au début, avec lien direct vers le drawer détaillé de /telephonie",
-          "Filtre par type (appel / SMS / voicemail) + recherche dans les transcriptions"
+          "Onglet/section « Communications » ajouté dans /prospection/[id], /app/crm/[id] et /app/clients/[id]",
+          "Endpoint GET /api/v1/voice/communications/{type}/{id} accessible à tout utilisateur authentifié (read-only, scopé par entité)",
+          "Filtres Tout / Appels / SMS / Voicemail + recherche libre dans le contenu, lien vers le drawer détaillé /telephonie"
         ]}
       />
 
