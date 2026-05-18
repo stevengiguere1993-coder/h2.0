@@ -3,10 +3,10 @@
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
 
-import { AppSidebar } from "@/components/app-sidebar";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
 import { KratosFloating } from "@/components/kratos-floating";
+import { TelephonieSidebar } from "@/components/telephonie-sidebar";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
 import { VoiceConsole } from "@/components/voice-console";
 import { useCurrentUser } from "@/hooks/use-current-user";
@@ -43,7 +43,7 @@ export default function TelephonieLayout({
   return (
     <ThemeProvider initialTheme={initialTheme}>
       <div className="flex min-h-screen bg-brand-950">
-        <AppSidebar
+        <TelephonieSidebar
           open={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
           userEmail={user.email}
