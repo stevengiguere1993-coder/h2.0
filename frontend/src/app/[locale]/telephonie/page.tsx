@@ -35,6 +35,7 @@ type PhoneNumberRow = {
   provider: string;
   label: string | null;
   forward_to_e164: string | null;
+  secretary_mode_active: boolean;
   owner_user_id: number | null;
   active: boolean;
 };
@@ -51,6 +52,21 @@ type CallRow = {
   answered_at: string | null;
   ended_at: string | null;
   duration_sec: number | null;
+  lang: string;
+  intent: string | null;
+  lead_name: string | null;
+  lead_callback_phone: string | null;
+  lead_reason: string | null;
+  contact_request_id: number | null;
+};
+
+type CallTurnRow = {
+  id: number;
+  turn_index: number;
+  role: string;
+  text: string;
+  confidence: number | null;
+  created_at: string;
 };
 
 export default function TelephonieHome() {
@@ -62,6 +78,52 @@ export default function TelephonieHome() {
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [expandedCallId, setExpandedCallId] = useState<number | null>(null);
+  const [turnsByCallId, setTurnsByCallId] = useState<Record<number, CallTurnRow[]>>({});
+
+  const toggleSecretary = useCallback(async (n: PhoneNumberRow) => {
+    const next = !n.secretary_mode_active;
+    // Optimistic update
+    setNumbers((prev) =>
+      prev.map((row) =>
+        row.id === n.id ? { ...row, secretary_mode_active: next } : row
+      )
+    );
+    try {
+      const res = await authedFetch(`/api/v1/voice/phone-numbers/${n.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ secretary_mode_active: next })
+      });
+      if (!res.ok) throw new Error(`http_${res.status}`);
+    } catch (err) {
+      // Rollback on error
+      setNumbers((prev) =>
+        prev.map((row) =>
+          row.id === n.id
+            ? { ...row, secretary_mode_active: n.secretary_mode_active }
+            : row
+        )
+      );
+      setLoadError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  const expandCall = useCallback(async (callId: number) => {
+    if (expandedCallId === callId) {
+      setExpandedCallId(null);
+      return;
+    }
+    setExpandedCallId(callId);
+    if (turnsByCallId[callId]) return;
+    try {
+      const res = await authedFetch(`/api/v1/voice/calls/${callId}/turns`);
+      if (!res.ok) throw new Error(`turns http_${res.status}`);
+      const data = (await res.json()) as CallTurnRow[];
+      setTurnsByCallId((prev) => ({ ...prev, [callId]: data }));
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : String(err));
+    }
+  }, [expandedCallId, turnsByCallId]);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -166,13 +228,13 @@ export default function TelephonieHome() {
               Secrétaire IA d&apos;appels
             </h1>
             <p className="mt-1 text-sm text-white/60">
-              Numéro 438 unique, appels entrants forwardés au mobile en
-              Phase 1. Secrétaire IA et qualification automatique en
-              Phase 2.
+              Numéro 438 unique, secrétaire IA bilingue qui décroche,
+              qualifie et transfère — désactivable par numéro (fallback
+              transfert direct).
             </p>
           </div>
-          <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">
-            Phase 1 active
+          <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+            Phase 2 active
           </span>
         </header>
 
@@ -215,6 +277,7 @@ export default function TelephonieHome() {
                   <th className="py-1.5 font-normal">Numéro</th>
                   <th className="py-1.5 font-normal">Libellé</th>
                   <th className="py-1.5 font-normal">Forward vers</th>
+                  <th className="py-1.5 font-normal">Secrétaire IA</th>
                   <th className="py-1.5 text-right font-normal">État</th>
                 </tr>
               </thead>
@@ -227,6 +290,25 @@ export default function TelephonieHome() {
                       {n.forward_to_e164 || (
                         <span className="text-white/30">non configuré</span>
                       )}
+                    </td>
+                    <td className="py-2">
+                      <button
+                        type="button"
+                        onClick={() => void toggleSecretary(n)}
+                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider transition ${
+                          n.secretary_mode_active
+                            ? "bg-amber-500/20 text-amber-200 hover:bg-amber-500/30"
+                            : "bg-white/5 text-white/50 hover:bg-white/10"
+                        }`}
+                        title={
+                          n.secretary_mode_active
+                            ? "Cliquer pour désactiver — retour au transfert direct"
+                            : "Cliquer pour activer — l'IA décroche et qualifie"
+                        }
+                      >
+                        <Sparkles className="h-3 w-3" />
+                        {n.secretary_mode_active ? "activée" : "désactivée"}
+                      </button>
                     </td>
                     <td className="py-2 text-right">
                       {n.active ? (
@@ -259,26 +341,21 @@ export default function TelephonieHome() {
                 <tr>
                   <th className="py-1.5 font-normal">Date</th>
                   <th className="py-1.5 font-normal">De</th>
-                  <th className="py-1.5 font-normal">Vers</th>
+                  <th className="py-1.5 font-normal">Intent</th>
                   <th className="py-1.5 font-normal">Statut</th>
                   <th className="py-1.5 text-right font-normal">Durée</th>
+                  <th className="py-1.5 text-right font-normal" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/10">
                 {calls.map((c) => (
-                  <tr key={c.id}>
-                    <td className="py-2 text-white/60">
-                      {formatDateTime(c.started_at)}
-                    </td>
-                    <td className="py-2 font-mono text-white">{c.from_e164}</td>
-                    <td className="py-2 font-mono text-white/80">{c.to_e164}</td>
-                    <td className="py-2">
-                      <StatusBadge status={c.status} />
-                    </td>
-                    <td className="py-2 text-right text-white/80">
-                      {c.duration_sec != null ? `${c.duration_sec}s` : "—"}
-                    </td>
-                  </tr>
+                  <CallRowItem
+                    key={c.id}
+                    call={c}
+                    expanded={expandedCallId === c.id}
+                    turns={turnsByCallId[c.id]}
+                    onToggle={() => void expandCall(c.id)}
+                  />
                 ))}
               </tbody>
             </table>
@@ -326,33 +403,33 @@ export default function TelephonieHome() {
             title="Secrétaire IA (qualification + dispatch)"
             icon={<Sparkles className="h-4 w-4 text-amber-300" />}
             scope="2-3 PR"
-            status="todo"
+            status="in_progress"
           >
             <ul className="space-y-1">
               <li>
-                Décroche + salutation française naturelle (Twilio
-                ConversationRelay ou Anthropic + ElevenLabs TTS).
+                Décroche + salutation française/anglaise naturelle
+                (Polly Neural). ✓
               </li>
               <li>
-                Capture nom + raison de l&apos;appel + numéro de rappel
-                si nécessaire.
+                Capture nom + raison de l&apos;appel + numéro de rappel,
+                tour-par-tour via Claude (cascade Gemini → Anthropic →
+                Groq). ✓
               </li>
               <li>
-                Création automatique d&apos;un lead CRM selon l&apos;intent
-                détecté (construction / dev IA / gestion immo / autre).
+                Création automatique d&apos;un ContactRequest CRM quand
+                l&apos;appelant demande à être rappelé. ✓
               </li>
               <li>
-                Transfert vers le bon user selon l&apos;intent et la
-                disponibilité.
+                Transfert direct vers <code>forward_to_e164</code> quand
+                l&apos;intent est clair (rénovation / logiciel / gestion
+                immo / urgence). ✓
               </li>
               <li>
-                Prise de RDV intégrée à ton agenda existant (créneaux
-                libres).
+                Toggle activable par numéro depuis cette page. ✓
               </li>
               <li>
-                Transcription complète + résumé structuré (décisions,
-                actions) après chaque appel — réutilise la cascade IA
-                déjà en place.
+                Reste à faire : prise de RDV intégrée à l&apos;agenda
+                + résumé structuré post-appel.
               </li>
             </ul>
           </PhaseCard>
@@ -453,19 +530,127 @@ export default function TelephonieHome() {
         </section>
 
         {/* CTA */}
-        <div className="mt-8 rounded-2xl border border-teal-500/40 bg-teal-500/10 p-4 text-center">
-          <CheckCircle2 className="mx-auto mb-1.5 h-5 w-5 text-teal-300" />
+        <div className="mt-8 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-center">
+          <Sparkles className="mx-auto mb-1.5 h-5 w-5 text-amber-300" />
           <p className="text-sm font-semibold text-white">
-            Phase 1 prête. Appelle le numéro pour tester.
+            Active la secrétaire IA pour tester
           </p>
           <p className="mt-1 text-xs text-white/70">
-            Le journal ci-dessus se met à jour à chaque appel. Quand tu seras
-            prêt pour la secrétaire IA, dis-le et j&apos;enchaîne sur la
-            Phase 2.
+            Bouton « Secrétaire IA » dans le tableau des numéros ci-dessus.
+            Une fois activée, appelle le numéro : l&apos;IA décroche,
+            comprend ta demande et soit te transfère, soit prend un
+            message. Clique sur un appel dans le journal pour voir la
+            transcription tour-par-tour.
           </p>
         </div>
       </div>
     </div>
+  );
+}
+
+function CallRowItem({
+  call,
+  expanded,
+  turns,
+  onToggle
+}: {
+  call: CallRow;
+  expanded: boolean;
+  turns: CallTurnRow[] | undefined;
+  onToggle: () => void;
+}) {
+  return (
+    <>
+      <tr className="cursor-pointer hover:bg-white/[0.03]" onClick={onToggle}>
+        <td className="py-2 text-white/60">{formatDateTime(call.started_at)}</td>
+        <td className="py-2 font-mono text-white">{call.from_e164}</td>
+        <td className="py-2 text-white/80">
+          {call.intent ? (
+            <IntentBadge intent={call.intent} />
+          ) : (
+            <span className="text-white/30">—</span>
+          )}
+        </td>
+        <td className="py-2">
+          <StatusBadge status={call.status} />
+        </td>
+        <td className="py-2 text-right text-white/80">
+          {call.duration_sec != null ? `${call.duration_sec}s` : "—"}
+        </td>
+        <td className="py-2 text-right text-white/40">
+          {expanded ? "▾" : "▸"}
+        </td>
+      </tr>
+      {expanded ? (
+        <tr>
+          <td colSpan={6} className="bg-white/[0.02] p-3">
+            {call.lead_name || call.lead_callback_phone || call.lead_reason ? (
+              <div className="mb-3 rounded-md border border-teal-500/30 bg-teal-500/5 p-3 text-[11px] text-white/80">
+                <div className="mb-1 font-semibold text-teal-200">
+                  Lead capturé
+                </div>
+                {call.lead_name ? <div>Nom : {call.lead_name}</div> : null}
+                {call.lead_callback_phone ? (
+                  <div>Rappel : {call.lead_callback_phone}</div>
+                ) : null}
+                {call.lead_reason ? <div>Raison : {call.lead_reason}</div> : null}
+                {call.contact_request_id ? (
+                  <div className="mt-1 text-teal-300">
+                    Fiche CRM #{call.contact_request_id} créée
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {turns === undefined ? (
+              <p className="text-[11px] text-white/40">Chargement…</p>
+            ) : turns.length === 0 ? (
+              <p className="text-[11px] text-white/40">
+                Pas de transcription (transfert direct, pas de secrétaire IA
+                sur cet appel).
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {turns.map((t) => (
+                  <li
+                    key={t.id}
+                    className={`rounded-md p-2 text-[11px] ${
+                      t.role === "assistant"
+                        ? "bg-teal-500/10 text-teal-100"
+                        : "bg-white/5 text-white/80"
+                    }`}
+                  >
+                    <span className="mr-2 font-semibold uppercase tracking-wide text-[9px] opacity-60">
+                      {t.role === "assistant" ? "Secrétaire" : "Appelant"}
+                    </span>
+                    {t.text}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </td>
+        </tr>
+      ) : null}
+    </>
+  );
+}
+
+function IntentBadge({ intent }: { intent: string }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    renovation: { label: "rénovation", cls: "bg-teal-500/15 text-teal-300" },
+    dev_logiciel: { label: "logiciel", cls: "bg-violet-500/15 text-violet-300" },
+    gestion_immo: { label: "gestion immo", cls: "bg-blue-500/15 text-blue-300" },
+    urgence: { label: "urgence", cls: "bg-rose-500/15 text-rose-300" },
+    callback: { label: "rappel", cls: "bg-amber-500/15 text-amber-300" },
+    spam: { label: "spam", cls: "bg-white/10 text-white/40" },
+    unclear: { label: "indéfini", cls: "bg-white/10 text-white/40" }
+  };
+  const meta = map[intent] || { label: intent, cls: "bg-white/10 text-white/60" };
+  return (
+    <span
+      className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${meta.cls}`}
+    >
+      {meta.label}
+    </span>
   );
 }
 

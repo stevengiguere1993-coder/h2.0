@@ -80,6 +80,11 @@ class PhoneNumber(Base):
     # quand aucune CallRoute ne matche. En Phase 2, la secrétaire IA
     # prend le relais et ce champ devient un fallback.
     forward_to_e164: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # Phase 2 : si True, la secrétaire IA décroche et qualifie l'appel
+    # avant de transférer. Sinon : transfert direct (comportement Phase 1).
+    secretary_mode_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
     # Optionnel : user_id à qui ce numéro « appartient » (statistiques,
     # affichage dans son tableau, etc.). NULL = pool partagé.
     owner_user_id: Mapped[Optional[int]] = mapped_column(
@@ -150,12 +155,33 @@ class Call(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
+    # Phase 2 — secrétaire IA. Langue détectée au premier tour
+    # ("fr-CA" / "en-US"), intent classifié à la fin, infos de rappel
+    # capturées si l'appelant ne pouvait pas être transféré directement,
+    # action finale prise par la secrétaire.
+    lang: Mapped[str] = mapped_column(String(8), nullable=False, default="fr-CA")
+    intent: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    lead_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    lead_callback_phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    lead_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # contact_requests.id si la secrétaire a créé un lead CRM pour cet
+    # appel (intent = callback / business connu hors heures).
+    contact_request_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("contact_requests.id", ondelete="SET NULL"), nullable=True
+    )
+
     phone_number: Mapped[PhoneNumber] = relationship(back_populates="calls")
     transcript: Mapped[Optional["CallTranscript"]] = relationship(
         back_populates="call",
         cascade="all, delete-orphan",
         passive_deletes=True,
         uselist=False,
+    )
+    turns: Mapped[list["CallTurn"]] = relationship(
+        back_populates="call",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="CallTurn.turn_index",
     )
 
 
@@ -215,3 +241,32 @@ class CallTranscript(Base):
     )
 
     call: Mapped[Call] = relationship(back_populates="transcript")
+
+
+class CallTurn(Base):
+    """Un tour de parole pendant la conversation avec la secrétaire IA.
+
+    `role` = 'user' (ce que l'appelant a dit, transcrit par Twilio) ou
+    'assistant' (ce que la secrétaire a répondu). On indexe par
+    (call_id, turn_index) pour rejouer l'historique facilement.
+    """
+
+    __tablename__ = "voice_call_turns"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    call_id: Mapped[int] = mapped_column(
+        ForeignKey("voice_calls.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    turn_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)  # user|assistant
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Confidence de la transcription Twilio (0.0-1.0) pour les tours
+    # 'user'. NULL pour 'assistant'.
+    confidence: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    call: Mapped[Call] = relationship(back_populates="turns")
