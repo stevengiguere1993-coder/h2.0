@@ -41,6 +41,13 @@ services:
         sync: false
       - key: CLAUDE_MODEL
         value: "claude-sonnet-4-5"
+      # Gemini (Google AI Studio) — gratuit, utilisé EN PREMIER dans la
+      # cascade IA (app/integrations/ai/_factory.py) avant de tomber sur
+      # Anthropic puis Groq. Clé : https://aistudio.google.com/apikey
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
       - key: MONDAY_API_TOKEN
         sync: false
       - key: QUICKBOOKS_CLIENT_ID
