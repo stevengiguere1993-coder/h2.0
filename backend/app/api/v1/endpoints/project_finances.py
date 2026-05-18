@@ -56,6 +56,10 @@ class InvoiceLine(BaseModel):
 
 class FinancesResponse(BaseModel):
     projected_revenue: float
+    # Revenu projeté HORS TAXES (TPS/TVQ exclues) — c'est cette valeur
+    # qui sert au calcul du profit. Les taxes ne sont jamais un revenu :
+    # elles passent au gouvernement (« perçues pour le compte de »).
+    projected_revenue_ex_tax: float = 0.0
     projected_service_cost: float
     projected_labour_cost: float
     projected_labour_hours: float
@@ -73,12 +77,21 @@ class FinancesResponse(BaseModel):
     service_lines: List[CostLine]   # from soumission items
     material_lines: List[CostLine]  # from achats
     invoiced_amount: float
+    # Facturé HORS TAXES (somme des subtotals des factures émises).
+    invoiced_amount_ex_tax: float = 0.0
     # Sous-total facturé en EXTRAS (FactureItem.kind == 'extra') — ne
     # compte pas dans le « reste à facturer » du contrat. Sert de
     # revenu additionnel dans le calcul du profit réel.
     extras_billed_amount: float = 0.0
     paid_amount: float
     balance_due: float
+    # Taxes COLLECTÉES sur les factures émises (à remettre au
+    # gouvernement). TPS = fédéral (Receveur général), TVQ = Revenu
+    # Québec. La somme représente l'obligation fiscale brute du projet
+    # (avant déduction des CTI/RTI sur les achats — non gérés ici).
+    tps_collected: float = 0.0
+    tvq_collected: float = 0.0
+    taxes_collected: float = 0.0
     invoices: List[InvoiceLine]
 
 
@@ -148,6 +161,18 @@ async def _compute_finances(
             projected_revenue = float(sm.total)
         else:
             projected_revenue = sum(it.total for it in service_lines)
+
+        # Revenu HORS TAXES : prend le subtotal de la soumission si
+        # disponible (c'est exactement somme(quantité × prix unitaire)
+        # avant TPS/TVQ). Fallback : on dérive du TTC via 1.14975.
+        if sm and sm.subtotal is not None:
+            projected_revenue_ex_tax = float(sm.subtotal)
+        elif projected_revenue > 0:
+            projected_revenue_ex_tax = round(projected_revenue / 1.14975, 2)
+        else:
+            projected_revenue_ex_tax = sum(float(it.total) for it in service_lines)
+    else:
+        projected_revenue_ex_tax = 0.0
 
     projected_service_cost = sum(it.total for it in service_lines)
 
@@ -319,10 +344,16 @@ async def _compute_finances(
     projected_total_cost = round(
         projected_service_cost + projected_labour_cost, 2
     )
-    projected_profit = round(projected_revenue - projected_total_cost, 2)
+    # Profit = revenu HORS TAXES − coûts. Les TPS/TVQ ne sont pas du
+    # revenu (elles sont perçues pour le gouvernement), donc on les
+    # exclut du calcul. Les coûts (achats, main-d'œuvre) sont déjà HT
+    # côté achats — les CTI/RTI ne sont pas considérés ici.
+    projected_profit = round(
+        projected_revenue_ex_tax - projected_total_cost, 2
+    )
     projected_margin_pct = (
-        round(projected_profit / projected_revenue * 100, 1)
-        if projected_revenue > 0
+        round(projected_profit / projected_revenue_ex_tax * 100, 1)
+        if projected_revenue_ex_tax > 0
         else 0.0
     )
 
@@ -427,6 +458,15 @@ async def _compute_finances(
     # pour les KPI cash-flow (Facturé / Reçu / Solde).
     invoiced = sum(float(f.total or 0) for f in factures)
 
+    # Facturé HT et taxes collectées — séparés pour calcul du profit
+    # (HT) et pour afficher l'obligation fiscale (à remettre au gouv).
+    invoiced_ex_tax = round(
+        sum(float(f.subtotal or 0) for f in factures), 2
+    )
+    tps_collected = round(sum(float(f.tps or 0) for f in factures), 2)
+    tvq_collected = round(sum(float(f.tvq or 0) for f in factures), 2)
+    taxes_collected = round(tps_collected + tvq_collected, 2)
+
     # Extras facturés (avant taxes) — exposé séparément à l'UI.
     extras_billed_amount = round(extras_subtotal, 2)
 
@@ -476,10 +516,12 @@ async def _compute_finances(
 
     balance = max(0.0, invoiced - paid_sum)
 
-    # Profit réel = (revenu contractuel + extras facturés) - coûts
-    # engagés réels. Les extras bonifient le profit puisqu'ils sont
-    # de nouveaux revenus hors-contrat (ex. travaux ajoutés).
-    revenue_base = projected_revenue + extras_billed_amount
+    # Profit réel = (revenu contractuel HT + extras facturés HT) -
+    # coûts engagés réels. Les taxes (TPS/TVQ) ne sont jamais incluses
+    # — elles sont à remettre au gouvernement et exposées séparément
+    # via `taxes_collected`. Les extras bonifient le profit puisqu'ils
+    # sont de nouveaux revenus hors-contrat (ex. travaux ajoutés).
+    revenue_base = projected_revenue_ex_tax + extras_billed_amount
     actual_profit = round(revenue_base - actual_total_cost, 2)
     actual_margin_pct = (
         round(actual_profit / revenue_base * 100, 1)
@@ -488,6 +530,7 @@ async def _compute_finances(
 
     return FinancesResponse(
         projected_revenue=round(projected_revenue, 2),
+        projected_revenue_ex_tax=round(projected_revenue_ex_tax, 2),
         projected_service_cost=round(projected_service_cost, 2),
         projected_labour_cost=projected_labour_cost,
         projected_labour_hours=round(projected_labour_hours, 2),
@@ -503,8 +546,12 @@ async def _compute_finances(
         service_lines=service_lines,
         material_lines=material_lines,
         invoiced_amount=round(invoiced, 2),
+        invoiced_amount_ex_tax=invoiced_ex_tax,
         extras_billed_amount=extras_billed_amount,
         paid_amount=round(paid_sum, 2),
         balance_due=round(balance, 2),
+        tps_collected=tps_collected,
+        tvq_collected=tvq_collected,
+        taxes_collected=taxes_collected,
         invoices=invoices_out,
     )
