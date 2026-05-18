@@ -105,7 +105,9 @@ export default function ProjectDetailPage() {
   const [convertingToFacture, setConvertingToFacture] = useState(false);
   const [factureModalOpen, setFactureModalOpen] = useState(false);
   const [includeSoumission, setIncludeSoumission] = useState(true);
+  const [soumissionMode, setSoumissionMode] = useState<"pct" | "amount">("pct");
   const [soumissionPct, setSoumissionPct] = useState("100");
+  const [soumissionAmount, setSoumissionAmount] = useState("");
   const [includeHours, setIncludeHours] = useState(false);
   const [includeAchats, setIncludeAchats] = useState(false);
   const [onlyApproved, setOnlyApproved] = useState(true);
@@ -294,7 +296,9 @@ export default function ProjectDetailPage() {
     if (!p) return;
     // Default: if the project came from a soumission, prefer prix fixe.
     setIncludeSoumission(!!p.soumission_id);
+    setSoumissionMode("pct");
     setSoumissionPct("100");
+    setSoumissionAmount("");
     setIncludeHours(!p.soumission_id);
     setIncludeAchats(false);
     setOnlyApproved(true);
@@ -311,6 +315,9 @@ export default function ProjectDetailPage() {
     setConvertingToFacture(true);
     setError(null);
     try {
+      const amountVal = Number(soumissionAmount) || 0;
+      const useAmount =
+        soumissionMode === "amount" && amountVal > 0 && includeSoumission;
       const res = await authedFetch(
         `/api/v1/projects/${id}/convert-to-facture`,
         {
@@ -321,6 +328,9 @@ export default function ProjectDetailPage() {
               1,
               Math.min(100, Number(soumissionPct) || 100)
             ),
+            // Si l'admin a coché « Montant $ », on envoie le montant
+            // exact. Le backend dérive le ratio depuis le subtotal.
+            ...(useAmount ? { soumission_amount: amountVal } : {}),
             include_hours: includeHours,
             only_approved: onlyApproved,
             include_achats: includeAchats,
@@ -592,38 +602,104 @@ export default function ProjectDetailPage() {
                       : "Aucune soumission liée à ce projet."}
                   </p>
                   {includeSoumission && p.soumission_id ? (
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <label
-                        htmlFor="s_pct"
-                        className="text-xs text-white/70"
-                      >
-                        % à facturer
-                      </label>
-                      <input
-                        id="s_pct"
-                        type="number"
-                        min="1"
-                        max="100"
-                        value={soumissionPct}
-                        onChange={(e) => setSoumissionPct(e.target.value)}
-                        className="input w-20 text-sm"
-                      />
-                      <div className="flex gap-1">
-                        {[25, 30, 50, 75, 100].map((v) => (
-                          <button
-                            key={v}
-                            type="button"
-                            onClick={() => setSoumissionPct(String(v))}
-                            className={`rounded-md px-2 py-0.5 text-[10px] font-semibold ${
-                              String(v) === soumissionPct
-                                ? "bg-accent-500 text-brand-950"
-                                : "bg-white/5 text-white/70 hover:bg-white/10"
-                            }`}
-                          >
-                            {v}%
-                          </button>
-                        ))}
+                    <div className="mt-3 space-y-2">
+                      {/* Toggle mode : % vs montant $ */}
+                      <div className="inline-flex rounded-md border border-brand-800 bg-brand-950 p-0.5 text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() => setSoumissionMode("pct")}
+                          className={`rounded px-2.5 py-1 font-semibold transition ${
+                            soumissionMode === "pct"
+                              ? "bg-accent-500 text-brand-950"
+                              : "text-white/70 hover:bg-white/5"
+                          }`}
+                        >
+                          Pourcentage
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSoumissionMode("amount")}
+                          className={`rounded px-2.5 py-1 font-semibold transition ${
+                            soumissionMode === "amount"
+                              ? "bg-accent-500 text-brand-950"
+                              : "text-white/70 hover:bg-white/5"
+                          }`}
+                        >
+                          Montant $
+                        </button>
                       </div>
+
+                      {soumissionMode === "pct" ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label
+                            htmlFor="s_pct"
+                            className="text-xs text-white/70"
+                          >
+                            % à facturer
+                          </label>
+                          <input
+                            id="s_pct"
+                            type="number"
+                            min="1"
+                            max="100"
+                            value={soumissionPct}
+                            onChange={(e) => setSoumissionPct(e.target.value)}
+                            className="input w-20 text-sm"
+                          />
+                          <div className="flex gap-1">
+                            {[25, 30, 50, 75, 100].map((v) => (
+                              <button
+                                key={v}
+                                type="button"
+                                onClick={() => setSoumissionPct(String(v))}
+                                className={`rounded-md px-2 py-0.5 text-[10px] font-semibold ${
+                                  String(v) === soumissionPct
+                                    ? "bg-accent-500 text-brand-950"
+                                    : "bg-white/5 text-white/70 hover:bg-white/10"
+                                }`}
+                              >
+                                {v}%
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label
+                            htmlFor="s_amount"
+                            className="text-xs text-white/70"
+                          >
+                            Montant à facturer (avant taxes)
+                          </label>
+                          <div className="relative">
+                            <input
+                              id="s_amount"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              placeholder="5000"
+                              value={soumissionAmount}
+                              onChange={(e) =>
+                                setSoumissionAmount(e.target.value)
+                              }
+                              className="input w-32 pr-8 text-sm"
+                            />
+                            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-white/50">
+                              $
+                            </span>
+                          </div>
+                          {p.budget ? (
+                            <span className="text-[10px] text-white/40">
+                              Budget total :{" "}
+                              {Number(p.budget).toLocaleString("fr-CA", {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2
+                              })}{" "}
+                              $
+                            </span>
+                          ) : null}
+                        </div>
+                      )}
                     </div>
                   ) : null}
                 </div>

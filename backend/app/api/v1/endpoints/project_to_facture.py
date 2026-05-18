@@ -44,7 +44,16 @@ class ConvertToFactureRequest(BaseModel):
         default=100, ge=1, le=100,
         description=(
             "Percentage of the soumission to invoice — supports progress "
-            "billing (ex. 30% acompte, 50% mi-projet, 20% livraison)."
+            "billing (ex. 30% acompte, 50% mi-projet, 20% livraison). "
+            "Ignoré si `soumission_amount` est fourni."
+        ),
+    )
+    soumission_amount: Optional[float] = Field(
+        default=None, ge=0,
+        description=(
+            "Montant fixe $ à facturer depuis la soumission (avant taxes). "
+            "Si fourni, surcharge soumission_percentage. Utile pour la "
+            "facturation à montant convenu plutôt qu'à pourcentage exact."
         ),
     )
     include_hours: bool = Field(
@@ -141,9 +150,28 @@ async def convert_project_to_facture(
                     .order_by(SoumissionItem.position.asc(), SoumissionItem.id.asc())
                 )
             ).scalars().all()
-            pct = max(1, min(100, int(data.soumission_percentage)))
-            ratio = pct / 100.0
-            prefix = f"{pct}% — " if pct != 100 else ""
+            # Détermine le ratio : si l'admin a fourni un montant $
+            # personnalisé, on calcule le ratio basé sur le subtotal
+            # de la soumission (avant taxes). Sinon, on utilise le %.
+            if data.soumission_amount is not None and data.soumission_amount > 0:
+                sm_base = float(sm.subtotal or 0)
+                if sm_base <= 0:
+                    sm_base = sum(
+                        float(it.quantity) * float(it.unit_price)
+                        for it in sm_items
+                    )
+                if sm_base > 0:
+                    ratio = min(1.0, float(data.soumission_amount) / sm_base)
+                    pct = max(1, min(100, round(ratio * 100)))
+                    prefix = f"{int(round(float(data.soumission_amount)))} $ — "
+                else:
+                    ratio = 1.0
+                    pct = 100
+                    prefix = ""
+            else:
+                pct = max(1, min(100, int(data.soumission_percentage)))
+                ratio = pct / 100.0
+                prefix = f"{pct}% — " if pct != 100 else ""
             for it in sm_items:
                 qty = float(it.quantity)
                 unit_price = round(float(it.unit_price) * ratio, 2)
