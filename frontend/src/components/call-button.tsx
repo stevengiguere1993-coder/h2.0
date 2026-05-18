@@ -69,27 +69,36 @@ export function CallButton({
     }
   }
 
-  const base =
-    "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed";
+  // Variant icon = bouton rond discret (à côté d'un numéro affiché).
+  // Variant full = bouton avec label visible.
+  const isIcon = variant === "icon";
+  const base = isIcon
+    ? "inline-flex items-center justify-center rounded-full border h-7 w-7 text-[11px] transition disabled:opacity-40 disabled:cursor-not-allowed"
+    : "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed";
   const cls = normalized
-    ? "border-teal-500/40 bg-teal-500/10 text-teal-200 hover:bg-teal-500/20"
+    ? "border-teal-500/40 bg-teal-500/10 text-teal-300 hover:bg-teal-500/20"
     : "border-white/10 bg-white/5 text-white/40";
 
   return (
     <span className="inline-flex flex-col items-start gap-1">
       <button
         type="button"
-        onClick={call}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          void call();
+        }}
         disabled={disabled}
         title={
           normalized
             ? `Appeler ${normalized}`
             : "Aucun numéro disponible pour cet enregistrement"
         }
+        aria-label={normalized ? `Appeler ${normalized}` : "Appeler"}
         className={`${base} ${cls} ${className || ""}`}
       >
-        <Phone className="h-3 w-3" />
-        {variant === "full" ? (busy ? "Composition…" : label) : null}
+        <Phone className={isIcon ? "h-3.5 w-3.5" : "h-3 w-3"} />
+        {!isIcon ? (busy ? "Composition…" : label) : null}
       </button>
       {error ? (
         <span className="text-[10px] text-rose-300">{error}</span>

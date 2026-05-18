@@ -28,6 +28,7 @@ import { authedFetch } from "@/lib/auth";
 import { useProspectionLayout } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
 import { DriveButton } from "@/components/drive-button";
+import { CallButton } from "@/components/call-button";
 import { ActivityTimeline } from "./_activity-timeline";
 import { AddressAutocomplete } from "./_address-autocomplete";
 import { AnalysesSection } from "./_analyses-section";
@@ -1012,12 +1013,22 @@ export default function ProspectionDetailPage() {
                     </div>
                     <div>
                       <label className="label">Téléphone</label>
-                      <input
-                        type="tel"
-                        value={ownerPhone}
-                        onChange={(e) => setOwnerPhone(e.target.value)}
-                        className="input"
-                      />
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="tel"
+                          value={ownerPhone}
+                          onChange={(e) => setOwnerPhone(e.target.value)}
+                          className="input flex-1"
+                        />
+                        {ownerPhone ? (
+                          <CallButton
+                            variant="icon"
+                            targetE164={ownerPhone}
+                            entityType="prospection_lead"
+                            entityId={Number(id)}
+                          />
+                        ) : null}
+                      </div>
                       {ownerName && !ownerPhone ? (
                         <Canada411LookupButton
                           leadId={id}
