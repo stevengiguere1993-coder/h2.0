@@ -25,6 +25,7 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
+import { CallButton } from "@/components/call-button";
 import { FollowUpTimeline } from "@/components/follow-up-timeline";
 import { MeasurementsPanel } from "@/components/measurements-panel";
 import { SalesTasksPanel } from "@/components/sales-tasks-panel";
@@ -495,14 +496,27 @@ export default function ProspectDetailPage() {
                     value={p.email}
                     onSave={(v) => patchProspect({ email: v })}
                   />
-                  <EditableField
-                    icon={Phone}
-                    label="Téléphone"
-                    type="tel"
-                    value={p.phone || ""}
-                    displayValue={p.phone ? formatPhone(p.phone) : "—"}
-                    onSave={(v) => patchProspect({ phone: v || null })}
-                  />
+                  <div className="flex items-end gap-2">
+                    <div className="flex-1">
+                      <EditableField
+                        icon={Phone}
+                        label="Téléphone"
+                        type="tel"
+                        value={p.phone || ""}
+                        displayValue={p.phone ? formatPhone(p.phone) : "—"}
+                        onSave={(v) => patchProspect({ phone: v || null })}
+                      />
+                    </div>
+                    {p.phone ? (
+                      <CallButton
+                        variant="icon"
+                        targetE164={p.phone}
+                        entityType="contact_request"
+                        entityId={p.id}
+                        className="mb-1"
+                      />
+                    ) : null}
+                  </div>
                   <EditableAddress
                     icon={MapPin}
                     label="Adresse du projet"

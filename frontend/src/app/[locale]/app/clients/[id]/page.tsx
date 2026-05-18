@@ -17,6 +17,7 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
+import { CallButton } from "@/components/call-button";
 import { MeasurementsPanel } from "@/components/measurements-panel";
 import { SalesTasksPanel } from "@/components/sales-tasks-panel";
 import { Link } from "@/i18n/navigation";
@@ -376,13 +377,23 @@ function ClientTabs({
               </div>
               <div>
                 <label htmlFor="c_phone" className="label">Téléphone</label>
-                <input
-                  id="c_phone"
-                  type="tel"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className="input"
-                />
+                <div className="flex items-center gap-2">
+                  <input
+                    id="c_phone"
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    className="input flex-1"
+                  />
+                  {phone ? (
+                    <CallButton
+                      variant="icon"
+                      targetE164={phone}
+                      entityType="client"
+                      entityId={id}
+                    />
+                  ) : null}
+                </div>
               </div>
               <div className="sm:col-span-2">
                 <label htmlFor="c_address" className="label">Adresse</label>
