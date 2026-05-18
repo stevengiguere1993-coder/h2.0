@@ -73,6 +73,18 @@ function HomeContent() {
                 {tHero("ctaSecondary")}
               </Link>
             </div>
+            {/* Lien interne stratégique vers la page pilier SEO —
+                ancre de texte avec le mot-clé exact ciblé. */}
+            <p className="mt-4 text-sm text-white/60">
+              En savoir plus sur la{" "}
+              <Link
+                href={"/construction-renovation-montreal" as never}
+                className="text-accent-400 underline-offset-2 hover:underline"
+              >
+                construction et rénovation à Montréal
+              </Link>{" "}
+              avec Horizon — entrepreneur général licencié RBQ.
+            </p>
           </div>
 
           <div className="relative">

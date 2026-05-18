@@ -89,8 +89,67 @@ export default async function LocaleLayout({ children, params }: Props) {
   // client provider so every useTranslations() call resolves.
   const messages = await getMessages();
 
+  const siteUrl =
+    process.env.NEXT_PUBLIC_SITE_URL || "https://immohorizon.com";
+
+  // LocalBusiness schema servi sur TOUTES les pages publiques.
+  // Permet à Google d'afficher le knowledge panel + le map pack
+  // pour des requêtes locales (« construction rénovation Montréal »).
+  // Ajoute / modifie les champs (RBQ, geo, ratings) au fur et à mesure
+  // qu'ils sont disponibles. `@type: GeneralContractor` est plus
+  // spécifique que `LocalBusiness` et matche Google Construction.
+  const localBusinessLd = {
+    "@context": "https://schema.org",
+    "@type": ["GeneralContractor", "LocalBusiness"],
+    "@id": `${siteUrl}/#organization`,
+    name: "Horizon Services Immobiliers",
+    legalName: "Horizon Services Immobiliers inc.",
+    url: siteUrl,
+    logo: `${siteUrl}/logo.png`,
+    image: `${siteUrl}/logo.png`,
+    email: "info@immohorizon.com",
+    telephone: "+1-438-800-2979",
+    priceRange: "$$",
+    address: {
+      "@type": "PostalAddress",
+      addressLocality: "Montréal",
+      addressRegion: "QC",
+      addressCountry: "CA"
+    },
+    areaServed: [
+      { "@type": "City", name: "Montréal" },
+      { "@type": "City", name: "Laval" },
+      { "@type": "City", name: "Longueuil" },
+      { "@type": "City", name: "Brossard" },
+      { "@type": "AdministrativeArea", name: "Grand Montréal" }
+    ],
+    knowsAbout: [
+      "Construction résidentielle",
+      "Rénovation de cuisine",
+      "Rénovation de salle de bain",
+      "Rénovation de multilogement",
+      "Agrandissement de maison",
+      "Gestion immobilière"
+    ],
+    sameAs: [
+      `${siteUrl}`
+    ],
+    openingHoursSpecification: [
+      {
+        "@type": "OpeningHoursSpecification",
+        dayOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+        opens: "08:00",
+        closes: "17:00"
+      }
+    ]
+  };
+
   return (
     <NextIntlClientProvider locale={locale} messages={messages}>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(localBusinessLd) }}
+      />
       <div className="flex min-h-screen flex-col bg-brand-950 text-brand-100">
         <PublicChrome>{children}</PublicChrome>
       </div>
