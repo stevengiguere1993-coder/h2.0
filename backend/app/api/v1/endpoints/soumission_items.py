@@ -5,23 +5,78 @@ Nested endpoints for soumission line items:
     PATCH  /api/v1/soumissions/{soumission_id}/items/{item_id}
     DELETE /api/v1/soumissions/{soumission_id}/items/{item_id}
 
-All routes are staff-only (CurrentUser). The endpoint never recomputes
-the parent Soumission totals -- that responsibility lives on the
-frontend which already computes subtotal/TPS/TVQ/total live.
+All routes are staff-only (CurrentUser). Le backend recalcule
+automatiquement les totaux de la soumission parente (subtotal / TPS
+/ TVQ / total) après chaque mutation d'item, puis propage à
+`Project.budget` si un projet est lié. Comme ça la kanban des
+soumissions ET la fiche projet restent toujours synchros sans
+dépendre d'un PATCH manuel côté frontend.
 """
 
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from app.api.deps import CurrentUser, DBSession
+from app.models.project import Project
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
 
 
 router = APIRouter(prefix="/soumissions", tags=["soumission-items"])
+
+
+# Taux taxes québécoises 2026 — alignés avec le calcul frontend.
+TPS_RATE = 0.05
+TVQ_RATE = 0.09975
+
+
+async def _recompute_soumission_totals(db, soumission_id: int) -> None:
+    """Recalcule subtotal / tps / tvq / total à partir des items de la
+    soumission + propage au budget des projets liés.
+
+    Appelé après chaque create / update / delete d'un SoumissionItem.
+    Garantit que la kanban et la fiche projet reflètent toujours la
+    réalité, sans dépendre d'un PATCH frontend séparé.
+    """
+    items = (
+        await db.execute(
+            select(SoumissionItem).where(
+                SoumissionItem.soumission_id == soumission_id
+            )
+        )
+    ).scalars().all()
+
+    subtotal = round(sum(float(it.total or 0) for it in items), 2)
+    tps_base = round(
+        sum(float(it.total or 0) for it in items if it.tps_applicable), 2
+    )
+    tvq_base = round(
+        sum(float(it.total or 0) for it in items if it.tvq_applicable), 2
+    )
+    tps = round(tps_base * TPS_RATE, 2)
+    tvq = round(tvq_base * TVQ_RATE, 2)
+    total = round(subtotal + tps + tvq, 2)
+
+    sm = (
+        await db.execute(select(Soumission).where(Soumission.id == soumission_id))
+    ).scalar_one_or_none()
+    if sm is None:
+        return
+    sm.subtotal = subtotal
+    sm.tps = tps
+    sm.tvq = tvq
+    sm.total = total
+
+    # Sync : budget des projets liés (même hook que business.update_item).
+    await db.execute(
+        update(Project)
+        .where(Project.soumission_id == soumission_id)
+        .values(budget=total)
+    )
+    await db.flush()
 
 
 class SoumissionItemCreate(BaseModel):
@@ -127,6 +182,7 @@ async def create_item(
     )
     db.add(item)
     await db.flush()
+    await _recompute_soumission_totals(db, soumission_id)
     await db.refresh(item)
     return SoumissionItemRead.model_validate(item)
 
@@ -153,13 +209,14 @@ async def update_item(
     ).scalar_one_or_none()
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
-    update = data.model_dump(exclude_unset=True)
-    for field, value in update.items():
+    update_data = data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
         setattr(item, field, value)
     # Re-derive total whenever qty or price changes
-    if "quantity" in update or "unit_price" in update:
+    if "quantity" in update_data or "unit_price" in update_data:
         item.total = round(float(item.quantity) * float(item.unit_price), 2)
     await db.flush()
+    await _recompute_soumission_totals(db, soumission_id)
     await db.refresh(item)
     return SoumissionItemRead.model_validate(item)
 
@@ -187,3 +244,21 @@ async def delete_item(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
     await db.delete(item)
     await db.flush()
+    await _recompute_soumission_totals(db, soumission_id)
+
+
+# Backfill : endpoint admin pour resynchroniser TOUTES les soumissions
+# existantes dont les totaux ne reflètent pas leurs items.
+@router.post(
+    "/recompute-all",
+    summary="Backfill : recalcule subtotal/total de toutes les soumissions",
+)
+async def recompute_all_soumissions(
+    db: DBSession, _: CurrentUser
+) -> dict:
+    ids = (
+        await db.execute(select(Soumission.id))
+    ).scalars().all()
+    for sid in ids:
+        await _recompute_soumission_totals(db, int(sid))
+    return {"recomputed": len(ids)}
