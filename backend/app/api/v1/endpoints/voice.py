@@ -29,6 +29,12 @@ from sqlalchemy import select
 from app.api.deps import CurrentAdmin, DBSession
 from app.integrations.voice import get_voice_provider
 from app.integrations.voice.routing import RoutingAction, decide_routing
+from app.integrations.voice.caller_identity import (
+    CallerKind,
+    build_identity_context_block,
+    build_personalized_greeting,
+    identify_caller,
+)
 from app.integrations.voice.lead_outbound import (
     build_outbound_system_prompt,
     decide_lead_outbound_turn,
@@ -290,12 +296,37 @@ async def twilio_incoming_call(request: Request, db: DBSession) -> Response:
         db.add(existing)
         await db.flush()
 
+    # ----- Identification CRM de l'appelant -----
+    # Lookup phone dans client / locataire / lead_prospection / lead_web.
+    # On stocke caller_kind + entity_type+entity_id pour la fiche, et
+    # on garde l'objet `identified` pour personnaliser le greeting + le
+    # system prompt secrétaire ci-dessous.
+    identified = await identify_caller(db, from_e164)
+    existing.caller_kind = identified.kind.value
+    if identified.kind != CallerKind.UNKNOWN and identified.entity_id:
+        # Le mapping kind → entity_type table name :
+        kind_to_entity = {
+            CallerKind.CLIENT: "client",
+            CallerKind.LOCATAIRE: "locataire",
+            CallerKind.LEAD_PROSPECTION: "prospection_lead",
+            CallerKind.LEAD_WEB: "contact_request",
+        }
+        existing.entity_type = kind_to_entity.get(identified.kind)
+        existing.entity_id = identified.entity_id
+
     # ----- Anti-spam (6 couches) -----
     # Évalué AVANT toute action coûteuse. Si bloqué, on Reject ou on
     # bascule en voicemail-only sans facturer Polly + Claude.
+    # Exception : si l'appelant est identifié dans notre CRM
+    # (client/locataire/lead), on lui fait confiance et on bypass les
+    # filtres anti-spam. Sinon un locataire qui appelle plusieurs fois
+    # en urgence se ferait bannir.
     verstat = params.get("StirVerstat") or params.get("VerStat") or None
-    spam = await check_incoming(db, from_e164=from_e164, verstat=verstat)
-    if spam.result != SpamCheckResult.ALLOW:
+    if identified.kind != CallerKind.UNKNOWN:
+        spam = None  # type: ignore[assignment]
+    else:
+        spam = await check_incoming(db, from_e164=from_e164, verstat=verstat)
+    if spam is not None and spam.result != SpamCheckResult.ALLOW:
         existing.was_blocked = True
         existing.intent = "spam"
         await record_spam_block(db)
@@ -369,7 +400,15 @@ async def twilio_incoming_call(request: Request, db: DBSession) -> Response:
 
     if action == RoutingAction.SECRETARY:
         # Tour 0 : phrase d'accueil + Gather du 1er énoncé client.
-        greeting = await decide_initial_greeting(lang="fr-CA")
+        # Si l'appelant est identifié, on personnalise le greeting.
+        personalized = (
+            build_personalized_greeting(identified)
+            if identified.kind != CallerKind.UNKNOWN
+            else None
+        )
+        greeting = await decide_initial_greeting(
+            lang="fr-CA", personalized_say=personalized
+        )
         existing.lang = greeting.lang
         await _record_turn(
             db, call_id=existing.id, role="assistant", text=greeting.say
@@ -454,10 +493,19 @@ async def twilio_secretary_turn(request: Request, db: DBSession) -> Response:
     ).scalars().all()
     history = [(t.role, t.text) for t in turns]
 
+    # Re-identifie l'appelant pour passer le contexte à Claude (rapide :
+    # comparaison SQL sur 10 derniers chiffres, indexée).
+    identified = await identify_caller(db, call.from_e164)
+    identity_ctx = (
+        build_identity_context_block(identified)
+        if identified.kind != CallerKind.UNKNOWN
+        else None
+    )
     decision = await decide_next_turn(
         history=history,
         current_turn_count=len(turns),
         caller_e164=call.from_e164,
+        identity_context=identity_ctx,
     )
 
     # Persist langue + intent à mesure (la dernière décision écrase).
@@ -1305,6 +1353,7 @@ class CallRead(BaseModel):
     entity_type: Optional[str] = None
     entity_id: Optional[int] = None
     followup_suggestion: Optional[str] = None
+    caller_kind: Optional[str] = None
 
 
 class CallTurnRead(BaseModel):
