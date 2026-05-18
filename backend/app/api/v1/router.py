@@ -58,6 +58,7 @@ from app.api.v1.endpoints import (
     project_to_facture,
     projects,
     public_bon,
+    push,
     public_contract,
     public_purchase_agreement,
     public_soumission,
@@ -151,6 +152,7 @@ api_router.include_router(public_contract.router)
 api_router.include_router(contract_sign.router)
 api_router.include_router(contract_sign.docs_router)
 api_router.include_router(public_bon.router)
+api_router.include_router(push.router)
 api_router.include_router(public_purchase_agreement.router)
 api_router.include_router(qbo_token.router)
 api_router.include_router(qbo_oauth.router)

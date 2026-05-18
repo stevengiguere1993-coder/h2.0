@@ -1,8 +1,8 @@
 {
   "name": "Horizon Services Immobiliers",
   "short_name": "Horizon",
-  "description": "Portail employé Horizon Services Immobiliers — poinçonner, agenda, interventions.",
-  "start_url": "/m?source=pwa",
+  "description": "Portail Horizon Services Immobiliers — téléphonie, CRM, agenda, interventions.",
+  "start_url": "/?source=pwa",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
@@ -32,6 +32,13 @@
     }
   ],
   "shortcuts": [
+    {
+      "name": "Téléphonie",
+      "short_name": "Téléphone",
+      "description": "Voir les appels et SMS",
+      "url": "/telephonie?source=shortcut",
+      "icons": [{ "src": "/pwa/icon-192.png", "sizes": "192x192" }]
+    },
     {
       "name": "Poinçonner",
       "short_name": "Punch",

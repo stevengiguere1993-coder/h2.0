@@ -517,8 +517,10 @@ async def _find_project_lead_online_user_ids(
 async def _notify_owners_urgence(db, *, call: "Call", reason: str) -> None:
     """Notif cloche urgente envoyée à TOUS les owners — un appel
     URGENCE LOCATAIRE doit toujours déclencher une alerte visible
-    dans le portail, peu importe qui répond au transfert."""
+    dans le portail, peu importe qui répond au transfert. Push aussi
+    si VAPID configuré (réveille le téléphone même si app fermée)."""
     try:
+        from app.integrations.webpush import push_to_users
         from app.models.notification import Notification
         from app.models.user import User
 
@@ -529,6 +531,7 @@ async def _notify_owners_urgence(db, *, call: "Call", reason: str) -> None:
         ).scalars().all()
         title = f"🚨 URGENCE — {call.from_e164}"
         body = (reason or "Urgence détectée par Léa")[:500]
+        href = f"/telephonie?call={call.id}"
         for uid in owners:
             db.add(
                 Notification(
@@ -536,10 +539,22 @@ async def _notify_owners_urgence(db, *, call: "Call", reason: str) -> None:
                     kind="urgence_locataire",
                     title=title,
                     body=body,
-                    href=f"/telephonie?call={call.id}",
+                    href=href,
                 )
             )
         await db.flush()
+        # Push best-effort en parallèle (no-op si VAPID pas configuré).
+        try:
+            await push_to_users(
+                db,
+                user_ids=list(owners),
+                title=title,
+                body=body,
+                href=href,
+                tag=f"urgence-{call.id}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Urgence push failed: %s", exc)
     except Exception as exc:  # noqa: BLE001
         log.warning("Urgence notification failed: %s", exc)
 
