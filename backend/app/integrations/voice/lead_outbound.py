@@ -176,6 +176,7 @@ async def start_lead_qualification_call(
     *,
     contact_request_id: int,
     delay_sec: int = 60,
+    force: bool = False,
 ) -> Optional[int]:
     """Schedule + initiate l'appel sortant de qualification.
 
@@ -183,6 +184,12 @@ async def start_lead_qualification_call(
     browser et de poser son téléphone), puis appelle Twilio. Doit être
     lancé via `asyncio.create_task()` ou `BackgroundTasks.add_task()`
     pour ne pas bloquer la réponse HTTP du POST /contact.
+
+    Args:
+        force: si True, ignore le toggle `lead_auto_callback_enabled`
+            (utilisé par le déclencheur manuel admin depuis le CRM).
+            Si False (auto-trigger sur création), on vérifie le toggle
+            et on skip si désactivé.
     """
     if delay_sec > 0:
         await asyncio.sleep(delay_sec)
@@ -248,6 +255,18 @@ async def start_lead_qualification_call(
         ).scalar_one_or_none()
         if pn is None:
             log.warning("Lead qualification skipped: no active phone number")
+            return None
+
+        # Toggle safety : par défaut OFF tant que l'admin n'a pas
+        # explicitement activé « Rappel auto des leads » depuis la page
+        # /telephonie. Le déclencheur manuel admin passe `force=True`
+        # pour outrepasser ce filet.
+        if not force and not pn.lead_auto_callback_enabled:
+            log.info(
+                "Lead qualification skipped: lead_auto_callback_enabled=False "
+                "on PhoneNumber %s (contact_request=%d)",
+                pn.e164, contact_request_id,
+            )
             return None
 
         # Crée la ligne Call AVANT l'API call (référence dans la TwiML URL).

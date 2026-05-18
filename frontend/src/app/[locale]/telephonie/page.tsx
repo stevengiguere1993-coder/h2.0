@@ -37,6 +37,7 @@ type PhoneNumberRow = {
   label: string | null;
   forward_to_e164: string | null;
   secretary_mode_active: boolean;
+  lead_auto_callback_enabled: boolean;
   owner_user_id: number | null;
   active: boolean;
 };
@@ -112,32 +113,55 @@ export default function TelephonieHome() {
   const [expandedCallId, setExpandedCallId] = useState<number | null>(null);
   const [turnsByCallId, setTurnsByCallId] = useState<Record<number, CallTurnRow[]>>({});
 
-  const toggleSecretary = useCallback(async (n: PhoneNumberRow) => {
-    const next = !n.secretary_mode_active;
-    // Optimistic update
-    setNumbers((prev) =>
-      prev.map((row) =>
-        row.id === n.id ? { ...row, secretary_mode_active: next } : row
-      )
-    );
-    try {
-      const res = await authedFetch(`/api/v1/voice/phone-numbers/${n.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ secretary_mode_active: next })
-      });
-      if (!res.ok) throw new Error(`http_${res.status}`);
-    } catch (err) {
-      // Rollback on error
+  const patchNumber = useCallback(
+    async (n: PhoneNumberRow, patch: Partial<PhoneNumberRow>) => {
+      // Optimistic update
       setNumbers((prev) =>
-        prev.map((row) =>
-          row.id === n.id
-            ? { ...row, secretary_mode_active: n.secretary_mode_active }
-            : row
-        )
+        prev.map((row) => (row.id === n.id ? { ...row, ...patch } : row))
       );
-      setLoadError(err instanceof Error ? err.message : String(err));
-    }
-  }, []);
+      try {
+        const res = await authedFetch(`/api/v1/voice/phone-numbers/${n.id}`, {
+          method: "PATCH",
+          body: JSON.stringify(patch)
+        });
+        if (!res.ok) throw new Error(`http_${res.status}`);
+      } catch (err) {
+        // Rollback
+        setNumbers((prev) =>
+          prev.map((row) => (row.id === n.id ? n : row))
+        );
+        setLoadError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    []
+  );
+
+  const toggleSecretary = useCallback(
+    (n: PhoneNumberRow) =>
+      patchNumber(n, { secretary_mode_active: !n.secretary_mode_active }),
+    [patchNumber]
+  );
+
+  const toggleAutoCallback = useCallback(
+    async (n: PhoneNumberRow) => {
+      const next = !n.lead_auto_callback_enabled;
+      // Confirmation explicite à l'activation — c'est CE flag qui
+      // déclenche les appels vers de vrais clients.
+      if (
+        next &&
+        !window.confirm(
+          "Activer le rappel auto va faire que Léa appelle automatiquement " +
+            "tout nouveau lead avec un téléphone, dans les 60 secondes après " +
+            "la création de la fiche.\n\n" +
+            "Es-tu sûr d'avoir testé la secrétaire IA et que tout fonctionne ?"
+        )
+      ) {
+        return;
+      }
+      await patchNumber(n, { lead_auto_callback_enabled: next });
+    },
+    [patchNumber]
+  );
 
   const expandCall = useCallback(async (callId: number) => {
     if (expandedCallId === callId) {
@@ -370,6 +394,7 @@ export default function TelephonieHome() {
                   <th className="py-1.5 font-normal">Libellé</th>
                   <th className="py-1.5 font-normal">Forward vers</th>
                   <th className="py-1.5 font-normal">Secrétaire IA</th>
+                  <th className="py-1.5 font-normal">Rappel auto leads</th>
                   <th className="py-1.5 text-right font-normal">État</th>
                 </tr>
               </thead>
@@ -400,6 +425,25 @@ export default function TelephonieHome() {
                       >
                         <Sparkles className="h-3 w-3" />
                         {n.secretary_mode_active ? "activée" : "désactivée"}
+                      </button>
+                    </td>
+                    <td className="py-2">
+                      <button
+                        type="button"
+                        onClick={() => void toggleAutoCallback(n)}
+                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider transition ${
+                          n.lead_auto_callback_enabled
+                            ? "bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30"
+                            : "bg-white/5 text-white/50 hover:bg-white/10"
+                        }`}
+                        title={
+                          n.lead_auto_callback_enabled
+                            ? "Cliquer pour désactiver — les nouveaux leads ne seront plus rappelés automatiquement"
+                            : "Cliquer pour activer — Léa rappellera automatiquement chaque nouveau lead 60 sec après création"
+                        }
+                      >
+                        <PhoneForwarded className="h-3 w-3" />
+                        {n.lead_auto_callback_enabled ? "actif" : "désactivé"}
                       </button>
                     </td>
                     <td className="py-2 text-right">
