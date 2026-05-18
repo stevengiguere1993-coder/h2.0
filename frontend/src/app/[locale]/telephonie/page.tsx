@@ -1,34 +1,51 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
-  ArrowLeft,
+  Bot,
+  Building2,
   CheckCircle2,
+  Clock,
   Filter,
+  Home,
+  Phone,
   PhoneCall,
   PhoneForwarded,
   PhoneIncoming,
+  PhoneOff,
   RefreshCw,
+  ShieldCheck,
   Sparkles,
-  Workflow
+  TrendingUp,
+  Users,
+  Workflow,
+  X
 } from "lucide-react";
 
 import { authedFetch, getMe, getToken } from "@/lib/auth";
 import { Link, useRouter } from "@/i18n/navigation";
+import { AppTopbar } from "@/components/app-topbar";
 import { CallButton } from "@/components/call-button";
+import { useTelephonieLayout } from "./layout";
 
-// Volet « Téléphonie / Secrétaire d'appels ».
+// Volet « Téléphonie / Secrétaire d'appels » — interface premium.
 //
-// Phase 1 : page de pilotage minimal — numéros connus + journal
-// d'appels live + plan restant. Gated par email (sgiguere) en attendant
-// que les rôles d'accès au volet soient câblés côté back.
+// Sections (tabs) :
+//   1. Tableau de bord — KPIs du jour + activité live + plan
+//   2. Appels — journal complet avec drawer de détail + transcription
+//   3. Numéros — toggles secrétaire / rappel auto / forward / état
+//   4. Filtres — blocklist + VIP whitelist
+//   5. Heures — plages d'ouverture hebdomadaires
+//
+// L'accès reste gated par email pour l'instant (sgiguere) — sera
+// remplacé par un rôle dédié quand le volet sortira en GA.
 
 const TELEPHONIE_ALLOWED_EMAILS = ["sgiguere@immohorizon.com"];
 
-type Me = {
-  email?: string | null;
-};
+type Me = { email?: string | null };
+
+type Section = "dashboard" | "appels" | "numeros" | "filtres" | "heures" | "plan";
 
 type PhoneNumberRow = {
   id: number;
@@ -69,6 +86,16 @@ type CallRow = {
   entity_type: string | null;
   entity_id: number | null;
   followup_suggestion: string | null;
+  caller_kind: string | null;
+};
+
+type CallTurnRow = {
+  id: number;
+  turn_index: number;
+  role: string;
+  text: string;
+  confidence: number | null;
+  created_at: string;
 };
 
 type FilterRow = {
@@ -89,33 +116,66 @@ type BusinessHoursRow = {
   timezone: string;
 };
 
-type CallTurnRow = {
-  id: number;
-  turn_index: number;
-  role: string;
-  text: string;
-  confidence: number | null;
-  created_at: string;
+type UsageDay = {
+  usage_date: string;
+  cents_spent: number;
+  calls_count: number;
+  spam_blocked: number;
 };
-
 
 export default function TelephonieHome() {
   const router = useRouter();
+  const { onOpenSidebar } = useTelephonieLayout();
   const [checking, setChecking] = useState(true);
   const [allowed, setAllowed] = useState(false);
+  const [section, setSection] = useState<Section>("dashboard");
 
   const [numbers, setNumbers] = useState<PhoneNumberRow[]>([]);
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [filters, setFilters] = useState<FilterRow[]>([]);
   const [hours, setHours] = useState<BusinessHoursRow[]>([]);
+  const [usage, setUsage] = useState<UsageDay | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [expandedCallId, setExpandedCallId] = useState<number | null>(null);
-  const [turnsByCallId, setTurnsByCallId] = useState<Record<number, CallTurnRow[]>>({});
+  const [drawerCallId, setDrawerCallId] = useState<number | null>(null);
+  const [turnsByCallId, setTurnsByCallId] = useState<
+    Record<number, CallTurnRow[]>
+  >({});
+  const [search, setSearch] = useState("");
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [nRes, cRes, fRes, uRes] = await Promise.all([
+        authedFetch("/api/v1/voice/phone-numbers"),
+        authedFetch("/api/v1/voice/calls?limit=100"),
+        authedFetch("/api/v1/voice/filters"),
+        authedFetch("/api/v1/voice/usage/today")
+      ]);
+      if (!nRes.ok) throw new Error(`numbers http_${nRes.status}`);
+      if (!cRes.ok) throw new Error(`calls http_${cRes.status}`);
+      if (!fRes.ok) throw new Error(`filters http_${fRes.status}`);
+      const nums = (await nRes.json()) as PhoneNumberRow[];
+      setNumbers(nums);
+      setCalls((await cRes.json()) as CallRow[]);
+      setFilters((await fRes.json()) as FilterRow[]);
+      if (uRes.ok) setUsage((await uRes.json()) as UsageDay);
+      if (nums.length > 0) {
+        const hRes = await authedFetch(
+          `/api/v1/voice/business-hours?phone_number_id=${nums[0].id}`
+        );
+        if (hRes.ok) setHours((await hRes.json()) as BusinessHoursRow[]);
+      }
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   const patchNumber = useCallback(
     async (n: PhoneNumberRow, patch: Partial<PhoneNumberRow>) => {
-      // Optimistic update
       setNumbers((prev) =>
         prev.map((row) => (row.id === n.id ? { ...row, ...patch } : row))
       );
@@ -126,10 +186,7 @@ export default function TelephonieHome() {
         });
         if (!res.ok) throw new Error(`http_${res.status}`);
       } catch (err) {
-        // Rollback
-        setNumbers((prev) =>
-          prev.map((row) => (row.id === n.id ? n : row))
-        );
+        setNumbers((prev) => prev.map((row) => (row.id === n.id ? n : row)));
         setLoadError(err instanceof Error ? err.message : String(err));
       }
     },
@@ -145,8 +202,6 @@ export default function TelephonieHome() {
   const toggleAutoCallback = useCallback(
     async (n: PhoneNumberRow) => {
       const next = !n.lead_auto_callback_enabled;
-      // Confirmation explicite à l'activation — c'est CE flag qui
-      // déclenche les appels vers de vrais clients.
       if (
         next &&
         !window.confirm(
@@ -163,55 +218,13 @@ export default function TelephonieHome() {
     [patchNumber]
   );
 
-  const expandCall = useCallback(async (callId: number) => {
-    if (expandedCallId === callId) {
-      setExpandedCallId(null);
-      return;
-    }
-    setExpandedCallId(callId);
-    if (turnsByCallId[callId]) return;
-    try {
-      const res = await authedFetch(`/api/v1/voice/calls/${callId}/turns`);
-      if (!res.ok) throw new Error(`turns http_${res.status}`);
-      const data = (await res.json()) as CallTurnRow[];
-      setTurnsByCallId((prev) => ({ ...prev, [callId]: data }));
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : String(err));
-    }
-  }, [expandedCallId, turnsByCallId]);
-
-  const reload = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const [nRes, cRes, fRes] = await Promise.all([
-        authedFetch("/api/v1/voice/phone-numbers"),
-        authedFetch("/api/v1/voice/calls?limit=30"),
-        authedFetch("/api/v1/voice/filters")
-      ]);
-      if (!nRes.ok) throw new Error(`numbers http_${nRes.status}`);
-      if (!cRes.ok) throw new Error(`calls http_${cRes.status}`);
-      if (!fRes.ok) throw new Error(`filters http_${fRes.status}`);
-      const nums = (await nRes.json()) as PhoneNumberRow[];
-      setNumbers(nums);
-      setCalls((await cRes.json()) as CallRow[]);
-      setFilters((await fRes.json()) as FilterRow[]);
-      // Heures : on charge celles du 1er numéro (Phase 3 = 1 numéro).
-      if (nums.length > 0) {
-        const hRes = await authedFetch(
-          `/api/v1/voice/business-hours?phone_number_id=${nums[0].id}`
-        );
-        if (hRes.ok) setHours((await hRes.json()) as BusinessHoursRow[]);
-      }
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   const addFilter = useCallback(
-    async (phoneNumberId: number, kind: "block" | "vip", pattern: string, label: string) => {
+    async (
+      phoneNumberId: number,
+      kind: "block" | "vip",
+      pattern: string,
+      label: string
+    ) => {
       const res = await authedFetch("/api/v1/voice/filters", {
         method: "POST",
         body: JSON.stringify({
@@ -243,7 +256,10 @@ export default function TelephonieHome() {
   }, []);
 
   const saveHours = useCallback(
-    async (phoneNumberId: number, rows: { day_of_week: number; open_time: string; close_time: string }[]) => {
+    async (
+      phoneNumberId: number,
+      rows: { day_of_week: number; open_time: string; close_time: string }[]
+    ) => {
       const res = await authedFetch("/api/v1/voice/business-hours", {
         method: "PUT",
         body: JSON.stringify({
@@ -258,6 +274,22 @@ export default function TelephonieHome() {
       setHours((await res.json()) as BusinessHoursRow[]);
     },
     []
+  );
+
+  const openDrawer = useCallback(
+    async (callId: number) => {
+      setDrawerCallId(callId);
+      if (turnsByCallId[callId]) return;
+      try {
+        const res = await authedFetch(`/api/v1/voice/calls/${callId}/turns`);
+        if (!res.ok) return;
+        const data = (await res.json()) as CallTurnRow[];
+        setTurnsByCallId((prev) => ({ ...prev, [callId]: data }));
+      } catch {
+        /* ignore */
+      }
+    },
+    [turnsByCallId]
   );
 
   useEffect(() => {
@@ -314,541 +346,1182 @@ export default function TelephonieHome() {
             href={"/connexion" as any}
             className="mt-4 inline-flex items-center gap-1.5 text-xs text-rose-200 hover:underline"
           >
-            <ArrowLeft className="h-3 w-3" />
-            Retour au sélecteur de portail
+            Retour
           </Link>
         </div>
       </div>
     );
   }
 
+  const primaryNumber = numbers[0];
+  const drawerCall = calls.find((c) => c.id === drawerCallId) || null;
+
   return (
-    <div className="min-h-screen bg-brand-950 text-white">
-      <div className="mx-auto max-w-4xl px-5 py-8">
-        <Link
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={"/connexion" as any}
-          className="inline-flex items-center text-xs text-white/60 hover:text-teal-300"
-        >
-          <ArrowLeft className="mr-1 h-3.5 w-3.5" />
-          Retour au sélecteur de portail
-        </Link>
+    <div className="min-h-screen bg-brand-950">
+      <AppTopbar
+        breadcrumbs={[{ label: "Téléphonie" }]}
+        onOpenSidebar={onOpenSidebar}
+        searchPlaceholder="Filtrer les appels (numéro, intent…)"
+        onSearch={(q) => setSearch(q)}
+      />
 
-        <header className="mt-4 flex items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-teal-300">
-              <PhoneCall className="h-4 w-4" />
-              Téléphonie
-            </div>
-            <h1 className="mt-1 text-3xl font-bold">
-              Secrétaire IA d&apos;appels
-            </h1>
-            <p className="mt-1 text-sm text-white/60">
-              Numéro 438 unique, secrétaire IA bilingue qui décroche,
-              qualifie et transfère — désactivable par numéro (fallback
-              transfert direct).
-            </p>
+      <div className="mx-auto max-w-7xl px-4 pb-12 pt-5 lg:px-6">
+        <SectionTabs
+          active={section}
+          onChange={setSection}
+          onReload={() => void reload()}
+          loading={loading}
+        />
+
+        {loadError ? (
+          <div className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[12px] text-rose-200">
+            Erreur de chargement : {loadError}
           </div>
-          <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">
-            Toutes phases livrées
-          </span>
-        </header>
-
-        {/* Live data */}
-        <section className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="flex items-center gap-2 text-sm font-bold text-white">
-              <PhoneIncoming className="h-4 w-4 text-teal-300" />
-              Numéros configurés
-            </h2>
-            <button
-              type="button"
-              onClick={() => void reload()}
-              disabled={loading}
-              className="inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-white/70 hover:bg-white/10 disabled:opacity-50"
-            >
-              <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
-              Rafraîchir
-            </button>
-          </div>
-
-          {loadError ? (
-            <p className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-200">
-              Erreur de chargement : {loadError}
-            </p>
-          ) : null}
-
-          {numbers.length === 0 && !loading && !loadError ? (
-            <p className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
-              Aucun numéro enregistré. Le bootstrap se déclenche au prochain
-              démarrage du backend si TWILIO_PHONE_NUMBER est configuré côté
-              Render.
-            </p>
-          ) : null}
-
-          {numbers.length > 0 ? (
-            <table className="mt-3 w-full text-xs">
-              <thead className="text-left text-white/40">
-                <tr>
-                  <th className="py-1.5 font-normal">Numéro</th>
-                  <th className="py-1.5 font-normal">Libellé</th>
-                  <th className="py-1.5 font-normal">Forward vers</th>
-                  <th className="py-1.5 font-normal">Secrétaire IA</th>
-                  <th className="py-1.5 font-normal">Rappel auto leads</th>
-                  <th className="py-1.5 text-right font-normal">État</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/10">
-                {numbers.map((n) => (
-                  <tr key={n.id}>
-                    <td className="py-2 font-mono text-white">{n.e164}</td>
-                    <td className="py-2 text-white/70">{n.label || "—"}</td>
-                    <td className="py-2 font-mono text-white/80">
-                      {n.forward_to_e164 || (
-                        <span className="text-white/30">non configuré</span>
-                      )}
-                    </td>
-                    <td className="py-2">
-                      <button
-                        type="button"
-                        onClick={() => void toggleSecretary(n)}
-                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider transition ${
-                          n.secretary_mode_active
-                            ? "bg-amber-500/20 text-amber-200 hover:bg-amber-500/30"
-                            : "bg-white/5 text-white/50 hover:bg-white/10"
-                        }`}
-                        title={
-                          n.secretary_mode_active
-                            ? "Cliquer pour désactiver — retour au transfert direct"
-                            : "Cliquer pour activer — l'IA décroche et qualifie"
-                        }
-                      >
-                        <Sparkles className="h-3 w-3" />
-                        {n.secretary_mode_active ? "activée" : "désactivée"}
-                      </button>
-                    </td>
-                    <td className="py-2">
-                      <button
-                        type="button"
-                        onClick={() => void toggleAutoCallback(n)}
-                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider transition ${
-                          n.lead_auto_callback_enabled
-                            ? "bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30"
-                            : "bg-white/5 text-white/50 hover:bg-white/10"
-                        }`}
-                        title={
-                          n.lead_auto_callback_enabled
-                            ? "Cliquer pour désactiver — les nouveaux leads ne seront plus rappelés automatiquement"
-                            : "Cliquer pour activer — Léa rappellera automatiquement chaque nouveau lead 60 sec après création"
-                        }
-                      >
-                        <PhoneForwarded className="h-3 w-3" />
-                        {n.lead_auto_callback_enabled ? "actif" : "désactivé"}
-                      </button>
-                    </td>
-                    <td className="py-2 text-right">
-                      {n.active ? (
-                        <span className="text-emerald-300">actif</span>
-                      ) : (
-                        <span className="text-white/40">inactif</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : null}
-        </section>
-
-        {/* Test click-to-call (Phase 4) */}
-        {numbers.length > 0 ? (
-          <section className="mt-4 rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-            <h2 className="flex items-center gap-2 text-sm font-bold text-white">
-              <PhoneForwarded className="h-4 w-4 text-emerald-300" />
-              Test sortant (click-to-call)
-            </h2>
-            <p className="mt-1 text-[11px] text-white/40">
-              Twilio appellera d&apos;abord ton mobile interne, puis
-              bridgera vers la cible.
-            </p>
-            <OutboundTester />
-          </section>
         ) : null}
 
-        {/* Filtres + Heures (Phase 3) */}
-        {numbers.length > 0 ? (
-          <>
-            <FiltersSection
-              phoneNumberId={numbers[0].id}
-              filters={filters.filter((f) => f.phone_number_id === numbers[0].id)}
-              onAdd={addFilter}
-              onDelete={deleteFilter}
-            />
-            <BusinessHoursSection
-              phoneNumberId={numbers[0].id}
-              hours={hours}
-              onSave={saveHours}
-            />
-          </>
+        {section === "dashboard" ? (
+          <DashboardSection
+            numbers={numbers}
+            calls={calls}
+            usage={usage}
+            onOpenCall={openDrawer}
+            onJumpTo={setSection}
+          />
         ) : null}
 
-        {/* Call log */}
-        <section className="mt-4 rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-          <h2 className="flex items-center gap-2 text-sm font-bold text-white">
-            <PhoneCall className="h-4 w-4 text-teal-300" />
-            Journal d&apos;appels (30 derniers)
-          </h2>
-          {calls.length === 0 ? (
-            <p className="mt-3 text-[11px] text-white/40">
-              Aucun appel reçu pour l&apos;instant. Appelle le numéro
-              ci-dessus depuis un mobile vérifié sur Twilio pour tester.
-            </p>
-          ) : (
-            <table className="mt-3 w-full text-xs">
-              <thead className="text-left text-white/40">
-                <tr>
-                  <th className="py-1.5 font-normal">Date</th>
-                  <th className="py-1.5 font-normal">De</th>
-                  <th className="py-1.5 font-normal">Intent</th>
-                  <th className="py-1.5 font-normal">Statut</th>
-                  <th className="py-1.5 text-right font-normal">Durée</th>
-                  <th className="py-1.5 text-right font-normal" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/10">
-                {calls.map((c) => (
-                  <CallRowItem
-                    key={c.id}
-                    call={c}
-                    expanded={expandedCallId === c.id}
-                    turns={turnsByCallId[c.id]}
-                    onToggle={() => void expandCall(c.id)}
-                  />
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
+        {section === "appels" ? (
+          <CallsSection
+            calls={calls}
+            search={search}
+            onOpenCall={openDrawer}
+          />
+        ) : null}
 
-        {/* Plan en 4 phases */}
-        <h2 className="mt-8 text-sm font-bold uppercase tracking-wider text-white/70">
-          Plan de livraison
-        </h2>
-        <div className="mt-3 space-y-3">
-          <PhaseCard
-            num={1}
-            title="Fondations"
-            icon={<PhoneIncoming className="h-4 w-4 text-teal-300" />}
-            scope="1-2 PR"
-            status="done"
-          >
-            <ul className="space-y-1">
-              <li>
-                Module backend <code>app/integrations/voice/</code>, abstraction
-                provider (Twilio par défaut). ✓
-              </li>
-              <li>
-                Modèles SQL : <code>PhoneNumber</code>, <code>Call</code>,{" "}
-                <code>CallRoute</code>, <code>CallTranscript</code>. ✓
-              </li>
-              <li>Endpoint webhook Twilio (signature HMAC vérifiée). ✓</li>
-              <li>
-                Bootstrap automatique au démarrage du backend : numéro 438
-                enregistré + voice_url poussée chez Twilio. ✓
-              </li>
-              <li>
-                Dispatch simple : appel entrant →{" "}
-                <code>&lt;Dial&gt;</code> vers <code>TWILIO_FORWARD_TO</code>. ✓
-              </li>
-              <li>
-                Page <code>/telephonie</code> : journal d&apos;appels live. ✓
-              </li>
-            </ul>
-          </PhaseCard>
+        {section === "numeros" ? (
+          <NumbersSection
+            numbers={numbers}
+            onToggleSecretary={toggleSecretary}
+            onToggleAutoCallback={toggleAutoCallback}
+          />
+        ) : null}
 
-          <PhaseCard
-            num={2}
-            title="Secrétaire IA (qualification + dispatch)"
-            icon={<Sparkles className="h-4 w-4 text-amber-300" />}
-            scope="2-3 PR"
-            status="in_progress"
-          >
-            <ul className="space-y-1">
-              <li>
-                Décroche + salutation française/anglaise naturelle
-                (Polly Neural). ✓
-              </li>
-              <li>
-                Capture nom + raison de l&apos;appel + numéro de rappel,
-                tour-par-tour via Claude (cascade Gemini → Anthropic →
-                Groq). ✓
-              </li>
-              <li>
-                Création automatique d&apos;un ContactRequest CRM quand
-                l&apos;appelant demande à être rappelé. ✓
-              </li>
-              <li>
-                Transfert direct vers <code>forward_to_e164</code> quand
-                l&apos;intent est clair (rénovation / logiciel / gestion
-                immo / urgence). ✓
-              </li>
-              <li>
-                Toggle activable par numéro depuis cette page. ✓
-              </li>
-              <li>
-                Reste à faire : prise de RDV intégrée à l&apos;agenda
-                + résumé structuré post-appel.
-              </li>
-            </ul>
-          </PhaseCard>
+        {section === "filtres" && primaryNumber ? (
+          <FiltersSection
+            phoneNumberId={primaryNumber.id}
+            filters={filters.filter(
+              (f) => f.phone_number_id === primaryNumber.id
+            )}
+            onAdd={addFilter}
+            onDelete={deleteFilter}
+          />
+        ) : null}
 
-          <PhaseCard
-            num={3}
-            title="Filtres & règles intelligentes"
-            icon={<Filter className="h-4 w-4 text-violet-300" />}
-            scope="1-2 PR"
-            status="done"
-          >
-            <ul className="space-y-1">
-              <li>
-                Heures d&apos;ouverture par jour de semaine (timezone
-                Montréal) — hors heures → voicemail IA. ✓
-              </li>
-              <li>
-                Blocklist : pattern E.164 exact ou préfixe (<code>+1438*</code>),
-                rejet immédiat (tonalité d&apos;occupation). ✓
-              </li>
-              <li>
-                Whitelist VIP : sonne direct sans passer par la secrétaire
-                IA, même si elle est activée. ✓
-              </li>
-              <li>
-                Voicemail IA : <code>&lt;Record&gt;</code> + transcription
-                Twilio + résumé Claude + notification cloche +
-                ContactRequest CRM. ✓
-              </li>
-              <li>
-                Reste à faire : file d&apos;attente si tous les users sont
-                occupés (Phase 3.5 si besoin).
-              </li>
-            </ul>
-          </PhaseCard>
+        {section === "heures" && primaryNumber ? (
+          <BusinessHoursSection
+            phoneNumberId={primaryNumber.id}
+            hours={hours}
+            onSave={saveHours}
+          />
+        ) : null}
 
-          <PhaseCard
-            num={4}
-            title="Sortant + intégration CRM"
-            icon={<PhoneForwarded className="h-4 w-4 text-emerald-300" />}
-            scope="1-2 PR"
-            status="done"
-          >
-            <ul className="space-y-1">
-              <li>
-                Composant <code>&lt;CallButton&gt;</code> réutilisable :
-                click-to-call qui sonne ton mobile puis bridge vers la
-                cible. Wired sur la fiche Prospection (à côté du
-                téléphone propriétaire). ✓
-              </li>
-              <li>
-                Journalisation : chaque appel sortant est créé dans{" "}
-                <code>voice_calls</code> avec <code>entity_type</code> +
-                <code>entity_id</code> → filtrable par fiche via
-                <code>GET /voice/calls?entity_type=&amp;entity_id=</code>. ✓
-              </li>
-              <li>
-                Bouton « Suggérer un suivi » par appel : Claude analyse
-                le contexte (intent, voicemail, tours secrétaire) et
-                propose une action en 2 phrases. ✓
-              </li>
-              <li>
-                Reste à faire : créer un Follow-up agenda d&apos;un clic
-                depuis la suggestion (Phase 4.5 si besoin).
-              </li>
-            </ul>
-          </PhaseCard>
-        </div>
-
-        {/* Coûts récap */}
-        <section className="mt-8 rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-          <h2 className="flex items-center gap-2 text-sm font-bold text-white">
-            <Workflow className="h-4 w-4 text-white/60" />
-            Coûts attendus
-          </h2>
-          <table className="mt-3 w-full text-xs">
-            <tbody className="divide-y divide-white/10">
-              <tr>
-                <td className="py-2 text-white/70">Trial Twilio</td>
-                <td className="py-2 text-right text-emerald-300">
-                  0 $ (~15 USD de crédit, plusieurs mois)
-                </td>
-              </tr>
-              <tr>
-                <td className="py-2 text-white/70">Numéro 438 (prod)</td>
-                <td className="py-2 text-right text-white/90">~1,15 $/mois</td>
-              </tr>
-              <tr>
-                <td className="py-2 text-white/70">Appels entrants</td>
-                <td className="py-2 text-right text-white/90">~0,01 $/min</td>
-              </tr>
-              <tr>
-                <td className="py-2 text-white/70">
-                  IA (cascade Gemini → Anthropic → Groq)
-                </td>
-                <td className="py-2 text-right text-emerald-300">
-                  0 $ (tier gratuit Gemini suffit)
-                </td>
-              </tr>
-              <tr>
-                <td className="py-2 font-semibold text-white">
-                  Total croisière prod
-                </td>
-                <td className="py-2 text-right font-semibold text-teal-300">
-                  ~5-20 $/mois
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <p className="mt-3 text-[11px] text-white/40">
-            Alternative cheap (VoIP.ms) restera possible plus tard — le
-            module est déjà codé avec une abstraction provider pour qu&apos;on
-            puisse swap sans réécrire le frontend.
-          </p>
-        </section>
-
-        {/* CTA */}
-        <div className="mt-8 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-center">
-          <Sparkles className="mx-auto mb-1.5 h-5 w-5 text-amber-300" />
-          <p className="text-sm font-semibold text-white">
-            Active la secrétaire IA pour tester
-          </p>
-          <p className="mt-1 text-xs text-white/70">
-            Bouton « Secrétaire IA » dans le tableau des numéros ci-dessus.
-            Une fois activée, appelle le numéro : l&apos;IA décroche,
-            comprend ta demande et soit te transfère, soit prend un
-            message. Clique sur un appel dans le journal pour voir la
-            transcription tour-par-tour.
-          </p>
-        </div>
+        {section === "plan" ? <PlanSection /> : null}
       </div>
+
+      {drawerCall ? (
+        <CallDrawer
+          call={drawerCall}
+          turns={turnsByCallId[drawerCall.id]}
+          onClose={() => setDrawerCallId(null)}
+        />
+      ) : null}
     </div>
   );
 }
 
-function CallRowItem({
-  call,
-  expanded,
-  turns,
-  onToggle
+// ----------------------------------------------------------------------
+// Section tabs
+// ----------------------------------------------------------------------
+
+function SectionTabs({
+  active,
+  onChange,
+  onReload,
+  loading
 }: {
-  call: CallRow;
-  expanded: boolean;
-  turns: CallTurnRow[] | undefined;
-  onToggle: () => void;
+  active: Section;
+  onChange: (s: Section) => void;
+  onReload: () => void;
+  loading: boolean;
+}) {
+  const items: { key: Section; label: string; icon: React.ReactNode }[] = [
+    { key: "dashboard", label: "Tableau de bord", icon: <Home className="h-3.5 w-3.5" /> },
+    { key: "appels", label: "Appels", icon: <PhoneCall className="h-3.5 w-3.5" /> },
+    { key: "numeros", label: "Numéros", icon: <Phone className="h-3.5 w-3.5" /> },
+    { key: "filtres", label: "Filtres", icon: <Filter className="h-3.5 w-3.5" /> },
+    { key: "heures", label: "Heures", icon: <Clock className="h-3.5 w-3.5" /> },
+    { key: "plan", label: "Roadmap", icon: <Workflow className="h-3.5 w-3.5" /> }
+  ];
+  return (
+    <div className="flex items-center gap-2 overflow-x-auto border-b border-brand-800 pb-2">
+      {items.map((it) => (
+        <button
+          key={it.key}
+          type="button"
+          onClick={() => onChange(it.key)}
+          className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+            active === it.key
+              ? "border-teal-500/50 bg-teal-500/10 text-teal-200"
+              : "border-brand-800 bg-brand-900 text-white/70 hover:border-brand-700 hover:text-white"
+          }`}
+        >
+          {it.icon}
+          {it.label}
+        </button>
+      ))}
+      <button
+        type="button"
+        onClick={onReload}
+        disabled={loading}
+        className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-brand-800 bg-brand-900 px-3 py-1.5 text-[11px] text-white/70 hover:border-brand-700 disabled:opacity-50"
+      >
+        <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
+        Rafraîchir
+      </button>
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------
+// Dashboard section — KPIs + live activity
+// ----------------------------------------------------------------------
+
+function DashboardSection({
+  numbers,
+  calls,
+  usage,
+  onOpenCall,
+  onJumpTo
+}: {
+  numbers: PhoneNumberRow[];
+  calls: CallRow[];
+  usage: UsageDay | null;
+  onOpenCall: (id: number) => void;
+  onJumpTo: (s: Section) => void;
+}) {
+  // Calculs KPI sur les calls (sans filtrage côté serveur, on a déjà le top 100).
+  const todayStart = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }, []);
+  const todayCalls = calls.filter(
+    (c) => new Date(c.started_at).getTime() >= todayStart
+  );
+  const totalToday = todayCalls.length;
+  const inboundToday = todayCalls.filter((c) => c.direction === "inbound").length;
+  const outboundToday = todayCalls.filter((c) => c.direction === "outbound").length;
+  const missedToday = todayCalls.filter(
+    (c) => c.status === "no-answer" || c.status === "busy" || c.status === "failed"
+  ).length;
+  const aiHandledToday = todayCalls.filter(
+    (c) => c.intent && c.intent !== "unclear"
+  ).length;
+  const voicemailToday = todayCalls.filter((c) => c.was_voicemail).length;
+  const avgDuration =
+    todayCalls.filter((c) => c.duration_sec).length === 0
+      ? 0
+      : Math.round(
+          todayCalls
+            .filter((c) => c.duration_sec)
+            .reduce((s, c) => s + (c.duration_sec || 0), 0) /
+            todayCalls.filter((c) => c.duration_sec).length
+        );
+
+  const primary = numbers[0];
+  const secretaryOn = !!primary?.secretary_mode_active;
+  const autoOn = !!primary?.lead_auto_callback_enabled;
+
+  return (
+    <div className="mt-5 space-y-5">
+      {/* Hero — état du système + numéro */}
+      <section className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-teal-300">
+              <PhoneCall className="h-4 w-4" />
+              Ligne principale
+            </div>
+            <div className="mt-1 font-mono text-2xl font-bold text-white">
+              {primary ? primary.e164 : "(aucun numéro configuré)"}
+            </div>
+            {primary?.label ? (
+              <div className="text-xs text-white/50">{primary.label}</div>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusPill
+              on={secretaryOn}
+              icon={<Sparkles className="h-3 w-3" />}
+              label={secretaryOn ? "Secrétaire IA active" : "Secrétaire IA off"}
+              onClick={() => onJumpTo("numeros")}
+            />
+            <StatusPill
+              on={autoOn}
+              icon={<Bot className="h-3 w-3" />}
+              label={
+                autoOn ? "Rappel auto leads actif" : "Rappel auto leads off"
+              }
+              onClick={() => onJumpTo("numeros")}
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* KPI grid */}
+      <section className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+        <KpiCard
+          icon={<PhoneIncoming className="h-4 w-4" />}
+          label="Appels aujourd'hui"
+          value={String(totalToday)}
+          subtitle={`${inboundToday} entrants · ${outboundToday} sortants`}
+          tone="teal"
+        />
+        <KpiCard
+          icon={<Bot className="h-4 w-4" />}
+          label="Qualifiés par Léa"
+          value={String(aiHandledToday)}
+          subtitle={
+            totalToday === 0
+              ? "—"
+              : `${Math.round((aiHandledToday / totalToday) * 100)}% du total`
+          }
+          tone="violet"
+        />
+        <KpiCard
+          icon={<PhoneOff className="h-4 w-4" />}
+          label="Manqués"
+          value={String(missedToday + voicemailToday)}
+          subtitle={`${missedToday} non-rep · ${voicemailToday} voicemail`}
+          tone="amber"
+        />
+        <KpiCard
+          icon={<ShieldCheck className="h-4 w-4" />}
+          label="Spam bloqué (jour)"
+          value={String(usage?.spam_blocked ?? 0)}
+          subtitle={
+            usage
+              ? `${(usage.cents_spent / 100).toFixed(2)} $ dépensés`
+              : "—"
+          }
+          tone="emerald"
+        />
+        <KpiCard
+          icon={<Clock className="h-4 w-4" />}
+          label="Durée moyenne"
+          value={avgDuration ? `${avgDuration}s` : "—"}
+          subtitle="appels du jour"
+          tone="blue"
+        />
+        <KpiCard
+          icon={<Users className="h-4 w-4" />}
+          label="Filtres actifs"
+          value={String(numbers.length ? "—" : 0)}
+          subtitle="VIP + blocklist"
+          tone="violet"
+          onClick={() => onJumpTo("filtres")}
+        />
+        <KpiCard
+          icon={<TrendingUp className="h-4 w-4" />}
+          label="Coût mensuel estimé"
+          value={
+            usage
+              ? `~${((usage.cents_spent / 100) * 30).toFixed(0)} $`
+              : "—"
+          }
+          subtitle="projection 30 j"
+          tone="teal"
+        />
+        <KpiCard
+          icon={<Building2 className="h-4 w-4" />}
+          label="Identifiés CRM"
+          value={String(
+            todayCalls.filter(
+              (c) => c.caller_kind && c.caller_kind !== "unknown"
+            ).length
+          )}
+          subtitle="reconnus avant décroché"
+          tone="amber"
+        />
+      </section>
+
+      {/* Activity feed */}
+      <section className="grid gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-2 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+          <div className="flex items-center justify-between">
+            <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+              <PhoneCall className="h-4 w-4 text-teal-300" />
+              Activité récente
+            </h2>
+            <button
+              type="button"
+              onClick={() => onJumpTo("appels")}
+              className="text-[11px] text-teal-300 hover:underline"
+            >
+              Tout voir →
+            </button>
+          </div>
+          {calls.length === 0 ? (
+            <EmptyHint>
+              Appelle le numéro ci-dessus depuis un mobile vérifié pour
+              déclencher ton premier appel test.
+            </EmptyHint>
+          ) : (
+            <ul className="mt-3 divide-y divide-brand-800">
+              {calls.slice(0, 8).map((c) => (
+                <li key={c.id}>
+                  <button
+                    type="button"
+                    onClick={() => onOpenCall(c.id)}
+                    className="flex w-full items-center gap-3 py-2.5 text-left hover:bg-brand-800/30"
+                  >
+                    <DirectionIcon dir={c.direction} status={c.status} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 truncate">
+                        <span className="truncate font-mono text-sm text-white">
+                          {c.from_e164}
+                        </span>
+                        {c.caller_kind && c.caller_kind !== "unknown" ? (
+                          <CallerKindBadge kind={c.caller_kind} />
+                        ) : null}
+                        {c.intent ? <IntentBadge intent={c.intent} /> : null}
+                      </div>
+                      <div className="truncate text-[11px] text-white/50">
+                        {formatDateTime(c.started_at)}
+                        {c.duration_sec != null ? ` · ${c.duration_sec}s` : ""}
+                        {c.lead_name ? ` · ${c.lead_name}` : ""}
+                      </div>
+                    </div>
+                    <StatusBadge status={c.status} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+            <Sparkles className="h-4 w-4 text-amber-300" />
+            Comment ça marche
+          </h2>
+          <ol className="mt-3 space-y-2 text-[12px] text-white/70">
+            <li className="flex gap-2">
+              <span className="font-bold text-teal-300">1.</span>
+              <span>
+                Léa décroche en français/anglais selon l&apos;appelant
+                (Polly Neural).
+              </span>
+            </li>
+            <li className="flex gap-2">
+              <span className="font-bold text-teal-300">2.</span>
+              <span>
+                Identification CRM : client / locataire / lead reconnu
+                → routage adapté.
+              </span>
+            </li>
+            <li className="flex gap-2">
+              <span className="font-bold text-teal-300">3.</span>
+              <span>
+                Filtrage anti-spam 6 couches (geo, STIR/SHAKEN, rate
+                limit, honeypot, lookup, cost cap).
+              </span>
+            </li>
+            <li className="flex gap-2">
+              <span className="font-bold text-teal-300">4.</span>
+              <span>
+                Transfert WebRTC sur ton browser ouvert, fallback mobile
+                après 15 sec.
+              </span>
+            </li>
+            <li className="flex gap-2">
+              <span className="font-bold text-teal-300">5.</span>
+              <span>
+                Hors heures → voicemail IA + transcription + résumé
+                automatique dans le CRM.
+              </span>
+            </li>
+          </ol>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------
+// Calls section — full table with search + drawer
+// ----------------------------------------------------------------------
+
+function CallsSection({
+  calls,
+  search,
+  onOpenCall
+}: {
+  calls: CallRow[];
+  search: string;
+  onOpenCall: (id: number) => void;
+}) {
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? calls.filter(
+        (c) =>
+          c.from_e164.toLowerCase().includes(q) ||
+          (c.intent || "").toLowerCase().includes(q) ||
+          (c.lead_name || "").toLowerCase().includes(q) ||
+          (c.caller_kind || "").toLowerCase().includes(q) ||
+          (c.status || "").toLowerCase().includes(q)
+      )
+    : calls;
+
+  return (
+    <section className="mt-5 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <div className="flex items-center justify-between">
+        <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+          <PhoneCall className="h-4 w-4 text-teal-300" />
+          Journal d&apos;appels
+          <span className="ml-2 rounded-full bg-brand-800 px-2 py-0.5 text-[10px] text-white/60">
+            {filtered.length}
+          </span>
+        </h2>
+      </div>
+
+      {filtered.length === 0 ? (
+        <EmptyHint>Aucun appel ne correspond à ta recherche.</EmptyHint>
+      ) : (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-left text-white/40">
+              <tr>
+                <th className="py-1.5 font-normal">Date</th>
+                <th className="py-1.5 font-normal">De</th>
+                <th className="py-1.5 font-normal">Identifié</th>
+                <th className="py-1.5 font-normal">Intent</th>
+                <th className="py-1.5 font-normal">Statut</th>
+                <th className="py-1.5 text-right font-normal">Durée</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-brand-800">
+              {filtered.map((c) => (
+                <tr
+                  key={c.id}
+                  className="cursor-pointer hover:bg-brand-800/30"
+                  onClick={() => onOpenCall(c.id)}
+                >
+                  <td className="py-2 text-white/60">
+                    {formatDateTime(c.started_at)}
+                  </td>
+                  <td className="py-2">
+                    <div className="flex items-center gap-2">
+                      <DirectionIcon dir={c.direction} status={c.status} />
+                      <span className="font-mono text-white">
+                        {c.from_e164}
+                      </span>
+                      {c.was_blocked ? <Tag tone="rose">blocked</Tag> : null}
+                      {c.was_vip ? <Tag tone="emerald">vip</Tag> : null}
+                      {c.was_voicemail ? <Tag tone="amber">vm</Tag> : null}
+                    </div>
+                  </td>
+                  <td className="py-2">
+                    {c.caller_kind && c.caller_kind !== "unknown" ? (
+                      <CallerKindBadge kind={c.caller_kind} />
+                    ) : (
+                      <span className="text-white/30">—</span>
+                    )}
+                  </td>
+                  <td className="py-2">
+                    {c.intent ? (
+                      <IntentBadge intent={c.intent} />
+                    ) : (
+                      <span className="text-white/30">—</span>
+                    )}
+                  </td>
+                  <td className="py-2">
+                    <StatusBadge status={c.status} />
+                  </td>
+                  <td className="py-2 text-right text-white/80">
+                    {c.duration_sec != null ? `${c.duration_sec}s` : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ----------------------------------------------------------------------
+// Numbers section
+// ----------------------------------------------------------------------
+
+function NumbersSection({
+  numbers,
+  onToggleSecretary,
+  onToggleAutoCallback
+}: {
+  numbers: PhoneNumberRow[];
+  onToggleSecretary: (n: PhoneNumberRow) => void;
+  onToggleAutoCallback: (n: PhoneNumberRow) => void;
+}) {
+  if (numbers.length === 0) {
+    return (
+      <EmptyHint>
+        Aucun numéro enregistré. Le bootstrap se déclenche au prochain
+        démarrage du backend si TWILIO_PHONE_NUMBER est configuré.
+      </EmptyHint>
+    );
+  }
+  return (
+    <section className="mt-5 grid gap-3 md:grid-cols-2">
+      {numbers.map((n) => (
+        <article
+          key={n.id}
+          className="rounded-2xl border border-brand-800 bg-brand-900 p-5"
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <div className="font-mono text-lg font-bold text-white">
+                {n.e164}
+              </div>
+              <div className="text-xs text-white/50">{n.label || "—"}</div>
+            </div>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                n.active
+                  ? "bg-emerald-500/15 text-emerald-300"
+                  : "bg-white/10 text-white/50"
+              }`}
+            >
+              {n.active ? "actif" : "inactif"}
+            </span>
+          </div>
+
+          <dl className="mt-4 space-y-2 text-xs">
+            <Row label="Forward fallback">
+              {n.forward_to_e164 ? (
+                <span className="font-mono text-white/80">
+                  {n.forward_to_e164}
+                </span>
+              ) : (
+                <span className="text-white/40">non configuré</span>
+              )}
+            </Row>
+            <Row label="Secrétaire IA">
+              <ToggleButton
+                on={n.secretary_mode_active}
+                onClick={() => onToggleSecretary(n)}
+                icon={<Sparkles className="h-3 w-3" />}
+                tone="amber"
+              />
+            </Row>
+            <Row label="Rappel auto leads">
+              <ToggleButton
+                on={n.lead_auto_callback_enabled}
+                onClick={() => onToggleAutoCallback(n)}
+                icon={<PhoneForwarded className="h-3 w-3" />}
+                tone="emerald"
+              />
+            </Row>
+          </dl>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <dt className="text-white/50">{label}</dt>
+      <dd>{children}</dd>
+    </div>
+  );
+}
+
+function ToggleButton({
+  on,
+  onClick,
+  icon,
+  tone
+}: {
+  on: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  tone: "amber" | "emerald";
+}) {
+  const onCls =
+    tone === "amber"
+      ? "bg-amber-500/20 text-amber-200 hover:bg-amber-500/30"
+      : "bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition ${
+        on ? onCls : "bg-white/10 text-white/50 hover:bg-white/15"
+      }`}
+    >
+      {icon}
+      {on ? "activée" : "désactivée"}
+    </button>
+  );
+}
+
+// ----------------------------------------------------------------------
+// Filters section
+// ----------------------------------------------------------------------
+
+function FiltersSection({
+  phoneNumberId,
+  filters,
+  onAdd,
+  onDelete
+}: {
+  phoneNumberId: number;
+  filters: FilterRow[];
+  onAdd: (
+    phoneNumberId: number,
+    kind: "block" | "vip",
+    pattern: string,
+    label: string
+  ) => void;
+  onDelete: (filterId: number) => void;
+}) {
+  const [kind, setKind] = useState<"block" | "vip">("block");
+  const [pattern, setPattern] = useState("");
+  const [label, setLabel] = useState("");
+  const blocks = filters.filter((f) => f.kind === "block");
+  const vips = filters.filter((f) => f.kind === "vip");
+
+  return (
+    <section className="mt-5 grid gap-4 lg:grid-cols-3">
+      <div className="lg:col-span-2 grid gap-3 md:grid-cols-2">
+        <FilterCard
+          title="Blocklist"
+          subtitle={`${blocks.length} ${blocks.length > 1 ? "numéros" : "numéro"}`}
+          tone="rose"
+        >
+          {blocks.length === 0 ? (
+            <EmptyHint compact>Aucun blocage.</EmptyHint>
+          ) : (
+            <ul className="space-y-1">
+              {blocks.map((f) => (
+                <FilterItem key={f.id} f={f} onDelete={() => onDelete(f.id)} />
+              ))}
+            </ul>
+          )}
+        </FilterCard>
+        <FilterCard
+          title="VIP — ring direct"
+          subtitle={`${vips.length} ${vips.length > 1 ? "numéros" : "numéro"}`}
+          tone="emerald"
+        >
+          {vips.length === 0 ? (
+            <EmptyHint compact>Aucun VIP.</EmptyHint>
+          ) : (
+            <ul className="space-y-1">
+              {vips.map((f) => (
+                <FilterItem key={f.id} f={f} onDelete={() => onDelete(f.id)} />
+              ))}
+            </ul>
+          )}
+        </FilterCard>
+      </div>
+
+      <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+        <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+          <Filter className="h-4 w-4 text-violet-300" />
+          Ajouter un filtre
+        </h2>
+        <p className="mt-1 text-[11px] text-white/50">
+          Pattern : numéro exact (<code>+14385551234</code>), préfixe avec
+          astérisque (<code>+1438*</code>), ou vide = match-tout.
+        </p>
+        <div className="mt-3 space-y-2 text-xs">
+          <select
+            value={kind}
+            onChange={(e) => setKind(e.target.value as "block" | "vip")}
+            className="w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-white"
+          >
+            <option value="block">Bloquer ce numéro</option>
+            <option value="vip">VIP (ring direct, skip secrétaire)</option>
+          </select>
+          <input
+            type="text"
+            placeholder="Pattern (ex: +14385551234 ou +1438*)"
+            value={pattern}
+            onChange={(e) => setPattern(e.target.value)}
+            className="w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-white placeholder-white/30"
+          />
+          <input
+            type="text"
+            placeholder="Libellé (ex: Marie Tremblay)"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            className="w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1.5 text-white placeholder-white/30"
+          />
+          <button
+            type="button"
+            onClick={() => {
+              if (
+                !pattern.trim() &&
+                !confirm(
+                  "Sans pattern, ce filtre s'applique à TOUS les appels. Continuer ?"
+                )
+              )
+                return;
+              onAdd(phoneNumberId, kind, pattern, label);
+              setPattern("");
+              setLabel("");
+            }}
+            className="w-full rounded-md border border-teal-500/40 bg-teal-500/10 px-3 py-2 text-xs font-semibold text-teal-200 hover:bg-teal-500/20"
+          >
+            Ajouter
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function FilterCard({
+  title,
+  subtitle,
+  tone,
+  children
+}: {
+  title: string;
+  subtitle: string;
+  tone: "rose" | "emerald";
+  children: React.ReactNode;
+}) {
+  const toneCls =
+    tone === "rose" ? "text-rose-300" : "text-emerald-300";
+  return (
+    <div className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <h3 className={`text-xs font-bold uppercase tracking-wider ${toneCls}`}>
+        {title}
+      </h3>
+      <div className="text-[10px] text-white/40">{subtitle}</div>
+      <div className="mt-3">{children}</div>
+    </div>
+  );
+}
+
+function FilterItem({
+  f,
+  onDelete
+}: {
+  f: FilterRow;
+  onDelete: () => void;
 }) {
   return (
-    <>
-      <tr className="cursor-pointer hover:bg-white/[0.03]" onClick={onToggle}>
-        <td className="py-2 text-white/60">{formatDateTime(call.started_at)}</td>
-        <td className="py-2 font-mono text-white">
-          {call.from_e164}
-          {call.was_blocked ? (
-            <span className="ml-1.5 rounded bg-rose-500/20 px-1 text-[9px] uppercase tracking-wide text-rose-300">
-              blocked
-            </span>
-          ) : null}
-          {call.was_vip ? (
-            <span className="ml-1.5 rounded bg-emerald-500/20 px-1 text-[9px] uppercase tracking-wide text-emerald-300">
-              vip
-            </span>
-          ) : null}
-          {call.was_voicemail ? (
-            <span className="ml-1.5 rounded bg-amber-500/20 px-1 text-[9px] uppercase tracking-wide text-amber-300">
-              voicemail
-            </span>
-          ) : null}
-        </td>
-        <td className="py-2 text-white/80">
-          <span className="mr-1 text-[9px] uppercase tracking-wide text-white/40">
-            {call.direction === "outbound" ? "↗" : "↘"}
+    <li className="flex items-center justify-between gap-2 rounded-md bg-brand-950 px-2 py-1.5 text-[11px]">
+      <div className="min-w-0">
+        <div className="font-mono text-white">{f.pattern || "(tous)"}</div>
+        {f.label ? (
+          <div className="truncate text-white/40">{f.label}</div>
+        ) : null}
+      </div>
+      <button
+        type="button"
+        onClick={onDelete}
+        className="text-white/40 hover:text-rose-300"
+        title="Supprimer"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </li>
+  );
+}
+
+// ----------------------------------------------------------------------
+// Business hours section
+// ----------------------------------------------------------------------
+
+const DAY_LABELS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
+
+function BusinessHoursSection({
+  phoneNumberId,
+  hours,
+  onSave
+}: {
+  phoneNumberId: number;
+  hours: BusinessHoursRow[];
+  onSave: (
+    phoneNumberId: number,
+    rows: { day_of_week: number; open_time: string; close_time: string }[]
+  ) => void;
+}) {
+  type DayState = { enabled: boolean; open: string; close: string };
+  const init = (): DayState[] =>
+    DAY_LABELS.map((_, dow) => {
+      const existing = hours.find((h) => h.day_of_week === dow);
+      return existing
+        ? { enabled: true, open: existing.open_time, close: existing.close_time }
+        : { enabled: false, open: "09:00", close: "17:00" };
+    });
+  const [days, setDays] = useState<DayState[]>(init);
+
+  useEffect(() => {
+    setDays(init());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hours]);
+
+  const update = (i: number, patch: Partial<DayState>) =>
+    setDays((prev) =>
+      prev.map((d, idx) => (idx === i ? { ...d, ...patch } : d))
+    );
+
+  const save = () => {
+    const rows = days
+      .map((d, dow) => ({
+        enabled: d.enabled,
+        day_of_week: dow,
+        open_time: d.open,
+        close_time: d.close
+      }))
+      .filter((r) => r.enabled)
+      .map(({ enabled: _e, ...rest }) => rest);
+    onSave(phoneNumberId, rows);
+  };
+
+  return (
+    <section className="mt-5 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <div className="flex items-center justify-between">
+        <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+          <Clock className="h-4 w-4 text-blue-300" />
+          Heures d&apos;ouverture
+          <span className="ml-2 rounded-full bg-brand-800 px-2 py-0.5 text-[10px] text-white/60">
+            Montréal
           </span>
-          {call.intent ? (
-            <IntentBadge intent={call.intent} />
-          ) : (
-            <span className="text-white/30">—</span>
-          )}
-          {call.entity_type ? (
-            <span className="ml-1.5 rounded bg-violet-500/15 px-1 text-[9px] uppercase tracking-wide text-violet-300">
-              {call.entity_type}#{call.entity_id}
-            </span>
+        </h2>
+        <button
+          type="button"
+          onClick={save}
+          className="rounded-md border border-teal-500/40 bg-teal-500/10 px-3 py-1.5 text-xs font-semibold text-teal-200 hover:bg-teal-500/20"
+        >
+          <CheckCircle2 className="mr-1 inline h-3 w-3" />
+          Enregistrer
+        </button>
+      </div>
+      <p className="mt-1 text-[11px] text-white/50">
+        Hors plages → voicemail IA (enregistrement + transcription + résumé).
+        Aucun jour activé = ouvert 24 / 7.
+      </p>
+
+      <div className="mt-4 space-y-2">
+        {days.map((d, i) => (
+          <div
+            key={i}
+            className="flex items-center gap-3 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm"
+          >
+            <label className="flex w-28 items-center gap-2 text-white/80">
+              <input
+                type="checkbox"
+                checked={d.enabled}
+                onChange={(e) => update(i, { enabled: e.target.checked })}
+                className="h-3.5 w-3.5"
+              />
+              {DAY_LABELS[i]}
+            </label>
+            <input
+              type="time"
+              value={d.open}
+              onChange={(e) => update(i, { open: e.target.value })}
+              disabled={!d.enabled}
+              className="rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-white disabled:opacity-40"
+            />
+            <span className="text-white/40">→</span>
+            <input
+              type="time"
+              value={d.close}
+              onChange={(e) => update(i, { close: e.target.value })}
+              disabled={!d.enabled}
+              className="rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-white disabled:opacity-40"
+            />
+            {!d.enabled ? (
+              <span className="ml-auto text-[11px] text-white/40">
+                voicemail
+              </span>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// ----------------------------------------------------------------------
+// Plan section (les 4 phases)
+// ----------------------------------------------------------------------
+
+function PlanSection() {
+  return (
+    <section className="mt-5 space-y-3">
+      <PhaseCard
+        num={1}
+        title="Fondations"
+        status="done"
+        items={[
+          "Module backend voice + abstraction provider",
+          "Modèles SQL + webhook Twilio signé HMAC",
+          "Auto-bootstrap + dispatch <Dial> simple"
+        ]}
+      />
+      <PhaseCard
+        num={2}
+        title="Secrétaire IA bilingue"
+        status="done"
+        items={[
+          "Polly Neural FR/EN + Claude tour-par-tour",
+          "Création ContactRequest sur callback",
+          "Toggle activable par numéro"
+        ]}
+      />
+      <PhaseCard
+        num={3}
+        title="Filtres + Heures + Voicemail IA"
+        status="done"
+        items={[
+          "Blocklist + VIP whitelist par pattern",
+          "Heures d'ouverture par jour de semaine",
+          "Voicemail Record + transcription + résumé Claude"
+        ]}
+      />
+      <PhaseCard
+        num={4}
+        title="Sortant + lien CRM"
+        status="done"
+        items={[
+          "Click-to-call avec entity_type/id",
+          "AI outbound auto sur nouveaux leads (toggle safety)",
+          "Suggestion follow-up Claude post-appel"
+        ]}
+      />
+      <PhaseCard
+        num={5}
+        title="Anti-spam 6 couches + Voice SDK hybride"
+        status="done"
+        items={[
+          "Geo, STIR/SHAKEN, rate limit, honeypot, Lookup, cost cap",
+          "Identification CRM avant décroché (bypass spam VIP)",
+          "Voice SDK browser WebRTC + fallback mobile 15 sec"
+        ]}
+      />
+    </section>
+  );
+}
+
+function PhaseCard({
+  num,
+  title,
+  status,
+  items
+}: {
+  num: number;
+  title: string;
+  status: "done" | "in_progress" | "todo";
+  items: string[];
+}) {
+  return (
+    <article className="rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <header className="flex items-center justify-between gap-3 border-b border-brand-800 pb-3">
+        <div className="flex items-center gap-3">
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-800 text-xs font-bold text-white">
+            {num}
+          </span>
+          <h3 className="text-base font-bold text-white">{title}</h3>
+        </div>
+        <span
+          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+            status === "done"
+              ? "bg-emerald-500/15 text-emerald-300"
+              : status === "in_progress"
+                ? "bg-amber-500/15 text-amber-300"
+                : "bg-white/5 text-white/50"
+          }`}
+        >
+          {status === "done"
+            ? "Livré"
+            : status === "in_progress"
+              ? "En cours"
+              : "À faire"}
+        </span>
+      </header>
+      <ul className="mt-3 space-y-1 text-xs text-white/70">
+        {items.map((it, i) => (
+          <li key={i}>• {it}</li>
+        ))}
+      </ul>
+    </article>
+  );
+}
+
+// ----------------------------------------------------------------------
+// Call drawer
+// ----------------------------------------------------------------------
+
+function CallDrawer({
+  call,
+  turns,
+  onClose
+}: {
+  call: CallRow;
+  turns: CallTurnRow[] | undefined;
+  onClose: () => void;
+}) {
+  const [suggestion, setSuggestion] = useState<string | null>(
+    call.followup_suggestion
+  );
+  const [busy, setBusy] = useState(false);
+
+  const askSuggest = async () => {
+    setBusy(true);
+    try {
+      const res = await authedFetch(
+        `/api/v1/voice/calls/${call.id}/suggest-followup`,
+        { method: "POST" }
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as { suggestion: string };
+      setSuggestion(data.suggestion);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <aside
+        onClick={(e) => e.stopPropagation()}
+        className="absolute right-0 top-0 flex h-full w-full max-w-xl flex-col overflow-y-auto border-l border-brand-800 bg-brand-900 shadow-2xl"
+      >
+        <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-brand-800 bg-brand-900 p-4">
+          <div className="flex items-center gap-3">
+            <DirectionIcon dir={call.direction} status={call.status} />
+            <div>
+              <div className="font-mono text-base font-bold text-white">
+                {call.from_e164}
+              </div>
+              <div className="text-[11px] text-white/50">
+                {formatDateTime(call.started_at)}
+                {call.duration_sec != null ? ` · ${call.duration_sec}s` : ""}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-2 text-white/60 hover:bg-brand-800 hover:text-white"
+            aria-label="Fermer"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="space-y-4 p-4">
+          {/* Status badges */}
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge status={call.status} />
+            {call.intent ? <IntentBadge intent={call.intent} /> : null}
+            {call.caller_kind && call.caller_kind !== "unknown" ? (
+              <CallerKindBadge kind={call.caller_kind} />
+            ) : null}
+            {call.was_blocked ? <Tag tone="rose">blocked</Tag> : null}
+            {call.was_vip ? <Tag tone="emerald">vip</Tag> : null}
+            {call.was_voicemail ? <Tag tone="amber">voicemail</Tag> : null}
+          </div>
+
+          {/* Voicemail */}
+          {call.was_voicemail ? (
+            <DrawerCard title="Voicemail" tone="amber">
+              {call.voicemail_summary ? (
+                <p className="italic text-amber-100">{call.voicemail_summary}</p>
+              ) : null}
+              {call.voicemail_transcription ? (
+                <p className="mt-2 whitespace-pre-wrap text-white/80">
+                  {call.voicemail_transcription}
+                </p>
+              ) : (
+                <p className="text-[11px] text-white/40">
+                  Transcription en cours…
+                </p>
+              )}
+              {call.recording_url ? (
+                <a
+                  href={call.recording_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-2 inline-block rounded-md border border-amber-500/40 px-2 py-1 text-[10px] text-amber-200 hover:bg-amber-500/10"
+                >
+                  ▶ Écouter
+                </a>
+              ) : null}
+            </DrawerCard>
           ) : null}
-        </td>
-        <td className="py-2">
-          <StatusBadge status={call.status} />
-        </td>
-        <td className="py-2 text-right text-white/80">
-          {call.duration_sec != null ? `${call.duration_sec}s` : "—"}
-        </td>
-        <td className="py-2 text-right text-white/40">
-          {expanded ? "▾" : "▸"}
-        </td>
-      </tr>
-      {expanded ? (
-        <tr>
-          <td colSpan={6} className="bg-white/[0.02] p-3">
-            {call.was_voicemail ? (
-              <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-[11px] text-white/80">
-                <div className="mb-1 font-semibold text-amber-200">
-                  Voicemail
+
+          {/* Lead capturé */}
+          {(call.lead_name || call.lead_callback_phone || call.lead_reason) ? (
+            <DrawerCard title="Lead capturé" tone="teal">
+              {call.lead_name ? (
+                <div>
+                  <span className="text-white/50">Nom : </span>
+                  {call.lead_name}
                 </div>
-                {call.voicemail_summary ? (
-                  <div className="mb-2 italic text-amber-100">
-                    Résumé IA : {call.voicemail_summary}
-                  </div>
-                ) : null}
-                {call.voicemail_transcription ? (
-                  <div className="whitespace-pre-wrap">
-                    {call.voicemail_transcription}
-                  </div>
-                ) : (
-                  <div className="text-white/40">
-                    Transcription en cours… (Twilio prend 5-15 sec après
-                    l&apos;enregistrement)
-                  </div>
-                )}
-                {call.recording_url ? (
-                  <a
-                    href={call.recording_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-2 inline-block rounded-md border border-amber-500/40 px-2 py-1 text-[10px] text-amber-200 hover:bg-amber-500/10"
-                  >
-                    ▶ Écouter
-                  </a>
-                ) : null}
-              </div>
-            ) : null}
-            {call.lead_name || call.lead_callback_phone || call.lead_reason ? (
-              <div className="mb-3 rounded-md border border-teal-500/30 bg-teal-500/5 p-3 text-[11px] text-white/80">
-                <div className="mb-1 font-semibold text-teal-200">
-                  Lead capturé
+              ) : null}
+              {call.lead_callback_phone ? (
+                <div>
+                  <span className="text-white/50">Rappel : </span>
+                  <span className="font-mono">
+                    {call.lead_callback_phone}
+                  </span>
                 </div>
-                {call.lead_name ? <div>Nom : {call.lead_name}</div> : null}
-                {call.lead_callback_phone ? (
-                  <div>Rappel : {call.lead_callback_phone}</div>
-                ) : null}
-                {call.lead_reason ? <div>Raison : {call.lead_reason}</div> : null}
-                {call.contact_request_id ? (
-                  <div className="mt-1 text-teal-300">
-                    Fiche CRM #{call.contact_request_id} créée
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
+              ) : null}
+              {call.lead_reason ? (
+                <div>
+                  <span className="text-white/50">Raison : </span>
+                  {call.lead_reason}
+                </div>
+              ) : null}
+              {call.contact_request_id ? (
+                <div className="mt-1 text-teal-300">
+                  Fiche CRM #{call.contact_request_id} créée
+                </div>
+              ) : null}
+              {call.lead_callback_phone ? (
+                <div className="mt-3">
+                  <CallButton
+                    targetE164={call.lead_callback_phone}
+                    entityType={call.entity_type || undefined}
+                    entityId={call.entity_id || undefined}
+                    label="Rappeler maintenant"
+                  />
+                </div>
+              ) : null}
+            </DrawerCard>
+          ) : null}
+
+          {/* Transcript */}
+          <DrawerCard title="Conversation" tone="neutral">
             {turns === undefined ? (
               <p className="text-[11px] text-white/40">Chargement…</p>
             ) : turns.length === 0 ? (
               <p className="text-[11px] text-white/40">
-                Pas de transcription (transfert direct, pas de secrétaire IA
-                sur cet appel).
+                Pas de transcription (transfert direct sans secrétaire IA).
               </p>
             ) : (
               <ul className="space-y-2">
@@ -858,92 +1531,207 @@ function CallRowItem({
                     className={`rounded-md p-2 text-[11px] ${
                       t.role === "assistant"
                         ? "bg-teal-500/10 text-teal-100"
-                        : "bg-white/5 text-white/80"
+                        : "bg-brand-800 text-white/80"
                     }`}
                   >
-                    <span className="mr-2 font-semibold uppercase tracking-wide text-[9px] opacity-60">
-                      {t.role === "assistant" ? "Secrétaire" : "Appelant"}
-                    </span>
+                    <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wide opacity-60">
+                      {t.role === "assistant" ? "Léa" : "Appelant"}
+                    </div>
                     {t.text}
                   </li>
                 ))}
               </ul>
             )}
-            <SuggestFollowupBlock call={call} />
-          </td>
-        </tr>
-      ) : null}
-    </>
-  );
-}
+          </DrawerCard>
 
-function SuggestFollowupBlock({ call }: { call: CallRow }) {
-  const [suggestion, setSuggestion] = useState<string | null>(
-    call.followup_suggestion
-  );
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function ask() {
-    setBusy(true);
-    setErr(null);
-    try {
-      const res = await authedFetch(
-        `/api/v1/voice/calls/${call.id}/suggest-followup`,
-        { method: "POST" }
-      );
-      if (!res.ok) throw new Error(`http_${res.status}`);
-      const data = (await res.json()) as { suggestion: string };
-      setSuggestion(data.suggestion);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="mt-3 rounded-md border border-violet-500/20 bg-violet-500/5 p-3 text-[11px] text-white/80">
-      <div className="mb-1 flex items-center justify-between gap-2">
-        <span className="font-semibold text-violet-200">Suivi suggéré (IA)</span>
-        <button
-          type="button"
-          onClick={ask}
-          disabled={busy}
-          className="rounded-md border border-violet-500/40 px-2 py-0.5 text-[10px] text-violet-200 hover:bg-violet-500/10 disabled:opacity-50"
-        >
-          {busy ? "…" : suggestion ? "Régénérer" : "Générer"}
-        </button>
-      </div>
-      {suggestion ? (
-        <p className="whitespace-pre-wrap">{suggestion}</p>
-      ) : (
-        <p className="text-white/40">
-          Pas encore de suggestion. Clique sur Générer pour demander à
-          l&apos;IA quoi faire après cet appel.
-        </p>
-      )}
-      {err ? <p className="mt-1 text-rose-300">{err}</p> : null}
+          {/* Followup suggestion */}
+          <DrawerCard title="Suggestion de suivi (IA)" tone="violet">
+            {suggestion ? (
+              <p className="whitespace-pre-wrap text-white/80">{suggestion}</p>
+            ) : (
+              <p className="text-[11px] text-white/40">
+                Clique sur Générer pour demander à Claude une action de
+                suivi concrète post-appel.
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={askSuggest}
+              disabled={busy}
+              className="mt-3 rounded-md border border-violet-500/40 bg-violet-500/10 px-2.5 py-1 text-[11px] text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
+            >
+              {busy ? "…" : suggestion ? "Régénérer" : "Générer"}
+            </button>
+          </DrawerCard>
+        </div>
+      </aside>
     </div>
   );
 }
 
-function IntentBadge({ intent }: { intent: string }) {
-  const map: Record<string, { label: string; cls: string }> = {
-    renovation: { label: "rénovation", cls: "bg-teal-500/15 text-teal-300" },
-    dev_logiciel: { label: "logiciel", cls: "bg-violet-500/15 text-violet-300" },
-    gestion_immo: { label: "gestion immo", cls: "bg-blue-500/15 text-blue-300" },
-    urgence: { label: "urgence", cls: "bg-rose-500/15 text-rose-300" },
-    callback: { label: "rappel", cls: "bg-amber-500/15 text-amber-300" },
-    spam: { label: "spam", cls: "bg-white/10 text-white/40" },
-    unclear: { label: "indéfini", cls: "bg-white/10 text-white/40" }
+function DrawerCard({
+  title,
+  tone,
+  children
+}: {
+  title: string;
+  tone: "amber" | "teal" | "violet" | "neutral";
+  children: React.ReactNode;
+}) {
+  const map = {
+    amber: "border-amber-500/30 bg-amber-500/5 text-amber-200",
+    teal: "border-teal-500/30 bg-teal-500/5 text-teal-200",
+    violet: "border-violet-500/30 bg-violet-500/5 text-violet-200",
+    neutral: "border-brand-800 bg-brand-950 text-white/70"
   };
-  const meta = map[intent] || { label: intent, cls: "bg-white/10 text-white/60" };
+  const titleTone = map[tone].split(" ").slice(-1)[0];
+  return (
+    <div className={`rounded-xl border p-3 text-[12px] ${map[tone]}`}>
+      <div className={`mb-2 text-[10px] font-bold uppercase tracking-wider ${titleTone}`}>
+        {title}
+      </div>
+      <div className="text-white/80">{children}</div>
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------
+// Small UI helpers
+// ----------------------------------------------------------------------
+
+function KpiCard({
+  icon,
+  label,
+  value,
+  subtitle,
+  tone,
+  onClick
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  subtitle: string;
+  tone: "teal" | "amber" | "violet" | "emerald" | "blue";
+  onClick?: () => void;
+}) {
+  const map = {
+    teal: "text-teal-300",
+    amber: "text-amber-300",
+    violet: "text-violet-300",
+    emerald: "text-emerald-300",
+    blue: "text-blue-300"
+  };
+  const Component = onClick ? "button" : "div";
+  return (
+    <Component
+      onClick={onClick}
+      className={`rounded-2xl border border-brand-800 bg-brand-900 p-4 text-left transition ${
+        onClick ? "hover:border-brand-700 hover:bg-brand-800" : ""
+      }`}
+    >
+      <div
+        className={`flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider ${map[tone]}`}
+      >
+        {icon}
+        {label}
+      </div>
+      <div className="mt-1 text-2xl font-bold text-white">{value}</div>
+      <div className="text-[11px] text-white/50">{subtitle}</div>
+    </Component>
+  );
+}
+
+function StatusPill({
+  on,
+  icon,
+  label,
+  onClick
+}: {
+  on: boolean;
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-wider transition ${
+        on
+          ? "bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30"
+          : "bg-white/10 text-white/50 hover:bg-white/15"
+      }`}
+    >
+      <span className="flex h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+function EmptyHint({
+  children,
+  compact = false
+}: {
+  children: React.ReactNode;
+  compact?: boolean;
+}) {
+  return (
+    <p
+      className={`text-[11px] text-white/40 ${
+        compact ? "" : "rounded-md border border-brand-800 bg-brand-950 px-3 py-3 mt-3"
+      }`}
+    >
+      {children}
+    </p>
+  );
+}
+
+function Tag({
+  children,
+  tone
+}: {
+  children: React.ReactNode;
+  tone: "rose" | "emerald" | "amber";
+}) {
+  const cls = {
+    rose: "bg-rose-500/20 text-rose-300",
+    emerald: "bg-emerald-500/20 text-emerald-300",
+    amber: "bg-amber-500/20 text-amber-300"
+  }[tone];
   return (
     <span
-      className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${meta.cls}`}
+      className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${cls}`}
     >
-      {meta.label}
+      {children}
+    </span>
+  );
+}
+
+function DirectionIcon({
+  dir,
+  status
+}: {
+  dir: string;
+  status: string;
+}) {
+  if (dir === "outbound") {
+    return (
+      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-500/15 text-blue-300">
+        <PhoneForwarded className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
+  if (status === "no-answer" || status === "busy" || status === "failed") {
+    return (
+      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-rose-500/15 text-rose-300">
+        <PhoneOff className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
+  return (
+    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-teal-500/15 text-teal-300">
+      <PhoneIncoming className="h-3.5 w-3.5" />
     </span>
   );
 }
@@ -959,7 +1747,48 @@ function StatusBadge({ status }: { status: string }) {
     failed: { label: "échec", cls: "bg-rose-500/15 text-rose-300" },
     canceled: { label: "annulé", cls: "bg-white/10 text-white/60" }
   };
-  const meta = known[status] || { label: status, cls: "bg-white/10 text-white/60" };
+  const meta =
+    known[status] || { label: status, cls: "bg-white/10 text-white/60" };
+  return (
+    <span
+      className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${meta.cls}`}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
+function IntentBadge({ intent }: { intent: string }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    renovation: { label: "rénovation", cls: "bg-teal-500/15 text-teal-300" },
+    dev_logiciel: { label: "logiciel", cls: "bg-violet-500/15 text-violet-300" },
+    gestion_immo: { label: "gestion immo", cls: "bg-blue-500/15 text-blue-300" },
+    urgence: { label: "urgence", cls: "bg-rose-500/15 text-rose-300" },
+    callback: { label: "rappel", cls: "bg-amber-500/15 text-amber-300" },
+    lead_qualification: { label: "qualification", cls: "bg-violet-500/15 text-violet-300" },
+    spam: { label: "spam", cls: "bg-white/10 text-white/40" },
+    unclear: { label: "indéfini", cls: "bg-white/10 text-white/40" }
+  };
+  const meta =
+    map[intent] || { label: intent, cls: "bg-white/10 text-white/60" };
+  return (
+    <span
+      className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${meta.cls}`}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
+function CallerKindBadge({ kind }: { kind: string }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    client: { label: "client", cls: "bg-emerald-500/15 text-emerald-300" },
+    locataire: { label: "locataire", cls: "bg-blue-500/15 text-blue-300" },
+    lead_prospection: { label: "lead prospect", cls: "bg-violet-500/15 text-violet-300" },
+    lead_web: { label: "lead web", cls: "bg-teal-500/15 text-teal-300" }
+  };
+  const meta = map[kind];
+  if (!meta) return null;
   return (
     <span
       className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${meta.cls}`}
@@ -981,291 +1810,4 @@ function formatDateTime(iso: string): string {
   } catch {
     return iso;
   }
-}
-
-const DAY_LABELS = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
-
-function OutboundTester() {
-  const [target, setTarget] = useState("");
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-2">
-      <input
-        type="tel"
-        placeholder="+15146191111"
-        value={target}
-        onChange={(e) => setTarget(e.target.value)}
-        className="flex-1 min-w-[200px] rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-white placeholder-white/30"
-      />
-      <CallButton targetE164={target} />
-    </div>
-  );
-}
-
-function FiltersSection({
-  phoneNumberId,
-  filters,
-  onAdd,
-  onDelete
-}: {
-  phoneNumberId: number;
-  filters: FilterRow[];
-  onAdd: (
-    phoneNumberId: number,
-    kind: "block" | "vip",
-    pattern: string,
-    label: string
-  ) => void;
-  onDelete: (filterId: number) => void;
-}) {
-  const [kind, setKind] = useState<"block" | "vip">("block");
-  const [pattern, setPattern] = useState("");
-  const [label, setLabel] = useState("");
-
-  const blocks = filters.filter((f) => f.kind === "block");
-  const vips = filters.filter((f) => f.kind === "vip");
-
-  return (
-    <section className="mt-4 rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-      <h2 className="flex items-center gap-2 text-sm font-bold text-white">
-        <Filter className="h-4 w-4 text-violet-300" />
-        Filtres (blocklist + VIP)
-      </h2>
-      <p className="mt-1 text-[11px] text-white/40">
-        Pattern : numéro exact (<code>+14385551234</code>), préfixe avec
-        astérisque (<code>+1438*</code>) ou vide = match-tout.
-      </p>
-
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <div>
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-rose-300">
-            Blocklist ({blocks.length})
-          </h3>
-          {blocks.length === 0 ? (
-            <p className="mt-2 text-[11px] text-white/40">Aucun blocage.</p>
-          ) : (
-            <ul className="mt-2 space-y-1">
-              {blocks.map((f) => (
-                <FilterItem key={f.id} f={f} onDelete={() => onDelete(f.id)} />
-              ))}
-            </ul>
-          )}
-        </div>
-        <div>
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-emerald-300">
-            VIP — ring direct ({vips.length})
-          </h3>
-          {vips.length === 0 ? (
-            <p className="mt-2 text-[11px] text-white/40">Aucun VIP.</p>
-          ) : (
-            <ul className="mt-2 space-y-1">
-              {vips.map((f) => (
-                <FilterItem key={f.id} f={f} onDelete={() => onDelete(f.id)} />
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
-
-      <div className="mt-4 flex flex-wrap items-end gap-2 border-t border-white/5 pt-4">
-        <select
-          value={kind}
-          onChange={(e) => setKind(e.target.value as "block" | "vip")}
-          className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-white"
-        >
-          <option value="block">Bloquer</option>
-          <option value="vip">VIP</option>
-        </select>
-        <input
-          type="text"
-          placeholder="Pattern (ex: +14385551234)"
-          value={pattern}
-          onChange={(e) => setPattern(e.target.value)}
-          className="min-w-[180px] flex-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-white placeholder-white/30"
-        />
-        <input
-          type="text"
-          placeholder="Libellé (optionnel)"
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          className="min-w-[140px] flex-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-white placeholder-white/30"
-        />
-        <button
-          type="button"
-          onClick={() => {
-            if (!pattern.trim() && !confirm("Sans pattern, ce filtre s'applique à TOUS les appels. Continuer ?")) return;
-            onAdd(phoneNumberId, kind, pattern, label);
-            setPattern("");
-            setLabel("");
-          }}
-          className="rounded-md border border-teal-500/40 bg-teal-500/10 px-3 py-1 text-xs font-semibold text-teal-200 hover:bg-teal-500/20"
-        >
-          Ajouter
-        </button>
-      </div>
-    </section>
-  );
-}
-
-function FilterItem({ f, onDelete }: { f: FilterRow; onDelete: () => void }) {
-  return (
-    <li className="flex items-center justify-between gap-2 rounded-md bg-white/5 px-2 py-1 text-[11px]">
-      <div className="min-w-0">
-        <div className="font-mono text-white">{f.pattern || "(tous)"}</div>
-        {f.label ? (
-          <div className="truncate text-white/40">{f.label}</div>
-        ) : null}
-      </div>
-      <button
-        type="button"
-        onClick={onDelete}
-        className="text-white/40 hover:text-rose-300"
-        title="Supprimer"
-      >
-        ✕
-      </button>
-    </li>
-  );
-}
-
-function BusinessHoursSection({
-  phoneNumberId,
-  hours,
-  onSave
-}: {
-  phoneNumberId: number;
-  hours: BusinessHoursRow[];
-  onSave: (
-    phoneNumberId: number,
-    rows: { day_of_week: number; open_time: string; close_time: string }[]
-  ) => void;
-}) {
-  // État local par jour : enabled + open + close.
-  type DayState = { enabled: boolean; open: string; close: string };
-  const init = (): DayState[] =>
-    DAY_LABELS.map((_, dow) => {
-      const existing = hours.find((h) => h.day_of_week === dow);
-      return existing
-        ? { enabled: true, open: existing.open_time, close: existing.close_time }
-        : { enabled: false, open: "09:00", close: "17:00" };
-    });
-
-  const [days, setDays] = useState<DayState[]>(init);
-
-  // Re-sync si les heures fetched changent (après reload).
-  useEffect(() => {
-    setDays(init());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hours]);
-
-  const update = (i: number, patch: Partial<DayState>) =>
-    setDays((prev) => prev.map((d, idx) => (idx === i ? { ...d, ...patch } : d)));
-
-  const save = () => {
-    const rows = days
-      .map((d, dow) => ({ enabled: d.enabled, day_of_week: dow, open_time: d.open, close_time: d.close }))
-      .filter((r) => r.enabled)
-      .map(({ enabled: _ignore, ...rest }) => rest);
-    onSave(phoneNumberId, rows);
-  };
-
-  return (
-    <section className="mt-4 rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-      <h2 className="flex items-center gap-2 text-sm font-bold text-white">
-        <Workflow className="h-4 w-4 text-blue-300" />
-        Heures d&apos;ouverture (timezone Montréal)
-      </h2>
-      <p className="mt-1 text-[11px] text-white/40">
-        Hors heures → voicemail IA (enregistrement + transcription + résumé).
-        Aucun jour activé = ouvert 24/7.
-      </p>
-      <div className="mt-3 space-y-1.5">
-        {days.map((d, i) => (
-          <div key={i} className="flex items-center gap-3 text-xs">
-            <label className="flex w-20 items-center gap-2 text-white/80">
-              <input
-                type="checkbox"
-                checked={d.enabled}
-                onChange={(e) => update(i, { enabled: e.target.checked })}
-                className="h-3 w-3"
-              />
-              {DAY_LABELS[i]}
-            </label>
-            <input
-              type="time"
-              value={d.open}
-              onChange={(e) => update(i, { open: e.target.value })}
-              disabled={!d.enabled}
-              className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-white disabled:opacity-40"
-            />
-            <span className="text-white/40">→</span>
-            <input
-              type="time"
-              value={d.close}
-              onChange={(e) => update(i, { close: e.target.value })}
-              disabled={!d.enabled}
-              className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-white disabled:opacity-40"
-            />
-          </div>
-        ))}
-      </div>
-      <button
-        type="button"
-        onClick={save}
-        className="mt-3 rounded-md border border-teal-500/40 bg-teal-500/10 px-3 py-1 text-xs font-semibold text-teal-200 hover:bg-teal-500/20"
-      >
-        Enregistrer les heures
-      </button>
-    </section>
-  );
-}
-
-function PhaseCard({
-  num,
-  title,
-  icon,
-  scope,
-  status,
-  children
-}: {
-  num: number;
-  title: string;
-  icon: React.ReactNode;
-  scope: string;
-  status: "todo" | "in_progress" | "done";
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-      <header className="flex items-start justify-between gap-3 border-b border-white/10 pb-3">
-        <div className="flex items-center gap-3">
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-xs font-bold text-white">
-            {num}
-          </span>
-          <div>
-            <h3 className="flex items-center gap-1.5 text-base font-bold text-white">
-              {icon}
-              {title}
-            </h3>
-            <p className="text-[11px] text-white/40">{scope}</p>
-          </div>
-        </div>
-        <span
-          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-            status === "done"
-              ? "bg-emerald-500/15 text-emerald-300"
-              : status === "in_progress"
-                ? "bg-amber-500/15 text-amber-300"
-                : "bg-white/5 text-white/50"
-          }`}
-        >
-          {status === "done"
-            ? "Terminé"
-            : status === "in_progress"
-              ? "En cours"
-              : "À faire"}
-        </span>
-      </header>
-      <div className="mt-3 text-xs text-white/70">{children}</div>
-    </div>
-  );
 }
