@@ -444,12 +444,16 @@ async def _compute_finances(
 
     balance = max(0.0, invoiced - paid_sum)
 
-    # Actual profit = paid revenue - costs. Tant que rien n'est payé,
-    # paid_sum = 0 → profit = -coûts engagés (potentiellement négatif),
-    # marge = 0 (division par zéro neutralisée).
-    actual_profit = round(paid_sum - actual_total_cost, 2)
+    # Profit réel = revenu contractuel (soumission / projected_revenue)
+    # - coûts engagés réels. Donne la marge théorique sur le contrat
+    # complet, indépendamment du % facturé / payé à ce stade.
+    # Avant : on faisait paid_sum - actual_cost qui rendait le profit
+    # extrêmement négatif tant que la facturation n'avait pas suivi le
+    # rythme des dépenses (cas usuel en cours de chantier).
+    actual_profit = round(projected_revenue - actual_total_cost, 2)
     actual_margin_pct = (
-        round(actual_profit / paid_sum * 100, 1) if paid_sum > 0 else 0.0
+        round(actual_profit / projected_revenue * 100, 1)
+        if projected_revenue > 0 else 0.0
     )
 
     return FinancesResponse(
