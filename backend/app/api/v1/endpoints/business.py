@@ -176,6 +176,13 @@ def make_crud_router(
         prev_project_id = (
             getattr(obj, "project_id", None) if model is Punch else None
         )
+        # Capture pre-update total Soumission — si le total change,
+        # on propage au budget du projet lié pour que la kanban, le
+        # header projet (« Budget » pill) et le champ « Budget (CAD) »
+        # de la fiche reflètent la dernière version soumissionnée.
+        prev_soum_total = (
+            getattr(obj, "total", None) if model is Soumission else None
+        )
         obj = await crud.update(obj, data)
         if model is Achat:
             new_status = getattr(obj, "status", None)
@@ -193,6 +200,23 @@ def make_crud_router(
                 )
 
                 await bump_to_in_progress_if_needed(db, new_project_id)
+                await db.flush()
+        if model is Soumission:
+            new_total = getattr(obj, "total", None)
+            if new_total != prev_soum_total and new_total is not None:
+                # Sync : Project.budget = Soumission.total quand le
+                # total change. Affecte la card kanban, le pill «
+                # Budget » du header projet et le champ « Budget (CAD)
+                # » de la fiche projet.
+                from sqlalchemy import update as _update
+
+                from app.models.project import Project as _Project
+
+                await db.execute(
+                    _update(_Project)
+                    .where(_Project.soumission_id == int(obj.id))
+                    .values(budget=new_total)
+                )
                 await db.flush()
         return read_schema.model_validate(obj)
 
