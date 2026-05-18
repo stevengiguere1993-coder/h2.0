@@ -182,6 +182,15 @@ class Call(Base):
     voicemail_transcription: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     voicemail_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Phase 4 — lien CRM générique. `entity_type` ∈ {prospection_lead,
+    # contact_request, client, contact} ; `entity_id` = id dans la table
+    # concernée. Permet de journaliser un appel sortant dans la bonne
+    # fiche, et d'afficher l'historique d'appels d'un prospect/client.
+    entity_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    entity_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    # Suggestion de suivi générée par l'IA après l'appel (Phase 4).
+    followup_suggestion: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     phone_number: Mapped[PhoneNumber] = relationship(back_populates="calls")
     transcript: Mapped[Optional["CallTranscript"]] = relationship(
         back_populates="call",
