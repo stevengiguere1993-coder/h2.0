@@ -8,6 +8,7 @@ import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
 import { KratosFloating } from "@/components/kratos-floating";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
+import { VoiceConsole } from "@/components/voice-console";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -43,6 +44,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   chaque page (statique, ne chevauche plus le contenu). */}
               <KratosFloating />
               <HelpButton />
+              {/* Phase 9 — Voice SDK actif dans tout le portail
+                  construction : un appel entrant route via WebRTC
+                  vers le user connecté quel que soit l'écran. */}
+              <VoiceConsole />
             </ConfirmProvider>
           </AppLayoutContextProvider>
         </div>

@@ -16,6 +16,7 @@ import {
   PhoneIncoming,
   PhoneOutgoing,
   Search,
+  Send,
   Voicemail
 } from "lucide-react";
 
@@ -72,18 +73,56 @@ export function CommunicationsTimeline({
   entityType,
   entityId,
   title = "Communications",
-  emptyHint
+  emptyHint,
+  replyToE164
 }: {
   entityType: CommunicationsEntityType;
   entityId: number;
   title?: string;
   emptyHint?: string;
+  // Si fourni, affiche un quick-reply SMS sous le timeline qui
+  // envoie au numéro indiqué (généralement le téléphone CRM du
+  // contact en cours).
+  replyToE164?: string | null;
 }) {
   const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
+  const [replyBody, setReplyBody] = useState("");
+  const [replyBusy, setReplyBusy] = useState(false);
+  const [replyNotice, setReplyNotice] = useState<string | null>(null);
+
+  async function sendQuickReply() {
+    if (!replyToE164 || !replyBody.trim()) return;
+    setReplyBusy(true);
+    setReplyNotice(null);
+    try {
+      const r = await authedFetch("/api/v1/voice/sms", {
+        method: "POST",
+        body: JSON.stringify({
+          to_e164: replyToE164,
+          body: replyBody.trim()
+        })
+      });
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(t.slice(0, 200));
+      }
+      setReplyBody("");
+      setReplyNotice("SMS envoyé.");
+      // Reload timeline to show the sent SMS
+      const lr = await authedFetch(
+        `/api/v1/voice/communications/${entityType}/${entityId}?limit=200`
+      );
+      if (lr.ok) setEvents((await lr.json()) as Event[]);
+    } catch (e) {
+      setReplyNotice(`Échec d'envoi : ${(e as Error).message}`);
+    } finally {
+      setReplyBusy(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -214,6 +253,56 @@ export function CommunicationsTimeline({
           </ol>
         )}
       </div>
+
+      {replyToE164 ? (
+        <div className="mt-4 border-t border-brand-800 pt-3">
+          <label className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
+            Réponse rapide SMS
+            <span className="ml-2 font-mono text-white/40">
+              → {replyToE164}
+            </span>
+          </label>
+          <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+            <textarea
+              value={replyBody}
+              onChange={(e) => setReplyBody(e.target.value)}
+              rows={2}
+              maxLength={1600}
+              placeholder="Tapez votre message…"
+              className="flex-1 rounded-md border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white placeholder:text-white/30 focus:border-accent-500 focus:outline-none"
+              disabled={replyBusy}
+            />
+            <button
+              type="button"
+              onClick={sendQuickReply}
+              disabled={replyBusy || !replyBody.trim()}
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-accent-500 px-4 py-2 text-sm font-semibold text-brand-950 transition hover:bg-accent-400 disabled:opacity-50 sm:self-start"
+            >
+              {replyBusy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
+              Envoyer
+            </button>
+          </div>
+          {replyNotice ? (
+            <p
+              className={`mt-2 text-[11px] ${
+                replyNotice.startsWith("SMS envoyé")
+                  ? "text-emerald-300"
+                  : "text-rose-300"
+              }`}
+            >
+              {replyNotice}
+            </p>
+          ) : null}
+          <p className="mt-1 text-[10px] text-white/30">
+            Le SMS sera envoyé depuis le numéro Horizon (438 800 2979)
+            et apparaîtra dans la fiche.
+          </p>
+        </div>
+      ) : null}
     </section>
   );
 }
