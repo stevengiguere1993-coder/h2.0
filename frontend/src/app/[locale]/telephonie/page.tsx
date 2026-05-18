@@ -29,6 +29,7 @@ import { authedFetch, getMe, getToken } from "@/lib/auth";
 import { Link, useRouter } from "@/i18n/navigation";
 import { AppTopbar } from "@/components/app-topbar";
 import { CallButton } from "@/components/call-button";
+import { DialPad } from "@/components/dial-pad";
 import { PushNotificationsToggle } from "@/components/push-notifications-toggle";
 import { useTelephonieLayout } from "./layout";
 
@@ -488,7 +489,40 @@ export default function TelephonieHome() {
           onClose={() => setDrawerCallId(null)}
         />
       ) : null}
+
+      {/* Dial pad flottant (Phase 10) — bouton fixe en bas à droite. */}
+      <DialPadFab />
     </div>
+  );
+}
+
+function DialPadFab() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500 text-emerald-950 shadow-2xl transition hover:bg-emerald-400 active:scale-95"
+        aria-label="Ouvrir le dial pad"
+        title="Composer un numéro"
+      >
+        <Phone className="h-6 w-6" />
+      </button>
+      {open ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-end bg-black/50 p-6"
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className="rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <DialPad onClose={() => setOpen(false)} />
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -2042,14 +2076,13 @@ function PlanSection() {
       <PhaseCard
         num={10}
         title="App mobile dédiée + dial pad + push"
-        status="in_progress"
+        status="done"
         items={[
-          "✅ PWA installable (manifest + service worker) — bouton « Installer l'app » dispo, ajoute Horizon à l'écran d'accueil iPhone et Android",
-          "✅ WebPush bout-en-bout : pywebpush + VAPID côté backend, pushManager côté frontend, sw.js gère push/notificationclick. Réveille le téléphone pour les urgences locataires (broadcast tous owners) — à étendre aux SMS et appels manqués",
-          "🟡 Dial pad mobile (composer un numéro depuis le cell, appel via le 438) — à venir",
-          "🟡 Recording avec consentement Québec — à venir",
-          "🟡 Résumé IA automatique post-appel (followup_suggestion existe déjà mais à exposer dans la fiche) — à venir",
-          "🟡 App Android native (APK direct download, hors PWA) si l'expérience push iOS reste limitée"
+          "PWA installable (manifest scope global + service worker v4) — bouton « Installer l'app » dispo, ajoute Horizon à l'écran d'accueil iPhone et Android",
+          "WebPush bout-en-bout : pywebpush + VAPID, pushManager frontend, sw.js gère push/notificationclick. Urgences locataires push tous les owners en plus de la cloche",
+          "Dial pad flottant dans /telephonie — composer un numéro et lancer un appel click-to-call qui passe par le 438 (le cell de l'user sonne, puis bridge vers la cible)",
+          "Résumé IA post-appel (followup_suggestion) déjà exposé dans le CallDrawer avec bouton « Re-générer »",
+          "À venir si besoin : app Android native APK direct (sans App Store) ; recording avec consentement Québec ; extension push aux SMS reçus"
         ]}
       />
     </section>
