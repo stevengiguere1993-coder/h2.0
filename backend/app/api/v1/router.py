@@ -93,6 +93,7 @@ from app.api.v1.endpoints import (
     soumission_to_project,
     soumissions_aggregates,
     subcontractor_contracts,
+    voice,
     webhooks,
 )
 from app.api.v1.endpoints.business import (
@@ -144,6 +145,7 @@ api_router.include_router(contact.router)
 api_router.include_router(contacts.router)
 api_router.include_router(blog.router)
 api_router.include_router(webhooks.router)
+api_router.include_router(voice.router)
 api_router.include_router(public_soumission.router)
 api_router.include_router(public_contract.router)
 api_router.include_router(contract_sign.router)
