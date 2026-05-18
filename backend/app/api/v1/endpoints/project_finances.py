@@ -371,6 +371,31 @@ async def _compute_finances(
             .order_by(Facture.issued_at.desc().nulls_last(), Facture.id.desc())
         )
     ).scalars().all()
+
+    # Self-heal : si une facture a son total NULL ou désynchro vs ses
+    # items, on le recalcule à la volée. Évite que les KPI projet
+    # (« Facturé », « Reste à facturer ») affichent 0 quand la
+    # facture a été créée avant l'auto-recompute (PR #396) OU quand
+    # un item a été modifié hors de notre endpoint (import QBO, etc.).
+    if factures:
+        from app.api.v1.endpoints.facture_items import (
+            _recompute_facture_totals,
+        )
+
+        for f in factures:
+            if not (f.total and f.total > 0):
+                await _recompute_facture_totals(db, f.id)
+        # Rafraîchit pour avoir les nouveaux totaux.
+        await db.flush()
+        ids = [f.id for f in factures]
+        factures = (
+            await db.execute(
+                select(Facture)
+                .where(Facture.id.in_(ids))
+                .order_by(Facture.issued_at.desc().nulls_last(), Facture.id.desc())
+            )
+        ).scalars().all()
+
     invoiced = sum(float(f.total or 0) for f in factures)
 
     # Paiements par facture (un seul SELECT, on group puis on lookup).
