@@ -236,7 +236,9 @@ export function LoginForm() {
           </h2>
         </header>
 
-        <div className="grid gap-3">
+        <div className="grid gap-3 md:grid-cols-2 md:items-start md:gap-4">
+          {/* Colonne gauche : volets opérationnels principaux. */}
+          <div className="space-y-3">
           {has("construction") ? (
             <button
               type="button"
@@ -338,7 +340,11 @@ export function LoginForm() {
               En développement
             </span>
           </button>
+          </div>
 
+          {/* Colonne droite : volets en développement, partenaires,
+              et secrétaire IA téléphonique. */}
+          <div className="space-y-3">
           {has("entreprises") && isOwner ? (
             <button
               type="button"
@@ -450,6 +456,7 @@ export function LoginForm() {
               </span>
             </button>
           ) : null}
+          </div>
         </div>
 
         <p className="pt-1 text-center text-[11px] text-white/40">
@@ -468,7 +475,7 @@ export function LoginForm() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-5" noValidate>
+    <form onSubmit={onSubmit} className="mx-auto max-w-md space-y-5" noValidate>
       <div>
         <label htmlFor="email" className="label">Courriel</label>
         <input id="email" name="email" type="email" required autoComplete="email" className="input" />

@@ -16,7 +16,7 @@ export default async function LoginPage({ params }: Props) {
 
   return (
     <section className="section">
-      <div className="container max-w-md">
+      <div className="container max-w-3xl">
         <div className="card">
           <h1 className="text-2xl font-bold text-brand-950">Connexion</h1>
           <p className="mt-1 text-sm text-brand-700">
