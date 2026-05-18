@@ -7,6 +7,7 @@ const BASE = process.env.NEXT_PUBLIC_SITE_URL || "https://immohorizon.com";
 
 const CORE_PAGES = [
   "",
+  "/construction-renovation-montreal",
   "/services",
   "/services/salle-de-bain",
   "/services/cuisine",
@@ -16,6 +17,9 @@ const CORE_PAGES = [
   "/blog"
 ];
 
+// Pages stratégiques SEO : priorité 1.0, freq weekly.
+const HIGH_PRIORITY_PAGES = new Set(["", "/construction-renovation-montreal"]);
+
 export default function sitemap(): MetadataRoute.Sitemap {
   const now = new Date();
   const entries: MetadataRoute.Sitemap = [];
@@ -24,11 +28,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
   for (const locale of routing.locales) {
     const prefix = locale === routing.defaultLocale ? "" : `/${locale}`;
     for (const p of CORE_PAGES) {
+      const isHi = HIGH_PRIORITY_PAGES.has(p);
       entries.push({
         url: `${BASE}${prefix}${p}`,
         lastModified: now,
-        changeFrequency: p === "" ? "weekly" : "monthly",
-        priority: p === "" ? 1.0 : 0.6
+        changeFrequency: isHi ? "weekly" : "monthly",
+        priority: isHi ? 1.0 : 0.6
       });
     }
   }
