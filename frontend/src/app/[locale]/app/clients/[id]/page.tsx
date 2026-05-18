@@ -18,6 +18,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
 import { CallButton } from "@/components/call-button";
+import { CommunicationsTimeline } from "@/components/communications-timeline";
 import { MeasurementsPanel } from "@/components/measurements-panel";
 import { SalesTasksPanel } from "@/components/sales-tasks-panel";
 import { Link } from "@/i18n/navigation";
@@ -246,7 +247,13 @@ export default function ClientDetailPage() {
 // ClientTabs — navigation horizontale entre les sections de la fiche
 // ---------------------------------------------------------------------------
 
-type TabKey = "infos" | "projets" | "documents" | "mesures" | "suivi";
+type TabKey =
+  | "infos"
+  | "projets"
+  | "communications"
+  | "documents"
+  | "mesures"
+  | "suivi";
 
 function ClientTabs({
   client,
@@ -306,6 +313,7 @@ function ClientTabs({
   const tabs: Array<{ key: TabKey; label: string; badge?: number }> = [
     { key: "infos", label: "Infos" },
     { key: "projets", label: "Projets", badge: projectsCount },
+    { key: "communications", label: "Communications" },
     { key: "documents", label: "Documents" },
     { key: "mesures", label: "Mesures" },
     { key: "suivi", label: "Suivi commercial" }
@@ -478,6 +486,15 @@ function ClientTabs({
         <MeasurementsPanel
           clientId={client.id}
           defaultAddress={client.address}
+        />
+      ) : null}
+
+      {active === "communications" ? (
+        <CommunicationsTimeline
+          entityType="client"
+          entityId={client.id}
+          title="Appels & SMS"
+          emptyHint="Aucun appel ni SMS lié à ce client pour le moment."
         />
       ) : null}
 

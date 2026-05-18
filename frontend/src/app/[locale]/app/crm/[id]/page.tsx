@@ -26,6 +26,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
 import { CallButton } from "@/components/call-button";
+import { CommunicationsTimeline } from "@/components/communications-timeline";
 import { FollowUpTimeline } from "@/components/follow-up-timeline";
 import { MeasurementsPanel } from "@/components/measurements-panel";
 import { SalesTasksPanel } from "@/components/sales-tasks-panel";
@@ -85,6 +86,7 @@ const BUDGET_LABEL: Record<string, string> = {
 const TABS = [
   { id: "apercu", label: "Aperçu", icon: FileText },
   { id: "client", label: "Client", icon: User },
+  { id: "communications", label: "Communications", icon: Phone },
   { id: "rendez-vous", label: "Rendez-vous", icon: Calendar },
   { id: "mesures", label: "Mesures", icon: Ruler },
   { id: "documents", label: "Documents", icon: FileText },
@@ -578,6 +580,14 @@ export default function ProspectDetailPage() {
                 </div>
               ) : null}
 
+              {tab === "communications" ? (
+                <CommunicationsTimeline
+                  entityType="contact_request"
+                  entityId={p.id}
+                  title="Appels & SMS"
+                  emptyHint="Aucun appel ni SMS lié à ce prospect. Utilise « Appeler » dans la fiche pour démarrer."
+                />
+              ) : null}
               {tab === "rendez-vous" ? (
                 <AppointmentScheduler
                   contactRequestId={p.id}

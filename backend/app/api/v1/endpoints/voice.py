@@ -2031,6 +2031,113 @@ async def list_sms(
     return [SmsRead.model_validate(r) for r in rows]
 
 
+# -- Communications timeline (vue 360 pour les fiches CRM) --------
+# Endpoint dédié, accessible à tout utilisateur authentifié (pas
+# admin) : retourne la chronologie fusionnée appels + SMS pour une
+# entité CRM précise (lead, client, locataire, contact_request).
+# Read-only. Sert l'onglet « Communications » dans /prospection,
+# /app/crm, /app/clients. On scope strictement par (entity_type,
+# entity_id) — pas de listing global.
+class CommunicationEvent(BaseModel):
+    kind: str  # "call" | "sms"
+    id: int
+    at: datetime
+    direction: str  # inbound | outbound
+    status: str
+    from_e164: str
+    to_e164: str
+    # Champs propres aux appels
+    duration_sec: Optional[int] = None
+    intent: Optional[str] = None
+    was_voicemail: bool = False
+    voicemail_summary: Optional[str] = None
+    followup_suggestion: Optional[str] = None
+    # Champs propres aux SMS
+    body: Optional[str] = None
+    num_media: int = 0
+
+
+_VALID_ENTITY_TYPES = {"client", "locataire", "prospection_lead", "contact_request"}
+
+
+@router.get(
+    "/communications/{entity_type}/{entity_id}",
+    response_model=List[CommunicationEvent],
+    summary="Chronologie unifiée appels + SMS pour une entité CRM",
+)
+async def list_communications_for_entity(
+    entity_type: str,
+    entity_id: int,
+    _: CurrentUser,
+    db: DBSession,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> List[CommunicationEvent]:
+    if entity_type not in _VALID_ENTITY_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "entity_type doit être l'un de : "
+                + ", ".join(sorted(_VALID_ENTITY_TYPES))
+            ),
+        )
+
+    calls = (
+        await db.execute(
+            select(Call)
+            .where(Call.entity_type == entity_type, Call.entity_id == entity_id)
+            .order_by(Call.started_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    sms_rows = (
+        await db.execute(
+            select(VoiceSms)
+            .where(
+                VoiceSms.entity_type == entity_type,
+                VoiceSms.entity_id == entity_id,
+            )
+            .order_by(VoiceSms.received_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    events: List[CommunicationEvent] = []
+    for c in calls:
+        events.append(
+            CommunicationEvent(
+                kind="call",
+                id=c.id,
+                at=c.started_at,
+                direction=c.direction,
+                status=c.status,
+                from_e164=c.from_e164,
+                to_e164=c.to_e164,
+                duration_sec=c.duration_sec,
+                intent=c.intent,
+                was_voicemail=bool(c.was_voicemail),
+                voicemail_summary=c.voicemail_summary,
+                followup_suggestion=c.followup_suggestion,
+            )
+        )
+    for s in sms_rows:
+        events.append(
+            CommunicationEvent(
+                kind="sms",
+                id=s.id,
+                at=s.received_at,
+                direction=s.direction,
+                status=s.status,
+                from_e164=s.from_e164,
+                to_e164=s.to_e164,
+                body=s.body,
+                num_media=s.num_media or 0,
+            )
+        )
+    events.sort(key=lambda e: e.at, reverse=True)
+    return events[:limit]
+
+
 @router.get(
     "/sms/threads",
     summary="Threads SMS : groupe par numéro pair avec last message + unread count",

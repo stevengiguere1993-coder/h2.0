@@ -29,6 +29,7 @@ import { useProspectionLayout } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
 import { DriveButton } from "@/components/drive-button";
 import { CallButton } from "@/components/call-button";
+import { CommunicationsTimeline } from "@/components/communications-timeline";
 import { ActivityTimeline } from "./_activity-timeline";
 import { AddressAutocomplete } from "./_address-autocomplete";
 import { AnalysesSection } from "./_analyses-section";
@@ -1379,6 +1380,13 @@ export default function ProspectionDetailPage() {
               <FinanceSection leadId={id} lead={lead} onSaved={load} />
 
               <UpcomingReminders leadId={id} />
+
+              <CommunicationsTimeline
+                entityType="prospection_lead"
+                entityId={id}
+                title="Communications (téléphonie)"
+                emptyHint="Aucun appel ni SMS lié à ce lead. Utilise le bouton « Appeler » ci-dessus pour démarrer."
+              />
 
               <ActivityTimeline leadId={id} />
 
