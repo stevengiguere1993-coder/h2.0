@@ -4,6 +4,11 @@
     POST   /api/v1/factures/{facture_id}/items
     PATCH  /api/v1/factures/{facture_id}/items/{item_id}
     DELETE /api/v1/factures/{facture_id}/items/{item_id}
+
+Le backend recalcule automatiquement les totaux de la facture
+parente (subtotal / TPS / TVQ / total) après chaque mutation d'item.
+Garantit que les totaux Facture sont toujours synchros pour les
+KPIs projet (« Facturé », « Reste à facturer ») et pour QBO.
 """
 
 from typing import List, Optional
@@ -18,6 +23,41 @@ from app.models.facture_item import FactureItem
 
 
 router = APIRouter(prefix="/factures", tags=["facture-items"])
+
+
+# Taux taxes québécoises 2026.
+TPS_RATE = 0.05
+TVQ_RATE = 0.09975
+
+
+async def _recompute_facture_totals(db, facture_id: int) -> None:
+    """Recalcule subtotal/tps/tvq/total à partir des items.
+
+    Les FactureItem n'ont pas de flags tps_applicable/tvq_applicable
+    (contrairement aux SoumissionItem) — on applique les 2 taxes par
+    défaut. Si un item « rabais » (montant négatif) est présent, il
+    réduit la base taxable comme attendu.
+    """
+    items = (
+        await db.execute(
+            select(FactureItem).where(FactureItem.facture_id == facture_id)
+        )
+    ).scalars().all()
+    subtotal = round(sum(float(it.total or 0) for it in items), 2)
+    tps = round(subtotal * TPS_RATE, 2)
+    tvq = round(subtotal * TVQ_RATE, 2)
+    total = round(subtotal + tps + tvq, 2)
+
+    fac = (
+        await db.execute(select(Facture).where(Facture.id == facture_id))
+    ).scalar_one_or_none()
+    if fac is None:
+        return
+    fac.subtotal = subtotal
+    fac.tps = tps
+    fac.tvq = tvq
+    fac.total = total
+    await db.flush()
 
 
 class FactureItemCreate(BaseModel):
@@ -103,6 +143,7 @@ async def create_item(
     )
     db.add(item)
     await db.flush()
+    await _recompute_facture_totals(db, facture_id)
     await db.refresh(item)
     return FactureItemRead.model_validate(item)
 
@@ -135,6 +176,7 @@ async def update_item(
     if "quantity" in update or "unit_price" in update:
         item.total = round(float(item.quantity) * float(item.unit_price), 2)
     await db.flush()
+    await _recompute_facture_totals(db, facture_id)
     await db.refresh(item)
     return FactureItemRead.model_validate(item)
 
@@ -162,3 +204,17 @@ async def delete_item(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
     await db.delete(item)
     await db.flush()
+    await _recompute_facture_totals(db, facture_id)
+
+
+# Backfill : resynchronise les totaux de TOUTES les factures
+# existantes depuis leurs items réels.
+@router.post(
+    "/recompute-all",
+    summary="Backfill : recalcule subtotal/total de toutes les factures",
+)
+async def recompute_all_factures(db: DBSession, _: CurrentUser) -> dict:
+    ids = (await db.execute(select(Facture.id))).scalars().all()
+    for fid in ids:
+        await _recompute_facture_totals(db, int(fid))
+    return {"recomputed": len(ids)}
