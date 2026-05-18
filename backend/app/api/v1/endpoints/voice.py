@@ -2261,29 +2261,46 @@ async def trigger_dedupe(_: CurrentAdmin, db: DBSession) -> dict:
         dups = [r for r in rows if r.id != keep.id]
 
         for dup in dups:
-            keep.secretary_mode_active = (
-                keep.secretary_mode_active or dup.secretary_mode_active
-            )
-            keep.lead_auto_callback_enabled = (
-                keep.lead_auto_callback_enabled or dup.lead_auto_callback_enabled
-            )
-            keep.active = keep.active or dup.active
-            if not keep.forward_to_e164 and dup.forward_to_e164:
-                keep.forward_to_e164 = dup.forward_to_e164
-            if not keep.provider_sid and dup.provider_sid:
-                keep.provider_sid = dup.provider_sid
-            if not keep.label and dup.label:
-                keep.label = dup.label
+            # Snapshot des champs AVANT delete pour pouvoir les copier
+            # sur keep ensuite.
+            snap = {
+                "secretary_mode_active": dup.secretary_mode_active,
+                "lead_auto_callback_enabled": dup.lead_auto_callback_enabled,
+                "active": dup.active,
+                "forward_to_e164": dup.forward_to_e164,
+                "provider_sid": dup.provider_sid,
+                "label": dup.label,
+            }
 
+            # 1) Réassigne les FK enfants vers keep.id (UPDATE).
             for cls in (Call, VoiceSms, VoiceFilter, VoiceBusinessHours):
                 await db.execute(
                     update(cls)
                     .where(cls.phone_number_id == dup.id)
                     .values(phone_number_id=keep.id)
                 )
-            await db.delete(dup)
 
-        await db.flush()
+            # 2) Delete dup AVANT de copier provider_sid sur keep —
+            # sinon UNIQUE constraint sur provider_sid se déclenche
+            # (les deux lignes ont brièvement le même SID en mémoire).
+            await db.delete(dup)
+            await db.flush()
+
+            # 3) Maintenant safe : merge les champs sur keep.
+            keep.secretary_mode_active = (
+                keep.secretary_mode_active or snap["secretary_mode_active"]
+            )
+            keep.lead_auto_callback_enabled = (
+                keep.lead_auto_callback_enabled or snap["lead_auto_callback_enabled"]
+            )
+            keep.active = keep.active or snap["active"]
+            if not keep.forward_to_e164 and snap["forward_to_e164"]:
+                keep.forward_to_e164 = snap["forward_to_e164"]
+            if not keep.provider_sid and snap["provider_sid"]:
+                keep.provider_sid = snap["provider_sid"]
+            if not keep.label and snap["label"]:
+                keep.label = snap["label"]
+            await db.flush()
         report["deleted_count"] = len(dups)
         report["kept_id"] = keep.id
         report["kept_state"] = {

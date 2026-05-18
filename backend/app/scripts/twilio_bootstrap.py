@@ -204,23 +204,17 @@ async def _dedupe_phone_numbers(*, canonical_e164: str) -> int:
         )
 
         for dup in dups:
-            # Merge toggles : OR booléens (si l'un était actif, on garde actif).
-            keep.secretary_mode_active = (
-                keep.secretary_mode_active or dup.secretary_mode_active
-            )
-            keep.lead_auto_callback_enabled = (
-                keep.lead_auto_callback_enabled or dup.lead_auto_callback_enabled
-            )
-            keep.active = keep.active or dup.active
-            # Préserve forward_to_e164 et provider_sid si keep ne l'a pas.
-            if not keep.forward_to_e164 and dup.forward_to_e164:
-                keep.forward_to_e164 = dup.forward_to_e164
-            if not keep.provider_sid and dup.provider_sid:
-                keep.provider_sid = dup.provider_sid
-            if not keep.label and dup.label:
-                keep.label = dup.label
+            # Snapshot AVANT delete (UNIQUE provider_sid).
+            snap = {
+                "secretary_mode_active": dup.secretary_mode_active,
+                "lead_auto_callback_enabled": dup.lead_auto_callback_enabled,
+                "active": dup.active,
+                "forward_to_e164": dup.forward_to_e164,
+                "provider_sid": dup.provider_sid,
+                "label": dup.label,
+            }
 
-            # Réassigne les FK des tables enfants.
+            # 1) Réassigne les FK des tables enfants vers keep.id.
             for cls in (Call, VoiceSms, VoiceFilter, VoiceBusinessHours):
                 await db.execute(
                     update(cls)
@@ -228,9 +222,28 @@ async def _dedupe_phone_numbers(*, canonical_e164: str) -> int:
                     .values(phone_number_id=keep.id)
                 )
 
-            # Supprime le doublon.
+            # 2) Delete dup AVANT de copier provider_sid sur keep —
+            # sinon UNIQUE constraint sur provider_sid se déclenche.
             await db.delete(dup)
+            await db.flush()
             log.info("→ Supprimé doublon id=%d e164=%r", dup.id, dup.e164)
+
+            # 3) Merge les champs sur keep maintenant que la contrainte
+            # UNIQUE est libérée.
+            keep.secretary_mode_active = (
+                keep.secretary_mode_active or snap["secretary_mode_active"]
+            )
+            keep.lead_auto_callback_enabled = (
+                keep.lead_auto_callback_enabled or snap["lead_auto_callback_enabled"]
+            )
+            keep.active = keep.active or snap["active"]
+            if not keep.forward_to_e164 and snap["forward_to_e164"]:
+                keep.forward_to_e164 = snap["forward_to_e164"]
+            if not keep.provider_sid and snap["provider_sid"]:
+                keep.provider_sid = snap["provider_sid"]
+            if not keep.label and snap["label"]:
+                keep.label = snap["label"]
+            await db.flush()
 
         await db.commit()
         return len(dups)
