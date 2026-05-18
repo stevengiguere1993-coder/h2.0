@@ -38,7 +38,14 @@ class GeminiProvider:
     default_embedding_model = "text-embedding-004"
 
     def __init__(self, api_key: Optional[str] = None) -> None:
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY", "").strip()
+        # Case-insensitive : Render permet de saisir l'env en minuscule
+        # par erreur ; on accepte les 2 formes pour ne pas bloquer.
+        self.api_key = (
+            api_key
+            or os.getenv("GEMINI_API_KEY")
+            or os.getenv("gemini_api_key")
+            or ""
+        ).strip()
 
     def _check_key(self) -> None:
         if not self.api_key:
