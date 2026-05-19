@@ -587,6 +587,11 @@ async def init_db() -> None:
                 "validated_at",
                 "TIMESTAMP WITH TIME ZONE",
             ),
+            # Phase 8 : cibles de routage par scénario, configurables
+            # depuis l'app (au lieu d'env vars Render).
+            ("voice_phone_numbers", "urgency_forward_e164", "VARCHAR(20)"),
+            ("voice_phone_numbers", "closer_forward_e164", "VARCHAR(20)"),
+            ("voice_phone_numbers", "followup_forward_e164", "VARCHAR(20)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

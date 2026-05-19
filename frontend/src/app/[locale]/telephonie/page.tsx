@@ -29,7 +29,7 @@ import { authedFetch, getMe, getToken } from "@/lib/auth";
 import { Link, useRouter } from "@/i18n/navigation";
 import { AppTopbar } from "@/components/app-topbar";
 import { CallButton } from "@/components/call-button";
-import { DialPad } from "@/components/dial-pad";
+import { DialPadFab } from "@/components/dial-pad-fab";
 import { PushNotificationsToggle } from "@/components/push-notifications-toggle";
 import { useTelephonieLayout } from "./layout";
 
@@ -49,14 +49,7 @@ const TELEPHONIE_ALLOWED_EMAILS = ["sgiguere@immohorizon.com"];
 
 type Me = { email?: string | null };
 
-type Section =
-  | "dashboard"
-  | "appels"
-  | "messages"
-  | "numeros"
-  | "filtres"
-  | "heures"
-  | "plan";
+import type { TelephonieSection as Section } from "./layout";
 
 type SmsThread = {
   peer_e164: string;
@@ -99,6 +92,9 @@ type PhoneNumberRow = {
   provider: string;
   label: string | null;
   forward_to_e164: string | null;
+  urgency_forward_e164: string | null;
+  closer_forward_e164: string | null;
+  followup_forward_e164: string | null;
   secretary_mode_active: boolean;
   lead_auto_callback_enabled: boolean;
   owner_user_id: number | null;
@@ -174,7 +170,9 @@ export default function TelephonieHome() {
   const { onOpenSidebar } = useTelephonieLayout();
   const [checking, setChecking] = useState(true);
   const [allowed, setAllowed] = useState(false);
-  const [section, setSection] = useState<Section>("dashboard");
+  // Section vit dans le contexte du layout pour que la sidebar la
+  // contrôle aussi (cohérence avec les autres volets).
+  const { section, setSection } = useTelephonieLayout();
 
   const [numbers, setNumbers] = useState<PhoneNumberRow[]>([]);
   const [calls, setCalls] = useState<CallRow[]>([]);
@@ -415,12 +413,17 @@ export default function TelephonieHome() {
       />
 
       <div className="mx-auto max-w-7xl px-4 pb-12 pt-5 lg:px-6">
-        <SectionTabs
-          active={section}
-          onChange={setSection}
-          onReload={() => void reload()}
-          loading={loading}
-        />
+        {/* Bouton refresh discret (la nav est dans la sidebar). */}
+        <div className="mb-3 flex items-center justify-end">
+          <button
+            type="button"
+            onClick={() => void reload()}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 rounded-md border border-brand-800 bg-brand-900 px-2.5 py-1 text-[11px] text-white/70 hover:text-white disabled:opacity-50"
+          >
+            {loading ? "Chargement…" : "↻ Rafraîchir"}
+          </button>
+        </div>
 
         {loadError ? (
           <div className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[12px] text-rose-200">
@@ -457,6 +460,7 @@ export default function TelephonieHome() {
             numbers={numbers}
             onToggleSecretary={toggleSecretary}
             onToggleAutoCallback={toggleAutoCallback}
+            patchNumber={patchNumber}
           />
         ) : null}
 
@@ -496,35 +500,8 @@ export default function TelephonieHome() {
   );
 }
 
-function DialPadFab() {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500 text-emerald-950 shadow-2xl transition hover:bg-emerald-400 active:scale-95"
-        aria-label="Ouvrir le dial pad"
-        title="Composer un numéro"
-      >
-        <Phone className="h-6 w-6" />
-      </button>
-      {open ? (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-end bg-black/50 p-6"
-          onClick={() => setOpen(false)}
-        >
-          <div
-            className="rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <DialPad onClose={() => setOpen(false)} />
-          </div>
-        </div>
-      ) : null}
-    </>
-  );
-}
+// (DialPadFab a été extrait dans components/dial-pad-fab.tsx pour
+// pouvoir être réutilisé dans /app/layout.tsx aussi.)
 
 // ----------------------------------------------------------------------
 // Section tabs
@@ -1563,11 +1540,16 @@ function MessagesSection({
 function NumbersSection({
   numbers,
   onToggleSecretary,
-  onToggleAutoCallback
+  onToggleAutoCallback,
+  patchNumber
 }: {
   numbers: PhoneNumberRow[];
   onToggleSecretary: (n: PhoneNumberRow) => void;
   onToggleAutoCallback: (n: PhoneNumberRow) => void;
+  patchNumber: (
+    n: PhoneNumberRow,
+    patch: Partial<PhoneNumberRow>
+  ) => Promise<void> | void;
 }) {
   if (numbers.length === 0) {
     return (
@@ -1603,15 +1585,6 @@ function NumbersSection({
           </div>
 
           <dl className="mt-4 space-y-2 text-xs">
-            <Row label="Forward fallback">
-              {n.forward_to_e164 ? (
-                <span className="font-mono text-white/80">
-                  {n.forward_to_e164}
-                </span>
-              ) : (
-                <span className="text-white/40">non configuré</span>
-              )}
-            </Row>
             <Row label="Secrétaire IA">
               <ToggleButton
                 on={n.secretary_mode_active}
@@ -1629,6 +1602,49 @@ function NumbersSection({
               />
             </Row>
           </dl>
+
+          {/* Cibles de transfert par scénario — configurables depuis
+              l'app (au lieu d'env vars Render). */}
+          <div className="mt-4 space-y-2 border-t border-brand-800 pt-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+              Cibles de transfert (E.164)
+            </p>
+            <ForwardField
+              label="Fallback générique"
+              hint="utilisé quand Léa transfère sans contexte particulier"
+              value={n.forward_to_e164}
+              onSave={(v) =>
+                patchNumber(n, { forward_to_e164: v ?? "" })
+              }
+            />
+            <ForwardField
+              label="🚨 Urgence locataire"
+              hint="hot-transfert détecté par Léa (dégât, fuite, panne)"
+              value={n.urgency_forward_e164}
+              onSave={(v) =>
+                patchNumber(n, { urgency_forward_e164: v ?? "" })
+              }
+              tone="rose"
+            />
+            <ForwardField
+              label="🎯 Closer (lead qualifié)"
+              hint="vendeur humain pour confirmer un RDV"
+              value={n.closer_forward_e164}
+              onSave={(v) =>
+                patchNumber(n, { closer_forward_e164: v ?? "" })
+              }
+              tone="amber"
+            />
+            <ForwardField
+              label="🏗️ Suivi projet (back-office)"
+              hint="utilisé si aucun chargé de projet assigné n'est dispo"
+              value={n.followup_forward_e164}
+              onSave={(v) =>
+                patchNumber(n, { followup_forward_e164: v ?? "" })
+              }
+              tone="teal"
+            />
+          </div>
         </article>
       ))}
     </section>
@@ -1640,6 +1656,109 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     <div className="flex items-center justify-between gap-3">
       <dt className="text-white/50">{label}</dt>
       <dd>{children}</dd>
+    </div>
+  );
+}
+
+function ForwardField({
+  label,
+  hint,
+  value,
+  onSave,
+  tone = "white"
+}: {
+  label: string;
+  hint?: string;
+  value: string | null;
+  onSave: (next: string | null) => Promise<void> | void;
+  tone?: "white" | "rose" | "amber" | "teal";
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || "");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!editing) setDraft(value || "");
+  }, [value, editing]);
+
+  const labelTone: Record<typeof tone, string> = {
+    white: "text-white/60",
+    rose: "text-rose-300",
+    amber: "text-amber-300",
+    teal: "text-teal-300"
+  };
+
+  async function persist() {
+    setSaving(true);
+    try {
+      const trimmed = draft.trim();
+      await onSave(trimmed || null);
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded-md border border-brand-800/60 bg-brand-950/40 p-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className={`text-[11px] font-semibold ${labelTone[tone]}`}>
+            {label}
+          </div>
+          {hint ? (
+            <div className="text-[10px] text-white/30">{hint}</div>
+          ) : null}
+        </div>
+        {!editing ? (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="text-[10px] text-white/40 underline decoration-dotted hover:text-white"
+          >
+            {value ? "Modifier" : "+ Ajouter"}
+          </button>
+        ) : null}
+      </div>
+      <div className="mt-1.5">
+        {editing ? (
+          <div className="flex items-center gap-1">
+            <input
+              type="tel"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="+15145551234"
+              className="flex-1 rounded border border-brand-700 bg-brand-950 px-2 py-1 font-mono text-xs text-white placeholder:text-white/30 focus:border-accent-500 focus:outline-none"
+              disabled={saving}
+            />
+            <button
+              type="button"
+              onClick={persist}
+              disabled={saving}
+              className="rounded bg-accent-500 px-2 py-1 text-[10px] font-semibold text-brand-950 disabled:opacity-50"
+            >
+              {saving ? "…" : "OK"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEditing(false);
+                setDraft(value || "");
+              }}
+              disabled={saving}
+              className="rounded border border-brand-700 px-2 py-1 text-[10px] text-white/60"
+            >
+              ✕
+            </button>
+          </div>
+        ) : value ? (
+          <span className="font-mono text-xs text-white/80">{value}</span>
+        ) : (
+          <span className="text-[10px] italic text-white/30">
+            non configuré (fallback env var)
+          </span>
+        )}
+      </div>
     </div>
   );
 }
