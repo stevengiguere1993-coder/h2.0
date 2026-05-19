@@ -16,11 +16,12 @@ export function DialPadFab() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500 text-emerald-950 shadow-2xl transition hover:bg-emerald-400 active:scale-95"
-        aria-label="Ouvrir le dial pad"
+        className="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full bg-emerald-500 px-5 py-3 font-semibold text-emerald-950 shadow-2xl ring-2 ring-emerald-300/40 transition hover:bg-emerald-400 hover:shadow-emerald-500/30 active:scale-95"
+        aria-label="Ouvrir le dial pad — composer un numéro"
         title="Composer un numéro"
       >
-        <Phone className="h-6 w-6" />
+        <Phone className="h-5 w-5" />
+        <span className="text-sm">Composer</span>
       </button>
       {open ? (
         <div

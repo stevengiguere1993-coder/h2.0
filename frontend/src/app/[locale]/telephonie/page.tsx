@@ -29,6 +29,7 @@ import { authedFetch, getMe, getToken } from "@/lib/auth";
 import { Link, useRouter } from "@/i18n/navigation";
 import { AppTopbar } from "@/components/app-topbar";
 import { CallButton } from "@/components/call-button";
+import { DialPad } from "@/components/dial-pad";
 import { DialPadFab } from "@/components/dial-pad-fab";
 import { PushNotificationsToggle } from "@/components/push-notifications-toggle";
 import { useTelephonieLayout } from "./_client-shell";
@@ -503,6 +504,35 @@ export default function TelephonieHome() {
 // (DialPadFab a été extrait dans components/dial-pad-fab.tsx pour
 // pouvoir être réutilisé dans /app/layout.tsx aussi.)
 
+function DashboardDialButton() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-2 rounded-md bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-emerald-950 transition hover:bg-emerald-400"
+      >
+        <Phone className="h-3.5 w-3.5" />
+        Composer un numéro
+      </button>
+      {open ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className="rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <DialPad onClose={() => setOpen(false)} />
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 // ----------------------------------------------------------------------
 // Section tabs
 // ----------------------------------------------------------------------
@@ -657,12 +687,13 @@ function DashboardSection({
             />
           </div>
         </div>
-        <div className="mt-3 text-[11px] text-white/40">
+        <div className="mt-3 text-[11px] text-white/60">
           Astuce : clique sur les pastilles ci-dessus pour activer ou
           désactiver. Les changements sont appliqués immédiatement et
           partagés entre toi et toute l&apos;équipe.
         </div>
-        <div className="mt-3 border-t border-brand-800 pt-3">
+        <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-brand-800 pt-3">
+          <DashboardDialButton />
           <PushNotificationsToggle />
         </div>
       </section>
@@ -1606,7 +1637,7 @@ function NumbersSection({
           {/* Cibles de transfert par scénario — configurables depuis
               l'app (au lieu d'env vars Render). */}
           <div className="mt-4 space-y-2 border-t border-brand-800 pt-3">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+            <p className="text-xs font-semibold uppercase tracking-wider text-white/80">
               Cibles de transfert (E.164)
             </p>
             <ForwardField
@@ -1682,10 +1713,10 @@ function ForwardField({
   }, [value, editing]);
 
   const labelTone: Record<typeof tone, string> = {
-    white: "text-white/60",
-    rose: "text-rose-300",
-    amber: "text-amber-300",
-    teal: "text-teal-300"
+    white: "text-white/90",
+    rose: "text-rose-400",
+    amber: "text-amber-400",
+    teal: "text-teal-400"
   };
 
   async function persist() {
@@ -1700,21 +1731,21 @@ function ForwardField({
   }
 
   return (
-    <div className="rounded-md border border-brand-800/60 bg-brand-950/40 p-2">
+    <div className="rounded-md border border-brand-800 bg-brand-950/40 p-2.5">
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <div className={`text-[11px] font-semibold ${labelTone[tone]}`}>
+          <div className={`text-xs font-semibold ${labelTone[tone]}`}>
             {label}
           </div>
           {hint ? (
-            <div className="text-[10px] text-white/30">{hint}</div>
+            <div className="text-[11px] text-white/70">{hint}</div>
           ) : null}
         </div>
         {!editing ? (
           <button
             type="button"
             onClick={() => setEditing(true)}
-            className="text-[10px] text-white/40 underline decoration-dotted hover:text-white"
+            className="rounded-md border border-brand-800 px-2 py-0.5 text-[11px] font-medium text-white/80 hover:bg-brand-800 hover:text-white"
           >
             {value ? "Modifier" : "+ Ajouter"}
           </button>
@@ -1728,7 +1759,7 @@ function ForwardField({
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               placeholder="+15145551234"
-              className="flex-1 rounded border border-brand-700 bg-brand-950 px-2 py-1 font-mono text-xs text-white placeholder:text-white/30 focus:border-accent-500 focus:outline-none"
+              className="flex-1 rounded border border-brand-700 bg-brand-950 px-2 py-1 font-mono text-xs text-white placeholder:text-white/50 focus:border-accent-500 focus:outline-none"
               disabled={saving}
             />
             <button
@@ -1746,15 +1777,17 @@ function ForwardField({
                 setDraft(value || "");
               }}
               disabled={saving}
-              className="rounded border border-brand-700 px-2 py-1 text-[10px] text-white/60"
+              className="rounded border border-brand-700 px-2 py-1 text-[10px] text-white/70"
             >
               ✕
             </button>
           </div>
         ) : value ? (
-          <span className="font-mono text-xs text-white/80">{value}</span>
+          <span className="font-mono text-sm font-semibold text-white">
+            {value}
+          </span>
         ) : (
-          <span className="text-[10px] italic text-white/30">
+          <span className="text-[11px] italic text-white/60">
             non configuré (fallback env var)
           </span>
         )}
