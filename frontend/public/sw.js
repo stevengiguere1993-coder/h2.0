@@ -10,7 +10,7 @@
  *   in the background when the network returns.
  */
 
-const VERSION = "hsi-v5";
+const VERSION = "hsi-v6";
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 const SHELL_CACHE = `${VERSION}-shell`;
 
