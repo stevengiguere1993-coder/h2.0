@@ -595,6 +595,10 @@ async def init_db() -> None:
             # Agenda — type de RV configurable (lien vers
             # appointment_types). Optionnel pour ne pas casser le legacy.
             ("agenda_events", "appointment_type_id", "INTEGER"),
+            # État conversationnel JSON sur Call (smart booking : on
+            # mémorise les créneaux proposés par Léa pour les
+            # retrouver au tour suivant).
+            ("voice_calls", "session_state", "TEXT"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

@@ -12,6 +12,11 @@ Actions possibles :
 - `transfer_emergency` : urgence locataire → numéro gestionnaire
 - `transfer_project_lead` : suivi projet → ring les membres du projet
 - `intake_complete`    : intake construction terminé → email + RDV
+- `propose_slots`      : intake fait + prospect veut un RV → on cherche
+                         3 créneaux libres pour un closer et on les
+                         annonce
+- `book_slot`          : prospect a choisi un créneau → on crée
+                         l'AgendaEvent + SMS confirmation
 - `callback`           : on raccroche en promettant un rappel
 - `end_spam`           : on raccroche poliment (démarcheur)
 
@@ -257,6 +262,30 @@ fixer un rendez-vous. Merci ! »
 Si l'appelant refuse de donner son courriel : finalise quand même avec \
 `next_action = callback` et capture son numéro de rappel.
 
+**3bis. PROPOSITION DE RDV après l'intake (SMART BOOKING) :**
+
+Après avoir collecté les infos d'intake (type_travaux + adresse + \
+echeancier au minimum), tu peux proposer de prendre RDV directement \
+au téléphone au lieu de juste promettre un rappel. Demande : \
+« Voulez-vous que je vous propose des disponibilités pour une visite \
+d'évaluation cette semaine ? »
+
+→ Si OUI : retourne `next_action = propose_slots` avec \
+`intent = intake_construction`. Le serveur va chercher 3 créneaux \
+libres pour un closer et te les renvoyer au prochain tour dans le \
+contexte (sous forme « Créneaux : 1) jeudi 14h, 2) vendredi 10h, \
+3) lundi 9h »). Tu les annonceras alors à l'appelant.
+
+→ Quand le serveur t'a fourni des créneaux (tu les vois dans le \
+contexte appelant ou les messages précédents) et que l'appelant en \
+choisit un, retourne `next_action = book_slot` avec \
+`chosen_slot_index = 0|1|2` selon le choix (0 = premier proposé). \
+Dis : « Parfait, c'est confirmé pour [date+heure]. Vous recevrez \
+un SMS de confirmation. »
+
+→ Si l'appelant préfère qu'on le rappelle, retourne \
+`next_action = intake_complete` (comportement classique).
+
 **4. Démarcheur / robot / B2B non sollicité :**
 
 → `intent = spam`, `next_action = end_spam`, dis poliment : « Merci, \
@@ -278,6 +307,8 @@ class SecretaryDecision:
         "transfer_emergency",
         "transfer_project_lead",
         "intake_complete",
+        "propose_slots",
+        "book_slot",
         "callback",
         "end_spam",
     ]
@@ -286,6 +317,9 @@ class SecretaryDecision:
     lead_callback_phone: Optional[str] = None
     lead_reason: Optional[str] = None
     intake_data: Dict[str, Any] = field(default_factory=dict)
+    # Index 0-based du slot proposé que l'appelant a choisi (uniquement
+    # pour next_action = book_slot).
+    chosen_slot_index: Optional[int] = None
 
 
 async def decide_initial_greeting(
@@ -406,6 +440,8 @@ _VALID_ACTIONS = {
     "transfer_emergency",
     "transfer_project_lead",
     "intake_complete",
+    "propose_slots",
+    "book_slot",
     "callback",
     "end_spam",
 }
@@ -458,6 +494,13 @@ def _parse_decision(text: str) -> SecretaryDecision:
             if s:
                 intake[k] = s
 
+    chosen_idx = data.get("chosen_slot_index")
+    if chosen_idx is not None:
+        try:
+            chosen_idx = int(chosen_idx)
+        except (TypeError, ValueError):
+            chosen_idx = None
+
     return SecretaryDecision(
         lang=lang,
         intent=intent,
@@ -467,6 +510,7 @@ def _parse_decision(text: str) -> SecretaryDecision:
         lead_callback_phone=_optstr(data.get("lead_callback_phone")),
         lead_reason=_optstr(data.get("lead_reason")),
         intake_data=intake,
+        chosen_slot_index=chosen_idx,
     )
 
 
