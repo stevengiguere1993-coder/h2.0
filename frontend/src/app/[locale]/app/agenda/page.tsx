@@ -604,14 +604,23 @@ export default function AgendaPage() {
         breadcrumbs={[{ label: "Construction", href: "/app" }, { label: "Agenda" }]}
         onOpenSidebar={onOpenSidebar}
         rightSlot={
-          <button
-            type="button"
-            onClick={() => setModal({ date: new Date() })}
-            className="btn-accent text-sm"
-          >
-            <Plus className="mr-1.5 h-4 w-4" />
-            Nouvel événement
-          </button>
+          <div className="flex items-center gap-2">
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/app/agenda/parametres" as any}
+              className="inline-flex items-center gap-1 rounded-md border border-brand-800 bg-brand-900 px-3 py-1.5 text-xs text-white/80 hover:text-white"
+            >
+              ⚙️ Rôles & types de RV
+            </Link>
+            <button
+              type="button"
+              onClick={() => setModal({ date: new Date() })}
+              className="btn-accent text-sm"
+            >
+              <Plus className="mr-1.5 h-4 w-4" />
+              Nouvel événement
+            </button>
+          </div>
         }
       />
 
