@@ -15,8 +15,9 @@ import type { Metadata, Viewport } from "next";
 
 import { TelephonieClientShell } from "./_client-shell";
 
-export { useTelephonieLayout } from "./_client-shell";
-export type { TelephonieSection } from "./_client-shell";
+// Note : useTelephonieLayout et TelephonieSection sont exportés
+// depuis ./_client-shell directement. Ne pas les re-exporter depuis
+// ce fichier server, sinon Next.js refuse l'import côté client.
 
 export const metadata: Metadata = {
   title: "Horizon Téléphone",

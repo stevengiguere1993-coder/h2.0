@@ -24,7 +24,7 @@ import { AccountBadge } from "@/components/account-badge";
 import { HorizonLogo } from "@/components/horizon-logo";
 import { Link } from "@/i18n/navigation";
 
-import type { TelephonieSection } from "@/app/[locale]/telephonie/layout";
+import type { TelephonieSection } from "@/app/[locale]/telephonie/_client-shell";
 
 const SECTIONS: {
   key: TelephonieSection;

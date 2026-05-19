@@ -31,7 +31,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { CallButton } from "@/components/call-button";
 import { DialPadFab } from "@/components/dial-pad-fab";
 import { PushNotificationsToggle } from "@/components/push-notifications-toggle";
-import { useTelephonieLayout } from "./layout";
+import { useTelephonieLayout } from "./_client-shell";
 
 // Volet « Téléphonie / Secrétaire d'appels » — interface premium.
 //
@@ -49,7 +49,7 @@ const TELEPHONIE_ALLOWED_EMAILS = ["sgiguere@immohorizon.com"];
 
 type Me = { email?: string | null };
 
-import type { TelephonieSection as Section } from "./layout";
+import type { TelephonieSection as Section } from "./_client-shell";
 
 type SmsThread = {
   peer_e164: string;
