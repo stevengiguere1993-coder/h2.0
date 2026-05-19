@@ -203,14 +203,41 @@ class QuickBooksClient:
                 json=json_body,
                 params=params,
             )
+            # Capture le `intuit_tid` retourné par QBO sur chaque
+            # réponse — Intuit l'utilise comme correlation ID quand on
+            # ouvre un support ticket. On le logge systématiquement
+            # (info en succès, warning en erreur) pour pouvoir le
+            # forwarder à Intuit Support quand on diagnostique.
+            intuit_tid = (
+                r.headers.get("intuit_tid")
+                or r.headers.get("Intuit_Tid")
+                or r.headers.get("Intuit-Tid")
+                or ""
+            )
             if r.status_code >= 400:
                 try:
                     payload = r.json()
                 except Exception:
                     payload = {"error": r.text}
-                log.warning("QBO %s %s -> %s %s", method, path, r.status_code, payload)
+                log.warning(
+                    "QBO %s %s -> %s tid=%s payload=%s",
+                    method,
+                    path,
+                    r.status_code,
+                    intuit_tid or "<missing>",
+                    payload,
+                )
                 raise QuickBooksError(
-                    f"QBO {method} {path} failed: {r.status_code} {payload}"
+                    f"QBO {method} {path} failed: {r.status_code} "
+                    f"(intuit_tid={intuit_tid or 'n/a'}) {payload}"
+                )
+            if intuit_tid:
+                log.info(
+                    "QBO %s %s -> %s tid=%s",
+                    method,
+                    path,
+                    r.status_code,
+                    intuit_tid,
                 )
             return r.json()
 
