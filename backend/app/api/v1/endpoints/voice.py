@@ -459,35 +459,51 @@ async def _find_project_lead_phone(
     db, *, call: "Call"
 ) -> Optional[str]:
     """Renvoie le téléphone du premier ProjectMember actif du projet
-    lié à l'appelant. Utilisé pour transfer_project_lead."""
+    lié à l'appelant. Si aucun ProjectMember n'a de phone, fallback
+    sur le `followup_forward_e164` configuré sur le PhoneNumber appelé
+    (back-office / réception). Utilisé pour transfer_project_lead."""
     project = await _find_project_for_call(db, call)
-    if not project:
-        return None
-    from app.models.employe import Employe
-    from app.models.project_member import ProjectMember
-    from app.models.user import User
+    if project:
+        from app.models.employe import Employe
+        from app.models.project_member import ProjectMember
+        from app.models.user import User
 
-    rows = (
+        rows = (
+            await db.execute(
+                select(User.email)
+                .join(ProjectMember, ProjectMember.user_id == User.id)
+                .where(
+                    ProjectMember.project_id == project.id,
+                    User.is_active.is_(True),
+                )
+            )
+        ).all()
+        emails = [r[0] for r in rows if r[0]]
+        if emails:
+            emp = (
+                await db.execute(
+                    select(Employe.phone)
+                    .where(
+                        Employe.email.in_(emails),
+                        Employe.phone.is_not(None),
+                    )
+                    .limit(1)
+                )
+            ).first()
+            if emp and emp[0]:
+                return emp[0]
+
+    # Fallback : numéro back-office configuré sur le PhoneNumber appelé.
+    pn = (
         await db.execute(
-            select(User.email)
-            .join(ProjectMember, ProjectMember.user_id == User.id)
-            .where(
-                ProjectMember.project_id == project.id,
-                User.is_active.is_(True),
+            select(PhoneNumber).where(
+                PhoneNumber.id == call.phone_number_id
             )
         )
-    ).all()
-    emails = [r[0] for r in rows if r[0]]
-    if not emails:
-        return None
-    emp = (
-        await db.execute(
-            select(Employe.phone)
-            .where(Employe.email.in_(emails), Employe.phone.is_not(None))
-            .limit(1)
-        )
-    ).first()
-    return (emp[0] if emp else None) or None
+    ).scalar_one_or_none()
+    if pn and pn.followup_forward_e164:
+        return pn.followup_forward_e164
+    return None
 
 
 async def _find_project_lead_online_user_ids(
@@ -989,8 +1005,20 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
     #    gestionnaire (env URGENCY_FORWARD_E164, sinon TWILIO_FORWARD_TO
     #    en dernier recours pour ne jamais raccrocher un cas urgent).
     if decision.next_action == "transfer_emergency":
+        # Récupère le numéro d'urgence du PhoneNumber appelé, sinon
+        # fallback aux env vars (URGENCY_FORWARD_E164, puis
+        # TWILIO_FORWARD_TO). Permet de configurer par numéro depuis
+        # l'app sans toucher Render.
+        _pn_for_urgence = (
+            await db.execute(
+                select(PhoneNumber).where(
+                    PhoneNumber.id == call.phone_number_id
+                )
+            )
+        ).scalar_one_or_none()
         emergency_to = (
-            os.getenv("URGENCY_FORWARD_E164")
+            (_pn_for_urgence.urgency_forward_e164 if _pn_for_urgence else None)
+            or os.getenv("URGENCY_FORWARD_E164")
             or os.getenv("TWILIO_FORWARD_TO")
             or ""
         ).strip()
@@ -2101,6 +2129,9 @@ class PhoneNumberRead(BaseModel):
     provider: str
     label: Optional[str]
     forward_to_e164: Optional[str]
+    urgency_forward_e164: Optional[str] = None
+    closer_forward_e164: Optional[str] = None
+    followup_forward_e164: Optional[str] = None
     secretary_mode_active: bool
     lead_auto_callback_enabled: bool = False
     owner_user_id: Optional[int]
@@ -2110,6 +2141,9 @@ class PhoneNumberRead(BaseModel):
 class PhoneNumberPatch(BaseModel):
     label: Optional[str] = Field(default=None, max_length=128)
     forward_to_e164: Optional[str] = Field(default=None, max_length=20)
+    urgency_forward_e164: Optional[str] = Field(default=None, max_length=20)
+    closer_forward_e164: Optional[str] = Field(default=None, max_length=20)
+    followup_forward_e164: Optional[str] = Field(default=None, max_length=20)
     secretary_mode_active: Optional[bool] = None
     lead_auto_callback_enabled: Optional[bool] = None
     active: Optional[bool] = None
@@ -2188,6 +2222,18 @@ async def patch_phone_number(
         pn.label = payload.label or None
     if payload.forward_to_e164 is not None:
         pn.forward_to_e164 = payload.forward_to_e164.strip() or None
+    if payload.urgency_forward_e164 is not None:
+        pn.urgency_forward_e164 = (
+            payload.urgency_forward_e164.strip() or None
+        )
+    if payload.closer_forward_e164 is not None:
+        pn.closer_forward_e164 = (
+            payload.closer_forward_e164.strip() or None
+        )
+    if payload.followup_forward_e164 is not None:
+        pn.followup_forward_e164 = (
+            payload.followup_forward_e164.strip() or None
+        )
     if payload.secretary_mode_active is not None:
         pn.secretary_mode_active = payload.secretary_mode_active
     if payload.lead_auto_callback_enabled is not None:

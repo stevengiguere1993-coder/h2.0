@@ -1,31 +1,59 @@
 "use client";
 
-// Sidebar dédiée au volet Téléphonie — volontairement minimaliste.
+// Sidebar dédiée au volet Téléphonie — navigation verticale.
 //
-// La téléphonie est isolée des autres volets pour l'instant, donc on
-// n'expose AUCUNE entrée vers construction / prospection / etc. dans
-// cette sidebar. La navigation interne (Tableau de bord, Appels,
-// Messages, etc.) vit dans les tabs en haut de la page, pas ici.
-//
-// Quand on décidera de réintégrer la téléphonie (phase 9 roadmap),
-// on pourra y ajouter un sélecteur de volet ou réutiliser AppSidebar.
+// Les sections (Tableau de bord, Appels, Messages, Numéros, Filtres,
+// Heures, Roadmap) vivent dans cette sidebar. Le menu horizontal en
+// haut de la page a été retiré pour cohérence avec les autres volets
+// (Construction, Prospection).
 
-import { Home, LogOut, PhoneCall, UserCircle, X } from "lucide-react";
+import {
+  Clock,
+  Filter,
+  Home,
+  LogOut,
+  MessageSquare,
+  Phone,
+  PhoneCall,
+  UserCircle,
+  Workflow,
+  X
+} from "lucide-react";
 
 import { AccountBadge } from "@/components/account-badge";
 import { HorizonLogo } from "@/components/horizon-logo";
 import { Link } from "@/i18n/navigation";
 
+import type { TelephonieSection } from "@/app/[locale]/telephonie/layout";
+
+const SECTIONS: {
+  key: TelephonieSection;
+  label: string;
+  icon: typeof Home;
+}[] = [
+  { key: "dashboard", label: "Tableau de bord", icon: Home },
+  { key: "appels", label: "Appels", icon: PhoneCall },
+  { key: "messages", label: "Messages", icon: MessageSquare },
+  { key: "numeros", label: "Numéros & routage", icon: Phone },
+  { key: "filtres", label: "Filtres anti-spam", icon: Filter },
+  { key: "heures", label: "Heures d'ouverture", icon: Clock },
+  { key: "plan", label: "Roadmap", icon: Workflow }
+];
+
 export function TelephonieSidebar({
   open,
   onClose,
   userEmail: _userEmail,
-  onSignOut
+  onSignOut,
+  section,
+  onSectionChange
 }: {
   open: boolean;
   onClose: () => void;
   userEmail?: string;
   onSignOut: () => void;
+  section: TelephonieSection;
+  onSectionChange: (s: TelephonieSection) => void;
 }) {
   return (
     <>
@@ -62,18 +90,33 @@ export function TelephonieSidebar({
         </div>
 
         <nav className="flex-1 overflow-y-auto px-3 py-4">
-          <div className="rounded-xl border border-teal-500/30 bg-teal-500/5 p-3">
-            <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-teal-300">
-              <PhoneCall className="h-3 w-3" />
-              Volet actif
-            </div>
-            <div className="mt-1 text-sm font-bold text-white">Téléphonie</div>
-            <p className="mt-1 text-[11px] text-white/60">
-              Volet isolé pour l&apos;instant. La navigation entre les
-              sections (tableau de bord, appels, messages…) se fait via
-              les onglets en haut de la page.
-            </p>
+          <div className="mb-3 flex items-center gap-2 px-2 text-[10px] font-bold uppercase tracking-wider text-teal-300">
+            <PhoneCall className="h-3 w-3" />
+            Téléphonie
           </div>
+
+          <ul className="space-y-0.5">
+            {SECTIONS.map((s) => {
+              const Icon = s.icon;
+              const active = section === s.key;
+              return (
+                <li key={s.key}>
+                  <button
+                    type="button"
+                    onClick={() => onSectionChange(s.key)}
+                    className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition ${
+                      active
+                        ? "bg-teal-500/15 text-teal-200 font-semibold"
+                        : "text-white/70 hover:bg-brand-900 hover:text-white"
+                    }`}
+                  >
+                    <Icon className="h-4 w-4" />
+                    {s.label}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
 
           <div className="mt-6 border-t border-brand-800 pt-3">
             <Link
