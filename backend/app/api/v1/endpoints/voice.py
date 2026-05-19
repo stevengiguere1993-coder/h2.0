@@ -592,6 +592,319 @@ async def _notify_owners_urgence(db, *, call: "Call", reason: str) -> None:
         log.warning("Urgence notification failed: %s", exc)
 
 
+async def _propose_appointment_slots(
+    db, *, call: "Call", intake_data: dict
+) -> list[dict]:
+    """Cherche les 3 meilleurs créneaux libres pour un closer et les
+    mémorise dans intake_data['proposed_slots']. Retourne la liste
+    serialisée (str-friendly pour Polly) à annoncer à l'appelant."""
+    from app.models.appointment_type import AppointmentType
+    from app.services.agenda_slot_finder import find_available_slots
+
+    # Type « évaluation soumission » par défaut (seedé au boot).
+    apt_type = (
+        await db.execute(
+            select(AppointmentType).where(
+                AppointmentType.slug == "evaluation_soumission",
+                AppointmentType.active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if apt_type is None:
+        return []
+    location = (intake_data or {}).get("adresse") or ""
+    slots = await find_available_slots(
+        db,
+        appointment_type_id=apt_type.id,
+        location=location or None,
+        role_kind="closer",
+        days_ahead=7,
+        max_results=3,
+    )
+    if not slots:
+        return []
+    out = []
+    for s in slots:
+        out.append(
+            {
+                "user_id": s.user_id,
+                "user_display": s.user_display,
+                "start_at": s.start_at.isoformat(),
+                "end_at": s.end_at.isoformat(),
+                "appointment_type_id": s.appointment_type_id,
+            }
+        )
+    # Persiste les slots sur le Call.session_state pour les retrouver
+    # quand Léa retournera next_action=book_slot au tour suivant.
+    state = {}
+    if call.session_state:
+        try:
+            state = json.loads(call.session_state) or {}
+        except Exception:
+            state = {}
+    state["proposed_slots"] = out
+    # On garde aussi un snapshot de l'intake en cours pour pouvoir
+    # créer le ContactRequest au moment du book_slot.
+    state["intake_data"] = intake_data
+    call.session_state = json.dumps(state, ensure_ascii=False)
+    await db.flush()
+    return out
+
+
+_FR_WEEKDAYS = [
+    "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"
+]
+_FR_MONTHS = [
+    "janvier", "février", "mars", "avril", "mai", "juin",
+    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+]
+_EN_WEEKDAYS = [
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"
+]
+
+
+def _format_slots_announcement(slots: list[dict], *, lang: str) -> str:
+    """Convertit la liste de créneaux en phrase lisible par Polly."""
+    if not slots:
+        return (
+            "Aucune disponibilité, désolée."
+            if lang.startswith("fr")
+            else "No availability, sorry."
+        )
+    parts = []
+    for i, s in enumerate(slots, 1):
+        dt = datetime.fromisoformat(s["start_at"])
+        if lang.startswith("fr"):
+            day = _FR_WEEKDAYS[dt.weekday()]
+            hour = dt.strftime("%-Hh%M" if dt.minute else "%-Hh")
+            parts.append(f"{i}) {day} à {hour}")
+        else:
+            day = _EN_WEEKDAYS[dt.weekday()]
+            hour = dt.strftime("%-I:%M %p" if dt.minute else "%-I %p")
+            parts.append(f"{i}) {day} at {hour}")
+    listing = ", ".join(parts)
+    if lang.startswith("fr"):
+        return (
+            f"Voici les disponibilités pour une visite d'évaluation : "
+            f"{listing}. Lequel vous convient ?"
+        )
+    return (
+        f"Here are the available slots for an evaluation visit: "
+        f"{listing}. Which one works for you?"
+    )
+
+
+async def _book_chosen_slot(
+    db,
+    *,
+    call: "Call",
+    intake_data: dict,
+    chosen_index: int,
+) -> bool:
+    """Crée l'AgendaEvent à partir du slot choisi par l'appelant.
+    Crée aussi le ContactRequest si pas déjà fait. Envoie SMS de
+    confirmation + push au closer. Renvoie True si OK, False sinon."""
+    proposed = intake_data.get("proposed_slots") or []
+    if not (0 <= chosen_index < len(proposed)):
+        return False
+    chosen = proposed[chosen_index]
+
+    # Crée le ContactRequest (si pas déjà fait) avec les infos d'intake.
+    if call.contact_request_id is None:
+        cr_id = await _create_intake_contact_request(
+            db, call=call, intake_data=intake_data
+        )
+    else:
+        cr_id = call.contact_request_id
+
+    from app.models.agenda_event import AgendaEvent
+    from app.models.appointment_type import AppointmentType
+
+    # Re-vérifie la dispo (anti-race condition : un autre RV a pu
+    # être créé entre la proposition et le choix).
+    from app.services.agenda_availability import check_slot_availability
+
+    start_at = datetime.fromisoformat(chosen["start_at"])
+    end_at = datetime.fromisoformat(chosen["end_at"])
+    apt_type = (
+        await db.execute(
+            select(AppointmentType).where(
+                AppointmentType.id == chosen["appointment_type_id"]
+            )
+        )
+    ).scalar_one_or_none()
+    prep = (apt_type.prep_buffer_min if apt_type else 0) or 0
+    recheck = await check_slot_availability(
+        db,
+        user_id=chosen["user_id"],
+        start_at=start_at,
+        end_at=end_at,
+        location=intake_data.get("adresse") or None,
+        prep_buffer_min=prep,
+    )
+    if not recheck.is_available:
+        log.info(
+            "Slot no longer available for call %s (conflicts: %s)",
+            call.id, recheck.conflicts,
+        )
+        return False
+
+    title = (
+        f"Évaluation soumission — "
+        f"{(call.lead_name or 'Prospect').strip()}"
+    )[:255]
+    event = AgendaEvent(
+        title=title,
+        description=(
+            f"RV pris au téléphone par Léa.\n"
+            f"Téléphone : {call.from_e164}\n"
+            f"Type travaux : {(intake_data.get('type_travaux') or '—')}\n"
+            f"Budget : {(intake_data.get('budget') or '—')}\n"
+            f"Échéancier : {(intake_data.get('echeancier') or '—')}"
+        ),
+        location=(intake_data.get("adresse") or None),
+        start_at=start_at,
+        end_at=end_at,
+        all_day=False,
+        scope="construction",
+        assignee_user_id=chosen["user_id"],
+        contact_request_id=cr_id,
+        event_type="rdv",
+        appointment_type_id=chosen["appointment_type_id"],
+    )
+    db.add(event)
+    await db.flush()
+    call.contact_request_id = cr_id
+    call.intent = "intake_construction"
+    call.lead_reason = (
+        (call.lead_reason or "") + f" [BOOKED {start_at.isoformat()}]"
+    ).strip()
+
+    # SMS de confirmation au prospect
+    try:
+        await _send_booking_confirmation_sms(
+            call=call,
+            user_display=chosen["user_display"],
+            start_at=start_at,
+            location=intake_data.get("adresse") or "",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Booking SMS failed: %s", exc)
+
+    # Push notification au closer + cloche
+    try:
+        await _notify_closer_new_booking(
+            db,
+            closer_user_id=chosen["user_id"],
+            event_id=event.id,
+            prospect_name=(call.lead_name or call.from_e164),
+            start_at=start_at,
+            location=intake_data.get("adresse") or "",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Booking notif failed: %s", exc)
+
+    return True
+
+
+async def _send_booking_confirmation_sms(
+    *,
+    call: "Call",
+    user_display: str,
+    start_at: datetime,
+    location: str,
+) -> None:
+    """Envoie un SMS de confirmation au numéro appelant après booking.
+    Utilise l'API REST Twilio directement via httpx (cohérent avec le
+    reste du codebase qui n'utilise pas le SDK officiel)."""
+    import base64
+
+    import httpx
+
+    sid = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+    token = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+    from_num = _normalize_e164(os.getenv("TWILIO_PHONE_NUMBER", ""))
+    if not sid or not token or not from_num:
+        log.info("Booking SMS skipped — Twilio creds missing")
+        return
+    body_fr = (
+        f"Horizon Services Immobiliers : votre RV avec {user_display} "
+        f"est confirmé pour {_human_datetime_fr(start_at)}"
+        f"{(' au ' + location) if location else ''}. "
+        f"À bientôt !"
+    )
+    basic = base64.b64encode(f"{sid}:{token}".encode()).decode("ascii")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as http:
+            r = await http.post(
+                f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json",
+                headers={
+                    "Authorization": f"Basic {basic}",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                data={
+                    "To": call.from_e164,
+                    "From": from_num,
+                    "Body": body_fr[:1500],
+                },
+            )
+            if r.status_code >= 400:
+                log.warning(
+                    "Booking SMS failed: %s %s", r.status_code, r.text[:200]
+                )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Booking SMS exception: %s", exc)
+
+
+def _human_datetime_fr(dt: datetime) -> str:
+    day = _FR_WEEKDAYS[dt.weekday()]
+    month = _FR_MONTHS[dt.month - 1]
+    hour = dt.strftime("%-Hh%M" if dt.minute else "%-Hh")
+    return f"{day} {dt.day} {month} à {hour}"
+
+
+async def _notify_closer_new_booking(
+    db,
+    *,
+    closer_user_id: int,
+    event_id: int,
+    prospect_name: str,
+    start_at: datetime,
+    location: str,
+) -> None:
+    """Notif cloche + push au closer pour son nouveau RV booké par Léa."""
+    from app.integrations.webpush import push_to_user
+    from app.models.notification import Notification
+
+    title = f"📅 Nouveau RV — {prospect_name}"
+    body = (
+        f"Léa a booké un RV pour vous le {_human_datetime_fr(start_at)}"
+        f"{(' au ' + location) if location else ''}."
+    )
+    href = f"/app/agenda?event={event_id}"
+    db.add(
+        Notification(
+            user_id=closer_user_id,
+            kind="agenda_booked_by_ai",
+            title=title,
+            body=body,
+            href=href,
+        )
+    )
+    await db.flush()
+    try:
+        await push_to_user(
+            db,
+            user_id=closer_user_id,
+            title=title,
+            body=body,
+            href=href,
+            tag=f"booking-{event_id}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Closer push failed: %s", exc)
+
+
 async def _find_project_for_call(db, call: "Call"):
     """Trouve un projet ACTIF pour l'appelant identifié (CLIENT ou
     LOCATAIRE avec projet en cours). Renvoie None sinon."""
@@ -1136,6 +1449,97 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
         )
         call.intent = "intake_construction"
         call.contact_request_id = cr_id
+        twiml = provider.build_say_and_hangup(
+            say=decision.say, lang=decision.lang
+        )
+        return Response(content=twiml, media_type="application/xml")
+
+    # 4) Smart booking — Léa cherche 3 créneaux libres pour un closer
+    #    et les annonce à l'appelant. On stocke les créneaux proposés
+    #    dans intake_data['proposed_slots'] pour retrouver à
+    #    chosen_slot_index quand l'appelant choisira au tour suivant.
+    if decision.next_action == "propose_slots":
+        proposed = await _propose_appointment_slots(
+            db, call=call, intake_data=decision.intake_data
+        )
+        if not proposed:
+            # Aucun closer disponible cette semaine → on retombe sur
+            # intake_complete (callback humain).
+            cr_id = await _create_intake_contact_request(
+                db, call=call, intake_data=decision.intake_data
+            )
+            call.intent = "intake_construction"
+            call.contact_request_id = cr_id
+            fallback = (
+                "Désolée, aucune disponibilité cette semaine. Nous "
+                "vous rappellerons sous peu pour fixer un rendez-vous."
+                if decision.lang.startswith("fr")
+                else "Sorry, no availability this week. We'll call you "
+                "back shortly to schedule a visit."
+            )
+            twiml = provider.build_say_and_hangup(
+                say=fallback, lang=decision.lang
+            )
+            return Response(content=twiml, media_type="application/xml")
+        announcement = _format_slots_announcement(proposed, lang=decision.lang)
+        # IMPORTANT : on remplace le tour assistant déjà enregistré
+        # (qui contient le `say` brut de Léa) par l'annonce détaillée
+        # avec les 3 slots énumérés. Permet à Léa de retrouver
+        # « 1) jeudi 14h » dans l'historique au tour suivant.
+        await _record_turn(
+            db, call_id=call.id, role="assistant", text=announcement
+        )
+        twiml = provider.build_say_and_gather(
+            say=announcement,
+            lang=decision.lang,
+            action_url=_secretary_action_url(),
+        )
+        return Response(content=twiml, media_type="application/xml")
+
+    # 5) Smart booking — l'appelant a choisi un des créneaux proposés.
+    if decision.next_action == "book_slot":
+        idx = decision.chosen_slot_index
+        # Récupère les slots proposés depuis session_state (persistés
+        # au tour précédent par _propose_appointment_slots).
+        state = {}
+        if call.session_state:
+            try:
+                state = json.loads(call.session_state) or {}
+            except Exception:
+                state = {}
+        proposed_serialized = state.get("proposed_slots") or []
+        intake = state.get("intake_data") or decision.intake_data or {}
+        if not proposed_serialized or idx is None:
+            cr_id = await _create_intake_contact_request(
+                db, call=call, intake_data=intake
+            )
+            call.intent = "intake_construction"
+            call.contact_request_id = cr_id
+            twiml = provider.build_say_and_hangup(
+                say=decision.say, lang=decision.lang
+            )
+            return Response(content=twiml, media_type="application/xml")
+        # Injecte les proposed_slots dans l'intake pour _book_chosen_slot
+        intake_for_book = dict(intake)
+        intake_for_book["proposed_slots"] = proposed_serialized
+        booked = await _book_chosen_slot(
+            db,
+            call=call,
+            intake_data=intake_for_book,
+            chosen_index=idx,
+        )
+        if not booked:
+            twiml = provider.build_say_and_hangup(
+                say=(
+                    "Ce créneau n'est plus disponible, nous vous "
+                    "rappellerons. Merci !"
+                    if decision.lang.startswith("fr")
+                    else "That slot is no longer available, we'll call "
+                    "you back. Thanks!"
+                ),
+                lang=decision.lang,
+            )
+            return Response(content=twiml, media_type="application/xml")
         twiml = provider.build_say_and_hangup(
             say=decision.say, lang=decision.lang
         )

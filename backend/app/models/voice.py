@@ -222,6 +222,10 @@ class Call(Base):
     # caller_identity.identify_caller(). Sert au reporting et à
     # afficher le bon badge dans le journal d'appels.
     caller_kind: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    # État conversationnel JSON (cross-turn). Sert au smart booking :
+    # quand Léa propose 3 créneaux, on les stocke ici pour retrouver
+    # user_id + datetime quand l'appelant choisit au tour suivant.
+    session_state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     phone_number: Mapped[PhoneNumber] = relationship(back_populates="calls")
     transcript: Mapped[Optional["CallTranscript"]] = relationship(

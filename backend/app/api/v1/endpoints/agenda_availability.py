@@ -21,6 +21,7 @@ from app.services.agenda_availability import (
     check_slot_availability,
     travel_time_between,
 )
+from app.services.agenda_slot_finder import find_available_slots
 from app.integrations import openrouteservice
 
 
@@ -104,4 +105,79 @@ async def travel_time(
         minutes=int(secs / 60) if secs is not None else None,
         provider="openrouteservice" if openrouteservice.is_configured() else "haversine_fallback",
         is_openrouteservice_configured=openrouteservice.is_configured(),
+    )
+
+
+# ─── Suggest slots ───
+# Retourne les meilleurs créneaux disponibles pour un type de RV +
+# un user (ou un rôle, ex. tous les closers). Utilisé par Léa au
+# téléphone pour proposer 2-3 créneaux au prospect.
+
+
+class SuggestSlotsRequest(BaseModel):
+    appointment_type_id: int
+    location: Optional[str] = Field(default=None, max_length=500)
+    role_kind: Optional[str] = Field(default=None, max_length=32)
+    user_id: Optional[int] = None
+    earliest_start: Optional[datetime] = None
+    days_ahead: int = Field(default=7, ge=1, le=30)
+    max_results: int = Field(default=3, ge=1, le=10)
+
+
+class SuggestedSlotRead(BaseModel):
+    user_id: int
+    user_email: str
+    user_display: str
+    start_at: datetime
+    end_at: datetime
+    appointment_type_id: int
+    travel_from_prev_sec: Optional[int] = None
+    travel_to_next_sec: Optional[int] = None
+
+
+class SuggestSlotsResponse(BaseModel):
+    slots: List[SuggestedSlotRead]
+    searched_role: Optional[str]
+    searched_user_id: Optional[int]
+
+
+@router.post(
+    "/suggest-slots",
+    response_model=SuggestSlotsResponse,
+    summary="Trouve les meilleurs créneaux libres pour un RV",
+)
+async def suggest_slots(
+    payload: SuggestSlotsRequest, _: CurrentUser, db: DBSession
+) -> SuggestSlotsResponse:
+    if not payload.user_id and not payload.role_kind:
+        raise HTTPException(
+            status_code=400,
+            detail="Spécifiez user_id ou role_kind",
+        )
+    slots = await find_available_slots(
+        db,
+        appointment_type_id=payload.appointment_type_id,
+        location=payload.location,
+        role_kind=payload.role_kind,
+        user_id=payload.user_id,
+        earliest_start=payload.earliest_start,
+        days_ahead=payload.days_ahead,
+        max_results=payload.max_results,
+    )
+    return SuggestSlotsResponse(
+        slots=[
+            SuggestedSlotRead(
+                user_id=s.user_id,
+                user_email=s.user_email,
+                user_display=s.user_display,
+                start_at=s.start_at,
+                end_at=s.end_at,
+                appointment_type_id=s.appointment_type_id,
+                travel_from_prev_sec=s.travel_from_prev_sec,
+                travel_to_next_sec=s.travel_to_next_sec,
+            )
+            for s in slots
+        ],
+        searched_role=payload.role_kind,
+        searched_user_id=payload.user_id,
     )
