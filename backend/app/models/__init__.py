@@ -179,6 +179,11 @@ from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
 from app.models.sous_traitant import SousTraitant
 from app.models.user import User
+from app.models.user_business_role import (  # noqa: F401
+    FunctionalRole,
+    UserBusinessRole,
+)
+from app.models.appointment_type import AppointmentType  # noqa: F401
 from app.models.voice import (  # noqa: F401
     Call,
     CallDirection,

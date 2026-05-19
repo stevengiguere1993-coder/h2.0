@@ -592,6 +592,9 @@ async def init_db() -> None:
             ("voice_phone_numbers", "urgency_forward_e164", "VARCHAR(20)"),
             ("voice_phone_numbers", "closer_forward_e164", "VARCHAR(20)"),
             ("voice_phone_numbers", "followup_forward_e164", "VARCHAR(20)"),
+            # Agenda — type de RV configurable (lien vers
+            # appointment_types). Optionnel pour ne pas casser le legacy.
+            ("agenda_events", "appointment_type_id", "INTEGER"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
@@ -1009,6 +1012,82 @@ async def init_db() -> None:
             except Exception:
                 # Table absente / colonne pas encore migrée — on
                 # passe sans bloquer le boot.
+                pass
+
+        # Seed des types de RV par défaut. Idempotent :
+        # INSERT ... ON CONFLICT DO NOTHING. L'admin peut modifier
+        # depuis l'UI ensuite (couleur, durée, buffer).
+        for slug, label, duration, prep, roles, color, travel in (
+            (
+                "evaluation_soumission",
+                "Évaluation soumission (chez le client)",
+                90,
+                15,
+                "closer",
+                "0ea5e9",
+                True,
+            ),
+            (
+                "visite_chantier",
+                "Visite de chantier",
+                30,
+                0,
+                "charge_projet,closer",
+                "10b981",
+                True,
+            ),
+            (
+                "reunion_interne",
+                "Réunion interne (bureau)",
+                30,
+                0,
+                None,
+                "a855f7",
+                False,
+            ),
+            (
+                "inspection_finale",
+                "Inspection finale / livraison",
+                45,
+                15,
+                "closer,charge_projet",
+                "f59e0b",
+                True,
+            ),
+            (
+                "appel_telephone",
+                "Appel téléphonique planifié",
+                15,
+                0,
+                None,
+                "64748b",
+                False,
+            ),
+        ):
+            try:
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO appointment_types
+                          (slug, label, default_duration_min,
+                           prep_buffer_min, allowed_roles_csv, color,
+                           requires_travel, active, created_at)
+                        VALUES (:slug, :label, :duration, :prep,
+                                :roles, :color, :travel, TRUE, NOW())
+                        ON CONFLICT (slug) DO NOTHING
+                        """
+                    ),
+                    {
+                        "slug": slug,
+                        "label": label,
+                        "duration": duration,
+                        "prep": prep,
+                        "roles": roles,
+                        "color": color,
+                        "travel": travel,
+                    },
+                )
+            except Exception:
                 pass
 
 

@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import (
     admin_data,
     agenda_unified,
+    appointment_types,
     ai,
     appointments,
     audit,
@@ -48,6 +49,7 @@ from app.api.v1.endpoints import (
     payments,
     sales_tasks,
     service_templates,
+    user_roles,
     users,
     project_billables,
     project_finances,
@@ -153,6 +155,8 @@ api_router.include_router(contract_sign.router)
 api_router.include_router(contract_sign.docs_router)
 api_router.include_router(public_bon.router)
 api_router.include_router(push.router)
+api_router.include_router(appointment_types.router)
+api_router.include_router(user_roles.router)
 api_router.include_router(public_purchase_agreement.router)
 api_router.include_router(qbo_token.router)
 api_router.include_router(qbo_oauth.router)
