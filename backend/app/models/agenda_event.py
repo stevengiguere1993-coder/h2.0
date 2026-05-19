@@ -84,6 +84,15 @@ class AgendaEvent(Base, TimestampUpdateMixin):
     event_type: Mapped[str] = mapped_column(String(32), nullable=False, default="chantier")
     # e.g. chantier, visite, reunion, livraison, rdv, appel
 
+    # Lien vers un AppointmentType configurable (durée par défaut,
+    # prep buffer, rôles autorisés). Optionnel — les events legacy
+    # restent valides sans type.
+    appointment_type_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("appointment_types.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     # Marker for the 24h reminder cron so we don't send twice.
     reminder_sent_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
