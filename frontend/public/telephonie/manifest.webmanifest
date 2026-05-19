@@ -1,0 +1,51 @@
+{
+  "name": "Horizon Téléphone",
+  "short_name": "Horizon Tél",
+  "description": "Téléphonie Horizon Services Immobiliers — appels, SMS, dial pad, secrétaire IA.",
+  "id": "/telephonie",
+  "start_url": "/telephonie?source=pwa",
+  "scope": "/telephonie",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b3a36",
+  "theme_color": "#0b3a36",
+  "lang": "fr-CA",
+  "dir": "ltr",
+  "categories": ["business", "communication", "productivity"],
+  "icons": [
+    {
+      "src": "/pwa/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Composer un numéro",
+      "short_name": "Composer",
+      "description": "Ouvrir le dial pad",
+      "url": "/telephonie?source=shortcut&action=dial",
+      "icons": [{ "src": "/pwa/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Messages",
+      "short_name": "SMS",
+      "description": "Voir les SMS",
+      "url": "/telephonie?source=shortcut&section=messages",
+      "icons": [{ "src": "/pwa/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

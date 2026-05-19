@@ -10,7 +10,7 @@
  *   in the background when the network returns.
  */
 
-const VERSION = "hsi-v4";
+const VERSION = "hsi-v5";
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 const SHELL_CACHE = `${VERSION}-shell`;
 
@@ -20,7 +20,9 @@ const SHELL_URLS = [
   "/m/punch",
   "/m/profil",
   "/m/clients",
+  "/telephonie",
   "/manifest.webmanifest",
+  "/telephonie/manifest.webmanifest",
   "/pwa/icon-192.png",
   "/pwa/icon-512.png",
   "/pwa/apple-touch-icon.png"
@@ -128,7 +130,7 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(cacheFirst(request));
     return;
   }
-  if (isNavigation(request) && url.pathname.startsWith("/m")) {
+  if (isNavigation(request) && (url.pathname.startsWith("/m") || url.pathname.startsWith("/telephonie"))) {
     event.respondWith(staleWhileRevalidate(request));
     return;
   }
