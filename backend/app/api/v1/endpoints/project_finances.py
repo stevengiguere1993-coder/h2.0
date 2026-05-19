@@ -254,7 +254,7 @@ async def _compute_finances(
 
     if phases:
         # Coût moyen "réel" des membres du projet — fallback pour les
-        # phases non-assignées explicitement.
+        # phases sans aucun assignee précis (cas legacy).
         if members_employes:
             members_avg_cost = round(
                 sum(_real_cost_for_employe(m) for m in members_employes)
@@ -264,45 +264,86 @@ async def _compute_finances(
         else:
             members_avg_cost = float(avg_rate)
 
+        # Pré-charge tous les assignees N-M des phases pour ne pas
+        # faire 1 query par phase. Map phase_id → list[employe_id] +
+        # list[sous_traitant_id].
+        from app.models.project_assignees import ProjectPhaseAssignee as _PPA
+
+        phase_assignees_emp: dict[int, set[int]] = {}
+        phase_assignees_st: dict[int, set[int]] = {}
+        if phases:
+            pa_rows = (
+                await db.execute(
+                    select(_PPA).where(
+                        _PPA.phase_id.in_([p.id for p in phases])
+                    )
+                )
+            ).scalars().all()
+            for pa in pa_rows:
+                if pa.employe_id:
+                    phase_assignees_emp.setdefault(pa.phase_id, set()).add(
+                        pa.employe_id
+                    )
+                if pa.sous_traitant_id:
+                    phase_assignees_st.setdefault(pa.phase_id, set()).add(
+                        pa.sous_traitant_id
+                    )
+
         for ph in phases:
             days = int(ph.duration_days or 0)
             if days <= 0:
                 continue
             hours = days * 8
 
-            # Quel coût appliquer ?
-            cost_per_hour = members_avg_cost
+            # Union de TOUS les assignees de la phase :
+            #   - legacy single (assignee_employe_id / sous_traitant_id)
+            #   - N-M moderne (ProjectPhaseAssignee)
+            emp_ids: set[int] = set(phase_assignees_emp.get(ph.id, set()))
+            st_ids: set[int] = set(phase_assignees_st.get(ph.id, set()))
             if ph.assignee_employe_id:
-                emp = (
-                    await db.execute(
-                        select(Employe).where(
-                            Employe.id == ph.assignee_employe_id
-                        )
-                    )
-                ).scalar_one_or_none()
-                cost_per_hour = _real_cost_for_employe(emp)
-            elif ph.assignee_sous_traitant_id:
-                # Pour un sous-traitant on prend hourly_rate (s'il existe
-                # dans le modèle SousTraitant) — sinon avg_rate.
-                st = (
-                    await db.execute(
-                        select(SousTraitant).where(
-                            SousTraitant.id == ph.assignee_sous_traitant_id
-                        )
-                    )
-                ).scalar_one_or_none()
-                st_rate = (
-                    float(getattr(st, "hourly_rate", None) or avg_rate)
-                    if st
-                    else float(avg_rate)
-                )
-                cost_per_hour = st_rate
+                emp_ids.add(ph.assignee_employe_id)
+            if ph.assignee_sous_traitant_id:
+                st_ids.add(ph.assignee_sous_traitant_id)
 
-            # Multiplier par le nombre de personnes : si un assignee
-            # explicite, c'est 1 ; sinon membres du projet (au moins 1).
-            persons = 1
-            if not ph.assignee_employe_id and not ph.assignee_sous_traitant_id:
-                persons = max(1, len(members_employes))
+            total_assignees = len(emp_ids) + len(st_ids)
+
+            # Coût horaire : moyenne pondérée des assignees réels.
+            # S'il n'y en a aucun, on tombe sur le coût moyen des
+            # membres du projet (ancien comportement), mais avec
+            # persons=1 (PAS persons=len(members)) — sinon on
+            # surestime grossièrement les phases non assignées.
+            if total_assignees > 0:
+                rates = []
+                if emp_ids:
+                    emps = (
+                        await db.execute(
+                            select(Employe).where(Employe.id.in_(emp_ids))
+                        )
+                    ).scalars().all()
+                    rates.extend(_real_cost_for_employe(e) for e in emps)
+                if st_ids:
+                    sts = (
+                        await db.execute(
+                            select(SousTraitant).where(
+                                SousTraitant.id.in_(st_ids)
+                            )
+                        )
+                    ).scalars().all()
+                    for st in sts:
+                        rates.append(
+                            float(
+                                getattr(st, "hourly_rate", None) or avg_rate
+                            )
+                        )
+                cost_per_hour = (
+                    round(sum(rates) / len(rates), 2) if rates else members_avg_cost
+                )
+                persons = total_assignees
+            else:
+                # Phase non assignée : 1 personne placeholder au taux
+                # moyen équipe (n'amplifie pas les heures par #members).
+                cost_per_hour = members_avg_cost
+                persons = 1
 
             phase_hours = hours * persons
             projected_labour_hours += phase_hours
