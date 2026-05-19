@@ -11,6 +11,7 @@ from app.api.v1.endpoints import (
     agenda_availability,
     agenda_unified,
     appointment_types,
+    lea_web,
     ai,
     appointments,
     audit,
@@ -159,6 +160,7 @@ api_router.include_router(push.router)
 api_router.include_router(appointment_types.router)
 api_router.include_router(agenda_availability.router)
 api_router.include_router(user_roles.router)
+api_router.include_router(lea_web.router)
 api_router.include_router(public_purchase_agreement.router)
 api_router.include_router(qbo_token.router)
 api_router.include_router(qbo_oauth.router)
