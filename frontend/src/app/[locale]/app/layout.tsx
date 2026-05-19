@@ -5,7 +5,6 @@ import { Loader2 } from "lucide-react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { ConfirmProvider } from "@/components/confirm-dialog";
-import { DialPadFab } from "@/components/dial-pad-fab";
 import { HelpButton } from "@/components/help-button";
 import { KratosFloating } from "@/components/kratos-floating";
 import { ThemeProvider, type Theme } from "@/components/theme-provider";
@@ -49,9 +48,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   construction : un appel entrant route via WebRTC
                   vers le user connecté quel que soit l'écran. */}
               <VoiceConsole />
-              {/* Dial pad accessible partout dans le portail
-                  construction (pas seulement /telephonie). */}
-              <DialPadFab />
+              {/* NB : Le dial pad (DialPadFab) ne vit QUE dans
+                  /telephonie pour ne pas saturer le coin du portail
+                  construction (déjà occupé par Kratos + Aide). */}
             </ConfirmProvider>
           </AppLayoutContextProvider>
         </div>

@@ -16,7 +16,7 @@ export function DialPadFab() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full bg-emerald-500 px-5 py-3 font-semibold text-emerald-950 shadow-2xl ring-2 ring-emerald-300/40 transition hover:bg-emerald-400 hover:shadow-emerald-500/30 active:scale-95"
+        className="fixed bottom-6 left-6 z-40 flex items-center gap-2 rounded-full bg-emerald-500 px-5 py-3 font-semibold text-emerald-950 shadow-2xl ring-2 ring-emerald-300/40 transition hover:bg-emerald-400 hover:shadow-emerald-500/30 active:scale-95"
         aria-label="Ouvrir le dial pad — composer un numéro"
         title="Composer un numéro"
       >
@@ -25,7 +25,7 @@ export function DialPadFab() {
       </button>
       {open ? (
         <div
-          className="fixed inset-0 z-50 flex items-end justify-end bg-black/50 p-6"
+          className="fixed inset-0 z-50 flex items-end justify-start bg-black/50 p-6"
           onClick={() => setOpen(false)}
         >
           <div
