@@ -33,6 +33,22 @@ type Employe = {
   created_at: string;
 };
 
+// Les taux CNESST / CCQ sont stockés en DÉCIMAL côté backend
+// (0.0216 = 2,16 %) mais saisis / affichés en POURCENTAGE côté UI.
+// Ces deux helpers font la conversion aux frontières (load / save).
+function pctFromDecimal(v: number | string | null | undefined): string {
+  if (v == null || v === "") return "";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "";
+  // Évite les artefacts de virgule flottante (0.0216 * 100 = 2.1599…).
+  return String(Math.round(n * 100 * 1e6) / 1e6);
+}
+function decimalFromPct(pct: string): number | null {
+  const n = Number(pct);
+  if (!pct || !Number.isFinite(n)) return null;
+  return Math.round((n / 100) * 1e8) / 1e8;
+}
+
 export default function EmployeDetailPage() {
   const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
@@ -89,10 +105,8 @@ export default function EmployeDetailPage() {
         setEmergencyName(data.emergency_contact_name || "");
         setEmergencyPhone(data.emergency_contact_phone || "");
         setIsCcq(Boolean(data.is_ccq));
-        setCnesstRate(
-          data.cnesst_rate != null ? String(data.cnesst_rate) : ""
-        );
-        setCcqRate(data.ccq_rate != null ? String(data.ccq_rate) : "");
+        setCnesstRate(pctFromDecimal(data.cnesst_rate));
+        setCcqRate(pctFromDecimal(data.ccq_rate));
         setEmployeurDUrl(data.employeur_d_url || "");
       } catch {
         if (!cancelled) setError("Employé introuvable.");
@@ -123,8 +137,8 @@ export default function EmployeDetailPage() {
       emergencyName !== (emp.emergency_contact_name || "") ||
       emergencyPhone !== (emp.emergency_contact_phone || "") ||
       isCcq !== Boolean(emp.is_ccq) ||
-      cnesstRate !== (emp.cnesst_rate != null ? String(emp.cnesst_rate) : "") ||
-      ccqRate !== (emp.ccq_rate != null ? String(emp.ccq_rate) : "") ||
+      cnesstRate !== pctFromDecimal(emp.cnesst_rate) ||
+      ccqRate !== pctFromDecimal(emp.ccq_rate) ||
       employeurDUrl !== (emp.employeur_d_url || "")
     );
   }, [
@@ -155,8 +169,9 @@ export default function EmployeDetailPage() {
   const realCost = useMemo(() => {
     const base = Number(hourlyRate || 0);
     if (base <= 0) return null;
-    const cnesst = Number(cnesstRate || 0);
-    const ccq = isCcq ? Number(ccqRate || 0) : 0;
+    // cnesstRate / ccqRate sont en POURCENTAGE dans le state → /100.
+    const cnesst = (Number(cnesstRate || 0)) / 100;
+    const ccq = isCcq ? (Number(ccqRate || 0)) / 100 : 0;
     return +(base * (1 + cnesst + ccq)).toFixed(2);
   }, [hourlyRate, cnesstRate, isCcq, ccqRate]);
 
@@ -180,8 +195,8 @@ export default function EmployeDetailPage() {
         emergency_contact_name: emergencyName.trim() || null,
         emergency_contact_phone: emergencyPhone.trim() || null,
         is_ccq: isCcq,
-        cnesst_rate: cnesstRate ? Number(cnesstRate) : null,
-        ccq_rate: ccqRate ? Number(ccqRate) : null,
+        cnesst_rate: decimalFromPct(cnesstRate),
+        ccq_rate: decimalFromPct(ccqRate),
         employeur_d_url: employeurDUrl.trim() || null
       };
       const res = await authedFetch(`/api/v1/employes/${id}`, {
@@ -417,34 +432,34 @@ export default function EmployeDetailPage() {
                   </label>
                   <div>
                     <label htmlFor="e_cnesst" className="label">
-                      Prime CNESST (% en décimal — ex. 0.05 = 5 %)
+                      Prime CNESST (% — ex. 2,16 pour 2,16 %)
                     </label>
                     <input
                       id="e_cnesst"
                       type="number"
-                      step="0.0001"
+                      step="0.01"
                       min="0"
-                      max="1"
+                      max="100"
                       value={cnesstRate}
                       onChange={(e) => setCnesstRate(e.target.value)}
-                      placeholder="Ex. 0.05"
+                      placeholder="Ex. 2.16"
                       className="input"
                     />
                   </div>
                   {isCcq ? (
                     <div>
                       <label htmlFor="e_ccq" className="label">
-                        Prime CCQ (% en décimal — ex. 0.22 = 22 %)
+                        Prime CCQ (% — ex. 22 pour 22 %)
                       </label>
                       <input
                         id="e_ccq"
                         type="number"
-                        step="0.0001"
+                        step="0.01"
                         min="0"
-                        max="1"
+                        max="100"
                         value={ccqRate}
                         onChange={(e) => setCcqRate(e.target.value)}
-                        placeholder="Ex. 0.22"
+                        placeholder="Ex. 22"
                         className="input"
                       />
                     </div>
@@ -459,9 +474,9 @@ export default function EmployeDetailPage() {
                       </p>
                       <p className="mt-0.5 text-[11px] text-amber-100/70">
                         Base {Number(hourlyRate).toFixed(2)} $ + CNESST{" "}
-                        {((Number(cnesstRate) || 0) * 100).toFixed(2)} %
+                        {(Number(cnesstRate) || 0).toFixed(2)} %
                         {isCcq
-                          ? ` + CCQ ${((Number(ccqRate) || 0) * 100).toFixed(2)} %`
+                          ? ` + CCQ ${(Number(ccqRate) || 0).toFixed(2)} %`
                           : ""}
                         . Utilisé pour calculer le coût des heures
                         poinçonnées sur les rapports de paie.
