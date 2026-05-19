@@ -160,7 +160,7 @@ def make_crud_router(
         return read_schema.model_validate(obj)
 
     @router.patch("/{item_id}")
-    async def update_item(item_id: int, data: update_schema, db: DBSession, _: AuthWrite):  # type: ignore[valid-type]
+    async def update_item(item_id: int, data: update_schema, db: DBSession, user: AuthWrite):  # type: ignore[valid-type]
         crud = GenericCrud(db, model)
         obj = await crud.get(item_id)
         if obj is None:
@@ -183,7 +183,47 @@ def make_crud_router(
         prev_soum_total = (
             getattr(obj, "total", None) if model is Soumission else None
         )
+        # Snapshot avant/après pour journaliser une modification
+        # MANUELLE de punch (édition admin des heures / dates /
+        # projet). Permet de tracer dans le journal d'activité qui a
+        # touché à un pointage et ce qui a changé.
+        punch_before: dict = {}
+        punch_changed_fields: list[str] = []
+        if model is Punch:
+            try:
+                punch_changed_fields = list(
+                    data.model_dump(exclude_unset=True).keys()
+                )
+            except Exception:  # noqa: BLE001
+                punch_changed_fields = []
+            for f in punch_changed_fields:
+                punch_before[f] = getattr(obj, f, None)
         obj = await crud.update(obj, data)
+        if model is Punch and punch_changed_fields:
+            from app.services.audit import log_action as _log_punch_audit
+
+            changes = {}
+            for f in punch_changed_fields:
+                after = getattr(obj, f, None)
+                before = punch_before.get(f)
+                if str(before) != str(after):
+                    changes[f] = {
+                        "avant": str(before) if before is not None else None,
+                        "apres": str(after) if after is not None else None,
+                    }
+            if changes:
+                await _log_punch_audit(
+                    db,
+                    user=user,
+                    action="punch.modifie",
+                    entity_type="punch",
+                    entity_id=int(obj.id),
+                    details={
+                        "employe_id": getattr(obj, "employe_id", None),
+                        "project_id": getattr(obj, "project_id", None),
+                        "modifications": changes,
+                    },
+                )
         if model is Achat:
             new_status = getattr(obj, "status", None)
             if prev_status != "received" and new_status == "received":

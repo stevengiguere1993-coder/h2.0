@@ -74,6 +74,9 @@ function actionPillCls(action: string): string {
   if (action.endsWith(".auto_closed")) {
     return "bg-amber-500/15 text-amber-300 border-amber-500/30";
   }
+  if (action.endsWith(".modifie") || action.endsWith(".updated")) {
+    return "bg-violet-500/15 text-violet-300 border-violet-500/30";
+  }
   return "bg-white/10 text-white/70 border-white/20";
 }
 
@@ -251,8 +254,8 @@ export default function AuditPage() {
             </p>
           </div>
         ) : (
-          <div className="mt-4 overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
-            <table className="w-full text-sm">
+          <div className="mt-4 overflow-x-auto rounded-xl border border-brand-800 bg-brand-900">
+            <table className="w-full min-w-[720px] text-sm">
               <thead className="border-b border-brand-800 bg-brand-950/50 text-left text-[11px] uppercase tracking-wider text-white/50">
                 <tr>
                   <th className="px-3 py-2">Date</th>
