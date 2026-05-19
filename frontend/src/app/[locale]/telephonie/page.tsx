@@ -798,12 +798,15 @@ function DashboardSection({
             </EmptyHint>
           ) : (
             <ul className="mt-3 divide-y divide-brand-800">
-              {calls.slice(0, 8).map((c) => (
-                <li key={c.id}>
+              {calls.slice(0, 6).map((c) => (
+                <li
+                  key={c.id}
+                  className="flex items-center gap-2 py-2.5 hover:bg-brand-800/30"
+                >
                   <button
                     type="button"
                     onClick={() => onOpenCall(c.id)}
-                    className="flex w-full items-center gap-3 py-2.5 text-left hover:bg-brand-800/30"
+                    className="flex flex-1 items-center gap-3 text-left"
                   >
                     <DirectionIcon dir={c.direction} status={c.status} />
                     <div className="min-w-0 flex-1">
@@ -814,7 +817,6 @@ function DashboardSection({
                         {c.caller_kind && c.caller_kind !== "unknown" ? (
                           <CallerKindBadge kind={c.caller_kind} />
                         ) : null}
-                        {c.intent ? <IntentBadge intent={c.intent} /> : null}
                       </div>
                       <div className="truncate text-[11px] text-white/50">
                         {formatDateTime(c.started_at)}
@@ -824,6 +826,21 @@ function DashboardSection({
                     </div>
                     <StatusBadge status={c.status} />
                   </button>
+                  {/* Bouton « Rappeler » direct si l'appel a généré
+                      une demande de callback (intent=callback ou
+                      manqué). Sinon, juste le badge intent. */}
+                  {c.intent === "callback" ||
+                  c.status === "no-answer" ||
+                  c.status === "busy" ||
+                  c.status === "failed" ? (
+                    <CallbackInlineButton
+                      targetE164={c.from_e164}
+                      entityType={c.entity_type || undefined}
+                      entityId={c.entity_id || undefined}
+                    />
+                  ) : c.intent ? (
+                    <IntentBadge intent={c.intent} />
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -2681,6 +2698,28 @@ function StatusBadge({ status }: { status: string }) {
     </span>
   );
 }
+
+function CallbackInlineButton({
+  targetE164,
+  entityType,
+  entityId
+}: {
+  targetE164: string;
+  entityType?: string;
+  entityId?: number;
+}) {
+  return (
+    <CallButton
+      targetE164={targetE164}
+      entityType={entityType}
+      entityId={entityId}
+      label="Rappeler"
+      className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-300 hover:bg-amber-500/25"
+      variant="full"
+    />
+  );
+}
+
 
 function IntentBadge({ intent }: { intent: string }) {
   const map: Record<string, { label: string; cls: string }> = {
