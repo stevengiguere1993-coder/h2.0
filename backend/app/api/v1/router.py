@@ -8,6 +8,7 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     admin_data,
+    agenda_availability,
     agenda_unified,
     appointment_types,
     ai,
@@ -156,6 +157,7 @@ api_router.include_router(contract_sign.docs_router)
 api_router.include_router(public_bon.router)
 api_router.include_router(push.router)
 api_router.include_router(appointment_types.router)
+api_router.include_router(agenda_availability.router)
 api_router.include_router(user_roles.router)
 api_router.include_router(public_purchase_agreement.router)
 api_router.include_router(qbo_token.router)

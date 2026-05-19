@@ -184,6 +184,7 @@ from app.models.user_business_role import (  # noqa: F401
     UserBusinessRole,
 )
 from app.models.appointment_type import AppointmentType  # noqa: F401
+from app.models.geocoded_address import GeocodedAddress  # noqa: F401
 from app.models.voice import (  # noqa: F401
     Call,
     CallDirection,
