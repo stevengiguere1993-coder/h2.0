@@ -1650,7 +1650,7 @@ function NumbersSection({
             />
             <ForwardField
               label="🚨 Urgence locataire"
-              hint="hot-transfert détecté par Léa (dégât, fuite, panne)"
+              hint="hot-transfert + enregistrement (consentement annoncé). Plusieurs numéros séparés par virgule = ring tous en parallèle, premier qui décroche gagne."
               value={n.urgency_forward_e164}
               onSave={(v) =>
                 patchNumber(n, { urgency_forward_e164: v ?? "" })

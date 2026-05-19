@@ -159,6 +159,23 @@ def _normalize_e164(raw: str) -> str:
     return ""
 
 
+def _parse_e164_list(raw: str) -> list[str]:
+    """Parse une chaîne potentiellement multi-numéros séparés par
+    virgule / point-virgule / espace en liste de numéros E.164
+    normalisés. Permet à un user de mettre plusieurs cibles dans un
+    champ « cible de transfert » et qu'on ring tout le monde en
+    parallèle (premier qui décroche gagne).
+    """
+    if not raw:
+        return []
+    out: list[str] = []
+    for chunk in raw.replace(";", ",").replace(" ", ",").split(","):
+        n = _normalize_e164(chunk.strip())
+        if n and n not in out:
+            out.append(n)
+    return out
+
+
 async def _validate_twilio_signature(request: Request) -> dict[str, str]:
     """Lit le body form-encoded, vérifie la signature, retourne les params."""
     try:
@@ -1005,10 +1022,10 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
     #    gestionnaire (env URGENCY_FORWARD_E164, sinon TWILIO_FORWARD_TO
     #    en dernier recours pour ne jamais raccrocher un cas urgent).
     if decision.next_action == "transfer_emergency":
-        # Récupère le numéro d'urgence du PhoneNumber appelé, sinon
-        # fallback aux env vars (URGENCY_FORWARD_E164, puis
-        # TWILIO_FORWARD_TO). Permet de configurer par numéro depuis
-        # l'app sans toucher Render.
+        # Récupère les numéros d'urgence du PhoneNumber (peut être
+        # une liste séparée par virgules pour ring plusieurs cibles
+        # en parallèle). Fallback env vars URGENCY_FORWARD_E164 +
+        # TWILIO_FORWARD_TO.
         _pn_for_urgence = (
             await db.execute(
                 select(PhoneNumber).where(
@@ -1016,12 +1033,12 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
                 )
             )
         ).scalar_one_or_none()
-        emergency_to = (
+        targets = _parse_e164_list(
             (_pn_for_urgence.urgency_forward_e164 if _pn_for_urgence else None)
             or os.getenv("URGENCY_FORWARD_E164")
             or os.getenv("TWILIO_FORWARD_TO")
             or ""
-        ).strip()
+        )
         # Notif cloche urgente — TOUS les owners reçoivent pour qu'au
         # moins une personne soit avertie même si la cible ne décroche pas.
         await _notify_owners_urgence(
@@ -1029,7 +1046,7 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
             call=call,
             reason=decision.lead_reason or "Urgence détectée",
         )
-        if not emergency_to:
+        if not targets:
             # Pas de cible configurée → on ne raccroche pas sec : on
             # capture en callback urgent pour rappel manuel.
             call.intent = "urgence_locataire"
@@ -1041,10 +1058,27 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
                 say=decision.say, lang=decision.lang
             )
             return Response(content=twiml, media_type="application/xml")
-        call.forwarded_to_e164 = emergency_to
+        call.forwarded_to_e164 = ",".join(targets)
         call.intent = "urgence_locataire"
-        twiml = provider.build_say_and_dial(
-            say=decision.say, lang=decision.lang, dial_to_e164=emergency_to
+        # Multi-cible : premier qui décroche prend l'appel, les autres
+        # cessent. Enregistrement audio activé (consentement annoncé
+        # par Léa juste avant). Fallback callback si personne décroche.
+        action_url = (
+            f"{_secretary_base_url()}/api/v1/voice/twilio/"
+            f"dial-followup?call_id={call.id}"
+        )
+        # Préfixe d'annonce de consentement enregistrement (Loi 25).
+        say_with_consent = (
+            decision.say
+            + " Cet appel pourrait être enregistré pour fins de qualité."
+        )
+        twiml = provider.build_say_and_dial_multi(
+            say=say_with_consent,
+            lang=decision.lang,
+            targets_e164=targets,
+            action_url=action_url,
+            timeout_sec=20,
+            record=True,
         )
         return Response(content=twiml, media_type="application/xml")
 
@@ -1150,9 +1184,27 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
                 say=decision.say, lang=decision.lang
             )
             return Response(content=twiml, media_type="application/xml")
-        call.forwarded_to_e164 = forward_to
-        twiml = provider.build_say_and_dial(
-            say=decision.say, lang=decision.lang, dial_to_e164=forward_to
+        # Multi-cible : si le champ contient plusieurs numéros séparés
+        # par virgule, on ring tout le monde en parallèle. Fallback
+        # callback si personne ne décroche. Enregistrement activé +
+        # consentement annoncé.
+        targets = _parse_e164_list(forward_to)
+        call.forwarded_to_e164 = ",".join(targets) if targets else forward_to
+        action_url = (
+            f"{_secretary_base_url()}/api/v1/voice/twilio/"
+            f"dial-followup?call_id={call.id}"
+        )
+        say_with_consent = (
+            decision.say
+            + " Cet appel pourrait être enregistré pour fins de qualité."
+        )
+        twiml = provider.build_say_and_dial_multi(
+            say=say_with_consent,
+            lang=decision.lang,
+            targets_e164=targets or [forward_to],
+            action_url=action_url,
+            timeout_sec=20,
+            record=True,
         )
         return Response(content=twiml, media_type="application/xml")
 
@@ -1564,6 +1616,194 @@ async def _twilio_clients_fallback_impl(request: Request, db: DBSession) -> Resp
 
     twiml = provider.build_forward_response(forward_to_e164=forward_to)
     return Response(content=twiml, media_type="application/xml")
+
+
+# ---------------------------------------------------------------------
+# Multi-target dial : callback de résultat
+# ---------------------------------------------------------------------
+#
+# Quand Léa <Dial> plusieurs numéros en parallèle (urgence locataire,
+# transfer générique, etc.), Twilio POST ici à la fin du Dial avec :
+#   - DialCallStatus : answered / completed / no-answer / busy / failed
+#   - DialCallSid    : SID du leg appelé qui a répondu (si answered)
+#   - RecordingUrl   : URL de l'enregistrement (si record=True)
+#
+# Si quelqu'un a répondu  → on notifie les autres « pris en charge »
+# Si personne n'a répondu → Léa dit qu'on rappelle ASAP + push urgent
+
+
+@router.post(
+    "/twilio/dial-followup",
+    summary="Post-dial multi-cible : notifie les autres OU bascule en callback",
+    response_class=Response,
+)
+async def twilio_dial_followup(
+    request: Request, db: DBSession
+) -> Response:
+    try:
+        return await _twilio_dial_followup_impl(request, db)
+    except HTTPException as _http_exc:
+        log.warning(
+            "dial-followup rejected: %d %s",
+            _http_exc.status_code, _http_exc.detail,
+        )
+        return _safe_error_twiml()
+    except Exception:
+        log.exception("twilio_dial_followup failed")
+        return _safe_error_twiml()
+
+
+async def _twilio_dial_followup_impl(
+    request: Request, db: DBSession
+) -> Response:
+    params = await _validate_twilio_signature(request)
+    provider = _twilio_provider()
+    call_id_raw = request.query_params.get("call_id", "")
+    dial_status = (params.get("DialCallStatus") or "").lower()
+    answered_by = (params.get("DialCallSid") or "").strip()
+    duration_raw = params.get("DialCallDuration") or "0"
+    recording_url = (params.get("RecordingUrl") or "").strip()
+
+    call = None
+    if call_id_raw.isdigit():
+        call = (
+            await db.execute(select(Call).where(Call.id == int(call_id_raw)))
+        ).scalar_one_or_none()
+
+    # Persist le recording URL sur l'appel parent (sera transcrit
+    # asynchrone par le webhook /twilio/voicemail-transcript si on
+    # branche un transcribe-callback).
+    if call is not None and recording_url:
+        call.recording_url = recording_url
+        await db.flush()
+
+    # SUCCÈS : quelqu'un a répondu → notifie tous les owners « pris
+    # en charge » pour éviter que d'autres rappellent inutilement.
+    if dial_status in ("answered", "completed"):
+        if call is not None:
+            await _notify_call_taken(db, call=call, duration_sec=int(duration_raw) if duration_raw.isdigit() else None)
+        # On ne renvoie pas de TwiML supplémentaire — la conversation
+        # est en cours côté humain.
+        return Response(content="<Response/>", media_type="application/xml")
+
+    # ÉCHEC : personne n'a décroché → message d'excuse + callback
+    # + push urgent à tous les owners pour rappel manuel ASAP.
+    if call is not None:
+        if call.intent != "urgence_locataire":
+            call.intent = call.intent or "callback"
+        call.lead_reason = (
+            (call.lead_reason or "") + " [NO ANSWER - RAPPEL REQUIS]"
+        ).strip()
+        await _create_lead_from_callback(db, call=call)
+        await _notify_callback_required(db, call=call)
+
+    lang = (call.lang if call else "fr-CA") or "fr-CA"
+    say = (
+        "Désolée, personne ne peut prendre votre appel pour l'instant. "
+        "Nous vous rappellerons le plus rapidement possible. Merci !"
+        if lang.startswith("fr")
+        else "Sorry, nobody can take your call right now. We will call "
+        "you back as soon as possible. Thank you!"
+    )
+    twiml = provider.build_say_and_hangup(say=say, lang=lang)
+    return Response(content=twiml, media_type="application/xml")
+
+
+async def _notify_call_taken(
+    db, *, call: "Call", duration_sec: Optional[int]
+) -> None:
+    """Quand un appel multi-cible a été pris par quelqu'un, on push
+    aux autres owners pour leur dire « inutile de rappeler »."""
+    try:
+        from app.integrations.webpush import push_to_users
+        from app.models.notification import Notification
+        from app.models.user import User
+
+        owners = (
+            await db.execute(
+                select(User.id).where(User.role.in_(("owner", "admin")))
+            )
+        ).scalars().all()
+        dur_str = f" ({duration_sec}s)" if duration_sec else ""
+        title = f"✅ Appel pris en charge — {call.from_e164}"
+        body = (
+            f"L'appel a été répondu{dur_str}. Aucun rappel nécessaire."
+        )
+        href = f"/telephonie?call={call.id}"
+        for uid in owners:
+            db.add(
+                Notification(
+                    user_id=uid,
+                    kind="call_handled",
+                    title=title,
+                    body=body,
+                    href=href,
+                )
+            )
+        await db.flush()
+        try:
+            await push_to_users(
+                db,
+                user_ids=list(owners),
+                title=title,
+                body=body,
+                href=href,
+                tag=f"handled-{call.id}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("call_handled push failed: %s", exc)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("_notify_call_taken failed: %s", exc)
+
+
+async def _notify_callback_required(db, *, call: "Call") -> None:
+    """Quand personne n'a décroché un transfert, on push à tous les
+    owners pour rappel manuel rapide. URGENT pour les urgences."""
+    try:
+        from app.integrations.webpush import push_to_users
+        from app.models.notification import Notification
+        from app.models.user import User
+
+        owners = (
+            await db.execute(
+                select(User.id).where(User.role.in_(("owner", "admin")))
+            )
+        ).scalars().all()
+        is_urgent = call.intent == "urgence_locataire"
+        title = (
+            f"🚨 RAPPEL URGENT — {call.from_e164}"
+            if is_urgent
+            else f"📞 Rappel à faire — {call.from_e164}"
+        )
+        body = (
+            f"Aucun de tes contacts n'a décroché. Rappel manuel requis. "
+            f"{call.lead_reason or ''}"
+        )[:500]
+        href = f"/telephonie?call={call.id}"
+        for uid in owners:
+            db.add(
+                Notification(
+                    user_id=uid,
+                    kind="callback_required",
+                    title=title,
+                    body=body,
+                    href=href,
+                )
+            )
+        await db.flush()
+        try:
+            await push_to_users(
+                db,
+                user_ids=list(owners),
+                title=title,
+                body=body,
+                href=href,
+                tag=f"callback-{call.id}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("callback_required push failed: %s", exc)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("_notify_callback_required failed: %s", exc)
 
 
 # ---------------------------------------------------------------------
