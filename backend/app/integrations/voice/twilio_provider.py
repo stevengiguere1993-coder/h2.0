@@ -307,6 +307,56 @@ class TwilioVoiceProvider(VoiceProvider):
             "</Response>"
         )
 
+    def build_say_and_dial_multi(
+        self,
+        *,
+        say: str,
+        lang: str,
+        targets_e164: list[str],
+        action_url: str,
+        timeout_sec: int = 20,
+        record: bool = False,
+    ) -> str:
+        """TwiML : la secrétaire annonce le transfert puis <Dial> ring
+        PLUSIEURS numéros en parallèle (premier qui décroche gagne, les
+        autres s'arrêtent). Si timeout/no-answer/busy, Twilio POST sur
+        `action_url` qui sert un TwiML de fallback (callback + notif).
+
+        Si `record=True`, on enregistre l'appel (record-from-answer-dual,
+        2 pistes) avec annonce de consentement parlée par Léa AVANT le
+        transfert. Loi 25 du Québec exige le consentement explicite.
+        """
+        voice = self._voice_for_lang(lang)
+        numbers_xml = "".join(
+            f"<Number>{xml_escape(t)}</Number>"
+            for t in targets_e164
+            if t
+        )
+        if not numbers_xml:
+            # Aucune cible — on ne déclenche pas un <Dial> vide, on
+            # bascule directement au fallback.
+            return (
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                "<Response>"
+                f'<Redirect method="POST">{xml_escape(action_url)}</Redirect>'
+                "</Response>"
+            )
+        record_attr = (
+            ' record="record-from-answer-dual" recordingStatusCallbackMethod="POST"'
+            if record
+            else ""
+        )
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            f'<Say voice="{voice}" language="{lang}">{xml_escape(say)}</Say>'
+            f'<Dial timeout="{int(timeout_sec)}"'
+            f' action="{xml_escape(action_url)}" method="POST"{record_attr}>'
+            f"{numbers_xml}"
+            "</Dial>"
+            "</Response>"
+        )
+
     def build_say_and_hangup(self, *, say: str, lang: str) -> str:
         """TwiML : la secrétaire dit quelque chose puis raccroche."""
         voice = self._voice_for_lang(lang)
