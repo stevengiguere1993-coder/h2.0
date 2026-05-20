@@ -425,14 +425,39 @@ async def _compute_finances(
 
     # Pull each punched employé's REAL cost (with CNESST + CCQ) and
     # total individually. C'est le coût qui charge réellement le projet.
+    #
+    # IMPORTANT — coût daté : on utilise le taux EN VIGUEUR à la date
+    # du punch (historique des salaires), pas le taux courant. Ainsi un
+    # changement de salaire ne réécrit pas la rentabilité passée.
+    from app.services.employe_rates import (
+        load_rate_periods,
+        resolve_real_cost,
+    )
+
+    punch_emp_ids = [p.employe_id for p in punches if p.employe_id]
+    rate_periods = await load_rate_periods(db, punch_emp_ids)
+    emp_cache: dict[int, Optional[Employe]] = {}
+
     actual_labour_cost = 0.0
     for p in punches:
-        emp = (
-            await db.execute(
-                select(Employe).where(Employe.id == p.employe_id)
-            )
-        ).scalar_one_or_none()
-        actual_labour_cost += float(p.hours or 0) * _real_cost_for_employe(emp)
+        emp = emp_cache.get(p.employe_id)
+        if p.employe_id not in emp_cache:
+            emp = (
+                await db.execute(
+                    select(Employe).where(Employe.id == p.employe_id)
+                )
+            ).scalar_one_or_none()
+            emp_cache[p.employe_id] = emp
+        punch_date = (
+            p.started_at.date() if p.started_at is not None else None
+        )
+        cost_per_hour = resolve_real_cost(
+            rate_periods.get(p.employe_id or -1, []),
+            punch_date,
+            emp,
+            float(avg_rate),
+        )
+        actual_labour_cost += float(p.hours or 0) * cost_per_hour
     actual_labour_cost = round(actual_labour_cost, 2)
 
     actual_total_cost = round(actual_material_cost + actual_labour_cost, 2)

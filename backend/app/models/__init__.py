@@ -35,6 +35,7 @@ from app.models.devlog_sous_traitant import DevlogSousTraitant  # noqa: F401
 from app.models.devlog_time_entry import DevlogTimeEntry  # noqa: F401
 from app.models.email_template import EmailTemplate
 from app.models.employe import Employe
+from app.models.employe_rate_history import EmployeRateHistory  # noqa: F401
 from app.models.entreprise import Entreprise, EntrepriseLink, EntreprisePartner  # noqa: F401
 from app.models.entreprise_finance import (  # noqa: F401
     EntrepriseFinanceSnapshot,
