@@ -33,6 +33,20 @@ type Employe = {
   created_at: string;
 };
 
+// Un palier de taux daté : s'applique à partir de `effective_date`.
+// CNESST / CCQ sont en DÉCIMAL ici (0.0216), comme côté backend.
+type RateHistoryEntry = {
+  id: number;
+  employe_id: number;
+  effective_date: string;
+  hourly_rate: number | string;
+  billing_rate: number | string | null;
+  cnesst_rate: number | string | null;
+  ccq_rate: number | string | null;
+  is_ccq: boolean;
+  note: string | null;
+};
+
 // Les taux CNESST / CCQ sont stockés en DÉCIMAL côté backend
 // (0.0216 = 2,16 %) mais saisis / affichés en POURCENTAGE côté UI.
 // Ces deux helpers font la conversion aux frontières (load / save).
@@ -47,6 +61,18 @@ function decimalFromPct(pct: string): number | null {
   const n = Number(pct);
   if (!pct || !Number.isFinite(n)) return null;
   return Math.round((n / 100) * 1e8) / 1e8;
+}
+
+function fmtRateDate(iso: string): string {
+  // iso = "YYYY-MM-DD" ; on construit la date en LOCAL pour éviter le
+  // décalage d'un jour que provoque new Date(iso) (interprété en UTC).
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(y, m - 1, d).toLocaleDateString("fr-CA", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 export default function EmployeDetailPage() {
@@ -80,6 +106,19 @@ export default function EmployeDetailPage() {
   const [ccqRate, setCcqRate] = useState("");
   const [employeurDUrl, setEmployeurDUrl] = useState("");
 
+  // Historique des taux (paliers datés).
+  const [rateHistory, setRateHistory] = useState<RateHistoryEntry[]>([]);
+  const [rateFormOpen, setRateFormOpen] = useState(false);
+  const [rateSaving, setRateSaving] = useState(false);
+  const [rateError, setRateError] = useState<string | null>(null);
+  const [rcDate, setRcDate] = useState("");
+  const [rcHourly, setRcHourly] = useState("");
+  const [rcBilling, setRcBilling] = useState("");
+  const [rcCnesst, setRcCnesst] = useState("");
+  const [rcCcq, setRcCcq] = useState("");
+  const [rcIsCcq, setRcIsCcq] = useState(false);
+  const [rcNote, setRcNote] = useState("");
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -108,6 +147,12 @@ export default function EmployeDetailPage() {
         setCnesstRate(pctFromDecimal(data.cnesst_rate));
         setCcqRate(pctFromDecimal(data.ccq_rate));
         setEmployeurDUrl(data.employeur_d_url || "");
+        const histRes = await authedFetch(
+          `/api/v1/employes/${id}/rate-history`
+        );
+        if (histRes.ok && !cancelled) {
+          setRateHistory((await histRes.json()) as RateHistoryEntry[]);
+        }
       } catch {
         if (!cancelled) setError("Employé introuvable.");
       } finally {
@@ -119,6 +164,15 @@ export default function EmployeDetailPage() {
       cancelled = true;
     };
   }, [id]);
+
+  async function reloadRateHistory() {
+    try {
+      const res = await authedFetch(`/api/v1/employes/${id}/rate-history`);
+      if (res.ok) setRateHistory((await res.json()) as RateHistoryEntry[]);
+    } catch {
+      /* silencieux : l'historique reste tel quel */
+    }
+  }
 
   const dirty = useMemo(() => {
     if (!emp) return false;
@@ -249,6 +303,81 @@ export default function EmployeDetailPage() {
     } catch {
       setDeleting(false);
       setError("Suppression échouée.");
+    }
+  }
+
+  async function addRateChange() {
+    if (!rcDate || !rcHourly) {
+      setRateError("La date et le taux horaire sont requis.");
+      return;
+    }
+    setRateSaving(true);
+    setRateError(null);
+    try {
+      const payload = {
+        effective_date: rcDate,
+        hourly_rate: Number(rcHourly),
+        billing_rate: rcBilling ? Number(rcBilling) : null,
+        cnesst_rate: decimalFromPct(rcCnesst),
+        ccq_rate: rcIsCcq ? decimalFromPct(rcCcq) : null,
+        is_ccq: rcIsCcq,
+        note: rcNote.trim() || null,
+      };
+      const res = await authedFetch(`/api/v1/employes/${id}/rate-history`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await explainError(res));
+      setRateHistory((await res.json()) as RateHistoryEntry[]);
+      // Le backend aligne le taux COURANT de l'employé sur ce palier :
+      // on resynchronise les champs Tarification pour rester cohérent.
+      try {
+        const fresh = await authedFetch(`/api/v1/employes/${id}`);
+        if (fresh.ok) {
+          const data = (await fresh.json()) as Employe;
+          setEmp(data);
+          setHourlyRate(
+            data.hourly_rate != null ? String(data.hourly_rate) : ""
+          );
+          setBillingRate(
+            data.billing_rate != null ? String(data.billing_rate) : ""
+          );
+          setIsCcq(Boolean(data.is_ccq));
+          setCnesstRate(pctFromDecimal(data.cnesst_rate));
+          setCcqRate(pctFromDecimal(data.ccq_rate));
+        }
+      } catch {
+        /* l'historique est à jour ; le taux courant se resync au reload */
+      }
+      setRcDate("");
+      setRcHourly("");
+      setRcBilling("");
+      setRcCnesst("");
+      setRcCcq("");
+      setRcIsCcq(false);
+      setRcNote("");
+      setRateFormOpen(false);
+    } catch (err) {
+      setRateError((err as Error).message);
+    } finally {
+      setRateSaving(false);
+    }
+  }
+
+  async function deleteRateChange(rateId: number) {
+    const ok = await confirm(
+      "Supprimer ce palier ? Le coût des punchs de cette période repassera au palier précédent."
+    );
+    if (!ok) return;
+    try {
+      const res = await authedFetch(
+        `/api/v1/employes/${id}/rate-history/${rateId}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error();
+      await reloadRateHistory();
+    } catch {
+      setRateError("Suppression du palier échouée.");
     }
   }
 
@@ -484,6 +613,234 @@ export default function EmployeDetailPage() {
                     </div>
                   ) : null}
                 </div>
+              </section>
+
+              <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                    Historique des taux
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRateError(null);
+                      setRateFormOpen((v) => !v);
+                    }}
+                    className="rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-medium text-accent-200 hover:border-accent-500"
+                  >
+                    {rateFormOpen
+                      ? "Annuler"
+                      : "+ Changer le taux à partir d'une date"}
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-white/50">
+                  Chaque palier s&apos;applique à partir de sa date. Les
+                  heures poinçonnées avant un changement gardent l&apos;ancien
+                  taux dans le calcul de rentabilité — le client, lui, ne voit
+                  aucune différence.
+                </p>
+
+                {rateFormOpen ? (
+                  <div className="mt-4 rounded-lg border border-brand-800 bg-brand-950/40 p-4">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <label htmlFor="rc_date" className="label">
+                          En vigueur à partir du
+                        </label>
+                        <input
+                          id="rc_date"
+                          type="date"
+                          value={rcDate}
+                          onChange={(e) => setRcDate(e.target.value)}
+                          className="input"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="rc_hourly" className="label">
+                          Taux horaire — coûtant (CAD)
+                        </label>
+                        <input
+                          id="rc_hourly"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={rcHourly}
+                          onChange={(e) => setRcHourly(e.target.value)}
+                          className="input"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="rc_billing" className="label">
+                          Taux facturable — client (CAD)
+                        </label>
+                        <input
+                          id="rc_billing"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={rcBilling}
+                          onChange={(e) => setRcBilling(e.target.value)}
+                          placeholder="Vide = aucun taux facturable"
+                          className="input"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="rc_cnesst" className="label">
+                          Prime CNESST (% — ex. 2,16)
+                        </label>
+                        <input
+                          id="rc_cnesst"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="100"
+                          value={rcCnesst}
+                          onChange={(e) => setRcCnesst(e.target.value)}
+                          placeholder="Ex. 2.16"
+                          className="input"
+                        />
+                      </div>
+                      <label className="flex items-center gap-2 pt-6 text-sm text-white/80">
+                        <input
+                          type="checkbox"
+                          checked={rcIsCcq}
+                          onChange={(e) => setRcIsCcq(e.target.checked)}
+                        />
+                        Employé CCQ à cette date
+                      </label>
+                      {rcIsCcq ? (
+                        <div>
+                          <label htmlFor="rc_ccq" className="label">
+                            Prime CCQ (% — ex. 22)
+                          </label>
+                          <input
+                            id="rc_ccq"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max="100"
+                            value={rcCcq}
+                            onChange={(e) => setRcCcq(e.target.value)}
+                            placeholder="Ex. 22"
+                            className="input"
+                          />
+                        </div>
+                      ) : null}
+                      <div className="sm:col-span-2">
+                        <label htmlFor="rc_note" className="label">
+                          Note (optionnel)
+                        </label>
+                        <input
+                          id="rc_note"
+                          type="text"
+                          value={rcNote}
+                          onChange={(e) => setRcNote(e.target.value)}
+                          placeholder="Ex. Augmentation annuelle, promotion…"
+                          className="input"
+                        />
+                      </div>
+                    </div>
+                    {rateError ? (
+                      <p className="mt-3 rounded border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                        {rateError}
+                      </p>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={addRateChange}
+                      disabled={rateSaving || !rcDate || !rcHourly}
+                      className="btn-accent mt-3 text-sm"
+                    >
+                      {rateSaving ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />{" "}
+                          Enregistrement…
+                        </>
+                      ) : (
+                        <>
+                          <Save className="mr-2 h-4 w-4" /> Enregistrer le
+                          palier
+                        </>
+                      )}
+                    </button>
+                  </div>
+                ) : null}
+
+                {rateHistory.length === 0 ? (
+                  <p className="mt-4 text-xs text-white/40">
+                    Aucun changement de taux documenté. Le taux courant
+                    s&apos;applique à toutes les heures poinçonnées.
+                  </p>
+                ) : (
+                  <div className="mt-4 overflow-x-auto">
+                    <table className="w-full min-w-[560px] text-left text-xs">
+                      <thead>
+                        <tr className="text-white/40">
+                          <th className="pb-2 pr-3 font-medium">À partir du</th>
+                          <th className="pb-2 pr-3 font-medium">Coûtant</th>
+                          <th className="pb-2 pr-3 font-medium">Facturable</th>
+                          <th className="pb-2 pr-3 font-medium">CNESST</th>
+                          <th className="pb-2 pr-3 font-medium">CCQ</th>
+                          <th className="pb-2 pr-3 font-medium">Coût réel</th>
+                          <th className="pb-2 pr-3 font-medium">Note</th>
+                          <th className="pb-2" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...rateHistory].reverse().map((r) => {
+                          const base = Number(r.hourly_rate || 0);
+                          const cn = Number(r.cnesst_rate || 0);
+                          const cq = r.is_ccq ? Number(r.ccq_rate || 0) : 0;
+                          const rc = base * (1 + cn + cq);
+                          return (
+                            <tr
+                              key={r.id}
+                              className="border-t border-brand-800 text-white/80"
+                            >
+                              <td className="py-2 pr-3 font-medium text-white">
+                                {fmtRateDate(r.effective_date)}
+                              </td>
+                              <td className="py-2 pr-3">
+                                {base.toFixed(2)} $
+                              </td>
+                              <td className="py-2 pr-3">
+                                {r.billing_rate != null
+                                  ? `${Number(r.billing_rate).toFixed(2)} $`
+                                  : "—"}
+                              </td>
+                              <td className="py-2 pr-3">
+                                {r.cnesst_rate != null
+                                  ? `${(cn * 100).toFixed(2)} %`
+                                  : "—"}
+                              </td>
+                              <td className="py-2 pr-3">
+                                {r.is_ccq && r.ccq_rate != null
+                                  ? `${(Number(r.ccq_rate) * 100).toFixed(2)} %`
+                                  : "—"}
+                              </td>
+                              <td className="py-2 pr-3 font-semibold text-amber-200">
+                                {rc.toFixed(2)} $
+                              </td>
+                              <td className="py-2 pr-3 text-white/50">
+                                {r.note || "—"}
+                              </td>
+                              <td className="py-2 pl-2 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => deleteRateChange(r.id)}
+                                  className="text-rose-300/70 hover:text-rose-300"
+                                  aria-label="Supprimer ce palier"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </section>
 
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
