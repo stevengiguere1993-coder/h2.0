@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation";
 import {
   BarChart3,
   Building2,
-  Calculator,
   Calendar,
   Home,
   Layers,
@@ -103,12 +102,7 @@ const PROSPECTION_SECTIONS: NavSection[] = [
         icon: Layers,
         minRole: "employee"
       },
-      {
-        href: "/prospection/analyse",
-        label: "Analyses financières",
-        icon: Calculator,
-        minRole: "employee"
-      },
+
       {
         href: "/prospection/dashboard",
         label: "Dashboard",
@@ -334,7 +328,9 @@ export function ProspectionSidebar({
         pathname === "/en/prospection"
       );
     }
-    return pathname.includes(href);
+    // Strip le préfixe locale : /fr/prospection/leads → /prospection/leads
+    const stripped = pathname.replace(/^\/(fr|en)/, "");
+    return stripped === href || stripped.startsWith(href + "/");
   }
 
   return (
