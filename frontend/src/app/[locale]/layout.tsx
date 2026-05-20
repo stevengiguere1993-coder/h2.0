@@ -108,7 +108,6 @@ export default async function LocaleLayout({ children, params }: Props) {
     logo: `${siteUrl}/logo.png`,
     image: `${siteUrl}/logo.png`,
     email: "info@immohorizon.com",
-    telephone: "+1-438-800-2979",
     priceRange: "$$",
     address: {
       "@type": "PostalAddress",

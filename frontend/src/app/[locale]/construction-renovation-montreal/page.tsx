@@ -7,7 +7,6 @@ import {
   Hammer,
   Home,
   MapPin,
-  Phone,
   ShieldCheck,
   Sparkles
 } from "lucide-react";
@@ -269,13 +268,6 @@ export default async function PillarPage({ params }: Props) {
                 Obtenir ma soumission gratuite
                 <ArrowRight className="h-4 w-4" />
               </Link>
-              <a
-                href="tel:+14388002979"
-                className="inline-flex items-center gap-2 rounded-xl border border-white/30 bg-white/5 px-5 py-3 font-semibold text-white hover:bg-white/10"
-              >
-                <Phone className="h-4 w-4" />
-                +1 438 800 2979
-              </a>
             </div>
             <ul className="mt-6 grid gap-2 text-sm text-white/80 sm:grid-cols-2">
               {[
