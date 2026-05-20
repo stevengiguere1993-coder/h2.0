@@ -2,7 +2,6 @@
 
 import { usePathname } from "next/navigation";
 
-import { LeaChatWidget } from "@/components/lea-chat-widget";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 
@@ -62,10 +61,6 @@ export function PublicChrome({ children }: { children: React.ReactNode }) {
       <SiteHeader />
       <main className="flex-1">{children}</main>
       <SiteFooter />
-      {/* Léa-Web — chat IA visible sur toutes les pages publiques
-          (landing, services, blog, etc.). Pas affiché sur les
-          portails internes ni les pages tokenisées. */}
-      <LeaChatWidget />
     </>
   );
 }
