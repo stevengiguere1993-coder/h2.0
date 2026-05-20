@@ -32,7 +32,6 @@ import { CallButton } from "@/components/call-button";
 import { CommunicationsTimeline } from "@/components/communications-timeline";
 import { ActivityTimeline } from "./_activity-timeline";
 import { AddressAutocomplete } from "./_address-autocomplete";
-import { AnalysesSection } from "./_analyses-section";
 import { ComparablesSection } from "./_comparables-section";
 import { PurchaseAgreementSection } from "./_purchase-agreement-section";
 import { UpcomingReminders } from "./_upcoming-reminders";
@@ -1395,8 +1394,6 @@ export default function ProspectionDetailPage() {
                 postalCode={lead.postal_code}
                 address={lead.address}
               />
-
-              <AnalysesSection leadId={id} />
 
               <PurchaseAgreementSection leadId={id} />
 
