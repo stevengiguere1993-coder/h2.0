@@ -381,9 +381,20 @@ export function ProspectionSidebar({
           {visibleSections.map((section, idx) => (
             <div key={section.label} className={idx === 0 ? "" : "mt-4"}>
               <div className="flex items-center justify-between px-2 py-1">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/80">
-                  {section.label}
-                </p>
+                {section.label === "Pipeline" ? (
+                  <Link
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    href={"/prospection/pipeline" as any}
+                    onClick={onClose}
+                    className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/80 transition hover:text-emerald-300"
+                  >
+                    {section.label}
+                  </Link>
+                ) : (
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/80">
+                    {section.label}
+                  </p>
+                )}
                 {section.label === "Pipeline" ? (
                   <button
                     type="button"
