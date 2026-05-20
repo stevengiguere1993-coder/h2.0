@@ -298,8 +298,8 @@ export function CommunicationsTimeline({
             </p>
           ) : null}
           <p className="mt-1 text-[10px] text-white/30">
-            Le SMS sera envoyé depuis le numéro Horizon (438 800 2979)
-            et apparaîtra dans la fiche.
+            Le SMS sera envoyé depuis le numéro Horizon et apparaîtra
+            dans la fiche.
           </p>
         </div>
       ) : null}

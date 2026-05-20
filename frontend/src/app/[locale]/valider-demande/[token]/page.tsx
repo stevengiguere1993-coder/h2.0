@@ -93,7 +93,7 @@ export default function ValidateRequestPage() {
       if (pr.ok) setPhotos((await pr.json()) as Photo[]);
     } catch {
       setError(
-        "Ce lien est introuvable ou a expiré. Si vous pensez qu'il y a une erreur, contactez-nous au 438 800 2979."
+        "Ce lien est introuvable ou a expiré. Si vous pensez qu'il y a une erreur, contactez-nous par courriel à info@immohorizon.com."
       );
     } finally {
       setLoading(false);
@@ -425,7 +425,7 @@ export default function ValidateRequestPage() {
         </section>
 
         <footer className="mt-8 text-center text-[11px] text-white/30">
-          Horizon Services Immobiliers · Montréal, Québec · 438 800 2979
+          Horizon Services Immobiliers · Montréal, Québec
         </footer>
       </div>
     </div>
