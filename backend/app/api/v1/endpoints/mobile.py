@@ -278,6 +278,25 @@ async def punch_start(
     db.add(p)
     await db.flush()
     await db.refresh(p)
+    # Journal d'activité : trace l'usage du système par l'employé
+    # (punch démarré depuis l'app mobile chantier).
+    from app.services.audit import log_action as _log_action
+
+    await _log_action(
+        db,
+        user=user,
+        action="punch.clock_in",
+        entity_type="punch",
+        entity_id=p.id,
+        details={
+            "employe_id": emp.id,
+            "employe": emp.full_name,
+            "project_id": p.project_id,
+            "task": p.task,
+            "started_at": p.started_at.isoformat(),
+            "source": "mobile",
+        },
+    )
     return OpenPunch.model_validate(p)
 
 
@@ -322,6 +341,24 @@ async def punch_stop(
             p.geolocation = end_geo[:128]
     await db.flush()
     await db.refresh(p)
+    # Journal d'activité : trace la fin du punch (clock-out mobile).
+    from app.services.audit import log_action as _log_action
+
+    await _log_action(
+        db,
+        user=user,
+        action="punch.clock_out",
+        entity_type="punch",
+        entity_id=p.id,
+        details={
+            "employe_id": emp.id,
+            "employe": emp.full_name,
+            "project_id": p.project_id,
+            "hours": float(p.hours or 0),
+            "ended_at": now.isoformat(),
+            "source": "mobile",
+        },
+    )
     return OpenPunch.model_validate(p)
 
 
