@@ -310,3 +310,206 @@ async def delete_employe(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Employé introuvable.")
     await db.delete(e)
     await db.flush()
+
+
+# --------------------------------------------------------------------------
+# Historique des taux horaires
+# --------------------------------------------------------------------------
+# Permet de changer le salaire d'un employé À PARTIR d'une date précise,
+# pour que les punchs passés gardent l'ancien taux dans le calcul de
+# rentabilité. La 1re fois qu'on ajoute une période, on crée aussi une
+# « baseline » avec les taux courants datée de l'embauche.
+
+from datetime import date as _Date  # noqa: E402
+
+from pydantic import BaseModel, ConfigDict, Field  # noqa: E402
+
+from app.models.employe_rate_history import EmployeRateHistory  # noqa: E402
+
+
+class RateHistoryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    employe_id: int
+    effective_date: _Date
+    hourly_rate: float
+    billing_rate: Optional[float]
+    cnesst_rate: Optional[float]
+    ccq_rate: Optional[float]
+    is_ccq: bool
+    note: Optional[str]
+
+
+class RateChangeCreate(BaseModel):
+    """Nouveau palier de taux à partir d'une date."""
+
+    effective_date: _Date
+    hourly_rate: float = Field(..., ge=0)
+    billing_rate: Optional[float] = Field(default=None, ge=0)
+    # CNESST / CCQ en DÉCIMAL (0.0216 = 2,16 %) — le frontend convertit.
+    cnesst_rate: Optional[float] = Field(default=None, ge=0, le=1)
+    ccq_rate: Optional[float] = Field(default=None, ge=0, le=1)
+    is_ccq: bool = False
+    note: Optional[str] = Field(default=None, max_length=255)
+
+
+@router.get(
+    "/{employe_id}/rate-history",
+    response_model=List[RateHistoryRead],
+    summary="Historique des taux d'un employé (du plus ancien au plus récent)",
+)
+async def list_rate_history(
+    employe_id: int, db: DBSession, _: CurrentUser
+) -> List[RateHistoryRead]:
+    rows = (
+        await db.execute(
+            select(EmployeRateHistory)
+            .where(EmployeRateHistory.employe_id == employe_id)
+            .order_by(EmployeRateHistory.effective_date.asc())
+        )
+    ).scalars().all()
+    return [RateHistoryRead.model_validate(r) for r in rows]
+
+
+@router.post(
+    "/{employe_id}/rate-history",
+    response_model=List[RateHistoryRead],
+    status_code=status.HTTP_201_CREATED,
+    summary="Ajoute un palier de taux + applique le nouveau taux à l'employé",
+)
+async def add_rate_change(
+    employe_id: int,
+    data: RateChangeCreate,
+    db: DBSession,
+    user: RequireManager,
+) -> List[RateHistoryRead]:
+    emp = (
+        await db.execute(select(Employe).where(Employe.id == employe_id))
+    ).scalar_one_or_none()
+    if emp is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Employé introuvable."
+        )
+
+    existing = (
+        await db.execute(
+            select(EmployeRateHistory)
+            .where(EmployeRateHistory.employe_id == employe_id)
+            .order_by(EmployeRateHistory.effective_date.asc())
+        )
+    ).scalars().all()
+
+    # 1er changement → on fige d'abord les taux COURANTS comme baseline,
+    # datée de l'embauche, pour que les punchs antérieurs au changement
+    # gardent l'ancien taux.
+    if not existing:
+        baseline_date = (
+            emp.created_at.date()
+            if getattr(emp, "created_at", None) is not None
+            else _Date(2000, 1, 1)
+        )
+        # La baseline ne doit jamais être postérieure au nouveau palier.
+        if baseline_date >= data.effective_date:
+            baseline_date = _Date(2000, 1, 1)
+        db.add(
+            EmployeRateHistory(
+                employe_id=employe_id,
+                effective_date=baseline_date,
+                hourly_rate=float(emp.hourly_rate or 0),
+                billing_rate=(
+                    float(emp.billing_rate)
+                    if emp.billing_rate is not None
+                    else None
+                ),
+                cnesst_rate=(
+                    float(emp.cnesst_rate)
+                    if emp.cnesst_rate is not None
+                    else None
+                ),
+                ccq_rate=(
+                    float(emp.ccq_rate)
+                    if emp.ccq_rate is not None
+                    else None
+                ),
+                is_ccq=bool(emp.is_ccq),
+                note="Taux d'origine (baseline)",
+            )
+        )
+
+    # Refus d'un doublon de date — sinon on aurait 2 paliers le même jour.
+    if any(r.effective_date == data.effective_date for r in existing):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Un palier de taux existe déjà à cette date.",
+        )
+
+    db.add(
+        EmployeRateHistory(
+            employe_id=employe_id,
+            effective_date=data.effective_date,
+            hourly_rate=data.hourly_rate,
+            billing_rate=data.billing_rate,
+            cnesst_rate=data.cnesst_rate,
+            ccq_rate=data.ccq_rate,
+            is_ccq=data.is_ccq,
+            note=data.note,
+        )
+    )
+
+    # Le nouveau palier devient le taux COURANT de l'employé (le champ
+    # Employe reste la « photo actuelle » utilisée par les prévisions).
+    emp.hourly_rate = data.hourly_rate
+    emp.billing_rate = data.billing_rate
+    emp.cnesst_rate = data.cnesst_rate
+    emp.ccq_rate = data.ccq_rate
+    emp.is_ccq = data.is_ccq
+    await db.flush()
+
+    from app.services.audit import log_action as _log_action
+
+    await _log_action(
+        db,
+        user=user,
+        action="employes.rate_changed",
+        entity_type="employes",
+        entity_id=employe_id,
+        details={
+            "employe": emp.full_name,
+            "effective_date": data.effective_date.isoformat(),
+            "hourly_rate": data.hourly_rate,
+            "billing_rate": data.billing_rate,
+        },
+    )
+
+    rows = (
+        await db.execute(
+            select(EmployeRateHistory)
+            .where(EmployeRateHistory.employe_id == employe_id)
+            .order_by(EmployeRateHistory.effective_date.asc())
+        )
+    ).scalars().all()
+    return [RateHistoryRead.model_validate(r) for r in rows]
+
+
+@router.delete(
+    "/{employe_id}/rate-history/{rate_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Supprime un palier de taux",
+)
+async def delete_rate_change(
+    employe_id: int, rate_id: int, db: DBSession, _: RequireManager
+) -> None:
+    row = (
+        await db.execute(
+            select(EmployeRateHistory).where(
+                EmployeRateHistory.id == rate_id,
+                EmployeRateHistory.employe_id == employe_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Palier de taux introuvable."
+        )
+    await db.delete(row)
+    await db.flush()
