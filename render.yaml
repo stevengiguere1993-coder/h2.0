@@ -24,6 +24,10 @@ services:
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
+      # Python 3.11 épinglé : le défaut Render (Python 3.14) n'a pas de
+      # wheel pillow-heif et le build échoue à la compilation native.
+      - key: PYTHON_VERSION
+        value: "3.11.11"
       - key: ENV
         value: production
       - key: DATABASE_URL
@@ -130,6 +134,10 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m app.jobs.seo_daily
     envVars:
+      # Python 3.11 épinglé : le défaut Render (Python 3.14) n'a pas de
+      # wheel pillow-heif et le build échoue à la compilation native.
+      - key: PYTHON_VERSION
+        value: "3.11.11"
       - key: ENV
         value: production
       - key: DATABASE_URL
@@ -155,6 +163,10 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m app.jobs.facture_reminders
     envVars:
+      # Python 3.11 épinglé : le défaut Render (Python 3.14) n'a pas de
+      # wheel pillow-heif et le build échoue à la compilation native.
+      - key: PYTHON_VERSION
+        value: "3.11.11"
       - key: ENV
         value: production
       - key: DATABASE_URL
@@ -187,6 +199,10 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m app.jobs.follow_up_reminders
     envVars:
+      # Python 3.11 épinglé : le défaut Render (Python 3.14) n'a pas de
+      # wheel pillow-heif et le build échoue à la compilation native.
+      - key: PYTHON_VERSION
+        value: "3.11.11"
       - key: ENV
         value: production
       - key: DATABASE_URL
@@ -211,6 +227,10 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m app.jobs.punch_auto_close
     envVars:
+      # Python 3.11 épinglé : le défaut Render (Python 3.14) n'a pas de
+      # wheel pillow-heif et le build échoue à la compilation native.
+      - key: PYTHON_VERSION
+        value: "3.11.11"
       - key: ENV
         value: production
       - key: DATABASE_URL
@@ -234,6 +254,10 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m app.jobs.kratos_problems_daily
     envVars:
+      # Python 3.11 épinglé : le défaut Render (Python 3.14) n'a pas de
+      # wheel pillow-heif et le build échoue à la compilation native.
+      - key: PYTHON_VERSION
+        value: "3.11.11"
       - key: ENV
         value: production
       - key: DATABASE_URL
