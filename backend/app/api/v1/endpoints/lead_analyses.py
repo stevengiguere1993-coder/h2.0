@@ -408,12 +408,22 @@ async def extract_and_create(
     src_text = (text or "").strip() or None
 
     now = datetime.now(timezone.utc)
+    warnings_notes: Optional[str] = None
+    if res.warnings:
+        wlines = ["Diagnostic de l'extraction :"]
+        wlines.extend(f"• {w}" for w in res.warnings)
+        warnings_notes = "\n".join(wlines)
     for idx, item in enumerate(res.data or []):
         kwargs = _map_extracted_to_lead(item)
         # Applique les défauts pour les champs manuels d'analyse
         # avant les valeurs extraites (les extraites ne touchent
         # jamais ces champs de toute façon).
         kwargs = {**DEFAULTS_NEW_ANALYSIS, **kwargs}
+        # Si warnings et qu'on n'a pas déjà de notes (ie. l'extraction
+        # n'a pas mis quelque chose dans `notes` via _map_extracted_to_lead),
+        # on stocke les warnings comme notes pour visibilité.
+        if warnings_notes and idx == 0 and "notes" not in kwargs:
+            kwargs["notes"] = warnings_notes
         rec = LeadAnalysis(
             status=LeadAnalysisStatus.A_ANALYSER.value,
             source_urls=src_url_str if idx == 0 else None,
@@ -442,10 +452,30 @@ async def extract_and_create(
 
         created_records.append(rec)
 
-    # Cas dégénéré : Claude n'a rien retourné mais il y avait des
-    # sources. On crée quand même une fiche vide pour ne pas perdre
-    # l'effort de l'utilisateur (il pourra remplir à la main).
+    # Cas dégénéré : l'extraction n'a rien retourné mais il y avait
+    # des sources. On crée quand même une fiche vide pour ne pas
+    # perdre l'effort de l'utilisateur (il pourra remplir à la main).
+    # On INJECTE les warnings dans `notes` pour que l'utilisateur voie
+    # le diagnostic directement dans la fiche (pas juste un panel
+    # ambre éphémère qui disparaît quand il ouvre le modal).
     if not created_records and (url_list or src_text or file_blobs):
+        warning_lines = []
+        if res.warnings:
+            warning_lines.append("Diagnostic de l'extraction :")
+            warning_lines.extend(f"• {w}" for w in res.warnings)
+        else:
+            warning_lines.append(
+                "Extraction n'a retourné aucun champ — aucun warning détaillé."
+            )
+        # Statut Tesseract pour diagnostic en cas d'image
+        if any("image" in (ct or "").lower() for _, ct, _ in file_blobs):
+            from app.services.lead_extraction import _check_tesseract_status
+            warning_lines.append("")
+            warning_lines.append(f"État serveur OCR : {_check_tesseract_status()}")
+        warning_lines.append("")
+        warning_lines.append("→ À compléter manuellement.")
+        notes_text = "\n".join(warning_lines)
+
         rec = LeadAnalysis(
             status=LeadAnalysisStatus.A_ANALYSER.value,
             source_urls=src_url_str,
@@ -453,7 +483,7 @@ async def extract_and_create(
             extracted_json=None,
             created_by_user_id=getattr(user, "id", None),
             **DEFAULTS_NEW_ANALYSIS,
-            notes="Extraction IA n'a retourné aucun champ — à compléter manuellement.",
+            notes=notes_text,
         )
         rec.created_at = now
         rec.updated_at = now
