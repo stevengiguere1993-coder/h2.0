@@ -1,0 +1,26 @@
+# Render apt packages — installés au build time sur le service backend h2-0.
+#
+# Render reconnait automatiquement un fichier nommé `Aptfile` à la
+# racine du service Python natif (rootDir: backend dans render.yaml)
+# et installe les paquets listés via apt-get avant le buildCommand.
+# Référence : https://render.com/docs/native-runtimes#apt-packages
+#
+# Stack OCR pour l'extraction de leads :
+#   - tesseract-ocr      : moteur OCR open source (Google), utilisé
+#                          par pytesseract pour reconnaître le texte
+#                          dans les images (screenshots de tableaux
+#                          Excel, photos de fiches MLS, captures de
+#                          courriels).
+#   - tesseract-ocr-fra  : pack de langue française pour Tesseract.
+#                          Phil opère au Québec — les documents sont
+#                          en français (taxes municipales, revenus
+#                          bruts, logements). Sans ce pack, Tesseract
+#                          force l'anglais et confond les accents.
+#   - poppler-utils      : binaires `pdftoppm` / `pdftocairo` requis
+#                          par pdf2image pour convertir un PDF en
+#                          images PIL page par page. Sans ça, le
+#                          fallback OCR sur PDFs scannés ne fonctionne
+#                          pas.
+tesseract-ocr
+tesseract-ocr-fra
+poppler-utils

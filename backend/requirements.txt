@@ -48,3 +48,25 @@ pypdf>=4.0.0,<6.0.0
 # l'utilisateur sur son téléphone pour les appels entrants, SMS et
 # urgences locataires, même quand l'app est fermée.
 pywebpush>=2.0.0,<3.0.0
+
+# OCR — extraction depuis images (screenshots de tableaux Excel,
+# photos de fiches MLS, captures d'écran) et PDFs scannés. Stack
+# 100% locale, sans aucun LLM externe :
+#   - pytesseract : binding Python vers le binaire Tesseract
+#   - Pillow      : manipulation d'images (déjà tiré par d'autres
+#                   paquets, on l'épingle ici explicitement)
+#   - pdf2image   : convertit un PDF en images PIL page par page
+#                   (fallback OCR pour PDFs scannés sans couche texte)
+#   - pillow-heif : support des photos HEIC/HEIF iPhone (iOS par
+#                   défaut depuis iOS 11). Sans ça, Pillow ne lit
+#                   pas les .heic et l'OCR ignore les photos prises
+#                   directement avec un iPhone.
+#
+# IMPORTANT : ces paquets Python dépendent de binaires système
+# (tesseract-ocr, tesseract-ocr-fra, poppler-utils) installés via
+# le fichier `Aptfile` à la racine du backend. Sans ces binaires,
+# pytesseract et pdf2image lèvent une exception au premier appel.
+pytesseract>=0.3.10,<1.0.0
+Pillow>=10.0.0,<12.0.0
+pdf2image>=1.16.0,<2.0.0
+pillow-heif>=0.13.0,<1.0.0

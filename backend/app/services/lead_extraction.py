@@ -18,7 +18,10 @@ Sources supportées :
                               adresse, code postal, évaluation,
                               taxes, courtier, typologie québécoise)
   - PDFs texte              → pypdf + regex texte
-  - Images / PDFs scannés   → warning (OCR non supporté localement)
+  - PDFs scannés            → fallback OCR Tesseract (pdf2image →
+                              images PIL → pytesseract page par page)
+  - Images (PNG/JPG/HEIC/…) → OCR Tesseract (pytesseract sur l'image
+                              décodée par Pillow / pillow-heif)
 
 API publique inchangée : `extract_lead_info(urls, text, files)` →
 `ExtractionResult(data, model_used, raw_response, warnings)`.
@@ -28,6 +31,10 @@ Autres services du repo qui restent sur leur LLM (hors scope de cette
 refonte) : `estimate-expenses` (Claude) et `debug-extract-url`
 (garde Gemini pour debug d'extraction). Les paquets
 `google-generativeai` et `anthropic` restent donc dans les deps.
+
+Stack OCR (binaires système installés via backend/Aptfile sur Render) :
+  - tesseract-ocr + tesseract-ocr-fra  → moteur OCR + pack français
+  - poppler-utils                      → pdftoppm pour pdf2image
 """
 
 from __future__ import annotations
@@ -36,6 +43,7 @@ import io
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -46,6 +54,157 @@ log = logging.getLogger(__name__)
 
 
 MODEL_TAG = "local-parser-v1"
+
+
+# ── Activation du support HEIC/HEIF (photos iPhone) ───────────────
+#
+# Depuis iOS 11, les iPhones prennent des photos en .heic par défaut.
+# Pillow standard ne sait pas lire ce format — il faut enregistrer un
+# opener via pillow-heif. L'import est paresseux pour ne pas planter
+# si le paquet est absent en local (dev), mais en prod (Render) il
+# est installé via requirements.txt.
+try:
+    from pillow_heif import register_heif_opener  # type: ignore
+
+    register_heif_opener()
+except ImportError:  # pragma: no cover — env dev sans pillow-heif
+    log.info("pillow-heif absent — support HEIC/HEIF désactivé")
+
+
+# Seuil sous lequel on considère qu'un PDF est "scanné" (couche texte
+# vide ou bruitée) et qu'on tombe en fallback OCR. 50 caractères c'est
+# moins qu'une ligne d'adresse + prix — n'importe quel PDF descriptif
+# réel dépasse largement.
+_PDF_OCR_FALLBACK_THRESHOLD = 50
+
+
+# Normalisations OCR fréquentes. Tesseract confond parfois certains
+# caractères sur du texte stylisé. Ces remplacements sont conservateurs
+# (ne touchent QUE des contextes ambigus) — on les applique APRÈS l'OCR
+# mais AVANT parse_text(), pour donner toutes les chances aux regex.
+_OCR_FIXES = [
+    # « S 1 234 » → « $ 1 234 » (Tesseract rend souvent $ comme S quand
+    # la police est fine). Conditionné à un nombre qui suit.
+    (re.compile(r"\bS\s+(\d[\d\s\.,]*)"), r"$ \1"),
+    # Caractères pipe verticaux en bordure de tableau → espace.
+    (re.compile(r"[|]+"), " "),
+    # Ligatures et caractères mal reconnus dans les nombres : « O »
+    # entre deux chiffres → « 0 » ; « l » entre deux chiffres → « 1 ».
+    (re.compile(r"(\d)\s*[Oo]\s*(\d)"), r"\1 0 \2"),
+    (re.compile(r"(\d)\s*[lI]\s*(\d)"), r"\1 1 \2"),
+]
+
+
+def _normalize_ocr_text(text: str) -> str:
+    """Applique des corrections best-effort au texte sorti par Tesseract.
+
+    Tesseract peut introduire des confusions sur du texte stylisé
+    (chiffres ambigus, dollar mal reconnu). On nettoie avant de passer
+    à parse_text() pour donner toutes les chances aux regex. Restera
+    toujours du bruit résiduel — c'est attendu, le parser est tolérant.
+    """
+    if not text:
+        return ""
+    out = text
+    for pattern, repl in _OCR_FIXES:
+        out = pattern.sub(repl, out)
+    return out
+
+
+def parse_image_ocr(image_bytes: bytes, filename: str = "image") -> str:
+    """OCR sur une image (PNG/JPEG/HEIC/etc.). Retourne le texte extrait.
+
+    Stack : Pillow décode l'image (HEIC géré via pillow-heif registré
+    au module load), puis pytesseract appelle le binaire Tesseract en
+    français+anglais. Phil reçoit souvent des screenshots de tableaux
+    Excel (texte propre, contraste fort) — Tesseract performe très
+    bien sur ce type d'input.
+
+    Retourne une chaîne vide si l'OCR échoue (image illisible, binaire
+    Tesseract absent, exception inattendue). Le caller émet alors un
+    warning explicite.
+    """
+    try:
+        import pytesseract  # type: ignore
+        from PIL import Image  # type: ignore
+    except ImportError as exc:
+        log.warning("OCR désactivé — paquet manquant : %s", exc)
+        return ""
+
+    t0 = time.perf_counter()
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        # Tesseract préfère RGB/L. Pour HEIC, RGBA, palette indexée, on
+        # convertit pour éviter "OSError: cannot write mode RGBA as JPEG"
+        # ou des résultats dégradés.
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        text = pytesseract.image_to_string(img, lang="fra+eng") or ""
+    except Exception as exc:  # noqa: BLE001
+        log.warning("OCR image '%s' a échoué : %s", filename, exc)
+        return ""
+    dt = time.perf_counter() - t0
+    log.info(
+        "OCR image '%s' : %d chars extraits en %.2fs",
+        filename,
+        len(text),
+        dt,
+    )
+    return text
+
+
+def parse_pdf_ocr(pdf_bytes: bytes, filename: str = "pdf") -> str:
+    """OCR sur un PDF scanné. Convertit en images puis OCR page par page.
+
+    Utilisé en fallback quand pypdf retourne une chaîne vide ou trop
+    courte (PDF purement scanné, sans couche texte). Nécessite le
+    binaire `pdftoppm` fourni par poppler-utils (installé via Aptfile
+    sur Render).
+
+    DPI 200 est un bon compromis qualité/vitesse pour du texte de
+    fiche MLS scannée. Au-delà la précision n'augmente plus mais le
+    temps explose (1-5 sec par page à 200 DPI, 10+ sec à 400 DPI).
+    """
+    try:
+        import pytesseract  # type: ignore
+        from pdf2image import convert_from_bytes  # type: ignore
+    except ImportError as exc:
+        log.warning("OCR PDF désactivé — paquet manquant : %s", exc)
+        return ""
+
+    t0 = time.perf_counter()
+    try:
+        images = convert_from_bytes(pdf_bytes, dpi=200)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "Conversion PDF→images (poppler) a échoué pour '%s' : %s",
+            filename,
+            exc,
+        )
+        return ""
+
+    texts: List[str] = []
+    for i, img in enumerate(images, start=1):
+        try:
+            page_text = pytesseract.image_to_string(img, lang="fra+eng") or ""
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "OCR PDF '%s' page %d a échoué : %s", filename, i, exc
+            )
+            continue
+        if page_text.strip():
+            texts.append(page_text)
+
+    full = "\n\n".join(texts)
+    dt = time.perf_counter() - t0
+    log.info(
+        "OCR PDF '%s' : %d pages, %d chars extraits en %.2fs",
+        filename,
+        len(images),
+        len(full),
+        dt,
+    )
+    return full
 
 
 # ── Compatibilité : exports utilisés par `debug-extract-url` ──────
@@ -1047,6 +1206,10 @@ def parse_pdf(blob: bytes) -> str:
 
 # Priorité décroissante : parser dédié (Centris/DuProprio/Realtor/Next)
 # l'emporte sur JSON-LD générique, qui l'emporte sur regex texte.
+# Les sources OCR (image-ocr, pdf-ocr) sont notées un cran plus bas que
+# le texte natif — Tesseract introduit du bruit, donc si on a un PDF
+# avec couche texte ET une image OCR pour le même immeuble, on garde
+# les valeurs natives.
 _PARSER_PRIORITY: Dict[str, int] = {
     "centris": 100,
     "duproprio": 100,
@@ -1055,6 +1218,8 @@ _PARSER_PRIORITY: Dict[str, int] = {
     "jsonld": 70,
     "text": 50,
     "pdf": 50,
+    "image-ocr": 40,
+    "pdf-ocr": 40,
 }
 
 
@@ -1152,7 +1317,12 @@ async def extract_lead_info(
          puis regex texte.
       2. Le texte libre passe par ``parse_text``.
       3. Les fichiers PDF passent par ``pypdf`` puis ``parse_text``.
-      4. Les images et PDFs scannés génèrent un warning (OCR à venir).
+         Si la couche texte est vide ou < 50 chars (PDF scanné), on
+         tombe en fallback OCR Tesseract (``parse_pdf_ocr``).
+      4. Les fichiers image passent par OCR Tesseract direct
+         (``parse_image_ocr``) puis ``parse_text`` sur le texte OCR
+         normalisé. Couvre les screenshots de tableaux Excel, photos
+         de fiches MLS, captures de courriels, photos HEIC iPhone.
       5. On fusionne les résultats selon la priorité parser dédié >
          JSON-LD > texte. Si plusieurs sources ont des adresses
          différentes, on crée plusieurs entrées de sortie.
@@ -1237,27 +1407,66 @@ async def extract_lead_info(
     for filename, content_type, blob in files or []:
         ct = (content_type or "").lower()
         if ct == "application/pdf" or filename.lower().endswith(".pdf"):
+            # 1) Couche texte native via pypdf (PDFs descriptifs MLS,
+            #    courtiers qui exportent depuis Centris, etc.).
             pdf_text = parse_pdf(blob)
+            ocr_used = False
+            if (
+                not pdf_text.strip()
+                or len(pdf_text.strip()) < _PDF_OCR_FALLBACK_THRESHOLD
+            ):
+                # 2) PDF probablement scanné (pas de couche texte ou
+                #    presque rien). Fallback OCR Tesseract page par page.
+                log.info(
+                    "PDF '%s' : couche texte vide/courte (%d chars), "
+                    "fallback OCR Tesseract",
+                    filename,
+                    len(pdf_text.strip()),
+                )
+                ocr_text = parse_pdf_ocr(blob, filename=filename)
+                if ocr_text.strip():
+                    pdf_text = _normalize_ocr_text(ocr_text)
+                    ocr_used = True
             if not pdf_text.strip():
                 warnings.append(
-                    f"PDF « {filename} » : aucun texte extractible "
-                    "(PDF probablement scanné — OCR non supporté en "
-                    "mode local, à venir)"
+                    f"PDF « {filename} » : ni texte natif ni OCR "
+                    "exploitable (PDF illisible ou binaires Tesseract/"
+                    "poppler indisponibles sur le serveur)"
                 )
                 continue
             td = parse_text(pdf_text)
             if td:
-                extracted.append(("pdf", _addr_key(td), td))
+                tag = "pdf-ocr" if ocr_used else "pdf"
+                extracted.append((tag, _addr_key(td), td))
             else:
                 warnings.append(
-                    f"PDF « {filename} » : texte extrait mais aucun "
+                    f"PDF « {filename} » : texte extrait "
+                    f"({'OCR' if ocr_used else 'natif'}) mais aucun "
                     "champ reconnaissable"
                 )
-        elif ct.startswith("image/"):
-            warnings.append(
-                f"Image « {filename} » : extraction depuis images "
-                "non supportée en mode local (OCR à venir)"
-            )
+        elif ct.startswith("image/") or filename.lower().endswith(
+            (".png", ".jpg", ".jpeg", ".heic", ".heif", ".webp", ".tiff", ".bmp")
+        ):
+            # Screenshot de tableau Excel, photo de fiche MLS, capture
+            # de courriel, photo HEIC iPhone, etc. → OCR Tesseract.
+            ocr_text = parse_image_ocr(blob, filename=filename)
+            if not ocr_text.strip():
+                warnings.append(
+                    f"Image « {filename} » : OCR n'a rien extrait "
+                    "(image floue, texte non reconnu, ou binaire "
+                    "Tesseract indisponible sur le serveur)"
+                )
+                continue
+            normalized = _normalize_ocr_text(ocr_text)
+            td = parse_text(normalized)
+            if td:
+                extracted.append(("image-ocr", _addr_key(td), td))
+            else:
+                warnings.append(
+                    f"Image « {filename} » : OCR a produit du texte "
+                    "mais aucun champ reconnaissable (essayer une "
+                    "image plus nette ou recadrer sur le tableau)"
+                )
         else:
             warnings.append(
                 f"Fichier « {filename} » : type {ct or 'inconnu'} "
