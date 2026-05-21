@@ -1133,6 +1133,7 @@ function LeadDetailModal({
                   />
                   <FieldNumber
                     label="Prix demandé ($)"
+                    name="asking_price"
                     value={data.asking_price}
                     onSave={(v) => patchField("asking_price", v)}
                     required
@@ -1145,6 +1146,7 @@ function LeadDetailModal({
                   />
                   <FieldNumber
                     label="Nb logements"
+                    name="nb_logements"
                     value={data.nb_logements}
                     onSave={(v) => patchField("nb_logements", v)}
                     required
@@ -1156,6 +1158,7 @@ function LeadDetailModal({
                   />
                   <FieldNumber
                     label="Revenus bruts ($/an)"
+                    name="revenus_bruts"
                     value={data.revenus_bruts}
                     onSave={(v) => patchField("revenus_bruts", v)}
                     required
@@ -1169,6 +1172,7 @@ function LeadDetailModal({
                   />
                   <FieldNumber
                     label="Taxes municipales ($/an)"
+                    name="taxes_municipales"
                     value={data.taxes_municipales}
                     onSave={(v) => patchField("taxes_municipales", v)}
                     required
@@ -1178,6 +1182,7 @@ function LeadDetailModal({
                   />
                   <FieldNumber
                     label="Taxes scolaires ($/an)"
+                    name="taxes_scolaires"
                     value={data.taxes_scolaires}
                     onSave={(v) => patchField("taxes_scolaires", v)}
                     required
@@ -1187,6 +1192,7 @@ function LeadDetailModal({
                   />
                   <FieldNumber
                     label="Assurances ($/an)"
+                    name="assurances"
                     value={data.assurances}
                     onSave={(v) => patchField("assurances", v)}
                     required
@@ -1196,6 +1202,7 @@ function LeadDetailModal({
                   />
                   <FieldNumber
                     label="Énergie ($/an)"
+                    name="energie"
                     value={data.energie}
                     onSave={(v) => patchField("energie", v)}
                     format="money"
@@ -1465,34 +1472,62 @@ function AttachmentThumb({
   );
 }
 
+// Champs effectivement consommés par les fonctions compute_* de
+// l'analyse financière (backend/app/services/lead_analysis_finance.py).
+// Quand l'un de ces champs est vide, on surligne son label en ambre
+// pour signaler que le calcul sera incomplet, sans bruit visuel sur
+// les autres champs facultatifs.
+//
+// Les noms ci-dessous sont les noms tels qu'utilisés côté formulaire
+// (prop `name` passée à FieldText / FieldNumber), pas les noms du
+// modèle backend (certains diffèrent : asking_price ↔ prix_achat,
+// nb_logements ↔ nombre_logements, revenus_bruts ↔ revenus_annuels).
+const CHAMPS_NECESSAIRES_CALC: ReadonlySet<string> = new Set([
+  "asking_price",
+  "nb_logements",
+  "revenus_bruts",
+  "taxes_municipales",
+  "taxes_scolaires",
+  "assurances",
+  "energie",
+  "typology_json"
+]);
+
 function FieldText({
   label,
   value,
   onSave,
-  required
+  required,
+  name
 }: {
   label: string;
   value: string | null;
   onSave: (v: string | null) => void;
   required?: boolean;
+  /** Nom du champ côté formulaire — utilisé pour décider si le
+   *  surlignage ambre « champ nécessaire aux calculs » doit
+   *  s'appliquer quand la valeur est vide. */
+  name?: string;
 }) {
   const [v, setV] = useState(value || "");
   useEffect(() => setV(value || ""), [value]);
   const isEmpty = !value;
   const missingRequired = isEmpty && required;
+  const necessaryForCalc =
+    isEmpty && !missingRequired && !!name && CHAMPS_NECESSAIRES_CALC.has(name);
   return (
     <div>
       <label
         className={`text-[10px] uppercase tracking-wider ${
           missingRequired
             ? "text-rose-400 font-semibold"
-            : isEmpty
+            : necessaryForCalc
             ? "text-amber-600 dark:text-amber-300/80"
             : "text-white/50"
         }`}
       >
         {label}
-        {missingRequired ? " · OBLIGATOIRE" : isEmpty ? " ⚠" : ""}
+        {missingRequired ? " · OBLIGATOIRE" : ""}
       </label>
       <input
         type="text"
@@ -1546,7 +1581,8 @@ function FieldNumber({
   required,
   onEstimate,
   estimating,
-  format = "plain"
+  format = "plain",
+  name
 }: {
   label: string;
   value: number | null;
@@ -1562,6 +1598,10 @@ function FieldNumber({
    *  - "percent" : « 4.00 % »
    *  - "plain"   : valeur brute (défaut) */
   format?: "money" | "percent" | "plain";
+  /** Nom du champ côté formulaire — utilisé pour décider si le
+   *  surlignage ambre « champ nécessaire aux calculs » doit
+   *  s'appliquer quand la valeur est vide. */
+  name?: string;
 }) {
   const [focused, setFocused] = useState(false);
   const [v, setV] = useState(value != null ? String(value) : "");
@@ -1570,6 +1610,8 @@ function FieldNumber({
   }, [value, focused]);
   const isEmpty = value == null;
   const missingRequired = isEmpty && required;
+  const necessaryForCalc =
+    isEmpty && !missingRequired && !!name && CHAMPS_NECESSAIRES_CALC.has(name);
 
   // Texte affiché quand le champ n'est pas focus.
   const displayed = (() => {
@@ -1587,13 +1629,13 @@ function FieldNumber({
           className={`text-[10px] uppercase tracking-wider ${
             missingRequired
               ? "text-rose-400 font-semibold"
-              : isEmpty
+              : necessaryForCalc
               ? "text-amber-600 dark:text-amber-300/80"
               : "text-white/50"
           }`}
         >
           {label}
-          {missingRequired ? " · OBLIGATOIRE" : isEmpty ? " ⚠" : ""}
+          {missingRequired ? " · OBLIGATOIRE" : ""}
         </label>
         {isEmpty && onEstimate ? (
           <button
