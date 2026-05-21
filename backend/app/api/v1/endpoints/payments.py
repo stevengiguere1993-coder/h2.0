@@ -10,10 +10,11 @@ auto-marked as PAID (paid_at = date of the last payment). Deleting or
 lowering payments reverts the status back to SENT.
 """
 
+import logging
 from datetime import date, datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
@@ -22,7 +23,76 @@ from app.models.facture import Facture, FactureStatus
 from app.models.payment import Payment, PaymentMethod
 
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/factures", tags=["payments"])
+
+
+async def _send_statement_email(facture_id: int) -> None:
+    """Envoie l'état de compte du projet au client, en arrière-plan.
+    Best-effort : silencieux s'il n'y a pas de projet, pas de courriel
+    client, ou si le mailer n'est pas configuré."""
+    from app.db.session import AsyncSessionLocal
+    from app.integrations.email_graph import EmailAttachment, get_mailer
+    from app.models.client import Client
+    from app.services.facture_pdf import render_statement_pdf
+
+    try:
+        async with AsyncSessionLocal() as db:
+            fa = (
+                await db.execute(
+                    select(Facture).where(Facture.id == facture_id)
+                )
+            ).scalar_one_or_none()
+            if fa is None or fa.project_id is None or fa.client_id is None:
+                return
+            client = (
+                await db.execute(
+                    select(Client).where(Client.id == fa.client_id)
+                )
+            ).scalar_one_or_none()
+            if client is None or not client.email:
+                return
+            rendered = await render_statement_pdf(db, fa.project_id)
+            if rendered is None:
+                return
+            _project, pdf_bytes = rendered
+            mailer = get_mailer()
+            if not mailer.ready:
+                log.warning(
+                    "Envoi état de compte ignoré : mailer non configuré"
+                )
+                return
+            is_en = (getattr(client, "language", "fr") or "fr") == "en"
+            subject = (
+                "Account statement — Horizon Services Immobiliers"
+                if is_en
+                else "État de compte — Horizon Services Immobiliers"
+            )
+            body = (
+                "<p>Hello,</p><p>Please find attached the current "
+                "account statement for your project.</p>"
+                if is_en
+                else "<p>Bonjour,</p><p>Vous trouverez ci-joint "
+                "l'état de compte à jour de votre projet.</p>"
+            )
+            await mailer.send(
+                to=[client.email],
+                subject=subject,
+                html_body=body,
+                attachments=[
+                    EmailAttachment(
+                        name="etat-de-compte.pdf",
+                        content_bytes=pdf_bytes,
+                        content_type="application/pdf",
+                    )
+                ],
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "Envoi état de compte échoué (facture %s) : %s",
+            facture_id,
+            exc,
+        )
 
 
 class PaymentCreate(BaseModel):
@@ -34,6 +104,9 @@ class PaymentCreate(BaseModel):
     paid_at: date
     reference: Optional[str] = Field(default=None, max_length=128)
     notes: Optional[str] = None
+    # Si vrai, envoie l'état de compte du projet au client par courriel
+    # juste après l'enregistrement du paiement.
+    send_statement: bool = False
 
 
 class PaymentUpdate(BaseModel):
@@ -131,6 +204,7 @@ async def create_payment(
     facture_id: int,
     data: PaymentCreate,
     db: DBSession,
+    background: BackgroundTasks,
     _: CurrentUser,
 ) -> PaymentRead:
     fa = await _ensure_facture(db, facture_id)
@@ -147,6 +221,10 @@ async def create_payment(
     await db.refresh(p)
     await _recompute_facture_status(db, fa)
     await db.flush()
+    # Envoi optionnel de l'état de compte au client (en arrière-plan
+    # pour ne pas ralentir la réponse).
+    if data.send_statement:
+        background.add_task(_send_statement_email, facture_id)
     return PaymentRead.model_validate(p)
 
 

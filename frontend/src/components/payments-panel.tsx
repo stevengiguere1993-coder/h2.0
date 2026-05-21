@@ -253,6 +253,7 @@ function PaymentModal({
   const [paidAt, setPaidAt] = useState(today());
   const [reference, setReference] = useState("");
   const [notes, setNotes] = useState("");
+  const [sendStatement, setSendStatement] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -273,7 +274,8 @@ function PaymentModal({
             method,
             paid_at: paidAt,
             reference: reference.trim() || null,
-            notes: notes.trim() || null
+            notes: notes.trim() || null,
+            send_statement: sendStatement
           })
         }
       );
@@ -393,6 +395,25 @@ function PaymentModal({
               className="input"
             />
           </div>
+
+          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-brand-800 bg-brand-900/40 p-3 hover:border-accent-500/40">
+            <input
+              type="checkbox"
+              checked={sendStatement}
+              onChange={(e) => setSendStatement(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span className="text-sm">
+              <span className="block font-medium text-white">
+                Envoyer l&apos;état de compte au client
+              </span>
+              <span className="mt-0.5 block text-[11px] text-white/60">
+                Le relevé à jour (factures, paiements, solde) est
+                expédié par courriel au client après l&apos;enregistrement
+                du paiement.
+              </span>
+            </span>
+          </label>
 
           {error ? (
             <p className="text-sm text-rose-300">{error}</p>
