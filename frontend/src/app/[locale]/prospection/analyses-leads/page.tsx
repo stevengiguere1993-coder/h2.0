@@ -27,6 +27,7 @@ import {
   LeadAnalysisCard,
   type LeadAnalysisCardBadge
 } from "@/components/lead-analysis-card";
+import { PillPicker } from "@/components/task-pills";
 import { useProspectionLayout } from "../layout";
 import { Link, useRouter } from "@/i18n/navigation";
 
