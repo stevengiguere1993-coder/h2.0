@@ -1,11 +1,17 @@
-"""Extraction d'infos immeuble — 100% locale, sans aucun LLM externe.
+"""Extraction d'infos immeuble — hybride Gemini + parser local.
 
-Cette refonte retire complètement les appels à Gemini (et à Claude
-pour ce service précis). Avant : on payait/utilisait un quota Gemini
-gratuit qui plafonnait à ~50 req/jour sur le tier free récent (cf.
-erreur HTTP 429 vue en prod). Maintenant : tout est traité par des
-parsers Python purs, sans rate limit, sans coût, sans dépendance
-externe sur le critical path.
+Pipeline en deux étages :
+  1. PRIMAIRE — Gemini (palier gratuit). Il *comprend* la fiche et
+     extrait correctement typologie, revenus, dépenses, etc. — là où
+     le regex se trompe (année prise pour un montant, logements
+     mal comptés…).
+  2. SECOURS — parser Python pur (regex + OCR Tesseract) si Gemini
+     est indisponible : clé absente, quota atteint, panne réseau.
+
+L'extraction fonctionne donc TOUJOURS, même hors-ligne : un quota
+épuisé devient un repli silencieux sur le parser local, jamais une
+erreur « maximum atteint ». `model_used` indique le moteur retenu
+(`gemini-2.0-flash` ou `local-parser-v1`).
 
 Sources supportées :
   - URLs Centris.ca         → parser CSS spécifique (BeautifulSoup)
@@ -39,6 +45,7 @@ Stack OCR (binaires système installés via backend/Aptfile sur Render) :
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import logging
@@ -49,6 +56,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx
+
+from app.core.config import settings
 
 log = logging.getLogger(__name__)
 
@@ -287,6 +296,102 @@ async def _fetch_url_text(url: str) -> str:
         stripped = stripped[:35_000] + "\n[…tronqué]"
     parts.append(f"[Texte de la page]\n{stripped}")
     return "\n\n".join(parts)
+
+
+# ── Extraction IA (Gemini) — primaire du pipeline hybride ─────────
+#
+# Le parser regex local est rapide et autonome mais fragile : il
+# confond l'année et le montant des taxes, rate la typologie, etc.
+# Gemini *comprend* la fiche et extrait correctement. On l'utilise
+# donc en PRIMAIRE, avec le parser local en filet de secours si
+# Gemini est indisponible (clé absente, quota atteint, panne réseau).
+# L'extraction fonctionne ainsi toujours, même hors-ligne.
+
+_GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
+
+
+async def _gemini_extract(
+    material: str,
+    images: List[Tuple[str, bytes]],
+) -> Optional[List[Dict[str, Any]]]:
+    """Extrait les champs immeuble via Gemini. Retourne une liste de
+    dicts au schéma `SCHEMA_GUIDE`, ou ``None`` si Gemini est
+    indisponible (l'appelant retombe alors sur le parser local)."""
+    api_key = (getattr(settings, "gemini_api_key", None) or "").strip()
+    if not api_key:
+        return None
+    if not material.strip() and not images:
+        return None
+
+    user_parts: List[Dict[str, Any]] = [{"text": SCHEMA_GUIDE}]
+    if material.strip():
+        user_parts.append(
+            {"text": "Sources à analyser :\n\n" + material[:60_000]}
+        )
+    for mime, blob in images[:4]:  # garde-fou : 4 images max
+        if not blob:
+            continue
+        user_parts.append(
+            {
+                "inlineData": {
+                    "mimeType": mime or "image/png",
+                    "data": base64.standard_b64encode(blob).decode("ascii"),
+                }
+            }
+        )
+
+    payload = {
+        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": [{"role": "user", "parts": user_parts}],
+        "generationConfig": {
+            "temperature": 0,
+            "responseMimeType": "application/json",
+            "maxOutputTokens": 4096,
+        },
+    }
+    url = f"{_GEMINI_BASE}/models/{EXTRACTION_MODEL}:generateContent"
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                url, params={"key": api_key}, json=payload
+            )
+        if resp.status_code == 429:
+            log.warning("Gemini : quota atteint — fallback parser local")
+            return None
+        if resp.status_code >= 400:
+            log.warning(
+                "Gemini extraction HTTP %s : %s",
+                resp.status_code,
+                resp.text[:300],
+            )
+            return None
+        body = resp.json()
+        text = (
+            (body.get("candidates") or [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
+        )
+        if not text.strip():
+            return None
+        parsed = json.loads(text)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Gemini extraction échouée : %s", exc)
+        return None
+
+    items = parsed if isinstance(parsed, list) else [parsed]
+    out: List[Dict[str, Any]] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        # Retire les champs vides — `null`, "", "null" — pour ne pas
+        # écraser inutilement (le formulaire reste blanc si absent).
+        clean = {
+            k: v for k, v in it.items() if v not in (None, "", "null")
+        }
+        if clean:
+            out.append(clean)
+    return out or None
 
 
 # ── Dataclasses publiques ─────────────────────────────────────────
@@ -1344,6 +1449,9 @@ async def extract_lead_info(
     warnings: List[str] = []
     # Liste de tuples (parser_tag, addr_key, data_dict).
     extracted: List[Tuple[str, str, Dict[str, Any]]] = []
+    # Matériel brut consolidé pour l'extraction IA primaire (Gemini).
+    gemini_material_parts: List[str] = []
+    gemini_images: List[Tuple[str, bytes]] = []
 
     # ── URLs ───
     for u in urls or []:
@@ -1354,6 +1462,9 @@ async def extract_lead_info(
         if fetch_err:
             warnings.append(f"URL {u} : {fetch_err}")
             continue
+        gemini_material_parts.append(
+            f"[Page web : {u}]\n{_strip_html(html)[:40_000]}"
+        )
 
         domain = urlparse(u).netloc
         parser_kind = _parser_for_domain(domain)
@@ -1409,6 +1520,7 @@ async def extract_lead_info(
 
     # ── Texte libre ───
     if text and text.strip():
+        gemini_material_parts.append(f"[Texte fourni]\n{text.strip()}")
         td = parse_text(text)
         if td:
             extracted.append(("text", _addr_key(td), td))
@@ -1448,6 +1560,9 @@ async def extract_lead_info(
                     "poppler indisponibles sur le serveur)"
                 )
                 continue
+            gemini_material_parts.append(
+                f"[PDF : {filename}]\n{pdf_text[:40_000]}"
+            )
             td = parse_text(pdf_text)
             if td:
                 tag = "pdf-ocr" if ocr_used else "pdf"
@@ -1463,6 +1578,10 @@ async def extract_lead_info(
         elif ct.startswith("image/") or filename.lower().endswith(
             (".png", ".jpg", ".jpeg", ".heic", ".heif", ".webp", ".tiff", ".bmp")
         ):
+            # Image transmise telle quelle à Gemini (lecture native,
+            # bien meilleure que l'OCR). L'OCR reste calculé comme
+            # filet de secours du parser local.
+            gemini_images.append((ct or "image/png", blob))
             # Screenshot de tableau Excel, photo de fiche MLS, capture
             # de courriel, photo HEIC iPhone, etc. → OCR Tesseract.
             ocr_text = parse_image_ocr(blob, filename=filename)
@@ -1494,6 +1613,28 @@ async def extract_lead_info(
                 f"Fichier « {filename} » : type {ct or 'inconnu'} "
                 "non supporté"
             )
+
+    # ── Extraction IA (Gemini) — PRIMAIRE ───
+    # Qualité nettement supérieure au parser regex. Si Gemini répond,
+    # on retourne son résultat. Sinon (clé absente, quota, panne) on
+    # retombe sur le parser local ci-dessous.
+    gemini_material = "\n\n".join(
+        p for p in gemini_material_parts if p.strip()
+    )
+    gemini_data = await _gemini_extract(gemini_material, gemini_images)
+    if gemini_data:
+        return ExtractionResult(
+            data=gemini_data,
+            model_used=EXTRACTION_MODEL,
+            warnings=warnings,
+        )
+
+    # ── Fallback : parser local (regex + OCR) ───
+    if (getattr(settings, "gemini_api_key", None) or "").strip():
+        warnings.append(
+            "Extraction IA indisponible (quota atteint ou hors-ligne) "
+            "— extraction locale utilisée, vérifiez bien les champs."
+        )
 
     if not extracted:
         if not warnings:
