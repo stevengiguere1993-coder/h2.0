@@ -135,6 +135,7 @@ async def init_db() -> None:
             ("clients", "address", "VARCHAR(500)"),
             ("clients", "notes", "TEXT"),
             ("clients", "contact_request_id", "INTEGER"),
+            ("clients", "language", "VARCHAR(8) NOT NULL DEFAULT 'fr'"),
             ("achats", "receipt_image", "BYTEA"),
             ("achats", "receipt_image_content_type", "VARCHAR(100)"),
             ("factures", "last_reminder_at", "TIMESTAMP WITH TIME ZONE"),
