@@ -23,10 +23,12 @@ from app.models.payment import Payment
 from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.project_phase import ProjectPhase
+from app.models.project_subcontractor_contract import (
+    ProjectSubcontractorContract,
+)
 from app.models.punch import Punch
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
-from app.models.sous_traitant import SousTraitant
 from app.models.user import User
 
 
@@ -290,31 +292,57 @@ async def _compute_finances(
                         pa.sous_traitant_id
                     )
 
+        # Contrats sous-traitants du projet. Seuls les sous-traitants
+        # facturés À L'HEURE (billing_mode = flat_hourly) comptent dans
+        # les heures de main-d'œuvre planifiées. Un sous-traitant au
+        # FORFAIT (lump_sum) ou en markup n'ajoute aucune heure : son
+        # coût est couvert par son contrat, pas par notre planification.
+        st_billing: dict[int, str] = {}
+        st_hourly_rate: dict[int, float] = {}
+        ctr_rows = (
+            await db.execute(
+                select(ProjectSubcontractorContract).where(
+                    ProjectSubcontractorContract.project_id == project_id
+                )
+            )
+        ).scalars().all()
+        for c in ctr_rows:
+            st_billing[c.sous_traitant_id] = c.billing_mode
+            if c.flat_hourly_rate is not None:
+                st_hourly_rate[c.sous_traitant_id] = float(
+                    c.flat_hourly_rate
+                )
+
         for ph in phases:
             days = int(ph.duration_days or 0)
             if days <= 0:
                 continue
             hours = days * 8
 
-            # Union de TOUS les assignees de la phase :
-            #   - legacy single (assignee_employe_id / sous_traitant_id)
-            #   - N-M moderne (ProjectPhaseAssignee)
+            # Union de TOUS les assignees de la phase (legacy single +
+            # N-M moderne ProjectPhaseAssignee).
             emp_ids: set[int] = set(phase_assignees_emp.get(ph.id, set()))
-            st_ids: set[int] = set(phase_assignees_st.get(ph.id, set()))
+            raw_st_ids: set[int] = set(phase_assignees_st.get(ph.id, set()))
             if ph.assignee_employe_id:
                 emp_ids.add(ph.assignee_employe_id)
             if ph.assignee_sous_traitant_id:
-                st_ids.add(ph.assignee_sous_traitant_id)
+                raw_st_ids.add(ph.assignee_sous_traitant_id)
 
-            total_assignees = len(emp_ids) + len(st_ids)
+            # Sous-traitants : seuls ceux facturés À L'HEURE (contrat
+            # flat_hourly) comptent dans les heures planifiées. Les
+            # sous-traitants au FORFAIT n'ajoutent aucune heure — leur
+            # coût est porté par leur contrat, pas par la planification.
+            hourly_st_ids = {
+                sid
+                for sid in raw_st_ids
+                if st_billing.get(sid) == "flat_hourly"
+            }
 
-            # Coût horaire : moyenne pondérée des assignees réels.
-            # S'il n'y en a aucun, on tombe sur le coût moyen des
-            # membres du projet (ancien comportement), mais avec
-            # persons=1 (PAS persons=len(members)) — sinon on
-            # surestime grossièrement les phases non assignées.
+            total_assignees = len(emp_ids) + len(hourly_st_ids)
+
+            # Coût horaire : moyenne des taux des assignees comptés.
             if total_assignees > 0:
-                rates = []
+                rates: list[float] = []
                 if emp_ids:
                     emps = (
                         await db.execute(
@@ -322,27 +350,21 @@ async def _compute_finances(
                         )
                     ).scalars().all()
                     rates.extend(_real_cost_for_employe(e) for e in emps)
-                if st_ids:
-                    sts = (
-                        await db.execute(
-                            select(SousTraitant).where(
-                                SousTraitant.id.in_(st_ids)
-                            )
-                        )
-                    ).scalars().all()
-                    for st in sts:
-                        rates.append(
-                            float(
-                                getattr(st, "hourly_rate", None) or avg_rate
-                            )
-                        )
+                for sid in hourly_st_ids:
+                    # Taux du contrat à l'heure du sous-traitant.
+                    rates.append(float(st_hourly_rate.get(sid) or avg_rate))
                 cost_per_hour = (
-                    round(sum(rates) / len(rates), 2) if rates else members_avg_cost
+                    round(sum(rates) / len(rates), 2)
+                    if rates else members_avg_cost
                 )
                 persons = total_assignees
+            elif raw_st_ids:
+                # Phase entièrement sous-traitée au forfait : 0 h de
+                # main-d'œuvre planifiée (coût dans le contrat, pas ici).
+                continue
             else:
-                # Phase non assignée : 1 personne placeholder au taux
-                # moyen équipe (n'amplifie pas les heures par #members).
+                # Phase non assignée du tout : 1 personne placeholder
+                # au taux moyen équipe (n'amplifie pas par #membres).
                 cost_per_hour = members_avg_cost
                 persons = 1
 
