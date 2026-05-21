@@ -10,6 +10,7 @@ import { Link, useRouter } from "@/i18n/navigation";
 import { useConfirm } from "@/components/confirm-dialog";
 import { DriveButton } from "@/components/drive-button";
 import { LeadAnalysisSummary } from "@/components/lead-analysis-summary";
+import { OfferSection } from "@/components/offer-section";
 import { useProspectionLayout } from "../../layout";
 import {
   AutoGrowTextarea,
@@ -398,6 +399,8 @@ export default function DealDetailPage() {
         {deal?.lead_analysis_id ? (
           <LeadAnalysisSummary id={deal.lead_analysis_id} />
         ) : null}
+
+        <OfferSection dealId={dealId} />
 
         <TaskBoard
           tasks={boardItems}

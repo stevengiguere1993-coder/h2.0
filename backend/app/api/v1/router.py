@@ -34,6 +34,7 @@ from app.api.v1.endpoints import (
     dashboard,
     help,
     kratos,
+    offers,
     org_nodes,
     org_seed_canonical,
     rencontres,
@@ -49,6 +50,7 @@ from app.api.v1.endpoints import (
     mobile,
     notifications,
     payments,
+    public_offer,
     sales_tasks,
     service_templates,
     user_roles,
@@ -162,6 +164,10 @@ api_router.include_router(agenda_availability.router)
 api_router.include_router(user_roles.router)
 api_router.include_router(lea_web.router)
 api_router.include_router(public_purchase_agreement.router)
+# Offre d'achat minimaliste — flow indépendant du PurchaseAgreement
+# complet (modèle Offer dédié, page publique /sign-offer/{token}).
+api_router.include_router(offers.router)
+api_router.include_router(public_offer.router)
 api_router.include_router(qbo_token.router)
 api_router.include_router(qbo_oauth.router)
 api_router.include_router(client_qbo.router)
