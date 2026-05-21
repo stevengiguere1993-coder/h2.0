@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter as useNextRouter } from "next/navigation";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2, Plus } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
@@ -27,6 +27,15 @@ export default function NewProjectPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Création d'un client à la volée, sans quitter le formulaire projet.
+  const [clientModalOpen, setClientModalOpen] = useState(false);
+  const [ncName, setNcName] = useState("");
+  const [ncEmail, setNcEmail] = useState("");
+  const [ncPhone, setNcPhone] = useState("");
+  const [ncAddress, setNcAddress] = useState("");
+  const [ncSaving, setNcSaving] = useState(false);
+  const [ncError, setNcError] = useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     async function loadClients() {
@@ -44,6 +53,55 @@ export default function NewProjectPage() {
       cancelled = true;
     };
   }, []);
+
+  async function createClient() {
+    if (!ncName.trim()) {
+      setNcError("Le nom du client est requis.");
+      return;
+    }
+    setNcSaving(true);
+    setNcError(null);
+    try {
+      const payload: Record<string, unknown> = { name: ncName.trim() };
+      if (ncEmail.trim()) payload.email = ncEmail.trim();
+      if (ncPhone.trim()) payload.phone = ncPhone.trim();
+      if (ncAddress.trim()) payload.address = ncAddress.trim();
+      const res = await authedFetch("/api/v1/clients", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        let detail = `http_${res.status}`;
+        try {
+          const text = await res.text();
+          try {
+            const j = JSON.parse(text);
+            detail =
+              typeof j.detail === "string" ? j.detail : text.slice(0, 240);
+          } catch {
+            detail = text.slice(0, 240);
+          }
+        } catch {
+          /* garde le code http */
+        }
+        throw new Error(detail);
+      }
+      const created = (await res.json()) as Client;
+      // Ajoute le client à la liste, le sélectionne, et ferme la fenêtre
+      // — l'utilisateur poursuit la création du projet.
+      setClients((xs) => [...xs, { id: created.id, name: created.name }]);
+      setClientId(String(created.id));
+      setClientModalOpen(false);
+      setNcName("");
+      setNcEmail("");
+      setNcPhone("");
+      setNcAddress("");
+    } catch (err) {
+      setNcError(`Création échouée : ${(err as Error).message}`);
+    } finally {
+      setNcSaving(false);
+    }
+  }
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -132,19 +190,31 @@ export default function NewProjectPage() {
 
           <div>
             <label htmlFor="client" className="label">Client</label>
-            <select
-              id="client"
-              value={clientId}
-              onChange={(e) => setClientId(e.target.value)}
-              className="input"
-            >
-              <option value="">— Aucun client —</option>
-              {clients.map((c) => (
-                <option key={c.id} value={String(c.id)}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+            <div className="flex items-center gap-2">
+              <select
+                id="client"
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                className="input flex-1"
+              >
+                <option value="">— Aucun client —</option>
+                {clients.map((c) => (
+                  <option key={c.id} value={String(c.id)}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => {
+                  setNcError(null);
+                  setClientModalOpen(true);
+                }}
+                className="btn-secondary flex shrink-0 items-center gap-1.5 text-sm"
+              >
+                <Plus className="h-4 w-4" /> Nouveau client
+              </button>
+            </div>
             <p className="mt-1 text-xs text-white/50">
               Nécessaire pour facturer. Un client est créé automatiquement
               quand une soumission est acceptée.
@@ -236,6 +306,106 @@ export default function NewProjectPage() {
             </Link>
           </div>
         </form>
+
+        {clientModalOpen ? (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+            onClick={() => (!ncSaving ? setClientModalOpen(false) : null)}
+          >
+            <div
+              className="w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-lg font-bold text-white">Nouveau client</h3>
+              <p className="mt-1 text-xs text-white/50">
+                Le client sera créé et sélectionné pour ce projet.
+              </p>
+              <div className="mt-5 space-y-4">
+                <div>
+                  <label htmlFor="nc_name" className="label">
+                    Nom <span className="text-rose-400">*</span>
+                  </label>
+                  <input
+                    id="nc_name"
+                    type="text"
+                    value={ncName}
+                    onChange={(e) => setNcName(e.target.value)}
+                    placeholder="Ex. Denis Tremblay"
+                    className="input"
+                    autoFocus
+                  />
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="nc_email" className="label">
+                      Courriel
+                    </label>
+                    <input
+                      id="nc_email"
+                      type="email"
+                      value={ncEmail}
+                      onChange={(e) => setNcEmail(e.target.value)}
+                      className="input"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="nc_phone" className="label">
+                      Téléphone
+                    </label>
+                    <input
+                      id="nc_phone"
+                      type="tel"
+                      value={ncPhone}
+                      onChange={(e) => setNcPhone(e.target.value)}
+                      className="input"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label htmlFor="nc_address" className="label">
+                    Adresse
+                  </label>
+                  <input
+                    id="nc_address"
+                    type="text"
+                    value={ncAddress}
+                    onChange={(e) => setNcAddress(e.target.value)}
+                    placeholder="Ex. 1234 rue Principale, Montréal"
+                    className="input"
+                  />
+                </div>
+                {ncError ? (
+                  <p className="text-sm text-rose-400">{ncError}</p>
+                ) : null}
+              </div>
+              <div className="mt-6 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setClientModalOpen(false)}
+                  disabled={ncSaving}
+                  className="btn-secondary text-sm"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  onClick={createClient}
+                  disabled={ncSaving || !ncName.trim()}
+                  className="btn-accent text-sm disabled:opacity-60"
+                >
+                  {ncSaving ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />{" "}
+                      Création…
+                    </>
+                  ) : (
+                    "Créer le client"
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </>
   );
