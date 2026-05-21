@@ -136,7 +136,8 @@ async def convert_project_to_facture(
         client_id=project.client_id,
         project_id=project.id,
         status=FactureStatus.DRAFT.value,
-        issued_at=datetime.now(timezone.utc),
+        # issued_at reste vide : la facture n'est « émise » qu'à l'envoi
+        # au client, pas à sa création (cf. send_facture).
         due_at=due_at,
     )
     db.add(facture)
