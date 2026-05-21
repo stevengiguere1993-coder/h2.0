@@ -9,6 +9,7 @@ import { authedFetch } from "@/lib/auth";
 import { Link, useRouter } from "@/i18n/navigation";
 import { useConfirm } from "@/components/confirm-dialog";
 import { DriveButton } from "@/components/drive-button";
+import { LeadAnalysisSummary } from "@/components/lead-analysis-summary";
 import { useProspectionLayout } from "../../layout";
 import {
   AutoGrowTextarea,
@@ -30,6 +31,7 @@ type Deal = {
   address: string;
   priority: string;
   drive_folder_url: string | null;
+  lead_analysis_id: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -391,6 +393,10 @@ export default function DealDetailPage() {
           <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {error}
           </p>
+        ) : null}
+
+        {deal?.lead_analysis_id ? (
+          <LeadAnalysisSummary id={deal.lead_analysis_id} />
         ) : null}
 
         <TaskBoard

@@ -263,6 +263,12 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
         index=True,
     )
 
+    converted_to_deal_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("prospection_deals.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     created_by_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,

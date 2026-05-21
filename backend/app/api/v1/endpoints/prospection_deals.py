@@ -59,6 +59,7 @@ class DealRead(BaseModel):
     address: str
     priority: str
     drive_folder_url: Optional[str] = None
+    lead_analysis_id: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 

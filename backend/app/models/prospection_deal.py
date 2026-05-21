@@ -12,7 +12,7 @@ urgent → eleve → moyenne → en_attente → a_venir.
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Integer, String, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -54,6 +54,15 @@ class ProspectionDeal(Base):
     # header de la fiche y mène. NULL = pas configuré.
     drive_folder_url: Mapped[Optional[str]] = mapped_column(
         String(1024), nullable=True
+    )
+
+    # Lien optionnel vers la fiche d'analyse qui a généré ce deal
+    # (via le bouton « Pipeline » sur la page Analyses des leads).
+    # NULL si le deal a été créé manuellement.
+    lead_analysis_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("lead_analyses.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(

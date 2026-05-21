@@ -56,6 +56,7 @@ type Lead = {
   mdf_preteur_b: number | null;
   type_batiment: string | null;
   converted_to_lead_id: number | null;
+  converted_to_deal_id: number | null;
   created_at: string;
   attachments_count: number;
 };
@@ -274,22 +275,22 @@ export default function AnalysesLeadsPage() {
 
   async function convertToLead(id: number, label: string) {
     const ok = await confirm({
-      title: `Convertir « ${label} » en lead du Pipeline ?`,
+      title: `Ajouter « ${label} » au Pipeline ?`,
       description:
-        "Un nouveau lead sera créé dans Suivi de leads (statut « À contacter »). Le lien sera conservé sur la fiche d'analyse.",
-      confirmLabel: "Convertir"
+        "Un nouveau deal sera créé dans le Pipeline. La fiche d'analyse restera accessible depuis la page du deal.",
+      confirmLabel: "Ajouter au Pipeline"
     });
     if (!ok) return;
     try {
       const r = await authedFetch(
-        `/api/v1/lead-analyses/${id}/convert-to-lead`,
+        `/api/v1/lead-analyses/${id}/convert-to-deal`,
         { method: "POST" }
       );
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = (await r.json()) as { lead_id: number };
+      const j = (await r.json()) as { deal_id: number };
       void reload();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      router.push(`/prospection/${j.lead_id}` as any);
+      router.push(`/prospection/pipeline/${j.deal_id}` as any);
     } catch (e) {
       setExtractErr((e as Error).message);
     }
@@ -711,12 +712,12 @@ function LeadCard({
         <button
           type="button"
           onClick={onConvert}
-          disabled={!!lead.converted_to_lead_id}
+          disabled={!!lead.converted_to_deal_id}
           className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
           title={
-            lead.converted_to_lead_id
+            lead.converted_to_deal_id
               ? "Déjà converti"
-              : "Convertir en lead Pipeline"
+              : "Ajouter au Pipeline"
           }
         >
           <Plus className="h-3 w-3" />
@@ -817,9 +818,9 @@ function LeadTable({
                     onClick={() =>
                       onConvert(l.id, l.address || `Lead #${l.id}`)
                     }
-                    disabled={!!l.converted_to_lead_id}
+                    disabled={!!l.converted_to_deal_id}
                     className="rounded-md border border-emerald-500/30 p-1 text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
-                    title="Convertir en lead Pipeline"
+                    title="Ajouter au Pipeline"
                   >
                     <Plus className="h-3 w-3" />
                   </button>
