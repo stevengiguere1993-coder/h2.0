@@ -314,7 +314,13 @@ async def _compute_finances(
                 )
 
         for ph in phases:
-            days = int(ph.duration_days or 0)
+            # duration_days est décimal (Numeric 6,2) : la planification
+            # autorise les demi-journées et fractions — 0.5 j = 4 h,
+            # 1.25 j = 10 h. On NE tronque PAS : un int() ferait
+            # disparaître les demi-journées (0.5 → 0, phase ignorée) et
+            # arrondirait 1.75 j à 1 j. Les heures prévues doivent
+            # refléter la planification réelle, journée par journée.
+            days = float(ph.duration_days or 0)
             if days <= 0:
                 continue
             hours = days * 8
