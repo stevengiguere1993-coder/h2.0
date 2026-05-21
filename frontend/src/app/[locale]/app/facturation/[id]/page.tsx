@@ -585,6 +585,24 @@ export default function FactureDetailPage() {
     }
   }
 
+  async function openStatement() {
+    if (!f?.project_id) return;
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${f.project_id}/statement.pdf`
+      );
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      setSendNotice(
+        `Ouverture de l'état de compte échouée : ${(err as Error).message.slice(0, 240)}`
+      );
+    }
+  }
+
   async function sendToClient() {
     if (!f) return;
     const to = sendTo
@@ -788,7 +806,7 @@ export default function FactureDetailPage() {
               </p>
             ) : null}
 
-            <div className="mt-6 grid gap-3 sm:grid-cols-3">
+            <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <button
                 type="button"
                 onClick={() => previewPdf(false)}
@@ -849,6 +867,23 @@ export default function FactureDetailPage() {
                   </p>
                 </div>
               </button>
+              {f.project_id ? (
+                <button
+                  type="button"
+                  onClick={openStatement}
+                  className="flex items-start gap-3 rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-accent-500"
+                >
+                  <FileText className="mt-0.5 h-5 w-5 flex-shrink-0 text-accent-500" />
+                  <div>
+                    <p className="text-sm font-semibold text-white">
+                      Consulter l&apos;état de compte
+                    </p>
+                    <p className="mt-0.5 text-xs text-white/60">
+                      Relevé du projet (PDF) tel qu&apos;envoyé au client.
+                    </p>
+                  </div>
+                </button>
+              ) : null}
             </div>
 
             <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900 p-5">

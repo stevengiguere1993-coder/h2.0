@@ -2141,6 +2141,23 @@ function FinancesTab({ projectId }: { projectId: number }) {
     }
   }
 
+  async function openStatement() {
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/statement.pdf`
+      );
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      setErr(
+        `Ouverture de l'état de compte échouée : ${(e as Error).message}`
+      );
+    }
+  }
+
   async function saveOverrideHours() {
     setSavingHours(true);
     try {
@@ -2614,6 +2631,17 @@ function FinancesTab({ projectId }: { projectId: number }) {
             Aucune facture émise pour ce projet.
           </p>
         )}
+
+        {data.invoices && data.invoices.length > 0 ? (
+          <button
+            type="button"
+            onClick={openStatement}
+            className="mt-5 inline-flex items-center gap-2 rounded-lg border border-brand-800 bg-brand-950/40 px-3 py-2 text-xs font-medium text-white/80 transition hover:border-accent-500 hover:text-white"
+          >
+            <FileText className="h-4 w-4 text-accent-500" />
+            Consulter l&apos;état de compte (PDF)
+          </button>
+        ) : null}
       </section>
     </div>
   );
