@@ -191,6 +191,25 @@ _CLIENT_FACTURE_STATUSES = (
     FactureStatus.OVERDUE.value,
 )
 
+# L'état de compte est un document client : statuts de facture et modes
+# de paiement doivent être affichés en français, jamais en code brut
+# anglais (« PAID », « bank transfer »).
+_FACTURE_STATUS_FR = {
+    "draft": "Brouillon",
+    "sent": "Envoyée",
+    "paid": "Payée",
+    "overdue": "En retard",
+    "void": "Annulée",
+}
+_PAYMENT_METHOD_FR = {
+    "cash": "Argent comptant",
+    "credit_card": "Carte de crédit",
+    "debit_card": "Carte de débit",
+    "check": "Chèque",
+    "bank_transfer": "Virement bancaire",
+    "other": "Autre",
+}
+
 
 async def _build_statement(
     db: AsyncSession, project: Project
@@ -239,13 +258,16 @@ async def _build_statement(
     lines: List[StatementLine] = []
     for f in factures:
         when = (f.issued_at.date() if f.issued_at else f.created_at.date())
+        status_fr = _FACTURE_STATUS_FR.get(
+            (f.status or "").lower(), (f.status or "").upper() or None
+        )
         lines.append(
             StatementLine(
                 kind="facture",
                 when=when,
                 label=f"Facture {f.reference}",
                 amount=float(f.total or 0),
-                detail=f.status.upper() if f.status else None,
+                detail=status_fr,
             )
         )
     for p in payments:
@@ -254,7 +276,9 @@ async def _build_statement(
             (f.reference for f in factures if f.id == p.facture_id),
             None,
         )
-        method = (p.method or "").replace("_", " ")
+        method = _PAYMENT_METHOD_FR.get(
+            (p.method or "").lower(), (p.method or "").replace("_", " ")
+        )
         detail_parts = [method]
         if p.reference:
             detail_parts.append(f"réf. {p.reference}")
