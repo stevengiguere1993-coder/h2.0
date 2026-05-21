@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Building,
   Eye,
   FileText,
   Flame,
@@ -24,7 +23,10 @@ import { useSearchParams } from "next/navigation";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { AppTopbar } from "@/components/app-topbar";
-import { PillPicker } from "@/components/task-pills";
+import {
+  LeadAnalysisCard,
+  type LeadAnalysisCardBadge
+} from "@/components/lead-analysis-card";
 import { useProspectionLayout } from "../layout";
 import { Link, useRouter } from "@/i18n/navigation";
 
@@ -633,13 +635,27 @@ export default function AnalysesLeadsPage() {
 
 // ─── Card kanban ────────────────────────────────────────────────
 
+/** Mapping statut d'analyse -> badge visuel (label + couleur). Le
+ * badge sert d'indicateur de statut, et le drag-and-drop entre
+ * colonnes du kanban sert d'editeur — on n'a donc plus besoin du
+ * PillPicker historique a l'interieur de la card.
+ *
+ * Note : on garde `onChangeStatus` dans la signature (au cas ou un
+ * appelant en aurait encore besoin) mais on ne l'utilise plus dans
+ * le rendu. */
+const STATUS_BADGE: Record<Lead["status"], LeadAnalysisCardBadge> = {
+  a_analyser: { label: "À analyser", color: "violet" },
+  decision_en_attente: { label: "Décision en attente", color: "amber" },
+  interessant: { label: "Intéressant", color: "emerald" },
+  abandonne: { label: "Abandonné", color: "rose" }
+};
+
 function LeadCard({
   lead,
   dragging,
   onDragStart,
   onDragEnd,
   onView,
-  onChangeStatus,
   onDelete,
   onConvert
 }: {
@@ -657,111 +673,58 @@ function LeadCard({
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className={`group cursor-grab rounded-md border border-brand-800 bg-brand-950 p-2.5 transition active:cursor-grabbing ${
-        dragging ? "opacity-50" : ""
-      }`}
+      className={`cursor-grab transition active:cursor-grabbing ${dragging ? "opacity-50" : ""}`}
     >
-      <button
-        type="button"
+      <LeadAnalysisCard
+        data={{
+          id: lead.id,
+          address: lead.address,
+          city: lead.city,
+          nb_logements: lead.nb_logements,
+          asking_price: lead.asking_price,
+          best_refi_amount: lead.best_refi_amount,
+          best_refi_program: lead.best_refi_program,
+          mdf_preteur_b: lead.mdf_preteur_b
+        }}
+        badge={STATUS_BADGE[lead.status]}
         onClick={onView}
-        className="block w-full text-left"
-      >
-        <p className="line-clamp-2 text-xs font-semibold text-white hover:text-accent-500">
-          {lead.address || `Lead #${lead.id}`}
-        </p>
-        {lead.city ? (
-          <p className="mt-0.5 text-[10px] text-white/50">{lead.city}</p>
-        ) : null}
-      </button>
-      <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[10px] text-white/60">
-        {lead.nb_logements != null ? (
-          <span className="inline-flex items-center gap-0.5">
-            <Building className="h-2.5 w-2.5" /> {lead.nb_logements} log.
-          </span>
-        ) : null}
-        {lead.asking_price != null ? (
-          <span className="font-mono tabular-nums">
-            {fmtMoney(lead.asking_price)}
-          </span>
-        ) : null}
-        {lead.best_refi_amount != null ? (
-          <span
-            className={`inline-flex items-center gap-0.5 ${
-              lead.best_refi_amount >= 0 ? "text-emerald-300" : "text-rose-300"
-            }`}
-            title={lead.best_refi_program || ""}
-          >
-            <Flame className="h-2.5 w-2.5" />
-            {lead.best_refi_amount >= 0 ? "refi" : "perte"}{" "}
-            {fmtMoney(lead.best_refi_amount)}
-          </span>
-        ) : null}
-      </div>
-      {lead.best_refi_program ? (
-        <p className="mt-0.5 truncate text-[9px] text-white/40" title={lead.best_refi_program}>
-          {lead.best_refi_program}
-        </p>
-      ) : null}
-      {lead.mdf_preteur_b != null ? (
-        <p
-          className="mt-0.5 text-[10px] text-amber-300/80"
-          title="Mise de fonds avec prêteur B = % MDF × prix d'achat + frais démarrage (% paramétrable par fiche)"
-        >
-          MDF prêteur B : <span className="font-mono">{fmtMoney(lead.mdf_preteur_b)}</span>
-        </p>
-      ) : null}
-      {/* Sélecteur de statut — même style que les pills tâches
-          d'entreprise (point coloré + label, picker discret). */}
-      <div
-        className="mt-1.5"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <PillPicker
-          options={COLUMNS.map((c) => ({
-            value: c.key,
-            label: c.label,
-            dot: c.dot,
-            cls: c.dot
-          }))}
-          value={lead.status}
-          onChange={(v) => onChangeStatus(v as Lead["status"])}
-          ariaLabel="Statut du lead"
-        />
-      </div>
-      <div className="mt-2 flex flex-wrap items-center gap-1">
-        <button
-          type="button"
-          onClick={onView}
-          className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-brand-950 px-1.5 py-0.5 text-[10px] text-white/70 hover:text-white"
-          title="Ouvrir la fiche complète"
-        >
-          <Eye className="h-3 w-3" />
-          Fiche
-        </button>
-        <button
-          type="button"
-          onClick={onConvert}
-          disabled={!!lead.converted_to_deal_id}
-          className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
-          title={
-            lead.converted_to_deal_id
-              ? "Déjà converti"
-              : "Ajouter au Pipeline"
-          }
-        >
-          <Plus className="h-3 w-3" />
-          Pipeline
-        </button>
-        <button
-          type="button"
-          onClick={onDelete}
-          className="ml-auto inline-flex items-center rounded-md border border-white/15 bg-brand-950 p-0.5 text-white/40 hover:border-rose-400/50 hover:text-rose-300"
-          title="Supprimer"
-          aria-label="Supprimer"
-        >
-          <Trash2 className="h-3 w-3" />
-        </button>
-      </div>
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={onView}
+              className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-brand-950 px-1.5 py-0.5 text-[10px] text-white/70 hover:text-white"
+              title="Ouvrir la fiche complète"
+            >
+              <Eye className="h-3 w-3" />
+              Fiche
+            </button>
+            <button
+              type="button"
+              onClick={onConvert}
+              disabled={!!lead.converted_to_deal_id}
+              className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+              title={
+                lead.converted_to_deal_id
+                  ? "Déjà converti"
+                  : "Ajouter au Pipeline"
+              }
+            >
+              <Plus className="h-3 w-3" />
+              Pipeline
+            </button>
+            <button
+              type="button"
+              onClick={onDelete}
+              className="inline-flex items-center rounded-md border border-white/15 bg-brand-950 p-0.5 text-white/40 hover:border-rose-400/50 hover:text-rose-300"
+              title="Supprimer"
+              aria-label="Supprimer"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </>
+        }
+      />
     </div>
   );
 }
