@@ -191,13 +191,26 @@ export default function PublicFacturePage() {
             <h2 className="text-base font-semibold text-white">
               Signer la facture finale
             </h2>
-            <p className="mt-2 text-sm text-white/70">
-              En signant, vous reconnaissez que la totalité des travaux
-              prévus à la soumission de base a été complétée à votre
-              satisfaction. Tout travail supplémentaire est facturé
-              séparément, par entente mutuelle entre vous et{" "}
-              {data.company_name}. Votre nom, votre adresse IP et
-              l&apos;heure sont enregistrés comme trace.
+
+            {/* Texte de reconnaissance — identique à celui du PDF —
+                affiché juste avant la signature pour que le client
+                comprenne bien ce qu'il signe. */}
+            <div className="mt-4 rounded-lg border border-accent-500/40 bg-brand-950/60 p-4">
+              <p className="text-xs font-bold uppercase tracking-wider text-accent-400">
+                Facture finale
+              </p>
+              <p className="mt-2 text-sm leading-relaxed text-white/90">
+                En signant cette facture finale, le client reconnaît
+                que la totalité des travaux prévus à la soumission de
+                base a été complétée à sa satisfaction. Tout travail
+                supplémentaire est facturé séparément, par entente
+                mutuelle entre le client et {data.company_name}.
+              </p>
+            </div>
+
+            <p className="mt-3 text-xs text-white/50">
+              Votre nom, votre adresse IP et l&apos;heure sont
+              enregistrés comme trace.
             </p>
 
             <div className="mt-4">
