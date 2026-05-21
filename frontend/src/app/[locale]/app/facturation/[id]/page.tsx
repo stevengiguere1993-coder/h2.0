@@ -39,6 +39,10 @@ type Facture = {
   qbo_doc_number: string | null;
   internal_notes: string | null;
   client_note: string | null;
+  is_final: boolean;
+  signed_name: string | null;
+  signed_at: string | null;
+  signature_token: string | null;
   created_at: string;
 };
 
@@ -354,6 +358,23 @@ export default function FactureDetailPage() {
     } catch {
       setF(prev);
       setError("Changement de statut échoué.");
+    }
+  }
+
+  async function toggleFinal(next: boolean) {
+    if (!f) return;
+    const prev = f;
+    setF({ ...f, is_final: next });
+    try {
+      const res = await authedFetch(`/api/v1/factures/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ is_final: next })
+      });
+      if (!res.ok) throw new Error();
+      setF((await res.json()) as Facture);
+    } catch {
+      setF(prev);
+      setError("Mise à jour « facture finale » échouée.");
     }
   }
 
@@ -901,6 +922,52 @@ export default function FactureDetailPage() {
                 </button>
               ) : null}
             </div>
+
+            <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900 p-5">
+              <label className="flex cursor-pointer items-start gap-2">
+                <input
+                  type="checkbox"
+                  checked={!!f.is_final}
+                  onChange={(e) => toggleFinal(e.target.checked)}
+                  disabled={!!f.signed_at}
+                  className="mt-0.5"
+                />
+                <span className="text-sm">
+                  <span className="block font-medium text-white">
+                    Facture finale
+                  </span>
+                  <span className="mt-0.5 block text-[11px] text-white/60">
+                    À l&apos;envoi, le client signe la facture en ligne et
+                    reconnaît que la totalité de la soumission de base est
+                    complétée. Les travaux supplémentaires sont facturés
+                    par entente mutuelle.
+                  </span>
+                </span>
+              </label>
+              {f.signed_at ? (
+                <p className="mt-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+                  Signée par {f.signed_name || "le client"} le{" "}
+                  {new Date(f.signed_at).toLocaleDateString("fr-CA")}.
+                </p>
+              ) : f.is_final && f.signature_token ? (
+                <p className="mt-3 text-[11px] text-white/50">
+                  Lien de signature client :{" "}
+                  <a
+                    href={`/facture/${f.signature_token}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-accent-400 underline-offset-2 hover:underline"
+                  >
+                    /facture/{f.signature_token}
+                  </a>
+                </p>
+              ) : f.is_final ? (
+                <p className="mt-3 text-[11px] text-white/50">
+                  Le lien de signature sera généré à l&apos;envoi de la
+                  facture au client.
+                </p>
+              ) : null}
+            </section>
 
             <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900 p-5">
               <div className="flex flex-wrap items-center gap-3">

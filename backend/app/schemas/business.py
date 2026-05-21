@@ -348,6 +348,7 @@ class FactureCreate(BaseModel):
     due_at: Optional[datetime] = None
     internal_notes: Optional[str] = None
     client_note: Optional[str] = None
+    is_final: bool = False
 
 
 class FactureUpdate(BaseModel):
@@ -369,6 +370,7 @@ class FactureUpdate(BaseModel):
     qbo_sync_token: Optional[str] = None
     internal_notes: Optional[str] = None
     client_note: Optional[str] = None
+    is_final: Optional[bool] = None
 
 
 class FactureRead(_Base):
@@ -389,6 +391,10 @@ class FactureRead(_Base):
     qbo_doc_number: Optional[str]
     internal_notes: Optional[str] = None
     client_note: Optional[str] = None
+    is_final: bool = False
+    signed_name: Optional[str] = None
+    signed_at: Optional[datetime] = None
+    signature_token: Optional[str] = None
     created_at: datetime
 
 

@@ -68,6 +68,7 @@ from app.api.v1.endpoints import (
     public_bon,
     push,
     public_contract,
+    public_facture,
     public_purchase_agreement,
     public_soumission,
     purchase_agreement_milestones,
@@ -157,6 +158,7 @@ api_router.include_router(webhooks.router)
 api_router.include_router(voice.router)
 api_router.include_router(public_soumission.router)
 api_router.include_router(public_contract.router)
+api_router.include_router(public_facture.router)
 api_router.include_router(contract_sign.router)
 api_router.include_router(contract_sign.docs_router)
 api_router.include_router(public_bon.router)

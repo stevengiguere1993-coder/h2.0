@@ -17,6 +17,7 @@ from typing import Any, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
 
 from app.models.client import Client
 from app.models.facture import Facture, FactureStatus
@@ -96,8 +97,15 @@ def _date(d: Optional[datetime | date]) -> str:
 
 
 async def _load(db: AsyncSession, facture_id: int):
+    # undefer(signature_image) : la colonne BLOB est `deferred` ; on la
+    # charge explicitement ici car le rendu PDF (sync) y accède — un
+    # lazy-load en contexte async lèverait une erreur greenlet.
     fa = (
-        await db.execute(select(Facture).where(Facture.id == facture_id))
+        await db.execute(
+            select(Facture)
+            .where(Facture.id == facture_id)
+            .options(undefer(Facture.signature_image))
+        )
     ).scalar_one_or_none()
     if fa is None:
         return None, [], None
@@ -631,6 +639,51 @@ def _render_bytes(
         "conditions générales.</b>",
         s["small"],
     ))
+
+    # Facture finale : texte de reconnaissance + bloc de signature du
+    # client. Le client confirme que la soumission de base est
+    # complétée; les travaux supplémentaires sont par entente.
+    if getattr(fa, "is_final", False):
+        story.append(Spacer(1, 16))
+        story.append(Paragraph("FACTURE FINALE", s["accent"]))
+        story.append(Paragraph(
+            "En signant cette facture finale, le client reconnaît que "
+            "la totalité des travaux prévus à la soumission de base a "
+            "été complétée à sa satisfaction. Tout travail "
+            "supplémentaire est facturé séparément, par entente "
+            "mutuelle entre le client et "
+            f"{COMPANY_NAME}.",
+            s["small"],
+        ))
+        story.append(Spacer(1, 10))
+        sig_cell: list = [Paragraph("<b>CLIENT</b>", s["accent"])]
+        sig_img = getattr(fa, "signature_image", None)
+        if sig_img:
+            try:
+                sig_cell.append(
+                    Image(io.BytesIO(sig_img), width=46 * mm, height=18 * mm)
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Signature image illisible: %s", exc)
+                sig_cell.append(Spacer(1, 18))
+        else:
+            sig_cell.append(Spacer(1, 18))
+        sig_cell.append(
+            Paragraph("_______________________________", s["small"])
+        )
+        sig_cell.append(Paragraph(
+            fa.signed_name or "Nom : ____________________", s["body"]
+        ))
+        sig_cell.append(Paragraph(
+            f"Date : {_date(fa.signed_at)}"
+            if fa.signed_at
+            else "Date : ____________________",
+            s["small"],
+        ))
+        sig_tbl = Table([[sig_cell]], colWidths=[doc.width * 0.55])
+        sig_tbl.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+        story.append(sig_tbl)
+
     story.append(Spacer(1, 16))
     story.append(Paragraph(
         f"{COMPANY_NAME} &middot; {COMPANY_RBQ} &middot; {COMPANY_EMAIL}",
