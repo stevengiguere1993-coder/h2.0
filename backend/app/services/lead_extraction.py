@@ -111,6 +111,20 @@ def _normalize_ocr_text(text: str) -> str:
     return out
 
 
+def _check_tesseract_status() -> str:
+    """Vérifie si Tesseract est installé et lit la version. Pour
+    diagnostic dans les warnings utilisateur quand l'OCR retourne
+    du vide."""
+    try:
+        import pytesseract  # type: ignore
+        version = pytesseract.get_tesseract_version()
+        return f"OK (Tesseract v{version})"
+    except ImportError:
+        return "pytesseract non installé"
+    except Exception as exc:  # noqa: BLE001
+        return f"binaire absent ou erreur : {exc}"
+
+
 def parse_image_ocr(image_bytes: bytes, filename: str = "image") -> str:
     """OCR sur une image (PNG/JPEG/HEIC/etc.). Retourne le texte extrait.
 
@@ -1439,10 +1453,12 @@ async def extract_lead_info(
                 tag = "pdf-ocr" if ocr_used else "pdf"
                 extracted.append((tag, _addr_key(td), td))
             else:
+                preview_pdf = (pdf_text or "").strip().replace("\n", " ⏎ ")[:300]
                 warnings.append(
                     f"PDF « {filename} » : texte extrait "
-                    f"({'OCR' if ocr_used else 'natif'}) mais aucun "
-                    "champ reconnaissable"
+                    f"({'OCR' if ocr_used else 'natif'}, "
+                    f"{len(pdf_text or '')} chars) mais aucun champ "
+                    f"reconnaissable. Aperçu : « {preview_pdf}… »"
                 )
         elif ct.startswith("image/") or filename.lower().endswith(
             (".png", ".jpg", ".jpeg", ".heic", ".heif", ".webp", ".tiff", ".bmp")
@@ -1451,21 +1467,27 @@ async def extract_lead_info(
             # de courriel, photo HEIC iPhone, etc. → OCR Tesseract.
             ocr_text = parse_image_ocr(blob, filename=filename)
             if not ocr_text.strip():
+                tess_status = _check_tesseract_status()
                 warnings.append(
-                    f"Image « {filename} » : OCR n'a rien extrait "
-                    "(image floue, texte non reconnu, ou binaire "
-                    "Tesseract indisponible sur le serveur)"
+                    f"Image « {filename} » : OCR n'a rien extrait. "
+                    f"État Tesseract serveur : {tess_status}"
                 )
                 continue
             normalized = _normalize_ocr_text(ocr_text)
             td = parse_text(normalized)
+            preview = ocr_text.strip().replace("\n", " ⏎ ")[:300]
             if td:
                 extracted.append(("image-ocr", _addr_key(td), td))
+                warnings.append(
+                    f"Image « {filename} » : OCR OK "
+                    f"({len(ocr_text)} chars extraits, "
+                    f"{len(td)} champs reconnus). Aperçu : « {preview}… »"
+                )
             else:
                 warnings.append(
-                    f"Image « {filename} » : OCR a produit du texte "
-                    "mais aucun champ reconnaissable (essayer une "
-                    "image plus nette ou recadrer sur le tableau)"
+                    f"Image « {filename} » : OCR a extrait "
+                    f"{len(ocr_text)} chars mais aucun champ "
+                    f"reconnaissable. Texte OCR (aperçu) : « {preview}… »"
                 )
         else:
             warnings.append(
