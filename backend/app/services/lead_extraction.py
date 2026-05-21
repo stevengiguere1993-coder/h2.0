@@ -313,15 +313,19 @@ _GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 async def _gemini_extract(
     material: str,
     images: List[Tuple[str, bytes]],
-) -> Optional[List[Dict[str, Any]]]:
-    """Extrait les champs immeuble via Gemini. Retourne une liste de
-    dicts au schéma `SCHEMA_GUIDE`, ou ``None`` si Gemini est
-    indisponible (l'appelant retombe alors sur le parser local)."""
+) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+    """Extrait les champs immeuble via Gemini.
+
+    Retourne ``(data, None)`` en cas de succès, ou ``(None, raison)``
+    sinon — où ``raison`` est un message lisible expliquant pourquoi
+    Gemini n'a pas été utilisé (affiché à l'utilisateur comme
+    avertissement, pour diagnostiquer sans fouiller les logs)."""
     api_key = (getattr(settings, "gemini_api_key", None) or "").strip()
     if not api_key:
-        return None
+        log.warning("Gemini : GEMINI_API_KEY absente — parser local")
+        return None, "clé GEMINI_API_KEY absente du serveur"
     if not material.strip() and not images:
-        return None
+        return None, None
 
     user_parts: List[Dict[str, Any]] = [{"text": SCHEMA_GUIDE}]
     if material.strip():
@@ -357,14 +361,14 @@ async def _gemini_extract(
             )
         if resp.status_code == 429:
             log.warning("Gemini : quota atteint — fallback parser local")
-            return None
+            return None, "quota Gemini atteint"
         if resp.status_code >= 400:
             log.warning(
                 "Gemini extraction HTTP %s : %s",
                 resp.status_code,
                 resp.text[:300],
             )
-            return None
+            return None, f"erreur Gemini HTTP {resp.status_code}"
         body = resp.json()
         text = (
             (body.get("candidates") or [{}])[0]
@@ -373,11 +377,11 @@ async def _gemini_extract(
             .get("text", "")
         )
         if not text.strip():
-            return None
+            return None, "réponse Gemini vide"
         parsed = json.loads(text)
     except Exception as exc:  # noqa: BLE001
         log.warning("Gemini extraction échouée : %s", exc)
-        return None
+        return None, f"Gemini injoignable ({type(exc).__name__})"
 
     items = parsed if isinstance(parsed, list) else [parsed]
     out: List[Dict[str, Any]] = []
@@ -391,7 +395,9 @@ async def _gemini_extract(
         }
         if clean:
             out.append(clean)
-    return out or None
+    if not out:
+        return None, "Gemini n'a renvoyé aucun champ"
+    return out, None
 
 
 # ── Dataclasses publiques ─────────────────────────────────────────
@@ -1621,7 +1627,9 @@ async def extract_lead_info(
     gemini_material = "\n\n".join(
         p for p in gemini_material_parts if p.strip()
     )
-    gemini_data = await _gemini_extract(gemini_material, gemini_images)
+    gemini_data, gemini_err = await _gemini_extract(
+        gemini_material, gemini_images
+    )
     if gemini_data:
         return ExtractionResult(
             data=gemini_data,
@@ -1630,10 +1638,11 @@ async def extract_lead_info(
         )
 
     # ── Fallback : parser local (regex + OCR) ───
-    if (getattr(settings, "gemini_api_key", None) or "").strip():
+    if gemini_err:
         warnings.append(
-            "Extraction IA indisponible (quota atteint ou hors-ligne) "
-            "— extraction locale utilisée, vérifiez bien les champs."
+            f"⚠ Extraction IA non utilisée — {gemini_err}. "
+            "Repli sur le parser local (regex, qualité réduite) : "
+            "vérifiez bien chaque champ."
         )
 
     if not extracted:
