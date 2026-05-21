@@ -548,6 +548,10 @@ def parse_text(text: str) -> Dict[str, Any]:
     partiel — jamais d'exception non catchée."""
     if not text:
         return {}
+    # Normalise les apostrophes typographiques — Centris écrit
+    # « Nombre d'unités » avec ' (U+2019), pas l'apostrophe droite.
+    # Sans ça, les regex en « ' » échouent (ex. nb logements raté).
+    text = text.replace("’", "'").replace("‘", "'")
     out: Dict[str, Any] = {}
 
     # Prix demandé. Plusieurs formes : "Prix demandé : 3 560 000 $",
@@ -613,8 +617,11 @@ def parse_text(text: str) -> Dict[str, Any]:
     # 4.5, 5.5, 6.5). Pattern : "8 x 5.5", "12 x 4 ½", "8 unités de
     # 5½". On REFUSE les patterns sans ".5" (faux positifs : "2 x 6").
     typology: Dict[str, int] = {}
+    # Accepte « 3 ½ », « 3.5 », « 3,5 » ET « 3 1/2 » (Centris écrit
+    # la typologie en ½ dans le tableau et en « 1/2 » dans le texte).
     typo_re = re.compile(
-        r"(\d{1,2})\s*(?:[xX×]|unit[eé]s?\s+de)\s*(\d)\s*(?:[\.,]\s*5|½)",
+        r"(\d{1,2})\s*(?:[xX×]|unit[eé]s?\s+de)\s*(\d)"
+        r"\s*(?:[\.,]\s*5|½|1\s*/\s*2)",
     )
     for m in typo_re.finditer(text):
         try:
@@ -719,19 +726,24 @@ def parse_text(text: str) -> Dict[str, Any]:
         if v and 100 <= v <= 5_000_000:
             out["assurances"] = v
 
-    # Énergie / chauffage payé par le propriétaire. Trailing « $ »
-    # exigé pour viser un poste de dépense (« Électricité 5 228 $ »).
-    m = re.search(
-        r"(?:[eé]nergie|[eé]lectricit[eé]|hydro|chauffage|gaz|"
-        r"huile\s+[aà]\s+fournaise|mazout)"
+    # Énergie payée par le propriétaire. Sur Centris la section
+    # « Dépenses » liste plusieurs postes énergétiques séparés
+    # (Électricité, Huile à fournaise, Gaz…) — on les ADDITIONNE
+    # tous dans `energie`. Trailing « $ » exigé (vise un montant).
+    energie_total = 0.0
+    for em in re.finditer(
+        r"(?:[eé]lectricit[eé]|hydro(?:[ -]?qu[eé]bec)?|"
+        r"huile\s+[aà]\s+fournaise|mazout|gaz\s+naturel|gaz|"
+        r"[eé]nergie|chauffage)"
         r"[^\d$]{0,12}?([\d][\d\s.,]*\d)\s*\$",
         text,
         flags=re.I,
-    )
-    if m:
-        v = _int_or_none(m.group(1))
-        if v and 100 <= v <= 5_000_000:
-            out["energie"] = v
+    ):
+        v = _int_or_none(em.group(1))
+        if v and 50 <= v <= 5_000_000:
+            energie_total += v
+    if energie_total > 0:
+        out["energie"] = int(round(energie_total))
 
     # Stationnements.
     m = re.search(
@@ -837,23 +849,28 @@ def parse_text(text: str) -> Dict[str, Any]:
             out["type_batiment"] = label
             break
 
-    # Courtier — nom probable (après "Courtier :" / "Agent :"). On
-    # accepte les noms en majuscules initiales, 2 à 4 mots. On doit
-    # combiner re.I sur le préfixe MAIS rester case-sensitive sur le
-    # capture group (sinon le nom est confondu avec le mot-clé). On
-    # split donc en deux étapes : trouver le préfixe, puis matcher le
-    # nom à partir de là.
+    # Courtier — nom probable. On combine re.I sur le préfixe MAIS on
+    # reste case-sensitive sur le nom (sinon le nom est confondu avec
+    # le mot-clé) : deux étapes — trouver le préfixe, matcher le nom.
+    # Priorité 1 : la section Centris « Courtiers inscripteurs » suivie
+    # directement du nom de l'inscripteur. Priorité 2 : « Courtier : ».
+    _NAME_RE = (
+        r"([A-ZÀ-Ÿ][a-zà-ÿ\-']+(?:\s+[A-ZÀ-Ÿ][a-zà-ÿ\-']+){1,3})"
+    )
     pref = re.search(
-        r"\b(?:courtier|agent|repr[eé]sentant)\b\s*:?\s*",
+        r"courtiers?\s+inscripteurs?\s*",
         text,
         flags=re.I,
     )
+    if not pref:
+        pref = re.search(
+            r"\b(?:courtier|agent|repr[eé]sentant)\b\s*:?\s*",
+            text,
+            flags=re.I,
+        )
     if pref:
         tail = text[pref.end():pref.end() + 120]
-        nm = re.match(
-            r"([A-ZÀ-Ÿ][a-zà-ÿ\-']+(?:\s+[A-ZÀ-Ÿ][a-zà-ÿ\-']+){1,3})",
-            tail,
-        )
+        nm = re.match(_NAME_RE, tail)
         if nm:
             out["courtier_nom"] = nm.group(1).strip()
 
