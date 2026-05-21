@@ -58,6 +58,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.core.config import settings
+from app.integrations import scraping_proxy
 
 log = logging.getLogger(__name__)
 
@@ -1484,6 +1485,48 @@ async def _fetch_html(url: str) -> Tuple[str, Optional[str]]:
         return "", f"erreur réseau : {exc!s}"
 
 
+async def _fetch_html_rendered(
+    url: str, parser_kind: str
+) -> Tuple[str, Optional[str]]:
+    """Comme ``_fetch_html`` mais, pour Centris, télécharge le HTML
+    *rendu* (JavaScript exécuté) via le VPS Playwright quand il est
+    configuré.
+
+    Centris injecte la section « Détails financiers » (évaluation
+    municipale, taxes municipales/scolaires, dépenses/énergie) en
+    JavaScript : un fetch httpx direct ne récupère pas ce bloc. Le
+    navigateur Chromium du VPS exécute le JS, déplie les sections et
+    renvoie le DOM complet — les parsers texte ancrés sur les
+    libellés y retrouvent alors taxes/évaluation/dépenses.
+
+    Fallback transparent sur le fetch httpx direct si le VPS n'est
+    pas configuré, ne renvoie pas de HTML, ou échoue.
+    """
+    if parser_kind == "centris" and scraping_proxy.vps_available():
+        try:
+            detail = await scraping_proxy.scrape_centris_detail(url)
+            html = (detail or {}).get("html") or ""
+            if html.strip():
+                log.info(
+                    "Centris %s : HTML rendu via VPS (%d chars)",
+                    url,
+                    len(html),
+                )
+                return html, None
+            log.warning(
+                "VPS Centris : pas de HTML rendu pour %s — "
+                "fallback httpx direct",
+                url,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "VPS Centris a échoué pour %s (%s) — fallback httpx",
+                url,
+                exc,
+            )
+    return await _fetch_html(url)
+
+
 def _parser_for_domain(domain: str) -> str:
     d = domain.lower()
     if "centris.ca" in d:
@@ -1534,16 +1577,24 @@ async def extract_lead_info(
         u = (u or "").strip()
         if not u:
             continue
-        html, fetch_err = await _fetch_html(u)
+        domain = urlparse(u).netloc
+        parser_kind = _parser_for_domain(domain)
+        html, fetch_err = await _fetch_html_rendered(u, parser_kind)
         if fetch_err:
             warnings.append(f"URL {u} : {fetch_err}")
             continue
+        if parser_kind == "centris" and not scraping_proxy.vps_available():
+            warnings.append(
+                f"URL {u} : la section « Détails financiers » de "
+                "Centris (évaluation municipale, taxes, dépenses) est "
+                "chargée en JavaScript et reste invisible sans rendu "
+                "navigateur. Active le VPS de scraping "
+                "(SCRAPING_VPS_URL / SCRAPING_VPS_KEY) pour l'importer."
+            )
         gemini_material_parts.append(
             f"[Page web : {u}]\n{_strip_html(html)[:40_000]}"
         )
 
-        domain = urlparse(u).netloc
-        parser_kind = _parser_for_domain(domain)
         sources_for_url: List[Tuple[str, Dict[str, Any]]] = []
         try:
             if parser_kind == "centris":

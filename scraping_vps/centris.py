@@ -89,18 +89,70 @@ async def scrape_listings_via_browser(
 async def scrape_detail_via_browser(
     browser: Browser, url: str
 ) -> dict:
-    """Ouvre une page de détail Centris et extrait toutes les
-    infos disponibles (prix, # unités, année, revenus, courtier…)."""
+    """Ouvre une page de détail Centris, exécute le JS, déplie les
+    sections repliables et retourne le HTML rendu complet.
+
+    La section « Détails financiers » de Centris (évaluation
+    municipale, taxes municipales/scolaires, dépenses) est injectée
+    en JavaScript : un fetch httpx direct ne la voit pas. Le HTML
+    rendu renvoyé dans la clé ``html`` contient tout le DOM après
+    exécution JS — le backend peut alors y extraire ces champs
+    financiers avec ses propres parsers ancrés sur les libellés.
+    """
     context = await browser.new_context(locale="fr-CA")
     page = await context.new_page()
     page.set_default_timeout(20_000)
     try:
         await page.goto(url, wait_until="networkidle")
         await page.wait_for_timeout(1500)
+        # Scroll progressif : déclenche le lazy-loading des sections
+        # basses de la fiche (dont « Détails financiers »).
+        for _ in range(6):
+            await page.evaluate(
+                "window.scrollTo(0, document.body.scrollHeight)"
+            )
+            await page.wait_for_timeout(600)
+        # Déplie les panneaux repliés (détails financiers, voir plus).
+        await _expand_all_sections(page)
+        await page.wait_for_timeout(1000)
         html = await page.content()
-        return _parse_detail_html(html, url)
+        detail = _parse_detail_html(html, url)
+        # HTML rendu complet → le backend lance parse_text dessus pour
+        # récupérer la section financière chargée en JS.
+        detail["html"] = html
+        return detail
     finally:
         await context.close()
+
+
+async def _expand_all_sections(page: Page) -> None:
+    """Clique les déclencheurs qui déplient les sections repliées
+    d'une fiche Centris — surtout « Détails financiers » (évaluation
+    municipale, taxes, dépenses) affiché à la demande.
+
+    Best-effort : toute erreur de clic (élément absent, hors écran,
+    non cliquable) est silencieusement ignorée.
+    """
+    triggers = [
+        "text=/d[ée]tails financiers/i",
+        "text=/[ée]valuation municipale/i",
+        "text=/voir (tous les |plus)/i",
+        "[class*='financial'] button",
+        "[class*='financial'] a",
+        "button[aria-expanded='false']",
+    ]
+    for sel in triggers:
+        try:
+            elements = await page.query_selector_all(sel)
+        except Exception:  # noqa: BLE001
+            continue
+        for el in elements[:8]:
+            try:
+                await el.scroll_into_view_if_needed(timeout=1500)
+                await el.click(timeout=2000)
+                await page.wait_for_timeout(350)
+            except Exception:  # noqa: BLE001
+                continue
 
 
 # ============== Parsers ==============
