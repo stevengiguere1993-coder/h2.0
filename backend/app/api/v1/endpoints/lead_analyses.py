@@ -8,6 +8,7 @@ Endpoints :
     PATCH  /lead-analyses/{id}      MAJ partielle (édition fiche)
     DELETE /lead-analyses/{id}      suppression (cascade attachments)
     POST   /lead-analyses/{id}/convert-to-lead  → ProspectionLead
+    POST   /lead-analyses/{id}/convert-to-deal  → ProspectionDeal (Pipeline)
     GET    /lead-analyses/{id}/attachments/{att_id}  blob inline
 
 Restreint au volet `prospection`.
@@ -47,6 +48,7 @@ from app.models.prospection_lead import (
     ProspectionLeadStatus,
     ProspectionOwnerKind,
 )
+from app.models.prospection_deal import ProspectionDeal
 from app.services.lead_extraction import extract_lead_info
 
 
@@ -138,6 +140,7 @@ class LeadAnalysisRead(BaseModel):
     frais_demarrage_financables_json: Optional[str] = None
     notes: Optional[str] = None
     converted_to_lead_id: Optional[int] = None
+    converted_to_deal_id: Optional[int] = None
 
     created_at: datetime
     updated_at: datetime
@@ -163,6 +166,7 @@ class LeadAnalysisListItem(BaseModel):
     mdf_preteur_b: Optional[float] = None
     type_batiment: Optional[str]
     converted_to_lead_id: Optional[int]
+    converted_to_deal_id: Optional[int] = None
     created_at: datetime
     attachments_count: int = 0
 
@@ -234,6 +238,10 @@ class ConvertResult(BaseModel):
     lead_id: int
 
 
+class ConvertDealResult(BaseModel):
+    deal_id: int
+
+
 # ── Helpers ────────────────────────────────────────────────────────
 
 
@@ -260,6 +268,7 @@ def _to_list_item(rec: LeadAnalysis, attachments_count: int) -> LeadAnalysisList
         ),
         type_batiment=rec.type_batiment,
         converted_to_lead_id=rec.converted_to_lead_id,
+        converted_to_deal_id=rec.converted_to_deal_id,
         created_at=rec.created_at,
         attachments_count=attachments_count,
     )
@@ -639,6 +648,40 @@ async def convert_to_lead(
     rec.updated_at = datetime.now(timezone.utc)
     await db.commit()
     return ConvertResult(lead_id=lead.id)
+
+
+@router.post(
+    "/{analysis_id}/convert-to-deal",
+    response_model=ConvertDealResult,
+    summary="Convertit l'analyse en ProspectionDeal (Pipeline).",
+)
+async def convert_to_deal(
+    analysis_id: int, db: DBSession, user: CurrentUser
+) -> ConvertDealResult:
+    """Crée un `ProspectionDeal` à partir de la fiche d'analyse.
+    Idempotent : si déjà converti, retourne l'id existant.
+
+    Le deal créé est lié à la fiche d'analyse via `lead_analysis_id`
+    pour que la page detail du deal puisse afficher la fiche
+    complète."""
+    _require_prospection(user)
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+    if rec.converted_to_deal_id:
+        return ConvertDealResult(deal_id=rec.converted_to_deal_id)
+
+    deal = ProspectionDeal(
+        address=rec.address or f"Deal #{rec.id}",
+        priority="moyenne",
+        lead_analysis_id=rec.id,
+    )
+    db.add(deal)
+    await db.flush()
+    rec.converted_to_deal_id = deal.id
+    rec.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    return ConvertDealResult(deal_id=deal.id)
 
 
 @router.get(

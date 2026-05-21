@@ -599,6 +599,8 @@ async def init_db() -> None:
             # mémorise les créneaux proposés par Léa pour les
             # retrouver au tour suivant).
             ("voice_calls", "session_state", "TEXT"),
+            ("prospection_deals", "lead_analysis_id", "INTEGER"),
+            ("lead_analyses", "converted_to_deal_id", "INTEGER"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
