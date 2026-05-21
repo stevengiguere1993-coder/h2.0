@@ -63,6 +63,7 @@ class StatementLine:
 class Statement:
     project_name: Optional[str]
     soumission_reference: Optional[str]
+    client_name: Optional[str]
     lines: List[StatementLine]
     contract_total: float
     billed_to_date: float
@@ -181,23 +182,21 @@ async def _load_contract_summary(
     )
 
 
-async def _load_statement(
-    db: AsyncSession, fa: Facture
-) -> Optional[Statement]:
-    """Construit l'état de compte (toutes les factures + paiements
-    pour le projet de `fa`). None si la facture n'est pas liée à un
-    projet."""
-    if fa.project_id is None:
-        return None
+# Factures « envoyées » au client : on exclut les brouillons (jamais
+# transmis) et les factures annulées (void). L'état de compte ne doit
+# montrer au client que les factures qu'il a réellement reçues.
+_CLIENT_FACTURE_STATUSES = (
+    FactureStatus.SENT.value,
+    FactureStatus.PAID.value,
+    FactureStatus.OVERDUE.value,
+)
 
-    project = (
-        await db.execute(
-            select(Project).where(Project.id == fa.project_id)
-        )
-    ).scalar_one_or_none()
-    if project is None:
-        return None
 
+async def _build_statement(
+    db: AsyncSession, project: Project
+) -> Statement:
+    """État de compte d'un projet : ses factures envoyées + les
+    paiements reçus, en ordre chronologique, avec les totaux."""
     sm: Optional[Soumission] = None
     if project.soumission_id:
         sm = (
@@ -212,7 +211,10 @@ async def _load_statement(
         (
             await db.execute(
                 select(Facture)
-                .where(Facture.project_id == project.id)
+                .where(
+                    Facture.project_id == project.id,
+                    Facture.status.in_(_CLIENT_FACTURE_STATUSES),
+                )
                 .order_by(Facture.issued_at.asc(), Facture.id.asc())
             )
         )
@@ -237,15 +239,13 @@ async def _load_statement(
     lines: List[StatementLine] = []
     for f in factures:
         when = (f.issued_at.date() if f.issued_at else f.created_at.date())
-        label = f"Facture {f.reference}"
-        detail = f.status.upper() if f.status else None
         lines.append(
             StatementLine(
                 kind="facture",
                 when=when,
-                label=label,
+                label=f"Facture {f.reference}",
                 amount=float(f.total or 0),
-                detail=detail,
+                detail=f.status.upper() if f.status else None,
             )
         )
     for p in payments:
@@ -268,34 +268,54 @@ async def _load_statement(
                     else "Paiement reçu"
                 ),
                 amount=float(p.amount or 0),
-                detail=" · ".join(p for p in detail_parts if p),
+                detail=" · ".join(x for x in detail_parts if x),
             )
         )
     # Tri chronologique global, factures avant paiements le même jour.
     lines.sort(key=lambda x: (x.when, 0 if x.kind == "facture" else 1))
 
     contract_total = float(sm.total or 0) if sm else 0.0
-    billed_to_date = round(
-        sum(float(f.total or 0) for f in factures
-            if f.status != FactureStatus.VOID.value),
-        2,
-    )
-    paid_to_date = round(
-        sum(float(p.amount or 0) for p in payments), 2
-    )
-    remaining = round(
-        (contract_total or billed_to_date) - paid_to_date, 2
-    )
+    billed_to_date = round(sum(float(f.total or 0) for f in factures), 2)
+    paid_to_date = round(sum(float(p.amount or 0) for p in payments), 2)
+    remaining = round((contract_total or billed_to_date) - paid_to_date, 2)
+
+    client_name: Optional[str] = None
+    if project.client_id:
+        c = (
+            await db.execute(
+                select(Client).where(Client.id == project.client_id)
+            )
+        ).scalar_one_or_none()
+        if c is not None:
+            client_name = c.name
 
     return Statement(
         project_name=project.name,
         soumission_reference=sm.reference if sm else None,
+        client_name=client_name,
         lines=lines,
         contract_total=round(contract_total, 2),
         billed_to_date=billed_to_date,
         paid_to_date=paid_to_date,
         remaining_balance=remaining,
     )
+
+
+async def _load_statement(
+    db: AsyncSession, fa: Facture
+) -> Optional[Statement]:
+    """État de compte du projet rattaché à `fa`. None si la facture
+    n'est pas liée à un projet."""
+    if fa.project_id is None:
+        return None
+    project = (
+        await db.execute(
+            select(Project).where(Project.id == fa.project_id)
+        )
+    ).scalar_one_or_none()
+    if project is None:
+        return None
+    return await _build_statement(db, project)
 
 
 def _render_bytes(
@@ -699,3 +719,198 @@ async def render_facture_pdf(
         statement=statement,
     )
     return fa, pdf
+
+
+def _render_statement_bytes(statement: Statement) -> bytes:
+    """Rend l'état de compte d'un projet dans un PDF autonome — le
+    relevé que le client peut consulter : factures envoyées, paiements
+    reçus, total des factures et solde dû."""
+    rl = _lazy_reportlab()
+    colors = rl["colors"]
+    mm = rl["mm"]
+    Paragraph = rl["Paragraph"]
+    Spacer = rl["Spacer"]
+    Table = rl["Table"]
+    TableStyle = rl["TableStyle"]
+    Image = rl["Image"]
+    DARK = colors.HexColor(DARK_HEX)
+    MUTED = colors.HexColor(MUTED_HEX)
+    ACCENT = colors.HexColor(ACCENT_HEX)
+
+    ParagraphStyle = rl["ParagraphStyle"]
+    base = rl["getSampleStyleSheet"]()
+    # Titre « ÉTAT DE COMPTE » plus court que la facture : 18 pt pour
+    # tenir sur une ligne dans la cellule droite de l'en-tête.
+    s = {
+        "h1": ParagraphStyle(
+            "h1", parent=base["Normal"], fontName="Helvetica-Bold",
+            fontSize=18, leading=22, textColor=DARK,
+        ),
+        "h2": ParagraphStyle(
+            "h2", parent=base["Normal"], fontName="Helvetica-Bold",
+            fontSize=11, leading=14, textColor=DARK, spaceBefore=6,
+        ),
+        "body": ParagraphStyle(
+            "body", parent=base["Normal"], fontName="Helvetica",
+            fontSize=10, leading=13, textColor=DARK,
+        ),
+        "small": ParagraphStyle(
+            "small", parent=base["Normal"], fontName="Helvetica",
+            fontSize=8.5, leading=11, textColor=MUTED,
+        ),
+        "accent": ParagraphStyle(
+            "accent", parent=base["Normal"], fontName="Helvetica-Bold",
+            fontSize=9, leading=12, textColor=ACCENT,
+        ),
+    }
+
+    buf = io.BytesIO()
+    doc = rl["SimpleDocTemplate"](
+        buf, pagesize=rl["letter"],
+        leftMargin=18 * mm, rightMargin=18 * mm,
+        topMargin=18 * mm, bottomMargin=18 * mm,
+        title="État de compte", author=COMPANY_NAME,
+    )
+    story: list = []
+
+    left_cell: list = []
+    _logo_src = _logo_light_source()
+    if _logo_src is not None:
+        try:
+            left_cell.append(
+                Image(_logo_src, width=28 * mm, height=28 * mm)
+            )
+            left_cell.append(Spacer(1, 4))
+        except Exception as exc:
+            log.warning("Could not embed logo in statement PDF: %s", exc)
+    left_cell.extend([
+        Paragraph(f"<b>{COMPANY_NAME}</b>", s["h2"]),
+        Paragraph(COMPANY_RBQ, s["small"]),
+        Paragraph(f"{COMPANY_SITE} &middot; {COMPANY_EMAIL}", s["small"]),
+    ])
+    right_cell: list = [
+        Paragraph("ÉTAT DE COMPTE", s["h1"]),
+        Paragraph(f"Émis le {_date(datetime.utcnow())}", s["small"]),
+    ]
+    header_tbl = Table(
+        [[left_cell, right_cell]],
+        colWidths=[doc.width * 0.55, doc.width * 0.45],
+    )
+    header_tbl.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+    ]))
+    story.append(header_tbl)
+    story.append(Spacer(1, 14))
+
+    info: list[str] = []
+    if statement.client_name:
+        info.append(f"<b>{statement.client_name}</b>")
+    if statement.project_name:
+        info.append(f"Projet : {statement.project_name}")
+    if statement.soumission_reference:
+        info.append(f"Soumission : {statement.soumission_reference}")
+    if info:
+        story.append(Paragraph("CLIENT", s["accent"]))
+        for line in info:
+            story.append(Paragraph(line, s["body"]))
+        story.append(Spacer(1, 12))
+
+    if statement.lines:
+        st_data = [["Date", "Description", "Détail", "Débit", "Crédit"]]
+        for ln in statement.lines:
+            if ln.kind == "facture":
+                debit, credit = ln.amount, 0.0
+            else:
+                debit, credit = 0.0, ln.amount
+            st_data.append([
+                _date(ln.when),
+                Paragraph(ln.label, s["body"]),
+                Paragraph(ln.detail or "", s["small"]),
+                _money(debit) if debit else "",
+                _money(credit) if credit else "",
+            ])
+        st_tbl = Table(
+            st_data,
+            colWidths=[
+                doc.width * 0.13, doc.width * 0.34,
+                doc.width * 0.23, doc.width * 0.15,
+                doc.width * 0.15,
+            ],
+            repeatRows=1,
+        )
+        st_tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), DARK),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, 0), 9),
+            ("ALIGN", (3, 0), (-1, -1), "RIGHT"),
+            ("ALIGN", (0, 0), (0, -1), "LEFT"),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                [colors.white, colors.HexColor("#fafafa")]),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.5, ACCENT),
+            ("FONTSIZE", (0, 1), (-1, -1), 9.0),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(st_tbl)
+    else:
+        story.append(Paragraph(
+            "<i>Aucune facture envoyée au client pour ce projet.</i>",
+            s["small"],
+        ))
+    story.append(Spacer(1, 12))
+
+    # Récap client : total des factures envoyées, montant déjà payé,
+    # et solde restant dû (total facturé − payé).
+    solde_du = round(statement.billed_to_date - statement.paid_to_date, 2)
+    recap_rows = [
+        ["Total des factures", _money(statement.billed_to_date)],
+        ["Montant payé", _money(statement.paid_to_date)],
+        ["Solde dû", _money(solde_du)],
+    ]
+    recap_tbl = Table(
+        recap_rows, colWidths=[doc.width * 0.30, doc.width * 0.20],
+    )
+    recap_tbl.setStyle(TableStyle([
+        ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9.5),
+        ("TEXTCOLOR", (0, 0), (-1, -2), MUTED),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, -1), (-1, -1), 11),
+        ("TEXTCOLOR", (0, -1), (-1, -1), DARK),
+        ("LINEABOVE", (0, -1), (-1, -1), 0.75, DARK),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    recap_wrap = Table(
+        [["", recap_tbl]],
+        colWidths=[doc.width * 0.50, doc.width * 0.50],
+    )
+    recap_wrap.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+    story.append(recap_wrap)
+    story.append(Spacer(1, 16))
+    story.append(Paragraph(
+        f"{COMPANY_NAME} &middot; {COMPANY_RBQ} &middot; {COMPANY_EMAIL}",
+        s["small"],
+    ))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+async def render_statement_pdf(
+    db: AsyncSession, project_id: int
+) -> Optional[tuple[Project, bytes]]:
+    """Génère le PDF autonome « État de compte » d'un projet. None si
+    le projet est introuvable."""
+    project = (
+        await db.execute(select(Project).where(Project.id == project_id))
+    ).scalar_one_or_none()
+    if project is None:
+        return None
+    statement = await _build_statement(db, project)
+    return project, _render_statement_bytes(statement)

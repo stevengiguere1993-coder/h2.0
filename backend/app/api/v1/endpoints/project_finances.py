@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -620,4 +621,32 @@ async def _compute_finances(
         tvq_collected=tvq_collected,
         taxes_collected=taxes_collected,
         invoices=invoices_out,
+    )
+
+
+@router.get(
+    "/{project_id}/statement.pdf",
+    summary="État de compte du projet en PDF (relevé client)",
+)
+async def get_project_statement_pdf(
+    project_id: int,
+    db: DBSession,
+    _: CurrentUser,
+) -> Response:
+    """Relevé autonome consultable à tout moment : factures envoyées,
+    paiements reçus, total des factures et solde dû — le même état de
+    compte que celui transmis au client."""
+    from app.services.facture_pdf import render_statement_pdf
+
+    rendered = await render_statement_pdf(db, project_id)
+    if rendered is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Projet introuvable"
+        )
+    project, pdf_bytes = rendered
+    filename = f"etat-de-compte-projet-{project.id}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
