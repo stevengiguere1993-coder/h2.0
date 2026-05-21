@@ -319,4 +319,9 @@ async def import_into_facture(
             ac.facture_item_id = item.id
 
     await db.flush()
+    # Regroupe les lignes importées par type (service → extra → frais
+    # → rabais) — cohérent avec l'ajout manuel.
+    from app.api.v1.endpoints.facture_items import _reorder_items_by_kind
+
+    await _reorder_items_by_kind(db, facture_id)
     return ImportResult(added=added)
