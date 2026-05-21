@@ -1355,6 +1355,15 @@ function LeadDetailModal({
                 />
               ) : null}
 
+              {/* Détail granulaire des calculs (style Excel) */}
+              {data.analysis_results_json ? (
+                <CalculationDetailsSection
+                  resultsJson={data.analysis_results_json}
+                  overridesJson={data.frais_demarrage_overrides_json}
+                  lead={data}
+                />
+              ) : null}
+
               {/* Notes internes */}
               <section>
                 <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
@@ -2157,6 +2166,20 @@ function FieldYesNo({
 
 // ─── Tableau de résultats post-analyse ─────────────────────────
 
+type DepensesBreakdown = {
+  inoccupation: number;
+  taxes_municipales: number;
+  taxes_scolaires: number;
+  assurances: number;
+  energie: number;
+  concierge: number;
+  entretien: number;
+  gestion: number;
+  wifi: number;
+  thermopompes: number;
+  autres: number;
+};
+
 type ScenarioResult = {
   name: string;
   label: string;
@@ -2167,6 +2190,7 @@ type ScenarioResult = {
   loyer_mois: number;
   revenus_totaux: number;
   depenses_total: number;
+  depenses?: DepensesBreakdown;
   revenus_net: number;
   valeur_eco_tga: number;
   valeur_eco_rcd: number;
@@ -2206,6 +2230,9 @@ type AnalysisResults = {
   mdf_pct_prix_achat?: number;
   mdf_25pct_prix_achat?: number;
   prix_achat?: number;
+  frais_demarrage_financables?: string[];
+  taux_interet_preteur_b_projet?: number;
+  taux_inoccupation_pct?: number;
   typology: {
     h13_loyer_pondere: number;
     nb_abordables: number;
@@ -2809,5 +2836,540 @@ function ResultRow({
         );
       })}
     </tr>
+  );
+}
+
+// ─── Détail granulaire des calculs (reproduction du fichier Excel) ───
+//
+// Section repliable (par défaut fermée) affichée sous le tableau
+// résumé `AnalysisResultsTable`. Reproduit la granularité ligne par
+// ligne du fichier `CALCULATEUR_OFFICIEL.xlsm` :
+//   A) Hypothèses paramétrables (TGA, taux intérêts, MDF prêteur B, ...)
+//   B) Typologie agrégée (H13, abord, PDM)
+//   C) Frais de démarrage détaillés (15 postes + total + MDF)
+//   D) Pour chaque scénario : nb log, loyers, revenus, dépenses (11
+//      lignes), revenus nets, valeurs éco, financement, MDF/équité
+//   E) Best refi
+//
+// Les hypothèses (TGA, taux, durée) viennent du LeadDetail (DB live)
+// car elles ne sont pas exportées dans `analysis_results_json` (seuls
+// `mdf_preteur_b_pct`, `taux_interet_preteur_b_projet` et
+// `taux_inoccupation_pct` le sont via `FinanceResults.to_dict()`).
+function CalculationDetailsSection({
+  resultsJson,
+  overridesJson,
+  lead
+}: {
+  resultsJson: string;
+  overridesJson?: string | null;
+  lead: LeadDetail;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const data = useMemo<AnalysisResults | null>(() => {
+    try {
+      return JSON.parse(resultsJson) as AnalysisResults;
+    } catch {
+      return null;
+    }
+  }, [resultsJson]);
+
+  const overrides = useMemo<Record<string, number>>(() => {
+    if (!overridesJson) return {};
+    try {
+      const j = JSON.parse(overridesJson);
+      if (j && typeof j === "object") return j as Record<string, number>;
+    } catch {
+      /* ignore */
+    }
+    return {};
+  }, [overridesJson]);
+
+  if (!data) return null;
+
+  return (
+    <section className="mt-3">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="text-xs text-emerald-300 underline-offset-2 hover:underline"
+      >
+        {open ? "▾" : "▸"} Voir détails des calculs
+      </button>
+
+      {open ? (
+        <div className="mt-2 max-h-[600px] overflow-y-auto rounded-xl border border-brand-800 bg-brand-950/40 p-4 text-[11px] text-white/80">
+          <p className="text-[10px] text-white/40">
+            Reproduit la granularité du fichier Excel d&apos;origine. Toutes
+            les valeurs sont issues du dernier calcul d&apos;analyse persisté.
+          </p>
+
+          <HypothesesSubsection lead={lead} data={data} />
+          <TypologieSubsection data={data} />
+          <FraisDemarrageDetailSubsection
+            data={data}
+            overrides={overrides}
+            mdfPctFinal={lead.mdf_preteur_b_pct ?? data.mdf_preteur_b_pct ?? 25}
+            prixAchat={lead.asking_price ?? data.prix_achat ?? 0}
+          />
+          <ScenariosDetailSubsection data={data} />
+          <BestRefiSubsection data={data} />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+// ─── Helpers de formatage (canadiens, fr-CA) ────────────────────
+
+function _fmtMoneyDetail(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  const rounded = Math.round(n);
+  const sign = rounded < 0 ? "-" : "";
+  const abs = Math.abs(rounded).toString();
+  const withSep = abs.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return `${sign}${withSep} $`;
+}
+
+function _fmtPctDetail(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  // Si n < 1, on suppose qu'il s'agit d'une fraction (0.085) sinon d'un
+  // pourcentage déjà multiplié (25). Tolère les 2 conventions.
+  const asPct = Math.abs(n) <= 1 ? n * 100 : n;
+  return `${asPct.toFixed(2).replace(".", ",")} %`;
+}
+
+function _fmtIntDetail(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  const abs = Math.round(n).toString();
+  return abs.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+}
+
+function _fmtBoolDetail(b: boolean | null | undefined): string {
+  if (b == null) return "—";
+  return b ? "Oui" : "Non";
+}
+
+// ─── Sous-section A : hypothèses paramétrables ─────────────────
+
+function HypothesesSubsection({
+  lead,
+  data
+}: {
+  lead: LeadDetail;
+  data: AnalysisResults;
+}) {
+  const rows: Array<[string, string]> = [
+    ["Prix d'achat", _fmtMoneyDetail(lead.asking_price ?? data.prix_achat ?? null)],
+    ["Durée du projet (années)", _fmtIntDetail(lead.duree_projet_annees)],
+    ["TGA (taux global d'actualisation)", _fmtPctDetail(lead.tga_pct)],
+    ["Taux d'intérêt achat", _fmtPctDetail(lead.taux_interet_achat_pct)],
+    ["Taux d'intérêt refi", _fmtPctDetail(lead.taux_interet_refi_pct)],
+    ["MDF prêteur B (%)", _fmtPctDetail(lead.mdf_preteur_b_pct ?? data.mdf_preteur_b_pct)],
+    [
+      "Taux d'intérêt prêteur B (chantier)",
+      _fmtPctDetail(data.taux_interet_preteur_b_projet)
+    ],
+    ["Taux d'inoccupation", _fmtPctDetail(data.taux_inoccupation_pct)],
+    ["Réduction énergie (refi)", _fmtPctDetail(lead.reduction_energie_pct)],
+    ["WiFi ajouté (refi)", _fmtBoolDetail(lead.ajout_wifi)],
+    ["Nb thermopompes ajoutées (APH)", _fmtIntDetail(lead.nb_thermopompes_ajoutees)],
+    ["Nb logements ajoutés", _fmtIntDetail(lead.nb_logements_ajoutes)]
+  ];
+  return (
+    <div className="mt-4">
+      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+        A · Hypothèses paramétrables
+      </h4>
+      <table className="mt-2 w-full">
+        <tbody>
+          {rows.map(([label, val]) => (
+            <tr key={label} className="border-t border-brand-800/60">
+              <td className="px-2 py-1 text-white/60">{label}</td>
+              <td className="px-2 py-1 text-right font-mono tabular-nums text-white/90">
+                {val}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ─── Sous-section B : typologie agrégée ────────────────────────
+
+function TypologieSubsection({ data }: { data: AnalysisResults }) {
+  const t = data.typology;
+  const rows: Array<[string, string]> = [
+    ["H13 — loyer pondéré ($/mois)", _fmtMoneyDetail(t.h13_loyer_pondere)],
+    ["Nb logements abordables", _fmtIntDetail(t.nb_abordables)],
+    ["Nb logements PDM (programme de modulation)", _fmtIntDetail(t.nb_pdm)],
+    ["Nouveau loyer moyen PDM ($/mois)", _fmtMoneyDetail(t.nouveau_loyer_moyen_pdm)]
+  ];
+  return (
+    <div className="mt-4">
+      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+        B · Typologie agrégée
+      </h4>
+      <table className="mt-2 w-full">
+        <tbody>
+          {rows.map(([label, val]) => (
+            <tr key={label} className="border-t border-brand-800/60">
+              <td className="px-2 py-1 text-white/60">{label}</td>
+              <td className="px-2 py-1 text-right font-mono tabular-nums text-white/90">
+                {val}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ─── Sous-section C : frais de démarrage détaillés ─────────────
+
+function FraisDemarrageDetailSubsection({
+  data,
+  overrides,
+  mdfPctFinal,
+  prixAchat
+}: {
+  data: AnalysisResults;
+  overrides: Record<string, number>;
+  mdfPctFinal: number;
+  prixAchat: number;
+}) {
+  const frais = data.frais_demarrage;
+  const financables = new Set(data.frais_demarrage_financables ?? []);
+  const mdfPctNumeric = mdfPctFinal > 1 ? mdfPctFinal / 100 : mdfPctFinal;
+  const mdfFromPrice = mdfPctNumeric * prixAchat;
+  const mdfTotal = data.mdf_preteur_b ?? null;
+
+  if (!frais) {
+    return (
+      <div className="mt-4">
+        <h4 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+          C · Frais de démarrage
+        </h4>
+        <p className="mt-2 text-white/40">
+          Détail indisponible dans cette version d&apos;analyse.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4">
+      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+        C · Frais de démarrage (détail par poste)
+      </h4>
+      <table className="mt-2 w-full">
+        <thead>
+          <tr className="text-white/40">
+            <th className="px-2 py-1 text-left font-normal">Poste</th>
+            <th className="px-2 py-1 text-right font-normal">Valeur</th>
+            <th className="px-2 py-1 text-center font-normal">Override</th>
+            <th className="px-2 py-1 text-center font-normal">Finançable</th>
+          </tr>
+        </thead>
+        <tbody>
+          {FRAIS_LABELS.map(([key, label]) => {
+            const v = frais[key];
+            const isOverridden = Object.prototype.hasOwnProperty.call(
+              overrides,
+              key
+            );
+            const isFinancable = financables.has(key);
+            return (
+              <tr key={key} className="border-t border-brand-800/60">
+                <td className="px-2 py-1 text-white/60">{label}</td>
+                <td className="px-2 py-1 text-right font-mono tabular-nums text-white/90">
+                  {_fmtMoneyDetail(v)}
+                </td>
+                <td className="px-2 py-1 text-center text-white/40">
+                  {isOverridden ? "manuel" : "calculé"}
+                </td>
+                <td className="px-2 py-1 text-center text-white/40">
+                  {isFinancable ? "oui" : "—"}
+                </td>
+              </tr>
+            );
+          })}
+          <tr className="border-t-2 border-brand-700">
+            <td className="px-2 py-1 font-semibold text-white">
+              Total frais de démarrage
+            </td>
+            <td className="px-2 py-1 text-right font-mono font-bold tabular-nums text-white">
+              {_fmtMoneyDetail(data.frais_demarrage_total)}
+            </td>
+            <td colSpan={2} />
+          </tr>
+        </tbody>
+      </table>
+
+      <div className="mt-3 rounded-lg border border-amber-400/30 bg-amber-500/5 p-3">
+        <p className="text-[10px] uppercase tracking-wider text-amber-300">
+          MDF prêteur B — composition
+        </p>
+        <table className="mt-1 w-full">
+          <tbody>
+            <tr className="border-t border-brand-800/60">
+              <td className="px-2 py-1 text-white/60">
+                {_fmtPctDetail(mdfPctNumeric)} × prix d&apos;achat
+                ({_fmtMoneyDetail(prixAchat)})
+              </td>
+              <td className="px-2 py-1 text-right font-mono tabular-nums text-white/90">
+                {_fmtMoneyDetail(mdfFromPrice)}
+              </td>
+            </tr>
+            <tr className="border-t border-brand-800/60">
+              <td className="px-2 py-1 text-white/60">
+                + Frais de démarrage total (cash après finançables)
+              </td>
+              <td className="px-2 py-1 text-right font-mono tabular-nums text-white/90">
+                {/* On affiche le total brut ; le détail finançables est ci-dessus. */}
+                {_fmtMoneyDetail(data.frais_demarrage_total)}
+              </td>
+            </tr>
+            <tr className="border-t-2 border-brand-700">
+              <td className="px-2 py-1 font-semibold text-amber-200">
+                = MDF prêteur B total (cash)
+              </td>
+              <td className="px-2 py-1 text-right font-mono font-bold tabular-nums text-amber-200">
+                {_fmtMoneyDetail(mdfTotal)}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Sous-section D : détail par scénario ──────────────────────
+
+const DEPENSES_LABELS: Array<[keyof DepensesBreakdown, string]> = [
+  ["inoccupation", "Inoccupation (% × revenus)"],
+  ["taxes_municipales", "Taxes municipales"],
+  ["taxes_scolaires", "Taxes scolaires"],
+  ["assurances", "Assurances"],
+  ["energie", "Énergie"],
+  ["concierge", "Concierge"],
+  ["entretien", "Entretien"],
+  ["gestion", "Gestion"],
+  ["wifi", "WiFi"],
+  ["thermopompes", "Thermopompes (APH)"],
+  ["autres", "Autres dépenses"]
+];
+
+function ScenariosDetailSubsection({ data }: { data: AnalysisResults }) {
+  const scenarios: Array<[string, ScenarioResult | null]> = [
+    ["Achat", data.scenarios.achat],
+    ["SCHL standard", data.scenarios.refi_schl],
+    ["APH 50 pts (Efficacité)", data.scenarios.refi_aph_50],
+    ["APH 100 pts (Abord + Eff.)", data.scenarios.refi_aph_100]
+  ];
+
+  return (
+    <div className="mt-4">
+      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+        D · Détail par scénario
+      </h4>
+      <div className="mt-2 space-y-4">
+        {scenarios.map(([label, s]) => (
+          <ScenarioDetailCard key={label} label={label} scenario={s} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ScenarioDetailCard({
+  label,
+  scenario
+}: {
+  label: string;
+  scenario: ScenarioResult | null;
+}) {
+  if (!scenario) {
+    return (
+      <div className="rounded-lg border border-brand-800 bg-brand-950 p-3">
+        <p className="text-[11px] font-semibold text-white/80">{label}</p>
+        <p className="mt-1 text-[10px] text-white/40">
+          Scénario non applicable (ex. pas d&apos;abordabilité).
+        </p>
+      </div>
+    );
+  }
+  const dep = scenario.depenses;
+  return (
+    <div className="rounded-lg border border-brand-800 bg-brand-950 p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-[11px] font-semibold text-white">{label}</p>
+        <p className="text-[10px] text-white/40">
+          LTV {(scenario.ltv * 100).toFixed(0)} % · amort.{" "}
+          {scenario.amort_annees} ans · RCD {scenario.rcd.toFixed(2)}
+        </p>
+      </div>
+
+      <table className="mt-2 w-full">
+        <tbody>
+          <tr className="border-t border-brand-800/60">
+            <td className="px-2 py-1 text-white/60">Nombre de logements</td>
+            <td className="px-2 py-1 text-right font-mono tabular-nums text-white/90">
+              {_fmtIntDetail(scenario.nb_log)}
+            </td>
+          </tr>
+          <tr className="border-t border-brand-800/60">
+            <td className="px-2 py-1 text-white/60">Loyer moyen ($/mois)</td>
+            <td className="px-2 py-1 text-right font-mono tabular-nums text-white/90">
+              {_fmtMoneyDetail(scenario.loyer_mois)}
+            </td>
+          </tr>
+          <tr className="border-t border-brand-800/60">
+            <td className="px-2 py-1 text-white/60">Revenus totaux ($/an)</td>
+            <td className="px-2 py-1 text-right font-mono tabular-nums text-white/90">
+              {_fmtMoneyDetail(scenario.revenus_totaux)}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* Détail des dépenses */}
+      <p className="mt-3 text-[10px] uppercase tracking-wider text-white/40">
+        Dépenses
+      </p>
+      <table className="mt-1 w-full">
+        <tbody>
+          {DEPENSES_LABELS.map(([key, lbl]) => (
+            <tr key={key} className="border-t border-brand-800/60">
+              <td className="px-2 py-1 text-white/60">{lbl}</td>
+              <td className="px-2 py-1 text-right font-mono tabular-nums text-white/80">
+                {dep ? _fmtMoneyDetail(dep[key]) : "—"}
+              </td>
+            </tr>
+          ))}
+          <tr className="border-t-2 border-brand-700">
+            <td className="px-2 py-1 font-semibold text-white">
+              Total dépenses
+            </td>
+            <td className="px-2 py-1 text-right font-mono font-bold tabular-nums text-white">
+              {_fmtMoneyDetail(scenario.depenses_total)}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* Bloc valeurs + financement */}
+      <p className="mt-3 text-[10px] uppercase tracking-wider text-white/40">
+        Valeurs et financement
+      </p>
+      <table className="mt-1 w-full">
+        <tbody>
+          <tr className="border-t border-brand-800/60">
+            <td className="px-2 py-1 text-white/60">
+              Revenus nets (revenus − dépenses)
+            </td>
+            <td className="px-2 py-1 text-right font-mono tabular-nums text-white/90">
+              {_fmtMoneyDetail(scenario.revenus_net)}
+            </td>
+          </tr>
+          <tr className="border-t border-brand-800/60">
+            <td className="px-2 py-1 text-white/60">Valeur éco RCD</td>
+            <td className="px-2 py-1 text-right font-mono tabular-nums text-white/80">
+              {_fmtMoneyDetail(scenario.valeur_eco_rcd)}
+            </td>
+          </tr>
+          <tr className="border-t border-brand-800/60">
+            <td className="px-2 py-1 text-white/60">Valeur éco TGA</td>
+            <td className="px-2 py-1 text-right font-mono tabular-nums text-white/80">
+              {_fmtMoneyDetail(scenario.valeur_eco_tga)}
+            </td>
+          </tr>
+          <tr className="border-t border-brand-800/60">
+            <td className="px-2 py-1 text-white/60">Valeur marchande</td>
+            <td className="px-2 py-1 text-right font-mono tabular-nums text-white/80">
+              {_fmtMoneyDetail(scenario.valeur_marchande)}
+            </td>
+          </tr>
+          <tr className="border-t border-brand-800/60">
+            <td className="px-2 py-1 font-semibold text-white">
+              Valeur retenue
+            </td>
+            <td className="px-2 py-1 text-right font-mono font-bold tabular-nums text-white">
+              {_fmtMoneyDetail(scenario.valeur_retenue)}
+            </td>
+          </tr>
+          <tr className="border-t border-brand-800/60">
+            <td className="px-2 py-1 font-semibold text-white">
+              Financement (prêt accordé)
+            </td>
+            <td className="px-2 py-1 text-right font-mono font-bold tabular-nums text-white">
+              {_fmtMoneyDetail(scenario.financement)}
+            </td>
+          </tr>
+          {scenario.mdf_necessaire != null ? (
+            <tr className="border-t border-brand-800/60">
+              <td className="px-2 py-1 text-white/60">MDF nécessaire</td>
+              <td className="px-2 py-1 text-right font-mono tabular-nums text-amber-200">
+                {_fmtMoneyDetail(scenario.mdf_necessaire)}
+              </td>
+            </tr>
+          ) : null}
+          {scenario.equite_a_la_fin != null ? (
+            <tr className="border-t border-brand-800/60">
+              <td className="px-2 py-1 text-white/60">Équité à la fin</td>
+              <td
+                className={`px-2 py-1 text-right font-mono tabular-nums ${scenario.equite_a_la_fin >= 0 ? "text-emerald-300" : "text-rose-300"}`}
+              >
+                {_fmtMoneyDetail(scenario.equite_a_la_fin)}
+              </td>
+            </tr>
+          ) : null}
+          {scenario.cashflow_annuel != null ? (
+            <tr className="border-t border-brand-800/60">
+              <td className="px-2 py-1 text-white/60">Cashflow annuel</td>
+              <td
+                className={`px-2 py-1 text-right font-mono tabular-nums ${scenario.cashflow_annuel >= 0 ? "text-emerald-300" : "text-rose-300"}`}
+              >
+                {_fmtMoneyDetail(scenario.cashflow_annuel)}
+              </td>
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ─── Sous-section E : best refi ────────────────────────────────
+
+function BestRefiSubsection({ data }: { data: AnalysisResults }) {
+  return (
+    <div className="mt-4">
+      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+        E · Best refi (scénario retenu)
+      </h4>
+      <table className="mt-2 w-full">
+        <tbody>
+          <tr className="border-t border-brand-800/60">
+            <td className="px-2 py-1 text-white/60">Programme retenu</td>
+            <td className="px-2 py-1 text-right font-mono tabular-nums text-emerald-300">
+              {data.best_refi.program}
+            </td>
+          </tr>
+          <tr className="border-t border-brand-800/60">
+            <td className="px-2 py-1 font-semibold text-white">
+              Montant (équité finale)
+            </td>
+            <td className="px-2 py-1 text-right font-mono font-bold tabular-nums text-emerald-300">
+              {_fmtMoneyDetail(data.best_refi.amount)}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   );
 }
