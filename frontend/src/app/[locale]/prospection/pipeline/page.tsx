@@ -2,16 +2,21 @@
 
 import { useEffect, useState } from "react";
 import {
-  Building,
   ChevronDown,
   ChevronRight,
-  Flame,
+  Eye,
   Loader2,
-  Plus
+  Plus,
+  Trash2
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { authedFetch } from "@/lib/auth";
+import { useConfirm } from "@/components/confirm-dialog";
+import {
+  LeadAnalysisCard,
+  type LeadAnalysisCardBadge
+} from "@/components/lead-analysis-card";
 import { Link, useRouter } from "@/i18n/navigation";
 import { useProspectionLayout } from "../layout";
 
@@ -72,41 +77,35 @@ function sectionOf(priority: string): SectionKey {
   return "active";
 }
 
-/** Formatage monétaire identique à celui de la page Analyses des
- * leads : entier arrondi, espaces tous les 3 chiffres, suffixe " $". */
-function fmtMoney(n: number | null | undefined): string {
-  if (n == null) return "—";
-  const rounded = Math.round(n);
-  const sign = rounded < 0 ? "-" : "";
-  const abs = Math.abs(rounded).toString();
-  const withSep = abs.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-  return `${sign}${withSep} $`;
-}
+/** Metadonnees du badge affiche en footer de chaque card, et de la
+ * pastille coloree placee a cote du titre de section. La palette est
+ * partagee entre les deux pour rester coherente :
+ *   - active   : bleu
+ *   - termine  : vert
+ *   - abandonne: rouge
+ * Les classes Tailwind du badge passent par le mapping statique du
+ * composant `LeadAnalysisCard`. Les classes de pastille sont aussi
+ * statiques (purge-safe). */
+const SECTION_BADGE: Record<SectionKey, LeadAnalysisCardBadge> = {
+  active: { label: "Actif", color: "blue" },
+  termine: { label: "Terminé", color: "emerald" },
+  abandonne: { label: "Abandonné", color: "rose" }
+};
 
-/** Métadonnées du badge selon la section. Aligné sur la palette du
- * kanban des leads (emerald = pipeline actif, blue = terminé,
- * rose = abandonné). */
-const SECTION_BADGE: Record<
-  SectionKey,
-  { label: string; cls: string }
-> = {
-  active: {
-    label: "Pipeline",
-    cls: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-  },
-  termine: {
-    label: "Terminé",
-    cls: "border-blue-500/40 bg-blue-500/10 text-blue-300"
-  },
-  abandonne: {
-    label: "Abandonné",
-    cls: "border-rose-500/40 bg-rose-500/10 text-rose-300"
-  }
+/** Pastille coloree (point rond 8px) placee a cote du titre de
+ * section. Inspire du markup utilise pour les colonnes du kanban
+ * "Analyses des leads" (cf. `analyses-leads/page.tsx`, section
+ * `COLUMNS` -> `col.dot`). Classes statiques pour rester purge-safe. */
+const SECTION_DOT: Record<SectionKey, string> = {
+  active: "bg-blue-500",
+  termine: "bg-emerald-500",
+  abandonne: "bg-rose-500"
 };
 
 export default function PipelineDealsListPage() {
   const { onOpenSidebar } = useProspectionLayout();
   const router = useRouter();
+  const confirm = useConfirm();
   const [deals, setDeals] = useState<Deal[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -188,6 +187,34 @@ export default function PipelineDealsListPage() {
     } catch {
       setDeals(prev);
       setError("Mise à jour échouée.");
+    }
+  }
+
+  /**
+   * Suppression d'un deal avec confirmation. Apres confirm, retire
+   * de la liste optimiste puis appelle DELETE. En cas d'echec API,
+   * on rollback a l'etat precedent.
+   */
+  async function deleteDeal(dealId: number, label: string) {
+    const ok = await confirm({
+      title: `Supprimer « ${label} » du Pipeline ?`,
+      description:
+        "Le deal, ses taches et son historique seront effaces. La fiche d'analyse liee (si elle existe) restera intacte.",
+      confirmLabel: "Supprimer",
+      destructive: true
+    });
+    if (!ok) return;
+    const prev = deals;
+    setDeals((xs) => xs.filter((d) => d.id !== dealId));
+    try {
+      const r = await authedFetch(
+        `/api/v1/prospection/deals/${dealId}`,
+        { method: "DELETE" }
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    } catch {
+      setDeals(prev);
+      setError("Suppression échouée.");
     }
   }
 
@@ -311,6 +338,7 @@ export default function PipelineDealsListPage() {
               onCardClick={(id) =>
                 router.push(`/prospection/pipeline/${id}` as never)
               }
+              onDeleteDeal={deleteDeal}
             />
 
             <PipelineSection
@@ -331,6 +359,7 @@ export default function PipelineDealsListPage() {
               onCardClick={(id) =>
                 router.push(`/prospection/pipeline/${id}` as never)
               }
+              onDeleteDeal={deleteDeal}
             />
 
             <PipelineSection
@@ -352,6 +381,7 @@ export default function PipelineDealsListPage() {
               onCardClick={(id) =>
                 router.push(`/prospection/pipeline/${id}` as never)
               }
+              onDeleteDeal={deleteDeal}
             />
           </div>
         )}
@@ -384,7 +414,8 @@ function PipelineSection({
   didDrop,
   setDidDrop,
   onDropSection,
-  onCardClick
+  onCardClick,
+  onDeleteDeal
 }: {
   section: SectionKey;
   title: string;
@@ -402,6 +433,7 @@ function PipelineSection({
   setDidDrop: (v: boolean) => void;
   onDropSection: (s: SectionKey) => void;
   onCardClick: (id: number) => void;
+  onDeleteDeal: (id: number, label: string) => void;
 }) {
   const isDragTarget = dragDealId != null && dragOverSection === section;
 
@@ -457,6 +489,12 @@ function PipelineSection({
             <ChevronRight className="h-4 w-4 text-white/60" />
           )
         ) : null}
+        {/* Pastille coloree (8px) — bleu/vert/rouge selon la section,
+            inspiree des titres de colonnes du kanban Analyses des leads. */}
+        <span
+          className={`inline-block h-2 w-2 rounded-full ${SECTION_DOT[section]}`}
+          aria-hidden
+        />
         <h2 className="text-sm font-semibold text-white/90">{title}</h2>
         <span className="rounded-md bg-brand-900 px-2 py-0.5 text-[11px] text-white/60">
           {deals.length}
@@ -500,6 +538,7 @@ function PipelineSection({
                     }
                     onCardClick(d.id);
                   }}
+                  onDelete={() => onDeleteDeal(d.id, d.address)}
                 />
               </li>
             ))}
@@ -511,14 +550,24 @@ function PipelineSection({
 }
 
 /**
- * Card individuelle d'un deal — style aligné sur LeadCard
- * (page Analyses des leads) : adresse en titre, ville en sous-titre,
- * ligne de métadonnées compactes, programme SCHL retenu, MDF prêteur B,
- * badge coloré selon la section.
+ * Card individuelle d'un deal — utilise le composant partage
+ * `LeadAnalysisCard` (meme rendu visuel que le kanban "Analyses des
+ * leads").
  *
- * Si `deal.lead_analysis` est null (deal créé manuellement, sans
- * fiche d'analyse liée), on affiche seulement l'adresse + la date
- * d'ajout — pas de fallback inventé.
+ * Particularites du Pipeline (vs. kanban Analyses) :
+ *   - Le badge reflete la section (Actif=blue, Termine=emerald,
+ *     Abandonne=rose).
+ *   - Pas de bouton "+ Pipeline" (le deal y est deja).
+ *   - Le bouton "Fiche" navigue vers `/prospection/pipeline/{id}`
+ *     (pas un modal — c'est une vraie page).
+ *   - Bouton poubelle (delete) qui passe par le confirm + DELETE
+ *     `/prospection/deals/{id}`.
+ *
+ * Le wrapper externe porte le drag-and-drop natif HTML5 : la card
+ * partagee reste agnostique a ces handlers. Si `deal.lead_analysis`
+ * est null (deal cree manuellement), le composant partage affiche
+ * uniquement l'adresse — on ajoute la date d'ajout sous le badge
+ * via un fallback specifique au Pipeline.
  */
 function DealCard({
   deal,
@@ -526,7 +575,8 @@ function DealCard({
   dragging,
   onDragStart,
   onDragEnd,
-  onClick
+  onClick,
+  onDelete
 }: {
   deal: Deal;
   section: SectionKey;
@@ -534,30 +584,43 @@ function DealCard({
   onDragStart: (ev: React.DragEvent<HTMLDivElement>) => void;
   onDragEnd: () => void;
   onClick: () => void;
+  onDelete: () => void;
 }) {
   const la = deal.lead_analysis;
   const badge = SECTION_BADGE[section];
+
+  // Map du shape `Deal` -> shape attendu par le composant partage.
+  // Quand la fiche d'analyse liee est absente, on passe null sur
+  // chaque champ metadonnee pour que la card masque gracieusement
+  // ces lignes (le composant ne rend que ce qui est non-null).
+  const cardData = {
+    id: deal.id,
+    address: deal.address,
+    city: la?.city ?? null,
+    nb_logements: la?.nb_logements ?? null,
+    asking_price: la?.asking_price ?? null,
+    best_refi_amount: la?.best_refi_amount ?? null,
+    best_refi_program: la?.best_refi_program ?? null,
+    mdf_preteur_b: la?.mdf_preteur_b ?? null
+  };
 
   return (
     <div
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      onClick={onClick}
-      role="link"
       tabIndex={0}
+      role="link"
       onKeyDown={(ev) => {
         if (ev.key === "Enter" || ev.key === " ") {
           ev.preventDefault();
           onClick();
         }
       }}
-      className={`block cursor-pointer rounded-xl border border-brand-800 bg-brand-900 p-3 text-left transition hover:border-emerald-500/50 ${dragging ? "opacity-50" : ""}`}
+      className={`cursor-grab transition active:cursor-grabbing ${dragging ? "opacity-50" : ""}`}
     >
-      {/* Lien invisible pour conserver la sémantique de navigation
-          côté SR / clic-milieu / "ouvrir dans un nouvel onglet".
-          draggable={false} pour ne pas interférer avec le drag du
-          parent. */}
+      {/* Lien invisible pour conserver la semantique de navigation
+          cote SR / clic-milieu / "ouvrir dans un nouvel onglet". */}
       <Link
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         href={`/prospection/pipeline/${deal.id}` as any}
@@ -568,71 +631,38 @@ function DealCard({
         Ouvrir {deal.address}
       </Link>
 
-      {/* Titre — adresse. */}
-      <h3 className="line-clamp-2 text-sm font-semibold text-white">
-        {deal.address}
-      </h3>
-
-      {/* Sous-titre — ville (depuis la fiche d'analyse, si dispo). */}
-      {la?.city ? (
-        <p className="mt-0.5 text-[11px] text-white/50">{la.city}</p>
-      ) : null}
-
-      {la ? (
-        <>
-          {/* Ligne de métadonnées compactes avec icônes. */}
-          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-white/60">
-            {la.nb_logements != null ? (
-              <span className="inline-flex items-center gap-0.5">
-                <Building className="h-3 w-3" /> {la.nb_logements} log.
-              </span>
-            ) : null}
-            {la.asking_price != null ? (
-              <span className="font-mono tabular-nums">
-                {fmtMoney(la.asking_price)}
-              </span>
-            ) : null}
-            {la.best_refi_amount != null ? (
-              <span
-                className={`inline-flex items-center gap-0.5 ${
-                  la.best_refi_amount >= 0
-                    ? "text-emerald-300"
-                    : "text-rose-300"
-                }`}
-                title={la.best_refi_program || ""}
-              >
-                <Flame className="h-3 w-3" />
-                {la.best_refi_amount >= 0 ? "refi" : "perte"}{" "}
-                {fmtMoney(la.best_refi_amount)}
-              </span>
-            ) : null}
-          </div>
-
-          {/* Programme SCHL retenu. */}
-          {la.best_refi_program ? (
-            <p
-              className="mt-1 truncate text-[10px] text-white/40"
-              title={la.best_refi_program}
+      <LeadAnalysisCard
+        data={cardData}
+        badge={badge}
+        onClick={onClick}
+        actions={
+          <>
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={`/prospection/pipeline/${deal.id}` as any}
+              className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-brand-950 px-1.5 py-0.5 text-[10px] text-white/70 hover:text-white"
+              title="Ouvrir la fiche du deal"
             >
-              {la.best_refi_program}
-            </p>
-          ) : null}
-
-          {/* MDF prêteur B. */}
-          {la.mdf_preteur_b != null ? (
-            <p
-              className="mt-1 text-[11px] text-amber-300/80"
-              title="Mise de fonds avec prêteur B = % MDF × prix d'achat + frais démarrage"
+              <Eye className="h-3 w-3" />
+              Fiche
+            </Link>
+            <button
+              type="button"
+              onClick={onDelete}
+              className="inline-flex items-center rounded-md border border-white/15 bg-brand-950 p-0.5 text-white/40 hover:border-rose-400/50 hover:text-rose-300"
+              title="Supprimer le deal"
+              aria-label="Supprimer le deal"
             >
-              MDF prêteur B :{" "}
-              <span className="font-mono">{fmtMoney(la.mdf_preteur_b)}</span>
-            </p>
-          ) : null}
-        </>
-      ) : (
-        // Fallback minimal : deal créé manuellement, sans fiche
-        // d'analyse liée. On montre juste la date d'ajout.
-        <p className="mt-2 text-[11px] text-white/40">
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </>
+        }
+      />
+
+      {/* Fallback Pipeline : deal sans fiche d'analyse — on montre
+          la date d'ajout sous la card pour donner un repere temporel. */}
+      {la == null ? (
+        <p className="mt-1 px-2.5 text-[10px] text-white/40">
           Ajouté le{" "}
           {new Date(deal.created_at).toLocaleDateString("fr-CA", {
             day: "2-digit",
@@ -640,16 +670,7 @@ function DealCard({
             year: "numeric"
           })}
         </p>
-      )}
-
-      {/* Badge de section en bas. */}
-      <div className="mt-2 flex items-center">
-        <span
-          className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${badge.cls}`}
-        >
-          {badge.label}
-        </span>
-      </div>
+      ) : null}
     </div>
   );
 }
