@@ -130,7 +130,7 @@ export default function AnalysesLeadsPage() {
   const [rawText, setRawText] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [extracting, setExtracting] = useState(false);
-  const [extractMsg, setExtractMsg] = useState<string | null>(null);
+  const [extractResult, setExtractResult] = useState<{ count: number; warnings: string[] } | null>(null);
   const [extractErr, setExtractErr] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -225,7 +225,7 @@ export default function AnalysesLeadsPage() {
 
   async function onExtract() {
     setExtractErr(null);
-    setExtractMsg(null);
+    setExtractResult(null);
     const hasSource =
       urlsText.trim() || rawText.trim() || files.length > 0;
     if (!hasSource) {
@@ -253,13 +253,7 @@ export default function AnalysesLeadsPage() {
       setUrlsText("");
       setRawText("");
       setFiles([]);
-      const n = data.created.length;
-      const warnTxt = data.warnings.length
-        ? ` · ${data.warnings.length} avertissement(s)`
-        : "";
-      setExtractMsg(
-        `${n} fiche${n > 1 ? "s" : ""} créée${n > 1 ? "s" : ""}${warnTxt}`
-      );
+      setExtractResult({ count: data.created.length, warnings: data.warnings || [] });
       await reload();
     } catch (e) {
       setExtractErr((e as Error).message);
@@ -470,10 +464,27 @@ export default function AnalysesLeadsPage() {
             {extractErr}
           </p>
         ) : null}
-        {extractMsg ? (
-          <p className="mt-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-            ✓ {extractMsg}
-          </p>
+        {extractResult ? (
+          <div className="mt-3 space-y-2">
+            <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+              ✓ {extractResult.count} fiche{extractResult.count > 1 ? "s" : ""} créée{extractResult.count > 1 ? "s" : ""}
+              {extractResult.count === 0 && extractResult.warnings.length === 0
+                ? " (rien à extraire)"
+                : ""}
+            </p>
+            {extractResult.warnings.length > 0 ? (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-300">
+                  ⚠ {extractResult.warnings.length} avertissement{extractResult.warnings.length > 1 ? "s" : ""}
+                </p>
+                <ul className="mt-1.5 space-y-1.5 text-[11px] text-amber-200/90">
+                  {extractResult.warnings.map((w, i) => (
+                    <li key={i} className="whitespace-pre-wrap break-words">• {w}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
         ) : null}
 
         <div className="mt-4 flex justify-end">
