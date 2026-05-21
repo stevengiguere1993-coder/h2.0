@@ -473,11 +473,11 @@ export default function AnalysesLeadsPage() {
                 : ""}
             </p>
             {extractResult.warnings.length > 0 ? (
-              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-300">
+              <div className="rounded-lg border border-amber-500/50 bg-amber-500/15 px-3 py-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-300">
                   ⚠ {extractResult.warnings.length} avertissement{extractResult.warnings.length > 1 ? "s" : ""}
                 </p>
-                <ul className="mt-1.5 space-y-1.5 text-[11px] text-amber-200/90">
+                <ul className="mt-1.5 space-y-1.5 text-[11px] text-amber-900 dark:text-amber-100">
                   {extractResult.warnings.map((w, i) => (
                     <li key={i} className="whitespace-pre-wrap break-words">• {w}</li>
                   ))}
