@@ -65,6 +65,24 @@ log = logging.getLogger(__name__)
 MODEL_TAG = "local-parser-v1"
 
 
+# Champs « clés » d'une fiche immeuble — sert à mesurer la couverture
+# d'une extraction. Très peu de champs trouvés ⇒ format mal pris en
+# charge : on le signale pour qu'il soit transmis et le parser amélioré.
+_KEY_FIELDS: Tuple[str, ...] = (
+    "address", "city", "asking_price", "nb_logements", "typology",
+    "revenus_bruts", "taxes_municipales", "taxes_scolaires",
+    "assurances", "energie", "evaluation_municipale",
+    "annee_construction", "superficie_terrain", "superficie_batiment",
+)
+
+
+def _coverage(rec: Dict[str, Any]) -> int:
+    """Nombre de champs clés réellement renseignés dans une fiche."""
+    return sum(
+        1 for f in _KEY_FIELDS if rec.get(f) not in (None, "", {}, [])
+    )
+
+
 # ── Activation du support HEIC/HEIF (photos iPhone) ───────────────
 #
 # Depuis iOS 11, les iPhones prennent des photos en .heic par défaut.
@@ -1675,6 +1693,18 @@ async def extract_lead_info(
             data_out.append(merged)
 
     if data_out:
+        # Détection « format mal pris en charge » : si la meilleure
+        # fiche n'a presque aucun champ clé, on le signale clairement
+        # pour que le document soit transmis et le parser amélioré.
+        best = max((_coverage(r) for r in data_out), default=0)
+        if best < 4:
+            warnings.append(
+                f"⚠ Extraction faible — {best} champ(s) clé(s) sur "
+                f"{len(_KEY_FIELDS)} reconnus. Ce format de document "
+                "est mal pris en charge par le parser : transmets-le "
+                "à l'équipe pour le faire évoluer. En attendant, "
+                "complète les champs manquants à la main."
+            )
         return ExtractionResult(
             data=data_out,
             model_used=MODEL_TAG,
