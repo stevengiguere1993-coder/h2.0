@@ -33,6 +33,7 @@ type Client = {
   phone: string | null;
   address: string | null;
   notes: string | null;
+  language: string;
   contact_request_id: number | null;
   qbo_customer_id: string | null;
   created_at: string;
@@ -57,6 +58,7 @@ export default function ClientDetailPage() {
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [notes, setNotes] = useState("");
+  const [language, setLanguage] = useState("fr");
 
   useEffect(() => {
     let cancelled = false;
@@ -74,6 +76,7 @@ export default function ClientDetailPage() {
         setPhone(data.phone || "");
         setAddress(data.address || "");
         setNotes(data.notes || "");
+        setLanguage(data.language || "fr");
       } catch {
         if (!cancelled) setError("Client introuvable.");
       } finally {
@@ -93,9 +96,10 @@ export default function ClientDetailPage() {
       email !== (c.email || "") ||
       phone !== (c.phone || "") ||
       address !== (c.address || "") ||
-      notes !== (c.notes || "")
+      notes !== (c.notes || "") ||
+      language !== (c.language || "fr")
     );
-  }, [c, name, email, phone, address, notes]);
+  }, [c, name, email, phone, address, notes, language]);
 
   async function saveAll() {
     if (!c) return;
@@ -107,7 +111,8 @@ export default function ClientDetailPage() {
         email: email.trim() || null,
         phone: phone.trim() || null,
         address: address.trim() || null,
-        notes: notes.trim() || null
+        notes: notes.trim() || null,
+        language
       };
       const res = await authedFetch(`/api/v1/clients/${id}`, {
         method: "PUT",
@@ -231,6 +236,8 @@ export default function ClientDetailPage() {
                 setAddress={setAddress}
                 notes={notes}
                 setNotes={setNotes}
+                language={language}
+                setLanguage={setLanguage}
                 saving={saving}
                 dirty={dirty}
                 onSave={saveAll}
@@ -267,6 +274,8 @@ function ClientTabs({
   setAddress,
   notes,
   setNotes,
+  language,
+  setLanguage,
   saving,
   dirty,
   onSave
@@ -282,6 +291,8 @@ function ClientTabs({
   setAddress: (v: string) => void;
   notes: string;
   setNotes: (v: string) => void;
+  language: string;
+  setLanguage: (v: string) => void;
   saving: boolean;
   dirty: boolean;
   onSave: () => void;
@@ -402,6 +413,21 @@ function ClientTabs({
                     />
                   ) : null}
                 </div>
+              </div>
+              <div>
+                <label htmlFor="c_language" className="label">Langue</label>
+                <select
+                  id="c_language"
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  className="input"
+                >
+                  <option value="fr">Français</option>
+                  <option value="en">Anglais</option>
+                </select>
+                <p className="mt-1 text-[11px] text-white/50">
+                  Langue de l&apos;état de compte transmis au client.
+                </p>
               </div>
               <div className="sm:col-span-2">
                 <label htmlFor="c_address" className="label">Adresse</label>

@@ -69,6 +69,8 @@ class Statement:
     billed_to_date: float
     paid_to_date: float
     remaining_balance: float
+    # Langue de rendu du relevé : « fr » (défaut) ou « en ».
+    lang: str = "fr"
 
 log = logging.getLogger(__name__)
 
@@ -192,30 +194,53 @@ _CLIENT_FACTURE_STATUSES = (
 )
 
 # L'état de compte est un document client : statuts de facture et modes
-# de paiement doivent être affichés en français, jamais en code brut
-# anglais (« PAID », « bank transfer »).
-_FACTURE_STATUS_FR = {
-    "draft": "Brouillon",
-    "sent": "Envoyée",
-    "paid": "Payée",
-    "overdue": "En retard",
-    "void": "Annulée",
+# de paiement sont affichés dans la langue du client, jamais en code
+# brut anglais (« PAID », « bank_transfer »).
+_FACTURE_STATUS_LABELS = {
+    "fr": {
+        "draft": "Brouillon",
+        "sent": "Envoyée",
+        "paid": "Payée",
+        "overdue": "En retard",
+        "void": "Annulée",
+    },
+    "en": {
+        "draft": "Draft",
+        "sent": "Sent",
+        "paid": "Paid",
+        "overdue": "Overdue",
+        "void": "Void",
+    },
 }
-_PAYMENT_METHOD_FR = {
-    "cash": "Argent comptant",
-    "credit_card": "Carte de crédit",
-    "debit_card": "Carte de débit",
-    "check": "Chèque",
-    "bank_transfer": "Virement bancaire",
-    "other": "Autre",
+_PAYMENT_METHOD_LABELS = {
+    "fr": {
+        "cash": "Argent comptant",
+        "credit_card": "Carte de crédit",
+        "debit_card": "Carte de débit",
+        "check": "Chèque",
+        "bank_transfer": "Virement bancaire",
+        "other": "Autre",
+    },
+    "en": {
+        "cash": "Cash",
+        "credit_card": "Credit card",
+        "debit_card": "Debit card",
+        "check": "Cheque",
+        "bank_transfer": "Bank transfer",
+        "other": "Other",
+    },
 }
 
 
 async def _build_statement(
-    db: AsyncSession, project: Project
+    db: AsyncSession,
+    project: Project,
+    force_lang: Optional[str] = None,
 ) -> Statement:
     """État de compte d'un projet : ses factures envoyées + les
-    paiements reçus, en ordre chronologique, avec les totaux."""
+    paiements reçus, en ordre chronologique, avec les totaux. La langue
+    suit celle du client, sauf si `force_lang` l'impose (le relevé
+    annexé aux factures reste en français)."""
     sm: Optional[Soumission] = None
     if project.soumission_id:
         sm = (
@@ -225,6 +250,21 @@ async def _build_statement(
                 )
             )
         ).scalar_one_or_none()
+
+    # Client + langue de rendu.
+    client: Optional[Client] = None
+    if project.client_id:
+        client = (
+            await db.execute(
+                select(Client).where(Client.id == project.client_id)
+            )
+        ).scalar_one_or_none()
+    lang = force_lang or (getattr(client, "language", None) or "fr")
+    if lang not in ("fr", "en"):
+        lang = "fr"
+    is_en = lang == "en"
+    status_labels = _FACTURE_STATUS_LABELS[lang]
+    method_labels = _PAYMENT_METHOD_LABELS[lang]
 
     factures = list(
         (
@@ -258,16 +298,20 @@ async def _build_statement(
     lines: List[StatementLine] = []
     for f in factures:
         when = (f.issued_at.date() if f.issued_at else f.created_at.date())
-        status_fr = _FACTURE_STATUS_FR.get(
+        status = status_labels.get(
             (f.status or "").lower(), (f.status or "").upper() or None
         )
         lines.append(
             StatementLine(
                 kind="facture",
                 when=when,
-                label=f"Facture {f.reference}",
+                label=(
+                    f"Invoice {f.reference}"
+                    if is_en
+                    else f"Facture {f.reference}"
+                ),
                 amount=float(f.total or 0),
-                detail=status_fr,
+                detail=status,
             )
         )
     for p in payments:
@@ -276,21 +320,31 @@ async def _build_statement(
             (f.reference for f in factures if f.id == p.facture_id),
             None,
         )
-        method = _PAYMENT_METHOD_FR.get(
+        method = method_labels.get(
             (p.method or "").lower(), (p.method or "").replace("_", " ")
         )
         detail_parts = [method]
         if p.reference:
-            detail_parts.append(f"réf. {p.reference}")
+            detail_parts.append(
+                f"ref. {p.reference}" if is_en else f"réf. {p.reference}"
+            )
+        if is_en:
+            label = (
+                f"Payment received — Invoice {ref}"
+                if ref
+                else "Payment received"
+            )
+        else:
+            label = (
+                f"Paiement reçu — Facture {ref}"
+                if ref
+                else "Paiement reçu"
+            )
         lines.append(
             StatementLine(
                 kind="payment",
                 when=p.paid_at,
-                label=(
-                    f"Paiement reçu — Facture {ref}"
-                    if ref
-                    else "Paiement reçu"
-                ),
+                label=label,
                 amount=float(p.amount or 0),
                 detail=" · ".join(x for x in detail_parts if x),
             )
@@ -303,25 +357,16 @@ async def _build_statement(
     paid_to_date = round(sum(float(p.amount or 0) for p in payments), 2)
     remaining = round((contract_total or billed_to_date) - paid_to_date, 2)
 
-    client_name: Optional[str] = None
-    if project.client_id:
-        c = (
-            await db.execute(
-                select(Client).where(Client.id == project.client_id)
-            )
-        ).scalar_one_or_none()
-        if c is not None:
-            client_name = c.name
-
     return Statement(
         project_name=project.name,
         soumission_reference=sm.reference if sm else None,
-        client_name=client_name,
+        client_name=client.name if client is not None else None,
         lines=lines,
         contract_total=round(contract_total, 2),
         billed_to_date=billed_to_date,
         paid_to_date=paid_to_date,
         remaining_balance=remaining,
+        lang=lang,
     )
 
 
@@ -339,7 +384,9 @@ async def _load_statement(
     ).scalar_one_or_none()
     if project is None:
         return None
-    return await _build_statement(db, project)
+    # Le relevé annexé à une facture reste en français (la facture
+    # elle-même l'est) ; seul le relevé autonome suit la langue client.
+    return await _build_statement(db, project, force_lang="fr")
 
 
 def _render_bytes(
@@ -788,12 +835,52 @@ def _render_statement_bytes(statement: Statement) -> bytes:
         ),
     }
 
+    # Le relevé est rendu dans la langue du client (fr par défaut).
+    lang = statement.lang if statement.lang in ("fr", "en") else "fr"
+    _T = {
+        "fr": {
+            "doc_title": "État de compte",
+            "title": "ÉTAT DE COMPTE",
+            "issued": "Émis le",
+            "client": "CLIENT",
+            "project": "Projet :",
+            "quote": "Soumission :",
+            "h_date": "Date",
+            "h_desc": "Description",
+            "h_detail": "Détail",
+            "h_debit": "Débit",
+            "h_credit": "Crédit",
+            "empty": "Aucune facture envoyée au client pour ce projet.",
+            "total_invoiced": "Total des factures",
+            "amount_paid": "Montant payé",
+            "balance_due": "Solde dû",
+        },
+        "en": {
+            "doc_title": "Account statement",
+            "title": "ACCOUNT STATEMENT",
+            "issued": "Issued on",
+            "client": "CLIENT",
+            "project": "Project:",
+            "quote": "Quote:",
+            "h_date": "Date",
+            "h_desc": "Description",
+            "h_detail": "Detail",
+            "h_debit": "Debit",
+            "h_credit": "Credit",
+            "empty": "No invoice sent to the client for this project.",
+            "total_invoiced": "Total invoiced",
+            "amount_paid": "Amount paid",
+            "balance_due": "Balance due",
+        },
+    }
+    tr = _T[lang]
+
     buf = io.BytesIO()
     doc = rl["SimpleDocTemplate"](
         buf, pagesize=rl["letter"],
         leftMargin=18 * mm, rightMargin=18 * mm,
         topMargin=18 * mm, bottomMargin=18 * mm,
-        title="État de compte", author=COMPANY_NAME,
+        title=tr["doc_title"], author=COMPANY_NAME,
     )
     story: list = []
 
@@ -813,8 +900,8 @@ def _render_statement_bytes(statement: Statement) -> bytes:
         Paragraph(f"{COMPANY_SITE} &middot; {COMPANY_EMAIL}", s["small"]),
     ])
     right_cell: list = [
-        Paragraph("ÉTAT DE COMPTE", s["h1"]),
-        Paragraph(f"Émis le {_date(datetime.utcnow())}", s["small"]),
+        Paragraph(tr["title"], s["h1"]),
+        Paragraph(f"{tr['issued']} {_date(datetime.utcnow())}", s["small"]),
     ]
     header_tbl = Table(
         [[left_cell, right_cell]],
@@ -831,17 +918,20 @@ def _render_statement_bytes(statement: Statement) -> bytes:
     if statement.client_name:
         info.append(f"<b>{statement.client_name}</b>")
     if statement.project_name:
-        info.append(f"Projet : {statement.project_name}")
+        info.append(f"{tr['project']} {statement.project_name}")
     if statement.soumission_reference:
-        info.append(f"Soumission : {statement.soumission_reference}")
+        info.append(f"{tr['quote']} {statement.soumission_reference}")
     if info:
-        story.append(Paragraph("CLIENT", s["accent"]))
+        story.append(Paragraph(tr["client"], s["accent"]))
         for line in info:
             story.append(Paragraph(line, s["body"]))
         story.append(Spacer(1, 12))
 
     if statement.lines:
-        st_data = [["Date", "Description", "Détail", "Débit", "Crédit"]]
+        st_data = [[
+            tr["h_date"], tr["h_desc"], tr["h_detail"],
+            tr["h_debit"], tr["h_credit"],
+        ]]
         for ln in statement.lines:
             if ln.kind == "facture":
                 debit, credit = ln.amount, 0.0
@@ -882,19 +972,16 @@ def _render_statement_bytes(statement: Statement) -> bytes:
         ]))
         story.append(st_tbl)
     else:
-        story.append(Paragraph(
-            "<i>Aucune facture envoyée au client pour ce projet.</i>",
-            s["small"],
-        ))
+        story.append(Paragraph(f"<i>{tr['empty']}</i>", s["small"]))
     story.append(Spacer(1, 12))
 
     # Récap client : total des factures envoyées, montant déjà payé,
     # et solde restant dû (total facturé − payé).
     solde_du = round(statement.billed_to_date - statement.paid_to_date, 2)
     recap_rows = [
-        ["Total des factures", _money(statement.billed_to_date)],
-        ["Montant payé", _money(statement.paid_to_date)],
-        ["Solde dû", _money(solde_du)],
+        [tr["total_invoiced"], _money(statement.billed_to_date)],
+        [tr["amount_paid"], _money(statement.paid_to_date)],
+        [tr["balance_due"], _money(solde_du)],
     ]
     recap_tbl = Table(
         recap_rows, colWidths=[doc.width * 0.30, doc.width * 0.20],

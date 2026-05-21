@@ -25,6 +25,12 @@ class Client(Base, TimestampMixin):
     address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Langue du client : « fr » (défaut) ou « en ». Détermine la langue
+    # de l'état de compte qui lui est transmis.
+    language: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="fr"
+    )
+
     # Link back to the original prospect (when the client was
     # converted from an accepted soumission). NULL when staff created
     # the client directly.
