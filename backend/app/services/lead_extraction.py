@@ -1,17 +1,17 @@
-"""Extraction d'infos immeuble — hybride Gemini + parser local.
+"""Extraction d'infos immeuble — parser local d'abord, Gemini en secours.
 
-Pipeline en deux étages :
-  1. PRIMAIRE — Gemini (palier gratuit). Il *comprend* la fiche et
-     extrait correctement typologie, revenus, dépenses, etc. — là où
-     le regex se trompe (année prise pour un montant, logements
-     mal comptés…).
-  2. SECOURS — parser Python pur (regex + OCR Tesseract) si Gemini
-     est indisponible : clé absente, quota atteint, panne réseau.
+Pipeline :
+  1. PRIMAIRE — parser Python pur (regex + OCR Tesseract), ancré sur
+     les libellés stables des fiches Centris (Nombre d'unités,
+     Unités résidentielles, Revenus bruts, Municipales/Scolaires,
+     Évaluation municipale…). Rapide, gratuit, sans quota, hors-ligne.
+  2. SECOURS — Gemini (palier gratuit) UNIQUEMENT si le parser local
+     ne sort rien (source inhabituelle, photo illisible). Comme le
+     parser couvre bien Centris, Gemini est rarement appelé → le
+     petit quota gratuit n'est pas gaspillé, pas d'erreur « maximum ».
 
-L'extraction fonctionne donc TOUJOURS, même hors-ligne : un quota
-épuisé devient un repli silencieux sur le parser local, jamais une
-erreur « maximum atteint ». `model_used` indique le moteur retenu
-(`gemini-2.0-flash` ou `local-parser-v1`).
+`model_used` indique le moteur retenu (`local-parser-v1` ou
+`gemini-2.0-flash`).
 
 Sources supportées :
   - URLs Centris.ca         → parser CSS spécifique (BeautifulSoup)
@@ -627,22 +627,33 @@ def parse_text(text: str) -> Dict[str, Any]:
         if 1700 <= y <= 2100:
             out["annee_construction"] = y
 
-    # Évaluation municipale.
+    # Évaluation municipale. Sur Centris : « ÉVALUATION MUNICIPALE
+    # (2026) Terrain 48 600 $ Bâtiment 481 400 $ Total 530 000 $ ».
+    # On saute le millésime entre parenthèses et on vise le « Total »
+    # du bloc (sinon le regex prenait l'année, ou le Terrain).
     m = re.search(
-        r"[ée]valuation\s+municipale(?:\s+totale)?[^\d$]{0,40}?\$?\s*"
-        r"([\d][\d\s\.,]*\d)\s*\$?",
+        r"[ée]valuation\s+municipale\s*(?:\(\s*\d{4}\s*\))?"
+        r"[\s\S]{0,90}?total[^\d$]{0,6}?([\d][\d\s.,]*\d)\s*\$",
         text,
         flags=re.I,
     )
+    if not m:
+        m = re.search(
+            r"[ée]valuation\s+municipale(?:\s+totale)?\s*"
+            r"(?:\(\s*\d{4}\s*\))?[^\d$]{0,8}?([\d][\d\s.,]*\d)\s*\$",
+            text,
+            flags=re.I,
+        )
     if m:
         v = _int_or_none(m.group(1))
         if v and v >= 1_000:
             out["evaluation_municipale"] = v
 
-    # Revenus bruts annuels.
+    # Revenus bruts annuels. Trailing « $ » exigé pour ne capter
+    # qu'un montant (« Revenus bruts potentiels 72 600 $ »).
     m = re.search(
-        r"revenus?\s*(?:bruts?\s+)?(?:annuels?\s+)?[^\d$]{0,15}?\$?\s*"
-        r"([\d][\d\s\.,]*\d)",
+        r"revenus?\s*(?:bruts?\s+)?(?:potentiels?\s+)?(?:annuels?\s+)?"
+        r"[^\d$]{0,15}?([\d][\d\s.,]*\d)\s*\$",
         text,
         flags=re.I,
     )
@@ -651,50 +662,57 @@ def parse_text(text: str) -> Dict[str, Any]:
         if v and v >= 1_000:
             out["revenus_bruts"] = v
 
-    # Taxes municipales.
+    # Taxes municipales. On saute un millésime entre parenthèses
+    # (« Municipales (2026) 9 115 $ ») — sinon le regex captait 2026.
+    # Le « $ » final garantit qu'on prend bien le montant.
     m = re.search(
-        r"taxes?\s+municipal(?:es?)?[^\d$]{0,15}?\$?\s*"
-        r"([\d][\d\s\.,]*\d)",
+        r"taxes?\s+municipal\w*\s*(?:\(\s*\d{4}\s*\))?"
+        r"[^\d$]{0,8}?([\d][\d\s.,]*\d)\s*\$",
         text,
         flags=re.I,
     )
     if m:
         v = _int_or_none(m.group(1))
-        if v and v >= 100:
+        if v and 100 <= v <= 5_000_000:
             out["taxes_municipales"] = v
 
-    # Taxes scolaires.
+    # Taxes scolaires. « taxes » optionnel — Centris liste juste
+    # « Scolaires (2026) 362 $ » sous l'en-tête TAXES.
     m = re.search(
-        r"taxes?\s+scolaires?[^\d$]{0,15}?\$?\s*([\d][\d\s\.,]*\d)",
+        r"(?:taxes?\s+)?scolaires?\s*(?:\(\s*\d{4}\s*\))?"
+        r"[^\d$]{0,8}?([\d][\d\s.,]*\d)\s*\$",
         text,
         flags=re.I,
     )
     if m:
         v = _int_or_none(m.group(1))
-        if v and v >= 50:
+        if v and 50 <= v <= 5_000_000:
             out["taxes_scolaires"] = v
 
-    # Assurances.
+    # Assurances. Trailing « $ » exigé : évite de capter la pub
+    # « assurances auto et habitation » et vise « Assurances 5 258 $ ».
     m = re.search(
-        r"assurances?[^\d$]{0,15}?\$?\s*([\d][\d\s\.,]*\d)",
+        r"assurances?[^\d$]{0,12}?([\d][\d\s.,]*\d)\s*\$",
         text,
         flags=re.I,
     )
     if m:
         v = _int_or_none(m.group(1))
-        if v and v >= 100:
+        if v and 100 <= v <= 5_000_000:
             out["assurances"] = v
 
-    # Énergie / chauffage payé par le propriétaire.
+    # Énergie / chauffage payé par le propriétaire. Trailing « $ »
+    # exigé pour viser un poste de dépense (« Électricité 5 228 $ »).
     m = re.search(
-        r"(?:[eé]nergie|chauffage|[eé]lectricit[eé]|hydro)[^\d$]{0,15}?\$?\s*"
-        r"([\d][\d\s\.,]*\d)",
+        r"(?:[eé]nergie|[eé]lectricit[eé]|hydro|chauffage|gaz|"
+        r"huile\s+[aà]\s+fournaise|mazout)"
+        r"[^\d$]{0,12}?([\d][\d\s.,]*\d)\s*\$",
         text,
         flags=re.I,
     )
     if m:
         v = _int_or_none(m.group(1))
-        if v and v >= 100:
+        if v and 100 <= v <= 5_000_000:
             out["energie"] = v
 
     # Stationnements.
@@ -738,7 +756,7 @@ def parse_text(text: str) -> Dict[str, Any]:
     # Adresse civique « 3715-3737 Rue Ethel », « 1234 Boulevard X »,
     # « 5678 Avenue Y ». On accepte un range numérique optionnel.
     m = re.search(
-        r"\b(\d{1,5}(?:\s*-\s*\d{1,5})?)\s+"
+        r"\b(\d{1,5}(?:\s*-\s*\d{1,5})?)[\s,]+"
         r"((?:Rue|Boul(?:evard)?\.?|Av(?:enue)?\.?|Ch(?:emin)?\.?|"
         r"Rte|Route|Place|Pl\.?|Mont[eé]e|Terrasse|Croissant)\s+"
         r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\-' \.]{2,50})",
@@ -749,25 +767,38 @@ def parse_text(text: str) -> Dict[str, Any]:
         addr = f"{m.group(1).strip()} {m.group(2).strip()}"
         out["address"] = re.sub(r"\s+", " ", addr).strip()[:200]
 
-    # Ville. Trois heuristiques, dans l'ordre de précision :
-    #   a) « Ville : Verdun » / « Municipalité : Verdun »
-    #   b) format québécois canonique « <adresse>, <Ville> (QC) <CP> »
-    #   c) immédiatement avant un code postal canadien
+    # Ville. Heuristiques par ordre de fiabilité décroissante :
+    city_val: Optional[str] = None
+    #   a) format Centris « …, <Ville> - Ville » (ex. Valcourt - Ville)
     m = re.search(
-        r"(?:Ville|Municipalit[eé])\s*:?\s*"
-        r"([A-ZÀ-Ÿ][A-Za-zÀ-ÿ\-' ]{2,40})",
+        r",\s*([A-ZÀ-Ÿ][A-Za-zÀ-ÿ\-']+(?:\s[A-ZÀ-Ÿ][A-Za-zÀ-ÿ\-']+)?)"
+        r"\s*-\s*Ville\b",
         text,
     )
     if m:
-        out["city"] = m.group(1).strip()
-    else:
+        city_val = m.group(1).strip()
+    #   b) format québécois canonique « <adresse>, <Ville> (QC) »
+    if not city_val:
         m = re.search(
             r",\s*([A-ZÀ-Ÿ][A-Za-zÀ-ÿ\-' ]{2,40}?)\s*"
             r"\(\s*(?:QC|Qu[eé]bec|ON|Ontario)\s*\)",
             text,
         )
         if m:
-            out["city"] = m.group(1).strip()
+            city_val = m.group(1).strip()
+    #   c) « Ville : <Nom> » / « Municipalité : <Nom> ». Le « : » est
+    #      EXIGÉ : sans lui le mot « Ville » seul (ex. Centris affiche
+    #      « Valcourt - Ville ») captait le texte d'à côté.
+    if not city_val:
+        m = re.search(
+            r"(?:Ville|Municipalit[eé])\s*:\s*"
+            r"([A-ZÀ-Ÿ][A-Za-zÀ-ÿ\-' ]{2,40})",
+            text,
+        )
+        if m:
+            city_val = m.group(1).strip()
+    if city_val:
+        out["city"] = city_val
 
     # Province (presque toujours QC, mais parfois explicite).
     if re.search(r"\bQu[eé]bec\b|\bQC\b", text):
@@ -1336,6 +1367,10 @@ def parse_pdf(blob: bytes) -> str:
 # avec couche texte ET une image OCR pour le même immeuble, on garde
 # les valeurs natives.
 _PARSER_PRIORITY: Dict[str, int] = {
+    # L'analyse texte de la page Centris (ancrée sur les libellés
+    # stables) prime sur le parser CSS, dont les sélecteurs se
+    # périment et renvoient parfois des valeurs fausses.
+    "centris-text": 105,
     "centris": 100,
     "duproprio": 100,
     "realtor": 100,
@@ -1478,6 +1513,12 @@ async def extract_lead_info(
         try:
             if parser_kind == "centris":
                 sources_for_url.append(("centris", parse_centris(html)))
+                # Le DOM Centris change souvent → on complète (et on
+                # priorise) avec l'analyse texte de la page strippée,
+                # ancrée sur les libellés stables de Centris.
+                sources_for_url.append(
+                    ("centris-text", parse_text(_strip_html(html)))
+                )
             elif parser_kind == "duproprio":
                 sources_for_url.append(("duproprio", parse_duproprio(html)))
             elif parser_kind == "realtor":
@@ -1620,44 +1661,9 @@ async def extract_lead_info(
                 "non supporté"
             )
 
-    # ── Extraction IA (Gemini) — PRIMAIRE ───
-    # Qualité nettement supérieure au parser regex. Si Gemini répond,
-    # on retourne son résultat. Sinon (clé absente, quota, panne) on
-    # retombe sur le parser local ci-dessous.
-    gemini_material = "\n\n".join(
-        p for p in gemini_material_parts if p.strip()
-    )
-    gemini_data, gemini_err = await _gemini_extract(
-        gemini_material, gemini_images
-    )
-    if gemini_data:
-        return ExtractionResult(
-            data=gemini_data,
-            model_used=EXTRACTION_MODEL,
-            warnings=warnings,
-        )
-
-    # ── Fallback : parser local (regex + OCR) ───
-    if gemini_err:
-        warnings.append(
-            f"⚠ Extraction IA non utilisée — {gemini_err}. "
-            "Repli sur le parser local (regex, qualité réduite) : "
-            "vérifiez bien chaque champ."
-        )
-
-    if not extracted:
-        if not warnings:
-            warnings.append("Aucune source fournie.")
-        return ExtractionResult(
-            data=[],
-            model_used=MODEL_TAG,
-            warnings=warnings,
-        )
-
-    # ── Regroupement par adresse ───
-    # Si plusieurs sources désignent le même immeuble (même adresse,
-    # ou pas d'adresse), on les fusionne. Si elles désignent des
-    # adresses différentes, on crée plusieurs fiches.
+    # ── Parser local — PRIMAIRE ───
+    # Regroupement par adresse : plusieurs sources du même immeuble
+    # fusionnent ; des adresses différentes créent plusieurs fiches.
     by_addr: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
     for tag, addr_key, data in extracted:
         by_addr.setdefault(addr_key, []).append((tag.split(":")[-1], data))
@@ -1668,8 +1674,34 @@ async def extract_lead_info(
         if merged:
             data_out.append(merged)
 
+    if data_out:
+        return ExtractionResult(
+            data=data_out,
+            model_used=MODEL_TAG,
+            warnings=warnings,
+        )
+
+    # ── Rescousse IA (Gemini) — UNIQUEMENT si le parser local n'a
+    # rien sorti (source inhabituelle, photo illisible…). Comme le
+    # parser local couvre bien Centris, Gemini n'est presque jamais
+    # appelé → le quota gratuit n'est pas consommé inutilement.
+    gemini_material = "\n\n".join(
+        p for p in gemini_material_parts if p.strip()
+    )
+    gemini_data, _gemini_err = await _gemini_extract(
+        gemini_material, gemini_images
+    )
+    if gemini_data:
+        return ExtractionResult(
+            data=gemini_data,
+            model_used=EXTRACTION_MODEL,
+            warnings=warnings,
+        )
+
+    if not warnings:
+        warnings.append("Aucune donnée exploitable extraite.")
     return ExtractionResult(
-        data=data_out,
+        data=[],
         model_used=MODEL_TAG,
         warnings=warnings,
     )
