@@ -40,7 +40,7 @@ class ConvertToFactureRequest(BaseModel):
             "this project (prix fixe)."
         ),
     )
-    soumission_percentage: int = Field(
+    soumission_percentage: float = Field(
         default=100, ge=1, le=100,
         description=(
             "Pourcentage cumulatif visé de la soumission à facturer "
@@ -195,7 +195,7 @@ async def convert_project_to_facture(
                 prefix_value = target_amount
                 prefix_kind = "amount"
             else:
-                target_pct = max(1, min(100, int(data.soumission_percentage)))
+                target_pct = max(1.0, min(100.0, float(data.soumission_percentage)))
                 target_amount = sm_base * (target_pct / 100.0)
                 prefix_value = float(target_pct)
                 prefix_kind = "pct"
@@ -221,7 +221,7 @@ async def convert_project_to_facture(
             if prefix_kind == "amount":
                 prefix = f"{int(round(prefix_value))} $ — "
             else:
-                prefix = f"{int(round(prefix_value))}% — " if pct != 100 else ""
+                prefix = f"{prefix_value:g}% — " if pct != 100 else ""
             for it in sm_items:
                 qty = float(it.quantity)
                 unit_price = round(float(it.unit_price) * ratio, 2)

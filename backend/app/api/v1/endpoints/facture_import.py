@@ -60,7 +60,7 @@ router = APIRouter(prefix="/factures", tags=["facture-import"])
 
 class ImportRequest(BaseModel):
     include_soumission: bool = False
-    soumission_percentage: int = Field(default=100, ge=1, le=100)
+    soumission_percentage: float = Field(default=100, ge=1, le=100)
     soumission_id: Optional[int] = Field(
         default=None,
         description=(
@@ -144,9 +144,9 @@ async def import_into_facture(
                         .order_by(SoumissionItem.position.asc(), SoumissionItem.id.asc())
                     )
                 ).scalars().all()
-                pct = max(1, min(100, int(data.soumission_percentage)))
+                pct = max(1.0, min(100.0, float(data.soumission_percentage)))
                 ratio = pct / 100.0
-                prefix = f"{pct}% — " if pct != 100 else ""
+                prefix = f"{pct:g}% — " if pct != 100 else ""
                 for it in sm_items:
                     qty = float(it.quantity)
                     unit_price = round(float(it.unit_price) * ratio, 2)
