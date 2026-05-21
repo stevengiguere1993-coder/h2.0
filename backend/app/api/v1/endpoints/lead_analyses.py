@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -893,13 +894,16 @@ def _heuristic_estimate_expenses(
 async def _ai_estimate_expenses(
     rec: LeadAnalysis,
 ) -> Optional[EstimateExpensesResponse]:
-    """Demande à Claude une estimation des dépenses manquantes en
+    """Demande à Gemini une estimation des dépenses manquantes en
     fonction de l'adresse, du prix, du nombre de logements et de
-    l'évaluation municipale. Retourne None si Claude indisponible
-    (le caller fera le fallback heuristique)."""
-    if not settings.anthropic_api_key:
+    l'évaluation municipale. Retourne None si Gemini indisponible
+    (le caller fera le fallback heuristique).
+
+    Migration Claude → Gemini : tier gratuit Google AI Studio
+    (1500 req/jour) — couvre largement les besoins d'estimation."""
+    if not settings.gemini_api_key:
         return None
-    import anthropic
+    import google.generativeai as genai
 
     prompt = (
         "Tu es un expert en immobilier locatif Québec. Estime les "
@@ -926,18 +930,25 @@ async def _ai_estimate_expenses(
         f"assurances={rec.assurances}"
     )
 
+    estimate_model = os.environ.get(
+        "LEAD_EXTRACTION_MODEL", "gemini-2.0-flash"
+    )
+
     try:
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        msg = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=500,
-            messages=[{"role": "user", "content": prompt}],
+        genai.configure(api_key=settings.gemini_api_key)
+        model = genai.GenerativeModel(
+            estimate_model,
+            generation_config=genai.GenerationConfig(
+                response_mime_type="application/json",
+                max_output_tokens=500,
+            ),
         )
+        response = await model.generate_content_async(prompt)
     except Exception as exc:  # noqa: BLE001
         log.warning("AI estimate expenses failed: %s", exc)
         return None
 
-    raw = "\n".join(b.text for b in msg.content if b.type == "text").strip()
+    raw = (response.text or "").strip()
     if raw.startswith("```"):
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```\s*$", "", raw)
@@ -1001,7 +1012,7 @@ class DebugExtractRequest(BaseModel):
 @router.post(
     "/debug-extract-url",
     summary=(
-        "Diagnostic : montre ce que l'extracteur envoie à Claude pour "
+        "Diagnostic : montre ce que l'extracteur envoie à Gemini pour "
         "une URL, et la réponse JSON brute"
     ),
 )
@@ -1009,7 +1020,7 @@ async def debug_extract_url(
     data: DebugExtractRequest,
     user: CurrentUser,
 ):
-    """Renvoie le texte stripé envoyé à Claude + la réponse brute,
+    """Renvoie le texte stripé envoyé à Gemini + la réponse brute,
     pour comprendre pourquoi une URL ne s'extrait pas."""
     _require_prospection(user)
     from app.services.lead_extraction import (
@@ -1023,7 +1034,7 @@ async def debug_extract_url(
     # Coupé pour ne pas exploser la réponse JSON.
     preview = fetched[:8000]
 
-    if not settings.anthropic_api_key:
+    if not settings.gemini_api_key:
         return {
             "preview_text_first_8k": preview,
             "fetched_total_len": len(fetched),
@@ -1031,33 +1042,28 @@ async def debug_extract_url(
             "raw_response": "(IA non configurée)",
         }
 
-    import anthropic
+    import google.generativeai as genai
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     try:
-        msg = client.messages.create(
-            model=EXTRACTION_MODEL,
-            max_tokens=4000,
-            system=SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": fetched},
-                        {
-                            "type": "text",
-                            "text": (
-                                "Extrais maintenant les infos selon "
-                                "le schéma ci-dessous.\n\n" + SCHEMA_GUIDE
-                            ),
-                        },
-                    ],
-                }
-            ],
+        genai.configure(api_key=settings.gemini_api_key)
+        model = genai.GenerativeModel(
+            EXTRACTION_MODEL,
+            system_instruction=SYSTEM_PROMPT,
+            generation_config=genai.GenerationConfig(
+                response_mime_type="application/json",
+                max_output_tokens=4000,
+            ),
         )
-        raw = "\n".join(
-            b.text for b in msg.content if b.type == "text"
-        ).strip()
+        response = await model.generate_content_async(
+            [
+                fetched,
+                (
+                    "Extrais maintenant les infos selon le schéma "
+                    "ci-dessous.\n\n" + SCHEMA_GUIDE
+                ),
+            ]
+        )
+        raw = (response.text or "").strip()
     except Exception as exc:  # noqa: BLE001
         return {
             "preview_text_first_8k": preview,

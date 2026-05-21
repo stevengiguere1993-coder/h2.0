@@ -84,9 +84,14 @@ class Settings(BaseSettings):
     # jobs (alternative gratuite aux Render Cron Jobs payants).
     cron_secret: Optional[str] = None
 
-    # Anthropic (SEO content + validation)
+    # Anthropic (SEO content + validation — usage hors extraction lead)
     anthropic_api_key: Optional[str] = None
     claude_model: str = "claude-sonnet-4-5"
+
+    # Gemini (Google AI Studio) — extraction des leads immobiliers
+    # (URLs, texte libre, images, PDFs). Tier gratuit : 1500 req/jour.
+    # Générer une clé : https://aistudio.google.com/app/apikey
+    gemini_api_key: Optional[str] = None
 
     # SLA : un nouveau prospect doit être contacté dans les X heures
     # qui suivent sa création, sinon une notif rouge fan-out aux
