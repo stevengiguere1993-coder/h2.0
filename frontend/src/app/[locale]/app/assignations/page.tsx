@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Archive,
   Briefcase,
   Calendar,
   CheckSquare,
@@ -87,6 +88,19 @@ function addDays(iso: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Date de fin d'une phase (ISO) = début + durée. null si non planifiée.
+function phaseEndISO(ph: Phase): string | null {
+  return ph.start_date && ph.duration_days
+    ? addDays(ph.start_date, ph.duration_days - 1)
+    : null;
+}
+
+function todayISO(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 export default function AssignationsPage() {
   const { onOpenSidebar } = useAppLayout();
   const [employes, setEmployes] = useState<Employe[]>([]);
@@ -102,6 +116,7 @@ export default function AssignationsPage() {
   const [selectedEmpId, setSelectedEmpId] = useState<number | null>(null);
   const [busyPhaseId, setBusyPhaseId] = useState<number | null>(null);
   const [showInactive, setShowInactive] = useState(false);
+  const [showArchivedPhases, setShowArchivedPhases] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -212,6 +227,24 @@ export default function AssignationsPage() {
       );
   }, [phases, selectedEmpId]);
 
+  // Une assignation est « terminée » quand la date de fin de la phase
+  // est passée — on l'archive dans une section repliée pour ne garder
+  // à l'écran que les phases en cours ou à venir.
+  const activePhases = useMemo(() => {
+    const today = todayISO();
+    return empPhases.filter((ph) => {
+      const end = phaseEndISO(ph);
+      return !end || end >= today;
+    });
+  }, [empPhases]);
+  const pastPhases = useMemo(() => {
+    const today = todayISO();
+    return empPhases.filter((ph) => {
+      const end = phaseEndISO(ph);
+      return !!end && end < today;
+    });
+  }, [empPhases]);
+
   const empEvents = useMemo(() => {
     if (!selectedEmpId) return [];
     return events
@@ -273,6 +306,77 @@ export default function AssignationsPage() {
     )
       return;
     await reassignPhase(phase, null);
+  }
+
+  function phaseItem(ph: Phase) {
+    const proj = projectById.get(ph.project_id);
+    const endISO = phaseEndISO(ph);
+    const coassignees = ph.assignee_employe_ids || [];
+    return (
+      <li
+        key={ph.id}
+        className="rounded-lg border border-brand-800 bg-brand-950 px-3 py-2.5"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={`/app/projets/${ph.project_id}` as any}
+              className="text-sm font-semibold text-white hover:text-accent-400"
+            >
+              {proj?.name || `Projet #${ph.project_id}`}
+            </Link>
+            <p className="mt-0.5 text-xs text-white/70">
+              Phase : {ph.name}
+            </p>
+            <p className="mt-0.5 text-[11px] text-white/50">
+              {ph.start_date
+                ? `${fmtDate(ph.start_date)}${
+                    endISO ? ` → ${fmtDate(endISO)}` : ""
+                  }`
+                : "Non planifiée"}
+              {ph.duration_days ? ` · ${ph.duration_days}j` : ""}
+            </p>
+            {coassignees.length > 1 ? (
+              <p className="mt-0.5 text-[10px] text-white/40">
+                + {coassignees.length - 1} autre
+                {coassignees.length - 1 > 1 ? "s" : ""} personne
+                {coassignees.length - 1 > 1 ? "s" : ""} sur cette phase
+              </p>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <select
+              value=""
+              disabled={busyPhaseId === ph.id}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (!v) return;
+                reassignPhase(ph, Number(v));
+              }}
+              className="rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-[11px] text-white disabled:opacity-50"
+            >
+              <option value="">Réassigner à…</option>
+              {employes
+                .filter((e) => e.id !== selectedEmpId)
+                .map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.full_name}
+                  </option>
+                ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => removeFromPhase(ph)}
+              disabled={busyPhaseId === ph.id}
+              className="text-[10px] text-rose-300 hover:text-rose-200 disabled:opacity-50"
+            >
+              Retirer de la phase
+            </button>
+          </div>
+        </div>
+      </li>
+    );
   }
 
   return (
@@ -418,98 +522,40 @@ export default function AssignationsPage() {
                   <section className="mt-5">
                     <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white/50">
                       <Briefcase className="h-3.5 w-3.5 text-accent-500" />
-                      Phases de chantier ({empPhases.length})
+                      Phases de chantier ({activePhases.length})
                     </h3>
-                    {empPhases.length === 0 ? (
+                    {activePhases.length === 0 ? (
                       <p className="mt-2 text-sm text-white/40">
-                        Aucune phase assignée.
+                        {pastPhases.length > 0
+                          ? "Aucune phase en cours ou à venir."
+                          : "Aucune phase assignée."}
                       </p>
                     ) : (
                       <ul className="mt-2 space-y-2">
-                        {empPhases.map((ph) => {
-                          const proj = projectById.get(ph.project_id);
-                          const endISO =
-                            ph.start_date && ph.duration_days
-                              ? addDays(ph.start_date, ph.duration_days - 1)
-                              : null;
-                          const coassignees =
-                            ph.assignee_employe_ids || [];
-                          return (
-                            <li
-                              key={ph.id}
-                              className="rounded-lg border border-brand-800 bg-brand-950 px-3 py-2.5"
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                  <Link
-                                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                    href={`/app/projets/${ph.project_id}` as any}
-                                    className="text-sm font-semibold text-white hover:text-accent-400"
-                                  >
-                                    {proj?.name || `Projet #${ph.project_id}`}
-                                  </Link>
-                                  <p className="mt-0.5 text-xs text-white/70">
-                                    Phase : {ph.name}
-                                  </p>
-                                  <p className="mt-0.5 text-[11px] text-white/50">
-                                    {ph.start_date
-                                      ? `${fmtDate(ph.start_date)}${
-                                          endISO
-                                            ? ` → ${fmtDate(endISO)}`
-                                            : ""
-                                        }`
-                                      : "Non planifiée"}
-                                    {ph.duration_days
-                                      ? ` · ${ph.duration_days}j`
-                                      : ""}
-                                  </p>
-                                  {coassignees.length > 1 ? (
-                                    <p className="mt-0.5 text-[10px] text-white/40">
-                                      + {coassignees.length - 1} autre
-                                      {coassignees.length - 1 > 1 ? "s" : ""}{" "}
-                                      personne
-                                      {coassignees.length - 1 > 1 ? "s" : ""}{" "}
-                                      sur cette phase
-                                    </p>
-                                  ) : null}
-                                </div>
-                                <div className="flex shrink-0 flex-col items-end gap-1">
-                                  <select
-                                    value=""
-                                    disabled={busyPhaseId === ph.id}
-                                    onChange={(e) => {
-                                      const v = e.target.value;
-                                      if (!v) return;
-                                      reassignPhase(ph, Number(v));
-                                    }}
-                                    className="rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-[11px] text-white disabled:opacity-50"
-                                  >
-                                    <option value="">
-                                      Réassigner à…
-                                    </option>
-                                    {employes
-                                      .filter((e) => e.id !== selectedEmpId)
-                                      .map((e) => (
-                                        <option key={e.id} value={e.id}>
-                                          {e.full_name}
-                                        </option>
-                                      ))}
-                                  </select>
-                                  <button
-                                    type="button"
-                                    onClick={() => removeFromPhase(ph)}
-                                    disabled={busyPhaseId === ph.id}
-                                    className="text-[10px] text-rose-300 hover:text-rose-200 disabled:opacity-50"
-                                  >
-                                    Retirer de la phase
-                                  </button>
-                                </div>
-                              </div>
-                            </li>
-                          );
-                        })}
+                        {activePhases.map(phaseItem)}
                       </ul>
                     )}
+
+                    {pastPhases.length > 0 ? (
+                      <div className="mt-3">
+                        <button
+                          type="button"
+                          onClick={() => setShowArchivedPhases((v) => !v)}
+                          className="flex items-center gap-1.5 text-[11px] font-medium text-white/45 hover:text-white/80"
+                        >
+                          <Archive className="h-3.5 w-3.5" />
+                          Phases terminées ({pastPhases.length})
+                          <span className="text-white/30">
+                            {showArchivedPhases ? "▾" : "▸"}
+                          </span>
+                        </button>
+                        {showArchivedPhases ? (
+                          <ul className="mt-2 space-y-2 opacity-60">
+                            {pastPhases.map(phaseItem)}
+                          </ul>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </section>
 
                   <section className="mt-6">
