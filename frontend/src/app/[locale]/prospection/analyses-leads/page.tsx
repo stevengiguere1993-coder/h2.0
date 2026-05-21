@@ -676,7 +676,7 @@ function LeadCard({
       {lead.mdf_preteur_b != null ? (
         <p
           className="mt-0.5 text-[10px] text-amber-300/80"
-          title="Mise de fonds avec prêteur B = 25 % × prix d'achat + frais démarrage"
+          title="Mise de fonds avec prêteur B = % MDF × prix d'achat + frais démarrage (% paramétrable par fiche)"
         >
           MDF prêteur B : <span className="font-mono">{fmtMoney(lead.mdf_preteur_b)}</span>
         </p>
@@ -2461,23 +2461,69 @@ function AnalysisResultsTable({
 
 // ─── Détail des frais de démarrage + composition de la MDF ─────
 
-const FRAIS_LABELS: Array<[keyof FraisDemarrageBreakdown, string]> = [
-  ["courtier_hypothecaire_1", "Courtier hypothécaire (1 % × prix d'achat)"],
-  ["courtier_hypothecaire_2", "Courtier hypothécaire 2 (1 % × financement APH)"],
-  ["taxes_bienvenue", "Taxes de bienvenue (Montréal, tiers progressifs)"],
-  ["evaluateur", "Évaluateur agréé"],
-  ["evaluateur_2", "Évaluateur agréé 2"],
-  ["inspection", "Inspection"],
-  ["avocat", "Avocat"],
-  ["notaire", "Notaire"],
-  ["notaire_2", "Notaire 2"],
-  ["rapport_efficacite", "Rapport d'efficacité énergétique"],
-  ["frais_developpement", "Frais de développement"],
-  ["frais_negociations", "Frais de négociations"],
-  ["frais_travaux", "Travaux estimés"],
-  ["interets", "Intérêts pendant projet (75 % × prix × 8 % × durée)"],
-  ["revenus_nets_pendant_projet", "Revenus nets pendant projet (négatif)"]
+// Clés des frais de démarrage, dans l'ordre d'affichage. Le label
+// de `interets` est dynamique (dépend de mdf_preteur_b_pct et du
+// taux d'intérêt prêteur B projet) — voir `buildFraisLabels`.
+const FRAIS_KEYS: Array<keyof FraisDemarrageBreakdown> = [
+  "courtier_hypothecaire_1",
+  "courtier_hypothecaire_2",
+  "taxes_bienvenue",
+  "evaluateur",
+  "evaluateur_2",
+  "inspection",
+  "avocat",
+  "notaire",
+  "notaire_2",
+  "rapport_efficacite",
+  "frais_developpement",
+  "frais_negociations",
+  "frais_travaux",
+  "interets",
+  "revenus_nets_pendant_projet"
 ];
+
+function _fmtPctShort(frac: number): string {
+  // Convertit une fraction (0.25) ou un pct (25) en "25 %" lisible.
+  const asPct = Math.abs(frac) <= 1 ? frac * 100 : frac;
+  // Pas de décimale si c'est un entier, sinon 1 décimale en virgule.
+  const isInt = Math.abs(asPct - Math.round(asPct)) < 0.01;
+  return isInt
+    ? `${Math.round(asPct)} %`
+    : `${asPct.toFixed(1).replace(".", ",")} %`;
+}
+
+function buildFraisLabels(
+  mdfPctNumeric: number,
+  tauxInteretPreteurB: number | null | undefined
+): Array<[keyof FraisDemarrageBreakdown, string]> {
+  // Intérêts du projet = (1 - mdf_pct) × prix × taux × durée. Le
+  // pourcentage affiché doit refléter dynamiquement la MDF prêteur B
+  // (si 25 %, on affiche 75 % ; si 35 %, on affiche 65 %).
+  const inverseMdf = 1 - mdfPctNumeric;
+  const tauxLbl =
+    tauxInteretPreteurB != null && !Number.isNaN(tauxInteretPreteurB)
+      ? _fmtPctShort(tauxInteretPreteurB)
+      : "taux prêteur B";
+  const interetsLabel = `Intérêts pendant projet (${_fmtPctShort(inverseMdf)} × prix × ${tauxLbl} × durée)`;
+  const labels: Record<keyof FraisDemarrageBreakdown, string> = {
+    courtier_hypothecaire_1: "Courtier hypothécaire (1 % × prix d'achat)",
+    courtier_hypothecaire_2: "Courtier hypothécaire 2 (1 % × financement APH)",
+    taxes_bienvenue: "Taxes de bienvenue (Montréal, tiers progressifs)",
+    evaluateur: "Évaluateur agréé",
+    evaluateur_2: "Évaluateur agréé 2",
+    inspection: "Inspection",
+    avocat: "Avocat",
+    notaire: "Notaire",
+    notaire_2: "Notaire 2",
+    rapport_efficacite: "Rapport d'efficacité énergétique",
+    frais_developpement: "Frais de développement",
+    frais_negociations: "Frais de négociations",
+    frais_travaux: "Travaux estimés",
+    interets: interetsLabel,
+    revenus_nets_pendant_projet: "Revenus nets pendant projet (négatif)"
+  };
+  return FRAIS_KEYS.map((k) => [k, labels[k]] as [keyof FraisDemarrageBreakdown, string]);
+}
 
 const DEFAULT_FINANCABLES = [
   "rapport_efficacite",
@@ -2556,13 +2602,19 @@ function FraisDemarrageBreakdownPanel({
     onPatchOverrides?.(JSON.stringify(next));
   }
 
+  // Labels dynamiques (le % « intérêts du projet » dépend de mdfPct).
+  const fraisLabels = buildFraisLabels(
+    mdfPctNumeric,
+    data.taux_interet_preteur_b_projet
+  );
+
   // Calcule le sous-total local (en appliquant les overrides ET la
   // logique finançable : un poste coché ne compte que mdfPct % en
   // cash). Affiche le bon total même si le moteur n'a pas re-roulé.
   let subTotalCash = 0;
   let subTotalFinanced = 0;
   if (frais) {
-    for (const [k] of FRAIS_LABELS) {
+    for (const k of FRAIS_KEYS) {
       const v =
         overrides[k] != null ? Number(overrides[k]) : Number(frais[k] || 0);
       if (!Number.isFinite(v)) continue;
@@ -2584,10 +2636,11 @@ function FraisDemarrageBreakdownPanel({
         Composition de la MDF avec prêteur B
       </h4>
       <p className="mt-0.5 text-[10px] text-white/50">
-        Total à sortir en cash = {mdfPctFinal} % du prix d&apos;achat +
-        frais non finançables + {mdfPctFinal} % des frais finançables.
-        Coche un poste pour le rendre finançable par le prêteur B
-        (par défaut : rapport efficacité, frais développement, travaux).
+        Total à sortir en cash = {_fmtPctShort(mdfPctNumeric)} du prix
+        d&apos;achat + frais non finançables + {_fmtPctShort(mdfPctNumeric)}
+        {" "}des frais finançables. Coche un poste pour le rendre
+        finançable par le prêteur B (par défaut : rapport efficacité,
+        frais développement, travaux).
       </p>
 
       <table className="mt-3 w-full text-[11px]">
@@ -2604,10 +2657,10 @@ function FraisDemarrageBreakdownPanel({
         <tbody>
           <tr className="border-t border-amber-400/20">
             <td className="px-2 py-1 font-semibold text-amber-200" colSpan={3}>
-              {mdfPctFinal} % du prix d&apos;achat
+              {_fmtPctShort(mdfPctNumeric)} du prix d&apos;achat
               {prixFinal > 0 ? (
                 <span className="ml-1 text-white/50">
-                  ({mdfPctFinal} % × {fmtMoney(prixFinal)})
+                  ({_fmtPctShort(mdfPctNumeric)} × {fmtMoney(prixFinal)})
                 </span>
               ) : null}
             </td>
@@ -2622,7 +2675,7 @@ function FraisDemarrageBreakdownPanel({
               </span>
             </td>
           </tr>
-          {FRAIS_LABELS.map(([key, label]) => {
+          {fraisLabels.map(([key, label]) => {
             const computed = Number(frais[key] || 0);
             const overridden = overrides[key] != null;
             const displayVal = overridden
@@ -2666,7 +2719,7 @@ function FraisDemarrageBreakdownPanel({
                     className="h-3.5 w-3.5 cursor-pointer accent-amber-400"
                     title={
                       isFinancable
-                        ? `Finançable — payé seulement à ${mdfPctFinal} % en cash`
+                        ? `Finançable — payé seulement à ${_fmtPctShort(mdfPctNumeric)} en cash`
                         : "Non finançable — payé 100 % en cash"
                     }
                   />
@@ -2959,8 +3012,19 @@ function HypothesesSubsection({
   lead: LeadDetail;
   data: AnalysisResults;
 }) {
+  // Coût par logement : prix d'achat / nb_logements. Si nb_logements
+  // est null ou 0, on affiche "—" pour éviter Infinity / NaN.
+  const prixAchat = lead.asking_price ?? data.prix_achat ?? null;
+  const nbLog = lead.nb_logements;
+  const coutParLogement =
+    prixAchat != null && nbLog != null && nbLog > 0
+      ? prixAchat / nbLog
+      : null;
+
   const rows: Array<[string, string]> = [
-    ["Prix d'achat", _fmtMoneyDetail(lead.asking_price ?? data.prix_achat ?? null)],
+    ["Prix d'achat", _fmtMoneyDetail(prixAchat)],
+    ["Nombre de logements", _fmtIntDetail(nbLog)],
+    ["Coût par logement", _fmtMoneyDetail(coutParLogement)],
     ["Durée du projet (années)", _fmtIntDetail(lead.duree_projet_annees)],
     ["TGA (taux global d'actualisation)", _fmtPctDetail(lead.tga_pct)],
     ["Taux d'intérêt achat", _fmtPctDetail(lead.taux_interet_achat_pct)],
@@ -3060,6 +3124,12 @@ function FraisDemarrageDetailSubsection({
     );
   }
 
+  // Labels dynamiques : "Intérêts du projet" reflète (1 - mdf_pct).
+  const fraisLabels = buildFraisLabels(
+    mdfPctNumeric,
+    data.taux_interet_preteur_b_projet
+  );
+
   return (
     <div className="mt-4">
       <h4 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
@@ -3075,7 +3145,7 @@ function FraisDemarrageDetailSubsection({
           </tr>
         </thead>
         <tbody>
-          {FRAIS_LABELS.map(([key, label]) => {
+          {fraisLabels.map(([key, label]) => {
             const v = frais[key];
             const isOverridden = Object.prototype.hasOwnProperty.call(
               overrides,
