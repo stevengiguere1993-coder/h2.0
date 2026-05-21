@@ -56,6 +56,7 @@ from app.models.lead_analysis import (  # noqa: F401
     LeadAnalysisAttachment,
     LeadAnalysisStatus,
 )
+from app.models.offer import Offer, OfferStatus  # noqa: F401
 from app.models.org_node import OrgNode  # noqa: F401
 from app.models.qg_embedding import Embedding  # noqa: F401
 from app.models.rencontre import (  # noqa: F401
@@ -257,6 +258,8 @@ __all__ = [
     "MontrealPropertyUnit",
     "Notification",
     "NumberingCounter",
+    "Offer",
+    "OfferStatus",
     "Payment",
     "Project",
     "ProjectMember",
