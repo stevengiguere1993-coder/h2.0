@@ -283,6 +283,7 @@ def compute_depenses_for_scenario(
     depenses_autres: float,
     wifi_ajoute: bool,
     nb_thermopompes_ajoutees: int,
+    taux_inoccupation_pct: float,
 ) -> DepensesBreakdown:
     """Calcule R35..R45 pour un scénario donné.
 
@@ -298,7 +299,7 @@ def compute_depenses_for_scenario(
         Dans l'Excel R44 col C (SCHL) = D5×J43 avec J43 vide → 0.
         R44 col D (APH 50) = D5×K43 avec K43 = 190 $/thermopompe.
     """
-    inoccupation = 0.03 * revenus_totaux
+    inoccupation = taux_inoccupation_pct * revenus_totaux
 
     concierge_par_log = (
         BAREME["concierge_lt12"] if nb_log < 12 else BAREME["concierge_gte12"]
@@ -502,13 +503,16 @@ def compute_frais_demarrage(
     duree_projet_annees: int,
     revenus_net_achat: float,
     financement_aph_100: float,
+    mdf_preteur_b_pct: float,
+    taux_interet_preteur_b_projet: float,
     frais_developpement: float = 0.0,
     frais_negociations: float = 0.0,
     frais_travaux: float = 0.0,
 ) -> FraisDemarrage:
     """Calcule L4..L19. `financement_aph_100` est utilisé pour le
     courtier hyp. 2 (1 % du financement APH 100 pts, le plus généreux).
-    L17 = intérêts pendant projet (75 % LTV × 8 % × durée).
+    L17 = intérêts pendant projet
+        ((1 - mdf_preteur_b_pct) × prix × taux_interet_preteur_b_projet × durée).
     L18 = revenus nets pendant projet (négatif si net négatif)."""
     return FraisDemarrage(
         courtier_hypothecaire_1=0.01 * prix_achat,
@@ -524,8 +528,8 @@ def compute_frais_demarrage(
         frais_developpement=frais_developpement,
         frais_negociations=frais_negociations,
         frais_travaux=frais_travaux,
-        # L17 : 75 % LTV × 8 % × durée
-        interets=0.75 * prix_achat * 0.08 * duree_projet_annees,
+        # L17 : (1 - mdf_preteur_b_pct) × prix × taux_interet_preteur_b_projet × durée
+        interets=(1 - mdf_preteur_b_pct) * prix_achat * taux_interet_preteur_b_projet * duree_projet_annees,
         # L18 : -revenus_net_achat × durée (négatif = pas de revenu
         # pendant le projet, donc coût)
         revenus_nets_pendant_projet=-revenus_net_achat * duree_projet_annees,
@@ -575,6 +579,16 @@ class FinanceInputs:
     # MDF prêteur B (en fraction, ex. 0.25 pour 25 %). Modifiable
     # selon le prêteur (peut monter à 0.35).
     mdf_preteur_b_pct: float = 0.25
+
+    # Taux d'intérêt du prêteur B pendant la phase chantier
+    # (8 % typique 2024-2025). Utilisé pour calculer L17 — intérêts
+    # de portage pendant projet.
+    taux_interet_preteur_b_projet: float = 0.08
+
+    # Taux d'inoccupation hypothèse SCHL standard (3 %). Varie selon
+    # le marché (Montréal centre vs régions). Appliqué aux revenus
+    # totaux pour calculer la perte de loyer R35.
+    taux_inoccupation_pct: float = 0.03
 
     # Overrides manuels des postes de frais de démarrage. Dict
     # `{ "evaluateur": 1800, "inspection": 2000, ... }` — chaque clé
@@ -629,6 +643,8 @@ class FinanceResults:
             # + frais_demarrage.total
             # = mdf_preteur_b
             "mdf_preteur_b_pct": mdf_pct,
+            "taux_interet_preteur_b_projet": self.inputs.taux_interet_preteur_b_projet,
+            "taux_inoccupation_pct": self.inputs.taux_inoccupation_pct,
             # Alias conservé pour rétrocompat UI front-end.
             "mdf_25pct_prix_achat": mdf_pct * self.inputs.prix_achat,
             "mdf_pct_prix_achat": mdf_pct * self.inputs.prix_achat,
@@ -729,6 +745,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         depenses_autres=inputs.depenses_autres,
         wifi_ajoute=inputs.wifi_ajoute,
         nb_thermopompes_ajoutees=inputs.nb_thermopompes_ajoutees,
+        taux_inoccupation_pct=inputs.taux_inoccupation_pct,
     )
     achat = compute_scenario(
         config=SCENARIO_ACHAT,
@@ -766,6 +783,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         depenses_autres=inputs.depenses_autres,
         wifi_ajoute=inputs.wifi_ajoute,
         nb_thermopompes_ajoutees=inputs.nb_thermopompes_ajoutees,
+        taux_inoccupation_pct=inputs.taux_inoccupation_pct,
     )
     # Dépenses APH 50 : avec thermopompes (is_aph=True).
     depenses_aph_50 = compute_depenses_for_scenario(
@@ -781,6 +799,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         depenses_autres=inputs.depenses_autres,
         wifi_ajoute=inputs.wifi_ajoute,
         nb_thermopompes_ajoutees=inputs.nb_thermopompes_ajoutees,
+        taux_inoccupation_pct=inputs.taux_inoccupation_pct,
     )
     refi_schl = compute_scenario(
         config=SCENARIO_REFI_SCHL,
@@ -825,6 +844,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             depenses_autres=inputs.depenses_autres,
             wifi_ajoute=inputs.wifi_ajoute,
             nb_thermopompes_ajoutees=inputs.nb_thermopompes_ajoutees,
+            taux_inoccupation_pct=inputs.taux_inoccupation_pct,
         )
         refi_aph_100 = compute_scenario(
             config=SCENARIO_REFI_APH_100,
@@ -855,6 +875,8 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         duree_projet_annees=inputs.duree_projet_annees,
         revenus_net_achat=achat.revenus_net,
         financement_aph_100=financement_best_aph,
+        mdf_preteur_b_pct=inputs.mdf_preteur_b_pct,
+        taux_interet_preteur_b_projet=inputs.taux_interet_preteur_b_projet,
         frais_developpement=inputs.frais_developpement,
         frais_negociations=inputs.frais_negociations,
         frais_travaux=inputs.frais_travaux,
