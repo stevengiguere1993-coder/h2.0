@@ -50,7 +50,7 @@ from app.models.prospection_lead import (
     ProspectionOwnerKind,
 )
 from app.models.prospection_deal import ProspectionDeal
-from app.services.lead_extraction import extract_lead_info
+from app.services.lead_extraction import extract_lead_info, _check_tesseract_status
 
 
 log = logging.getLogger(__name__)
@@ -1078,3 +1078,25 @@ async def debug_extract_url(
         "model_used": EXTRACTION_MODEL,
         "raw_response": raw,
     }
+
+
+@router.get(
+    "/ocr-health",
+    summary="Diagnostic Tesseract serveur (utile si extraction d'image vide).",
+)
+async def ocr_health(user: CurrentUser) -> dict:
+    """Renvoie le statut du binaire Tesseract installé sur le serveur.
+    Réponse type :
+      { "tesseract": "OK (Tesseract v5.3.0)", "pytesseract_installed": true,
+        "pdf2image_installed": true, "pillow_heif_installed": true }
+    Si l'extraction d'images retourne vide, hit cet endpoint dans le
+    navigateur ou via Postman pour confirmer si Tesseract est bien là."""
+    _require_prospection(user)
+    result: dict = {"tesseract": _check_tesseract_status()}
+    for pkg in ("pytesseract", "pdf2image", "pillow_heif", "PIL"):
+        try:
+            __import__(pkg)
+            result[f"{pkg}_installed"] = True
+        except ImportError as exc:
+            result[f"{pkg}_installed"] = f"NON installe : {exc}"
+    return result
