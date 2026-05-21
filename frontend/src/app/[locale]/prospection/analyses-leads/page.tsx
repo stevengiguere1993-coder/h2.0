@@ -19,6 +19,8 @@ import {
   X
 } from "lucide-react";
 
+import { useSearchParams } from "next/navigation";
+
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { AppTopbar } from "@/components/app-topbar";
@@ -139,6 +141,31 @@ export default function AnalysesLeadsPage() {
 
   // ── Détail modal ──────────────────────────────────────────────
   const [detailId, setDetailId] = useState<number | null>(null);
+
+  // Ouverture automatique du modal via ?openId={id} (lien depuis la
+  // page detail d'un deal — composant LeadAnalysisSummary).
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const raw = searchParams.get("openId");
+    if (!raw) return;
+    const id = Number(raw);
+    if (!Number.isFinite(id) || id <= 0) return;
+    setDetailId(id);
+    // Nettoyage de l'URL pour eviter une re-ouverture en boucle au
+    // reload / back-forward. On utilise history.replaceState plutot
+    // que router.replace : on conserve l'etat React local (notamment
+    // detailId qu'on vient de set) sans declencher de re-render
+    // ni de navigation cote next-intl.
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("openId");
+      window.history.replaceState(null, "", url.toString());
+    }
+    // Volontairement sans dependance sur searchParams : on ne veut
+    // declencher cet effet qu'au mount (le replaceState retire le
+    // param de toute facon).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -296,11 +323,13 @@ export default function AnalysesLeadsPage() {
     }
   }
 
-  // Filtrage recherche.
+  // Filtrage : on masque les fiches deja converties en deal (elles
+  // vivent uniquement dans le Pipeline) puis on applique la recherche.
   const filtered = useMemo(() => {
+    const visible = leads.filter((l) => l.converted_to_deal_id == null);
     const q = search.trim().toLowerCase();
-    if (!q) return leads;
-    return leads.filter((l) => {
+    if (!q) return visible;
+    return visible.filter((l) => {
       return (
         (l.address || "").toLowerCase().includes(q) ||
         (l.city || "").toLowerCase().includes(q) ||
