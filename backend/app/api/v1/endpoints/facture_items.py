@@ -62,6 +62,33 @@ async def _recompute_facture_totals(db, facture_id: int) -> None:
 
 _KIND_PATTERN = "^(service|extra|rabais|frais)$"
 
+# Ordre d'affichage imposé des lignes de facture : services d'abord,
+# puis extras, puis frais, et rabais en dernier.
+_KIND_ORDER = {"service": 0, "extra": 1, "frais": 2, "rabais": 3}
+
+
+async def _reorder_items_by_kind(db, facture_id: int) -> None:
+    """Regroupe les lignes de la facture par type, dans l'ordre
+    service → extra → frais → rabais, en réassignant leur `position`.
+    L'ordre relatif au sein d'un même type est conservé."""
+    items = (
+        await db.execute(
+            select(FactureItem)
+            .where(FactureItem.facture_id == facture_id)
+            .order_by(FactureItem.position.asc(), FactureItem.id.asc())
+        )
+    ).scalars().all()
+    # sorted() est stable : à type égal, l'ordre (position, id) de la
+    # requête ci-dessus est préservé.
+    ordered = sorted(items, key=lambda it: _KIND_ORDER.get(it.kind, 99))
+    changed = False
+    for idx, it in enumerate(ordered):
+        if it.position != idx:
+            it.position = idx
+            changed = True
+    if changed:
+        await db.flush()
+
 
 class FactureItemCreate(BaseModel):
     position: int = Field(default=0, ge=0)
@@ -114,6 +141,9 @@ async def list_items(
     facture_id: int, db: DBSession, _: CurrentUser
 ) -> List[FactureItemRead]:
     await _ensure_facture(db, facture_id)
+    # Auto-réparation : regroupe les lignes par type même pour les
+    # factures créées avant cette règle d'ordre.
+    await _reorder_items_by_kind(db, facture_id)
     rows = (
         await db.execute(
             select(FactureItem)
@@ -143,9 +173,19 @@ async def create_item(
     if data.kind == "rabais" and unit_price > 0:
         unit_price = -abs(unit_price)
     total = round(qty * unit_price, 2)
+    # Ajout en fin de liste ; le regroupement par type est appliqué
+    # juste après par _reorder_items_by_kind.
+    existing = (
+        await db.execute(
+            select(FactureItem.position).where(
+                FactureItem.facture_id == facture_id
+            )
+        )
+    ).scalars().all()
+    next_pos = (max(existing) + 1) if existing else 0
     item = FactureItem(
         facture_id=facture_id,
-        position=data.position,
+        position=next_pos,
         description=data.description.strip(),
         unit=(data.unit or None),
         quantity=qty,
@@ -156,6 +196,7 @@ async def create_item(
     db.add(item)
     await db.flush()
     await _recompute_facture_totals(db, facture_id)
+    await _reorder_items_by_kind(db, facture_id)
     await db.refresh(item)
     return FactureItemRead.model_validate(item)
 
@@ -189,6 +230,8 @@ async def update_item(
         item.total = round(float(item.quantity) * float(item.unit_price), 2)
     await db.flush()
     await _recompute_facture_totals(db, facture_id)
+    # Un changement de type peut déplacer la ligne dans un autre groupe.
+    await _reorder_items_by_kind(db, facture_id)
     await db.refresh(item)
     return FactureItemRead.model_validate(item)
 

@@ -460,6 +460,15 @@ export default function FactureDetailPage() {
     }
   }
 
+  async function reloadItems() {
+    try {
+      const r = await authedFetch(`/api/v1/factures/${id}/items`);
+      if (r.ok) setItems((await r.json()) as Item[]);
+    } catch {
+      /* on garde l'état courant en cas d'échec réseau */
+    }
+  }
+
   async function addItem() {
     setItemBusy("new");
     try {
@@ -474,8 +483,9 @@ export default function FactureDetailPage() {
         })
       });
       if (!res.ok) throw new Error();
-      const created = (await res.json()) as Item;
-      setItems((xs) => [...xs, created]);
+      // Le backend regroupe les lignes par type — on recharge pour
+      // afficher le nouvel item à sa place.
+      await reloadItems();
     } catch {
       setError("Ajout d'item échoué.");
     } finally {
@@ -495,7 +505,13 @@ export default function FactureDetailPage() {
       );
       if (!res.ok) throw new Error();
       const updated = (await res.json()) as Item;
-      setItems((xs) => xs.map((x) => (x.id === item_id ? updated : x)));
+      if ("kind" in patch) {
+        // Changement de type : la ligne change de groupe — on recharge
+        // pour refléter le nouvel ordre.
+        await reloadItems();
+      } else {
+        setItems((xs) => xs.map((x) => (x.id === item_id ? updated : x)));
+      }
     } catch {
       setError("Mise à jour échouée.");
     } finally {
