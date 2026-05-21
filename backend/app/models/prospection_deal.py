@@ -10,12 +10,15 @@ urgent → eleve → moyenne → en_attente → a_venir.
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:  # éviter import circulaire au runtime
+    from app.models.lead_analysis import LeadAnalysis
 
 
 # Ordre canonique des priorités. Conservé pour la compat des données
@@ -63,6 +66,16 @@ class ProspectionDeal(Base):
         ForeignKey("lead_analyses.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+
+    # Relation ORM vers la fiche d'analyse liée. lazy="selectin"
+    # déclenche une 2e query batchée lors de list_deals() pour éviter
+    # le N+1 — le coût est négligeable car on a typiquement < 100
+    # deals affichés à la fois.
+    lead_analysis: Mapped[Optional["LeadAnalysis"]] = relationship(
+        "LeadAnalysis",
+        foreign_keys=[lead_analysis_id],
+        lazy="selectin",
     )
 
     created_at: Mapped[datetime] = mapped_column(

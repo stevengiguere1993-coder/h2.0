@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Loader2, Plus } from "lucide-react";
+import {
+  Building,
+  ChevronDown,
+  ChevronRight,
+  Flame,
+  Loader2,
+  Plus
+} from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { authedFetch } from "@/lib/auth";
@@ -23,12 +30,34 @@ import { useProspectionLayout } from "../layout";
  * section différente, PATCH /api/v1/prospection/deals/{id} avec la
  * nouvelle priority. Drop sur "actif" depuis un statut archivé
  * réactive le deal en "moyenne".
+ *
+ * Style des cards : aligné sur le composant LeadCard de la page
+ * Analyses des leads — adresse en titre, ville en sous-titre, ligne
+ * de métadonnées compactes avec icônes (logements, prix, refi),
+ * programme SCHL retenu, MDF prêteur B, badge coloré selon section.
+ * Les métadonnées proviennent de la fiche d'analyse liée
+ * (`deal.lead_analysis`, eager-loaded côté backend). Fallback
+ * minimal (juste adresse + date) pour les deals créés manuellement
+ * sans `lead_analysis_id`.
  */
+
+type DealLeadAnalysis = {
+  id: number;
+  city: string | null;
+  nb_logements: number | null;
+  asking_price: number | null;
+  best_refi_amount: number | null;
+  best_refi_program: string | null;
+  mdf_preteur_b: number | null;
+};
 
 type Deal = {
   id: number;
   address: string;
   priority: string;
+  drive_folder_url: string | null;
+  lead_analysis_id: number | null;
+  lead_analysis: DealLeadAnalysis | null;
   created_at: string;
   updated_at: string;
 };
@@ -42,6 +71,38 @@ function sectionOf(priority: string): SectionKey {
   if (priority === "abandonne") return "abandonne";
   return "active";
 }
+
+/** Formatage monétaire identique à celui de la page Analyses des
+ * leads : entier arrondi, espaces tous les 3 chiffres, suffixe " $". */
+function fmtMoney(n: number | null | undefined): string {
+  if (n == null) return "—";
+  const rounded = Math.round(n);
+  const sign = rounded < 0 ? "-" : "";
+  const abs = Math.abs(rounded).toString();
+  const withSep = abs.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return `${sign}${withSep} $`;
+}
+
+/** Métadonnées du badge selon la section. Aligné sur la palette du
+ * kanban des leads (emerald = pipeline actif, blue = terminé,
+ * rose = abandonné). */
+const SECTION_BADGE: Record<
+  SectionKey,
+  { label: string; cls: string }
+> = {
+  active: {
+    label: "Pipeline",
+    cls: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+  },
+  termine: {
+    label: "Terminé",
+    cls: "border-blue-500/40 bg-blue-500/10 text-blue-300"
+  },
+  abandonne: {
+    label: "Abandonné",
+    cls: "border-rose-500/40 bg-rose-500/10 text-rose-300"
+  }
+};
 
 export default function PipelineDealsListPage() {
   const { onOpenSidebar } = useProspectionLayout();
@@ -409,79 +470,186 @@ function PipelineSection({
           </p>
         ) : (
           <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {deals.map((d) => {
-              const dragging = dragDealId === d.id;
-              return (
-                <li key={d.id}>
-                  <div
-                    draggable
-                    onDragStart={(ev) => {
-                      try {
-                        ev.dataTransfer.setData("text/plain", String(d.id));
-                        ev.dataTransfer.effectAllowed = "move";
-                      } catch {
-                        /* ignore */
-                      }
-                      setDragDealId(d.id);
+            {deals.map((d) => (
+              <li key={d.id}>
+                <DealCard
+                  deal={d}
+                  section={section}
+                  dragging={dragDealId === d.id}
+                  onDragStart={(ev) => {
+                    try {
+                      ev.dataTransfer.setData("text/plain", String(d.id));
+                      ev.dataTransfer.effectAllowed = "move";
+                    } catch {
+                      /* ignore */
+                    }
+                    setDragDealId(d.id);
+                    setDidDrop(false);
+                  }}
+                  onDragEnd={() => {
+                    setDragDealId(null);
+                    setDragOverSection(null);
+                  }}
+                  onClick={() => {
+                    // Si un drop vient d'avoir lieu, on ne navigue
+                    // pas. didDrop est remis à false au prochain
+                    // dragStart.
+                    if (didDrop) {
                       setDidDrop(false);
-                    }}
-                    onDragEnd={() => {
-                      setDragDealId(null);
-                      setDragOverSection(null);
-                    }}
-                    onClick={(ev) => {
-                      // Si un drop vient d'avoir lieu, on ne navigue
-                      // pas. didDrop est remis à false au prochain
-                      // dragStart.
-                      if (didDrop) {
-                        ev.preventDefault();
-                        ev.stopPropagation();
-                        setDidDrop(false);
-                        return;
-                      }
-                      onCardClick(d.id);
-                    }}
-                    role="link"
-                    tabIndex={0}
-                    onKeyDown={(ev) => {
-                      if (ev.key === "Enter" || ev.key === " ") {
-                        ev.preventDefault();
-                        onCardClick(d.id);
-                      }
-                    }}
-                    className={`block cursor-pointer rounded-xl border border-brand-800 bg-brand-900 p-4 text-left transition hover:border-emerald-500/50 ${dragging ? "opacity-50" : ""}`}
-                  >
-                    {/* Lien invisible pour conserver la sémantique
-                        de navigation côté SR / clic-milieu / "ouvrir
-                        dans un nouvel onglet". draggable={false} pour
-                        ne pas interférer avec le drag du parent. */}
-                    <Link
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                      href={`/prospection/pipeline/${d.id}` as any}
-                      draggable={false}
-                      onClick={(ev) => ev.preventDefault()}
-                      className="sr-only"
-                    >
-                      Ouvrir {d.address}
-                    </Link>
-                    <h3 className="text-base font-semibold text-white break-words">
-                      {d.address}
-                    </h3>
-                    <p className="mt-2 text-[11px] text-white/40">
-                      Ajouté le{" "}
-                      {new Date(d.created_at).toLocaleDateString("fr-CA", {
-                        day: "2-digit",
-                        month: "short",
-                        year: "numeric"
-                      })}
-                    </p>
-                  </div>
-                </li>
-              );
-            })}
+                      return;
+                    }
+                    onCardClick(d.id);
+                  }}
+                />
+              </li>
+            ))}
           </ul>
         )
       ) : null}
     </section>
+  );
+}
+
+/**
+ * Card individuelle d'un deal — style aligné sur LeadCard
+ * (page Analyses des leads) : adresse en titre, ville en sous-titre,
+ * ligne de métadonnées compactes, programme SCHL retenu, MDF prêteur B,
+ * badge coloré selon la section.
+ *
+ * Si `deal.lead_analysis` est null (deal créé manuellement, sans
+ * fiche d'analyse liée), on affiche seulement l'adresse + la date
+ * d'ajout — pas de fallback inventé.
+ */
+function DealCard({
+  deal,
+  section,
+  dragging,
+  onDragStart,
+  onDragEnd,
+  onClick
+}: {
+  deal: Deal;
+  section: SectionKey;
+  dragging: boolean;
+  onDragStart: (ev: React.DragEvent<HTMLDivElement>) => void;
+  onDragEnd: () => void;
+  onClick: () => void;
+}) {
+  const la = deal.lead_analysis;
+  const badge = SECTION_BADGE[section];
+
+  return (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onClick={onClick}
+      role="link"
+      tabIndex={0}
+      onKeyDown={(ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          onClick();
+        }
+      }}
+      className={`block cursor-pointer rounded-xl border border-brand-800 bg-brand-900 p-3 text-left transition hover:border-emerald-500/50 ${dragging ? "opacity-50" : ""}`}
+    >
+      {/* Lien invisible pour conserver la sémantique de navigation
+          côté SR / clic-milieu / "ouvrir dans un nouvel onglet".
+          draggable={false} pour ne pas interférer avec le drag du
+          parent. */}
+      <Link
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        href={`/prospection/pipeline/${deal.id}` as any}
+        draggable={false}
+        onClick={(ev) => ev.preventDefault()}
+        className="sr-only"
+      >
+        Ouvrir {deal.address}
+      </Link>
+
+      {/* Titre — adresse. */}
+      <h3 className="line-clamp-2 text-sm font-semibold text-white">
+        {deal.address}
+      </h3>
+
+      {/* Sous-titre — ville (depuis la fiche d'analyse, si dispo). */}
+      {la?.city ? (
+        <p className="mt-0.5 text-[11px] text-white/50">{la.city}</p>
+      ) : null}
+
+      {la ? (
+        <>
+          {/* Ligne de métadonnées compactes avec icônes. */}
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-white/60">
+            {la.nb_logements != null ? (
+              <span className="inline-flex items-center gap-0.5">
+                <Building className="h-3 w-3" /> {la.nb_logements} log.
+              </span>
+            ) : null}
+            {la.asking_price != null ? (
+              <span className="font-mono tabular-nums">
+                {fmtMoney(la.asking_price)}
+              </span>
+            ) : null}
+            {la.best_refi_amount != null ? (
+              <span
+                className={`inline-flex items-center gap-0.5 ${
+                  la.best_refi_amount >= 0
+                    ? "text-emerald-300"
+                    : "text-rose-300"
+                }`}
+                title={la.best_refi_program || ""}
+              >
+                <Flame className="h-3 w-3" />
+                {la.best_refi_amount >= 0 ? "refi" : "perte"}{" "}
+                {fmtMoney(la.best_refi_amount)}
+              </span>
+            ) : null}
+          </div>
+
+          {/* Programme SCHL retenu. */}
+          {la.best_refi_program ? (
+            <p
+              className="mt-1 truncate text-[10px] text-white/40"
+              title={la.best_refi_program}
+            >
+              {la.best_refi_program}
+            </p>
+          ) : null}
+
+          {/* MDF prêteur B. */}
+          {la.mdf_preteur_b != null ? (
+            <p
+              className="mt-1 text-[11px] text-amber-300/80"
+              title="Mise de fonds avec prêteur B = % MDF × prix d'achat + frais démarrage"
+            >
+              MDF prêteur B :{" "}
+              <span className="font-mono">{fmtMoney(la.mdf_preteur_b)}</span>
+            </p>
+          ) : null}
+        </>
+      ) : (
+        // Fallback minimal : deal créé manuellement, sans fiche
+        // d'analyse liée. On montre juste la date d'ajout.
+        <p className="mt-2 text-[11px] text-white/40">
+          Ajouté le{" "}
+          {new Date(deal.created_at).toLocaleDateString("fr-CA", {
+            day: "2-digit",
+            month: "short",
+            year: "numeric"
+          })}
+        </p>
+      )}
+
+      {/* Badge de section en bas. */}
+      <div className="mt-2 flex items-center">
+        <span
+          className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${badge.cls}`}
+        >
+          {badge.label}
+        </span>
+      </div>
+    </div>
   );
 }

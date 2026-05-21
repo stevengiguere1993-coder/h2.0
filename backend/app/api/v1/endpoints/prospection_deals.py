@@ -53,6 +53,25 @@ class DealUpdate(BaseModel):
     drive_folder_url: Optional[str] = Field(default=None, max_length=1024)
 
 
+class LeadAnalysisLite(BaseModel):
+    """Sous-objet sérialisé côté DealRead pour permettre au kanban
+    Pipeline d'afficher les métadonnées clé (logements, prix, refi,
+    programme SCHL, MDF) sans avoir à faire un second appel.
+
+    Tous les champs sont optionnels — la fiche d'analyse peut être
+    incomplète si l'extraction Claude a manqué certains champs.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    city: Optional[str] = None
+    nb_logements: Optional[int] = None
+    asking_price: Optional[float] = None
+    best_refi_amount: Optional[float] = None
+    best_refi_program: Optional[str] = None
+    mdf_preteur_b: Optional[float] = None
+
+
 class DealRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -60,6 +79,11 @@ class DealRead(BaseModel):
     priority: str
     drive_folder_url: Optional[str] = None
     lead_analysis_id: Optional[int] = None
+    # Snapshot des champs utiles de la fiche d'analyse liée
+    # (eager-loaded via relationship lazy="selectin").
+    # None si lead_analysis_id est NULL ou si la fiche n'existe
+    # plus (ondelete SET NULL).
+    lead_analysis: Optional[LeadAnalysisLite] = None
     created_at: datetime
     updated_at: datetime
 
