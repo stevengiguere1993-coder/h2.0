@@ -189,6 +189,18 @@ async def init_db() -> None:
             ("soumissions", "client_note", "TEXT"),
             ("factures", "internal_notes", "TEXT"),
             ("factures", "client_note", "TEXT"),
+            # Facture finale + signature électronique du client.
+            ("factures", "is_final", "BOOLEAN NOT NULL DEFAULT FALSE"),
+            ("factures", "signature_token", "VARCHAR(64)"),
+            ("factures", "signed_name", "VARCHAR(255)"),
+            ("factures", "signed_ip", "VARCHAR(64)"),
+            ("factures", "signed_at", "TIMESTAMP WITH TIME ZONE"),
+            ("factures", "signature_image", "BYTEA"),
+            (
+                "factures",
+                "signature_image_content_type",
+                "VARCHAR(100)",
+            ),
             ("employes", "address", "VARCHAR(500)"),
             ("employes", "license_number", "VARCHAR(64)"),
             ("employes", "emergency_contact_name", "VARCHAR(255)"),

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import secrets
 from datetime import datetime, timezone
 from typing import Iterable, Optional
 
@@ -18,6 +20,12 @@ log = logging.getLogger(__name__)
 
 class FactureSendError(Exception):
     pass
+
+
+def _public_base() -> str:
+    return (
+        os.getenv("PUBLIC_SITE_URL") or "https://immohorizon.com"
+    ).rstrip("/")
 
 
 def _default_subject(fa: Facture) -> str:
@@ -42,6 +50,25 @@ def _default_body_html(fa: Facture, intro: Optional[str]) -> str:
             f"<p style=\"margin:0 0 8px 0\"><strong>Échéance :</strong> "
             f"{fa.due_at.date().isoformat()}</p>"
         )
+    # Facture finale : bloc d'invitation à signer en ligne.
+    sign_block = ""
+    if fa.is_final and fa.signature_token:
+        sign_url = f"{_public_base()}/facture/{fa.signature_token}"
+        sign_block = f"""\
+  <p style="margin:8px 0 16px 0">
+    Cette <strong>facture finale</strong> confirme l'achèvement des
+    travaux de la soumission de base. Merci de la réviser et de la
+    signer en ligne :
+  </p>
+  <p style="margin:0 0 6px 0">
+    <a href="{sign_url}"
+       style="display:inline-block;background:#d89b3c;color:#111;
+              padding:12px 20px;border-radius:8px;font-weight:bold;
+              text-decoration:none">Voir et signer la facture</a>
+  </p>
+  <p style="margin:0 0 16px 0;font-size:12px;color:#555">
+    Ou copiez ce lien : {sign_url}
+  </p>"""
     return f"""\
 <div style="font-family:Helvetica,Arial,sans-serif;color:#111;line-height:1.5;max-width:640px">
   <p style="margin:0 0 16px 0">Bonjour,</p>
@@ -51,6 +78,7 @@ def _default_body_html(fa: Facture, intro: Optional[str]) -> str:
   </p>
   {total_line}
   {due_line}
+  {sign_block}
   <p style="margin:16px 0 0 0">
     Merci de confirmer la réception. Pour toute question, n'hésitez pas
     à nous joindre.
@@ -90,6 +118,12 @@ async def send_facture(
     recipients = [a.strip() for a in to if a and a.strip()]
     if not recipients:
         raise FactureSendError("Au moins un destinataire est requis.")
+
+    # Facture finale : jeton de signature généré au premier envoi
+    # (jamais régénéré, pour ne pas invalider un lien déjà transmis).
+    if fa.is_final and not fa.signature_token:
+        fa.signature_token = secrets.token_urlsafe(32)
+        await db.flush()
 
     cc_list = [a.strip() for a in (cc or []) if a and a.strip()]
     subj = subject or _default_subject(fa)

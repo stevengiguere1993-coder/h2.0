@@ -30,7 +30,8 @@ const PORTAL_PREFIXES = [
   // dédié et ne doit pas être pollué par la nav du site.
   "/valider-demande",
   "/contrat-signature",
-  "/promesse-achat"
+  "/promesse-achat",
+  "/facture"
 ];
 
 function stripLocale(pathname: string): string {
