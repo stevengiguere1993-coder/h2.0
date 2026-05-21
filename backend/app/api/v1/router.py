@@ -34,6 +34,7 @@ from app.api.v1.endpoints import (
     dashboard,
     help,
     kratos,
+    ndas,
     offers,
     org_nodes,
     org_seed_canonical,
@@ -50,6 +51,7 @@ from app.api.v1.endpoints import (
     mobile,
     notifications,
     payments,
+    public_nda,
     public_offer,
     sales_tasks,
     service_templates,
@@ -168,6 +170,11 @@ api_router.include_router(public_purchase_agreement.router)
 # complet (modèle Offer dédié, page publique /sign-offer/{token}).
 api_router.include_router(offers.router)
 api_router.include_router(public_offer.router)
+# NDA investisseurs — entente de confidentialité minimaliste pour
+# partager les infos d'un deal Pipeline avec un investisseur
+# potentiel (modèle NDA dédié, page publique /sign-nda/{token}).
+api_router.include_router(ndas.router)
+api_router.include_router(public_nda.router)
 api_router.include_router(qbo_token.router)
 api_router.include_router(qbo_oauth.router)
 api_router.include_router(client_qbo.router)
@@ -279,3 +286,4 @@ api_router.include_router(entreprise_partners_links.router)
 api_router.include_router(immobilier_extras.router)
 api_router.include_router(immobilier.router)
 api_router.include_router(investissements.router)
+

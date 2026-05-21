@@ -56,6 +56,7 @@ from app.models.lead_analysis import (  # noqa: F401
     LeadAnalysisAttachment,
     LeadAnalysisStatus,
 )
+from app.models.nda import NDA, NDAStatus  # noqa: F401
 from app.models.offer import Offer, OfferStatus  # noqa: F401
 from app.models.org_node import OrgNode  # noqa: F401
 from app.models.qg_embedding import Embedding  # noqa: F401
@@ -256,6 +257,8 @@ __all__ = [
     "MeasurementSnapshot",
     "MeasurementPhoto",
     "MontrealPropertyUnit",
+    "NDA",
+    "NDAStatus",
     "Notification",
     "NumberingCounter",
     "Offer",
@@ -308,3 +311,4 @@ __all__ = [
     "VoiceSms",
     "VoiceUsageDaily",
 ]
+
