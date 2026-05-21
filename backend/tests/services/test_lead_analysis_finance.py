@@ -144,6 +144,72 @@ def test_saint_joseph():
     print(f"  Best program: {res.best_refi_program}")
 
 
+# ── Tests de propagation (régression PR audit MDF prêteur B) ───
+
+
+def test_interets_scale_with_mdf_preteur_b():
+    """Vérifie que les intérêts de portage scalent avec (1 - mdf_pct).
+
+    Régression : avant le fix, le `0.75` (= 1 - 0.25) et le `0.08`
+    étaient en dur dans compute_frais_demarrage. Changer
+    mdf_preteur_b_pct ne propageait pas dans les intérêts.
+    """
+    print("\n[test] Propagation MDF prêteur B → intérêts portage")
+    base = make_saint_joseph_inputs()
+    base.mdf_preteur_b_pct = 0.25
+    res25 = compute_all(base, use_aph_select=False)
+
+    base.mdf_preteur_b_pct = 0.35
+    res35 = compute_all(base, use_aph_select=False)
+
+    # Avec mdf=0.25 : intérêts = 0.75 × 1_699_000 × 0.08 × 2 = 203_880
+    # Avec mdf=0.35 : intérêts = 0.65 × 1_699_000 × 0.08 × 2 = 176_696
+    expect("Intérêts avec MDF 25%", res25.frais_demarrage.interets, 203_880)
+    expect("Intérêts avec MDF 35%", res35.frais_demarrage.interets, 176_696)
+
+    # Ratio attendu : 0.65 / 0.75 = 0.8667
+    ratio = res35.frais_demarrage.interets / res25.frais_demarrage.interets
+    expect("Ratio intérêts 35%/25%", ratio, 0.8667, tol=0.01)
+
+
+def test_taux_interet_preteur_b_projet_parametrable():
+    """Vérifie que taux_interet_preteur_b_projet est bien parametre.
+
+    Si on double le taux (8 % → 16 %), les intérêts doublent aussi.
+    """
+    print("\n[test] Paramétrabilité taux intérêt prêteur B projet")
+    base = make_saint_joseph_inputs()
+    base.taux_interet_preteur_b_projet = 0.08
+    res8 = compute_all(base, use_aph_select=False)
+
+    base.taux_interet_preteur_b_projet = 0.16
+    res16 = compute_all(base, use_aph_select=False)
+
+    # 0.16 / 0.08 = 2.0
+    ratio = res16.frais_demarrage.interets / res8.frais_demarrage.interets
+    expect("Ratio intérêts 16%/8%", ratio, 2.0, tol=0.001)
+
+
+def test_taux_inoccupation_pct_parametrable():
+    """Vérifie que taux_inoccupation_pct est bien paramétré.
+
+    Régression : avant le fix, `0.03` était en dur dans
+    compute_depenses_for_scenario.
+    """
+    print("\n[test] Paramétrabilité taux d'inoccupation")
+    base = make_saint_joseph_inputs()
+    base.taux_inoccupation_pct = 0.03
+    res3 = compute_all(base, use_aph_select=False)
+
+    base.taux_inoccupation_pct = 0.05
+    res5 = compute_all(base, use_aph_select=False)
+
+    # 3 % sur 103 992 = 3 119.76
+    # 5 % sur 103 992 = 5 199.60
+    expect("Inoccupation 3% (achat)", res3.achat.depenses.inoccupation, 0.03 * 103_992)
+    expect("Inoccupation 5% (achat)", res5.achat.depenses.inoccupation, 0.05 * 103_992)
+
+
 # ── Runner ──────────────────────────────────────────────────────
 
 
@@ -151,6 +217,9 @@ def run_all():
     test_taxes_bienvenue_mtl()
     test_pv_canadian()
     test_saint_joseph()
+    test_interets_scale_with_mdf_preteur_b()
+    test_taux_interet_preteur_b_projet_parametrable()
+    test_taux_inoccupation_pct_parametrable()
     print("\n" + "=" * 78)
     print("Fin des tests. Si des écarts > 1 % apparaissent ci-dessus,")
     print("vérifier la formule correspondante dans lead_analysis_finance.py")
