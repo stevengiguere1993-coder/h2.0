@@ -23,8 +23,13 @@ pydantic-settings>=2.1.0,<3.0.0
 python-dotenv>=1.0.0,<2.0.0
 email-validator>=2.1.0,<3.0.0
 
-# Claude (SEO content + future validators)
+# Claude (SEO content + future validators — usage hors extraction lead)
 anthropic>=0.40.0,<1.0.0
+
+# Gemini (Google AI Studio) — extraction des leads immobiliers
+# (URLs, texte libre, images, PDFs). Tier gratuit suffisant pour les
+# volumes du pôle Prospection (1500 req/jour, 1M req/mois).
+google-generativeai>=0.8.0,<1.0.0
 
 # HTTP (Monday migration, QBO, Microsoft Graph)
 httpx>=0.27.0,<1.0.0

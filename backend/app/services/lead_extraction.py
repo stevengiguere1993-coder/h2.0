@@ -2,28 +2,36 @@
 
 Pipeline unifié :
   1. Pour chaque input (URL, texte, fichier image/PDF) on prépare un
-     content block Anthropic.
-  2. On envoie tous les blocks à Claude avec un schéma JSON cible.
+     élément à passer à Gemini (str pour le texte, dict avec
+     mime_type+data pour les binaires).
+  2. On envoie tous les éléments à Gemini avec un schéma JSON cible.
   3. On parse le JSON retourné et on le mappe sur les colonnes
      `lead_analyses`.
 
-Modèle utilisé : `claude-sonnet-4-6` (vision native, qualité élevée
-pour l'extraction structurée). Fallback `claude-haiku-4-5` si besoin
-de réduire les coûts.
+Modèle utilisé : `gemini-2.0-flash` (vision native, support PDF natif,
+JSON mode strict via `response_mime_type="application/json"`). Tier
+gratuit Google AI Studio : 1500 requêtes/jour, 1M req/mois — largement
+suffisant pour les volumes du pôle Prospection.
+
+Avant cette migration, l'extraction passait par l'API Anthropic Claude
+(claude-sonnet-4-6) — payante au token. Le SYSTEM_PROMPT et le
+SCHEMA_GUIDE sont identiques : on décrit le résultat attendu, le
+modèle s'adapte. Le pré-traitement HTML (NEXT_DATA, JSON-LD, meta,
+regex canoniques) reste inchangé — c'est purement Python, sans LLM.
 
 Sources supportées :
   - URLs : Centris.ca, DuProprio.com, Realtor.ca, ou n'importe quel
     autre site avec contenu HTML public. On fetch via httpx avec un
     User-Agent réaliste ; si bloqué (403/Cloudflare), on envoie
-    l'URL telle quelle à Claude qui essaiera de raisonner dessus.
+    l'URL telle quelle à Gemini qui essaiera de raisonner dessus.
   - Texte : passé tel quel.
-  - Image (JPEG/PNG/WebP/HEIC) : envoyée comme content block image.
-  - PDF : encodé en base64 et envoyé via le type document Anthropic.
+  - Image (JPEG/PNG/WebP/HEIC) : envoyée comme bloc multimodal.
+  - PDF : envoyé en bytes natifs (Gemini Flash 2.0 supporte les PDFs
+    sans pré-conversion).
 """
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import os
@@ -39,7 +47,7 @@ log = logging.getLogger(__name__)
 
 
 EXTRACTION_MODEL = os.environ.get(
-    "LEAD_EXTRACTION_MODEL", "claude-sonnet-4-6"
+    "LEAD_EXTRACTION_MODEL", "gemini-2.0-flash"
 )
 
 
@@ -131,16 +139,16 @@ class ExtractionResult:
 
 async def _fetch_url_text(url: str) -> str:
     """Récupère le contenu HTML d'une URL et le transforme en texte
-    riche pour Claude.
+    riche pour Gemini.
 
     Pour les sites SPA (Next.js, Nuxt, etc. — beaucoup de courtiers
     modernes : pmml.ca, certaines pages immobilières), le HTML rendu
     côté serveur est souvent vide ; la donnée vit dans des blocs
     `<script id="__NEXT_DATA__">` ou `<script type="application/ld+json">`.
-    On les extrait en priorité et on les passe à Claude tels quels
+    On les extrait en priorité et on les passe à Gemini tels quels
     (en JSON) avant de stripper le HTML.
 
-    Si l'URL est bloquée, on retourne juste l'URL pour que Claude
+    Si l'URL est bloquée, on retourne juste l'URL pour que Gemini
     raisonne dessus."""
     headers = {
         "User-Agent": (
@@ -222,7 +230,7 @@ async def _fetch_url_text(url: str) -> str:
 
     # 4. Texte visible — strip standard. Pour pmml.ca, c'est le bloc
     # qui contient la plupart des données (prix, typologie, évaluation
-    # municipale, année). On le met en TÊTE de liste pour que Claude
+    # municipale, année). On le met en TÊTE de liste pour que Gemini
     # le voie en premier — les meta/JSON-LD viennent compléter.
     text = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.I)
     text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
@@ -241,7 +249,7 @@ async def _fetch_url_text(url: str) -> str:
     # patterns canoniques (prix, typologie, évaluation, année,
     # courtier) directement dans le texte strippé et on les injecte
     # en TÊTE du prompt sous forme de pré-données. Donne un coup de
-    # pouce à Claude qui peut alors traduire en JSON sans deviner.
+    # pouce à Gemini qui peut alors traduire en JSON sans deviner.
     if text:
         pre_extracted = _pre_extract_canonical_fields(text)
         if pre_extracted:
@@ -254,7 +262,7 @@ async def _fetch_url_text(url: str) -> str:
 def _pre_extract_canonical_fields(text: str) -> str:
     """Cherche des patterns canoniques (prix demandé, X logements,
     évaluation municipale, année construction, X x typo) dans le
-    texte et retourne un bloc lisible pour Claude. Best-effort —
+    texte et retourne un bloc lisible pour Gemini. Best-effort —
     on ne fournit que ce qu'on trouve avec une confiance raisonnable."""
     lines: List[str] = []
 
@@ -380,28 +388,37 @@ def _pre_extract_canonical_fields(text: str) -> str:
     return "\n".join(lines)
 
 
-def _build_content_blocks(
+def _build_gemini_parts(
     inputs: List[ExtractionInput],
-) -> Tuple[List[dict], List[str]]:
-    """Convertit la liste d'inputs en content blocks Anthropic.
-    Retourne aussi la liste des warnings (sources sautées)."""
-    blocks: List[dict] = []
+) -> Tuple[List[Any], List[str]]:
+    """Convertit la liste d'inputs en éléments à passer à Gemini.
+    Retourne aussi la liste des warnings (sources sautées).
+
+    Gemini accepte dans `generate_content` :
+      - des chaînes str (texte)
+      - des dicts {"mime_type": "...", "data": <bytes>} pour les
+        images et PDFs (Gemini Flash 2.0 supporte le PDF nativement,
+        pas besoin de conversion en images).
+    """
+    parts: List[Any] = []
     warnings: List[str] = []
 
     for inp in inputs:
         if inp.text and inp.text.strip():
-            blocks.append({"type": "text", "text": inp.text.strip()})
+            parts.append(inp.text.strip())
         if inp.file_data:
             filename, content_type, data = inp.file_data
             ct = (content_type or "").lower()
             if ct.startswith("image/"):
-                # Anthropic vision accepte image/jpeg, image/png,
-                # image/webp, image/gif. On force vers ces 4.
+                # Gemini vision supporte image/jpeg, image/png,
+                # image/webp, image/heic, image/heif. On normalise.
                 supported = {
                     "image/jpeg",
                     "image/jpg",
                     "image/png",
                     "image/webp",
+                    "image/heic",
+                    "image/heif",
                     "image/gif",
                 }
                 if ct == "image/jpg":
@@ -411,32 +428,14 @@ def _build_content_blocks(
                         f"Format image non supporté pour {filename} : {ct}"
                     )
                     continue
-                blocks.append(
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": ct,
-                            "data": base64.b64encode(data).decode("ascii"),
-                        },
-                    }
-                )
+                parts.append({"mime_type": ct, "data": data})
             elif ct == "application/pdf":
-                blocks.append(
-                    {
-                        "type": "document",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "application/pdf",
-                            "data": base64.b64encode(data).decode("ascii"),
-                        },
-                    }
-                )
+                parts.append({"mime_type": "application/pdf", "data": data})
             else:
                 warnings.append(
                     f"Type de fichier non supporté pour {filename} : {ct}"
                 )
-    return blocks, warnings
+    return parts, warnings
 
 
 async def extract_lead_info(
@@ -446,9 +445,9 @@ async def extract_lead_info(
     files: List[Tuple[str, str, bytes]] | None = None,
 ) -> ExtractionResult:
     """Pipeline principal d'extraction. Retourne le résultat structuré."""
-    if not settings.anthropic_api_key:
+    if not settings.gemini_api_key:
         raise RuntimeError(
-            "ANTHROPIC_API_KEY non configuré — extraction impossible."
+            "GEMINI_API_KEY non configuré — extraction impossible."
         )
 
     inputs: List[ExtractionInput] = []
@@ -476,33 +475,37 @@ async def extract_lead_info(
             warnings=["Aucune source fournie."],
         )
 
-    content_blocks, warns = _build_content_blocks(inputs)
+    gemini_parts, warns = _build_gemini_parts(inputs)
     # Ajoute toujours la consigne JSON en fin pour bien cadrer la sortie.
-    content_blocks.append(
-        {
-            "type": "text",
-            "text": (
-                "Extrais maintenant les infos selon le schéma ci-dessous.\n\n"
-                + SCHEMA_GUIDE
-            ),
-        }
+    gemini_parts.append(
+        "Extrais maintenant les infos selon le schéma ci-dessous.\n\n"
+        + SCHEMA_GUIDE
     )
 
-    import anthropic  # import paresseux
+    import google.generativeai as genai  # import paresseux
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    genai.configure(api_key=settings.gemini_api_key)
+    model = genai.GenerativeModel(
+        EXTRACTION_MODEL,
+        system_instruction=SYSTEM_PROMPT,
+        # JSON mode strict : Gemini renvoie un JSON valide (object ou
+        # array selon ce qu'on demande dans le prompt) — pas besoin
+        # de stripper d'éventuelles backticks markdown.
+        generation_config=genai.GenerationConfig(
+            response_mime_type="application/json",
+            max_output_tokens=4000,
+        ),
+    )
+
     try:
-        msg = client.messages.create(
-            model=EXTRACTION_MODEL,
-            max_tokens=4000,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": content_blocks}],
-        )
-    except anthropic.APIError as exc:
-        log.exception("Claude extraction failed")
-        raise RuntimeError(f"Claude API error: {exc!s}") from exc
+        response = await model.generate_content_async(gemini_parts)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Gemini extraction failed")
+        raise RuntimeError(f"Gemini API error: {exc!s}") from exc
 
-    raw = "\n".join(b.text for b in msg.content if b.type == "text").strip()
+    raw = (response.text or "").strip()
+    # Garde-fou : si pour une raison quelconque Gemini renvoie du
+    # texte fencé, on le strip (ne devrait pas arriver en JSON mode).
     if raw.startswith("```"):
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```\s*$", "", raw)
@@ -511,8 +514,8 @@ async def extract_lead_info(
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        log.warning("Claude returned non-JSON: %s", raw[:300])
-        warns.append(f"Réponse Claude non-JSON : {exc!s}")
+        log.warning("Gemini returned non-JSON: %s", raw[:300])
+        warns.append(f"Réponse Gemini non-JSON : {exc!s}")
         return ExtractionResult(
             data=[],
             model_used=EXTRACTION_MODEL,
