@@ -209,7 +209,8 @@ async def provision_project_for_soumission(
             client_id=project.client_id,
             project_id=project.id,
             status=FactureStatus.DRAFT.value,
-            issued_at=datetime.now(timezone.utc),
+            # issued_at reste vide : la facture n'est « émise » qu'à
+            # l'envoi au client, pas à sa création (cf. send_facture).
             due_at=(
                 datetime.now(timezone.utc) + timedelta(days=due_in_days)
             ),

@@ -3,6 +3,7 @@
 All endpoints require an authenticated user.
 """
 
+from datetime import datetime, timezone
 from typing import List, Type
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -14,7 +15,7 @@ from app.models.achat import Achat
 from app.models.agenda_event import AgendaEvent
 from app.models.bon_travail import BonTravail
 from app.models.employe import Employe
-from app.models.facture import Facture
+from app.models.facture import Facture, FactureStatus
 from app.models.fournisseur import Fournisseur
 from app.models.punch import Punch
 from app.models.purchase_order import PurchaseOrder
@@ -168,7 +169,9 @@ def make_crud_router(
         # Capture pre-update status pour détecter la transition
         # vers received sur les achats → autopush QBO en background.
         prev_status = (
-            getattr(obj, "status", None) if model is Achat else None
+            getattr(obj, "status", None)
+            if model in (Achat, Facture)
+            else None
         )
         # Capture pre-update project_id du Punch — si on rattache un
         # punch existant à un projet (ou on le change de projet), on
@@ -257,6 +260,18 @@ def make_crud_router(
                     .where(_Project.soumission_id == int(obj.id))
                     .values(budget=new_total)
                 )
+                await db.flush()
+        if model is Facture:
+            # La facture est « émise » le jour où elle quitte l'état
+            # brouillon (envoi au client). issued_at n'est fixé qu'une
+            # fois : un changement de statut ultérieur ne le déplace pas.
+            new_status = getattr(obj, "status", None)
+            if (
+                prev_status == FactureStatus.DRAFT.value
+                and new_status != FactureStatus.DRAFT.value
+                and getattr(obj, "issued_at", None) is None
+            ):
+                obj.issued_at = datetime.now(timezone.utc)
                 await db.flush()
         return read_schema.model_validate(obj)
 
