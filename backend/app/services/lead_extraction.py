@@ -1,124 +1,127 @@
-"""Extraction d'infos immeuble depuis sources multiples.
+"""Extraction d'infos immeuble — 100% locale, sans aucun LLM externe.
 
-Pipeline unifié :
-  1. Pour chaque input (URL, texte, fichier image/PDF) on prépare un
-     élément à passer à Gemini (str pour le texte, dict avec
-     mime_type+data pour les binaires).
-  2. On envoie tous les éléments à Gemini avec un schéma JSON cible.
-  3. On parse le JSON retourné et on le mappe sur les colonnes
-     `lead_analyses`.
-
-Modèle utilisé : `gemini-2.0-flash` (vision native, support PDF natif,
-JSON mode strict via `response_mime_type="application/json"`). Tier
-gratuit Google AI Studio : 1500 requêtes/jour, 1M req/mois — largement
-suffisant pour les volumes du pôle Prospection.
-
-Avant cette migration, l'extraction passait par l'API Anthropic Claude
-(claude-sonnet-4-6) — payante au token. Le SYSTEM_PROMPT et le
-SCHEMA_GUIDE sont identiques : on décrit le résultat attendu, le
-modèle s'adapte. Le pré-traitement HTML (NEXT_DATA, JSON-LD, meta,
-regex canoniques) reste inchangé — c'est purement Python, sans LLM.
+Cette refonte retire complètement les appels à Gemini (et à Claude
+pour ce service précis). Avant : on payait/utilisait un quota Gemini
+gratuit qui plafonnait à ~50 req/jour sur le tier free récent (cf.
+erreur HTTP 429 vue en prod). Maintenant : tout est traité par des
+parsers Python purs, sans rate limit, sans coût, sans dépendance
+externe sur le critical path.
 
 Sources supportées :
-  - URLs : Centris.ca, DuProprio.com, Realtor.ca, ou n'importe quel
-    autre site avec contenu HTML public. On fetch via httpx avec un
-    User-Agent réaliste ; si bloqué (403/Cloudflare), on envoie
-    l'URL telle quelle à Gemini qui essaiera de raisonner dessus.
-  - Texte : passé tel quel.
-  - Image (JPEG/PNG/WebP/HEIC) : envoyée comme bloc multimodal.
-  - PDF : envoyé en bytes natifs (Gemini Flash 2.0 supporte les PDFs
-    sans pré-conversion).
+  - URLs Centris.ca         → parser CSS spécifique (BeautifulSoup)
+  - URLs DuProprio.com      → parser CSS spécifique
+  - URLs Realtor.ca         → parser CSS spécifique
+  - URLs Pmml.ca / Next.js  → bloc __NEXT_DATA__ (JSON applicatif)
+  - URLs génériques         → JSON-LD (schema.org) en priorité,
+                              sinon regex best-effort sur HTML stripped
+  - Texte libre             → regex + heuristiques (prix, logements,
+                              adresse, code postal, évaluation,
+                              taxes, courtier, typologie québécoise)
+  - PDFs texte              → pypdf + regex texte
+  - Images / PDFs scannés   → warning (OCR non supporté localement)
+
+API publique inchangée : `extract_lead_info(urls, text, files)` →
+`ExtractionResult(data, model_used, raw_response, warnings)`.
+`model_used` vaut désormais ``"local-parser-v1"``.
+
+Autres services du repo qui restent sur leur LLM (hors scope de cette
+refonte) : `estimate-expenses` (Claude) et `debug-extract-url`
+(garde Gemini pour debug d'extraction). Les paquets
+`google-generativeai` et `anthropic` restent donc dans les deps.
 """
 
 from __future__ import annotations
 
+import io
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import httpx
-
-from app.core.config import settings
 
 log = logging.getLogger(__name__)
 
 
-EXTRACTION_MODEL = os.environ.get(
+MODEL_TAG = "local-parser-v1"
+
+
+# ── Compatibilité : exports utilisés par `debug-extract-url` ──────
+#
+# L'endpoint diagnostic ``/lead-analyses/debug-extract-url`` reste sur
+# Gemini pour permettre à l'utilisateur de comparer ce que voit le
+# LLM vs ce que voient les parsers locaux. Pour qu'il continue de
+# fonctionner sans modifier l'endpoint, on ré-exporte ici les
+# symboles attendus. La refonte du pipeline principal n'a aucun lien
+# avec le debug — ils coexistent.
+
+import os as _os
+
+EXTRACTION_MODEL = _os.environ.get(
     "LEAD_EXTRACTION_MODEL", "gemini-2.0-flash"
 )
 
+SYSTEM_PROMPT = (
+    "Tu es un assistant d'extraction de données pour un dirigeant "
+    "qui acquiert des immeubles à logements au Québec. Tu reçois des "
+    "sources hétérogènes (Centris, DuProprio, PMML, courriel, photo "
+    "de fiche MLS, PDF descriptif, capture d'écran, SMS). Convertis "
+    "TOUS les nombres en valeur numérique pure. Pour la typologie, "
+    "parse en dict { \"4.5\": 4, \"5.5\": 8 }. Adresse civique dans "
+    "`address`, ville dans `city`. Si une info n'est pas présente, "
+    "retourne null. Réponds UNIQUEMENT avec du JSON strict."
+)
 
-SYSTEM_PROMPT = """Tu es un assistant d'extraction de données pour \
-un dirigeant qui acquiert des immeubles à logements au Québec. \
-Tu reçois des sources hétérogènes (lien Centris, DuProprio, PMML, \
-courriel courtier, photo de fiche MLS, PDF descriptif, capture \
-d'écran, SMS).
-
-Règles d'extraction :
-- Convertis TOUS les nombres en VALEUR NUMÉRIQUE PURE (jamais de \
-chaîne, jamais de symbole). Exemples :
-  - « 3 560 000 $ » → 3560000
-  - « 2 676 100 $ » → 2676100
-  - « 1 908 » (année) → 1908
-- Pour la typologie, parse les expressions du type « 8 x 5.5 + 4 x 4.5 » \
-ou « 8 unités de 5 ½ et 4 unités de 4 ½ » en un dict
-  `{ "1.5": 0, "2.5": 0, "3.5": 0, "4.5": 4, "5.5": 8, ... }`.
-- Adresse civique + rue dans `address` (ex. « 3715-3737 Ethel ») et \
-ville dans `city` (ex. « Verdun »).
-- Si plusieurs blocs structurés sont fournis (Meta tags, JSON-LD, \
-__NEXT_DATA__, En-têtes h1-h3, Texte visible), CROISE-les pour \
-trouver la même info plutôt que de te limiter à un seul bloc.
-- Si une info n'est pas présente, retourne `null`. Ne devine jamais — \
-null vaut mieux qu'une valeur approximative.
-- Réponds UNIQUEMENT avec le JSON strict, sans texte avant ni après, \
-sans markdown.
-- Si tu vois plusieurs immeubles différents dans les sources \
-(adresses qui ne matchent pas), retourne un array JSON de plusieurs \
-objets. Sinon retourne un seul objet."""
+SCHEMA_GUIDE = (
+    "Schéma JSON attendu (1 objet ou array si plusieurs immeubles) :\n"
+    "{ \"address\": str, \"city\": str, \"postal_code\": str, "
+    "\"province\": str, \"asking_price\": int, \"nb_logements\": int, "
+    "\"typology\": { \"3.5\": int, \"4.5\": int, ... }, "
+    "\"revenus_bruts\": int, \"taxes_municipales\": int, "
+    "\"taxes_scolaires\": int, \"assurances\": int, \"energie\": int, "
+    "\"depenses_autres\": int, \"annee_construction\": int, "
+    "\"superficie_terrain\": int, \"superficie_batiment\": int, "
+    "\"evaluation_municipale\": int, \"description\": str, "
+    "\"courtier_nom\": str, \"courtier_contact\": str, "
+    "\"type_batiment\": str, \"nb_stationnements\": int }"
+)
 
 
-SCHEMA_GUIDE = """Schéma JSON attendu (1 objet, ou array si plusieurs immeubles distincts) :
+async def _fetch_url_text(url: str) -> str:
+    """Variante texte du fetch — utilisée par l'endpoint debug pour
+    montrer ce que le LLM verrait. Renvoie le HTML stripé + meta tags
+    + JSON-LD + __NEXT_DATA__ concaténés (lisible)."""
+    html, err = await _fetch_html(url)
+    if err:
+        return f"[URL non accessible : {err}] {url}"
+    parts: List[str] = [f"[Source URL : {url}]"]
+    nd = _NEXTDATA_RE.search(html)
+    if nd:
+        chunk = nd.group(1).strip()
+        if len(chunk) > 40_000:
+            chunk = chunk[:40_000] + "\n[…tronqué]"
+        parts.append(f"[Bloc __NEXT_DATA__]\n{chunk}")
+    for i, ld in enumerate(_JSONLD_RE.findall(html)[:5]):
+        clean = ld.strip()
+        if len(clean) > 8_000:
+            clean = clean[:8_000] + "\n[…tronqué]"
+        if clean:
+            parts.append(f"[JSON-LD #{i + 1}]\n{clean}")
+    stripped = _strip_html(html)
+    if len(stripped) > 35_000:
+        stripped = stripped[:35_000] + "\n[…tronqué]"
+    parts.append(f"[Texte de la page]\n{stripped}")
+    return "\n\n".join(parts)
 
-{
-  "address": "123 Rue Example",            // adresse civique + rue
-  "city": "Montréal",
-  "postal_code": "H1H 1H1",
-  "province": "QC",
-  "asking_price": 1250000,                 // CAD, prix demandé
-  "nb_logements": 6,
-  "typology": {                            // répartition par typo
-    "1.5": 0,
-    "2.5": 0,
-    "3.5": 2,
-    "4.5": 4,
-    "5.5": 0,
-    "6.5+": 0,
-    "loft": 0
-  },
-  "revenus_bruts": 84000,                  // CAD/an
-  "taxes_municipales": 8500,               // CAD/an
-  "taxes_scolaires": 1200,                 // CAD/an
-  "assurances": 4500,                      // CAD/an
-  "energie": 0,                            // CAD/an si payé par owner
-  "depenses_autres": 0,                    // entretien, déneigement…
-  "annee_construction": 1965,
-  "superficie_terrain": 4500,              // pi² ou m² — précise ?
-  "superficie_batiment": 3800,
-  "evaluation_municipale": 980000,
-  "description": "Triplex bien situé...",  // notes du courtier
-  "courtier_nom": "Jane Doe",
-  "courtier_contact": "514-555-1234 / jane@centris.ca",
-  "type_batiment": "Triplex",              // Plex / Multi / Mixte / etc.
-  "nb_stationnements": 3
-}"""
+
+# ── Dataclasses publiques ─────────────────────────────────────────
 
 
 @dataclass
 class ExtractionInput:
-    """Un input à extraire. Un seul type doit être rempli à la fois."""
+    """Un input à extraire (compat avec l'ancienne signature)."""
 
     url: Optional[str] = None
     text: Optional[str] = None
@@ -128,8 +131,8 @@ class ExtractionInput:
 
 @dataclass
 class ExtractionResult:
-    """Résultat d'une extraction. `data` est un dict (un seul
-    immeuble) ou une list de dicts (plusieurs)."""
+    """Résultat d'une extraction. `data` est une liste de dicts (un
+    par immeuble distinct détecté — souvent un seul)."""
 
     data: List[dict] = field(default_factory=list)
     model_used: Optional[str] = None
@@ -137,19 +140,964 @@ class ExtractionResult:
     warnings: List[str] = field(default_factory=list)
 
 
-async def _fetch_url_text(url: str) -> str:
-    """Récupère le contenu HTML d'une URL et le transforme en texte
-    riche pour Gemini.
+# ── Helpers numériques ────────────────────────────────────────────
 
-    Pour les sites SPA (Next.js, Nuxt, etc. — beaucoup de courtiers
-    modernes : pmml.ca, certaines pages immobilières), le HTML rendu
-    côté serveur est souvent vide ; la donnée vit dans des blocs
-    `<script id="__NEXT_DATA__">` ou `<script type="application/ld+json">`.
-    On les extrait en priorité et on les passe à Gemini tels quels
-    (en JSON) avant de stripper le HTML.
 
-    Si l'URL est bloquée, on retourne juste l'URL pour que Gemini
-    raisonne dessus."""
+_NUM_CLEAN_RE = re.compile(r"[^\d.,kKmM]")
+
+
+def normalize_number(s: Any) -> Optional[float]:
+    """Convertit une valeur potentiellement bruitée en float.
+
+    Robuste aux formats vus en immobilier québécois :
+      - "1 200 000"      → 1_200_000.0
+      - "1,200,000"      → 1_200_000.0
+      - "1.2M" / "1,2 M" → 1_200_000.0
+      - "1.5k"           → 1_500.0
+      - "3 560 000 $"    → 3_560_000.0
+      - "84 000"         → 84_000.0
+      - 1250000 (int)    → 1_250_000.0
+
+    Retourne ``None`` si la valeur n'est pas convertible.
+    """
+    if s is None:
+        return None
+    if isinstance(s, (int, float)):
+        return float(s)
+    raw = str(s).strip()
+    if not raw:
+        return None
+
+    # Détecte un suffixe M / k (multiplicateur).
+    multiplier = 1.0
+    last = raw[-1]
+    if last in "Mm":
+        multiplier = 1_000_000.0
+        raw = raw[:-1].strip()
+    elif last in "Kk":
+        multiplier = 1_000.0
+        raw = raw[:-1].strip()
+
+    # Vire tout ce qui n'est pas chiffre/virgule/point.
+    cleaned = re.sub(r"[^\d.,]", "", raw)
+    if not cleaned:
+        return None
+
+    # Heuristique séparateur décimal :
+    # - Si la chaîne contient à la fois "," et "." : le DERNIER des deux
+    #   est le séparateur décimal (les autres sont des milliers).
+    # - Si elle contient un seul "," et au plus 2 chiffres après, c'est
+    #   décimal (style FR : "1,5").
+    # - Sinon les "," et "." sont des séparateurs de milliers.
+    if "," in cleaned and "." in cleaned:
+        if cleaned.rfind(",") > cleaned.rfind("."):
+            cleaned = cleaned.replace(".", "").replace(",", ".")
+        else:
+            cleaned = cleaned.replace(",", "")
+    elif "," in cleaned:
+        parts = cleaned.split(",")
+        if len(parts) == 2 and len(parts[1]) in (1, 2):
+            cleaned = cleaned.replace(",", ".")
+        else:
+            cleaned = cleaned.replace(",", "")
+    # "." seul : ambigu (peut être milliers FR rares ou décimal EN).
+    # On suppose décimal — sauf si 3 chiffres exactement après et pas
+    # de M/k (style "1.250" mal formaté → 1250).
+    elif "." in cleaned and multiplier == 1.0:
+        parts = cleaned.split(".")
+        if (
+            len(parts) == 2
+            and len(parts[1]) == 3
+            and len(parts[0]) <= 3
+        ):
+            # Probable séparateur de milliers européen rare.
+            cleaned = cleaned.replace(".", "")
+
+    try:
+        return float(cleaned) * multiplier
+    except ValueError:
+        return None
+
+
+def _int_or_none(s: Any) -> Optional[int]:
+    """Variante de normalize_number qui force le résultat en int."""
+    v = normalize_number(s)
+    if v is None:
+        return None
+    try:
+        return int(round(v))
+    except (ValueError, OverflowError):
+        return None
+
+
+# ── Parser texte libre (regex + heuristiques) ─────────────────────
+
+
+_POSTAL_RE = re.compile(r"\b([A-Z]\d[A-Z])\s?(\d[A-Z]\d)\b", re.I)
+_PHONE_RE = re.compile(
+    r"(?:\+?1[\-.\s]?)?\(?(\d{3})\)?[\-.\s]?(\d{3})[\-.\s]?(\d{4})"
+)
+_EMAIL_RE = re.compile(r"[\w\.\-+]+@[\w\.\-]+\.[a-z]{2,}", re.I)
+
+
+def parse_text(text: str) -> Dict[str, Any]:
+    """Extrait des champs depuis du texte libre (description courtier,
+    SMS, copier-coller, texte de PDF). Best-effort, retourne un dict
+    partiel — jamais d'exception non catchée."""
+    if not text:
+        return {}
+    out: Dict[str, Any] = {}
+
+    # Prix demandé. Plusieurs formes : "Prix demandé : 3 560 000 $",
+    # "Prix demandé 1,2M$", "1 250 000 $". On préfère la forme
+    # qualifiée (avec "demandé") quand elle existe.
+    m = re.search(
+        r"(?:prix\s+demand[eé]|prix\s+de\s+vente|asking\s+price)[\s:]*\$?\s*"
+        r"([\d][\d\s\.,]*[\d])\s*(?:\$|cad)?",
+        text,
+        flags=re.I,
+    )
+    if not m:
+        m = re.search(
+            r"([\d][\d\s\.,]*\d)\s*(?:M|m)\s*\$",  # "1,2 M$"
+            text,
+        )
+        if m:
+            v = normalize_number(m.group(1) + "M")
+            if v:
+                out["asking_price"] = int(round(v))
+        else:
+            # Fallback générique : un montant > 100 000 $ proche du
+            # mot "prix" → asking_price probable.
+            m = re.search(
+                r"prix[^\d]{0,40}?([\d][\d\s\.,]{4,})\s*\$",
+                text,
+                flags=re.I,
+            )
+            if m:
+                v = _int_or_none(m.group(1))
+                if v and v >= 50_000:
+                    out["asking_price"] = v
+    else:
+        v = normalize_number(m.group(1))
+        if v:
+            # Cas "1,2 M $" capté dans le 1er regex aussi.
+            tail = text[m.end():m.end() + 6].lower()
+            if "m" in tail and v < 1000:
+                v = v * 1_000_000
+            out["asking_price"] = int(round(v))
+
+    # Nombre de logements. "12 logements", "12 unités", "12 portes",
+    # "Nombre de logements : 8".
+    m = re.search(
+        r"nombre\s+d['e]\s*(?:logements|unit[eé]s)[^\d]{0,15}?(\d{1,3})",
+        text,
+        flags=re.I,
+    )
+    if m:
+        out["nb_logements"] = int(m.group(1))
+    else:
+        m = re.search(
+            r"\b(\d{1,3})\s*(?:logements?|unit[eé]s?|portes?)\b",
+            text,
+            flags=re.I,
+        )
+        if m:
+            v = int(m.group(1))
+            if 1 <= v <= 999:
+                out["nb_logements"] = v
+
+    # Typologie québécoise (X.5 ou X ½, caractéristique 1.5, 2.5, 3.5,
+    # 4.5, 5.5, 6.5). Pattern : "8 x 5.5", "12 x 4 ½", "8 unités de
+    # 5½". On REFUSE les patterns sans ".5" (faux positifs : "2 x 6").
+    typology: Dict[str, int] = {}
+    typo_re = re.compile(
+        r"(\d{1,2})\s*(?:[xX×]|unit[eé]s?\s+de)\s*(\d)\s*(?:[\.,]\s*5|½)",
+    )
+    for m in typo_re.finditer(text):
+        try:
+            qty = int(m.group(1))
+            base = int(m.group(2))
+            key = f"{base}.5"
+            # On garde le MAX si le texte cite plusieurs fois la même
+            # typologie (description + tableau).
+            typology[key] = max(typology.get(key, 0), qty)
+        except ValueError:
+            pass
+    if typology:
+        out["typology"] = typology
+        # Si nb_logements absent, déduit de la typologie.
+        if "nb_logements" not in out:
+            out["nb_logements"] = sum(typology.values())
+
+    # Année de construction. "Bâti en 1965", "Année de construction 1908",
+    # "construit en 1972".
+    m = re.search(
+        r"(?:b[aâ]ti(?:e)?(?:\s+en)?|construit(?:e)?(?:\s+en)?|"
+        r"ann[eé]e\s+(?:de\s+)?construction)\s*:?\s*(\d{4})",
+        text,
+        flags=re.I,
+    )
+    if m:
+        y = int(m.group(1))
+        if 1700 <= y <= 2100:
+            out["annee_construction"] = y
+
+    # Évaluation municipale.
+    m = re.search(
+        r"[ée]valuation\s+municipale(?:\s+totale)?[^\d$]{0,40}?\$?\s*"
+        r"([\d][\d\s\.,]*\d)\s*\$?",
+        text,
+        flags=re.I,
+    )
+    if m:
+        v = _int_or_none(m.group(1))
+        if v and v >= 1_000:
+            out["evaluation_municipale"] = v
+
+    # Revenus bruts annuels.
+    m = re.search(
+        r"revenus?\s*(?:bruts?\s+)?(?:annuels?\s+)?[^\d$]{0,15}?\$?\s*"
+        r"([\d][\d\s\.,]*\d)",
+        text,
+        flags=re.I,
+    )
+    if m:
+        v = _int_or_none(m.group(1))
+        if v and v >= 1_000:
+            out["revenus_bruts"] = v
+
+    # Taxes municipales.
+    m = re.search(
+        r"taxes?\s+municipal(?:es?)?[^\d$]{0,15}?\$?\s*"
+        r"([\d][\d\s\.,]*\d)",
+        text,
+        flags=re.I,
+    )
+    if m:
+        v = _int_or_none(m.group(1))
+        if v and v >= 100:
+            out["taxes_municipales"] = v
+
+    # Taxes scolaires.
+    m = re.search(
+        r"taxes?\s+scolaires?[^\d$]{0,15}?\$?\s*([\d][\d\s\.,]*\d)",
+        text,
+        flags=re.I,
+    )
+    if m:
+        v = _int_or_none(m.group(1))
+        if v and v >= 50:
+            out["taxes_scolaires"] = v
+
+    # Assurances.
+    m = re.search(
+        r"assurances?[^\d$]{0,15}?\$?\s*([\d][\d\s\.,]*\d)",
+        text,
+        flags=re.I,
+    )
+    if m:
+        v = _int_or_none(m.group(1))
+        if v and v >= 100:
+            out["assurances"] = v
+
+    # Énergie / chauffage payé par le propriétaire.
+    m = re.search(
+        r"(?:[eé]nergie|chauffage|[eé]lectricit[eé]|hydro)[^\d$]{0,15}?\$?\s*"
+        r"([\d][\d\s\.,]*\d)",
+        text,
+        flags=re.I,
+    )
+    if m:
+        v = _int_or_none(m.group(1))
+        if v and v >= 100:
+            out["energie"] = v
+
+    # Stationnements.
+    m = re.search(
+        r"(?:nombre\s+de\s+)?stationnements?[^\d]{0,15}?(\d{1,3})",
+        text,
+        flags=re.I,
+    )
+    if m:
+        v = int(m.group(1))
+        if 0 <= v <= 999:
+            out["nb_stationnements"] = v
+
+    # Superficie terrain / bâtiment (en pi² souvent).
+    m = re.search(
+        r"superficie\s+(?:du\s+)?terrain[^\d]{0,15}?"
+        r"([\d][\d\s\.,]*\d)\s*(?:pi|pieds|m)?",
+        text,
+        flags=re.I,
+    )
+    if m:
+        v = _int_or_none(m.group(1))
+        if v and v >= 100:
+            out["superficie_terrain"] = v
+    m = re.search(
+        r"superficie\s+(?:du\s+)?b[aâ]timent[^\d]{0,15}?"
+        r"([\d][\d\s\.,]*\d)\s*(?:pi|pieds|m)?",
+        text,
+        flags=re.I,
+    )
+    if m:
+        v = _int_or_none(m.group(1))
+        if v and v >= 100:
+            out["superficie_batiment"] = v
+
+    # Code postal canadien (format A1A 1A1).
+    m = _POSTAL_RE.search(text)
+    if m:
+        out["postal_code"] = f"{m.group(1).upper()} {m.group(2).upper()}"
+
+    # Adresse civique « 3715-3737 Rue Ethel », « 1234 Boulevard X »,
+    # « 5678 Avenue Y ». On accepte un range numérique optionnel.
+    m = re.search(
+        r"\b(\d{1,5}(?:\s*-\s*\d{1,5})?)\s+"
+        r"((?:Rue|Boul(?:evard)?\.?|Av(?:enue)?\.?|Ch(?:emin)?\.?|"
+        r"Rte|Route|Place|Pl\.?|Mont[eé]e|Terrasse|Croissant)\s+"
+        r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\-' \.]{2,50})",
+        text,
+        flags=re.I,
+    )
+    if m:
+        addr = f"{m.group(1).strip()} {m.group(2).strip()}"
+        out["address"] = re.sub(r"\s+", " ", addr).strip()[:200]
+
+    # Ville. Trois heuristiques, dans l'ordre de précision :
+    #   a) « Ville : Verdun » / « Municipalité : Verdun »
+    #   b) format québécois canonique « <adresse>, <Ville> (QC) <CP> »
+    #   c) immédiatement avant un code postal canadien
+    m = re.search(
+        r"(?:Ville|Municipalit[eé])\s*:?\s*"
+        r"([A-ZÀ-Ÿ][A-Za-zÀ-ÿ\-' ]{2,40})",
+        text,
+    )
+    if m:
+        out["city"] = m.group(1).strip()
+    else:
+        m = re.search(
+            r",\s*([A-ZÀ-Ÿ][A-Za-zÀ-ÿ\-' ]{2,40}?)\s*"
+            r"\(\s*(?:QC|Qu[eé]bec|ON|Ontario)\s*\)",
+            text,
+        )
+        if m:
+            out["city"] = m.group(1).strip()
+
+    # Province (presque toujours QC, mais parfois explicite).
+    if re.search(r"\bQu[eé]bec\b|\bQC\b", text):
+        out["province"] = "QC"
+
+    # Type de bâtiment.
+    for kw, label in (
+        (r"\btriplex\b", "Triplex"),
+        (r"\bduplex\b", "Duplex"),
+        (r"\bquadruplex\b", "Quadruplex"),
+        (r"\bquintuplex\b", "Quintuplex"),
+        (r"\bplex\b", "Plex"),
+        (r"\bcondominium\b|\bcondo\b", "Condo"),
+        (r"\bmulti(?:logements?|plex)?\b", "Multilogements"),
+        (r"\bmixte\b", "Mixte"),
+    ):
+        if re.search(kw, text, flags=re.I):
+            out["type_batiment"] = label
+            break
+
+    # Courtier — nom probable (après "Courtier :" / "Agent :"). On
+    # accepte les noms en majuscules initiales, 2 à 4 mots. On doit
+    # combiner re.I sur le préfixe MAIS rester case-sensitive sur le
+    # capture group (sinon le nom est confondu avec le mot-clé). On
+    # split donc en deux étapes : trouver le préfixe, puis matcher le
+    # nom à partir de là.
+    pref = re.search(
+        r"\b(?:courtier|agent|repr[eé]sentant)\b\s*:?\s*",
+        text,
+        flags=re.I,
+    )
+    if pref:
+        tail = text[pref.end():pref.end() + 120]
+        nm = re.match(
+            r"([A-ZÀ-Ÿ][a-zà-ÿ\-']+(?:\s+[A-ZÀ-Ÿ][a-zà-ÿ\-']+){1,3})",
+            tail,
+        )
+        if nm:
+            out["courtier_nom"] = nm.group(1).strip()
+
+    # Courtier — téléphone + email regroupés.
+    contact_bits: List[str] = []
+    m = _PHONE_RE.search(text)
+    if m:
+        contact_bits.append(f"{m.group(1)}-{m.group(2)}-{m.group(3)}")
+    m = _EMAIL_RE.search(text)
+    if m:
+        contact_bits.append(m.group(0))
+    if contact_bits:
+        out["courtier_contact"] = " / ".join(contact_bits)
+
+    return out
+
+
+# ── Parser JSON-LD (schema.org) ───────────────────────────────────
+
+
+_JSONLD_RE = re.compile(
+    r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>'
+    r'([\s\S]*?)</script>',
+    flags=re.I,
+)
+
+
+_SCHEMA_TYPES = {
+    "product",
+    "realestatelisting",
+    "house",
+    "apartment",
+    "singlefamilyresidence",
+    "residence",
+    "place",
+    "accommodation",
+    "offer",
+}
+
+
+def _walk_jsonld(node: Any, found: List[dict]) -> None:
+    """Aplatit un graphe JSON-LD pour récupérer tous les sous-objets
+    typés (schema.org). Robuste aux @graph, listes imbriquées, etc."""
+    if isinstance(node, dict):
+        t = node.get("@type")
+        types = t if isinstance(t, list) else [t] if t else []
+        if any(
+            isinstance(x, str) and x.lower() in _SCHEMA_TYPES
+            for x in types
+        ):
+            found.append(node)
+        for v in node.values():
+            _walk_jsonld(v, found)
+    elif isinstance(node, list):
+        for v in node:
+            _walk_jsonld(v, found)
+
+
+def parse_jsonld(html: str) -> Dict[str, Any]:
+    """Cherche les blocs ``<script type="application/ld+json">`` et en
+    extrait les champs immobiliers connus de schema.org."""
+    out: Dict[str, Any] = {}
+    for raw in _JSONLD_RE.findall(html):
+        try:
+            parsed = json.loads(raw.strip())
+        except (ValueError, TypeError):
+            continue
+        found: List[dict] = []
+        _walk_jsonld(parsed, found)
+        for node in found:
+            _merge_jsonld_node(node, out)
+    return out
+
+
+def _merge_jsonld_node(node: dict, out: dict) -> None:
+    """Extrait les champs reconnus d'un nœud schema.org et les pose
+    dans ``out`` s'ils ne sont pas déjà présents."""
+
+    def _put(key: str, value: Any) -> None:
+        if value is None or value == "" or out.get(key) is not None:
+            return
+        out[key] = value
+
+    # Nom / description
+    _put("description", node.get("description") or node.get("name"))
+
+    # Address (peut être string ou objet PostalAddress).
+    addr = node.get("address")
+    if isinstance(addr, dict):
+        street = addr.get("streetAddress")
+        city = addr.get("addressLocality")
+        postal = addr.get("postalCode")
+        prov = addr.get("addressRegion")
+        if street:
+            _put("address", str(street).strip()[:200])
+        if city:
+            _put("city", str(city).strip()[:100])
+        if postal:
+            _put("postal_code", str(postal).strip().upper()[:10])
+        if prov:
+            _put("province", str(prov).strip().upper()[:5])
+    elif isinstance(addr, str):
+        _put("address", addr.strip()[:200])
+
+    # Prix : offers.price, offers.priceSpecification.price, price.
+    offers = node.get("offers")
+    if isinstance(offers, dict):
+        price = offers.get("price") or offers.get("lowPrice")
+        if price is None:
+            ps = offers.get("priceSpecification")
+            if isinstance(ps, dict):
+                price = ps.get("price")
+        v = _int_or_none(price)
+        if v:
+            _put("asking_price", v)
+    elif isinstance(offers, list) and offers:
+        v = _int_or_none(offers[0].get("price"))
+        if v:
+            _put("asking_price", v)
+    else:
+        v = _int_or_none(node.get("price"))
+        if v:
+            _put("asking_price", v)
+
+    # Année construction (yearBuilt / dateBuilt).
+    y = _int_or_none(node.get("yearBuilt") or node.get("dateBuilt"))
+    if y and 1700 <= y <= 2100:
+        _put("annee_construction", y)
+
+    # Nb d'unités (numberOfRooms est ambigu — on l'évite ici).
+    v = _int_or_none(node.get("numberOfUnits"))
+    if v:
+        _put("nb_logements", v)
+
+    # Surfaces.
+    fs = node.get("floorSize")
+    if isinstance(fs, dict):
+        v = _int_or_none(fs.get("value"))
+        if v:
+            _put("superficie_batiment", v)
+    elif fs is not None:
+        v = _int_or_none(fs)
+        if v:
+            _put("superficie_batiment", v)
+
+    ls = node.get("lotSize")
+    if isinstance(ls, dict):
+        v = _int_or_none(ls.get("value"))
+        if v:
+            _put("superficie_terrain", v)
+    elif ls is not None:
+        v = _int_or_none(ls)
+        if v:
+            _put("superficie_terrain", v)
+
+
+# ── Parser __NEXT_DATA__ (Next.js — pmml.ca, etc.) ────────────────
+
+
+_NEXTDATA_RE = re.compile(
+    r'<script[^>]*id=["\']__NEXT_DATA__["\'][^>]*>([\s\S]*?)</script>',
+    flags=re.I,
+)
+
+
+def has_next_data(html: str) -> bool:
+    return bool(_NEXTDATA_RE.search(html))
+
+
+def parse_next_data(html: str) -> Dict[str, Any]:
+    """Extrait depuis le bloc ``__NEXT_DATA__`` (Next.js). Les sites
+    immobiliers Next.js (pmml.ca par ex.) sérialisent leur état dans
+    ``props.pageProps`` — on cherche récursivement les champs connus
+    (price, address, units, etc.).
+
+    Bonus : on convertit aussi l'arbre JSON en texte stringifié et on
+    le passe à ``parse_text`` — ça capte les champs québécois rares
+    (typologie, taxes, évaluation) que le SPA stocke en chaînes
+    libres dans le JSON."""
+    m = _NEXTDATA_RE.search(html)
+    if not m:
+        return {}
+    try:
+        parsed = json.loads(m.group(1).strip())
+    except (ValueError, TypeError):
+        return {}
+
+    out: Dict[str, Any] = {}
+    _walk_next_data(parsed, out)
+
+    # Filet de sécurité : passer le JSON stringifié à parse_text pour
+    # rattraper ce qu'on aurait raté. Les valeurs déjà extraites par
+    # le walker structurel ne sont pas écrasées.
+    try:
+        text_blob = json.dumps(parsed, ensure_ascii=False)
+        text_out = parse_text(text_blob)
+        for k, v in text_out.items():
+            out.setdefault(k, v)
+    except (TypeError, ValueError):
+        pass
+
+    return out
+
+
+# Clés JSON couramment utilisées par les SPA immobiliers (Next.js
+# notamment) → mapping vers nos champs canoniques.
+_NEXT_FIELD_MAP: Dict[str, str] = {
+    "price": "asking_price",
+    "askingprice": "asking_price",
+    "listprice": "asking_price",
+    "salesprice": "asking_price",
+    "prixdemande": "asking_price",
+    "address": "address",
+    "streetaddress": "address",
+    "adresse": "address",
+    "city": "city",
+    "ville": "city",
+    "postalcode": "postal_code",
+    "codepostal": "postal_code",
+    "province": "province",
+    "yearbuilt": "annee_construction",
+    "anneeconstruction": "annee_construction",
+    "numberofunits": "nb_logements",
+    "nbunits": "nb_logements",
+    "nblogements": "nb_logements",
+    "units": "nb_logements",
+    "description": "description",
+    "evaluationmunicipale": "evaluation_municipale",
+    "revenusbruts": "revenus_bruts",
+    "taxesmunicipales": "taxes_municipales",
+    "taxesscolaires": "taxes_scolaires",
+    "lotsize": "superficie_terrain",
+    "floorsize": "superficie_batiment",
+    "areaterrain": "superficie_terrain",
+    "areabatiment": "superficie_batiment",
+}
+
+
+def _walk_next_data(node: Any, out: dict, _depth: int = 0) -> None:
+    """Parcourt récursivement un arbre JSON et pose dans ``out`` les
+    valeurs des clés connues."""
+    if _depth > 25:  # garde-fou contre les cycles improbables
+        return
+    if isinstance(node, dict):
+        for k, v in node.items():
+            key_norm = re.sub(r"[^a-z]", "", str(k).lower())
+            mapped = _NEXT_FIELD_MAP.get(key_norm)
+            if mapped and mapped not in out:
+                if mapped in (
+                    "asking_price",
+                    "annee_construction",
+                    "nb_logements",
+                    "evaluation_municipale",
+                    "revenus_bruts",
+                    "taxes_municipales",
+                    "taxes_scolaires",
+                    "superficie_terrain",
+                    "superficie_batiment",
+                ):
+                    iv = _int_or_none(v)
+                    if iv:
+                        out[mapped] = iv
+                elif isinstance(v, str) and v.strip():
+                    out[mapped] = v.strip()[:500]
+            _walk_next_data(v, out, _depth + 1)
+    elif isinstance(node, list):
+        for v in node:
+            _walk_next_data(v, out, _depth + 1)
+
+
+# ── Parsers spécifiques sites ─────────────────────────────────────
+
+
+def _get_soup(html: str):
+    """Crée un BeautifulSoup en gérant l'import paresseusement (le
+    paquet est lourd à importer ; sur des URLs sans HTML utile on
+    veut éviter le coût)."""
+    from bs4 import BeautifulSoup  # type: ignore
+
+    return BeautifulSoup(html, "html.parser")
+
+
+def _strip_html(html: str) -> str:
+    """Strip HTML → texte plat. Utilisé en fallback regex."""
+    text = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.I)
+    text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
+    text = re.sub(r"<!--[\s\S]*?-->", " ", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"&nbsp;", " ", text)
+    text = re.sub(r"&amp;", "&", text)
+    text = re.sub(r"&#x27;|&#39;", "'", text)
+    text = re.sub(r"&quot;", '"', text)
+    text = re.sub(r"&#?\w+;", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def parse_centris(html: str) -> Dict[str, Any]:
+    """Parser sélecteurs CSS spécifiques à Centris.ca. En cas d'échec
+    sur un sélecteur, on retombe gracieusement sur JSON-LD puis sur
+    parse_text(HTML stripped)."""
+    out: Dict[str, Any] = {}
+    try:
+        soup = _get_soup(html)
+    except Exception:  # noqa: BLE001
+        return parse_text(_strip_html(html))
+
+    # Prix : Centris utilise .priceTag, ou un <span itemprop="price">,
+    # ou un <meta itemprop="price">.
+    for sel in (".priceTag", "[itemprop='price']", "meta[itemprop='price']"):
+        node = soup.select_one(sel)
+        if node:
+            raw = node.get("content") or node.get_text(" ", strip=True)
+            v = _int_or_none(raw)
+            if v and v >= 10_000:
+                out["asking_price"] = v
+                break
+
+    # Adresse : .address ou h1
+    for sel in (".address", "h1[itemprop='address']", "h1.heading"):
+        node = soup.select_one(sel)
+        if node:
+            txt = node.get_text(" ", strip=True)
+            if txt:
+                # Souvent Centris cumule "adresse, ville (province)" → on
+                # split sur la 1re virgule.
+                if "," in txt:
+                    parts = [p.strip() for p in txt.split(",", 1)]
+                    out["address"] = parts[0][:200]
+                    if len(parts) == 2:
+                        rest = parts[1]
+                        # « Verdun (Montréal) (QC) H4G 1M4 »
+                        city_m = re.match(
+                            r"([^\(]+)\s*(?:\([^\)]+\))?\s*\(([A-Z]{2})\)?",
+                            rest,
+                        )
+                        if city_m:
+                            out["city"] = city_m.group(1).strip()
+                            out["province"] = city_m.group(2)
+                        pm = _POSTAL_RE.search(rest)
+                        if pm:
+                            out["postal_code"] = (
+                                f"{pm.group(1).upper()} {pm.group(2).upper()}"
+                            )
+                else:
+                    out["address"] = txt[:200]
+                break
+
+    # Description (.description, .summary, .text).
+    for sel in (".description", ".summary", "[itemprop='description']"):
+        node = soup.select_one(sel)
+        if node:
+            txt = node.get_text(" ", strip=True)
+            if txt and len(txt) > 30:
+                out["description"] = txt[:2000]
+                break
+
+    # Fallback massif sur JSON-LD pour les champs encore manquants.
+    ld = parse_jsonld(html)
+    for k, v in ld.items():
+        out.setdefault(k, v)
+
+    # Fallback regex sur le texte strippé pour ce qui reste (taxes,
+    # typologie, année, etc.).
+    text_out = parse_text(_strip_html(html))
+    for k, v in text_out.items():
+        out.setdefault(k, v)
+
+    return out
+
+
+def parse_duproprio(html: str) -> Dict[str, Any]:
+    """Parser DuProprio.com. Approche similaire à Centris : sélecteurs
+    courants + fallback JSON-LD + fallback regex texte."""
+    out: Dict[str, Any] = {}
+    try:
+        soup = _get_soup(html)
+    except Exception:  # noqa: BLE001
+        return parse_text(_strip_html(html))
+
+    # Prix demandé : sur DuProprio, classes possibles : .listing-price,
+    # .price__value, [data-qaid="listing-price"].
+    for sel in (
+        ".listing-price",
+        ".price__value",
+        "[data-qaid='listing-price']",
+        ".sc-price",
+        "meta[itemprop='price']",
+    ):
+        node = soup.select_one(sel)
+        if node:
+            raw = node.get("content") or node.get_text(" ", strip=True)
+            v = _int_or_none(raw)
+            if v and v >= 10_000:
+                out["asking_price"] = v
+                break
+
+    # Adresse.
+    for sel in (
+        ".listing-location__address",
+        "h1.listing-title",
+        "[data-qaid='listing-address']",
+        "h1",
+    ):
+        node = soup.select_one(sel)
+        if node:
+            txt = node.get_text(" ", strip=True)
+            if txt:
+                out.setdefault("address", txt[:200])
+                break
+
+    # Description.
+    for sel in (
+        ".listing-description",
+        "[data-qaid='listing-description']",
+        ".sc-description",
+    ):
+        node = soup.select_one(sel)
+        if node:
+            txt = node.get_text(" ", strip=True)
+            if txt and len(txt) > 30:
+                out["description"] = txt[:2000]
+                break
+
+    ld = parse_jsonld(html)
+    for k, v in ld.items():
+        out.setdefault(k, v)
+    text_out = parse_text(_strip_html(html))
+    for k, v in text_out.items():
+        out.setdefault(k, v)
+    return out
+
+
+def parse_realtor(html: str) -> Dict[str, Any]:
+    """Parser Realtor.ca. Realtor.ca est très protégé (Cloudflare), le
+    fetch HTTP direct retourne souvent du HTML minimal — on tape donc
+    JSON-LD si présent, et le reste en regex texte."""
+    out: Dict[str, Any] = {}
+    try:
+        soup = _get_soup(html)
+    except Exception:  # noqa: BLE001
+        return parse_text(_strip_html(html))
+
+    # Prix : #listingPriceValue, #priceColLeft.
+    for sel in (
+        "#listingPriceValue",
+        "#priceColLeft",
+        "[itemprop='price']",
+        "meta[itemprop='price']",
+    ):
+        node = soup.select_one(sel)
+        if node:
+            raw = node.get("content") or node.get_text(" ", strip=True)
+            v = _int_or_none(raw)
+            if v and v >= 10_000:
+                out["asking_price"] = v
+                break
+
+    # Adresse.
+    for sel in (
+        "#listingAddress",
+        "h1[itemprop='address']",
+        ".listingAddress",
+    ):
+        node = soup.select_one(sel)
+        if node:
+            txt = node.get_text(" ", strip=True)
+            if txt:
+                out.setdefault("address", txt[:200])
+                break
+
+    # Description.
+    for sel in (
+        "#propertyDescriptionCon",
+        "[itemprop='description']",
+        ".propertyDescription",
+    ):
+        node = soup.select_one(sel)
+        if node:
+            txt = node.get_text(" ", strip=True)
+            if txt and len(txt) > 30:
+                out["description"] = txt[:2000]
+                break
+
+    ld = parse_jsonld(html)
+    for k, v in ld.items():
+        out.setdefault(k, v)
+    text_out = parse_text(_strip_html(html))
+    for k, v in text_out.items():
+        out.setdefault(k, v)
+    return out
+
+
+# ── Parser PDF (pypdf) ────────────────────────────────────────────
+
+
+def parse_pdf(blob: bytes) -> str:
+    """Extrait le texte brut d'un PDF (toutes pages concaténées).
+    Retourne une chaîne vide si le PDF est purement scanné (pas de
+    couche texte) — le caller émettra alors un warning."""
+    try:
+        from pypdf import PdfReader  # type: ignore
+    except ImportError:
+        log.warning("pypdf non installé — extraction PDF désactivée")
+        return ""
+    try:
+        reader = PdfReader(io.BytesIO(blob))
+        chunks: List[str] = []
+        for page in reader.pages:
+            try:
+                t = page.extract_text() or ""
+            except Exception:  # noqa: BLE001
+                t = ""
+            if t.strip():
+                chunks.append(t)
+        return "\n".join(chunks)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("pypdf extraction failed: %s", exc)
+        return ""
+
+
+# ── Fusion multi-sources ──────────────────────────────────────────
+
+
+# Priorité décroissante : parser dédié (Centris/DuProprio/Realtor/Next)
+# l'emporte sur JSON-LD générique, qui l'emporte sur regex texte.
+_PARSER_PRIORITY: Dict[str, int] = {
+    "centris": 100,
+    "duproprio": 100,
+    "realtor": 100,
+    "next_data": 90,
+    "jsonld": 70,
+    "text": 50,
+    "pdf": 50,
+}
+
+
+def merge_extracted(sources: List[Tuple[str, Dict[str, Any]]]) -> Dict[str, Any]:
+    """Fusionne plusieurs dicts en respectant la priorité du parseur.
+
+    ``sources`` est une liste de ``(parser_tag, dict)``. Pour chaque
+    champ, on garde la valeur du parseur le plus prioritaire qui a
+    fourni une valeur non-nulle. À priorité égale, premier arrivé.
+    La typologie est fusionnée champ par champ (les sources peuvent
+    se compléter).
+    """
+    merged: Dict[str, Any] = {}
+    field_origin: Dict[str, int] = {}
+
+    for tag, data in sources:
+        if not data:
+            continue
+        prio = _PARSER_PRIORITY.get(tag, 0)
+        for k, v in data.items():
+            if v is None or v == "":
+                continue
+            if k == "typology" and isinstance(v, dict):
+                existing = merged.get("typology") or {}
+                for tk, tv in v.items():
+                    # Pour la typologie : on prend le MAX (le texte cite
+                    # la typo plusieurs fois, on veut le compte réel).
+                    existing[tk] = max(existing.get(tk, 0), int(tv))
+                merged["typology"] = existing
+                field_origin[k] = max(field_origin.get(k, 0), prio)
+                continue
+            if k not in merged or prio > field_origin.get(k, -1):
+                merged[k] = v
+                field_origin[k] = prio
+    return merged
+
+
+# ── Fetch URL ─────────────────────────────────────────────────────
+
+
+async def _fetch_html(url: str) -> Tuple[str, Optional[str]]:
+    """Télécharge le HTML d'une URL. Retourne (html, error_msg).
+    En cas d'échec, html est "" et error_msg explique pourquoi."""
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -165,277 +1113,29 @@ async def _fetch_url_text(url: str) -> str:
         ) as client:
             r = await client.get(url, headers=headers)
             if r.status_code >= 400:
-                return f"[URL non accessible — code {r.status_code}] {url}"
-            html = r.text
-    except Exception as exc:  # noqa: BLE001
-        log.warning("fetch_url_text failed for %s: %s", url, exc)
-        return f"[URL non récupérable : {exc!s}] {url}"
-
-    parts: List[str] = [f"[Source URL : {url}]"]
-
-    # 1. __NEXT_DATA__ (Next.js apps : pmml.ca et beaucoup d'autres).
-    nd_match = re.search(
-        r'<script[^>]*id=["\']__NEXT_DATA__["\'][^>]*>([\s\S]*?)</script>',
-        html,
-        flags=re.I,
-    )
-    if nd_match:
-        nd_raw = nd_match.group(1).strip()
-        if len(nd_raw) > 40_000:
-            nd_raw = nd_raw[:40_000] + "\n[…tronqué]"
-        parts.append(f"[Bloc __NEXT_DATA__ — JSON Next.js]\n{nd_raw}")
-
-    # 2. JSON-LD (schema.org Property / Apartment / Place).
-    ld_matches = re.findall(
-        r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>([\s\S]*?)</script>',
-        html,
-        flags=re.I,
-    )
-    for i, blob in enumerate(ld_matches[:5]):  # max 5 pour limiter le bruit
-        clean = blob.strip()
-        if not clean:
-            continue
-        if len(clean) > 8_000:
-            clean = clean[:8_000] + "\n[…tronqué]"
-        parts.append(f"[JSON-LD #{i + 1}]\n{clean}")
-
-    # 3. Meta OpenGraph + Twitter (titre, description, image, prix).
-    meta_tags = re.findall(
-        r'<meta\s+(?:property|name)=["\'](og:[^"\']+|twitter:[^"\']+|description)["\']'
-        r'\s+content=["\']([^"\']+)["\']',
-        html,
-        flags=re.I,
-    )
-    if meta_tags:
-        meta_str = "\n".join(f"{k}: {v}" for k, v in meta_tags[:20])
-        parts.append(f"[Meta tags]\n{meta_str}")
-
-    # 3b. Titre + headers structurels (h1/h2/h3) — utile sur les sites
-    # qui rendent tout en HTML statique (Astro, Hugo, Jekyll, pmml.ca).
-    title_m = re.search(r"<title[^>]*>([^<]+)</title>", html, flags=re.I)
-    if title_m:
-        parts.append(f"[Titre page]\n{title_m.group(1).strip()}")
-    headers = re.findall(
-        r"<h[1-3][^>]*>([\s\S]{1,300}?)</h[1-3]>", html, flags=re.I
-    )
-    if headers:
-        cleaned = []
-        for h in headers[:30]:
-            h_clean = re.sub(r"<[^>]+>", " ", h)
-            h_clean = re.sub(r"\s+", " ", h_clean).strip()
-            if h_clean and len(h_clean) < 200:
-                cleaned.append(f"- {h_clean}")
-        if cleaned:
-            parts.append("[En-têtes (h1..h3)]\n" + "\n".join(cleaned))
-
-    # 4. Texte visible — strip standard. Pour pmml.ca, c'est le bloc
-    # qui contient la plupart des données (prix, typologie, évaluation
-    # municipale, année). On le met en TÊTE de liste pour que Gemini
-    # le voie en premier — les meta/JSON-LD viennent compléter.
-    text = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.I)
-    text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
-    text = re.sub(r"<!--[\s\S]*?-->", " ", text)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"&nbsp;", " ", text)
-    text = re.sub(r"&amp;", "&", text)
-    text = re.sub(r"&#x27;", "'", text)
-    text = re.sub(r"&quot;", '"', text)
-    text = re.sub(r"&#?\w+;", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    if len(text) > 35_000:
-        text = text[:35_000] + "\n[…tronqué]"
-
-    # 5. Pré-extraction par regex côté Python — on identifie les
-    # patterns canoniques (prix, typologie, évaluation, année,
-    # courtier) directement dans le texte strippé et on les injecte
-    # en TÊTE du prompt sous forme de pré-données. Donne un coup de
-    # pouce à Gemini qui peut alors traduire en JSON sans deviner.
-    if text:
-        pre_extracted = _pre_extract_canonical_fields(text)
-        if pre_extracted:
-            parts.insert(1, "[Données identifiées par regex]\n" + pre_extracted)
-        parts.insert(2, f"[Texte de la page]\n{text}")
-
-    return "\n\n".join(parts)
-
-
-def _pre_extract_canonical_fields(text: str) -> str:
-    """Cherche des patterns canoniques (prix demandé, X logements,
-    évaluation municipale, année construction, X x typo) dans le
-    texte et retourne un bloc lisible pour Gemini. Best-effort —
-    on ne fournit que ce qu'on trouve avec une confiance raisonnable."""
-    lines: List[str] = []
-
-    # Prix demandé : « Prix demandé : 3 560 000 $ » ou « Prix demandé 3 560 000 $ »
-    m = re.search(
-        r"Prix demand[eé][^0-9$]{0,30}?([\d\s]{3,15})\s*\$",
-        text,
-        flags=re.I,
-    )
-    if m:
-        cleaned = re.sub(r"\s", "", m.group(1))
-        if cleaned.isdigit():
-            lines.append(f"Prix demandé : {int(cleaned)} CAD")
-
-    # Évaluation municipale totale
-    m = re.search(
-        r"[ÉE]valuation municipale[^0-9$]{0,40}?([\d\s]{3,15})\s*\$",
-        text,
-        flags=re.I,
-    )
-    if m:
-        cleaned = re.sub(r"\s", "", m.group(1))
-        if cleaned.isdigit():
-            lines.append(f"Évaluation municipale : {int(cleaned)} CAD")
-
-    # Évaluation terrain
-    m = re.search(
-        r"[ÉE]valuation municipale du terrain[^0-9$]{0,40}?([\d\s]{3,15})\s*\$",
-        text,
-        flags=re.I,
-    )
-    if m:
-        cleaned = re.sub(r"\s", "", m.group(1))
-        if cleaned.isdigit():
-            lines.append(f"Évaluation municipale terrain : {int(cleaned)} CAD")
-
-    # Évaluation bâtiment
-    m = re.search(
-        r"[ÉE]valuation municipale du b[aâ]timent[^0-9$]{0,40}?([\d\s]{3,15})\s*\$",
-        text,
-        flags=re.I,
-    )
-    if m:
-        cleaned = re.sub(r"\s", "", m.group(1))
-        if cleaned.isdigit():
-            lines.append(f"Évaluation municipale bâtiment : {int(cleaned)} CAD")
-
-    # Année de construction
-    m = re.search(
-        r"Ann[eé]e\s+de\s+construction[^\d]{0,30}?(\d{4})",
-        text,
-        flags=re.I,
-    )
-    if m:
-        lines.append(f"Année de construction : {m.group(1)}")
-
-    # Nombre de logements / unités
-    m = re.search(
-        r"(?:Nombre d['e]\s*(?:logements|unit[eé]s)|(?:\b|[^\d])(\d{1,3})\s*(?:logements|Unit[eé]s))",
-        text,
-        flags=re.I,
-    )
-    if m:
-        # Cas 2 : « 12 Unités »
-        if m.group(1):
-            lines.append(f"Nombre de logements : {m.group(1)}")
-        else:
-            # Cas 1 : « Nombre de logements 12 » — refaire le match
-            m2 = re.search(
-                r"Nombre d['e]\s*(?:logements|unit[eé]s)[^\d]{0,15}?(\d{1,3})",
-                text,
-                flags=re.I,
-            )
-            if m2:
-                lines.append(f"Nombre de logements : {m2.group(1)}")
-
-    # Typologie : on EXIGE le pattern X.5 ou X ½ (caractéristique
-    # des typologies multilogements québécois : 2.5, 3.5, 4.5, 5.5,
-    # 6.5). Évite les faux positifs (« 2 x 6 unités », « 1 x 1 dans
-    # un numéro de cadastre », etc.).
-    typo_matches = re.findall(
-        r"(\d{1,2})\s*[xX×]\s*(\d\s*(?:\.\s*5|½))",
-        text,
-    )
-    typo_clean: Dict[str, int] = {}
-    for qty, typ in typo_matches:
-        # « 5 ½ » → « 5.5 », « 5.5 » → « 5.5 »
-        t = typ.strip().replace("½", ".5")
-        t = re.sub(r"\s+", "", t)
-        try:
-            qn = int(qty)
-            # On garde le MAX (pas la somme) : le texte cite souvent
-            # plusieurs fois la même typologie (description + tableau).
-            typo_clean[t] = max(typo_clean.get(t, 0), qn)
-        except ValueError:
-            pass
-    if typo_clean:
-        lines.append(
-            "Typologie identifiée : "
-            + " + ".join(f"{q}×{t}" for t, q in typo_clean.items())
-        )
-
-    # Nombre de stationnements
-    m = re.search(
-        r"Nombre\s+de\s+stationnements[^\d]{0,15}?(\d{1,3})",
-        text,
-        flags=re.I,
-    )
-    if m:
-        lines.append(f"Nombre de stationnements : {m.group(1)}")
-
-    # Adresse : best-effort sur les patterns « 3715-3737 Rue X » ou
-    # « X-Y Rue Name » courants dans le titre/h1.
-    m = re.search(
-        r"(\d{1,5}\s*-\s*\d{1,5}\s+[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\.\-' ]{2,50})",
-        text,
-    )
-    if m:
-        addr = m.group(1).strip()
-        if len(addr) < 100:
-            lines.append(f"Adresse possible : {addr}")
-
-    return "\n".join(lines)
-
-
-def _build_gemini_parts(
-    inputs: List[ExtractionInput],
-) -> Tuple[List[Any], List[str]]:
-    """Convertit la liste d'inputs en éléments à passer à Gemini.
-    Retourne aussi la liste des warnings (sources sautées).
-
-    Gemini accepte dans `generate_content` :
-      - des chaînes str (texte)
-      - des dicts {"mime_type": "...", "data": <bytes>} pour les
-        images et PDFs (Gemini Flash 2.0 supporte le PDF nativement,
-        pas besoin de conversion en images).
-    """
-    parts: List[Any] = []
-    warnings: List[str] = []
-
-    for inp in inputs:
-        if inp.text and inp.text.strip():
-            parts.append(inp.text.strip())
-        if inp.file_data:
-            filename, content_type, data = inp.file_data
-            ct = (content_type or "").lower()
-            if ct.startswith("image/"):
-                # Gemini vision supporte image/jpeg, image/png,
-                # image/webp, image/heic, image/heif. On normalise.
-                supported = {
-                    "image/jpeg",
-                    "image/jpg",
-                    "image/png",
-                    "image/webp",
-                    "image/heic",
-                    "image/heif",
-                    "image/gif",
-                }
-                if ct == "image/jpg":
-                    ct = "image/jpeg"
-                if ct not in supported:
-                    warnings.append(
-                        f"Format image non supporté pour {filename} : {ct}"
-                    )
-                    continue
-                parts.append({"mime_type": ct, "data": data})
-            elif ct == "application/pdf":
-                parts.append({"mime_type": "application/pdf", "data": data})
-            else:
-                warnings.append(
-                    f"Type de fichier non supporté pour {filename} : {ct}"
+                return "", (
+                    f"page inaccessible (HTTP {r.status_code}) — "
+                    "le site bloque peut-être les fetchs automatisés"
                 )
-    return parts, warnings
+            return r.text, None
+    except httpx.TimeoutException:
+        return "", "timeout après 20 s"
+    except Exception as exc:  # noqa: BLE001
+        return "", f"erreur réseau : {exc!s}"
+
+
+def _parser_for_domain(domain: str) -> str:
+    d = domain.lower()
+    if "centris.ca" in d:
+        return "centris"
+    if "duproprio.com" in d:
+        return "duproprio"
+    if "realtor.ca" in d:
+        return "realtor"
+    return "generic"
+
+
+# ── Pipeline principal ────────────────────────────────────────────
 
 
 async def extract_lead_info(
@@ -444,96 +1144,163 @@ async def extract_lead_info(
     text: str | None = None,
     files: List[Tuple[str, str, bytes]] | None = None,
 ) -> ExtractionResult:
-    """Pipeline principal d'extraction. Retourne le résultat structuré."""
-    if not settings.gemini_api_key:
-        raise RuntimeError(
-            "GEMINI_API_KEY non configuré — extraction impossible."
-        )
+    """Pipeline principal d'extraction 100% local.
 
-    inputs: List[ExtractionInput] = []
-    # Texte d'entrée brut.
-    if text and text.strip():
-        inputs.append(ExtractionInput(text=text))
+    Stratégie :
+      1. Pour chaque URL, on détecte le domaine et on dispatche vers
+         le parser dédié, en fallback sur __NEXT_DATA__ puis JSON-LD
+         puis regex texte.
+      2. Le texte libre passe par ``parse_text``.
+      3. Les fichiers PDF passent par ``pypdf`` puis ``parse_text``.
+      4. Les images et PDFs scannés génèrent un warning (OCR à venir).
+      5. On fusionne les résultats selon la priorité parser dédié >
+         JSON-LD > texte. Si plusieurs sources ont des adresses
+         différentes, on crée plusieurs entrées de sortie.
+    """
+    warnings: List[str] = []
+    # Liste de tuples (parser_tag, addr_key, data_dict).
+    extracted: List[Tuple[str, str, Dict[str, Any]]] = []
 
-    # URLs : on fetch et on injecte le texte récupéré.
+    # ── URLs ───
     for u in urls or []:
-        u = u.strip()
+        u = (u or "").strip()
         if not u:
             continue
-        fetched = await _fetch_url_text(u)
-        inputs.append(ExtractionInput(text=fetched))
+        html, fetch_err = await _fetch_html(u)
+        if fetch_err:
+            warnings.append(f"URL {u} : {fetch_err}")
+            continue
 
-    # Fichiers : on les passe tels quels.
-    for filename, content_type, data in files or []:
-        inputs.append(
-            ExtractionInput(file_data=(filename, content_type, data))
-        )
+        domain = urlparse(u).netloc
+        parser_kind = _parser_for_domain(domain)
+        sources_for_url: List[Tuple[str, Dict[str, Any]]] = []
+        try:
+            if parser_kind == "centris":
+                sources_for_url.append(("centris", parse_centris(html)))
+            elif parser_kind == "duproprio":
+                sources_for_url.append(("duproprio", parse_duproprio(html)))
+            elif parser_kind == "realtor":
+                sources_for_url.append(("realtor", parse_realtor(html)))
+            else:
+                # Site générique : on essaie __NEXT_DATA__ d'abord
+                # (couvre pmml.ca et tout autre Next.js), puis JSON-LD,
+                # puis regex sur HTML stripped.
+                if has_next_data(html):
+                    sources_for_url.append(
+                        ("next_data", parse_next_data(html))
+                    )
+                ld = parse_jsonld(html)
+                if ld:
+                    sources_for_url.append(("jsonld", ld))
+                if not sources_for_url:
+                    # Ni Next ni JSON-LD : full regex.
+                    sources_for_url.append(
+                        ("text", parse_text(_strip_html(html)))
+                    )
+                else:
+                    # Toujours compléter avec le texte strippé pour
+                    # rattraper taxes, typologie québécoise, etc.
+                    sources_for_url.append(
+                        ("text", parse_text(_strip_html(html)))
+                    )
+        except Exception as exc:  # noqa: BLE001
+            log.exception("parser failed for %s", u)
+            warnings.append(
+                f"URL {u} : erreur de parsing ({type(exc).__name__})"
+            )
+            continue
 
-    if not inputs:
+        # Mini-merge intra-URL.
+        url_merged = merge_extracted(sources_for_url)
+        if not url_merged:
+            warnings.append(
+                f"URL {u} : aucun champ extrait — page sans données "
+                "structurées reconnaissables (Cloudflare, SPA non "
+                "Next.js, ou format inhabituel)"
+            )
+            continue
+        url_merged["source_url"] = u
+        addr_key = _addr_key(url_merged)
+        extracted.append((f"url:{parser_kind}", addr_key, url_merged))
+
+    # ── Texte libre ───
+    if text and text.strip():
+        td = parse_text(text)
+        if td:
+            extracted.append(("text", _addr_key(td), td))
+        else:
+            warnings.append(
+                "Texte libre : aucun champ reconnaissable extrait"
+            )
+
+    # ── Fichiers ───
+    for filename, content_type, blob in files or []:
+        ct = (content_type or "").lower()
+        if ct == "application/pdf" or filename.lower().endswith(".pdf"):
+            pdf_text = parse_pdf(blob)
+            if not pdf_text.strip():
+                warnings.append(
+                    f"PDF « {filename} » : aucun texte extractible "
+                    "(PDF probablement scanné — OCR non supporté en "
+                    "mode local, à venir)"
+                )
+                continue
+            td = parse_text(pdf_text)
+            if td:
+                extracted.append(("pdf", _addr_key(td), td))
+            else:
+                warnings.append(
+                    f"PDF « {filename} » : texte extrait mais aucun "
+                    "champ reconnaissable"
+                )
+        elif ct.startswith("image/"):
+            warnings.append(
+                f"Image « {filename} » : extraction depuis images "
+                "non supportée en mode local (OCR à venir)"
+            )
+        else:
+            warnings.append(
+                f"Fichier « {filename} » : type {ct or 'inconnu'} "
+                "non supporté"
+            )
+
+    if not extracted:
+        if not warnings:
+            warnings.append("Aucune source fournie.")
         return ExtractionResult(
             data=[],
-            warnings=["Aucune source fournie."],
+            model_used=MODEL_TAG,
+            warnings=warnings,
         )
 
-    gemini_parts, warns = _build_gemini_parts(inputs)
-    # Ajoute toujours la consigne JSON en fin pour bien cadrer la sortie.
-    gemini_parts.append(
-        "Extrais maintenant les infos selon le schéma ci-dessous.\n\n"
-        + SCHEMA_GUIDE
-    )
+    # ── Regroupement par adresse ───
+    # Si plusieurs sources désignent le même immeuble (même adresse,
+    # ou pas d'adresse), on les fusionne. Si elles désignent des
+    # adresses différentes, on crée plusieurs fiches.
+    by_addr: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
+    for tag, addr_key, data in extracted:
+        by_addr.setdefault(addr_key, []).append((tag.split(":")[-1], data))
 
-    import google.generativeai as genai  # import paresseux
-
-    genai.configure(api_key=settings.gemini_api_key)
-    model = genai.GenerativeModel(
-        EXTRACTION_MODEL,
-        system_instruction=SYSTEM_PROMPT,
-        # JSON mode strict : Gemini renvoie un JSON valide (object ou
-        # array selon ce qu'on demande dans le prompt) — pas besoin
-        # de stripper d'éventuelles backticks markdown.
-        generation_config=genai.GenerationConfig(
-            response_mime_type="application/json",
-            max_output_tokens=4000,
-        ),
-    )
-
-    try:
-        response = await model.generate_content_async(gemini_parts)
-    except Exception as exc:  # noqa: BLE001
-        log.exception("Gemini extraction failed")
-        raise RuntimeError(f"Gemini API error: {exc!s}") from exc
-
-    raw = (response.text or "").strip()
-    # Garde-fou : si pour une raison quelconque Gemini renvoie du
-    # texte fencé, on le strip (ne devrait pas arriver en JSON mode).
-    if raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```\s*$", "", raw)
-
-    parsed: Any
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        log.warning("Gemini returned non-JSON: %s", raw[:300])
-        warns.append(f"Réponse Gemini non-JSON : {exc!s}")
-        return ExtractionResult(
-            data=[],
-            model_used=EXTRACTION_MODEL,
-            raw_response=raw,
-            warnings=warns,
-        )
-
-    if isinstance(parsed, dict):
-        data = [parsed]
-    elif isinstance(parsed, list):
-        data = [x for x in parsed if isinstance(x, dict)]
-    else:
-        warns.append("Format JSON inattendu (ni dict ni list).")
-        data = []
+    data_out: List[Dict[str, Any]] = []
+    for addr_key, sources in by_addr.items():
+        merged = merge_extracted(sources)
+        if merged:
+            data_out.append(merged)
 
     return ExtractionResult(
-        data=data,
-        model_used=EXTRACTION_MODEL,
-        raw_response=raw,
-        warnings=warns,
+        data=data_out,
+        model_used=MODEL_TAG,
+        warnings=warnings,
     )
+
+
+def _addr_key(d: Dict[str, Any]) -> str:
+    """Clé de regroupement par adresse. Si pas d'adresse, on retombe
+    sur un singleton « unknown » — toutes les sources sans adresse
+    seront fusionnées en une seule fiche (cas standard pour 99% des
+    inputs)."""
+    addr = (d.get("address") or "").strip().lower()
+    if not addr:
+        return "unknown"
+    # Normalise : retire les espaces multiples, garde alphanumeric.
+    return re.sub(r"[^\w]+", "_", addr)[:80]
