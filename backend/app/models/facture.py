@@ -66,6 +66,13 @@ class Facture(Base, TimestampUpdateMixin):
     reminder_count: Mapped[int] = mapped_column(
         nullable=False, default=0, server_default="0"
     )
+    # Date du prochain rappel automatique. Réglable à la main sur la
+    # fiche (repousser / avancer). Recalculée à « maintenant + 4 j »
+    # après chaque envoi ; nulle = le cron la calcule depuis le dernier
+    # rappel (ou l'échéance pour le premier).
+    next_reminder_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Internal-only staff notes (jamais rendues sur le PDF client).
     internal_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

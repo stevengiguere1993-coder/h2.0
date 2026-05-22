@@ -2,12 +2,12 @@
 
 Runs once a day. For every Facture in status "sent" / "overdue":
 - If due_at is in the past and status is still "sent", bump to "overdue".
-- Based on how many days past due + reminder_count, maybe send an
-  email via Microsoft Graph:
-    * J+1  -> friendly reminder  (count goes 0 -> 1)
-    * J+15 -> firm reminder      (count goes 1 -> 2)
-    * J+30 -> final notice       (count goes 2 -> 3)
-  After count >= 3 we stop — no more automatic emails.
+- Send a reminder email every 4 days while the invoice stays overdue
+  and unpaid — no cap, it keeps going until a payment is recorded and
+  the status flips to "paid". The tone escalates with reminder_count:
+  friendly -> firm -> final.
+- next_reminder_at can be set manually on the invoice to override when
+  the next reminder fires (push it back or bring it forward).
 
 The reminder body mentions the invoice reference, total and days
 overdue. Staff is cc'd on every send so they see the pressure trail.
@@ -20,8 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import select
@@ -39,34 +38,18 @@ from app.integrations.email_graph import EmailAttachment
 log = logging.getLogger(__name__)
 
 
-@dataclass
-class _Step:
-    days_overdue: int
-    next_count: int
-    subject_prefix: str
-    tone: str  # friendly | firm | final
+# Cadence des rappels : un rappel tous les 4 jours tant que la facture
+# est en retard et impayée — aucun plafond, ça continue jusqu'à
+# l'enregistrement du paiement (passage au statut "paid").
+REMINDER_INTERVAL_DAYS = 4
 
-
-STEPS: list[_Step] = [
-    _Step(
-        days_overdue=1,
-        next_count=1,
-        subject_prefix="Rappel",
-        tone="friendly",
-    ),
-    _Step(
-        days_overdue=15,
-        next_count=2,
-        subject_prefix="Rappel important",
-        tone="firm",
-    ),
-    _Step(
-        days_overdue=30,
-        next_count=3,
-        subject_prefix="Avis final",
-        tone="final",
-    ),
-]
+# Le ton monte avec le nombre de rappels déjà envoyés : 1er = amical,
+# 2e = ferme, 3e et suivants = avis final.
+_SUBJECT_PREFIX = {
+    "friendly": "Rappel",
+    "firm": "Rappel important",
+    "final": "Avis final",
+}
 
 
 def _body_html(tone: str, ref: str, total: float, days_late: int) -> str:
@@ -109,17 +92,6 @@ def _body_html(tone: str, ref: str, total: float, days_late: int) -> str:
   </p>
 </div>
 """
-
-
-def _pick_step(days_overdue: int, reminder_count: int) -> Optional[_Step]:
-    """Return the next reminder step to trigger, or None if none apply."""
-    for step in STEPS:
-        if reminder_count < step.next_count and days_overdue >= step.days_overdue:
-            # Only trigger the LOWEST step that still applies: we want to
-            # escalate one step at a time even if the invoice is very
-            # late. Pick the first matching step (STEPS is ordered).
-            return step
-    return None
 
 
 async def _client_for(db, client_id: Optional[int]) -> Optional[Client]:
@@ -205,9 +177,25 @@ async def run() -> dict:
                 fa.status = FactureStatus.OVERDUE.value
                 flipped_overdue += 1
 
-            step = _pick_step(days_overdue, fa.reminder_count or 0)
-            if step is None:
+            # Cadence : un rappel tous les 4 jours tant que la facture
+            # est impayée. `next_reminder_at` (réglable à la main sur la
+            # fiche) a priorité ; sinon on calcule depuis le dernier
+            # rappel — ou l'échéance pour le tout premier.
+            base = fa.last_reminder_at or fa.due_at
+            due_next = fa.next_reminder_at or (
+                base + timedelta(days=REMINDER_INTERVAL_DAYS)
+            )
+            if now < due_next:
                 continue
+
+            count = fa.reminder_count or 0
+            tone = (
+                "friendly"
+                if count == 0
+                else "firm"
+                if count == 1
+                else "final"
+            )
 
             client = await _client_for(db, fa.client_id)
             to_email = client.email if client else None
@@ -215,8 +203,11 @@ async def run() -> dict:
                 skipped_no_mail += 1
                 # Still mark the reminder as "attempted" so we don't loop
                 # on it every day with no target.
-                fa.reminder_count = step.next_count
+                fa.reminder_count = count + 1
                 fa.last_reminder_at = now
+                fa.next_reminder_at = now + timedelta(
+                    days=REMINDER_INTERVAL_DAYS
+                )
                 continue
 
             if not mailer.ready:
@@ -247,16 +238,21 @@ async def run() -> dict:
                     cc=[settings.mail_from_email]
                     if settings.mail_from_email
                     else None,
-                    subject=f"{step.subject_prefix} — Facture {fa.reference}",
+                    subject=(
+                        f"{_SUBJECT_PREFIX[tone]} — Facture {fa.reference}"
+                    ),
                     html_body=_body_html(
-                        step.tone, fa.reference, total_val, days_overdue
+                        tone, fa.reference, total_val, days_overdue
                     ),
                     attachments=attachments,
                     reply_to=settings.mail_from_email,
                 )
                 sent += 1
-                fa.reminder_count = step.next_count
+                fa.reminder_count = count + 1
                 fa.last_reminder_at = now
+                fa.next_reminder_at = now + timedelta(
+                    days=REMINDER_INTERVAL_DAYS
+                )
             except Exception as exc:
                 log.exception("Reminder send failed for %s: %s", fa.reference, exc)
 

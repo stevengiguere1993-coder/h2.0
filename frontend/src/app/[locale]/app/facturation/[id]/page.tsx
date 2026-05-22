@@ -37,6 +37,7 @@ type Facture = {
   paid_at: string | null;
   last_reminder_at: string | null;
   reminder_count: number;
+  next_reminder_at: string | null;
   qbo_invoice_id: string | null;
   qbo_doc_number: string | null;
   internal_notes: string | null;
@@ -177,6 +178,7 @@ export default function FactureDetailPage() {
   const [sendMessage, setSendMessage] = useState("");
 
   const [dueAt, setDueAt] = useState("");
+  const [nextReminderAt, setNextReminderAt] = useState("");
   const [internalNotes, setInternalNotes] = useState("");
   const [clientNote, setClientNote] = useState("");
   const [notesSaving, setNotesSaving] = useState(false);
@@ -295,6 +297,7 @@ export default function FactureDetailPage() {
         setF(fd);
         setItems(iData);
         setDueAt(isoToDateInput(fd.due_at));
+        setNextReminderAt(isoToDateInput(fd.next_reminder_at));
         setInternalNotes(fd.internal_notes || "");
         setClientNote(fd.client_note || "");
         setSendSubject(`Facture ${fd.reference}`);
@@ -395,6 +398,29 @@ export default function FactureDetailPage() {
       setF(u);
     } catch {
       setError("Sauvegarde échéance échouée.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveNextReminder() {
+    if (!f) return;
+    setSaving(true);
+    try {
+      const res = await authedFetch(`/api/v1/factures/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          next_reminder_at: nextReminderAt
+            ? new Date(nextReminderAt).toISOString()
+            : null
+        })
+      });
+      if (!res.ok) throw new Error();
+      const u = (await res.json()) as Facture;
+      setF(u);
+      setNextReminderAt(isoToDateInput(u.next_reminder_at));
+    } catch {
+      setError("Sauvegarde du rappel échouée.");
     } finally {
       setSaving(false);
     }
@@ -964,32 +990,46 @@ export default function FactureDetailPage() {
                 </div>
                 <div>
                   <p className="text-xs text-white/50">
-                    Prochain rappel prévu
+                    Prochain rappel
                   </p>
-                  <p className="mt-0.5 text-sm text-white">
-                    {(() => {
-                      if (f.status === "paid") return "Facture payée";
-                      if (f.status === "void") return "Facture annulée";
-                      if (f.status === "draft") return "—";
-                      if (f.reminder_count >= 3)
-                        return "Tous les rappels automatiques envoyés";
-                      if (!f.due_at) return "Échéance non définie";
-                      const days =
-                        [1, 15, 30][f.reminder_count] ?? 30;
-                      const next = new Date(f.due_at);
-                      next.setDate(next.getDate() + days);
-                      return next.toLocaleDateString("fr-CA", {
-                        day: "numeric",
-                        month: "long",
-                        year: "numeric",
-                      });
-                    })()}
-                  </p>
+                  {f.status === "paid" ||
+                  f.status === "void" ||
+                  f.status === "draft" ? (
+                    <p className="mt-0.5 text-sm text-white">
+                      {f.status === "paid"
+                        ? "Facture payée"
+                        : f.status === "void"
+                        ? "Facture annulée"
+                        : "Pas encore envoyée"}
+                    </p>
+                  ) : (
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <input
+                        type="date"
+                        value={nextReminderAt}
+                        onChange={(e) =>
+                          setNextReminderAt(e.target.value)
+                        }
+                        className="input h-9 w-auto py-1 text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={saveNextReminder}
+                        disabled={saving}
+                        className="rounded-lg border border-brand-700 bg-brand-800 px-3 py-1.5 text-xs font-medium text-white hover:border-accent-500 disabled:opacity-60"
+                      >
+                        Enregistrer
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
               <p className="mt-3 text-xs text-white/40">
-                Rappels automatiques : J+1 (amical), J+15 (ferme),
-                J+30 (avis final) après l&apos;échéance.
+                Rappels automatiques tous les 4 jours après
+                l&apos;échéance, jusqu&apos;à l&apos;enregistrement du
+                paiement. Laisse la date vide pour la cadence
+                automatique, ou fixe une date précise pour forcer le
+                prochain rappel.
               </p>
             </section>
 
