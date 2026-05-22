@@ -25,6 +25,12 @@ class SousTraitant(Base, TimestampUpdateMixin):
     email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True, index=True)
     phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Région principale desservie — classement parmi un ensemble fixe
+    # de secteurs (Montréal, Longueuil, Laval, Sorel, Châteauguay,
+    # Saint-Constant, Vaudreuil).
+    region: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True, index=True
+    )
 
     # RBQ (Regie du batiment du Quebec) licensing
     rbq_license: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)

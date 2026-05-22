@@ -17,6 +17,16 @@ import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 
+const REGIONS = [
+  "Montréal",
+  "Longueuil",
+  "Laval",
+  "Sorel",
+  "Châteauguay",
+  "Saint-Constant",
+  "Vaudreuil",
+];
+
 type SousTraitant = {
   id: number;
   full_name: string;
@@ -24,6 +34,7 @@ type SousTraitant = {
   email: string | null;
   phone: string | null;
   address: string | null;
+  region: string | null;
   rbq_license: string | null;
   rbq_expires_at: string | null;
   insurance_provider: string | null;
@@ -80,6 +91,7 @@ export default function SousTraitantDetailPage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
+  const [region, setRegion] = useState("");
   const [rbqLicense, setRbqLicense] = useState("");
   const [rbqExpiresAt, setRbqExpiresAt] = useState("");
   const [insProvider, setInsProvider] = useState("");
@@ -111,6 +123,7 @@ export default function SousTraitantDetailPage() {
         setEmail(data.email || "");
         setPhone(data.phone || "");
         setAddress(data.address || "");
+        setRegion(data.region || "");
         setRbqLicense(data.rbq_license || "");
         setRbqExpiresAt(data.rbq_expires_at || "");
         setInsProvider(data.insurance_provider || "");
@@ -147,6 +160,7 @@ export default function SousTraitantDetailPage() {
       email !== (st.email || "") ||
       phone !== (st.phone || "") ||
       address !== (st.address || "") ||
+      region !== (st.region || "") ||
       rbqLicense !== (st.rbq_license || "") ||
       rbqExpiresAt !== (st.rbq_expires_at || "") ||
       insProvider !== (st.insurance_provider || "") ||
@@ -163,7 +177,7 @@ export default function SousTraitantDetailPage() {
       notes !== (st.notes || "")
     );
   }, [
-    st, fullName, contactName, email, phone, address, rbqLicense,
+    st, fullName, contactName, email, phone, address, region, rbqLicense,
     rbqExpiresAt, insProvider, insPolicy, insExpiresAt, trades, hourlyRate,
     rating, competence, availability, punctuality, quality, active, notes
   ]);
@@ -179,6 +193,7 @@ export default function SousTraitantDetailPage() {
         email: email.trim() || null,
         phone: phone.trim() || null,
         address: address.trim() || null,
+        region: region || null,
         rbq_license: rbqLicense.trim() || null,
         rbq_expires_at: rbqExpiresAt || null,
         insurance_provider: insProvider.trim() || null,
@@ -368,6 +383,24 @@ export default function SousTraitantDetailPage() {
                         onChange={(e) => setAddress(e.target.value)}
                         className="input"
                       />
+                    </div>
+                    <div>
+                      <label htmlFor="region" className="label">
+                        Région desservie
+                      </label>
+                      <select
+                        id="region"
+                        value={region}
+                        onChange={(e) => setRegion(e.target.value)}
+                        className="input"
+                      >
+                        <option value="">— Choisir une région —</option>
+                        {REGIONS.map((r) => (
+                          <option key={r} value={r}>
+                            {r}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </div>
                 </section>

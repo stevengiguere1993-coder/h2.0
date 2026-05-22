@@ -9,6 +9,16 @@ import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 
+const REGIONS = [
+  "Montréal",
+  "Longueuil",
+  "Laval",
+  "Sorel",
+  "Châteauguay",
+  "Saint-Constant",
+  "Vaudreuil",
+];
+
 export default function NewSousTraitantPage() {
   const { onOpenSidebar } = useAppLayout();
   const router = useNextRouter();
@@ -18,6 +28,7 @@ export default function NewSousTraitantPage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [trades, setTrades] = useState("");
+  const [region, setRegion] = useState("");
   const [rbqLicense, setRbqLicense] = useState("");
   const [hourlyRate, setHourlyRate] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -39,6 +50,7 @@ export default function NewSousTraitantPage() {
       if (email.trim()) payload.email = email.trim();
       if (phone.trim()) payload.phone = phone.trim();
       if (trades.trim()) payload.trades = trades.trim();
+      if (region) payload.region = region;
       if (rbqLicense.trim()) payload.rbq_license = rbqLicense.trim();
       if (hourlyRate) payload.hourly_rate = Number(hourlyRate);
 
@@ -153,6 +165,25 @@ export default function NewSousTraitantPage() {
               placeholder="plomberie, chauffage"
               className="input"
             />
+          </div>
+
+          <div>
+            <label htmlFor="region" className="label">
+              Région desservie
+            </label>
+            <select
+              id="region"
+              value={region}
+              onChange={(e) => setRegion(e.target.value)}
+              className="input"
+            >
+              <option value="">— Choisir une région —</option>
+              {REGIONS.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">

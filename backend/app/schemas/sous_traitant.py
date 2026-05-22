@@ -14,6 +14,7 @@ class SousTraitantCreate(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = Field(default=None, max_length=50)
     address: Optional[str] = Field(default=None, max_length=500)
+    region: Optional[str] = Field(default=None, max_length=32)
     rbq_license: Optional[str] = Field(default=None, max_length=32)
     rbq_expires_at: Optional[date] = None
     insurance_provider: Optional[str] = Field(default=None, max_length=255)
@@ -35,6 +36,7 @@ class SousTraitantUpdate(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     address: Optional[str] = None
+    region: Optional[str] = None
     rbq_license: Optional[str] = None
     rbq_expires_at: Optional[date] = None
     insurance_provider: Optional[str] = None
@@ -60,6 +62,7 @@ class SousTraitantRead(BaseModel):
     email: Optional[str]
     phone: Optional[str]
     address: Optional[str]
+    region: Optional[str]
     rbq_license: Optional[str]
     rbq_expires_at: Optional[date]
     insurance_provider: Optional[str]
