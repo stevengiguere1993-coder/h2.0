@@ -153,8 +153,10 @@ async def send_facture(
         raise FactureSendError(f"Envoi courriel échoué: {exc}") from exc
 
     fa.status = FactureStatus.SENT.value
-    if fa.issued_at is None:
-        fa.issued_at = datetime.now(timezone.utc)
+    # « Émise le » = dernière fois où la facture a été envoyée au
+    # client. On remet à jour à CHAQUE envoi (y compris les renvois)
+    # pour que la date affichée soit la date réelle d'expédition.
+    fa.issued_at = datetime.now(timezone.utc)
     await db.flush()
     await db.refresh(fa)
     return fa
