@@ -838,6 +838,33 @@ def parse_text(text: str) -> Dict[str, Any]:
 
     # Ville. Heuristiques par ordre de fiabilité décroissante :
     city_val: Optional[str] = None
+    # Liste noire de "fausses villes" : termes ambigus qui ne sont pas
+    # réellement des municipalités (la province, le pays, un libellé
+    # générique). Si on tombe sur l'un d'eux, on ignore et on tente
+    # une autre heuristique.
+    _city_blacklist = {
+        "quebec",
+        "québec",
+        "canada",
+        "qc",
+        "ontario",
+        "on",
+        "province",
+        "ville",
+        "municipalite",
+        "municipalité",
+    }
+
+    def _accept_city(name: Optional[str]) -> Optional[str]:
+        if not name:
+            return None
+        cleaned = name.strip().strip(".,;:").strip()
+        if not cleaned or len(cleaned) < 2:
+            return None
+        if cleaned.lower() in _city_blacklist:
+            return None
+        return cleaned
+
     #   a) format Centris « …, <Ville> - Ville » (ex. Valcourt - Ville)
     m = re.search(
         r",\s*([A-ZÀ-Ÿ][A-Za-zÀ-ÿ\-']+(?:\s[A-ZÀ-Ÿ][A-Za-zÀ-ÿ\-']+)?)"
@@ -845,7 +872,7 @@ def parse_text(text: str) -> Dict[str, Any]:
         text,
     )
     if m:
-        city_val = m.group(1).strip()
+        city_val = _accept_city(m.group(1))
     #   b) format québécois canonique « <adresse>, <Ville> (QC) »
     if not city_val:
         m = re.search(
@@ -854,10 +881,23 @@ def parse_text(text: str) -> Dict[str, Any]:
             text,
         )
         if m:
-            city_val = m.group(1).strip()
-    #   c) « Ville : <Nom> » / « Municipalité : <Nom> ». Le « : » est
-    #      EXIGÉ : sans lui le mot « Ville » seul (ex. Centris affiche
-    #      « Valcourt - Ville ») captait le texte d'à côté.
+            city_val = _accept_city(m.group(1))
+    #   c) format SANS « : » ni virgule préalable :
+    #      « <Ville> (QC) <CP> » ou « <Ville> (QC) » en tête de ligne /
+    #      après un espace. Utile pour les courriels non structurés
+    #      ou les textes Centris où l'adresse précédente est absente.
+    if not city_val:
+        m = re.search(
+            r"(?:^|[\s>])([A-ZÀ-Ÿ][A-Za-zÀ-ÿ\-' ]{2,40}?)\s*"
+            r"\(\s*(?:QC|Qu[eé]bec|ON|Ontario)\s*\)"
+            r"(?:\s+[A-Z]\d[A-Z]\s?\d[A-Z]\d)?",
+            text,
+        )
+        if m:
+            city_val = _accept_city(m.group(1))
+    #   d) « Ville : <Nom> » / « Municipalité : <Nom> ». Le « : » est
+    #      EXIGÉ pour ce pattern : ça couvre les courriels structurés
+    #      type « Ville : Montréal », « Municipalité : Sherbrooke ».
     if not city_val:
         m = re.search(
             r"(?:Ville|Municipalit[eé])\s*:\s*"
@@ -865,7 +905,7 @@ def parse_text(text: str) -> Dict[str, Any]:
             text,
         )
         if m:
-            city_val = m.group(1).strip()
+            city_val = _accept_city(m.group(1))
     if city_val:
         out["city"] = city_val
 
@@ -1290,7 +1330,64 @@ def parse_centris(html: str) -> Dict[str, Any]:
                 out["description"] = txt[:2000]
                 break
 
-    # Fallback massif sur JSON-LD pour les champs encore manquants.
+    # Ville : sélecteurs CSS dédiés (Centris breadcrumb / itemprop /
+    # data-id). Appliqués UNIQUEMENT si la ville n'a pas été captée
+    # via l'address parsing plus haut. Sinon JSON-LD prendra le relais.
+    if "city" not in out:
+        _city_blacklist_html = {
+            "quebec", "québec", "canada", "qc", "ontario", "on",
+            "province", "ville", "municipalité", "municipalite",
+            "accueil", "home",
+        }
+        for sel in (
+            "[itemprop='addressLocality']",
+            "nav[aria-label*='breadcrumb' i] a:last-child",
+            "nav[aria-label*='fil' i] a:last-child",
+            ".breadcrumb li:last-child a",
+            ".breadcrumb li:last-child",
+            ".bread-crumb-item:last-child",
+            "[data-id*='Locality']",
+        ):
+            try:
+                node = soup.select_one(sel)
+            except Exception:  # noqa: BLE001 — sélecteur invalide
+                continue
+            if not node:
+                continue
+            txt = node.get_text(" ", strip=True)
+            if not txt or len(txt) < 2 or len(txt) > 60:
+                continue
+            if txt.lower() in _city_blacklist_html:
+                continue
+            # Doit ressembler à un nom propre (commence par majuscule
+            # ou caractère accentué). Évite "à vendre" et autres.
+            if not re.match(r"^[A-ZÀ-Ÿ]", txt):
+                continue
+            out["city"] = txt[:100]
+            break
+
+    # Code postal : sélecteur CSS dédié, si présent.
+    if "postal_code" not in out:
+        for sel in ("[itemprop='postalCode']", ".postal-code", ".postalCode"):
+            try:
+                node = soup.select_one(sel)
+            except Exception:  # noqa: BLE001
+                continue
+            if not node:
+                continue
+            raw = node.get("content") or node.get_text(" ", strip=True)
+            if not raw:
+                continue
+            pm = _POSTAL_RE.search(raw)
+            if pm:
+                out["postal_code"] = (
+                    f"{pm.group(1).upper()} {pm.group(2).upper()}"
+                )
+                break
+
+    # Fallback massif sur JSON-LD pour les champs encore manquants
+    # (address.addressLocality, address.postalCode pris en charge par
+    # parse_jsonld → _merge_jsonld_node).
     ld = parse_jsonld(html)
     for k, v in ld.items():
         out.setdefault(k, v)
