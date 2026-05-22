@@ -16,6 +16,24 @@ type Notif = {
 };
 
 /**
+ * Volet courant déduit de l'URL — sert à cloisonner la cloche : la
+ * cloche d'un volet n'affiche que ses propres notifications (un NDA
+ * signé côté prospection ne s'affiche pas dans le volet construction).
+ */
+function currentScope(): string {
+  if (typeof window === "undefined") return "";
+  const parts = window.location.pathname.split("/").filter(Boolean);
+  // parts[0] = locale (fr|en) ; parts[1] = segment de volet.
+  const seg = parts[1] || "";
+  if (seg === "app" || seg === "m") return "construction";
+  if (seg === "prospection") return "prospection";
+  if (seg === "immobilier") return "immobilier";
+  if (seg === "entreprises") return "entreprises";
+  if (seg === "dev-logiciel") return "devlog";
+  return "";
+}
+
+/**
  * Top-bar notification center.
  * - Polls /api/v1/notifications/unread-count every 60 s to update the
  *   badge (cheap lightweight endpoint).
@@ -31,7 +49,12 @@ export function NotificationBell() {
 
   const loadCount = useCallback(async () => {
     try {
-      const res = await authedFetch("/api/v1/notifications/unread-count");
+      const scope = currentScope();
+      const res = await authedFetch(
+        `/api/v1/notifications/unread-count${
+          scope ? `?scope=${scope}` : ""
+        }`
+      );
       if (!res.ok) return;
       const n = (await res.json()) as number;
       setUnread(Number(n) || 0);
@@ -60,7 +83,10 @@ export function NotificationBell() {
     setOpen(true);
     setLoading(true);
     try {
-      const res = await authedFetch("/api/v1/notifications?limit=30");
+      const scope = currentScope();
+      const res = await authedFetch(
+        `/api/v1/notifications?limit=30${scope ? `&scope=${scope}` : ""}`
+      );
       if (res.ok) setItems((await res.json()) as Notif[]);
     } finally {
       setLoading(false);

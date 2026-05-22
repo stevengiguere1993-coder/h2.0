@@ -14,7 +14,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.notification import Notification
@@ -34,31 +34,76 @@ class NotificationRead(BaseModel):
     created_at: datetime
 
 
+# Préfixes de href par volet. Sert à cloisonner la cloche : une
+# notification dont le href cible explicitement un AUTRE volet
+# n'apparaît pas (ex. un NDA signé — href /prospection/… — ne doit
+# pas s'afficher dans la cloche du volet construction /app).
+_VOLET_PREFIXES: dict[str, tuple[str, ...]] = {
+    "construction": ("/app", "/m"),
+    "prospection": ("/prospection",),
+    "immobilier": ("/immobilier",),
+    "entreprises": ("/entreprises",),
+    "devlog": ("/dev-logiciel",),
+}
+
+
+def _volet_filter(scope: Optional[str]):
+    """Condition SQL ne gardant que les notifications du volet `scope`.
+
+    Une notification est conservée si son href est nul, appartient au
+    volet demandé, ou ne correspond à aucun volet connu. Elle est
+    écartée uniquement si son href vise explicitement un autre volet.
+    Retourne ``None`` si `scope` est absent/inconnu (aucun filtre).
+    """
+    if not scope or scope not in _VOLET_PREFIXES:
+        return None
+    foreign = [
+        pfx
+        for volet, prefixes in _VOLET_PREFIXES.items()
+        if volet != scope
+        for pfx in prefixes
+    ]
+    if not foreign:
+        return None
+    return or_(
+        Notification.href.is_(None),
+        ~or_(*[Notification.href.like(f"{p}%") for p in foreign]),
+    )
+
+
 @router.get("", response_model=List[NotificationRead])
 async def list_notifications(
     db: DBSession,
     user: CurrentUser,
     limit: int = Query(default=30, ge=1, le=100),
     only_unread: bool = Query(default=False),
+    scope: Optional[str] = Query(default=None),
 ) -> List[NotificationRead]:
     stmt = select(Notification).where(Notification.user_id == user.id)
     if only_unread:
         stmt = stmt.where(Notification.is_read.is_(False))
+    clause = _volet_filter(scope)
+    if clause is not None:
+        stmt = stmt.where(clause)
     stmt = stmt.order_by(Notification.created_at.desc()).limit(limit)
     rows = (await db.execute(stmt)).scalars().all()
     return [NotificationRead.model_validate(r) for r in rows]
 
 
 @router.get("/unread-count")
-async def unread_count(db: DBSession, user: CurrentUser) -> int:
-    n = (
-        await db.execute(
-            select(func.count(Notification.id)).where(
-                Notification.user_id == user.id,
-                Notification.is_read.is_(False),
-            )
-        )
-    ).scalar_one()
+async def unread_count(
+    db: DBSession,
+    user: CurrentUser,
+    scope: Optional[str] = Query(default=None),
+) -> int:
+    stmt = select(func.count(Notification.id)).where(
+        Notification.user_id == user.id,
+        Notification.is_read.is_(False),
+    )
+    clause = _volet_filter(scope)
+    if clause is not None:
+        stmt = stmt.where(clause)
+    n = (await db.execute(stmt)).scalar_one()
     return int(n or 0)
 
 
