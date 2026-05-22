@@ -725,34 +725,56 @@ def parse_text(text: str) -> Dict[str, Any]:
 
     # Assurances. Trailing « $ » exigé : évite de capter la pub
     # « assurances auto et habitation » et vise « Assurances 5 258 $ ».
-    m = re.search(
+    # Centris affiche les dépenses en deux colonnes mensuel + annuel
+    # (comme pour taxes muni/scolaires). On capte tous les montants
+    # et on retient le plus grand = l'annuel (= 12× le mensuel). Avant
+    # ce fix, re.search prenait le premier match (= mensuel sur
+    # Centris moderne) → extraction de 232 $ au lieu de 2 784 $.
+    ass_vals = []
+    for am in re.finditer(
         r"assurances?[^\d$]{0,12}?([\d][\d\s.,]*\d)\s*\$",
         text,
         flags=re.I,
-    )
-    if m:
-        v = _int_or_none(m.group(1))
+    ):
+        v = _int_or_none(am.group(1))
         if v and 100 <= v <= 5_000_000:
-            out["assurances"] = v
+            ass_vals.append(v)
+    if ass_vals:
+        out["assurances"] = max(ass_vals)
 
     # Énergie payée par le propriétaire. Sur Centris la section
     # « Dépenses » liste plusieurs postes énergétiques séparés
     # (Électricité, Huile à fournaise, Gaz…) — on les ADDITIONNE
     # tous dans `energie`. Trailing « $ » exigé (vise un montant).
-    energie_total = 0.0
-    for em in re.finditer(
-        r"(?:[eé]lectricit[eé]|hydro(?:[ -]?qu[eé]bec)?|"
-        r"huile\s+[aà]\s+fournaise|mazout|gaz\s+naturel|gaz|"
-        r"[eé]nergie|chauffage)"
-        r"[^\d$]{0,12}?([\d][\d\s.,]*\d)\s*\$",
-        text,
-        flags=re.I,
-    ):
-        v = _int_or_none(em.group(1))
-        if v and 50 <= v <= 5_000_000:
-            energie_total += v
+    # Défense en profondeur : pour chaque poste on prend le MAX des
+    # matches (au cas où Centris affiche mensuel + annuel par poste,
+    # comme c'est déjà le cas pour taxes muni/scolaires et assurances).
+    # Si un poste n'a qu'une seule occurrence, max([x]) = x → no-op.
+    energie_postes = (
+        r"[eé]lectricit[eé]",
+        r"hydro(?:[ -]?qu[eé]bec)?",
+        r"huile\s+[aà]\s+fournaise",
+        r"mazout",
+        r"gaz\s+naturel",
+        r"gaz",
+        r"[eé]nergie",
+        r"chauffage",
+    )
+    energie_total = 0
+    for poste in energie_postes:
+        poste_vals = []
+        for em in re.finditer(
+            poste + r"[^\d$]{0,12}?([\d][\d\s.,]*\d)\s*\$",
+            text,
+            flags=re.I,
+        ):
+            v = _int_or_none(em.group(1))
+            if v and 50 <= v <= 5_000_000:
+                poste_vals.append(v)
+        if poste_vals:
+            energie_total += max(poste_vals)
     if energie_total > 0:
-        out["energie"] = int(round(energie_total))
+        out["energie"] = energie_total
 
     # Stationnements.
     m = re.search(
@@ -794,10 +816,18 @@ def parse_text(text: str) -> Dict[str, Any]:
 
     # Adresse civique « 3715-3737 Rue Ethel », « 1234 Boulevard X »,
     # « 5678 Avenue Y ». On accepte un range numérique optionnel.
+    # Types de voies élargis pour couvrir le contexte québécois :
+    # Rang (zones agricoles/rurales), Côte (Côte-des-Neiges), Impasse,
+    # Allée, Bretelle, Carré, Quai, Promenade, Voie, Cours — en plus
+    # des classiques Rue/Boulevard/Avenue/Chemin/Route/Place/Montée/
+    # Terrasse/Croissant. Avant ce fix, ces voies ratent le regex et
+    # le H1 fautif de parse_centris gagne par défaut.
     m = re.search(
         r"\b(\d{1,5}(?:\s*-\s*\d{1,5})?)[\s,]+"
         r"((?:Rue|Boul(?:evard)?\.?|Av(?:enue)?\.?|Ch(?:emin)?\.?|"
-        r"Rte|Route|Place|Pl\.?|Mont[eé]e|Terrasse|Croissant)\s+"
+        r"Rte|Route|Place|Pl\.?|Mont[eé]e|Terrasse|Croissant|"
+        r"Rang|C[oô]te|Impasse|All[eé]e|Bretelle|Carr[eé]|Quai|"
+        r"Promenade|Voie|Cours)\s+"
         r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\-' \.]{2,50})",
         text,
         flags=re.I,
@@ -1198,12 +1228,35 @@ def parse_centris(html: str) -> Dict[str, Any]:
                 out["asking_price"] = v
                 break
 
-    # Adresse : .address ou h1
+    # Adresse : .address ou h1. Filtre négatif appliqué : sur Centris
+    # moderne, le H1 affiche souvent le TYPE de propriété (« Immeuble
+    # à revenu à vendre ») au lieu de l'adresse civique. On rejette
+    # toute valeur qui ne contient pas de chiffre OU qui contient un
+    # terme invalidant (immeuble, plex, à vendre, etc.). En cas de
+    # rejet sur tous les sélecteurs, parse_text aura sa chance via le
+    # fallback regex plus bas.
+    _addr_invalid = re.compile(
+        r"\b(?:[aà]\s+vendre|[aà]\s+louer|immeuble|propri[eé]t[eé]|"
+        r"plex|duplex|triplex|quadruplex|quintuplex|"
+        r"r[eé]sidentiel|commercial|condominium|condo|"
+        r"multilogements?|mixte)\b",
+        re.I,
+    )
     for sel in (".address", "h1[itemprop='address']", "h1.heading"):
         node = soup.select_one(sel)
         if node:
             txt = node.get_text(" ", strip=True)
             if txt:
+                # Validation : doit contenir au moins un chiffre ET
+                # ne contenir aucun terme invalidant.
+                if (not re.search(r"\d", txt)) or _addr_invalid.search(txt):
+                    log.debug(
+                        "parse_centris: address selector %r rejected "
+                        "(invalid value: %r)",
+                        sel,
+                        txt[:120],
+                    )
+                    continue
                 # Souvent Centris cumule "adresse, ville (province)" → on
                 # split sur la 1re virgule.
                 if "," in txt:
