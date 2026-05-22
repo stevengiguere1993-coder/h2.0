@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { FileText, Loader2, Plus, Trash2 } from "lucide-react";
@@ -29,6 +29,7 @@ type Soumission = {
   property_address: string | null;
   kind?: "quote" | "contract";
   contract_data?: string | null;
+  is_devis_dev?: boolean;
   created_at: string;
 };
 
@@ -473,6 +474,11 @@ function SoumissionCard({
             {s.kind === "contract" ? (
               <span className="ml-1.5 rounded bg-indigo-500/15 px-1 py-0.5 text-[9px] text-indigo-300">
                 Contrat
+              </span>
+            ) : null}
+            {s.kind !== "contract" && s.is_devis_dev === false ? (
+              <span className="ml-1.5 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] text-amber-300">
+                Ancien format
               </span>
             ) : null}
           </span>
