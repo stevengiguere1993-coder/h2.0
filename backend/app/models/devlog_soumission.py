@@ -10,11 +10,17 @@ marge sur la base, ce qui force la résolution algébrique fermée
 décrite dans ``app.services.devlog_devis_calc``). Les soumissions
 créées avant la refonte gardent ``is_devis_dev = False`` et restent
 disponibles en lecture seule.
+
+Extension 2026-05 (vague 1) : pipeline d'envoi PDF + signature
+publique — ``signature_token`` opaque + ``sent_at`` /
+``signed_at`` / ``signed_name`` / ``signed_ip`` pour l'audit trail
+(pattern aligné sur Offer / DevlogContract).
 """
 
+from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Float, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -94,6 +100,27 @@ class DevlogSoumission(Base, TimestampUpdateMixin):
     # la vue client (« Hébergement + maintenance + 24/7 », etc.).
     client_recurring_description: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True
+    )
+
+    # --- Envoi PDF + signature publique (vague 1, mai 2026) ------------
+    # Token opaque (32 octets URL-safe) qui sert d'authentification
+    # pour la page publique /devlog/sign-soumission/{token}.
+    signature_token: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    # Horodatage envoi / signature — utilisés par l'UI (badges et
+    # historique) et par l'audit interne.
+    sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    signed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    signed_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    signed_ip: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
     )
 
     def __repr__(self) -> str:

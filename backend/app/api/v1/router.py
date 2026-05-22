@@ -1,4 +1,4 @@
-"""
+﻿"""
 API v1 Router
 
 Main router that aggregates all API v1 endpoints.
@@ -69,6 +69,7 @@ from app.api.v1.endpoints import (
     public_devlog_contact,
     push,
     public_contract,
+    public_devlog_soumission,
     public_facture,
     public_purchase_agreement,
     public_soumission,
@@ -143,6 +144,8 @@ api_router.include_router(devlog.invoice_items_router)
 api_router.include_router(devlog.lead_needs_router)
 api_router.include_router(devlog.contracts_router)
 api_router.include_router(devlog.public_contracts_router)
+# Page publique signature soumission devis_dev — /public/devlog/soumissions/{token}
+api_router.include_router(public_devlog_soumission.router)
 # Nested project routes MUST be registered before projects.router so
 # /projects/{id}/photos etc. are matched before /projects/{item_id}.
 api_router.include_router(project_photos.router)
