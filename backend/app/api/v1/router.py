@@ -66,6 +66,7 @@ from app.api.v1.endpoints import (
     project_to_facture,
     projects,
     public_bon,
+    public_devlog_contact,
     push,
     public_contract,
     public_facture,
@@ -290,4 +291,7 @@ api_router.include_router(entreprise_partners_links.router)
 api_router.include_router(immobilier_extras.router)
 api_router.include_router(immobilier.router)
 api_router.include_router(investissements.router)
+# Formulaire public Dev Logiciel — endpoint POST /public/devlog/contact
+# sans auth, cree un DevlogLead avec source=web_form au submit.
+api_router.include_router(public_devlog_contact.router)
 
