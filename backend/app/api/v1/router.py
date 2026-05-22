@@ -13,6 +13,7 @@ from app.api.v1.endpoints import (
     appointment_types,
     lea_web,
     letmetalk,
+    webhooks_external,
     webhooks_meta,
     ai,
     appointments,
@@ -183,6 +184,7 @@ api_router.include_router(agenda_availability.router)
 api_router.include_router(user_roles.router)
 api_router.include_router(lea_web.router)
 api_router.include_router(letmetalk.router)
+api_router.include_router(webhooks_external.router)
 api_router.include_router(webhooks_meta.router)
 api_router.include_router(public_purchase_agreement.router)
 # Offre d'achat minimaliste — flow indépendant du PurchaseAgreement
