@@ -5,13 +5,18 @@ import { useParams } from "next/navigation";
 import {
   ArrowLeft,
   Briefcase,
+  CheckCircle2,
+  Copy,
+  Download,
   Eye,
   EyeOff,
   Loader2,
   Plus,
   Repeat,
+  Send,
   Trash2,
-  X
+  X,
+  XCircle
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
@@ -53,6 +58,12 @@ type Soumission = {
   taux_manager_horaire: number | null;
   heures_manager: number | null;
   client_recurring_description: string | null;
+  // Envoi PDF + signature publique (vague 1, mai 2026)
+  signature_token: string | null;
+  sent_at: string | null;
+  signed_at: string | null;
+  signed_name: string | null;
+  signed_ip: string | null;
 };
 
 type Section = {
@@ -400,6 +411,77 @@ export default function SoumissionDetailPage() {
     }
   }
 
+  const [sending, setSending] = useState(false);
+  const [copyOk, setCopyOk] = useState(false);
+
+  async function sendToClient() {
+    if (sending) return;
+    const ok = await confirm({
+      title: "Envoyer la soumission au client ?",
+      description:
+        "Un courriel sera transmis au client avec le PDF en pièce " +
+        "jointe et un lien public pour signer. Continuer ?",
+      confirmLabel: "Envoyer"
+    });
+    if (!ok) return;
+    setSending(true);
+    try {
+      const r = await authedFetch(
+        `/api/v1/devlog/soumissions/${id}/send`,
+        { method: "POST" }
+      );
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      await loadAll();
+    } catch (e) {
+      setError(
+        (e as Error).message || "Envoi de la soumission impossible."
+      );
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function publicSignUrl(token: string): string {
+    const base =
+      typeof window !== "undefined" ? window.location.origin : "";
+    return `${base}/devlog/sign-soumission/${token}`;
+  }
+
+  async function copyPublicLink(token: string) {
+    try {
+      await navigator.clipboard.writeText(publicSignUrl(token));
+      setCopyOk(true);
+      setTimeout(() => setCopyOk(false), 2000);
+    } catch {
+      setError("Impossible de copier le lien (clipboard refusé).");
+    }
+  }
+
+  async function downloadPdf() {
+    try {
+      const r = await authedFetch(
+        `/api/v1/devlog/soumissions/${id}/pdf`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `soumission-devlog-${id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(
+        (e as Error).message || "Téléchargement du PDF impossible."
+      );
+    }
+  }
+
   const initialSections = sections.filter((x) => x.billing_kind === "initial");
   const recurringSections = sections.filter((x) => x.billing_kind === "recurring");
   const itemsBySection = useMemo(() => {
@@ -512,8 +594,69 @@ export default function SoumissionDetailPage() {
                   Créée le{" "}
                   {new Date(s.created_at).toLocaleDateString("fr-CA")}
                 </span>
-                <StatusActions status={s.status} onChange={changeStatus} />
+                {s.sent_at ? (
+                  <span className="rounded bg-blue-500/15 px-2 py-0.5 font-semibold text-blue-300">
+                    Envoyée le{" "}
+                    {new Date(s.sent_at).toLocaleDateString("fr-CA")}
+                  </span>
+                ) : null}
+                {s.signed_at && s.status === "acceptee" ? (
+                  <span className="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-2 py-0.5 font-semibold text-emerald-300">
+                    <CheckCircle2 className="h-3 w-3" />
+                    Signée le{" "}
+                    {new Date(s.signed_at).toLocaleDateString("fr-CA")}
+                    {s.signed_name ? ` par ${s.signed_name}` : ""}
+                  </span>
+                ) : null}
+                {s.signed_at && s.status === "refusee" ? (
+                  <span className="inline-flex items-center gap-1 rounded bg-rose-500/15 px-2 py-0.5 font-semibold text-rose-300">
+                    <XCircle className="h-3 w-3" />
+                    Refusée le{" "}
+                    {new Date(s.signed_at).toLocaleDateString("fr-CA")}
+                    {s.signed_name ? ` par ${s.signed_name}` : ""}
+                  </span>
+                ) : null}
+                <StatusActions
+                  status={s.status}
+                  isDevisDev={isDevisDev}
+                  sending={sending}
+                  onSend={sendToClient}
+                  onChange={changeStatus}
+                />
               </div>
+              {isDevisDev ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => void downloadPdf()}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-slate-500/40 bg-slate-500/10 px-3 py-1.5 font-semibold text-slate-200 hover:brightness-110"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Télécharger PDF
+                  </button>
+                  {s.signature_token && s.sent_at ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void copyPublicLink(s.signature_token!)
+                      }
+                      className="inline-flex items-center gap-1.5 rounded-md border border-blue-500/40 bg-blue-500/10 px-3 py-1.5 font-semibold text-blue-200 hover:brightness-110"
+                    >
+                      {copyOk ? (
+                        <>
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          Lien copié
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3.5 w-3.5" />
+                          Copier le lien public
+                        </>
+                      )}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
             </header>
 
             {isDevisDev ? (
@@ -1606,20 +1749,32 @@ function SectionCard({
 
 function StatusActions({
   status,
+  isDevisDev,
+  sending,
+  onSend,
   onChange
 }: {
   status: string;
+  isDevisDev: boolean;
+  sending: boolean;
+  onSend: () => void;
   onChange: (newStatus: string) => void;
 }) {
-  // Transitions possibles selon le statut actuel. Le passage à
-  // « acceptee » provisionne automatiquement le projet côté backend.
+  // Pour les soumissions devis_dev : l'envoi est un vrai envoi email
+  // qui passe par /send (génère token + PDF + email + sent_at). Pour
+  // les soumissions legacy : ancien comportement « marquer envoyée »
+  // (changement de statut seul, sans email).
   const transitions: Array<{ to: string; label: string; cls: string }> = [];
-  if (status === "brouillon")
+  if (
+    !isDevisDev &&
+    status === "brouillon"
+  ) {
     transitions.push({
       to: "envoyee",
       label: "Marquer envoyée",
       cls: "border-blue-500/40 bg-blue-500/10 text-blue-200"
     });
+  }
   if (status === "envoyee" || status === "brouillon") {
     transitions.push({
       to: "acceptee",
@@ -1632,9 +1787,28 @@ function StatusActions({
       cls: "border-rose-500/40 bg-rose-500/10 text-rose-200"
     });
   }
-  if (transitions.length === 0) return null;
+
+  const showSendButton =
+    isDevisDev && (status === "brouillon" || status === "envoyee");
+
+  if (transitions.length === 0 && !showSendButton) return null;
   return (
     <div className="flex flex-wrap items-center gap-1.5">
+      {showSendButton ? (
+        <button
+          type="button"
+          onClick={onSend}
+          disabled={sending}
+          className="inline-flex items-center gap-1 rounded-md border border-blue-500/40 bg-blue-500/15 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-blue-200 hover:brightness-110 disabled:opacity-60"
+        >
+          {sending ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Send className="h-3 w-3" />
+          )}
+          {status === "envoyee" ? "Renvoyer au client" : "Envoyer au client"}
+        </button>
+      ) : null}
       {transitions.map((t) => (
         <button
           key={t.to}
@@ -1648,3 +1822,4 @@ function StatusActions({
     </div>
   );
 }
+

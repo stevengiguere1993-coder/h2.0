@@ -1,4 +1,4 @@
-﻿"""Pydantic schemas — pôle Développement logiciel (clients & leads)."""
+﻿﻿"""Pydantic schemas — pôle Développement logiciel (clients & leads)."""
 
 from __future__ import annotations
 
@@ -264,6 +264,12 @@ class DevlogSoumissionRead(BaseModel):
     taux_manager_horaire: Optional[float] = None
     heures_manager: Optional[float] = None
     client_recurring_description: Optional[str] = None
+    # --- Envoi PDF + signature (vague 1) -----------------------------
+    signature_token: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    signed_at: Optional[datetime] = None
+    signed_name: Optional[str] = None
+    signed_ip: Optional[str] = None
 
 
 # --------------------------------------------------------------------------

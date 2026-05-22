@@ -562,6 +562,21 @@ async def init_db() -> None:
                 "client_recurring_description",
                 "TEXT",
             ),
+            # Envoi PDF + signature publique (vague 1, mai 2026) —
+            # token opaque + horodatages + audit trail signature.
+            ("devlog_soumissions", "signature_token", "VARCHAR(64)"),
+            (
+                "devlog_soumissions",
+                "sent_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
+            (
+                "devlog_soumissions",
+                "signed_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
+            ("devlog_soumissions", "signed_name", "VARCHAR(255)"),
+            ("devlog_soumissions", "signed_ip", "VARCHAR(64)"),
             (
                 "devlog_soumission_items",
                 "item_kind",
@@ -1153,3 +1168,4 @@ async def close_db() -> None:
     Should be called on application shutdown.
     """
     await engine.dispose()
+

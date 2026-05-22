@@ -13,6 +13,7 @@ petite équipe (closer / PM / devs partagent l'outil).
 from typing import List, Optional, Type
 
 from fastapi import APIRouter, HTTPException, Query, status
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -78,6 +79,11 @@ from app.schemas.devlog import (
     DevlogTimeEntryUpdate,
 )
 from app.services.devlog_devis_calc import compute_devis
+from app.services.devlog_soumission_pdf import generate_devis_pdf
+from app.services.devlog_soumission_send import (
+    DevlogSoumissionSendError,
+    send_devis_email,
+)
 
 
 def _make_crud_router(
@@ -577,6 +583,82 @@ async def convert_soumission_to_project(
     project = await _provision_project_for_soumission(db, soumission)
     return DevlogProjectRead.model_validate(project)
 
+
+# --------------------------------------------------------------------------
+# Envoi PDF + signature publique (vague 1, mai 2026)
+# --------------------------------------------------------------------------
+
+
+class _SendResult(BaseModel):
+    success: bool
+    sent_at: Optional[str] = None
+    signature_token: Optional[str] = None
+
+
+@soumission_automations_router.post(
+    "/{soumission_id}/send",
+    response_model=_SendResult,
+    summary=(
+        "Envoie la soumission devis_dev au client (PDF + email + "
+        "génération du token de signature publique)"
+    ),
+)
+async def send_soumission(
+    soumission_id: int, db: DBSession, _: CurrentUser
+):
+    soumission = await GenericCrud(db, DevlogSoumission).get(soumission_id)
+    if soumission is None:
+        raise HTTPException(status_code=404, detail="Soumission introuvable")
+    if not getattr(soumission, "is_devis_dev", False):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Les soumissions au format legacy ne peuvent pas être "
+                "envoyées par ce flow. Utilise une soumission « devis_dev »."
+            ),
+        )
+    try:
+        soumission = await send_devis_email(db, soumission_id)
+    except DevlogSoumissionSendError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _SendResult(
+        success=True,
+        sent_at=(
+            soumission.sent_at.isoformat()
+            if soumission.sent_at
+            else None
+        ),
+        signature_token=soumission.signature_token,
+    )
+
+
+@soumission_automations_router.get(
+    "/{soumission_id}/pdf",
+    summary="PDF de la soumission devis_dev (vue client uniquement)",
+)
+async def get_soumission_pdf(
+    soumission_id: int, db: DBSession, _: CurrentUser
+):
+    soumission = await GenericCrud(db, DevlogSoumission).get(soumission_id)
+    if soumission is None:
+        raise HTTPException(status_code=404, detail="Soumission introuvable")
+    if not getattr(soumission, "is_devis_dev", False):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Les soumissions au format legacy n'ont pas de PDF "
+                "généré. Utilise une soumission « devis_dev »."
+            ),
+        )
+    pdf_bytes = await generate_devis_pdf(db, soumission_id)
+    filename = f"soumission-devlog-{soumission_id}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+        },
+    )
 
 
 # --------------------------------------------------------------------------
@@ -1729,3 +1811,4 @@ async def public_sign_contract(
     obj.signed_ip = (ip or "")[:64]
     await db.flush()
     return DevlogContractPublicRead.model_validate(obj)
+
