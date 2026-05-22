@@ -30,7 +30,7 @@ import { Link } from "@/i18n/navigation";
 // Deux rendus possibles selon le flag ``is_devis_dev`` :
 //
 //   * **Nouveau format (devis_dev)** — refonte mai 2026. Deux sections
-//     (Frais mensuels récurrents + Frais de mise en oeuvre) avec calcul
+//     (Frais mensuels récurrents + Investissement initial) avec calcul
 //     circulaire (closing absorbe la marge sur la base), toggle vue
 //     propriétaire / vue client.
 //
@@ -162,6 +162,185 @@ function fmtAmount(n: number | null): string {
     currency: "CAD",
     maximumFractionDigits: 2
   });
+}
+
+// Format « 1 600,00 $ » pour les colonnes de totaux par ligne (sans
+// le mot « CAD », plus compact, fr-CA strict).
+function fmtMoneyShort(n: number): string {
+  return n.toLocaleString("fr-CA", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }) + " $";
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Inputs contrôlés à state local indépendant du parent.
+//
+// Le bug : tous les inputs du formulaire devis_dev étaient
+// contrôlés directement par l'objet venant du fetch (`value={it.x}`).
+// Chaque keystroke déclenchait `onPatchItem` → mutation locale +
+// PATCH API + reload des items. Pendant la frappe rapide, la
+// promesse du PATCH précédent revenait avec l'ancienne valeur et
+// écrasait l'état local (race), ce qui inversait/dupliquait des
+// lettres ("facturation" devenait "factuartion").
+//
+// Pattern inspiré de FieldText/FieldNumber dans prospection : on
+// garde un state local `v`, on ne re-sync avec la prop `value` que
+// quand le champ n'est PAS focusé (i.e. l'utilisateur ne tape
+// pas), et on commit au blur uniquement si la valeur a changé.
+// ──────────────────────────────────────────────────────────────────
+
+function DescInput({
+  value,
+  onCommit,
+  className,
+  placeholder
+}: {
+  value: string;
+  onCommit: (v: string) => void;
+  className?: string;
+  placeholder?: string;
+}) {
+  const [focused, setFocused] = useState(false);
+  const [v, setV] = useState(value ?? "");
+  useEffect(() => {
+    if (!focused) setV(value ?? "");
+  }, [value, focused]);
+  return (
+    <input
+      type="text"
+      value={v}
+      placeholder={placeholder}
+      onFocus={() => setFocused(true)}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={() => {
+        setFocused(false);
+        if ((value ?? "") !== v) onCommit(v);
+      }}
+      className={className}
+    />
+  );
+}
+
+function MoneyInput({
+  value,
+  onCommit,
+  className,
+  step = "1",
+  min = "0"
+}: {
+  value: number;
+  onCommit: (n: number) => void;
+  className?: string;
+  step?: string;
+  min?: string;
+}) {
+  const [focused, setFocused] = useState(false);
+  const [v, setV] = useState(value != null ? String(value) : "");
+  useEffect(() => {
+    if (!focused) setV(value != null ? String(value) : "");
+  }, [value, focused]);
+  return (
+    <div className="relative">
+      <input
+        type="number"
+        step={step}
+        min={min}
+        value={v}
+        onFocus={() => setFocused(true)}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={() => {
+          setFocused(false);
+          const n = Number(v);
+          if (Number.isFinite(n) && n !== value) onCommit(n);
+        }}
+        className={`${className ?? ""} pr-6`}
+      />
+      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-white/40">
+        $
+      </span>
+    </div>
+  );
+}
+
+function HoursInput({
+  value,
+  onCommit,
+  className,
+  step = "0.5",
+  min = "0"
+}: {
+  value: number;
+  onCommit: (n: number) => void;
+  className?: string;
+  step?: string;
+  min?: string;
+}) {
+  const [focused, setFocused] = useState(false);
+  const [v, setV] = useState(value != null ? String(value) : "");
+  useEffect(() => {
+    if (!focused) setV(value != null ? String(value) : "");
+  }, [value, focused]);
+  return (
+    <div className="relative">
+      <input
+        type="number"
+        step={step}
+        min={min}
+        value={v}
+        onFocus={() => setFocused(true)}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={() => {
+          setFocused(false);
+          const n = Number(v);
+          if (Number.isFinite(n) && n !== value) onCommit(n);
+        }}
+        className={`${className ?? ""} pr-6`}
+      />
+      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-white/40">
+        h
+      </span>
+    </div>
+  );
+}
+
+function PctInput({
+  value,
+  onCommit,
+  className,
+  step = "1",
+  min = "0",
+  max = "500"
+}: {
+  value: number;
+  onCommit: (n: number) => void;
+  className?: string;
+  step?: string;
+  min?: string;
+  max?: string;
+}) {
+  const [focused, setFocused] = useState(false);
+  const [v, setV] = useState(value != null ? String(value) : "");
+  useEffect(() => {
+    if (!focused) setV(value != null ? String(value) : "");
+  }, [value, focused]);
+  return (
+    <input
+      type="number"
+      step={step}
+      min={min}
+      max={max}
+      value={v}
+      onFocus={() => setFocused(true)}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={() => {
+        setFocused(false);
+        const n = Number(v);
+        if (Number.isFinite(n) && n !== value) onCommit(n);
+      }}
+      className={className}
+    />
+  );
 }
 
 export default function SoumissionDetailPage() {
@@ -731,7 +910,7 @@ function DevisDevEditor({
       {/* Totaux haut de page */}
       <div className="mb-5 grid gap-3 sm:grid-cols-2">
         <TotalCard
-          label="Frais de mise en oeuvre (one-shot)"
+          label="Investissement initial"
           value={init?.total_final ?? 0}
           icon={<Briefcase className="h-5 w-5 text-blue-300" />}
           accent="blue"
@@ -768,17 +947,12 @@ function DevisDevEditor({
           {ownerView ? (
             <label className="inline-flex items-center gap-1.5 text-xs text-white/70">
               Marge
-              <input
-                type="number"
-                step="5"
-                min="0"
-                max="500"
-                value={s.marge_recurrente_pct ?? 50}
-                onChange={(e) =>
-                  onPatchSoumission({
-                    marge_recurrente_pct: Number(e.target.value)
-                  })
+              <PctInput
+                value={Number(s.marge_recurrente_pct ?? 50)}
+                onCommit={(n) =>
+                  onPatchSoumission({ marge_recurrente_pct: n })
                 }
+                step="5"
                 className="w-16 rounded border border-emerald-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white"
               />
               %
@@ -800,6 +974,7 @@ function DevisDevEditor({
                   <tr>
                     <th className="text-left">Description</th>
                     <th className="text-right">Coût mensuel</th>
+                    <th className="text-right">Total ligne</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -807,26 +982,25 @@ function DevisDevEditor({
                   {recurringItems.map((it) => (
                     <tr key={it.id}>
                       <td className="py-1.5">
-                        <input
+                        <DescInput
                           value={it.description}
-                          onChange={(e) =>
-                            onPatchItem(it.id, { description: e.target.value })
+                          onCommit={(v) =>
+                            onPatchItem(it.id, { description: v })
                           }
                           className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-white hover:border-emerald-500/30 focus:border-emerald-500/50 focus:outline-none"
                         />
                       </td>
                       <td className="py-1.5">
-                        <input
-                          type="number"
-                          step="1"
-                          value={it.cost_per_unit}
-                          onChange={(e) =>
-                            onPatchItem(it.id, {
-                              cost_per_unit: Number(e.target.value)
-                            })
+                        <MoneyInput
+                          value={Number(it.cost_per_unit ?? 0)}
+                          onCommit={(n) =>
+                            onPatchItem(it.id, { cost_per_unit: n })
                           }
                           className="w-24 rounded border border-emerald-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white"
                         />
+                      </td>
+                      <td className="py-1.5 text-right text-white/80">
+                        {fmtMoneyShort(Number(it.cost_per_unit ?? 0))}
                       </td>
                       <td className="py-1.5">
                         <button
@@ -842,7 +1016,7 @@ function DevisDevEditor({
                 </tbody>
                 <tfoot className="border-t border-emerald-500/30 text-xs">
                   <tr>
-                    <td className="pt-2 text-right text-white/60">
+                    <td className="pt-2 text-right text-white/60" colSpan={2}>
                       Coût interne mensuel
                     </td>
                     <td className="pt-2 text-right font-semibold text-white">
@@ -851,7 +1025,7 @@ function DevisDevEditor({
                     <td></td>
                   </tr>
                   <tr>
-                    <td className="text-right text-white/60">
+                    <td className="text-right text-white/60" colSpan={2}>
                       Marge ({s.marge_recurrente_pct ?? 50}%)
                     </td>
                     <td className="text-right text-white/80">
@@ -860,7 +1034,10 @@ function DevisDevEditor({
                     <td></td>
                   </tr>
                   <tr>
-                    <td className="pb-1 text-right text-sm font-bold text-emerald-300">
+                    <td
+                      className="pb-1 text-right text-sm font-bold text-emerald-300"
+                      colSpan={2}
+                    >
                       Mensuel client
                     </td>
                     <td className="pb-1 text-right text-base font-bold text-emerald-300">
@@ -881,38 +1058,23 @@ function DevisDevEditor({
             </button>
           </>
         ) : (
-          // Vue client — montant unique + description libre
-          <div>
-            <p className="text-3xl font-bold text-emerald-300">
-              {fmtAmount(rec?.total_client_amount ?? 0)}
-              <span className="ml-1 text-sm font-normal text-white/60">
-                / mois
-              </span>
-            </p>
-            <p className="mt-3 text-xs uppercase tracking-wider text-white/40">
-              Inclus dans cet abonnement mensuel :
-            </p>
-            <textarea
-              value={s.client_recurring_description ?? ""}
-              onChange={(e) =>
-                onPatchSoumission({
-                  client_recurring_description: e.target.value
-                })
-              }
-              placeholder="Hébergement de la plateforme, monitoring 24/7, mises à jour de sécurité, support technique par courriel et téléphone, sauvegardes journalières..."
-              rows={5}
-              className="mt-1 w-full rounded border border-emerald-500/30 bg-brand-950 px-3 py-2 text-sm text-white focus:border-emerald-500/60 focus:outline-none"
-            />
-          </div>
+          // Vue client — liste des inclusions (labels uniquement) +
+          // total mensuel en bas, pattern identique à la section 2.
+          <DevisDevClientRecurring
+            soumission={s}
+            recurringItems={recurringItems}
+            totalClientAmount={rec?.total_client_amount ?? 0}
+            onPatchSoumission={onPatchSoumission}
+          />
         )}
       </section>
 
-      {/* ========== SECTION 2 — Frais de Mise en Oeuvre ========== */}
+      {/* ========== SECTION 2 — Investissement initial ========== */}
       <section className="mt-5 rounded-2xl border border-blue-500/30 bg-blue-500/5 p-4">
         <header className="mb-3 flex flex-wrap items-end justify-between gap-2 border-b border-blue-500/30 pb-3">
           <div>
             <h2 className="text-base font-bold text-white">
-              2. Frais de mise en oeuvre
+              2. Investissement initial
             </h2>
             <p className="text-xs text-white/60">
               Développement initial — payé en une seule fois à la livraison.
@@ -922,34 +1084,25 @@ function DevisDevEditor({
             <div className="flex flex-wrap items-end gap-2">
               <label className="inline-flex items-center gap-1.5 text-xs text-white/70">
                 Marge
-                <input
-                  type="number"
-                  step="5"
-                  min="0"
-                  max="500"
-                  value={s.marge_initiale_pct ?? 50}
-                  onChange={(e) =>
-                    onPatchSoumission({
-                      marge_initiale_pct: Number(e.target.value)
-                    })
+                <PctInput
+                  value={Number(s.marge_initiale_pct ?? 50)}
+                  onCommit={(n) =>
+                    onPatchSoumission({ marge_initiale_pct: n })
                   }
+                  step="5"
                   className="w-16 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white"
                 />
                 %
               </label>
               <label className="inline-flex items-center gap-1.5 text-xs text-white/70">
                 Closer
-                <input
-                  type="number"
-                  step="1"
-                  min="0"
-                  max="100"
-                  value={s.commission_closer_pct ?? 10}
-                  onChange={(e) =>
-                    onPatchSoumission({
-                      commission_closer_pct: Number(e.target.value)
-                    })
+                <PctInput
+                  value={Number(s.commission_closer_pct ?? 10)}
+                  onCommit={(n) =>
+                    onPatchSoumission({ commission_closer_pct: n })
                   }
+                  step="1"
+                  max="100"
                   className="w-16 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white"
                 />
                 %
@@ -1004,44 +1157,31 @@ function DevisDevOwnerInitial({
         <h3 className="text-xs font-bold uppercase tracking-wider text-blue-200">
           Gestionnaire de projet
         </h3>
-        <div className="mt-2 grid gap-2 sm:grid-cols-3">
+        <div className="mt-2 grid gap-2 sm:grid-cols-3 sm:items-end">
           <label className="text-xs text-white/70">
             Taux horaire
-            <div className="mt-1 inline-flex w-full items-center gap-1 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-1">
-              <input
-                type="number"
-                step="1"
-                min="0"
-                value={s.taux_manager_horaire ?? 80}
-                onChange={(e) =>
-                  onPatchSoumission({
-                    taux_manager_horaire: Number(e.target.value)
-                  })
-                }
-                className="w-full bg-transparent text-right text-white focus:outline-none"
-              />
-              <span className="text-[10px] text-white/40">$/h</span>
-            </div>
+            <MoneyInput
+              value={Number(s.taux_manager_horaire ?? 80)}
+              onCommit={(n) =>
+                onPatchSoumission({ taux_manager_horaire: n })
+              }
+              className="mt-1 block w-full rounded border border-blue-500/30 bg-brand-950 px-1.5 py-1 text-right text-white focus:outline-none"
+            />
           </label>
           <label className="text-xs text-white/70">
             Heures
-            <input
-              type="number"
-              step="0.5"
-              min="0"
-              value={s.heures_manager ?? 0}
-              onChange={(e) =>
-                onPatchSoumission({
-                  heures_manager: Number(e.target.value)
-                })
-              }
+            <HoursInput
+              value={Number(s.heures_manager ?? 0)}
+              onCommit={(n) => onPatchSoumission({ heures_manager: n })}
               className="mt-1 block w-full rounded border border-blue-500/30 bg-brand-950 px-1.5 py-1 text-right text-white focus:outline-none"
             />
           </label>
           <div className="text-xs text-white/70">
             Coût manager
-            <p className="mt-1 rounded border border-transparent px-1.5 py-1 text-right text-base font-semibold text-white">
-              {fmtAmount(init?.cout_manager ?? 0)}
+            {/* Hauteur identique aux inputs voisins (py-1 + border)
+                pour que la valeur s'aligne sur la même ligne. */}
+            <p className="mt-1 block w-full rounded border border-transparent px-1.5 py-1 text-right text-base font-semibold text-white">
+              {fmtMoneyShort(Number(init?.cout_manager ?? 0))}
             </p>
           </div>
         </div>
@@ -1053,23 +1193,15 @@ function DevisDevOwnerInitial({
           <h3 className="text-xs font-bold uppercase tracking-wider text-blue-200">
             Fonctionnalités (features)
           </h3>
-          <label className="text-xs text-white/70">
+          <label className="inline-flex items-end gap-2 text-xs text-white/70">
             Taux dev
-            <div className="ml-2 inline-flex items-center gap-1 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-0.5">
-              <input
-                type="number"
-                step="1"
-                min="0"
-                value={s.taux_dev_horaire ?? 75}
-                onChange={(e) =>
-                  onPatchSoumission({
-                    taux_dev_horaire: Number(e.target.value)
-                  })
-                }
-                className="w-16 bg-transparent text-right text-white focus:outline-none"
-              />
-              <span className="text-[10px] text-white/40">$/h</span>
-            </div>
+            <MoneyInput
+              value={Number(s.taux_dev_horaire ?? 75)}
+              onCommit={(n) =>
+                onPatchSoumission({ taux_dev_horaire: n })
+              }
+              className="block w-24 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white focus:outline-none"
+            />
           </label>
         </div>
         {featureItems.length === 0 ? (
@@ -1086,32 +1218,34 @@ function DevisDevOwnerInitial({
                 <th></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-blue-500/20">
+            <tbody className="divide-y divide-blue-500/20 align-middle">
               {featureItems.map((it) => (
                 <tr key={it.id}>
                   <td className="py-1.5">
-                    <input
+                    <DescInput
                       value={it.description}
-                      onChange={(e) =>
-                        onPatchItem(it.id, { description: e.target.value })
+                      onCommit={(v) =>
+                        onPatchItem(it.id, { description: v })
                       }
                       className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-white hover:border-blue-500/30 focus:border-blue-500/50 focus:outline-none"
                     />
                   </td>
                   <td className="py-1.5">
-                    <input
-                      type="number"
-                      step="0.5"
-                      min="0"
-                      value={it.heures ?? 0}
-                      onChange={(e) =>
-                        onPatchItem(it.id, { heures: Number(e.target.value) })
-                      }
-                      className="w-20 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white"
-                    />
+                    {/* `flex justify-end` aligne l'input HoursInput
+                        à droite de la cellule, sur la même ligne
+                        horizontale que les autres cellules. */}
+                    <div className="flex justify-end">
+                      <HoursInput
+                        value={Number(it.heures ?? 0)}
+                        onCommit={(n) =>
+                          onPatchItem(it.id, { heures: n })
+                        }
+                        className="w-24 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white"
+                      />
+                    </div>
                   </td>
                   <td className="py-1.5 text-right text-white/80">
-                    {fmtAmount(
+                    {fmtMoneyShort(
                       Number(it.heures ?? 0) *
                         Number(s.taux_dev_horaire ?? 75)
                     )}
@@ -1161,31 +1295,28 @@ function DevisDevOwnerInitial({
                 <th></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-blue-500/20">
+            <tbody className="divide-y divide-blue-500/20 align-middle">
               {fixedItems.map((it) => (
                 <tr key={it.id}>
                   <td className="py-1.5">
-                    <input
+                    <DescInput
                       value={it.description}
-                      onChange={(e) =>
-                        onPatchItem(it.id, { description: e.target.value })
+                      onCommit={(v) =>
+                        onPatchItem(it.id, { description: v })
                       }
                       className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-white hover:border-blue-500/30 focus:border-blue-500/50 focus:outline-none"
                     />
                   </td>
                   <td className="py-1.5">
-                    <input
-                      type="number"
-                      step="1"
-                      min="0"
-                      value={it.cost_per_unit}
-                      onChange={(e) =>
-                        onPatchItem(it.id, {
-                          cost_per_unit: Number(e.target.value)
-                        })
-                      }
-                      className="w-24 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white"
-                    />
+                    <div className="flex justify-end">
+                      <MoneyInput
+                        value={Number(it.cost_per_unit ?? 0)}
+                        onCommit={(n) =>
+                          onPatchItem(it.id, { cost_per_unit: n })
+                        }
+                        className="w-24 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white"
+                      />
+                    </div>
                   </td>
                   <td className="py-1.5">
                     <button
@@ -1258,6 +1389,83 @@ function DevisDevOwnerInitial({
             {fmtAmount(init?.total_final ?? 0)}
           </dd>
         </dl>
+      </div>
+    </div>
+  );
+}
+
+function DevisDevClientRecurring({
+  soumission: s,
+  recurringItems,
+  totalClientAmount,
+  onPatchSoumission
+}: {
+  soumission: Soumission;
+  recurringItems: Item[];
+  totalClientAmount: number;
+  onPatchSoumission: (patch: Partial<Soumission>) => void;
+}) {
+  // Notes optionnelles : on garde un state local pour que la frappe
+  // dans la textarea ne soit pas perturbée par les reloads de la
+  // soumission (même bug que les inputs — pattern FieldText).
+  const [focused, setFocused] = useState(false);
+  const initial = s.client_recurring_description ?? "";
+  const [v, setV] = useState(initial);
+  useEffect(() => {
+    if (!focused) setV(s.client_recurring_description ?? "");
+  }, [s.client_recurring_description, focused]);
+
+  return (
+    <div className="space-y-4">
+      {recurringItems.length === 0 ? (
+        <p className="rounded border border-dashed border-emerald-500/20 px-3 py-4 text-center text-xs text-white/40">
+          Aucune inclusion à afficher.
+        </p>
+      ) : (
+        <div>
+          <h3 className="text-xs uppercase tracking-wider text-white/40">
+            Inclusions
+          </h3>
+          <ul className="mt-1 divide-y divide-emerald-500/20">
+            {recurringItems.map((it) => (
+              <li key={it.id} className="py-2 text-sm text-white">
+                {it.description || "—"}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2">
+        <span className="text-sm font-semibold text-emerald-200">
+          Total mensuel
+        </span>
+        <span className="text-2xl font-bold text-emerald-200">
+          {fmtAmount(totalClientAmount)}
+          <span className="ml-1 text-sm font-normal text-emerald-200/70">
+            / mois
+          </span>
+        </span>
+      </div>
+
+      <div>
+        <label className="text-xs uppercase tracking-wider text-white/40">
+          Notes additionnelles (optionnel)
+        </label>
+        <textarea
+          value={v}
+          onFocus={() => setFocused(true)}
+          onChange={(e) => setV(e.target.value)}
+          onBlur={() => {
+            setFocused(false);
+            if ((s.client_recurring_description ?? "") !== v) {
+              onPatchSoumission({ client_recurring_description: v });
+            }
+          }}
+          placeholder="Précisions sur l'abonnement mensuel (SLA, fréquence des sauvegardes, etc.)..."
+          rows={3}
+          className="mt-1 w-full rounded border border-emerald-500/30 bg-brand-950 px-3 py-2 text-sm text-white focus:border-emerald-500/60 focus:outline-none"
+        />
       </div>
     </div>
   );
@@ -1822,4 +2030,5 @@ function StatusActions({
     </div>
   );
 }
+
 
