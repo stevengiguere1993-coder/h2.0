@@ -2,11 +2,19 @@
 
 Un devis envoyé à un lead ou à un client. Le pipeline du closer a une
 étape « soumission » : c'est ici qu'on suit le devis correspondant.
+
+Refonte 2026-05 : nouveau format de devis (« devis_dev ») avec deux
+sections — frais mensuels récurrents et frais de mise en oeuvre — et
+un calcul de marge circulaire (la commission du closer absorbe la
+marge sur la base, ce qui force la résolution algébrique fermée
+décrite dans ``app.services.devlog_devis_calc``). Les soumissions
+créées avant la refonte gardent ``is_devis_dev = False`` et restent
+disponibles en lecture seule.
 """
 
 from typing import Optional
 
-from sqlalchemy import Float, ForeignKey, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -47,6 +55,46 @@ class DevlogSoumission(Base, TimestampUpdateMixin):
     )
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # --- Refonte « devis_dev » (mai 2026) -------------------------------
+    # Flag : True = nouveau format (section mensuelle + section mise en
+    # oeuvre avec calcul circulaire). False = ancien format générique
+    # (sections + items), conservé en lecture seule pour l'historique.
+    is_devis_dev: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+
+    # Pourcentages — stockés en valeurs « humaines » (50 = 50 %).
+    marge_recurrente_pct: Mapped[Optional[float]] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )
+    marge_initiale_pct: Mapped[Optional[float]] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )
+    commission_closer_pct: Mapped[Optional[float]] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )
+
+    # Taux horaires utilisés pour transformer les heures en coût avant
+    # marge. Toujours appliqués à la mise en oeuvre (jamais au mensuel).
+    taux_dev_horaire: Mapped[Optional[float]] = mapped_column(
+        Numeric(8, 2), nullable=True
+    )
+    taux_manager_horaire: Mapped[Optional[float]] = mapped_column(
+        Numeric(8, 2), nullable=True
+    )
+    heures_manager: Mapped[Optional[float]] = mapped_column(
+        Numeric(8, 2), nullable=True
+    )
+
+    # Texte libre affiché à la place de la liste de coûts mensuels dans
+    # la vue client (« Hébergement + maintenance + 24/7 », etc.).
+    client_recurring_description: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
 
     def __repr__(self) -> str:
         return f"<DevlogSoumission(id={self.id}, title='{self.title}', status='{self.status}')>"

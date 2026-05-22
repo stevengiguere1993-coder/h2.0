@@ -1,4 +1,4 @@
-"""
+﻿"""
 Database session configuration for async SQLAlchemy.
 
 Provides:
@@ -532,6 +532,41 @@ async def init_db() -> None:
                 "cost_per_unit",
                 "DOUBLE PRECISION NOT NULL DEFAULT 0",
             ),
+            # Refonte devis Dev logiciel (mai 2026) — calcul circulaire
+            # mensuel + mise en oeuvre, voir
+            # ``app.services.devlog_devis_calc``. ``is_devis_dev``
+            # distingue les soumissions nouveau format des soumissions
+            # legacy (conservées en lecture seule).
+            (
+                "devlog_soumissions",
+                "is_devis_dev",
+                "BOOLEAN NOT NULL DEFAULT FALSE",
+            ),
+            ("devlog_soumissions", "marge_recurrente_pct", "NUMERIC(5,2)"),
+            ("devlog_soumissions", "marge_initiale_pct", "NUMERIC(5,2)"),
+            (
+                "devlog_soumissions",
+                "commission_closer_pct",
+                "NUMERIC(5,2)",
+            ),
+            ("devlog_soumissions", "taux_dev_horaire", "NUMERIC(8,2)"),
+            (
+                "devlog_soumissions",
+                "taux_manager_horaire",
+                "NUMERIC(8,2)",
+            ),
+            ("devlog_soumissions", "heures_manager", "NUMERIC(8,2)"),
+            (
+                "devlog_soumissions",
+                "client_recurring_description",
+                "TEXT",
+            ),
+            (
+                "devlog_soumission_items",
+                "item_kind",
+                "VARCHAR(20) NOT NULL DEFAULT 'feature'",
+            ),
+            ("devlog_soumission_items", "heures", "NUMERIC(8,2)"),
             ("devlog_leads", "address", "VARCHAR(500)"),
             (
                 "devlog_leads",

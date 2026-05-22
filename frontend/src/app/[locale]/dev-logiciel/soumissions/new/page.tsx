@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter as useNextRouter, useSearchParams } from "next/navigation";
@@ -149,6 +149,19 @@ export default function NewSoumissionPage() {
         payload.property_address = propertyAddress.trim();
       }
       payload.kind = kind;
+      // Refonte devis_dev (mai 2026) : toute nouvelle soumission devis
+      // utilise le nouveau format (calcul circulaire 2 sections). Les
+      // soumissions existantes restent en is_devis_dev=false (legacy)
+      // et conservent leur ancien rendu.
+      if (kind === "quote") {
+        payload.is_devis_dev = true;
+        payload.marge_recurrente_pct = 50;
+        payload.marge_initiale_pct = 50;
+        payload.commission_closer_pct = 10;
+        payload.taux_dev_horaire = 75;
+        payload.taux_manager_horaire = 80;
+        payload.heures_manager = 0;
+      }
 
       const res = await authedFetch("/api/v1/devlog/soumissions", {
         method: "POST",

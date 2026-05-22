@@ -1,4 +1,4 @@
-"""Endpoints — pôle Développement logiciel.
+﻿"""Endpoints — pôle Développement logiciel.
 
 Ressources :
   * /api/v1/devlog/clients — clients du pôle (boîtes pour qui on
@@ -32,6 +32,7 @@ from app.models.devlog_sous_traitant import DevlogSousTraitant
 from app.models.devlog_time_entry import DevlogTimeEntry
 from app.repositories.generic import GenericCrud
 from app.schemas.devlog import (
+    DevisPreview,
     DevlogClientCreate,
     DevlogClientRead,
     DevlogClientUpdate,
@@ -76,6 +77,7 @@ from app.schemas.devlog import (
     DevlogTimeEntryRead,
     DevlogTimeEntryUpdate,
 )
+from app.services.devlog_devis_calc import compute_devis
 
 
 def _make_crud_router(
@@ -425,13 +427,45 @@ async def update_soumission_with_automations(
 ):
     """Override de la mise à jour générique : si le statut passe à
     « acceptee », on provisionne automatiquement le projet (+ client
-    si nécessaire) et on met à jour le lead lié."""
+    si nécessaire) et on met à jour le lead lié.
+
+    En mode « devis_dev », un changement de ``taux_dev_horaire`` se
+    répercute aussi sur le total stocké de chaque item feature (la
+    quantité × taux), pour que ``amount`` reste cohérent avec les
+    listes / kanban sans repasser par compute_devis à chaque GET."""
     crud = GenericCrud(db, DevlogSoumission)
     obj = await crud.get(soumission_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Soumission introuvable")
     previous_status = obj.status
+    update_data = data.model_dump(exclude_unset=True)
+    devis_dev_fields_changed = any(
+        f in update_data
+        for f in (
+            "taux_dev_horaire",
+            "taux_manager_horaire",
+            "heures_manager",
+            "marge_recurrente_pct",
+            "marge_initiale_pct",
+            "commission_closer_pct",
+            "is_devis_dev",
+        )
+    )
     obj = await crud.update(obj, data)
+    if getattr(obj, "is_devis_dev", False) and devis_dev_fields_changed:
+        # Re-calc des totaux items feature (heures × taux_dev).
+        items = (
+            await db.execute(
+                select(DevlogSoumissionItem).where(
+                    DevlogSoumissionItem.soumission_id == soumission_id
+                )
+            )
+        ).scalars().all()
+        for it in items:
+            _apply_devis_dev_totals(it, obj)
+        await db.flush()
+        await _refresh_soumission_amount(db, soumission_id)
+        await db.refresh(obj)
     if (
         obj.status == "acceptee"
         and previous_status != "acceptee"
@@ -491,6 +525,36 @@ async def update_soumission_status(
 
     await db.refresh(soumission)
     return DevlogSoumissionRead.model_validate(soumission)
+
+
+@soumission_automations_router.get(
+    "/{soumission_id}/devis-preview",
+    response_model=DevisPreview,
+    summary=(
+        "Prévisualise les totaux du nouveau format devis_dev "
+        "(calcul circulaire frais initiaux + frais mensuels)"
+    ),
+)
+async def preview_soumission_devis(
+    soumission_id: int, db: DBSession, _: CurrentUser
+):
+    """Retourne la décomposition complète d'une soumission (vue
+    propriétaire ET vue client). Le frontend appelle cet endpoint en
+    debounced à chaque modification pour rafraîchir les totaux."""
+    soumission = await GenericCrud(db, DevlogSoumission).get(soumission_id)
+    if soumission is None:
+        raise HTTPException(status_code=404, detail="Soumission introuvable")
+    items = (
+        await db.execute(
+            select(DevlogSoumissionItem)
+            .where(DevlogSoumissionItem.soumission_id == soumission_id)
+            .order_by(
+                DevlogSoumissionItem.position.asc(),
+                DevlogSoumissionItem.id.asc(),
+            )
+        )
+    ).scalars().all()
+    return compute_devis(soumission, list(items))
 
 
 @soumission_automations_router.post(
@@ -802,7 +866,28 @@ async def _refresh_soumission_amount(db, soumission_id: int) -> None:
     """Recalcule `DevlogSoumission.amount` à partir de ses items
     `initial` (frais one-shot). Le total mensuel est exposé séparément
     côté API quand demandé — `amount` reste le « prix de soumission »
-    one-shot pour rester compatible avec les listes / kanbans existants."""
+    one-shot pour rester compatible avec les listes / kanbans existants.
+
+    Pour les soumissions « devis_dev » (refonte mai 2026), on
+    s'appuie sur ``compute_devis`` qui résout la formule circulaire :
+    ``amount`` = total final de la mise en oeuvre (frais one-shot
+    affichés au client)."""
+    soumission = await GenericCrud(db, DevlogSoumission).get(soumission_id)
+    if soumission is None:
+        return
+
+    if getattr(soumission, "is_devis_dev", False):
+        items = (
+            await db.execute(
+                select(DevlogSoumissionItem)
+                .where(DevlogSoumissionItem.soumission_id == soumission_id)
+            )
+        ).scalars().all()
+        devis = compute_devis(soumission, list(items))
+        soumission.amount = float(devis["initial"]["total_final"])
+        await db.flush()
+        return
+
     items = (
         await db.execute(
             select(DevlogSoumissionItem)
@@ -818,10 +903,8 @@ async def _refresh_soumission_amount(db, soumission_id: int) -> None:
         )
     ).scalars().all()
     total = round(sum(float(it.total or 0) for it in items), 2)
-    soumission = await GenericCrud(db, DevlogSoumission).get(soumission_id)
-    if soumission is not None:
-        soumission.amount = total
-        await db.flush()
+    soumission.amount = total
+    await db.flush()
 
 
 @soumission_items_router.get(
@@ -841,6 +924,35 @@ async def list_soumission_items(
     return list(rows)
 
 
+def _apply_devis_dev_totals(
+    obj: DevlogSoumissionItem, soumission: DevlogSoumission
+) -> None:
+    """Pour les items « devis_dev », recalcule ``total`` selon le
+    ``item_kind``. Pas de markup côté item — la marge est appliquée
+    par ``compute_devis`` au niveau de la soumission."""
+    kind = (obj.item_kind or "feature").strip()
+    if kind == "feature":
+        taux = float(soumission.taux_dev_horaire or 0)
+        heures = float(obj.heures or 0)
+        obj.quantity = heures
+        obj.unit = obj.unit or "h"
+        obj.cost_per_unit = taux
+        obj.unit_price = taux
+        obj.total = round(heures * taux, 2)
+    elif kind == "recurring_cost":
+        cost = float(obj.cost_per_unit or 0)
+        obj.quantity = 1
+        obj.unit = obj.unit or "mois"
+        obj.unit_price = cost
+        obj.total = round(cost, 2)
+    elif kind == "fixed_cost":
+        cost = float(obj.cost_per_unit or 0)
+        obj.quantity = 1
+        obj.unit = obj.unit or "forfait"
+        obj.unit_price = cost
+        obj.total = round(cost, 2)
+
+
 @soumission_items_router.post(
     "/soumission-items",
     response_model=DevlogSoumissionItemRead,
@@ -849,19 +961,31 @@ async def list_soumission_items(
 async def create_soumission_item(
     data: DevlogSoumissionItemCreate, db: DBSession, _: CurrentUser
 ):
-    if await GenericCrud(db, DevlogSoumission).get(data.soumission_id) is None:
+    soumission = await GenericCrud(db, DevlogSoumission).get(data.soumission_id)
+    if soumission is None:
         raise HTTPException(status_code=404, detail="Soumission introuvable")
     payload = data.model_dump(exclude_unset=True)
-    # Si l'item appartient à une section, le markup s'applique sur
-    # cost_per_unit pour calculer unit_price. Sinon (item legacy sans
-    # section), unit_price = celui fourni.
-    markup = await _section_markup(db, data.section_id)
-    if markup is not None and (data.cost_per_unit or 0) > 0:
-        payload["unit_price"] = _apply_markup(data.cost_per_unit, markup)
-    payload["total"] = _compute_item_total(
-        data.quantity, payload.get("unit_price", data.unit_price)
-    )
-    obj = DevlogSoumissionItem(**payload)
+
+    if getattr(soumission, "is_devis_dev", False):
+        # Mode devis_dev : pas de markup section, totaux dérivés du
+        # type d'item via ``_apply_devis_dev_totals``.
+        if "item_kind" not in payload or not payload["item_kind"]:
+            payload["item_kind"] = "feature"
+        payload.pop("section_id", None)
+        obj = DevlogSoumissionItem(**payload)
+        _apply_devis_dev_totals(obj, soumission)
+    else:
+        # Si l'item appartient à une section, le markup s'applique sur
+        # cost_per_unit pour calculer unit_price. Sinon (item legacy sans
+        # section), unit_price = celui fourni.
+        markup = await _section_markup(db, data.section_id)
+        if markup is not None and (data.cost_per_unit or 0) > 0:
+            payload["unit_price"] = _apply_markup(data.cost_per_unit, markup)
+        payload["total"] = _compute_item_total(
+            data.quantity, payload.get("unit_price", data.unit_price)
+        )
+        obj = DevlogSoumissionItem(**payload)
+
     db.add(obj)
     await db.flush()
     await db.refresh(obj)
@@ -886,13 +1010,18 @@ async def update_soumission_item(
     update_data = data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(obj, field, value)
-    # Si l'item est dans une section et que le coût a été modifié,
-    # re-applique le markup de la section.
-    if obj.section_id is not None:
-        markup = await _section_markup(db, obj.section_id)
-        if markup is not None and obj.cost_per_unit > 0:
-            obj.unit_price = _apply_markup(obj.cost_per_unit, markup)
-    obj.total = _compute_item_total(obj.quantity, obj.unit_price)
+
+    soumission = await GenericCrud(db, DevlogSoumission).get(obj.soumission_id)
+    if soumission is not None and getattr(soumission, "is_devis_dev", False):
+        _apply_devis_dev_totals(obj, soumission)
+    else:
+        # Si l'item est dans une section et que le coût a été modifié,
+        # re-applique le markup de la section.
+        if obj.section_id is not None:
+            markup = await _section_markup(db, obj.section_id)
+            if markup is not None and obj.cost_per_unit > 0:
+                obj.unit_price = _apply_markup(obj.cost_per_unit, markup)
+        obj.total = _compute_item_total(obj.quantity, obj.unit_price)
     await db.flush()
     await db.refresh(obj)
     await _refresh_soumission_amount(db, obj.soumission_id)

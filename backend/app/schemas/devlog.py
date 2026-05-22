@@ -1,4 +1,4 @@
-"""Pydantic schemas — pôle Développement logiciel (clients & leads)."""
+﻿"""Pydantic schemas — pôle Développement logiciel (clients & leads)."""
 
 from __future__ import annotations
 
@@ -200,6 +200,21 @@ class DevlogSoumissionCreate(BaseModel):
     status: str = Field(default="brouillon", max_length=16)
     summary: Optional[str] = None
     notes: Optional[str] = None
+    # --- Refonte « devis_dev » ---------------------------------------
+    is_devis_dev: bool = False
+    marge_recurrente_pct: Optional[float] = Field(
+        default=None, ge=0, le=500
+    )
+    marge_initiale_pct: Optional[float] = Field(
+        default=None, ge=0, le=500
+    )
+    commission_closer_pct: Optional[float] = Field(
+        default=None, ge=0, le=100
+    )
+    taux_dev_horaire: Optional[float] = Field(default=None, ge=0)
+    taux_manager_horaire: Optional[float] = Field(default=None, ge=0)
+    heures_manager: Optional[float] = Field(default=None, ge=0)
+    client_recurring_description: Optional[str] = None
 
 
 class DevlogSoumissionUpdate(BaseModel):
@@ -210,6 +225,21 @@ class DevlogSoumissionUpdate(BaseModel):
     status: Optional[str] = None
     summary: Optional[str] = None
     notes: Optional[str] = None
+    # --- Refonte « devis_dev » ---------------------------------------
+    is_devis_dev: Optional[bool] = None
+    marge_recurrente_pct: Optional[float] = Field(
+        default=None, ge=0, le=500
+    )
+    marge_initiale_pct: Optional[float] = Field(
+        default=None, ge=0, le=500
+    )
+    commission_closer_pct: Optional[float] = Field(
+        default=None, ge=0, le=100
+    )
+    taux_dev_horaire: Optional[float] = Field(default=None, ge=0)
+    taux_manager_horaire: Optional[float] = Field(default=None, ge=0)
+    heures_manager: Optional[float] = Field(default=None, ge=0)
+    client_recurring_description: Optional[str] = None
 
 
 class DevlogSoumissionRead(BaseModel):
@@ -225,6 +255,15 @@ class DevlogSoumissionRead(BaseModel):
     notes: Optional[str]
     created_at: datetime
     updated_at: datetime
+    # --- Refonte « devis_dev » ---------------------------------------
+    is_devis_dev: bool = False
+    marge_recurrente_pct: Optional[float] = None
+    marge_initiale_pct: Optional[float] = None
+    commission_closer_pct: Optional[float] = None
+    taux_dev_horaire: Optional[float] = None
+    taux_manager_horaire: Optional[float] = None
+    heures_manager: Optional[float] = None
+    client_recurring_description: Optional[str] = None
 
 
 # --------------------------------------------------------------------------
@@ -242,6 +281,9 @@ class DevlogSoumissionItemCreate(BaseModel):
     cost_per_unit: float = Field(default=0, ge=0)
     unit_price: float = Field(default=0, ge=0)
     notes: Optional[str] = None
+    # --- Refonte « devis_dev » ---------------------------------------
+    item_kind: Optional[str] = Field(default=None, max_length=20)
+    heures: Optional[float] = Field(default=None, ge=0)
 
 
 class DevlogSoumissionItemUpdate(BaseModel):
@@ -253,6 +295,9 @@ class DevlogSoumissionItemUpdate(BaseModel):
     cost_per_unit: Optional[float] = Field(default=None, ge=0)
     unit_price: Optional[float] = Field(default=None, ge=0)
     notes: Optional[str] = None
+    # --- Refonte « devis_dev » ---------------------------------------
+    item_kind: Optional[str] = Field(default=None, max_length=20)
+    heures: Optional[float] = Field(default=None, ge=0)
 
 
 class DevlogSoumissionItemRead(BaseModel):
@@ -271,6 +316,67 @@ class DevlogSoumissionItemRead(BaseModel):
     notes: Optional[str]
     created_at: datetime
     updated_at: datetime
+    # --- Refonte « devis_dev » ---------------------------------------
+    item_kind: str = "feature"
+    heures: Optional[float] = None
+
+
+# --------------------------------------------------------------------------
+# DevisPreview (refonte « devis_dev ») — résultat de compute_devis()
+# --------------------------------------------------------------------------
+
+
+class DevisPreviewRecurringItem(BaseModel):
+    id: Optional[int] = None
+    description: str
+    cost_per_unit: float
+
+
+class DevisPreviewRecurring(BaseModel):
+    total_owner_cost: float
+    total_client_amount: float
+    marge_amount: float
+    marge_pct: float
+    items_breakdown: list[DevisPreviewRecurringItem]
+
+
+class DevisPreviewFeatureClient(BaseModel):
+    id: Optional[int] = None
+    description: str
+    heures: float
+    prix_client: float
+
+
+class DevisPreviewFixedClient(BaseModel):
+    id: Optional[int] = None
+    description: str
+    cost_per_unit: float
+    prix_client: float
+
+
+class DevisPreviewInitial(BaseModel):
+    couts_dev: float
+    cout_manager: float
+    frais_fixes_total: float
+    base: float
+    closing: float
+    total_avant_marge: float
+    total_apres_marge: float
+    total_final: float
+    marge_amount: float
+    marge_pct: float
+    closer_pct: float
+    taux_dev_horaire: float
+    taux_manager_horaire: float
+    heures_manager: float
+    features_client: list[DevisPreviewFeatureClient]
+    frais_fixes_client: list[DevisPreviewFixedClient]
+
+
+class DevisPreview(BaseModel):
+    is_invalid: bool
+    recurring: DevisPreviewRecurring
+    initial: DevisPreviewInitial
 
 
 # --------------------------------------------------------------------------
