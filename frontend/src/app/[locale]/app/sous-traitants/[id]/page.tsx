@@ -91,7 +91,7 @@ export default function SousTraitantDetailPage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
-  const [region, setRegion] = useState("");
+  const [regions, setRegions] = useState<string[]>([]);
   const [rbqLicense, setRbqLicense] = useState("");
   const [rbqExpiresAt, setRbqExpiresAt] = useState("");
   const [insProvider, setInsProvider] = useState("");
@@ -123,7 +123,12 @@ export default function SousTraitantDetailPage() {
         setEmail(data.email || "");
         setPhone(data.phone || "");
         setAddress(data.address || "");
-        setRegion(data.region || "");
+        setRegions(
+          (data.region || "")
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        );
         setRbqLicense(data.rbq_license || "");
         setRbqExpiresAt(data.rbq_expires_at || "");
         setInsProvider(data.insurance_provider || "");
@@ -160,7 +165,12 @@ export default function SousTraitantDetailPage() {
       email !== (st.email || "") ||
       phone !== (st.phone || "") ||
       address !== (st.address || "") ||
-      region !== (st.region || "") ||
+      regions.join(",") !==
+        (st.region || "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .join(",") ||
       rbqLicense !== (st.rbq_license || "") ||
       rbqExpiresAt !== (st.rbq_expires_at || "") ||
       insProvider !== (st.insurance_provider || "") ||
@@ -177,7 +187,7 @@ export default function SousTraitantDetailPage() {
       notes !== (st.notes || "")
     );
   }, [
-    st, fullName, contactName, email, phone, address, region, rbqLicense,
+    st, fullName, contactName, email, phone, address, regions, rbqLicense,
     rbqExpiresAt, insProvider, insPolicy, insExpiresAt, trades, hourlyRate,
     rating, competence, availability, punctuality, quality, active, notes
   ]);
@@ -193,7 +203,7 @@ export default function SousTraitantDetailPage() {
         email: email.trim() || null,
         phone: phone.trim() || null,
         address: address.trim() || null,
-        region: region || null,
+        region: regions.length ? regions.join(", ") : null,
         rbq_license: rbqLicense.trim() || null,
         rbq_expires_at: rbqExpiresAt || null,
         insurance_provider: insProvider.trim() || null,
@@ -385,22 +395,40 @@ export default function SousTraitantDetailPage() {
                       />
                     </div>
                     <div>
-                      <label htmlFor="region" className="label">
-                        Région desservie
-                      </label>
-                      <select
-                        id="region"
-                        value={region}
-                        onChange={(e) => setRegion(e.target.value)}
-                        className="input"
-                      >
-                        <option value="">— Choisir une région —</option>
-                        {REGIONS.map((r) => (
-                          <option key={r} value={r}>
-                            {r}
-                          </option>
-                        ))}
-                      </select>
+                      <label className="label">Régions desservies</label>
+                      <p className="mt-0.5 text-xs text-white/50">
+                        Coche toutes les régions où ce sous-traitant
+                        accepte des mandats.
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {REGIONS.map((r) => {
+                          const checked = regions.includes(r);
+                          return (
+                            <label
+                              key={r}
+                              className={`flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs transition ${
+                                checked
+                                  ? "border-accent-500 bg-accent-500/10 text-white"
+                                  : "border-brand-800 bg-brand-900 text-white/70 hover:border-accent-500/60"
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) =>
+                                  setRegions((rs) =>
+                                    e.target.checked
+                                      ? [...rs, r]
+                                      : rs.filter((x) => x !== r)
+                                  )
+                                }
+                                className="h-3.5 w-3.5"
+                              />
+                              {r}
+                            </label>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
                 </section>

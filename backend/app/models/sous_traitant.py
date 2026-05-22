@@ -25,11 +25,12 @@ class SousTraitant(Base, TimestampUpdateMixin):
     email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True, index=True)
     phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    # Région principale desservie — classement parmi un ensemble fixe
-    # de secteurs (Montréal, Longueuil, Laval, Sorel, Châteauguay,
-    # Saint-Constant, Vaudreuil).
+    # Régions desservies — liste séparée par virgules parmi un
+    # ensemble fixe (Montréal, Longueuil, Laval, Sorel, Châteauguay,
+    # Saint-Constant, Vaudreuil). Un sous-traitant peut couvrir
+    # plusieurs régions ; même format que `trades`.
     region: Mapped[Optional[str]] = mapped_column(
-        String(32), nullable=True, index=True
+        String(255), nullable=True, index=True
     )
 
     # RBQ (Regie du batiment du Quebec) licensing

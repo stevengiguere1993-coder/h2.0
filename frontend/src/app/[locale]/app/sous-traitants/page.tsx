@@ -117,7 +117,14 @@ export default function SousTraitantsPage() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter((x) => {
-      if (regionFilter && x.region !== regionFilter) return false;
+      if (
+        regionFilter &&
+        !(x.region || "")
+          .split(",")
+          .map((s) => s.trim())
+          .includes(regionFilter)
+      )
+        return false;
       if (!q) return true;
       return (
         x.full_name.toLowerCase().includes(q) ||

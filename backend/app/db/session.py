@@ -83,7 +83,7 @@ async def init_db() -> None:
             ("sous_traitants", "availability_rating", "INTEGER"),
             ("sous_traitants", "punctuality_rating", "INTEGER"),
             ("sous_traitants", "quality_rating", "INTEGER"),
-            ("sous_traitants", "region", "VARCHAR(32)"),
+            ("sous_traitants", "region", "VARCHAR(255)"),
             ("factures", "next_reminder_at", "TIMESTAMP WITH TIME ZONE"),
             ("soumissions", "qbo_estimate_id", "VARCHAR(64)"),
             ("soumissions", "qbo_doc_number", "VARCHAR(64)"),
@@ -777,6 +777,19 @@ async def init_db() -> None:
                 text(
                     "ALTER TABLE mtl_property_units "
                     "ALTER COLUMN region TYPE VARCHAR(32)"
+                )
+            )
+        except Exception:
+            pass
+
+        # Élargit sous_traitants.region : créée en VARCHAR(32) (une
+        # seule région), on accepte désormais une liste séparée par
+        # virgules pour permettre plusieurs régions par sous-traitant.
+        try:
+            await conn.execute(
+                text(
+                    "ALTER TABLE sous_traitants "
+                    "ALTER COLUMN region TYPE VARCHAR(255)"
                 )
             )
         except Exception:

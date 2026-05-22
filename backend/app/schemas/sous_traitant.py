@@ -14,7 +14,7 @@ class SousTraitantCreate(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = Field(default=None, max_length=50)
     address: Optional[str] = Field(default=None, max_length=500)
-    region: Optional[str] = Field(default=None, max_length=32)
+    region: Optional[str] = Field(default=None, max_length=255)
     rbq_license: Optional[str] = Field(default=None, max_length=32)
     rbq_expires_at: Optional[date] = None
     insurance_provider: Optional[str] = Field(default=None, max_length=255)
