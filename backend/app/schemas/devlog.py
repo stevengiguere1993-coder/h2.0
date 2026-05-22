@@ -1,4 +1,4 @@
-﻿﻿"""Pydantic schemas — pôle Développement logiciel (clients & leads)."""
+"""Pydantic schemas — pôle Développement logiciel (clients & leads)."""
 
 from __future__ import annotations
 
