@@ -173,9 +173,19 @@ async def chat(
     max_tokens: int = 1024,
     temperature: float = 0.7,
     model: Optional[str] = None,
+    prefer: Optional[str] = None,
 ) -> CompletionResult:
-    """Multi-turn chat. Mêmes garanties de fallback que ``complete()``."""
+    """Multi-turn chat. Mêmes garanties de fallback que ``complete()``.
+
+    ``prefer`` : nom d'un provider (``"groq"``, ``"gemini"``…) à placer
+    EN TÊTE de la chaîne, devant l'ordre habituel. Les autres restent
+    disponibles en fallback. Utile pour les usages sensibles à la
+    latence et au quota — ex. la secrétaire téléphonique vise Groq
+    (gratuit, ultra-rapide) plutôt que Gemini (quota gratuit serré).
+    """
     chain = _build_chain()
+    if prefer:
+        chain = sorted(chain, key=lambda p: 0 if p.name == prefer else 1)
     last_err: Optional[Exception] = None
     for p in chain:
         try:

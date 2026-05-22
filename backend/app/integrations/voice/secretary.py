@@ -2,8 +2,9 @@
 
 Tour-par-tour : on alimente Claude avec l'historique de la conversation
 (turns) et il décide ce que la secrétaire doit dire/faire ensuite. Le
-provider IA est résolu via `app.integrations.ai.chat()` qui cascade
-Gemini → Anthropic → Groq en cas de panne.
+provider IA est résolu via `app.integrations.ai.chat(prefer="groq")` :
+la secrétaire vise Groq (gratuit, ultra-rapide, quota généreux — adapté
+au téléphone), avec Gemini puis Anthropic en secours.
 
 Actions possibles :
 
@@ -407,6 +408,10 @@ async def decide_next_turn(
             system=system,
             max_tokens=500,
             temperature=0.4,
+            # Le téléphone est sensible à la latence et au quota : Groq
+            # (gratuit, ultra-rapide) en priorité, Gemini / Anthropic
+            # seulement en secours.
+            prefer="groq",
         )
         return _parse_decision(result.text)
     except Exception as exc:  # noqa: BLE001
