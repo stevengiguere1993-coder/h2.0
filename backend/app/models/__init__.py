@@ -23,6 +23,7 @@ from app.models.contact_hide import ContactHide  # noqa: F401
 from app.models.contact_request import ContactRequest
 from app.models.contact_request_photo import ContactRequestPhoto
 from app.models.devlog_client import DevlogClient  # noqa: F401
+from app.models.devlog_contract import DevlogContract  # noqa: F401
 from app.models.devlog_invoice import DevlogInvoice  # noqa: F401
 from app.models.devlog_invoice_item import DevlogInvoiceItem  # noqa: F401
 from app.models.devlog_lead import DevlogLead  # noqa: F401
@@ -224,6 +225,7 @@ __all__ = [
     "ContactRequest",
     "ContactRequestPhoto",
     "DevlogClient",
+    "DevlogContract",
     "DevlogInvoice",
     "DevlogInvoiceItem",
     "DevlogLead",

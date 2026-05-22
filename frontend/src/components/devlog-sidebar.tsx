@@ -5,6 +5,7 @@ import {
   Calendar,
   Clock,
   Code2,
+  FileSignature,
   FileText,
   FolderKanban,
   HardHat,
@@ -46,6 +47,11 @@ const DEVLOG_SECTIONS: NavSection[] = [
         href: "/dev-logiciel/soumissions",
         label: "Soumissions",
         icon: FileText
+      },
+      {
+        href: "/dev-logiciel/contrats",
+        label: "Contrats",
+        icon: FileSignature
       },
       { href: "/dev-logiciel/clients", label: "Clients", icon: Users }
     ]
