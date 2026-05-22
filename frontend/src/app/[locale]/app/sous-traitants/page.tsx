@@ -17,6 +17,16 @@ import { authedFetch } from "@/lib/auth";
 import { Link } from "@/i18n/navigation";
 import { formatPhone } from "@/lib/utils";
 
+const REGIONS = [
+  "Montréal",
+  "Longueuil",
+  "Laval",
+  "Sorel",
+  "Châteauguay",
+  "Saint-Constant",
+  "Vaudreuil",
+];
+
 type SousTraitant = {
   id: number;
   full_name: string;
@@ -24,6 +34,7 @@ type SousTraitant = {
   email: string | null;
   phone: string | null;
   address: string | null;
+  region: string | null;
   rbq_license: string | null;
   rbq_expires_at: string | null;
   insurance_provider: string | null;
@@ -79,6 +90,7 @@ export default function SousTraitantsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [regionFilter, setRegionFilter] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -104,17 +116,20 @@ export default function SousTraitantsPage() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter(
-      (x) =>
+    return items.filter((x) => {
+      if (regionFilter && x.region !== regionFilter) return false;
+      if (!q) return true;
+      return (
         x.full_name.toLowerCase().includes(q) ||
         (x.contact_name || "").toLowerCase().includes(q) ||
         (x.email || "").toLowerCase().includes(q) ||
         (x.phone || "").includes(q) ||
         (x.trades || "").toLowerCase().includes(q) ||
+        (x.region || "").toLowerCase().includes(q) ||
         (x.rbq_license || "").toLowerCase().includes(q)
-    );
-  }, [items, search]);
+      );
+    });
+  }, [items, search, regionFilter]);
 
   return (
     <>
@@ -140,6 +155,31 @@ export default function SousTraitantsPage() {
             {error}
           </p>
         ) : null}
+
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <label htmlFor="region_filter" className="text-xs text-white/60">
+            Région
+          </label>
+          <select
+            id="region_filter"
+            value={regionFilter}
+            onChange={(e) => setRegionFilter(e.target.value)}
+            className="input w-auto"
+          >
+            <option value="">Toutes les régions</option>
+            {REGIONS.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+          {regionFilter ? (
+            <span className="text-xs text-white/40">
+              {filtered.length} sous-traitant
+              {filtered.length > 1 ? "s" : ""}
+            </span>
+          ) : null}
+        </div>
 
         {loading ? (
           <div className="flex min-h-[40vh] items-center justify-center">
@@ -209,6 +249,12 @@ function Card({ st }: { st: SousTraitant }) {
 
       {/* Contact */}
       <div className="space-y-1 text-xs text-white/70">
+        {st.region ? (
+          <p className="flex items-center gap-1.5 text-accent-500/90">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent-500" />
+            <span>{st.region}</span>
+          </p>
+        ) : null}
         {st.phone ? (
           <p className="flex items-center gap-1.5">
             <Phone className="h-3 w-3" /> <span>{formatPhone(st.phone)}</span>
