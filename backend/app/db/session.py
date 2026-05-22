@@ -577,6 +577,21 @@ async def init_db() -> None:
             ),
             ("devlog_soumissions", "signed_name", "VARCHAR(255)"),
             ("devlog_soumissions", "signed_ip", "VARCHAR(64)"),
+            # Envoi PDF + consultation publique des factures devlog
+            # (pièce #5 vague 1). `due_date` existe déjà dans le modèle,
+            # on ajoute le token public, l'horodatage d'envoi et celui
+            # du marquage manuel « payée » (en attendant Stripe).
+            ("devlog_invoices", "signature_token", "VARCHAR(64)"),
+            (
+                "devlog_invoices",
+                "sent_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
+            (
+                "devlog_invoices",
+                "paid_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
             (
                 "devlog_soumission_items",
                 "item_kind",

@@ -79,6 +79,14 @@ from app.schemas.devlog import (
     DevlogTimeEntryUpdate,
 )
 from app.services.devlog_devis_calc import compute_devis
+from app.services.devlog_invoice_pdf import (
+    compute_invoice_totals,
+    generate_invoice_pdf,
+)
+from app.services.devlog_invoice_send import (
+    DevlogInvoiceSendError,
+    send_invoice_email,
+)
 from app.services.devlog_soumission_pdf import generate_devis_pdf
 from app.services.devlog_soumission_send import (
     DevlogSoumissionSendError,
@@ -701,6 +709,121 @@ invoices_router = _make_crud_router(
     read_schema=DevlogInvoiceRead,
     not_found="Facture introuvable",
 )
+
+
+# --------------------------------------------------------------------------
+# Envoi PDF + page publique de consultation (pièce #5, vague 1, mai 2026)
+# --------------------------------------------------------------------------
+
+# Router dédié aux automations sur factures, registered AVANT
+# `invoices_router` côté router.py pour que /devlog/invoices/{id}/send
+# matche avant le PATCH générique de la CRUD.
+invoice_automations_router = APIRouter(prefix="/devlog/invoices", tags=["devlog"])
+
+
+def _public_base_url() -> str:
+    import os as _os
+
+    return (
+        _os.getenv("PUBLIC_SITE_URL") or "https://immohorizon.com"
+    ).rstrip("/")
+
+
+class _InvoiceSendResult(BaseModel):
+    success: bool
+    sent_at: Optional[str] = None
+    signature_token: Optional[str] = None
+    public_url: Optional[str] = None
+
+
+@invoice_automations_router.post(
+    "/{invoice_id}/send",
+    response_model=_InvoiceSendResult,
+    summary=(
+        "Envoie la facture au client (PDF + email + génération du token "
+        "de consultation publique)"
+    ),
+)
+async def send_invoice(
+    invoice_id: int, db: DBSession, _: CurrentUser
+):
+    invoice = await GenericCrud(db, DevlogInvoice).get(invoice_id)
+    if invoice is None:
+        raise HTTPException(status_code=404, detail="Facture introuvable")
+    if invoice.status == "payee":
+        raise HTTPException(
+            status_code=400,
+            detail="Facture déjà payée — envoi inutile.",
+        )
+    if invoice.status == "annulee":
+        raise HTTPException(
+            status_code=400,
+            detail="Facture annulée — envoi impossible.",
+        )
+    try:
+        invoice = await send_invoice_email(db, invoice_id)
+    except DevlogInvoiceSendError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _InvoiceSendResult(
+        success=True,
+        sent_at=(
+            invoice.sent_at.isoformat()
+            if invoice.sent_at
+            else None
+        ),
+        signature_token=invoice.signature_token,
+        public_url=(
+            f"{_public_base_url()}/devlog/pay-invoice/{invoice.signature_token}"
+            if invoice.signature_token
+            else None
+        ),
+    )
+
+
+@invoice_automations_router.get(
+    "/{invoice_id}/pdf",
+    summary="PDF de la facture (vue client)",
+)
+async def get_invoice_pdf(
+    invoice_id: int, db: DBSession, _: CurrentUser
+):
+    invoice = await GenericCrud(db, DevlogInvoice).get(invoice_id)
+    if invoice is None:
+        raise HTTPException(status_code=404, detail="Facture introuvable")
+    pdf_bytes = await generate_invoice_pdf(db, invoice_id)
+    label = invoice.number or f"facture-{invoice_id}"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{label}.pdf"',
+        },
+    )
+
+
+@invoice_automations_router.post(
+    "/{invoice_id}/mark-paid",
+    response_model=DevlogInvoiceRead,
+    summary="Marquer la facture comme payée (workflow manuel)",
+)
+async def mark_invoice_paid(
+    invoice_id: int, db: DBSession, _: CurrentUser
+):
+    from datetime import datetime as _dt, timezone as _tz
+
+    invoice = await GenericCrud(db, DevlogInvoice).get(invoice_id)
+    if invoice is None:
+        raise HTTPException(status_code=404, detail="Facture introuvable")
+    if invoice.status == "annulee":
+        raise HTTPException(
+            status_code=400,
+            detail="Facture annulée — impossible de la marquer payée.",
+        )
+    invoice.status = "payee"
+    invoice.paid_at = _dt.now(_tz.utc)
+    await db.flush()
+    await db.refresh(invoice)
+    return DevlogInvoiceRead.model_validate(invoice)
 
 
 # --------------------------------------------------------------------------

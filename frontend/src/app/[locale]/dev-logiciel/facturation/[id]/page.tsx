@@ -4,8 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   ArrowLeft,
+  CheckCircle2,
+  Copy,
   Download,
+  FileDown,
   Loader2,
+  Mail,
   Plus,
   Send,
   Trash2,
@@ -28,9 +32,15 @@ type Invoice = {
   issued_date: string | null;
   due_date: string | null;
   notes: string | null;
+  signature_token: string | null;
+  sent_at: string | null;
+  paid_at: string | null;
   created_at: string;
   updated_at: string;
 };
+
+const TPS_RATE = 0.05;
+const TVQ_RATE = 0.09975;
 
 type Item = {
   id: number;
@@ -299,18 +309,94 @@ export default function DevlogInvoiceDetailPage() {
     }
   }
 
+  const [sending, setSending] = useState(false);
+  const [copyOk, setCopyOk] = useState(false);
+
   async function markPaid() {
     try {
-      const r = await authedFetch(`/api/v1/devlog/invoices/${invoiceId}`, {
-        method: "PATCH",
-        body: JSON.stringify({ status: "payee" })
-      });
+      const r = await authedFetch(
+        `/api/v1/devlog/invoices/${invoiceId}/mark-paid`,
+        { method: "POST" }
+      );
       if (!r.ok) throw new Error();
       await loadAll();
     } catch {
       setError("Mise à jour impossible");
     }
   }
+
+  async function sendInvoice() {
+    if (sending) return;
+    const ok = await confirm({
+      title: "Envoyer la facture au client ?",
+      description:
+        "Le PDF sera généré et envoyé par courriel. Un lien public " +
+        "permettra au client de consulter la facture en ligne.",
+      confirmLabel: "Envoyer"
+    });
+    if (!ok) return;
+    setSending(true);
+    try {
+      const r = await authedFetch(
+        `/api/v1/devlog/invoices/${invoiceId}/send`,
+        { method: "POST" }
+      );
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 200) || "Envoi impossible");
+      }
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Envoi impossible");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function publicUrl(): string | null {
+    if (!inv?.signature_token) return null;
+    const origin =
+      typeof window !== "undefined" ? window.location.origin : "";
+    return `${origin}/devlog/pay-invoice/${inv.signature_token}`;
+  }
+
+  async function copyPublicLink() {
+    const url = publicUrl();
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopyOk(true);
+      window.setTimeout(() => setCopyOk(false), 1800);
+    } catch {
+      setError("Copie impossible — copie le lien manuellement.");
+    }
+  }
+
+  function fmtDate(iso: string | null): string {
+    if (!iso) return "—";
+    return new Date(iso).toLocaleDateString("fr-CA", {
+      day: "numeric",
+      month: "short",
+      year: "numeric"
+    });
+  }
+
+  const sousTotal = useMemo(
+    () => Number(total.toFixed(2)),
+    [total]
+  );
+  const tps = useMemo(
+    () => Number((sousTotal * TPS_RATE).toFixed(2)),
+    [sousTotal]
+  );
+  const tvq = useMemo(
+    () => Number((sousTotal * TVQ_RATE).toFixed(2)),
+    [sousTotal]
+  );
+  const grandTotal = useMemo(
+    () => Number((sousTotal + tps + tvq).toFixed(2)),
+    [sousTotal, tps, tvq]
+  );
 
   const inputCls = "input text-sm";
 
@@ -381,13 +467,51 @@ export default function DevlogInvoiceDetailPage() {
                   <Download className="h-3.5 w-3.5" />
                   Importer du projet
                 </button>
-                {inv.status === "envoyee" ? (
+                <a
+                  href={`/api/v1/devlog/invoices/${invoiceId}/pdf`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/80 hover:bg-white/10"
+                >
+                  <FileDown className="h-3.5 w-3.5" />
+                  Télécharger PDF
+                </a>
+                {inv.status !== "payee" && inv.status !== "annulee" ? (
                   <button
                     type="button"
-                    onClick={markPaid}
+                    onClick={() => void sendInvoice()}
+                    disabled={sending}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-blue-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-400 disabled:opacity-50"
+                  >
+                    {sending ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Mail className="h-3.5 w-3.5" />
+                    )}
+                    {inv.sent_at ? "Renvoyer" : "Envoyer au client"}
+                  </button>
+                ) : null}
+                {inv.signature_token ? (
+                  <button
+                    type="button"
+                    onClick={() => void copyPublicLink()}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/80 hover:bg-white/10"
+                  >
+                    {copyOk ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-300" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                    {copyOk ? "Copié !" : "Copier le lien public"}
+                  </button>
+                ) : null}
+                {inv.status !== "payee" && inv.status !== "annulee" ? (
+                  <button
+                    type="button"
+                    onClick={() => void markPaid()}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20"
                   >
-                    <Send className="h-3.5 w-3.5" />
+                    <CheckCircle2 className="h-3.5 w-3.5" />
                     Marquer payée
                   </button>
                 ) : null}
@@ -400,6 +524,18 @@ export default function DevlogInvoiceDetailPage() {
                 </button>
               </div>
             </header>
+
+            {inv.status === "payee" && inv.paid_at ? (
+              <div className="mb-3 inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-300">
+                <CheckCircle2 className="h-4 w-4" />
+                Payée le {fmtDate(inv.paid_at)}
+              </div>
+            ) : inv.sent_at ? (
+              <div className="mb-3 inline-flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-xs font-semibold text-blue-300">
+                <Send className="h-4 w-4" />
+                Envoyée le {fmtDate(inv.sent_at)}
+              </div>
+            ) : null}
 
             <section className="mb-4 rounded-2xl border border-brand-800 bg-brand-900 p-5">
               <h2 className="mb-3 text-sm font-bold text-white">En-tête</h2>
@@ -645,11 +781,38 @@ export default function DevlogInvoiceDetailPage() {
                     </tbody>
                     <tfoot>
                       <tr className="border-t border-brand-800">
-                        <td colSpan={4} className="px-2 py-3 text-right text-xs text-white/60">
+                        <td colSpan={4} className="px-2 py-2 text-right text-xs text-white/60">
+                          Sous-total
+                        </td>
+                        <td className="px-2 py-2 text-right text-xs text-white/80">
+                          {fmtAmount(sousTotal)}
+                        </td>
+                        <td></td>
+                      </tr>
+                      <tr>
+                        <td colSpan={4} className="px-2 py-1 text-right text-xs text-white/60">
+                          TPS (5%)
+                        </td>
+                        <td className="px-2 py-1 text-right text-xs text-white/80">
+                          {fmtAmount(tps)}
+                        </td>
+                        <td></td>
+                      </tr>
+                      <tr>
+                        <td colSpan={4} className="px-2 py-1 text-right text-xs text-white/60">
+                          TVQ (9.975%)
+                        </td>
+                        <td className="px-2 py-1 text-right text-xs text-white/80">
+                          {fmtAmount(tvq)}
+                        </td>
+                        <td></td>
+                      </tr>
+                      <tr className="border-t border-brand-800">
+                        <td colSpan={4} className="px-2 py-3 text-right text-xs font-semibold text-white">
                           Total
                         </td>
                         <td className="px-2 py-3 text-right text-base font-bold text-white">
-                          {fmtAmount(total)}
+                          {fmtAmount(grandTotal)}
                         </td>
                         <td></td>
                       </tr>
