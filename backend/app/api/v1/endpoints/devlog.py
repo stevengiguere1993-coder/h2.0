@@ -19,6 +19,7 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DBSession
 from app.db.base import Base
 from app.models.devlog_client import DevlogClient
+from app.models.devlog_contract import DevlogContract
 from app.models.devlog_invoice import DevlogInvoice
 from app.models.devlog_invoice_item import DevlogInvoiceItem
 from app.models.devlog_lead import LEAD_STATUSES, DevlogLead
@@ -34,6 +35,11 @@ from app.schemas.devlog import (
     DevlogClientCreate,
     DevlogClientRead,
     DevlogClientUpdate,
+    DevlogContractCreate,
+    DevlogContractPublicRead,
+    DevlogContractRead,
+    DevlogContractSignRequest,
+    DevlogContractUpdate,
     DevlogInvoiceCreate,
     DevlogInvoiceImportRequest,
     DevlogInvoiceImportResult,
@@ -1423,3 +1429,174 @@ async def plan_to_soumission(
     await _refresh_soumission_amount(db, soumission.id)
     await db.refresh(soumission)
     return DevlogSoumissionRead.model_validate(soumission)
+
+
+# --------------------------------------------------------------------------
+# Contrats electroniques (signature publique avec token)
+# --------------------------------------------------------------------------
+
+import secrets
+from datetime import datetime, timezone
+from fastapi import Request
+
+contracts_router = APIRouter(prefix="/devlog", tags=["devlog"])
+
+
+def _gen_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+@contracts_router.get(
+    "/contracts",
+    response_model=List[DevlogContractRead],
+)
+async def list_contracts(db: DBSession, _: CurrentUser):
+    rows = (
+        await db.execute(
+            select(DevlogContract).order_by(DevlogContract.id.desc())
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+@contracts_router.post(
+    "/contracts",
+    response_model=DevlogContractRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_contract(
+    data: DevlogContractCreate, db: DBSession, _: CurrentUser
+):
+    obj = await GenericCrud(db, DevlogContract).create(data)
+    return DevlogContractRead.model_validate(obj)
+
+
+@contracts_router.get(
+    "/contracts/{contract_id}",
+    response_model=DevlogContractRead,
+)
+async def get_contract(contract_id: int, db: DBSession, _: CurrentUser):
+    obj = await GenericCrud(db, DevlogContract).get(contract_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Contrat introuvable")
+    return DevlogContractRead.model_validate(obj)
+
+
+@contracts_router.patch(
+    "/contracts/{contract_id}",
+    response_model=DevlogContractRead,
+)
+async def update_contract(
+    contract_id: int,
+    data: DevlogContractUpdate,
+    db: DBSession,
+    _: CurrentUser,
+):
+    crud = GenericCrud(db, DevlogContract)
+    obj = await crud.get(contract_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Contrat introuvable")
+    if obj.status == "signe":
+        raise HTTPException(
+            status_code=400,
+            detail="Contrat signe - edition verrouillee.",
+        )
+    obj = await crud.update(obj, data)
+    return DevlogContractRead.model_validate(obj)
+
+
+@contracts_router.delete(
+    "/contracts/{contract_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_contract(
+    contract_id: int, db: DBSession, _: CurrentUser
+):
+    crud = GenericCrud(db, DevlogContract)
+    obj = await crud.get(contract_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Contrat introuvable")
+    await crud.delete(obj)
+
+
+@contracts_router.post(
+    "/contracts/{contract_id}/send",
+    response_model=DevlogContractRead,
+    summary=(
+        "Genere un signature_token (si absent) et passe le contrat en "
+        "envoye. L'admin peut copier le lien public et l'envoyer."
+    ),
+)
+async def send_contract(
+    contract_id: int, db: DBSession, _: CurrentUser
+):
+    obj = await GenericCrud(db, DevlogContract).get(contract_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Contrat introuvable")
+    if not obj.signature_token:
+        obj.signature_token = _gen_token()
+    obj.status = "envoye"
+    obj.sent_at = datetime.now(timezone.utc)
+    await db.flush()
+    return DevlogContractRead.model_validate(obj)
+
+
+# --- Endpoints publics (sans auth - acces par lien token) ---
+
+public_contracts_router = APIRouter(
+    prefix="/public/devlog", tags=["devlog-public"]
+)
+
+
+@public_contracts_router.get(
+    "/contracts/{token}",
+    response_model=DevlogContractPublicRead,
+)
+async def public_get_contract(token: str, db: DBSession):
+    obj = (
+        await db.execute(
+            select(DevlogContract).where(
+                DevlogContract.signature_token == token
+            )
+        )
+    ).scalar_one_or_none()
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Lien invalide")
+    return DevlogContractPublicRead.model_validate(obj)
+
+
+@public_contracts_router.post(
+    "/contracts/{token}/sign",
+    response_model=DevlogContractPublicRead,
+)
+async def public_sign_contract(
+    token: str,
+    data: DevlogContractSignRequest,
+    request: Request,
+    db: DBSession,
+):
+    obj = (
+        await db.execute(
+            select(DevlogContract).where(
+                DevlogContract.signature_token == token
+            )
+        )
+    ).scalar_one_or_none()
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Lien invalide")
+    if obj.status == "signe":
+        # Idempotent : on retourne la version signee sans reecrire.
+        return DevlogContractPublicRead.model_validate(obj)
+    if obj.status == "annule":
+        raise HTTPException(
+            status_code=400, detail="Contrat annule - signature refusee."
+        )
+    obj.status = "signe"
+    obj.signed_at = datetime.now(timezone.utc)
+    obj.signed_name = data.name.strip()[:255]
+    # Best-effort IP capture.
+    fwd = request.headers.get("x-forwarded-for") or ""
+    ip = fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "")
+    obj.signed_ip = (ip or "")[:64]
+    await db.flush()
+    return DevlogContractPublicRead.model_validate(obj)
