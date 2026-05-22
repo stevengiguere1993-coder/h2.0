@@ -264,30 +264,26 @@ async def _compute_finances(
         else:
             members_avg_cost = float(avg_rate)
 
-        # Pré-charge tous les assignees N-M des phases pour ne pas
-        # faire 1 query par phase. Map phase_id → list[employe_id] +
-        # list[sous_traitant_id].
+        # Pré-charge les employés assignés (N-M) à chaque phase pour
+        # ne pas faire 1 query par phase. Les sous-traitants n'entrent
+        # pas dans la main-d'œuvre planifiée — leurs heures et leur
+        # coût sont portés par leur propre contrat.
         from app.models.project_assignees import ProjectPhaseAssignee as _PPA
 
         phase_assignees_emp: dict[int, set[int]] = {}
-        phase_assignees_st: dict[int, set[int]] = {}
         if phases:
             pa_rows = (
                 await db.execute(
                     select(_PPA).where(
-                        _PPA.phase_id.in_([p.id for p in phases])
+                        _PPA.phase_id.in_([p.id for p in phases]),
+                        _PPA.employe_id.is_not(None),
                     )
                 )
             ).scalars().all()
             for pa in pa_rows:
-                if pa.employe_id:
-                    phase_assignees_emp.setdefault(pa.phase_id, set()).add(
-                        pa.employe_id
-                    )
-                if pa.sous_traitant_id:
-                    phase_assignees_st.setdefault(pa.phase_id, set()).add(
-                        pa.sous_traitant_id
-                    )
+                phase_assignees_emp.setdefault(pa.phase_id, set()).add(
+                    pa.employe_id
+                )
 
         for ph in phases:
             # duration_days est décimal (Numeric 6,2) : la planification
@@ -301,45 +297,30 @@ async def _compute_finances(
                 continue
             hours = days * 8
 
-            # Union de TOUS les assignees de la phase (legacy single +
-            # N-M moderne ProjectPhaseAssignee).
+            # Main-d'œuvre planifiée = EMPLOYÉS Horizon assignés à la
+            # phase (legacy single + N-M moderne). Aucun employé sur la
+            # phase — qu'elle soit confiée à un sous-traitant ou non
+            # encore assignée — = 0 h de main-d'œuvre planifiée. On ne
+            # devine pas de personne par défaut : la main-d'œuvre
+            # Horizon doit être assignée explicitement.
             emp_ids: set[int] = set(phase_assignees_emp.get(ph.id, set()))
-            raw_st_ids: set[int] = set(phase_assignees_st.get(ph.id, set()))
             if ph.assignee_employe_id:
                 emp_ids.add(ph.assignee_employe_id)
-            if ph.assignee_sous_traitant_id:
-                raw_st_ids.add(ph.assignee_sous_traitant_id)
-
-            # Main-d'œuvre planifiée = EMPLOYÉS Horizon seulement. Les
-            # sous-traitants (au forfait comme à l'heure) n'entrent PAS
-            # dans les heures prévues : leurs heures et leur coût sont
-            # portés par leur propre contrat, pas par la planification
-            # interne de main-d'œuvre.
-            total_assignees = len(emp_ids)
+            if not emp_ids:
+                continue
 
             # Coût horaire : moyenne des taux réels des employés assignés.
-            if total_assignees > 0:
-                emps = (
-                    await db.execute(
-                        select(Employe).where(Employe.id.in_(emp_ids))
-                    )
-                ).scalars().all()
-                rates = [_real_cost_for_employe(e) for e in emps]
-                cost_per_hour = (
-                    round(sum(rates) / len(rates), 2)
-                    if rates else members_avg_cost
+            emps = (
+                await db.execute(
+                    select(Employe).where(Employe.id.in_(emp_ids))
                 )
-                persons = total_assignees
-            elif raw_st_ids:
-                # Phase entièrement sous-traitée (forfait ou à l'heure) :
-                # 0 h de main-d'œuvre planifiée — heures et coût portés
-                # par le contrat du sous-traitant, pas par la planif.
-                continue
-            else:
-                # Phase non assignée du tout : 1 personne placeholder
-                # au taux moyen équipe (n'amplifie pas par #membres).
-                cost_per_hour = members_avg_cost
-                persons = 1
+            ).scalars().all()
+            rates = [_real_cost_for_employe(e) for e in emps]
+            cost_per_hour = (
+                round(sum(rates) / len(rates), 2)
+                if rates else members_avg_cost
+            )
+            persons = len(emp_ids)
 
             phase_hours = hours * persons
             projected_labour_hours += phase_hours
