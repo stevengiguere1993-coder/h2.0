@@ -429,7 +429,9 @@ export default async function PillarPage({ params }: Props) {
         </div>
       </section>
 
-      {/* CITIES SERVED (hub interne — boost crawl + maillage) */}
+      {/* CITIES SERVED (hub interne — boost crawl + maillage).
+          Liste repliée par défaut : les liens restent dans le DOM
+          (donc indexés par Google) sans noyer le visiteur. */}
       <section className="border-b border-brand-800">
         <div className="mx-auto max-w-6xl px-4 py-16 lg:px-6">
           <h2 className="text-2xl font-bold text-white sm:text-3xl">
@@ -437,36 +439,44 @@ export default async function PillarPage({ params }: Props) {
           </h2>
           <p className="mt-2 max-w-3xl text-white/70">
             Construction et rénovation sur l&apos;île de Montréal, à Laval,
-            sur la Rive-Sud et la Rive-Nord. Choisissez votre ville pour
-            voir les services offerts et les délais typiques.
+            sur la Rive-Sud et la Rive-Nord.
           </p>
-          <div className="mt-6 grid gap-2 text-sm md:grid-cols-2 lg:grid-cols-3">
-            {SEO_CITIES.map((c) => (
-              <Link
-                key={c.slug}
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                href={`/renovation/cuisine/${c.slug}` as any}
-                className="inline-flex items-center justify-between gap-2 rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-white/80 transition hover:border-accent-500 hover:text-white"
-              >
-                <span>{c.name}</span>
-                <span className="text-[10px] text-white/40">{c.region}</span>
-              </Link>
-            ))}
-          </div>
-          <p className="mt-4 text-[12px] text-white/50">
-            Votre ville n&apos;est pas listée ?{" "}
-            <Link
-              href="/contact"
-              className="text-accent-300 hover:underline"
-            >
-              Demandez une soumission
-            </Link>{" "}
-            — nous évaluons toutes les municipalités du Grand Montréal.
-          </p>
+          <details className="mt-5 rounded-2xl border border-brand-800 bg-brand-900">
+            <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-white">
+              Voir toutes les villes desservies
+            </summary>
+            <div className="border-t border-brand-800 px-5 py-5">
+              <div className="grid gap-2 text-sm md:grid-cols-2 lg:grid-cols-3">
+                {SEO_CITIES.map((c) => (
+                  <Link
+                    key={c.slug}
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    href={`/renovation/cuisine/${c.slug}` as any}
+                    className="inline-flex items-center justify-between gap-2 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-white/80 transition hover:border-accent-500 hover:text-white"
+                  >
+                    <span>{c.name}</span>
+                    <span className="text-[10px] text-white/40">{c.region}</span>
+                  </Link>
+                ))}
+              </div>
+              <p className="mt-4 text-[12px] text-white/50">
+                Votre ville n&apos;est pas listée ?{" "}
+                <Link
+                  href="/contact"
+                  className="text-accent-300 hover:underline"
+                >
+                  Demandez une soumission
+                </Link>{" "}
+                — nous évaluons toutes les municipalités du Grand Montréal.
+              </p>
+            </div>
+          </details>
         </div>
       </section>
 
-      {/* DEEP HUB — toutes les 80 landing pages, en collapsibles compacts */}
+      {/* DEEP HUB — toutes les landing pages service × ville. Replié
+          par défaut : les liens restent dans le DOM (indexés par
+          Google) sans alourdir la page pour le visiteur. */}
       <section className="border-b border-brand-800 bg-brand-900/40">
         <div className="mx-auto max-w-6xl px-4 py-16 lg:px-6">
           <h2 className="text-2xl font-bold text-white sm:text-3xl">
@@ -476,26 +486,33 @@ export default async function PillarPage({ params }: Props) {
             Pour chaque combinaison service × ville, une page détaillée
             avec inclusions, prix et FAQ locale.
           </p>
-          {SEO_SERVICES.map((s) => (
-            <div key={s.slug} className="mt-6">
-              <h3 className="text-sm font-bold uppercase tracking-wider text-accent-300">
-                {s.nameCap}
-              </h3>
-              <ul className="mt-2 flex flex-wrap gap-2 text-[12px]">
-                {SEO_CITIES.map((c) => (
-                  <li key={`${s.slug}-${c.slug}`}>
-                    <Link
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                      href={`/renovation/${s.slug}/${c.slug}` as any}
-                      className="inline-block rounded-md border border-brand-800 bg-brand-900 px-2 py-1 text-white/70 hover:border-accent-500 hover:text-white"
-                    >
-                      {s.nameCap} — {c.name}
-                    </Link>
-                  </li>
-                ))}
-              </ul>
+          <details className="mt-5 rounded-2xl border border-brand-800 bg-brand-900">
+            <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-white">
+              Voir toutes les pages par service et par ville
+            </summary>
+            <div className="border-t border-brand-800 px-5 pb-6">
+              {SEO_SERVICES.map((s) => (
+                <div key={s.slug} className="mt-6">
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-accent-300">
+                    {s.nameCap}
+                  </h3>
+                  <ul className="mt-2 flex flex-wrap gap-2 text-[12px]">
+                    {SEO_CITIES.map((c) => (
+                      <li key={`${s.slug}-${c.slug}`}>
+                        <Link
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          href={`/renovation/${s.slug}/${c.slug}` as any}
+                          className="inline-block rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-white/70 hover:border-accent-500 hover:text-white"
+                        >
+                          {s.nameCap} — {c.name}
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
             </div>
-          ))}
+          </details>
         </div>
       </section>
 
