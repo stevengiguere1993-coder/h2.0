@@ -688,32 +688,40 @@ def parse_text(text: str) -> Dict[str, Any]:
         if v and v >= 1_000:
             out["revenus_bruts"] = v
 
-    # Taxes municipales. On saute un millésime entre parenthèses
-    # (« Municipales (2026) 9 115 $ ») — sinon le regex captait 2026.
-    # Le « $ » final garantit qu'on prend bien le montant.
-    m = re.search(
+    # Taxes municipales. Centris affiche le bloc TAXES en deux
+    # colonnes — mensuel ET annuel (« Municipales (2026) 760 $ …
+    # 9 115 $ »). Le champ vise l'annuel : on capte tous les montants
+    # et on retient le plus grand (l'annuel = 12× le mensuel). On
+    # saute un millésime entre parenthèses, le « $ » final garantit
+    # qu'on prend bien le montant.
+    muni_vals = []
+    for tm in re.finditer(
         r"taxes?\s+municipal\w*\s*(?:\(\s*\d{4}\s*\))?"
         r"[^\d$]{0,8}?([\d][\d\s.,]*\d)\s*\$",
         text,
         flags=re.I,
-    )
-    if m:
-        v = _int_or_none(m.group(1))
+    ):
+        v = _int_or_none(tm.group(1))
         if v and 100 <= v <= 5_000_000:
-            out["taxes_municipales"] = v
+            muni_vals.append(v)
+    if muni_vals:
+        out["taxes_municipales"] = max(muni_vals)
 
-    # Taxes scolaires. « taxes » optionnel — Centris liste juste
+    # Taxes scolaires. Même bloc mensuel/annuel — on garde l'annuel
+    # (plus grand montant). « taxes » optionnel : Centris liste juste
     # « Scolaires (2026) 362 $ » sous l'en-tête TAXES.
-    m = re.search(
+    sco_vals = []
+    for ts in re.finditer(
         r"(?:taxes?\s+)?scolaires?\s*(?:\(\s*\d{4}\s*\))?"
         r"[^\d$]{0,8}?([\d][\d\s.,]*\d)\s*\$",
         text,
         flags=re.I,
-    )
-    if m:
-        v = _int_or_none(m.group(1))
+    ):
+        v = _int_or_none(ts.group(1))
         if v and 50 <= v <= 5_000_000:
-            out["taxes_scolaires"] = v
+            sco_vals.append(v)
+    if sco_vals:
+        out["taxes_scolaires"] = max(sco_vals)
 
     # Assurances. Trailing « $ » exigé : évite de capter la pub
     # « assurances auto et habitation » et vise « Assurances 5 258 $ ».
