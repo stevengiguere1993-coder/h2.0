@@ -23,9 +23,6 @@ from app.models.payment import Payment
 from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.project_phase import ProjectPhase
-from app.models.project_subcontractor_contract import (
-    ProjectSubcontractorContract,
-)
 from app.models.punch import Punch
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
@@ -292,27 +289,6 @@ async def _compute_finances(
                         pa.sous_traitant_id
                     )
 
-        # Contrats sous-traitants du projet. Seuls les sous-traitants
-        # facturés À L'HEURE (billing_mode = flat_hourly) comptent dans
-        # les heures de main-d'œuvre planifiées. Un sous-traitant au
-        # FORFAIT (lump_sum) ou en markup n'ajoute aucune heure : son
-        # coût est couvert par son contrat, pas par notre planification.
-        st_billing: dict[int, str] = {}
-        st_hourly_rate: dict[int, float] = {}
-        ctr_rows = (
-            await db.execute(
-                select(ProjectSubcontractorContract).where(
-                    ProjectSubcontractorContract.project_id == project_id
-                )
-            )
-        ).scalars().all()
-        for c in ctr_rows:
-            st_billing[c.sous_traitant_id] = c.billing_mode
-            if c.flat_hourly_rate is not None:
-                st_hourly_rate[c.sous_traitant_id] = float(
-                    c.flat_hourly_rate
-                )
-
         for ph in phases:
             # duration_days est décimal (Numeric 6,2) : la planification
             # autorise les demi-journées et fractions — 0.5 j = 4 h,
@@ -334,39 +310,30 @@ async def _compute_finances(
             if ph.assignee_sous_traitant_id:
                 raw_st_ids.add(ph.assignee_sous_traitant_id)
 
-            # Sous-traitants : seuls ceux facturés À L'HEURE (contrat
-            # flat_hourly) comptent dans les heures planifiées. Les
-            # sous-traitants au FORFAIT n'ajoutent aucune heure — leur
-            # coût est porté par leur contrat, pas par la planification.
-            hourly_st_ids = {
-                sid
-                for sid in raw_st_ids
-                if st_billing.get(sid) == "flat_hourly"
-            }
+            # Main-d'œuvre planifiée = EMPLOYÉS Horizon seulement. Les
+            # sous-traitants (au forfait comme à l'heure) n'entrent PAS
+            # dans les heures prévues : leurs heures et leur coût sont
+            # portés par leur propre contrat, pas par la planification
+            # interne de main-d'œuvre.
+            total_assignees = len(emp_ids)
 
-            total_assignees = len(emp_ids) + len(hourly_st_ids)
-
-            # Coût horaire : moyenne des taux des assignees comptés.
+            # Coût horaire : moyenne des taux réels des employés assignés.
             if total_assignees > 0:
-                rates: list[float] = []
-                if emp_ids:
-                    emps = (
-                        await db.execute(
-                            select(Employe).where(Employe.id.in_(emp_ids))
-                        )
-                    ).scalars().all()
-                    rates.extend(_real_cost_for_employe(e) for e in emps)
-                for sid in hourly_st_ids:
-                    # Taux du contrat à l'heure du sous-traitant.
-                    rates.append(float(st_hourly_rate.get(sid) or avg_rate))
+                emps = (
+                    await db.execute(
+                        select(Employe).where(Employe.id.in_(emp_ids))
+                    )
+                ).scalars().all()
+                rates = [_real_cost_for_employe(e) for e in emps]
                 cost_per_hour = (
                     round(sum(rates) / len(rates), 2)
                     if rates else members_avg_cost
                 )
                 persons = total_assignees
             elif raw_st_ids:
-                # Phase entièrement sous-traitée au forfait : 0 h de
-                # main-d'œuvre planifiée (coût dans le contrat, pas ici).
+                # Phase entièrement sous-traitée (forfait ou à l'heure) :
+                # 0 h de main-d'œuvre planifiée — heures et coût portés
+                # par le contrat du sous-traitant, pas par la planif.
                 continue
             else:
                 # Phase non assignée du tout : 1 personne placeholder
