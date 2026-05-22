@@ -78,6 +78,7 @@ from app.schemas.devlog import (
     DevlogTimeEntryRead,
     DevlogTimeEntryUpdate,
 )
+from app.services.audit import log_action
 from app.services.devlog_devis_calc import compute_devis
 from app.services.devlog_invoice_pdf import (
     compute_invoice_totals,
@@ -102,18 +103,31 @@ def _make_crud_router(
     update_schema: Type[BaseModel],
     read_schema: Type[BaseModel],
     not_found: str,
+    audit_entity: Optional[str] = None,
 ) -> APIRouter:
     """CRUD générique du pôle — ouvert à tout utilisateur authentifié.
 
     Diffère de ``business.make_crud_router`` : ici les écritures ne
-    sont pas réservées aux managers (petit pôle interne partagé)."""
+    sont pas réservées aux managers (petit pôle interne partagé).
+
+    ``audit_entity`` : si fourni, log les mutations dans audit_logs avec
+    des actions ``{audit_entity}.created/updated/deleted``."""
     router = APIRouter(prefix=prefix, tags=["devlog"])
 
     @router.post(
         "", response_model=read_schema, status_code=status.HTTP_201_CREATED
     )
-    async def create(data: create_schema, db: DBSession, _: CurrentUser):  # type: ignore[valid-type]
+    async def create(data: create_schema, db: DBSession, user: CurrentUser):  # type: ignore[valid-type]
         obj = await GenericCrud(db, model).create(data)
+        if audit_entity:
+            await log_action(
+                db,
+                user=user,
+                action=f"{audit_entity}.created",
+                entity_type=audit_entity,
+                entity_id=getattr(obj, "id", None),
+                details=data.model_dump(exclude_unset=True),
+            )
         return read_schema.model_validate(obj)
 
     @router.get("", response_model=List[read_schema])  # type: ignore[valid-type]
@@ -134,22 +148,40 @@ def _make_crud_router(
 
     @router.patch("/{item_id}", response_model=read_schema)
     async def update_item(
-        item_id: int, data: update_schema, db: DBSession, _: CurrentUser  # type: ignore[valid-type]
+        item_id: int, data: update_schema, db: DBSession, user: CurrentUser  # type: ignore[valid-type]
     ):
         crud = GenericCrud(db, model)
         obj = await crud.get(item_id)
         if obj is None:
             raise HTTPException(status_code=404, detail=not_found)
         obj = await crud.update(obj, data)
+        if audit_entity:
+            await log_action(
+                db,
+                user=user,
+                action=f"{audit_entity}.updated",
+                entity_type=audit_entity,
+                entity_id=item_id,
+                details=data.model_dump(exclude_unset=True),
+            )
         return read_schema.model_validate(obj)
 
     @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-    async def delete_item(item_id: int, db: DBSession, _: CurrentUser):
+    async def delete_item(item_id: int, db: DBSession, user: CurrentUser):
         crud = GenericCrud(db, model)
         obj = await crud.get(item_id)
         if obj is None:
             raise HTTPException(status_code=404, detail=not_found)
         await crud.delete(obj)
+        if audit_entity:
+            await log_action(
+                db,
+                user=user,
+                action=f"{audit_entity}.deleted",
+                entity_type=audit_entity,
+                entity_id=item_id,
+                details=None,
+            )
 
     return router
 
@@ -164,10 +196,22 @@ clients_router = APIRouter(prefix="/devlog/clients", tags=["devlog"])
     "", response_model=DevlogClientRead, status_code=status.HTTP_201_CREATED
 )
 async def create_client(
-    data: DevlogClientCreate, db: DBSession, _: CurrentUser
+    data: DevlogClientCreate, db: DBSession, user: CurrentUser
 ):
     crud = GenericCrud(db, DevlogClient)
     obj = await crud.create(data)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_client.created",
+        entity_type="devlog_client",
+        entity_id=obj.id,
+        details={
+            "name": getattr(obj, "name", None),
+            "email": getattr(obj, "email", None),
+            "company": getattr(obj, "company", None),
+        },
+    )
     return DevlogClientRead.model_validate(obj)
 
 
@@ -196,23 +240,40 @@ async def update_client(
     client_id: int,
     data: DevlogClientUpdate,
     db: DBSession,
-    _: CurrentUser,
+    user: CurrentUser,
 ):
     crud = GenericCrud(db, DevlogClient)
     obj = await crud.get(client_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Client introuvable")
     obj = await crud.update(obj, data)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_client.updated",
+        entity_type="devlog_client",
+        entity_id=client_id,
+        details=data.model_dump(exclude_unset=True),
+    )
     return DevlogClientRead.model_validate(obj)
 
 
 @clients_router.delete("/{client_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_client(client_id: int, db: DBSession, _: CurrentUser):
+async def delete_client(client_id: int, db: DBSession, user: CurrentUser):
     crud = GenericCrud(db, DevlogClient)
     obj = await crud.get(client_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Client introuvable")
+    name = getattr(obj, "name", None)
     await crud.delete(obj)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_client.deleted",
+        entity_type="devlog_client",
+        entity_id=client_id,
+        details={"name": name},
+    )
 
 
 # --------------------------------------------------------------------------
@@ -225,11 +286,24 @@ leads_router = APIRouter(prefix="/devlog/leads", tags=["devlog"])
 @leads_router.post(
     "", response_model=DevlogLeadRead, status_code=status.HTTP_201_CREATED
 )
-async def create_lead(data: DevlogLeadCreate, db: DBSession, _: CurrentUser):
+async def create_lead(data: DevlogLeadCreate, db: DBSession, user: CurrentUser):
     if data.status not in LEAD_STATUSES:
         raise HTTPException(status_code=422, detail="Statut invalide")
     crud = GenericCrud(db, DevlogLead)
     obj = await crud.create(data)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_lead.created",
+        entity_type="devlog_lead",
+        entity_id=obj.id,
+        details={
+            "name": getattr(obj, "name", None),
+            "email": getattr(obj, "email", None),
+            "project_type": getattr(obj, "project_type", None),
+            "source": getattr(obj, "source", None),
+        },
+    )
     return DevlogLeadRead.model_validate(obj)
 
 
@@ -260,7 +334,7 @@ async def get_lead(lead_id: int, db: DBSession, _: CurrentUser):
 
 @leads_router.patch("/{lead_id}", response_model=DevlogLeadRead)
 async def update_lead(
-    lead_id: int, data: DevlogLeadUpdate, db: DBSession, _: CurrentUser
+    lead_id: int, data: DevlogLeadUpdate, db: DBSession, user: CurrentUser
 ):
     crud = GenericCrud(db, DevlogLead)
     obj = await crud.get(lead_id)
@@ -269,6 +343,14 @@ async def update_lead(
     if data.status is not None and data.status not in LEAD_STATUSES:
         raise HTTPException(status_code=422, detail="Statut invalide")
     obj = await crud.update(obj, data)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_lead.updated",
+        entity_type="devlog_lead",
+        entity_id=lead_id,
+        details=data.model_dump(exclude_unset=True),
+    )
     return DevlogLeadRead.model_validate(obj)
 
 
@@ -277,7 +359,7 @@ async def move_lead(
     lead_id: int,
     data: DevlogLeadStatusUpdate,
     db: DBSession,
-    _: CurrentUser,
+    user: CurrentUser,
 ):
     """Déplace un lead dans le kanban (drag & drop entre colonnes)."""
     if data.status not in LEAD_STATUSES:
@@ -286,11 +368,20 @@ async def move_lead(
     obj = await crud.get(lead_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Lead introuvable")
+    from_status = obj.status
     obj.status = data.status
     if data.position is not None:
         obj.position = data.position
     await db.flush()
     await db.refresh(obj)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_lead.status_changed",
+        entity_type="devlog_lead",
+        entity_id=lead_id,
+        details={"from_status": from_status, "to_status": data.status},
+    )
     return DevlogLeadRead.model_validate(obj)
 
 
@@ -298,7 +389,7 @@ async def move_lead(
     "/{lead_id}/convert", response_model=DevlogClientRead
 )
 async def convert_lead_to_client(
-    lead_id: int, db: DBSession, _: CurrentUser
+    lead_id: int, db: DBSession, user: CurrentUser
 ):
     """Convertit un lead « gagné » en client du pôle. Idempotent :
     si le lead a déjà un client lié, on renvoie ce client."""
@@ -329,16 +420,33 @@ async def convert_lead_to_client(
     lead.status = "won"
     await db.flush()
 
+    await log_action(
+        db,
+        user=user,
+        action="devlog_lead.converted_to_client",
+        entity_type="devlog_lead",
+        entity_id=lead_id,
+        details={"client_id": client.id},
+    )
     return DevlogClientRead.model_validate(client)
 
 
 @leads_router.delete("/{lead_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_lead(lead_id: int, db: DBSession, _: CurrentUser):
+async def delete_lead(lead_id: int, db: DBSession, user: CurrentUser):
     crud = GenericCrud(db, DevlogLead)
     obj = await crud.get(lead_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Lead introuvable")
+    name = getattr(obj, "name", None)
     await crud.delete(obj)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_lead.deleted",
+        entity_type="devlog_lead",
+        entity_id=lead_id,
+        details={"name": name},
+    )
 
 
 # --------------------------------------------------------------------------
@@ -352,6 +460,7 @@ soumissions_router = _make_crud_router(
     update_schema=DevlogSoumissionUpdate,
     read_schema=DevlogSoumissionRead,
     not_found="Soumission introuvable",
+    audit_entity="devlog_soumission",
 )
 
 
@@ -437,7 +546,7 @@ async def update_soumission_with_automations(
     soumission_id: int,
     data: DevlogSoumissionUpdate,
     db: DBSession,
-    _: CurrentUser,
+    user: CurrentUser,
 ):
     """Override de la mise à jour générique : si le statut passe à
     « acceptee », on provisionne automatiquement le projet (+ client
@@ -485,6 +594,14 @@ async def update_soumission_with_automations(
         and previous_status != "acceptee"
     ):
         await _provision_project_for_soumission(db, obj)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission.updated",
+        entity_type="devlog_soumission",
+        entity_id=soumission_id,
+        details=update_data,
+    )
     return DevlogSoumissionRead.model_validate(obj)
 
 
@@ -507,7 +624,7 @@ async def update_soumission_status(
     soumission_id: int,
     body: _SoumissionStatusBody,
     db: DBSession,
-    _: CurrentUser,
+    user: CurrentUser,
 ):
     """Change le statut de la soumission ET propage côté lead + crée
     le projet si on passe à « acceptee ». Endpoint utilisé par le
@@ -518,6 +635,14 @@ async def update_soumission_status(
     previous_status = soumission.status
     soumission.status = body.status
     await db.flush()
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission.status_changed",
+        entity_type="devlog_soumission",
+        entity_id=soumission_id,
+        details={"from_status": previous_status, "to_status": body.status},
+    )
 
     # Propagation vers le lead (sauf si lead déjà en état terminal).
     if soumission.lead_id is not None:
@@ -577,7 +702,7 @@ async def preview_soumission_devis(
     summary="Crée le projet rattaché à une soumission acceptée",
 )
 async def convert_soumission_to_project(
-    soumission_id: int, db: DBSession, _: CurrentUser
+    soumission_id: int, db: DBSession, user: CurrentUser
 ):
     """Conversion explicite (idempotente) : si la soumission n'est pas
     encore acceptée, on la passe à `acceptee` puis on provisionne le
@@ -589,6 +714,14 @@ async def convert_soumission_to_project(
         soumission.status = "acceptee"
         await db.flush()
     project = await _provision_project_for_soumission(db, soumission)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission.converted_to_project",
+        entity_type="devlog_soumission",
+        entity_id=soumission_id,
+        details={"project_id": project.id},
+    )
     return DevlogProjectRead.model_validate(project)
 
 
@@ -612,7 +745,7 @@ class _SendResult(BaseModel):
     ),
 )
 async def send_soumission(
-    soumission_id: int, db: DBSession, _: CurrentUser
+    soumission_id: int, db: DBSession, user: CurrentUser
 ):
     soumission = await GenericCrud(db, DevlogSoumission).get(soumission_id)
     if soumission is None:
@@ -629,6 +762,18 @@ async def send_soumission(
         soumission = await send_devis_email(db, soumission_id)
     except DevlogSoumissionSendError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission.sent",
+        entity_type="devlog_soumission",
+        entity_id=soumission_id,
+        details={
+            "signature_token": soumission.signature_token,
+            "total": float(soumission.amount or 0),
+            "client_id": soumission.client_id,
+        },
+    )
     return _SendResult(
         success=True,
         sent_at=(
@@ -680,6 +825,7 @@ projects_router = _make_crud_router(
     update_schema=DevlogProjectUpdate,
     read_schema=DevlogProjectRead,
     not_found="Projet introuvable",
+    audit_entity="devlog_project",
 )
 
 
@@ -694,6 +840,7 @@ time_entries_router = _make_crud_router(
     update_schema=DevlogTimeEntryUpdate,
     read_schema=DevlogTimeEntryRead,
     not_found="Saisie d'heures introuvable",
+    audit_entity="devlog_time_entry",
 )
 
 
@@ -708,6 +855,7 @@ invoices_router = _make_crud_router(
     update_schema=DevlogInvoiceUpdate,
     read_schema=DevlogInvoiceRead,
     not_found="Facture introuvable",
+    audit_entity="devlog_invoice",
 )
 
 
@@ -745,7 +893,7 @@ class _InvoiceSendResult(BaseModel):
     ),
 )
 async def send_invoice(
-    invoice_id: int, db: DBSession, _: CurrentUser
+    invoice_id: int, db: DBSession, user: CurrentUser
 ):
     invoice = await GenericCrud(db, DevlogInvoice).get(invoice_id)
     if invoice is None:
@@ -764,6 +912,19 @@ async def send_invoice(
         invoice = await send_invoice_email(db, invoice_id)
     except DevlogInvoiceSendError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await log_action(
+        db,
+        user=user,
+        action="devlog_invoice.sent",
+        entity_type="devlog_invoice",
+        entity_id=invoice_id,
+        details={
+            "number": invoice.number,
+            "total": float(invoice.amount or 0),
+            "client_id": invoice.client_id,
+            "signature_token": invoice.signature_token,
+        },
+    )
     return _InvoiceSendResult(
         success=True,
         sent_at=(
@@ -807,7 +968,7 @@ async def get_invoice_pdf(
     summary="Marquer la facture comme payée (workflow manuel)",
 )
 async def mark_invoice_paid(
-    invoice_id: int, db: DBSession, _: CurrentUser
+    invoice_id: int, db: DBSession, user: CurrentUser
 ):
     from datetime import datetime as _dt, timezone as _tz
 
@@ -823,6 +984,18 @@ async def mark_invoice_paid(
     invoice.paid_at = _dt.now(_tz.utc)
     await db.flush()
     await db.refresh(invoice)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_invoice.paid",
+        entity_type="devlog_invoice",
+        entity_id=invoice_id,
+        details={
+            "paid_at": invoice.paid_at.isoformat() if invoice.paid_at else None,
+            "total": float(invoice.amount or 0),
+            "number": invoice.number,
+        },
+    )
     return DevlogInvoiceRead.model_validate(invoice)
 
 
@@ -837,6 +1010,7 @@ sous_traitants_router = _make_crud_router(
     update_schema=DevlogSousTraitantUpdate,
     read_schema=DevlogSousTraitantRead,
     not_found="Sous-traitant introuvable",
+    audit_entity="devlog_sous_traitant",
 )
 
 
@@ -885,7 +1059,7 @@ async def list_invoice_items(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_invoice_item(
-    data: DevlogInvoiceItemCreate, db: DBSession, _: CurrentUser
+    data: DevlogInvoiceItemCreate, db: DBSession, user: CurrentUser
 ):
     if await GenericCrud(db, DevlogInvoice).get(data.invoice_id) is None:
         raise HTTPException(status_code=404, detail="Facture introuvable")
@@ -896,6 +1070,18 @@ async def create_invoice_item(
     await db.flush()
     await db.refresh(obj)
     await _refresh_invoice_amount(db, data.invoice_id)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_invoice_item.created",
+        entity_type="devlog_invoice_item",
+        entity_id=obj.id,
+        details={
+            "invoice_id": data.invoice_id,
+            "description": getattr(obj, "description", None),
+            "total": float(obj.total or 0),
+        },
+    )
     return DevlogInvoiceItemRead.model_validate(obj)
 
 
@@ -907,7 +1093,7 @@ async def update_invoice_item(
     item_id: int,
     data: DevlogInvoiceItemUpdate,
     db: DBSession,
-    _: CurrentUser,
+    user: CurrentUser,
 ):
     crud = GenericCrud(db, DevlogInvoiceItem)
     obj = await crud.get(item_id)
@@ -920,6 +1106,14 @@ async def update_invoice_item(
     await db.flush()
     await db.refresh(obj)
     await _refresh_invoice_amount(db, obj.invoice_id)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_invoice_item.updated",
+        entity_type="devlog_invoice_item",
+        entity_id=item_id,
+        details=update_data,
+    )
     return DevlogInvoiceItemRead.model_validate(obj)
 
 
@@ -928,7 +1122,7 @@ async def update_invoice_item(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_invoice_item(
-    item_id: int, db: DBSession, _: CurrentUser
+    item_id: int, db: DBSession, user: CurrentUser
 ):
     crud = GenericCrud(db, DevlogInvoiceItem)
     obj = await crud.get(item_id)
@@ -937,6 +1131,14 @@ async def delete_invoice_item(
     invoice_id = obj.invoice_id
     await crud.delete(obj)
     await _refresh_invoice_amount(db, invoice_id)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_invoice_item.deleted",
+        entity_type="devlog_invoice_item",
+        entity_id=item_id,
+        details={"invoice_id": invoice_id},
+    )
 
 
 @invoice_items_router.post(
@@ -947,7 +1149,7 @@ async def import_into_invoice(
     invoice_id: int,
     data: DevlogInvoiceImportRequest,
     db: DBSession,
-    _: CurrentUser,
+    user: CurrentUser,
 ):
     """Ajoute des lignes à la facture en important depuis un projet :
     heures totales + (optionnel) items de la soumission acceptée. Pas
@@ -1019,6 +1221,18 @@ async def import_into_invoice(
 
     await db.flush()
     await _refresh_invoice_amount(db, invoice_id)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_invoice.items_imported",
+        entity_type="devlog_invoice",
+        entity_id=invoice_id,
+        details={
+            "nb_items_added": added,
+            "project_id": data.project_id,
+            "soumission_id": data.soumission_id,
+        },
+    )
     return DevlogInvoiceImportResult(added=added)
 
 
@@ -1164,7 +1378,7 @@ def _apply_devis_dev_totals(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_soumission_item(
-    data: DevlogSoumissionItemCreate, db: DBSession, _: CurrentUser
+    data: DevlogSoumissionItemCreate, db: DBSession, user: CurrentUser
 ):
     soumission = await GenericCrud(db, DevlogSoumission).get(data.soumission_id)
     if soumission is None:
@@ -1195,6 +1409,18 @@ async def create_soumission_item(
     await db.flush()
     await db.refresh(obj)
     await _refresh_soumission_amount(db, data.soumission_id)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission_item.created",
+        entity_type="devlog_soumission_item",
+        entity_id=obj.id,
+        details={
+            "soumission_id": data.soumission_id,
+            "description": getattr(obj, "description", None),
+            "total": float(obj.total or 0),
+        },
+    )
     return DevlogSoumissionItemRead.model_validate(obj)
 
 
@@ -1206,7 +1432,7 @@ async def update_soumission_item(
     item_id: int,
     data: DevlogSoumissionItemUpdate,
     db: DBSession,
-    _: CurrentUser,
+    user: CurrentUser,
 ):
     crud = GenericCrud(db, DevlogSoumissionItem)
     obj = await crud.get(item_id)
@@ -1230,6 +1456,14 @@ async def update_soumission_item(
     await db.flush()
     await db.refresh(obj)
     await _refresh_soumission_amount(db, obj.soumission_id)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission_item.updated",
+        entity_type="devlog_soumission_item",
+        entity_id=item_id,
+        details=update_data,
+    )
     return DevlogSoumissionItemRead.model_validate(obj)
 
 
@@ -1238,7 +1472,7 @@ async def update_soumission_item(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_soumission_item(
-    item_id: int, db: DBSession, _: CurrentUser
+    item_id: int, db: DBSession, user: CurrentUser
 ):
     crud = GenericCrud(db, DevlogSoumissionItem)
     obj = await crud.get(item_id)
@@ -1247,6 +1481,14 @@ async def delete_soumission_item(
     soumission_id = obj.soumission_id
     await crud.delete(obj)
     await _refresh_soumission_amount(db, soumission_id)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission_item.deleted",
+        entity_type="devlog_soumission_item",
+        entity_id=item_id,
+        details={"soumission_id": soumission_id},
+    )
 
 
 # --------------------------------------------------------------------------
@@ -1282,11 +1524,22 @@ async def list_sections(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_section(
-    data: DevlogSoumissionSectionCreate, db: DBSession, _: CurrentUser
+    data: DevlogSoumissionSectionCreate, db: DBSession, user: CurrentUser
 ):
     if await GenericCrud(db, DevlogSoumission).get(data.soumission_id) is None:
         raise HTTPException(status_code=404, detail="Soumission introuvable")
     obj = await GenericCrud(db, DevlogSoumissionSection).create(data)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission_section.created",
+        entity_type="devlog_soumission_section",
+        entity_id=obj.id,
+        details={
+            "soumission_id": data.soumission_id,
+            "name": getattr(obj, "name", None),
+        },
+    )
     return DevlogSoumissionSectionRead.model_validate(obj)
 
 
@@ -1298,7 +1551,7 @@ async def update_section(
     section_id: int,
     data: DevlogSoumissionSectionUpdate,
     db: DBSession,
-    _: CurrentUser,
+    user: CurrentUser,
 ):
     crud = GenericCrud(db, DevlogSoumissionSection)
     obj = await crud.get(section_id)
@@ -1315,6 +1568,14 @@ async def update_section(
     if markup_changed:
         await _refresh_section_items(db, section_id)
         await _refresh_soumission_amount(db, obj.soumission_id)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission_section.updated",
+        entity_type="devlog_soumission_section",
+        entity_id=section_id,
+        details=data.model_dump(exclude_unset=True),
+    )
     return DevlogSoumissionSectionRead.model_validate(obj)
 
 
@@ -1323,7 +1584,7 @@ async def update_section(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_section(
-    section_id: int, db: DBSession, _: CurrentUser
+    section_id: int, db: DBSession, user: CurrentUser
 ):
     crud = GenericCrud(db, DevlogSoumissionSection)
     obj = await crud.get(section_id)
@@ -1334,6 +1595,14 @@ async def delete_section(
     # ON DELETE SET NULL du modèle.
     await crud.delete(obj)
     await _refresh_soumission_amount(db, soumission_id)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission_section.deleted",
+        entity_type="devlog_soumission_section",
+        entity_id=section_id,
+        details={"soumission_id": soumission_id},
+    )
 
 
 @soumission_sections_router.get(
@@ -1507,11 +1776,23 @@ async def list_lead_needs(lead_id: int, db: DBSession, _: CurrentUser):
     status_code=status.HTTP_201_CREATED,
 )
 async def create_lead_need(
-    data: DevlogLeadNeedCreate, db: DBSession, _: CurrentUser
+    data: DevlogLeadNeedCreate, db: DBSession, user: CurrentUser
 ):
     if await GenericCrud(db, DevlogLead).get(data.lead_id) is None:
         raise HTTPException(status_code=404, detail="Lead introuvable")
     obj = await GenericCrud(db, DevlogLeadNeed).create(data)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_lead_need.created",
+        entity_type="devlog_lead_need",
+        entity_id=obj.id,
+        details={
+            "lead_id": data.lead_id,
+            "label": getattr(obj, "label", None),
+            "pole": getattr(obj, "pole", None),
+        },
+    )
     return DevlogLeadNeedRead.model_validate(obj)
 
 
@@ -1523,13 +1804,21 @@ async def update_lead_need(
     need_id: int,
     data: DevlogLeadNeedUpdate,
     db: DBSession,
-    _: CurrentUser,
+    user: CurrentUser,
 ):
     crud = GenericCrud(db, DevlogLeadNeed)
     obj = await crud.get(need_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Besoin introuvable")
     obj = await crud.update(obj, data)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_lead_need.updated",
+        entity_type="devlog_lead_need",
+        entity_id=need_id,
+        details=data.model_dump(exclude_unset=True),
+    )
     return DevlogLeadNeedRead.model_validate(obj)
 
 
@@ -1538,13 +1827,22 @@ async def update_lead_need(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_lead_need(
-    need_id: int, db: DBSession, _: CurrentUser
+    need_id: int, db: DBSession, user: CurrentUser
 ):
     crud = GenericCrud(db, DevlogLeadNeed)
     obj = await crud.get(need_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Besoin introuvable")
+    lead_id = getattr(obj, "lead_id", None)
     await crud.delete(obj)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_lead_need.deleted",
+        entity_type="devlog_lead_need",
+        entity_id=need_id,
+        details={"lead_id": lead_id},
+    )
 
 
 # --- AI : génération d'un plan structuré depuis les besoins du client ----
@@ -1619,7 +1917,7 @@ def _coerce_plan_payload(raw: str) -> dict:
     summary="Génère un plan structuré depuis les besoins du lead (IA)",
 )
 async def generate_lead_plan(
-    lead_id: int, db: DBSession, _: CurrentUser
+    lead_id: int, db: DBSession, user: CurrentUser
 ):
     from app.integrations.ai import (
         AIProviderUnavailable,
@@ -1685,12 +1983,25 @@ async def generate_lead_plan(
 
     try:
         payload = _coerce_plan_payload(res.text)
-        return DevlogLeadPlan.model_validate(payload)
+        plan = DevlogLeadPlan.model_validate(payload)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=502,
             detail=f"Plan IA illisible : {exc}",
         ) from exc
+    await log_action(
+        db,
+        user=user,
+        action="devlog_lead.plan_generated",
+        entity_type="devlog_lead",
+        entity_id=lead_id,
+        details={
+            "sections_count": len(plan.sections),
+            "items_count": sum(len(s.items) for s in plan.sections),
+            "model_used": getattr(res, "model", None),
+        },
+    )
+    return plan
 
 
 @lead_needs_router.post(
@@ -1703,7 +2014,7 @@ async def plan_to_soumission(
     lead_id: int,
     data: DevlogLeadPlanToSoumissionRequest,
     db: DBSession,
-    _: CurrentUser,
+    user: CurrentUser,
 ):
     lead = await GenericCrud(db, DevlogLead).get(lead_id)
     if lead is None:
@@ -1762,6 +2073,14 @@ async def plan_to_soumission(
     await db.flush()
     await _refresh_soumission_amount(db, soumission.id)
     await db.refresh(soumission)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_lead.plan_to_soumission",
+        entity_type="devlog_lead",
+        entity_id=lead_id,
+        details={"soumission_id": soumission.id},
+    )
     return DevlogSoumissionRead.model_validate(soumission)
 
 
@@ -1799,9 +2118,20 @@ async def list_contracts(db: DBSession, _: CurrentUser):
     status_code=status.HTTP_201_CREATED,
 )
 async def create_contract(
-    data: DevlogContractCreate, db: DBSession, _: CurrentUser
+    data: DevlogContractCreate, db: DBSession, user: CurrentUser
 ):
     obj = await GenericCrud(db, DevlogContract).create(data)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_contract.created",
+        entity_type="devlog_contract",
+        entity_id=obj.id,
+        details={
+            "client_id": getattr(obj, "client_id", None),
+            "title": getattr(obj, "title", None),
+        },
+    )
     return DevlogContractRead.model_validate(obj)
 
 
@@ -1824,7 +2154,7 @@ async def update_contract(
     contract_id: int,
     data: DevlogContractUpdate,
     db: DBSession,
-    _: CurrentUser,
+    user: CurrentUser,
 ):
     crud = GenericCrud(db, DevlogContract)
     obj = await crud.get(contract_id)
@@ -1836,6 +2166,14 @@ async def update_contract(
             detail="Contrat signe - edition verrouillee.",
         )
     obj = await crud.update(obj, data)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_contract.updated",
+        entity_type="devlog_contract",
+        entity_id=contract_id,
+        details=data.model_dump(exclude_unset=True),
+    )
     return DevlogContractRead.model_validate(obj)
 
 
@@ -1844,13 +2182,21 @@ async def update_contract(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_contract(
-    contract_id: int, db: DBSession, _: CurrentUser
+    contract_id: int, db: DBSession, user: CurrentUser
 ):
     crud = GenericCrud(db, DevlogContract)
     obj = await crud.get(contract_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Contrat introuvable")
     await crud.delete(obj)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_contract.deleted",
+        entity_type="devlog_contract",
+        entity_id=contract_id,
+        details=None,
+    )
 
 
 @contracts_router.post(
@@ -1862,7 +2208,7 @@ async def delete_contract(
     ),
 )
 async def send_contract(
-    contract_id: int, db: DBSession, _: CurrentUser
+    contract_id: int, db: DBSession, user: CurrentUser
 ):
     obj = await GenericCrud(db, DevlogContract).get(contract_id)
     if obj is None:
@@ -1872,6 +2218,14 @@ async def send_contract(
     obj.status = "envoye"
     obj.sent_at = datetime.now(timezone.utc)
     await db.flush()
+    await log_action(
+        db,
+        user=user,
+        action="devlog_contract.sent",
+        entity_type="devlog_contract",
+        entity_id=contract_id,
+        details={"signature_token": obj.signature_token},
+    )
     return DevlogContractRead.model_validate(obj)
 
 
@@ -1933,5 +2287,16 @@ async def public_sign_contract(
     ip = fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "")
     obj.signed_ip = (ip or "")[:64]
     await db.flush()
+    await log_action(
+        db,
+        user=None,
+        action="devlog_contract.signed",
+        entity_type="devlog_contract",
+        entity_id=obj.id,
+        details={
+            "signed_name": obj.signed_name,
+            "signed_ip": obj.signed_ip,
+        },
+    )
     return DevlogContractPublicRead.model_validate(obj)
 
