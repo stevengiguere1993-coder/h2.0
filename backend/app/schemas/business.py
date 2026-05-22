@@ -387,6 +387,8 @@ class FactureRead(_Base):
     issued_at: Optional[datetime]
     due_at: Optional[datetime]
     paid_at: Optional[datetime]
+    last_reminder_at: Optional[datetime] = None
+    reminder_count: int = 0
     qbo_invoice_id: Optional[str]
     qbo_doc_number: Optional[str]
     internal_notes: Optional[str] = None

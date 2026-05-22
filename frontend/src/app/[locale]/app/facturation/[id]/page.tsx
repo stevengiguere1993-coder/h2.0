@@ -35,6 +35,8 @@ type Facture = {
   issued_at: string | null;
   due_at: string | null;
   paid_at: string | null;
+  last_reminder_at: string | null;
+  reminder_count: number;
   qbo_invoice_id: string | null;
   qbo_doc_number: string | null;
   internal_notes: string | null;
@@ -922,6 +924,74 @@ export default function FactureDetailPage() {
                 </button>
               ) : null}
             </div>
+
+            <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900 p-5">
+              <h2 className="text-sm font-semibold text-white">
+                Suivi de l&apos;envoi et des rappels
+              </h2>
+              <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                <div>
+                  <p className="text-xs text-white/50">Envoyée au client</p>
+                  <p className="mt-0.5 text-sm text-white">
+                    {f.status === "draft"
+                      ? "Pas encore envoyée"
+                      : f.issued_at
+                      ? new Date(f.issued_at).toLocaleDateString("fr-CA", {
+                          day: "numeric",
+                          month: "long",
+                          year: "numeric",
+                        })
+                      : "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-white/50">Rappels envoyés</p>
+                  <p className="mt-0.5 text-sm text-white">
+                    {f.reminder_count > 0
+                      ? `${f.reminder_count} rappel${
+                          f.reminder_count > 1 ? "s" : ""
+                        }`
+                      : "Aucun"}
+                    {f.last_reminder_at
+                      ? ` · dernier le ${new Date(
+                          f.last_reminder_at
+                        ).toLocaleDateString("fr-CA", {
+                          day: "numeric",
+                          month: "long",
+                        })}`
+                      : ""}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-white/50">
+                    Prochain rappel prévu
+                  </p>
+                  <p className="mt-0.5 text-sm text-white">
+                    {(() => {
+                      if (f.status === "paid") return "Facture payée";
+                      if (f.status === "void") return "Facture annulée";
+                      if (f.status === "draft") return "—";
+                      if (f.reminder_count >= 3)
+                        return "Tous les rappels automatiques envoyés";
+                      if (!f.due_at) return "Échéance non définie";
+                      const days =
+                        [1, 15, 30][f.reminder_count] ?? 30;
+                      const next = new Date(f.due_at);
+                      next.setDate(next.getDate() + days);
+                      return next.toLocaleDateString("fr-CA", {
+                        day: "numeric",
+                        month: "long",
+                        year: "numeric",
+                      });
+                    })()}
+                  </p>
+                </div>
+              </div>
+              <p className="mt-3 text-xs text-white/40">
+                Rappels automatiques : J+1 (amical), J+15 (ferme),
+                J+30 (avis final) après l&apos;échéance.
+              </p>
+            </section>
 
             <section className="mt-6 rounded-xl border border-brand-800 bg-brand-900 p-5">
               <label className="flex cursor-pointer items-start gap-2">
