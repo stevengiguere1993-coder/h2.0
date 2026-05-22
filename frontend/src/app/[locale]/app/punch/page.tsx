@@ -18,7 +18,12 @@ import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 
 type Employe = { id: number; full_name: string; email: string | null };
-type Project = { id: number; name: string; status: string };
+type Project = {
+  id: number;
+  name: string;
+  status: string;
+  address: string | null;
+};
 type Prospect = {
   id: number;
   name: string;
@@ -601,11 +606,19 @@ function IdleCard({
             <option value="">— Administration (aucun lien) —</option>
             {projects.length > 0 ? (
               <optgroup label="Projets">
-                {projects.map((p) => (
-                  <option key={`p-${p.id}`} value={`p-${p.id}`}>
-                    {p.name}
-                  </option>
-                ))}
+                {[...projects]
+                  .sort((a, b) =>
+                    (a.address || "￿").localeCompare(
+                      b.address || "￿",
+                      "fr",
+                      { sensitivity: "base" }
+                    )
+                  )
+                  .map((p) => (
+                    <option key={`p-${p.id}`} value={`p-${p.id}`}>
+                      {p.address ? `${p.address} — ${p.name}` : p.name}
+                    </option>
+                  ))}
               </optgroup>
             ) : null}
             {prospects.length > 0 ? (
