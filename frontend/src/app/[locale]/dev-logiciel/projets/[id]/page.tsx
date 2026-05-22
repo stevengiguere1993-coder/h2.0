@@ -64,15 +64,22 @@ type TabId =
   | "finances"
   | "recap";
 
-const TABS: { id: TabId; label: string }[] = [
-  { id: "summary", label: "Résumé" },
-  { id: "planification", label: "Planification" },
-  { id: "agenda", label: "Agenda chantier" },
-  { id: "achats", label: "Achats / PO" },
-  { id: "finances", label: "Finances" },
-  { id: "recap", label: "Récap" },
-  { id: "photos", label: "Photos" },
-  { id: "tasks", label: "Tâches" }
+// Vague 1 (2026-05) : seul l'onglet Résumé est fonctionnel pour le pôle
+// dev-logiciel. Les 7 autres sont des clones visuels du pôle Construction
+// dont les endpoints backend dédiés n'existent pas encore (le backend
+// monte /api/v1/projects/... pour le modèle Construction, pas
+// /api/v1/devlog/projects/...). On garde les onglets visibles mais
+// désactivés avec un placeholder, en attendant la Vague 2 qui créera
+// les endpoints devlog/projects/{id}/(phases|tasks|photos|finances...).
+const TABS: { id: TabId; label: string; available: boolean }[] = [
+  { id: "summary", label: "Résumé", available: true },
+  { id: "planification", label: "Planification", available: false },
+  { id: "agenda", label: "Agenda chantier", available: false },
+  { id: "achats", label: "Achats / PO", available: false },
+  { id: "finances", label: "Finances", available: false },
+  { id: "recap", label: "Récap", available: false },
+  { id: "photos", label: "Photos", available: false },
+  { id: "tasks", label: "Tâches", available: false }
 ];
 
 function fmtMoney(n: number | string | null): string {
@@ -478,25 +485,46 @@ export default function ProjectDetailPage() {
 
             {/* Tabs */}
             <nav className="mt-8 flex gap-1 overflow-x-auto border-b border-brand-800">
-              {TABS.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => {
-                    setTab(t.id);
-                    if (typeof window !== "undefined") {
-                      window.history.replaceState(null, "", `#${t.id}`);
+              {TABS.map((t) => {
+                const isActive = tab === t.id;
+                const baseCls = "px-4 py-2.5 text-sm font-medium transition whitespace-nowrap";
+                const activeCls = isActive
+                  ? "border-b-2 border-blue-500 text-white"
+                  : "text-white/60 hover:text-white";
+                // Style atténué pour les onglets indisponibles : opacity
+                // + italique + curseur not-allowed au hover. On laisse
+                // quand même le clic faire setTab (le contenu affichera
+                // le placeholder « bientôt »).
+                const unavailableCls = t.available
+                  ? ""
+                  : "opacity-60 italic hover:cursor-not-allowed";
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => {
+                      setTab(t.id);
+                      if (typeof window !== "undefined") {
+                        window.history.replaceState(null, "", `#${t.id}`);
+                      }
+                    }}
+                    className={`${baseCls} ${activeCls} ${unavailableCls}`}
+                    aria-disabled={!t.available || undefined}
+                    title={
+                      t.available
+                        ? undefined
+                        : "Section bientôt disponible pour le pôle dev-logiciel"
                     }
-                  }}
-                  className={`px-4 py-2.5 text-sm font-medium transition ${
-                    tab === t.id
-                      ? "border-b-2 border-blue-500 text-white"
-                      : "text-white/60 hover:text-white"
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
+                  >
+                    {t.label}
+                    {!t.available ? (
+                      <span className="ml-1.5 text-[10px] font-normal not-italic text-white/40">
+                        (bientôt)
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
             </nav>
 
             <div className="mt-6">
@@ -525,30 +553,15 @@ export default function ProjectDetailPage() {
                   saving={saving}
                   onSave={saveAll}
                 />
-              ) : tab === "planification" ? (
-                <PlanificationTab projectId={id} />
-              ) : tab === "agenda" ? (
-                <ChantierAgendaTab
-                  projectId={id}
-                  projectName={p?.name || ""}
-                  projectEndDate={p?.end_date || null}
-                  onOpenPhase={() => {
-                    setTab("planification");
-                    if (typeof window !== "undefined") {
-                      window.history.replaceState(null, "", "#planification");
-                    }
-                  }}
-                />
-              ) : tab === "achats" ? (
-                <ProjectAchatsTab projectId={id} />
-              ) : tab === "finances" ? (
-                <FinancesTab projectId={id} />
-              ) : tab === "recap" ? (
-                <RecapTab project={p} />
-              ) : tab === "photos" ? (
-                <PhotosTab projectId={id} />
               ) : (
-                <TasksTab projectId={id} />
+                // Vague 1 : tous les autres onglets (planification, agenda,
+                // achats, finances, récap, photos, tâches) sont clones
+                // visuels du pôle Construction. Leurs sous-composants
+                // appellent des endpoints /api/v1/devlog/projects/{id}/...
+                // qui n'existent pas — on ne les rend donc PAS du tout
+                // (pas de fetch 404 dans le vide). Le placeholder explique
+                // la situation. Vague 2 créera les endpoints dédiés.
+                <UnavailableSection />
               )}
             </div>
           </>
@@ -754,6 +767,30 @@ function Kpi({
         </p>
       </div>
       <p className="mt-2 truncate text-sm font-semibold text-white">{value}</p>
+    </div>
+  );
+}
+
+// Placeholder affiché à la place des onglets cassés (planification,
+// agenda, achats, finances, récap, photos, tâches). Vague 1 — sera
+// remplacé quand les endpoints /api/v1/devlog/projects/{id}/* seront
+// créés en Vague 2. Style cohérent avec le Placeholder du pôle CRM
+// (border-dashed + bg-brand-900/40 + p-10 + text-center).
+function UnavailableSection() {
+  return (
+    <div className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 p-10 text-center">
+      <p className="text-2xl" aria-hidden="true">
+        🚧
+      </p>
+      <p className="mt-3 text-base font-semibold text-white/80">
+        Cette section n&apos;est pas encore disponible pour le pôle
+        dev-logiciel
+      </p>
+      <p className="mx-auto mt-2 max-w-md text-sm text-white/50">
+        Les endpoints backend dédiés sont en cours de développement.
+        En attendant, utilise l&apos;onglet Résumé pour gérer les
+        infos générales du projet.
+      </p>
     </div>
   );
 }
