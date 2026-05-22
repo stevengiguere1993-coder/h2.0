@@ -4,10 +4,10 @@ Facturation d'un client, généralement rattachée à un projet de
 développement.
 """
 
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Date, Float, ForeignKey, String, Text
+from sqlalchemy import Date, DateTime, Float, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -42,6 +42,20 @@ class DevlogInvoice(Base, TimestampUpdateMixin):
     issued_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # --- Envoi PDF + consultation publique (vague 1, mai 2026) ---
+    # Token opaque pour la page publique /devlog/pay-invoice/{token}.
+    signature_token: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    # Horodatage d'envoi par email au client.
+    sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Horodatage du marquage manuel « payée » (en attendant Stripe).
+    paid_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     def __repr__(self) -> str:
         return f"<DevlogInvoice(id={self.id}, number='{self.number}', status='{self.status}')>"

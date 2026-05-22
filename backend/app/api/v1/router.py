@@ -67,6 +67,7 @@ from app.api.v1.endpoints import (
     projects,
     public_bon,
     public_devlog_contact,
+    public_devlog_invoice,
     push,
     public_contract,
     public_devlog_soumission,
@@ -135,6 +136,10 @@ api_router.include_router(devlog.soumission_automations_router)
 api_router.include_router(devlog.soumissions_router)
 api_router.include_router(devlog.projects_router)
 api_router.include_router(devlog.time_entries_router)
+# invoice_automations_router DOIT être registered AVANT invoices_router
+# pour que /devlog/invoices/{id}/send, /pdf et /mark-paid matchent
+# avant le CRUD générique /devlog/invoices/{item_id}.
+api_router.include_router(devlog.invoice_automations_router)
 api_router.include_router(devlog.invoices_router)
 api_router.include_router(devlog.soumission_items_router)
 api_router.include_router(devlog.soumission_sections_router)
@@ -146,6 +151,8 @@ api_router.include_router(devlog.contracts_router)
 api_router.include_router(devlog.public_contracts_router)
 # Page publique signature soumission devis_dev — /public/devlog/soumissions/{token}
 api_router.include_router(public_devlog_soumission.router)
+# Page publique consultation facture devlog — /public/devlog/invoices/{token}
+api_router.include_router(public_devlog_invoice.router)
 # Nested project routes MUST be registered before projects.router so
 # /projects/{id}/photos etc. are matched before /projects/{item_id}.
 api_router.include_router(project_photos.router)

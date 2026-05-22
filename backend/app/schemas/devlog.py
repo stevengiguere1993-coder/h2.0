@@ -583,6 +583,10 @@ class DevlogInvoiceRead(BaseModel):
     issued_date: Optional[date]
     due_date: Optional[date]
     notes: Optional[str]
+    # Envoi + consultation publique (pièce #5, vague 1).
+    signature_token: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    paid_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
