@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.api.deps import DBSession
 from app.models.devlog_lead import DevlogLead, LEAD_PROJECT_TYPES
+from app.services.audit import log_action
 
 log = logging.getLogger(__name__)
 
@@ -241,6 +242,21 @@ async def submit_contact(
     db.add(lead)
     await db.flush()
     await db.refresh(lead)
+
+    # Audit trail (action publique - user=None, IP capturee dans details).
+    await log_action(
+        db,
+        user=None,
+        action="devlog_lead.web_form_submitted",
+        entity_type="devlog_lead",
+        entity_id=lead.id,
+        details={
+            "name": name,
+            "email": email,
+            "project_type": project_type,
+            "ip": ip,
+        },
+    )
 
     # 5. Notification interne (best-effort).
     try:

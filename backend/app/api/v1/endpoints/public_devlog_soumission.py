@@ -34,6 +34,7 @@ from app.api.deps import DBSession
 from app.models.devlog_client import DevlogClient
 from app.models.devlog_soumission import DevlogSoumission
 from app.models.devlog_soumission_item import DevlogSoumissionItem
+from app.services.audit import log_action
 from app.services.devlog_devis_calc import compute_devis
 from app.services.devlog_soumission_pdf import generate_devis_pdf
 
@@ -272,6 +273,24 @@ async def sign_public_soumission(
     soumission.status = "acceptee" if data.accept else "refusee"
     await db.flush()
     await db.refresh(soumission)
+
+    # Audit trail (action publique - user=None, IP capturee dans details).
+    await log_action(
+        db,
+        user=None,
+        action=(
+            "devlog_soumission.signed"
+            if data.accept
+            else "devlog_soumission.refused"
+        ),
+        entity_type="devlog_soumission",
+        entity_id=soumission.id,
+        details={
+            "signed_name": soumission.signed_name,
+            "signed_ip": soumission.signed_ip,
+            "accept": data.accept,
+        },
+    )
 
     # Notification interne best-effort (ne fait pas échouer la signature).
     try:
