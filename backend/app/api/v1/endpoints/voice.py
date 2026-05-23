@@ -1919,6 +1919,79 @@ async def presence_ping(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+class _SDKTranscriptPayload(BaseModel):
+    """Verbatim côté navigateur, envoyé à la fin d'un appel."""
+
+    call_sid: Optional[str] = None
+    parent_call_sid: Optional[str] = None
+    transcript: str
+
+
+@router.post(
+    "/sdk/transcript",
+    summary=(
+        "Stocke le verbatim Web Speech API d'un appel navigateur "
+        "sur la Call correspondante"
+    ),
+)
+async def store_sdk_transcript(
+    payload: _SDKTranscriptPayload,
+    db: DBSession,
+    user: CurrentUser,
+) -> dict:
+    """Reçoit le transcript collecté par le navigateur pendant
+    l'appel (Web Speech API → uniquement notre côté), et l'attache
+    à la Call correspondante.
+
+    Stratégie de match :
+      1. `parent_call_sid` (passé en custom param TwiML pour les
+         appels entrants routés vers le SDK) — préféré.
+      2. `call_sid` — la CallSid vue par le SDK ; correspond au
+         parent pour les appels sortants, au child pour les entrants.
+      3. Aucun match → on logue, on ne crée pas de Call (le
+         transcript est perdu côté UI, mais reste dans les logs).
+    """
+    transcript = (payload.transcript or "").strip()
+    if not transcript:
+        return {"saved": False, "reason": "empty"}
+
+    candidates: list[str] = []
+    if payload.parent_call_sid:
+        candidates.append(payload.parent_call_sid.strip())
+    if payload.call_sid:
+        candidates.append(payload.call_sid.strip())
+
+    call = None
+    for sid in candidates:
+        if not sid:
+            continue
+        call = (
+            await db.execute(
+                select(Call).where(Call.provider_sid == sid)
+            )
+        ).scalar_one_or_none()
+        if call is not None:
+            break
+
+    if call is None:
+        log.info(
+            "SDK transcript non lié (user=%s, sids=%s, len=%d)",
+            user.id,
+            candidates,
+            len(transcript),
+        )
+        return {"saved": False, "matched": False}
+
+    # Append si on a déjà du verbatim (rare, mais utile pour les
+    # appels longs où le navigateur envoie plusieurs paquets).
+    existing = call.verbatim_transcript or ""
+    if existing:
+        call.verbatim_transcript = f"{existing}\n---\n{transcript}"
+    else:
+        call.verbatim_transcript = transcript
+    return {"saved": True, "matched": True, "call_id": call.id}
+
+
 @router.post(
     "/twilio/sdk-outbound",
     summary="TwiML servi à la TwiML App quand un browser fait device.connect()",

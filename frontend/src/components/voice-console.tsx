@@ -50,6 +50,17 @@ export function VoiceConsole() {
   const [active, setActive] = useState<CallAny | null>(null);
   const [muted, setMuted] = useState(false);
 
+  // Verbatim de l'appel — Web Speech API du navigateur (ne capte
+  // QUE le micro local, pas la voix du distant via WebRTC). Le buffer
+  // accumule les résultats finaux pendant l'appel, et on le POSTe à
+  // la fin sur /sdk/transcript pour le lier à la Call correspondante.
+  const recognitionRef = useRef<{ stop: () => void } | null>(null);
+  const transcriptBufferRef = useRef<string>("");
+  const lastCallSidsRef = useRef<{
+    child: string | null;
+    parent: string | null;
+  }>({ child: null, parent: null });
+
   // 1) Boot : fetch token + register Device
   useEffect(() => {
     let mounted = true;
@@ -154,6 +165,99 @@ export function VoiceConsole() {
     window.addEventListener("beforeunload", bye);
     return () => window.removeEventListener("beforeunload", bye);
   }, []);
+
+  // Pendant un appel actif : démarre Web Speech API sur le micro
+  // local. À la fin de l'appel (active devient null), on stoppe et
+  // on POST le verbatim accumulé. Best-effort — si le navigateur
+  // ne supporte pas SpeechRecognition (Firefox, vieux Safari), on
+  // n'enregistre rien et on log juste un avertissement.
+  useEffect(() => {
+    if (!active) return;
+
+    // Capture les CallSids du tour courant — utiles à la POST finale
+    // car `active` sera null à ce moment-là.
+    const params = (active.parameters || {}) as Record<string, string>;
+    const customGet = (
+      active as unknown as {
+        customParameters?: { get: (k: string) => string | undefined };
+      }
+    ).customParameters?.get;
+    lastCallSidsRef.current = {
+      child: params.CallSid || null,
+      parent:
+        (customGet ? customGet("ParentCallSid") : undefined) ||
+        params.ParentCallSid ||
+        null,
+    };
+    transcriptBufferRef.current = "";
+
+    const W = window as unknown as {
+      SpeechRecognition?: new () => unknown;
+      webkitSpeechRecognition?: new () => unknown;
+    };
+    const SR = W.SpeechRecognition || W.webkitSpeechRecognition;
+    if (!SR) {
+      console.warn(
+        "[Voice] Web Speech API non supportée par ce navigateur — " +
+          "le verbatim ne sera pas capturé pour cet appel."
+      );
+      return;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rec: any = new SR();
+    rec.lang = "fr-CA";
+    rec.continuous = true;
+    rec.interimResults = false; // seulement les résultats finaux
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    rec.onresult = (e: any) => {
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) {
+          transcriptBufferRef.current += r[0].transcript + " ";
+        }
+      }
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    rec.onerror = (e: any) => {
+      console.warn(
+        "[Voice] SpeechRecognition error:",
+        e?.error || e
+      );
+    };
+
+    try {
+      rec.start();
+      recognitionRef.current = { stop: () => rec.stop() };
+    } catch (err) {
+      console.warn("[Voice] SR start failed:", err);
+    }
+
+    return () => {
+      try {
+        recognitionRef.current?.stop();
+      } catch {
+        /* ignore */
+      }
+      recognitionRef.current = null;
+      const buf = transcriptBufferRef.current.trim();
+      transcriptBufferRef.current = "";
+      const sids = lastCallSidsRef.current;
+      lastCallSidsRef.current = { child: null, parent: null };
+      if (!buf) return;
+      void authedFetch("/api/v1/voice/sdk/transcript", {
+        method: "POST",
+        body: JSON.stringify({
+          call_sid: sids.child,
+          parent_call_sid: sids.parent,
+          transcript: buf
+        })
+      }).catch(() => {
+        /* best-effort, on ne bloque pas l'utilisateur */
+      });
+    };
+  }, [active]);
 
   const acceptCall = useCallback(() => {
     if (!incoming) return;

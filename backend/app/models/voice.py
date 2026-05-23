@@ -177,6 +177,15 @@ class Call(Base):
     recording_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     recording_sid: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
+    # Verbatim de la conversation côté navigateur (Web Speech API du
+    # client : ne capte QUE le micro local, pas la voix du distant
+    # qui arrive par WebRTC/Twilio). Stocké tel quel à la fin de
+    # l'appel — utile pour retrouver ce que TU as dit, pas un transcript
+    # bilatéral complet.
+    verbatim_transcript: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+
     # En Phase 2 : lien vers le user CRM dont on a deviné l'identité
     # depuis le numéro entrant (match contact / prospect / client).
     matched_user_id: Mapped[Optional[int]] = mapped_column(
