@@ -346,6 +346,12 @@ class DevisPreviewRecurring(BaseModel):
     marge_amount: float
     marge_pct: float
     items_breakdown: list[DevisPreviewRecurringItem]
+    # --- Taxes (Quebec) ---------------------------------------------
+    tps_amount: float = 0.0
+    tvq_amount: float = 0.0
+    tps_pct: float = 5.0
+    tvq_pct: float = 9.975
+    total_client_amount_taxe: float = 0.0
 
 
 class DevisPreviewFeatureClient(BaseModel):
@@ -379,6 +385,12 @@ class DevisPreviewInitial(BaseModel):
     heures_manager: float
     features_client: list[DevisPreviewFeatureClient]
     frais_fixes_client: list[DevisPreviewFixedClient]
+    # --- Taxes (Quebec) ---------------------------------------------
+    tps_amount: float = 0.0
+    tvq_amount: float = 0.0
+    tps_pct: float = 5.0
+    tvq_pct: float = 9.975
+    total_final_taxe: float = 0.0
 
 
 class DevisPreview(BaseModel):
