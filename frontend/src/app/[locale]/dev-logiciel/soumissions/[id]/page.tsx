@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
@@ -261,8 +261,12 @@ function MoneyInput({
   useEffect(() => {
     if (!focused) setV(value != null ? String(value) : "");
   }, [value, focused]);
+  // `inline-block` sur le wrap : il prend la largeur naturelle de
+  // l'input (w-XX) au lieu de s'etirer dans la cellule. Le suffix
+  // `$` absolu se positionne donc bien a droite DE l'input, pas
+  // de la cellule entiere. (fix regression PR #481)
   return (
-    <div className="relative">
+    <div className="relative inline-block">
       <input
         type="number"
         step={step}
@@ -302,8 +306,10 @@ function HoursInput({
   useEffect(() => {
     if (!focused) setV(value != null ? String(value) : "");
   }, [value, focused]);
+  // Cf. MoneyInput : `inline-block` pour que le suffix `h` colle
+  // a l'input et que celui-ci ne s'etire pas dans son conteneur.
   return (
-    <div className="relative">
+    <div className="relative inline-block">
       <input
         type="number"
         step={step}
@@ -1036,7 +1042,11 @@ function DevisDevEditor({
                           className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-white hover:border-emerald-500/30 focus:border-emerald-500/50 focus:outline-none"
                         />
                       </td>
-                      <td className="py-1.5">
+                      <td className="py-1.5 text-right">
+                        {/* `text-right` aligne l'input MoneyInput
+                            (inline-block) sous l'en-tete COUT MENSUEL
+                            au lieu de coller a gauche sous DESCRIPTION.
+                            (fix regression PR #481) */}
                         <MoneyInput
                           value={Number(it.cost_per_unit ?? 0)}
                           onCommit={(n) =>
