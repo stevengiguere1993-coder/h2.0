@@ -1,17 +1,34 @@
-"""Extraction d'infos immeuble — parser local d'abord, Gemini en secours.
+"""Extraction d'infos immeuble — parser local + Gemini EN PARALLÈLE.
 
-Pipeline :
-  1. PRIMAIRE — parser Python pur (regex + OCR Tesseract), ancré sur
-     les libellés stables des fiches Centris (Nombre d'unités,
-     Unités résidentielles, Revenus bruts, Municipales/Scolaires,
-     Évaluation municipale…). Rapide, gratuit, sans quota, hors-ligne.
-  2. SECOURS — Gemini (palier gratuit) UNIQUEMENT si le parser local
-     ne sort rien (source inhabituelle, photo illisible). Comme le
-     parser couvre bien Centris, Gemini est rarement appelé → le
-     petit quota gratuit n'est pas gaspillé, pas d'erreur « maximum ».
+Pipeline (Phase A1, refonte 2026-05-22) — stratégie « sans faille » :
+  1. COUCHE 1 — parser Python pur (regex + parsers spécifiques
+     Centris/DuProprio/Realtor + JSON-LD + __NEXT_DATA__ + OCR
+     Tesseract). Rapide, gratuit, sans quota, hors-ligne.
+  2. COUCHE 2 — Gemini 2.0 Flash (palier gratuit) lancé EN PARALLÈLE
+     du parser local via ``asyncio.gather`` (et non plus en cascade
+     en filet de secours). Reçoit TOUS les inputs (HTML strippé,
+     texte libre, images, PDFs OCR-isés) et complète/corrige le
+     résultat local par un merge intelligent par champ.
+  3. COUCHE 3 — Claude Sonnet (sera ajoutée en Phase A2 sur un
+     bouton dédié — pas encore active ici).
 
-`model_used` indique le moteur retenu (`local-parser-v1` ou
-`gemini-2.0-flash`).
+Merge intelligent (par champ) :
+  - concordance des 2 sources (±5% pour numériques, strings
+    normalisées identiques) → on garde la valeur locale (confiance
+    forte).
+  - parser local seul → on garde le parser local (les parsers
+    spécifiques Centris/DuProprio/Realtor sont fiables).
+  - Gemini seul → on garde Gemini (le parser local a raté ce champ).
+  - divergence majeure → on garde Gemini par défaut + on émet un
+    warning visible « Divergence sur {champ} … vérifier
+    manuellement ». Exception : address/city/postal_code clairement
+    valides côté local (commence par chiffre, ville reconnue) → on
+    garde local malgré la divergence.
+
+`model_used` indique la cascade réelle utilisée pour cette
+extraction : ``"local + gemini"`` (les deux ont produit), ``"local"``
+(Gemini désactivé, en erreur, ou n'a rien renvoyé), ``"gemini"`` (le
+parser local n'a rien sorti) ou ``"none"`` (les deux vides).
 
 Sources supportées :
   - URLs Centris.ca         → parser CSS spécifique (BeautifulSoup)
@@ -28,10 +45,16 @@ Sources supportées :
                               images PIL → pytesseract page par page)
   - Images (PNG/JPG/HEIC/…) → OCR Tesseract (pytesseract sur l'image
                               décodée par Pillow / pillow-heif)
+  - Excel (.xlsx/.xls)      → openpyxl → texte structuré (headers +
+                              lignes/colonnes séparées par « | »)
+                              passé à parse_text + Gemini
 
 API publique inchangée : `extract_lead_info(urls, text, files)` →
 `ExtractionResult(data, model_used, raw_response, warnings)`.
-`model_used` vaut désormais ``"local-parser-v1"``.
+La structure JSON renvoyée au frontend ne change pas — seul le
+contenu de ``model_used`` est enrichi (cf. plus haut) et il y a
+potentiellement plus de warnings utiles (divergences, Gemini
+indisponible, etc.).
 
 Autres services du repo qui restent sur leur LLM (hors scope de cette
 refonte) : `estimate-expenses` (Claude) et `debug-extract-url`
@@ -45,6 +68,7 @@ Stack OCR (binaires système installés via backend/Aptfile sur Render) :
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
@@ -63,7 +87,34 @@ from app.integrations import scraping_proxy
 log = logging.getLogger(__name__)
 
 
+# Tag legacy — conservé pour compat éventuelle. Le pipeline retourne
+# désormais des valeurs enrichies (``"local + gemini"``, ``"local"``,
+# ``"gemini"``, ``"none"``) via _select_model_used().
 MODEL_TAG = "local-parser-v1"
+
+
+# Tolérance utilisée par _values_concordant() : pour les champs
+# numériques, on considère deux valeurs concordantes si elles sont à
+# moins de 5% l'une de l'autre (couvre les petits écarts de parsing,
+# arrondis, conversions M/k, etc.).
+_NUMERIC_TOLERANCE = 0.05
+
+
+# Champs adresse/géographie sur lesquels on préfère la valeur locale
+# si elle est « clairement valide » (adresse qui commence par un
+# chiffre, code postal canadien) — même en cas de divergence avec
+# Gemini, qui hallucine parfois sur l'adresse civique.
+_GEO_FIELDS = {"address", "city", "postal_code", "province"}
+
+
+# Champs traités comme numériques pour la comparaison de concordance.
+_NUMERIC_FIELDS = {
+    "asking_price", "nb_logements", "revenus_bruts",
+    "taxes_municipales", "taxes_scolaires", "assurances", "energie",
+    "depenses_autres", "annee_construction", "superficie_terrain",
+    "superficie_batiment", "evaluation_municipale",
+    "nb_stationnements",
+}
 
 
 # Champs « clés » d'une fiche immeuble — sert à mesurer la couverture
@@ -1551,6 +1602,221 @@ def parse_pdf(blob: bytes) -> str:
         return ""
 
 
+# ── Parser Excel (.xlsx / .xls) ───────────────────────────────────
+#
+# Phil reçoit régulièrement des tableaux Excel (listes d'immeubles à
+# vendre, exports de courtiers, listings privés) — souvent une ligne
+# par immeuble avec des colonnes type « Adresse / Prix / Revenus /
+# Taxes ». On convertit le tableau en texte structuré (headers
+# détectés + lignes séparées par « | ») et on le passe à parse_text
+# ET à Gemini en parallèle, comme n'importe quel autre input texte.
+
+
+def _excel_row_text(row_values: List[Any]) -> str:
+    """Sérialise une ligne Excel en chaîne « v1 | v2 | v3 »."""
+    cells: List[str] = []
+    for v in row_values:
+        if v is None:
+            cells.append("")
+            continue
+        if isinstance(v, float) and v.is_integer():
+            cells.append(str(int(v)))
+        else:
+            cells.append(str(v).strip())
+    return " | ".join(cells)
+
+
+def _looks_like_header(row_values: List[Any]) -> bool:
+    """Heuristique : est-ce que la première ligne ressemble à des
+    en-têtes ? On considère que oui si une majorité des cellules sont
+    des chaînes courtes contenant un libellé typique (adresse, prix,
+    ville, taxes, revenus, etc.). Permet de mieux mapper les colonnes
+    plus tard et d'enrichir le texte structuré passé aux parseurs."""
+    if not row_values:
+        return False
+    header_kw = {
+        "adresse", "address", "ville", "city", "prix", "price",
+        "asking", "demande", "demandé", "logements", "unités",
+        "unites", "units", "taxes", "revenu", "revenus", "revenue",
+        "code postal", "postal", "année", "annee", "construction",
+        "superficie", "évaluation", "evaluation", "assurance",
+        "énergie", "energie", "type", "courtier",
+    }
+    matched = 0
+    str_cells = 0
+    for v in row_values:
+        if not isinstance(v, str):
+            continue
+        str_cells += 1
+        low = v.strip().lower()
+        if not low:
+            continue
+        if any(kw in low for kw in header_kw):
+            matched += 1
+    # Au moins 2 cellules reconnues comme libellés ET majoritairement
+    # textuelles → on considère que c'est une ligne d'en-têtes.
+    return matched >= 2 and str_cells >= max(2, len(row_values) // 2)
+
+
+def parse_excel(blob: bytes, filename: str = "excel") -> str:
+    """Convertit un fichier Excel en texte structuré exploitable par
+    parse_text + Gemini.
+
+    Stratégie :
+      - Lit toutes les feuilles non vides via openpyxl (data_only=True
+        pour récupérer les valeurs calculées, pas les formules).
+      - Si la première ligne semble être des en-têtes (libellés
+        reconnus type « Adresse », « Prix »), on les conserve en tête
+        du texte et on répète les valeurs sous forme « Header: valeur »
+        ligne par ligne — meilleur ancrage pour les regex de
+        parse_text et pour la compréhension Gemini.
+      - Sinon, on dump simplement les lignes en « v1 | v2 | v3 ».
+
+    Pour .xls (ancien format binaire OLE) on tente xlrd ; si absent
+    on retourne une chaîne vide et un caller émet un warning.
+
+    Retourne une chaîne vide en cas d'échec — jamais d'exception.
+    """
+    is_xls = filename.lower().endswith(".xls")
+    t0 = time.perf_counter()
+
+    if is_xls:
+        # Ancien format binaire — xlrd ne fait que .xls depuis sa
+        # v2.0.1 (Microsoft ayant supprimé le support .xlsx). On
+        # essaie mais le paquet n'est pas garanti installé.
+        try:
+            import xlrd  # type: ignore
+        except ImportError:
+            log.warning(
+                "Excel '%s' : .xls non supporté (xlrd absent). "
+                "Phil peut sauver en .xlsx pour traiter ce fichier.",
+                filename,
+            )
+            return ""
+        try:
+            wb = xlrd.open_workbook(file_contents=blob)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "Excel '%s' (xls) : ouverture impossible — %s",
+                filename,
+                exc,
+            )
+            return ""
+        parts: List[str] = []
+        for sheet in wb.sheets():
+            if sheet.nrows == 0:
+                continue
+            parts.append(f"[Feuille : {sheet.name}]")
+            rows = [
+                [sheet.cell_value(r, c) for c in range(sheet.ncols)]
+                for r in range(sheet.nrows)
+            ]
+            parts.extend(_render_excel_rows(rows))
+        text = "\n".join(parts)
+        dt = time.perf_counter() - t0
+        log.info(
+            "Excel xls '%s' : %d feuilles, %d chars en %.2fs",
+            filename,
+            len(wb.sheets()),
+            len(text),
+            dt,
+        )
+        return text
+
+    # .xlsx — format standard depuis Excel 2007.
+    try:
+        from openpyxl import load_workbook  # type: ignore
+    except ImportError:
+        log.warning(
+            "Excel '%s' : openpyxl absent — installer pour activer "
+            "le support .xlsx",
+            filename,
+        )
+        return ""
+    try:
+        wb = load_workbook(
+            filename=io.BytesIO(blob), data_only=True, read_only=True
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "Excel '%s' : ouverture openpyxl impossible — %s",
+            filename,
+            exc,
+        )
+        return ""
+
+    parts: List[str] = []
+    nb_sheets = 0
+    for ws in wb.worksheets:
+        nb_sheets += 1
+        rows: List[List[Any]] = []
+        for row in ws.iter_rows(values_only=True):
+            # Ignore les lignes 100% vides.
+            if not any(c not in (None, "") for c in row):
+                continue
+            rows.append(list(row))
+        if not rows:
+            continue
+        parts.append(f"[Feuille : {ws.title}]")
+        parts.extend(_render_excel_rows(rows))
+    try:
+        wb.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+    text = "\n".join(parts)
+    dt = time.perf_counter() - t0
+    log.info(
+        "Excel xlsx '%s' : %d feuilles, %d chars en %.2fs",
+        filename,
+        nb_sheets,
+        len(text),
+        dt,
+    )
+    return text
+
+
+def _render_excel_rows(rows: List[List[Any]]) -> List[str]:
+    """Rend une liste de lignes Excel en texte exploitable.
+
+    Si la première ligne ressemble à des en-têtes, on l'utilise pour
+    générer des paires « Libellé: valeur » par cellule (en plus du
+    dump tabulaire) — ancrage idéal pour les regex de parse_text.
+    """
+    out: List[str] = []
+    headers: List[str] = []
+    data_start = 0
+    if _looks_like_header(rows[0]):
+        headers = [
+            (str(c).strip() if c is not None else "") for c in rows[0]
+        ]
+        out.append("[En-têtes] " + _excel_row_text(rows[0]))
+        data_start = 1
+
+    for row in rows[data_start:]:
+        out.append(_excel_row_text(row))
+        if headers:
+            # On enrichit chaque ligne avec des paires libellé/valeur
+            # — parse_text accroche bien sur ce format.
+            pairs: List[str] = []
+            for i, v in enumerate(row):
+                if i >= len(headers):
+                    break
+                h = headers[i]
+                if not h:
+                    continue
+                if v is None or v == "":
+                    continue
+                if isinstance(v, float) and v.is_integer():
+                    val_s = str(int(v))
+                else:
+                    val_s = str(v).strip()
+                pairs.append(f"{h}: {val_s}")
+            if pairs:
+                out.append("  " + " ; ".join(pairs))
+    return out
+
+
 # ── Fusion multi-sources ──────────────────────────────────────────
 
 
@@ -1696,7 +1962,218 @@ def _parser_for_domain(domain: str) -> str:
     return "generic"
 
 
+# ── Merge intelligent local + Gemini ──────────────────────────────
+
+
+def _norm_str(s: Any) -> str:
+    """Normalise une chaîne pour comparaison : trim, casse repliée,
+    espaces multiples écrasés, ponctuation finale enlevée."""
+    if s is None:
+        return ""
+    out = str(s).strip().lower()
+    out = re.sub(r"\s+", " ", out)
+    out = out.strip(".,;:")
+    return out
+
+
+def _values_concordant(a: Any, b: Any, field_name: str) -> bool:
+    """Retourne True si deux valeurs sont jugées concordantes.
+
+    - Numériques (montants, années, surfaces, nb logements…) : à
+      moins de 5% l'une de l'autre (ou exactement égales pour les
+      très petits nombres < 20, où le delta absolu prime).
+    - Typology (dict) : mêmes clés et mêmes valeurs (ordre indifférent).
+    - Strings : égalité après normalisation.
+    """
+    if a is None or a == "":
+        return False
+    if b is None or b == "":
+        return False
+    if field_name == "typology":
+        if not isinstance(a, dict) or not isinstance(b, dict):
+            return False
+        if set(a.keys()) != set(b.keys()):
+            return False
+        for k, v in a.items():
+            try:
+                if int(v) != int(b.get(k, -1)):
+                    return False
+            except (TypeError, ValueError):
+                if v != b.get(k):
+                    return False
+        return True
+    if field_name in _NUMERIC_FIELDS:
+        va = normalize_number(a)
+        vb = normalize_number(b)
+        if va is None or vb is None:
+            return False
+        if va == 0 and vb == 0:
+            return True
+        if va < 20 and vb < 20:
+            return abs(va - vb) < 0.5
+        denom = max(abs(va), abs(vb))
+        return abs(va - vb) / denom <= _NUMERIC_TOLERANCE
+    # Strings et autres.
+    return _norm_str(a) == _norm_str(b)
+
+
+def _looks_like_valid_address(s: Any) -> bool:
+    """Heuristique : adresse civique « clairement valide » côté
+    parser local. Commence par un chiffre (numéro civique) et
+    contient au moins un mot de 3+ lettres."""
+    if not s:
+        return False
+    raw = str(s).strip()
+    if not raw or not raw[0].isdigit():
+        return False
+    return bool(re.search(r"[A-Za-zÀ-ÿ]{3,}", raw))
+
+
+def _merge_local_gemini(
+    local: Dict[str, Any],
+    gemini: Dict[str, Any],
+) -> Tuple[Dict[str, Any], List[str], int]:
+    """Fusionne un dict du parser local et un dict Gemini selon la
+    matrice de décision spec Phase A1 (cf. docstring module).
+
+    Retourne ``(merged, divergence_warnings, divergences_count)``.
+    Les warnings émis sont visibles côté UI ; ils citent le champ,
+    les deux valeurs concurrentes et la décision prise.
+    """
+    merged: Dict[str, Any] = {}
+    divergence_warnings: List[str] = []
+    divergences = 0
+
+    all_keys = set(local.keys()) | set(gemini.keys())
+    for k in all_keys:
+        v_local = local.get(k)
+        v_gem = gemini.get(k)
+        has_local = v_local not in (None, "", {}, [])
+        has_gem = v_gem not in (None, "", {}, [])
+
+        if has_local and has_gem:
+            if _values_concordant(v_local, v_gem, k):
+                # Concordance → confiance forte, on garde local
+                # (parsers spécifiques Centris/DuProprio/Realtor
+                # sont fiables sur les valeurs qu'ils sortent).
+                merged[k] = v_local
+            elif k == "typology" and isinstance(v_local, dict) and isinstance(v_gem, dict):
+                # Pour la typologie en divergence, on union les
+                # clés en prenant le MAX par typologie — chaque
+                # source peut compléter l'autre sans perte.
+                combined = dict(v_local)
+                for tk, tv in v_gem.items():
+                    try:
+                        combined[tk] = max(
+                            int(combined.get(tk, 0)), int(tv)
+                        )
+                    except (TypeError, ValueError):
+                        combined.setdefault(tk, tv)
+                merged[k] = combined
+            elif k in _GEO_FIELDS and _looks_like_valid_address(v_local):
+                # Adresse locale clairement valide → on la garde
+                # malgré la divergence (Gemini hallucine parfois
+                # sur l'adresse civique).
+                merged[k] = v_local
+                divergences += 1
+                divergence_warnings.append(
+                    f"Divergence sur {k} : parser local = "
+                    f"« {v_local} », Gemini = « {v_gem} ». Pris "
+                    "parser local (adresse civique valide). "
+                    "Vérifier manuellement."
+                )
+            elif k in _GEO_FIELDS and k != "address":
+                # Pour city/postal_code/province : Gemini est
+                # souvent meilleur sur l'inférence (déduit la
+                # ville à partir d'autres indices) — sauf si le
+                # local a une valeur visiblement bonne.
+                if k == "postal_code" and re.fullmatch(
+                    r"[A-Z]\d[A-Z]\s?\d[A-Z]\d",
+                    str(v_local).strip().upper(),
+                ):
+                    merged[k] = v_local
+                else:
+                    merged[k] = v_gem
+                divergences += 1
+                divergence_warnings.append(
+                    f"Divergence sur {k} : parser local = "
+                    f"« {v_local} », Gemini = « {v_gem} ». Pris "
+                    f"{'parser local' if merged[k] == v_local else 'Gemini'} "
+                    "par défaut. Vérifier manuellement."
+                )
+            else:
+                # Divergence majeure générique → on prend Gemini
+                # (plus robuste sur formats inhabituels) ET on
+                # flag la divergence pour vérification humaine.
+                merged[k] = v_gem
+                divergences += 1
+                divergence_warnings.append(
+                    f"Divergence sur {k} : parser local = "
+                    f"« {v_local} », Gemini = « {v_gem} ». Pris "
+                    "Gemini par défaut. Vérifier manuellement."
+                )
+        elif has_local:
+            merged[k] = v_local
+        elif has_gem:
+            merged[k] = v_gem
+        # else : aucun n'a la valeur, on n'écrit rien.
+
+    return merged, divergence_warnings, divergences
+
+
+def _count_fields(d: Dict[str, Any]) -> int:
+    """Nb de champs non-vides dans un dict (exclut source_url qui
+    est de la métadonnée, pas un champ extrait)."""
+    return sum(
+        1
+        for k, v in d.items()
+        if k != "source_url" and v not in (None, "", {}, [])
+    )
+
+
+def _select_model_used(
+    n_local: int, n_gemini: int, gemini_skipped: bool
+) -> str:
+    """Sélectionne la valeur de ``model_used`` selon ce que chaque
+    couche a produit.
+
+    - ``"local + gemini"`` : les deux ont sorti au moins un champ.
+    - ``"local"``          : seul le parser local a sorti des champs
+      (Gemini désactivé, en erreur, ou rien renvoyé).
+    - ``"gemini"``         : seul Gemini a sorti des champs.
+    - ``"none"``           : aucune des deux couches n'a rien.
+    """
+    if n_local > 0 and n_gemini > 0:
+        return "local + gemini"
+    if n_local > 0:
+        return "local"
+    if n_gemini > 0:
+        return "gemini"
+    return "none"
+
+
 # ── Pipeline principal ────────────────────────────────────────────
+
+
+async def _run_gemini_safely(
+    material: str,
+    images: List[Tuple[str, bytes]],
+) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+    """Wrap ``_gemini_extract`` pour ne JAMAIS lever — toute exception
+    est convertie en ``(None, raison)`` pour ne pas faire échouer
+    l'extraction si Gemini tombe (quota, réseau, JSON invalide…).
+
+    Le caller émet alors un warning visible à l'utilisateur et on
+    poursuit avec le résultat du parser local seul."""
+    try:
+        return await _gemini_extract(material, images)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "Gemini extraction a levé inattenduement : %s (%s)",
+            type(exc).__name__,
+            exc,
+        )
+        return None, f"Gemini injoignable ({type(exc).__name__})"
 
 
 async def extract_lead_info(
@@ -1705,28 +2182,35 @@ async def extract_lead_info(
     text: str | None = None,
     files: List[Tuple[str, str, bytes]] | None = None,
 ) -> ExtractionResult:
-    """Pipeline principal d'extraction 100% local.
+    """Pipeline principal d'extraction — parser local + Gemini EN
+    PARALLÈLE avec merge intelligent par champ.
 
-    Stratégie :
-      1. Pour chaque URL, on détecte le domaine et on dispatche vers
-         le parser dédié, en fallback sur __NEXT_DATA__ puis JSON-LD
-         puis regex texte.
-      2. Le texte libre passe par ``parse_text``.
-      3. Les fichiers PDF passent par ``pypdf`` puis ``parse_text``.
-         Si la couche texte est vide ou < 50 chars (PDF scanné), on
-         tombe en fallback OCR Tesseract (``parse_pdf_ocr``).
-      4. Les fichiers image passent par OCR Tesseract direct
-         (``parse_image_ocr``) puis ``parse_text`` sur le texte OCR
-         normalisé. Couvre les screenshots de tableaux Excel, photos
-         de fiches MLS, captures de courriels, photos HEIC iPhone.
-      5. On fusionne les résultats selon la priorité parser dédié >
-         JSON-LD > texte. Si plusieurs sources ont des adresses
-         différentes, on crée plusieurs entrées de sortie.
+    Stratégie (Phase A1, voir docstring module pour le détail) :
+      1. Préparation : fetch URLs, OCR PDF/images, lecture Excel.
+         C'est ici que les I/O lourds sont concentrés. Les sources
+         locales (parser dédié, JSON-LD, regex texte) sont accumulées
+         dans ``extracted`` ; le matériel pour Gemini est préparé en
+         parallèle (HTML strippé, textes OCR, textes Excel,
+         images natives transmises sans OCR).
+      2. ``asyncio.gather`` lance EN PARALLÈLE :
+         (a) la finalisation du parser local (synchrone — regroupement
+             par adresse, merge multi-sources) wrappée dans
+             ``asyncio.to_thread`` pour ne pas bloquer la boucle.
+         (b) ``_gemini_extract`` sur tout le matériel consolidé.
+      3. Merge intelligent local↔Gemini par champ (cf.
+         ``_merge_local_gemini``) :
+           - concordance → confiance forte, on garde local.
+           - une seule source a la valeur → on prend cette source.
+           - divergence majeure → Gemini par défaut + warning, sauf
+             adresse locale clairement valide → on garde local.
+      4. ``model_used`` reflète la cascade réelle (``"local + gemini"``
+         / ``"local"`` / ``"gemini"`` / ``"none"``).
     """
     warnings: List[str] = []
     # Liste de tuples (parser_tag, addr_key, data_dict).
     extracted: List[Tuple[str, str, Dict[str, Any]]] = []
-    # Matériel brut consolidé pour l'extraction IA primaire (Gemini).
+    # Matériel brut consolidé pour l'extraction IA en parallèle
+    # (Gemini reçoit TOUTE la matière, pas juste un fallback).
     gemini_material_parts: List[str] = []
     gemini_images: List[Tuple[str, bytes]] = []
 
@@ -1899,58 +2383,191 @@ async def extract_lead_info(
                     f"{len(ocr_text)} chars mais aucun champ "
                     f"reconnaissable. Texte OCR (aperçu) : « {preview}… »"
                 )
+        elif (
+            "excel" in ct
+            or "spreadsheetml" in ct
+            or filename.lower().endswith((".xlsx", ".xls"))
+        ):
+            # Excel — Phil reçoit des listes d'immeubles à vendre
+            # exportées par des courtiers en .xlsx. On convertit le
+            # tableau en texte structuré (headers + lignes) puis on
+            # passe à parse_text ET à Gemini en parallèle.
+            xl_text = parse_excel(blob, filename=filename)
+            if not xl_text.strip():
+                warnings.append(
+                    f"Excel « {filename} » : impossible d'extraire "
+                    "le contenu (fichier illisible ou .xls sans "
+                    "xlrd installé — convertir en .xlsx pour le "
+                    "moment)."
+                )
+                continue
+            gemini_material_parts.append(
+                f"[Excel : {filename}]\n{xl_text[:60_000]}"
+            )
+            td = parse_text(xl_text)
+            if td:
+                extracted.append(("excel", _addr_key(td), td))
+            else:
+                preview_xl = xl_text.strip().replace("\n", " ⏎ ")[:300]
+                warnings.append(
+                    f"Excel « {filename} » : tableau lu "
+                    f"({len(xl_text)} chars) mais aucun champ "
+                    f"reconnaissable par le parser local. "
+                    f"Aperçu : « {preview_xl}… » — Gemini est tout "
+                    "de même appelé en parallèle sur ce contenu."
+                )
         else:
             warnings.append(
                 f"Fichier « {filename} » : type {ct or 'inconnu'} "
                 "non supporté"
             )
 
-    # ── Parser local — PRIMAIRE ───
-    # Regroupement par adresse : plusieurs sources du même immeuble
-    # fusionnent ; des adresses différentes créent plusieurs fiches.
-    by_addr: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
-    for tag, addr_key, data in extracted:
-        by_addr.setdefault(addr_key, []).append((tag.split(":")[-1], data))
+    # ── Lancement EN PARALLÈLE du finalize local + Gemini ───
+    # Le parser local est synchrone (CPU) — on le wrappe dans
+    # asyncio.to_thread pour ne pas bloquer la boucle pendant que
+    # Gemini fait son appel réseau. Les deux tâches s'exécutent
+    # simultanément ; on les attend via asyncio.gather.
+
+    def _finalize_local() -> List[Dict[str, Any]]:
+        """Regroupement par adresse + merge multi-sources locales.
+        Synchrone — appelé via asyncio.to_thread."""
+        by_addr: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
+        for tag, addr_key, data in extracted:
+            by_addr.setdefault(addr_key, []).append(
+                (tag.split(":")[-1], data)
+            )
+        out: List[Dict[str, Any]] = []
+        for _addr_k, sources in by_addr.items():
+            merged = merge_extracted(sources)
+            if merged:
+                out.append(merged)
+        return out
+
+    gemini_material = "\n\n".join(
+        p for p in gemini_material_parts if p.strip()
+    )
+
+    # Pas de matière pour Gemini (aucun input net) → on ne l'appelle
+    # pas du tout. Sinon on le lance EN PARALLÈLE du finalize local.
+    if gemini_material.strip() or gemini_images:
+        local_task = asyncio.to_thread(_finalize_local)
+        gemini_task = _run_gemini_safely(gemini_material, gemini_images)
+        local_data_list, gemini_result = await asyncio.gather(
+            local_task, gemini_task
+        )
+        gemini_data, gemini_err = gemini_result
+    else:
+        local_data_list = _finalize_local()
+        gemini_data, gemini_err = None, None
+
+    # Warning Gemini indisponible — émis seulement si on l'a tenté
+    # et qu'il a échoué pour une vraie raison (pas la matière vide).
+    if (
+        gemini_data is None
+        and gemini_err
+        and (gemini_material.strip() or gemini_images)
+    ):
+        warnings.append(
+            f"Gemini indisponible ({gemini_err}) — extraction sur "
+            "parser local seul."
+        )
+
+    # ── Merge local ↔ Gemini par adresse ───
+    gemini_list = gemini_data or []
+    # Indexe Gemini par clé d'adresse pour fusionner avec le bon
+    # immeuble local quand il y en a plusieurs.
+    gemini_by_addr: Dict[str, Dict[str, Any]] = {}
+    for g in gemini_list:
+        if not isinstance(g, dict):
+            continue
+        gk = _addr_key(g)
+        # Si la même adresse apparaît plusieurs fois côté Gemini, on
+        # union (gemini répond rarement avec doublons mais sait-on
+        # jamais).
+        if gk in gemini_by_addr:
+            gemini_by_addr[gk] = {**gemini_by_addr[gk], **g}
+        else:
+            gemini_by_addr[gk] = g
 
     data_out: List[Dict[str, Any]] = []
-    for addr_key, sources in by_addr.items():
-        merged = merge_extracted(sources)
-        if merged:
-            data_out.append(merged)
+    total_divergences = 0
+    used_gemini_keys: set = set()
 
+    for loc in local_data_list:
+        loc_key = _addr_key(loc)
+        gem = gemini_by_addr.get(loc_key)
+        if gem is None and len(gemini_by_addr) == 1 and loc_key == "unknown":
+            # Cas standard : 1 seul immeuble, pas d'adresse côté
+            # parser local → on associe l'unique fiche Gemini.
+            (only_key,) = gemini_by_addr.keys()
+            gem = gemini_by_addr[only_key]
+            used_gemini_keys.add(only_key)
+        elif gem is None and len(gemini_by_addr) == 1 and len(local_data_list) == 1:
+            # 1 ↔ 1 sans correspondance d'adresse exacte → on fait
+            # tout de même le merge (Gemini a pu trouver une
+            # adresse que le local a ratée, ou inversement).
+            (only_key,) = gemini_by_addr.keys()
+            gem = gemini_by_addr[only_key]
+            used_gemini_keys.add(only_key)
+        else:
+            used_gemini_keys.add(loc_key)
+
+        if gem:
+            merged, div_warns, n_div = _merge_local_gemini(loc, gem)
+            warnings.extend(div_warns)
+            total_divergences += n_div
+            data_out.append(merged)
+        else:
+            data_out.append(loc)
+
+    # Fiches Gemini sans pendant local (Gemini a détecté un immeuble
+    # que le parser local n'a pas su extraire) → on les ajoute.
+    for gk, gem in gemini_by_addr.items():
+        if gk in used_gemini_keys:
+            continue
+        data_out.append(dict(gem))
+
+    # ── Logging détaillé ───
+    n_local_total = sum(_count_fields(d) for d in local_data_list)
+    n_gemini_total = sum(
+        _count_fields(g) for g in gemini_list if isinstance(g, dict)
+    )
+    n_merged_total = sum(_count_fields(d) for d in data_out)
+    sources_tags = []
+    if urls:
+        sources_tags.append("url")
+    if text and text.strip():
+        sources_tags.append("texte")
+    if files:
+        sources_tags.append("fichier")
+    src_label = "+".join(sources_tags) or "vide"
+    log.info(
+        "Extraction %s : local=%d champs, gemini=%d champs, "
+        "merged=%d champs, %d divergence(s)",
+        src_label,
+        n_local_total,
+        n_gemini_total,
+        n_merged_total,
+        total_divergences,
+    )
+
+    # ── Sélection model_used et warnings de couverture ───
     if data_out:
-        # Détection « format mal pris en charge » : si la meilleure
-        # fiche n'a presque aucun champ clé, on le signale clairement
-        # pour que le document soit transmis et le parser amélioré.
         best = max((_coverage(r) for r in data_out), default=0)
         if best < 4:
             warnings.append(
                 f"⚠ Extraction faible — {best} champ(s) clé(s) sur "
-                f"{len(_KEY_FIELDS)} reconnus. Ce format de document "
-                "est mal pris en charge par le parser : transmets-le "
-                "à l'équipe pour le faire évoluer. En attendant, "
-                "complète les champs manquants à la main."
+                f"{len(_KEY_FIELDS)} reconnus. Ce format de "
+                "document est mal pris en charge même avec Gemini : "
+                "transmets-le à l'équipe pour le faire évoluer. En "
+                "attendant, complète les champs manquants à la main."
             )
+        model_used = _select_model_used(
+            n_local_total, n_gemini_total, gemini_skipped=False
+        )
         return ExtractionResult(
             data=data_out,
-            model_used=MODEL_TAG,
-            warnings=warnings,
-        )
-
-    # ── Rescousse IA (Gemini) — UNIQUEMENT si le parser local n'a
-    # rien sorti (source inhabituelle, photo illisible…). Comme le
-    # parser local couvre bien Centris, Gemini n'est presque jamais
-    # appelé → le quota gratuit n'est pas consommé inutilement.
-    gemini_material = "\n\n".join(
-        p for p in gemini_material_parts if p.strip()
-    )
-    gemini_data, _gemini_err = await _gemini_extract(
-        gemini_material, gemini_images
-    )
-    if gemini_data:
-        return ExtractionResult(
-            data=gemini_data,
-            model_used=EXTRACTION_MODEL,
+            model_used=model_used,
             warnings=warnings,
         )
 
@@ -1958,7 +2575,7 @@ async def extract_lead_info(
         warnings.append("Aucune donnée exploitable extraite.")
     return ExtractionResult(
         data=[],
-        model_used=MODEL_TAG,
+        model_used=_select_model_used(0, 0, gemini_skipped=False),
         warnings=warnings,
     )
 
