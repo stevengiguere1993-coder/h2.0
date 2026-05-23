@@ -77,12 +77,21 @@ def _body_html(tone: str, ref: str, total: float, days_late: int) -> str:
   <p style="margin:0 0 16px 0">Bonjour,</p>
   <p style="margin:0 0 16px 0">{lead}</p>
   <p style="margin:0 0 16px 0">
-    Vous trouverez la facture en pièce jointe. Les paiements Interac
-    à info@immohorizon.com et les chèques à l'ordre de Horizon Services
-    Immobiliers sont acceptés.
+    Vous trouverez la facture en pièce jointe.
+  </p>
+  <p style="margin:0 0 6px 0"><strong>Modes de paiement acceptés :</strong></p>
+  <ul style="margin:0 0 16px 18px;padding:0">
+    <li><strong>Dépôt direct</strong> — Horizon Services Immobiliers,
+        Institution 815, Transit 92004, Compte 0935973</li>
+    <li><strong>Virement Interac</strong> à
+        <a href="mailto:admin@immohorizon.com">admin@immohorizon.com</a></li>
+  </ul>
+  <p style="margin:0 0 16px 0;color:#555;font-size:13px">
+    Tout retard de paiement après l'échéance est facturé à 2 % par mois
+    (24 % annuel) selon nos conditions générales.
   </p>
   <p style="margin:16px 0 0 0">
-    Si le paiement a déjà été fait, ignore simplement ce courriel —
+    Si le paiement a déjà été fait, ignorez simplement ce courriel —
     la base sera mise à jour sous peu.
   </p>
   <p style="margin:24px 0 0 0;color:#555;font-size:12px">
@@ -235,9 +244,9 @@ async def run() -> dict:
                 total_val = await _compute_balance(db, fa)
                 await mailer.send(
                     to=[to_email],
-                    cc=[settings.mail_from_email]
-                    if settings.mail_from_email
-                    else None,
+                    # Pas de CC interne — le rappel doit ressembler
+                    # à un courriel reçu directement par le client,
+                    # pas à un envoi d'équipe en copie.
                     subject=(
                         f"{_SUBJECT_PREFIX[tone]} — Facture {fa.reference}"
                     ),
