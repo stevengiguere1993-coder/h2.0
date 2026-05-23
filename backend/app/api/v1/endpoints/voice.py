@@ -2968,6 +2968,47 @@ async def patch_phone_number(
 
 
 @router.get(
+    "/calls/search",
+    response_model=List[CallRead],
+    summary=(
+        "Recherche d'appels par numéro ou nom de lead — "
+        "accessible à tout utilisateur authentifié"
+    ),
+)
+async def search_calls(
+    _: CurrentUser,
+    db: DBSession,
+    q: str = Query(default="", max_length=120),
+    limit: int = Query(default=30, ge=1, le=100),
+) -> List[CallRead]:
+    """Recherche libre d'appels — match sur le numéro (partial,
+    digits-only — donc « 514-555 » trouve « +15145551234 ») ou le nom
+    du lead capturé sur l'appel. Trié du plus récent au plus ancien.
+    Visible par tout utilisateur authentifié — sert au composant
+    Historique d'appels affiché dans les volets construction,
+    prospection et téléphonie."""
+    q = (q or "").strip()
+    stmt = select(Call)
+    if q:
+        digits = "".join(c for c in q if c.isdigit())
+        clauses = []
+        if digits:
+            like = f"%{digits}%"
+            clauses.append(Call.from_e164.ilike(like))
+            clauses.append(Call.to_e164.ilike(like))
+            clauses.append(Call.forwarded_to_e164.ilike(like))
+        clauses.append(Call.lead_name.ilike(f"%{q}%"))
+        # OR sur tous les critères — au moins un match suffit.
+        cond = clauses[0]
+        for extra in clauses[1:]:
+            cond = cond | extra
+        stmt = stmt.where(cond)
+    stmt = stmt.order_by(Call.started_at.desc()).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
+    return [CallRead.model_validate(r) for r in rows]
+
+
+@router.get(
     "/calls",
     response_model=List[CallRead],
     summary="Journal d'appels récent (admin) — optionnel : filtre par entité",
