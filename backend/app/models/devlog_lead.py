@@ -38,6 +38,19 @@ LEAD_PROJECT_TYPES = (
     "integration",
     "consulting",
     "autre",
+    "a_determiner",
+)
+
+#: Tranches budgétaires acceptées côté lead. Source de vérité partagée
+#: avec le formulaire public et le formulaire interne de création.
+LEAD_BUDGET_RANGES = (
+    "under_10k",
+    "10_25",
+    "25_50",
+    "50_100",
+    "over_100",
+    "unsure",
+    "a_determiner",
 )
 
 
@@ -105,6 +118,12 @@ class DevlogLead(Base, TimestampUpdateMixin):
     # NOM DB : notes (legacy, conservé). Exposé en API comme
     # `internal_notes`.
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Notes prises pendant la rencontre client (peut être un copier-
+    # coller d'un Copilote, ou de la frappe libre). Sépare des notes
+    # internes pour pouvoir résumer ce texte spécifique via IA (cf.
+    # endpoint POST /devlog/leads/{id}/summarize-notes).
+    meeting_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Rempli quand le lead est converti en client (statut « won »).
     client_id: Mapped[Optional[int]] = mapped_column(
