@@ -1,23 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  Loader2,
-  Plus,
-  Sparkles,
-  Trash2,
-  Wand2,
-  X
-} from "lucide-react";
+import { Loader2, Plus, Trash2, X } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
-import { useRouter } from "@/i18n/navigation";
 
 // Panneau « Besoins du client » de la fiche prospect Dev logiciel.
-// Permet de documenter les besoins par pôle (Frontend, Backend, …) et
-// de générer un plan structuré via l'IA, qu'on peut transformer en
-// soumission (sections + items pré-remplis) d'un clic.
+// Permet de documenter les besoins par pôle (Frontend, Backend, …)
+// pour préparer la rédaction d'une soumission.
+//
+// Note (2026-05) : la génération de « Plan IA » + conversion en
+// soumission a été retirée du frontend — la liste des besoins reste
+// la base de référence pour la rédaction manuelle du devis. Les
+// endpoints backend `/generate-plan` et `/plan-to-soumission` sont
+// conservés pour rétro-compat mais ne sont plus appelés ici.
 
 export type Need = {
   id: number;
@@ -30,27 +27,6 @@ export type Need = {
   priority: "low" | "medium" | "high" | null;
   created_at: string;
   updated_at: string;
-};
-
-type PlanItem = {
-  description: string;
-  quantity: number;
-  unit?: string | null;
-  cost_per_unit: number;
-};
-
-type PlanSection = {
-  pole: string;
-  name: string;
-  billing_kind: "initial" | "recurring";
-  markup_percent?: number | null;
-  notes?: string | null;
-  items: PlanItem[];
-};
-
-type Plan = {
-  summary: string;
-  sections: PlanSection[];
 };
 
 const POLE_PRESETS: { pole: string; label: string }[] = [
@@ -78,25 +54,13 @@ const PRIORITY_LABEL: Record<string, string> = {
   low: "Basse"
 };
 
-function fmt(n: number): string {
-  return n.toLocaleString("fr-CA", {
-    style: "currency",
-    currency: "CAD",
-    maximumFractionDigits: 2
-  });
-}
-
 export function DevlogLeadNeedsPanel({ leadId }: { leadId: number }) {
-  const router = useRouter();
   const confirm = useConfirm();
 
   const [needs, setNeeds] = useState<Need[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [plan, setPlan] = useState<Plan | null>(null);
-  const [creating, setCreating] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -165,53 +129,6 @@ export function DevlogLeadNeedsPanel({ leadId }: { leadId: number }) {
     }
   }
 
-  async function generatePlan() {
-    if (needs.length === 0) {
-      setError("Ajoute au moins un besoin avant de générer le plan.");
-      return;
-    }
-    setGenerating(true);
-    setError(null);
-    try {
-      const r = await authedFetch(
-        `/api/v1/devlog/leads/${leadId}/generate-plan`,
-        { method: "POST" }
-      );
-      if (!r.ok) {
-        const j = await r.json().catch(() => ({} as { detail?: string }));
-        throw new Error(j.detail || "Génération impossible");
-      }
-      setPlan((await r.json()) as Plan);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Erreur IA");
-    } finally {
-      setGenerating(false);
-    }
-  }
-
-  async function createSoumission() {
-    if (!plan) return;
-    setCreating(true);
-    try {
-      const r = await authedFetch(
-        `/api/v1/devlog/leads/${leadId}/plan-to-soumission`,
-        {
-          method: "POST",
-          body: JSON.stringify({ plan })
-        }
-      );
-      if (!r.ok) throw new Error();
-      const created = (await r.json()) as { id: number };
-      router.push({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        pathname: `/dev-logiciel/soumissions/${created.id}` as any
-      });
-    } catch {
-      setError("Création soumission impossible");
-      setCreating(false);
-    }
-  }
-
   const presetsAvailable = useMemo(() => {
     const used = new Set(needs.map((n) => n.pole));
     return POLE_PRESETS.filter((p) => !used.has(p.pole));
@@ -223,8 +140,8 @@ export function DevlogLeadNeedsPanel({ leadId }: { leadId: number }) {
         <div>
           <h2 className="text-base font-bold text-white">Besoins du client</h2>
           <p className="text-xs text-white/50">
-            Note les besoins par pôle. L'IA structure ensuite un plan
-            (sections + items) prêt à devenir une soumission.
+            Note les besoins par pôle de développement pour préparer la
+            rédaction de la soumission.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -235,19 +152,6 @@ export function DevlogLeadNeedsPanel({ leadId }: { leadId: number }) {
           >
             <Plus className="h-3 w-3" />
             Ajouter un pôle
-          </button>
-          <button
-            type="button"
-            onClick={generatePlan}
-            disabled={generating || needs.length === 0}
-            className="inline-flex items-center gap-1.5 rounded-md border border-blue-500/40 bg-blue-500/15 px-3 py-1.5 text-xs font-semibold text-blue-200 hover:bg-blue-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {generating ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <Sparkles className="h-3 w-3" />
-            )}
-            Générer le plan IA
           </button>
         </div>
       </div>
@@ -287,15 +191,6 @@ export function DevlogLeadNeedsPanel({ leadId }: { leadId: number }) {
           presets={presetsAvailable}
           onClose={() => setAddOpen(false)}
           onAdd={addNeed}
-        />
-      ) : null}
-
-      {plan ? (
-        <PlanPreviewModal
-          plan={plan}
-          onClose={() => setPlan(null)}
-          onCreate={createSoumission}
-          creating={creating}
         />
       ) : null}
     </div>
@@ -444,128 +339,3 @@ function AddPoleModal({
   );
 }
 
-function PlanPreviewModal({
-  plan,
-  onClose,
-  onCreate,
-  creating
-}: {
-  plan: Plan;
-  onClose: () => void;
-  onCreate: () => void;
-  creating: boolean;
-}) {
-  const totalsByKind = useMemo(() => {
-    let initial = 0;
-    let monthly = 0;
-    for (const sec of plan.sections) {
-      const markup = (sec.markup_percent ?? 0) / 100;
-      for (const it of sec.items) {
-        const total = it.quantity * it.cost_per_unit * (1 + markup);
-        if (sec.billing_kind === "recurring") monthly += total;
-        else initial += total;
-      }
-    }
-    return { initial, monthly };
-  }, [plan]);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-      <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-brand-800 bg-brand-950">
-        <header className="flex items-start justify-between gap-3 border-b border-brand-800 p-5">
-          <div className="flex-1">
-            <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-blue-300">
-              <Wand2 className="h-3.5 w-3.5" />
-              Plan généré par l'IA
-            </div>
-            <h3 className="mt-1 text-base font-bold text-white">
-              Aperçu de la soumission
-            </h3>
-            <p className="mt-1 text-xs text-white/60">{plan.summary}</p>
-          </div>
-          <button type="button" onClick={onClose}>
-            <X className="h-5 w-5 text-white/50" />
-          </button>
-        </header>
-        <div className="flex-1 overflow-y-auto p-5">
-          <div className="mb-4 grid grid-cols-2 gap-2 text-xs">
-            <div className="rounded-lg border border-blue-500/40 bg-blue-500/10 p-3">
-              <p className="text-[10px] uppercase tracking-wider text-white/60">
-                Frais initial
-              </p>
-              <p className="mt-1 text-lg font-bold text-white">
-                {fmt(totalsByKind.initial)}
-              </p>
-            </div>
-            <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3">
-              <p className="text-[10px] uppercase tracking-wider text-white/60">
-                Frais mensuel
-              </p>
-              <p className="mt-1 text-lg font-bold text-white">
-                {fmt(totalsByKind.monthly)}
-                <span className="text-xs font-normal text-white/60">
-                  {" "}
-                  / mois
-                </span>
-              </p>
-            </div>
-          </div>
-          <ul className="space-y-3">
-            {plan.sections.map((sec, i) => (
-              <li
-                key={i}
-                className="rounded-lg border border-brand-800 bg-brand-900 p-3"
-              >
-                <div className="flex items-center justify-between border-b border-brand-800 pb-2">
-                  <p className="text-sm font-bold text-white">{sec.name}</p>
-                  <span className="rounded bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/60">
-                    {sec.billing_kind === "recurring" ? "mensuel" : "initial"}
-                    {sec.markup_percent != null
-                      ? ` · markup ${sec.markup_percent}%`
-                      : ""}
-                  </span>
-                </div>
-                <ul className="mt-2 space-y-1 text-xs">
-                  {sec.items.map((it, j) => (
-                    <li
-                      key={j}
-                      className="flex items-baseline justify-between gap-2"
-                    >
-                      <span className="text-white/80">{it.description}</span>
-                      <span className="whitespace-nowrap text-white/50">
-                        {it.quantity} {it.unit || ""} ×{" "}
-                        {fmt(it.cost_per_unit)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </li>
-            ))}
-          </ul>
-        </div>
-        <footer className="flex items-center justify-end gap-2 border-t border-brand-800 p-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-brand-700 px-3 py-2 text-xs font-semibold text-white/70 hover:bg-white/5"
-          >
-            Annuler
-          </button>
-          <button
-            type="button"
-            onClick={onCreate}
-            disabled={creating}
-            className="inline-flex items-center gap-2 rounded-md bg-blue-500 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-600 disabled:opacity-50"
-          >
-            {creating ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Sparkles className="h-3.5 w-3.5" />
-            )}
-            Créer la soumission depuis ce plan
-          </button>
-        </footer>
-      </div>
-    </div>
-  );
-}

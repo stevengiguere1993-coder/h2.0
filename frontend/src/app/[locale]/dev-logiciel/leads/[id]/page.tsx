@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter as useNextRouter } from "next/navigation";
@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  ClipboardEdit,
   Copy,
   DollarSign,
   FileText,
@@ -92,6 +93,7 @@ const TABS = [
   { id: "apercu", label: "Aperçu", icon: FileText },
   { id: "client", label: "Client", icon: User },
   { id: "rendez-vous", label: "Rendez-vous", icon: Calendar },
+  { id: "resume", label: "Résumé de rencontre", icon: ClipboardEdit },
   { id: "mesures", label: "Besoins du client", icon: MessageCircleQuestion },
   { id: "documents", label: "Documents", icon: FileText },
   { id: "employes", label: "Employés", icon: Users }
@@ -510,62 +512,71 @@ export default function ProspectDetailPage() {
                       )}
                     </button>
                   </div>
+                </div>
+              ) : null}
 
-                  <div className="lg:col-span-3 rounded-xl border border-brand-800 bg-brand-900 p-5">
-                    <div className="flex items-center justify-between">
+              {tab === "resume" ? (
+                <div className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                  <div className="flex items-center justify-between">
+                    <div>
                       <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
                         Notes de rencontre
                       </h3>
-                      <button
-                        type="button"
-                        onClick={summarizeMeetingNotes}
-                        disabled={summarizing || !meetingNotes.trim()}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-400 disabled:opacity-50"
-                        title="Résumer avec IA"
-                      >
-                        {summarizing ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Sparkles className="h-3.5 w-3.5" />
-                        )}
-                        Résumer avec IA
-                      </button>
-                    </div>
-                    <textarea
-                      value={meetingNotes}
-                      onChange={(e) => setMeetingNotes(e.target.value)}
-                      onBlur={saveMeetingNotes}
-                      rows={10}
-                      placeholder="Colle tes notes du Copilote ou tape pendant la rencontre…"
-                      className="input mt-3"
-                    />
-                    {summaryError ? (
-                      <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-                        {summaryError}
+                      <p className="mt-1 text-xs text-white/50">
+                        Colle tes notes brutes (Copilote, dictée, etc.) puis
+                        clique sur « Résumer avec IA » pour générer un résumé
+                        structuré.
                       </p>
-                    ) : null}
-                    {meetingSummary ? (
-                      <div className="mt-4 rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-4">
-                        <div className="flex items-center justify-between">
-                          <p className="text-xs font-semibold uppercase tracking-wider text-emerald-300">
-                            Résumé IA
-                          </p>
-                          <button
-                            type="button"
-                            onClick={copySummary}
-                            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-emerald-200 hover:bg-emerald-500/15"
-                            title="Copier"
-                          >
-                            <Copy className="h-3 w-3" />
-                            Copier
-                          </button>
-                        </div>
-                        <p className="mt-2 whitespace-pre-wrap text-sm text-white/90">
-                          {meetingSummary}
-                        </p>
-                      </div>
-                    ) : null}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={summarizeMeetingNotes}
+                      disabled={summarizing || !meetingNotes.trim()}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-400 disabled:opacity-50"
+                      title="Résumer avec IA"
+                    >
+                      {summarizing ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-3.5 w-3.5" />
+                      )}
+                      Résumer avec IA
+                    </button>
                   </div>
+                  <textarea
+                    value={meetingNotes}
+                    onChange={(e) => setMeetingNotes(e.target.value)}
+                    onBlur={saveMeetingNotes}
+                    rows={12}
+                    placeholder="Colle tes notes du Copilote ou tape pendant la rencontre…"
+                    className="input mt-3"
+                  />
+                  {summaryError ? (
+                    <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                      {summaryError}
+                    </p>
+                  ) : null}
+                  {meetingSummary ? (
+                    <div className="mt-4 rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-4">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-emerald-300">
+                          Résumé IA
+                        </p>
+                        <button
+                          type="button"
+                          onClick={copySummary}
+                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-emerald-200 hover:bg-emerald-500/15"
+                          title="Copier"
+                        >
+                          <Copy className="h-3 w-3" />
+                          Copier
+                        </button>
+                      </div>
+                      <p className="mt-2 whitespace-pre-wrap text-sm text-white/90">
+                        {meetingSummary}
+                      </p>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
