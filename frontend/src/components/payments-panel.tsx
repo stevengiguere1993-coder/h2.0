@@ -303,11 +303,11 @@ function PaymentModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto overscroll-contain bg-black/70 p-4 sm:items-center"
       onClick={() => (!busy ? onClose() : null)}
     >
       <div
-        className="w-full max-w-xl rounded-2xl border border-brand-800 bg-brand-950 p-6"
+        className="my-auto max-h-[calc(100dvh-2rem)] w-full max-w-xl overflow-y-auto overscroll-contain rounded-2xl border border-brand-800 bg-brand-950 p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <h3 className="text-lg font-bold text-white">
