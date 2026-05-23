@@ -1,11 +1,12 @@
-﻿"""
+"""
 API v1 Router
 
 Main router that aggregates all API v1 endpoints.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.api.deps import get_current_admin_or_owner
 from app.api.v1.endpoints import (
     admin_data,
     agenda_availability,
@@ -129,27 +130,34 @@ api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(users.router)
 api_router.include_router(clients.router)
-api_router.include_router(devlog.clients_router)
-api_router.include_router(devlog.leads_router)
+# Le pôle Dev Logiciel est restreint à admin/owner (Phil + Steven).
+# La garde est appliquée à TOUS les routers internes du pôle ; seuls
+# les routers publics (signature contrat sans login, formulaire de
+# contact, signature soumission, consultation facture) restent ouverts.
+_devlog_admin_only = [Depends(get_current_admin_or_owner)]
+api_router.include_router(devlog.clients_router, dependencies=_devlog_admin_only)
+api_router.include_router(devlog.leads_router, dependencies=_devlog_admin_only)
 # Automations DOIT être registered AVANT soumissions_router pour que
 # le PATCH override (auto-création projet quand status → acceptee) et
 # /soumissions/{id}/convert-to-project matchent avant le CRUD générique.
-api_router.include_router(devlog.soumission_automations_router)
-api_router.include_router(devlog.soumissions_router)
-api_router.include_router(devlog.projects_router)
-api_router.include_router(devlog.time_entries_router)
+api_router.include_router(devlog.soumission_automations_router, dependencies=_devlog_admin_only)
+api_router.include_router(devlog.soumissions_router, dependencies=_devlog_admin_only)
+api_router.include_router(devlog.projects_router, dependencies=_devlog_admin_only)
+api_router.include_router(devlog.time_entries_router, dependencies=_devlog_admin_only)
 # invoice_automations_router DOIT être registered AVANT invoices_router
 # pour que /devlog/invoices/{id}/send, /pdf et /mark-paid matchent
 # avant le CRUD générique /devlog/invoices/{item_id}.
-api_router.include_router(devlog.invoice_automations_router)
-api_router.include_router(devlog.invoices_router)
-api_router.include_router(devlog.soumission_items_router)
-api_router.include_router(devlog.soumission_sections_router)
-api_router.include_router(devlog.related_router)
-api_router.include_router(devlog.sous_traitants_router)
-api_router.include_router(devlog.invoice_items_router)
-api_router.include_router(devlog.lead_needs_router)
-api_router.include_router(devlog.contracts_router)
+api_router.include_router(devlog.invoice_automations_router, dependencies=_devlog_admin_only)
+api_router.include_router(devlog.invoices_router, dependencies=_devlog_admin_only)
+api_router.include_router(devlog.soumission_items_router, dependencies=_devlog_admin_only)
+api_router.include_router(devlog.soumission_sections_router, dependencies=_devlog_admin_only)
+api_router.include_router(devlog.related_router, dependencies=_devlog_admin_only)
+api_router.include_router(devlog.sous_traitants_router, dependencies=_devlog_admin_only)
+api_router.include_router(devlog.invoice_items_router, dependencies=_devlog_admin_only)
+api_router.include_router(devlog.lead_needs_router, dependencies=_devlog_admin_only)
+api_router.include_router(devlog.contracts_router, dependencies=_devlog_admin_only)
+# public_contracts_router = signature de contrat sans auth (prefix /public/devlog).
+# Ne PAS protéger sinon les clients externes ne peuvent plus signer.
 api_router.include_router(devlog.public_contracts_router)
 # Page publique signature soumission devis_dev — /public/devlog/soumissions/{token}
 api_router.include_router(public_devlog_soumission.router)
