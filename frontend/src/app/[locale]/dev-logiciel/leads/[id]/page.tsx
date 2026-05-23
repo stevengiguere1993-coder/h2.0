@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter as useNextRouter } from "next/navigation";
@@ -9,25 +9,28 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Copy,
   DollarSign,
   FileText,
   Image as ImageIcon,
   Loader2,
   Mail,
   MapPin,
+  MessageCircleQuestion,
   Pencil,
   Phone,
-  Ruler,
+  Sparkles,
   Trash2,
   User,
-  Users
+  UserPlus,
+  Users,
+  X
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
 import { FollowUpTimeline } from "@/components/follow-up-timeline";
 import { DevlogLeadNeedsPanel } from "@/components/devlog-lead-needs-panel";
-import { SalesTasksPanel } from "@/components/sales-tasks-panel";
 import { Link } from "@/i18n/navigation";
 import { useDevlogLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -47,6 +50,7 @@ type Prospect = {
   source: string | null;
   status: string;
   internal_notes: string | null;
+  meeting_notes: string | null;
   assigned_to_user_id: number | null;
   gdpr_consent: boolean;
   marketing_consent: boolean;
@@ -70,7 +74,8 @@ const PROJECT_LABEL: Record<string, string> = {
   automation: "Automatisation",
   integration: "Intégration",
   consulting: "Consultation",
-  autre: "Autre"
+  autre: "Autre",
+  a_determiner: "À déterminer"
 };
 
 const BUDGET_LABEL: Record<string, string> = {
@@ -79,17 +84,17 @@ const BUDGET_LABEL: Record<string, string> = {
   "25_50": "25 000 $ – 50 000 $",
   "50_100": "50 000 $ – 100 000 $",
   over_100: "Plus de 100 000 $",
-  unsure: "Indéterminé"
+  unsure: "Indéterminé",
+  a_determiner: "À déterminer"
 };
 
 const TABS = [
   { id: "apercu", label: "Aperçu", icon: FileText },
   { id: "client", label: "Client", icon: User },
   { id: "rendez-vous", label: "Rendez-vous", icon: Calendar },
-  { id: "mesures", label: "Besoins du client", icon: Ruler },
+  { id: "mesures", label: "Besoins du client", icon: MessageCircleQuestion },
   { id: "documents", label: "Documents", icon: FileText },
-  { id: "employes", label: "Employés", icon: Users },
-  { id: "taches", label: "Tâches", icon: CheckCircle2 }
+  { id: "employes", label: "Employés", icon: Users }
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -107,6 +112,10 @@ export default function ProspectDetailPage() {
   const [tab, setTab] = useState<TabId>("apercu");
   const [notes, setNotes] = useState("");
   const [savingNotes, setSavingNotes] = useState(false);
+  const [meetingNotes, setMeetingNotes] = useState("");
+  const [meetingSummary, setMeetingSummary] = useState<string | null>(null);
+  const [summarizing, setSummarizing] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [users, setUsers] = useState<
     { id: number; email: string; first_name?: string | null; last_name?: string | null }[]
@@ -187,6 +196,7 @@ export default function ProspectDetailPage() {
         if (!cancelled) {
           setP(data);
           setNotes(data.internal_notes || "");
+          setMeetingNotes(data.meeting_notes || "");
         }
       } catch {
         if (!cancelled) setError("Prospect introuvable.");
@@ -249,6 +259,64 @@ export default function ProspectDetailPage() {
       setError("Sauvegarde des notes échouée.");
     } finally {
       setSavingNotes(false);
+    }
+  }
+
+  async function saveMeetingNotes() {
+    if (!p) return;
+    if ((p.meeting_notes || "") === meetingNotes) return;
+    try {
+      const res = await authedFetch(`/api/v1/devlog/leads/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ meeting_notes: meetingNotes || null })
+      });
+      if (!res.ok) throw new Error();
+      const updated = (await res.json()) as Prospect;
+      setP(updated);
+    } catch {
+      // silencieux : auto-save au blur, on réessaiera au prochain blur
+    }
+  }
+
+  async function summarizeMeetingNotes() {
+    if (!p) return;
+    const text = meetingNotes.trim();
+    if (!text) {
+      setSummaryError("Tape ou colle des notes avant de résumer.");
+      return;
+    }
+    setSummarizing(true);
+    setSummaryError(null);
+    setMeetingSummary(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/devlog/leads/${id}/summarize-notes`,
+        {
+          method: "POST",
+          body: JSON.stringify({ notes: text })
+        }
+      );
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        throw new Error(t || `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as { summary: string };
+      setMeetingSummary(data.summary);
+    } catch (e) {
+      setSummaryError(
+        "Résumé IA échoué : " + ((e as Error).message || "erreur inconnue")
+      );
+    } finally {
+      setSummarizing(false);
+    }
+  }
+
+  async function copySummary() {
+    if (!meetingSummary) return;
+    try {
+      await navigator.clipboard.writeText(meetingSummary);
+    } catch {
+      /* ignore */
     }
   }
 
@@ -442,6 +510,62 @@ export default function ProspectDetailPage() {
                       )}
                     </button>
                   </div>
+
+                  <div className="lg:col-span-3 rounded-xl border border-brand-800 bg-brand-900 p-5">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+                        Notes de rencontre
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={summarizeMeetingNotes}
+                        disabled={summarizing || !meetingNotes.trim()}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-400 disabled:opacity-50"
+                        title="Résumer avec IA"
+                      >
+                        {summarizing ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Sparkles className="h-3.5 w-3.5" />
+                        )}
+                        Résumer avec IA
+                      </button>
+                    </div>
+                    <textarea
+                      value={meetingNotes}
+                      onChange={(e) => setMeetingNotes(e.target.value)}
+                      onBlur={saveMeetingNotes}
+                      rows={10}
+                      placeholder="Colle tes notes du Copilote ou tape pendant la rencontre…"
+                      className="input mt-3"
+                    />
+                    {summaryError ? (
+                      <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                        {summaryError}
+                      </p>
+                    ) : null}
+                    {meetingSummary ? (
+                      <div className="mt-4 rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-4">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-semibold uppercase tracking-wider text-emerald-300">
+                            Résumé IA
+                          </p>
+                          <button
+                            type="button"
+                            onClick={copySummary}
+                            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-emerald-200 hover:bg-emerald-500/15"
+                            title="Copier"
+                          >
+                            <Copy className="h-3 w-3" />
+                            Copier
+                          </button>
+                        </div>
+                        <p className="mt-2 whitespace-pre-wrap text-sm text-white/90">
+                          {meetingSummary}
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               ) : null}
 
@@ -516,7 +640,8 @@ export default function ProspectDetailPage() {
                       { value: "25_50", label: "25 000 $ – 50 000 $" },
                       { value: "50_100", label: "50 000 $ – 100 000 $" },
                       { value: "over_100", label: "Plus de 100 000 $" },
-                      { value: "unsure", label: "Indéterminé" }
+                      { value: "unsure", label: "Indéterminé" },
+                      { value: "a_determiner", label: "À déterminer" }
                     ]}
                     onSave={(v) => patchProspect({ budget_range: v || null })}
                   />
@@ -543,10 +668,12 @@ export default function ProspectDetailPage() {
                 <ProspectDocuments contactRequestId={p.id} />
               ) : null}
               {tab === "employes" ? (
-                <Placeholder label="Employés assignés — module à venir avec la phase Projets/Agenda." />
-              ) : null}
-              {tab === "taches" ? (
-                <SalesTasksPanel contactRequestId={p.id} />
+                <AssigneesPanel
+                  current={p.assigned_to_user_id}
+                  users={users}
+                  onAssign={(uid) => updateAssignee(uid)}
+                  onRemove={() => updateAssignee(null)}
+                />
               ) : null}
             </div>
           </>
@@ -769,6 +896,127 @@ function Placeholder({ label }: { label: string }) {
   return (
     <div className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 p-10 text-center">
       <p className="text-sm text-white/50">{label}</p>
+    </div>
+  );
+}
+
+// ---------- AssigneesPanel (onglet Employés) ---------------------------
+// Vue simplifiée du suivi des personnes assignées : le modèle DevlogLead
+// ne supporte qu'un seul `assigned_to_user_id`, on l'affiche en carte
+// avec bouton « Retirer » et un sélecteur « + Ajouter / Changer ».
+// Le suivi audit complet (qui a ajouté qui et quand) viendra avec un
+// modèle d'assignation multi-utilisateur dédié.
+
+function AssigneesPanel({
+  current,
+  users,
+  onAssign,
+  onRemove
+}: {
+  current: number | null;
+  users: {
+    id: number;
+    email: string;
+    first_name?: string | null;
+    last_name?: string | null;
+  }[];
+  onAssign: (userId: number) => void;
+  onRemove: () => void;
+}) {
+  const [picking, setPicking] = useState(false);
+  const assigned = current
+    ? users.find((u) => u.id === current) || null
+    : null;
+  const displayName = (u: {
+    email: string;
+    first_name?: string | null;
+    last_name?: string | null;
+  }) =>
+    u.first_name || u.last_name
+      ? `${u.first_name || ""} ${u.last_name || ""}`.trim()
+      : u.email;
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+          Personnes assignées
+        </h3>
+        <p className="mt-1 text-xs text-white/50">
+          Qui s&apos;occupe de ce prospect.
+        </p>
+
+        <div className="mt-4 space-y-2">
+          {assigned ? (
+            <div className="flex items-center justify-between rounded-lg border border-brand-800 bg-brand-950 px-3 py-2">
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-blue-400" />
+                <span className="text-sm text-white">
+                  {displayName(assigned)}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={onRemove}
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-white/60 hover:bg-rose-500/10 hover:text-rose-300"
+                title="Retirer"
+              >
+                <X className="h-3.5 w-3.5" />
+                Retirer
+              </button>
+            </div>
+          ) : (
+            <p className="rounded-lg border border-dashed border-brand-800 bg-brand-950 px-3 py-3 text-xs text-white/40">
+              Aucune personne assignée.
+            </p>
+          )}
+
+          {picking ? (
+            <div className="flex items-center gap-2">
+              <select
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v) {
+                    onAssign(Number(v));
+                    setPicking(false);
+                  }
+                }}
+                defaultValue=""
+                className="input flex-1"
+                autoFocus
+              >
+                <option value="" disabled>
+                  — Choisir un employé —
+                </option>
+                {users
+                  .filter((u) => u.id !== current)
+                  .map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {displayName(u)}
+                    </option>
+                  ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => setPicking(false)}
+                className="rounded-md p-2 text-white/40 hover:bg-brand-800"
+                title="Annuler"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setPicking(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-brand-800 px-3 py-2 text-xs text-white/60 hover:border-blue-500 hover:text-white"
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              {assigned ? "Changer" : "Ajouter une personne"}
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

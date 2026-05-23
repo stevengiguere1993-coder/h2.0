@@ -88,6 +88,7 @@ class DevlogLeadUpdate(BaseModel):
     project_summary: Optional[str] = None
     budget_range: Optional[str] = None
     notes: Optional[str] = None
+    meeting_notes: Optional[str] = None
 
 
 class DevlogLeadStatusUpdate(BaseModel):
@@ -117,6 +118,7 @@ class DevlogLeadRead(BaseModel):
     project_summary: Optional[str]
     budget_range: Optional[str]
     notes: Optional[str]
+    meeting_notes: Optional[str] = None
     client_id: Optional[int]
     created_at: datetime
     updated_at: datetime

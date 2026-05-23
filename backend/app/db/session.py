@@ -1,4 +1,4 @@
-﻿"""
+"""
 Database session configuration for async SQLAlchemy.
 
 Provides:
@@ -612,6 +612,9 @@ async def init_db() -> None:
                 "locale",
                 "VARCHAR(8) NOT NULL DEFAULT 'fr'",
             ),
+            # Notes de rencontre client (texte libre, peut etre tres
+            # long). Resume par Gemini via /devlog/leads/{id}/summarize-notes.
+            ("devlog_leads", "meeting_notes", "TEXT"),
             # Téléphonie Phase 2 — secrétaire IA. La table CallTurn est
             # créée par create_all ; les colonnes ci-dessous étendent
             # PhoneNumber et Call (créés en Phase 1).

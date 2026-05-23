@@ -7,6 +7,7 @@ Main router that aggregates all API v1 endpoints.
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_current_admin_or_owner
+from app.api.v1.endpoints import devlog_notes_ai
 from app.api.v1.endpoints import (
     admin_data,
     agenda_availability,
@@ -316,4 +317,9 @@ api_router.include_router(investissements.router)
 # Formulaire public Dev Logiciel — endpoint POST /public/devlog/contact
 # sans auth, cree un DevlogLead avec source=web_form au submit.
 api_router.include_router(public_devlog_contact.router)
+
+# Resume IA des notes de rencontre prospect (POST /devlog/leads/{id}/summarize-notes).
+# Isole de devlog.py pour minimiser les conflits de merge entre chantiers.
+# Protege par la meme garde admin/owner que les autres routers internes du pole.
+api_router.include_router(devlog_notes_ai.router, dependencies=_devlog_admin_only)
 

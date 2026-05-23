@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
-import { AddressInput } from "@/components/address-input";
 import { useDevlogLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -91,7 +90,8 @@ const PROJECT_LABEL: Record<string, string> = {
   automation: "Automatisation",
   integration: "Intégration",
   consulting: "Consultation",
-  autre: "Autre"
+  autre: "Autre",
+  a_determiner: "À déterminer"
 };
 
 const CUSTOM_COLS_KEY = "devlog_crm_custom_columns_v1";
@@ -620,6 +620,8 @@ function CreateLeadModal({
           <div>
             <label className="label">Nom complet *</label>
             <input
+              type="text"
+              autoComplete="name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="input"
@@ -635,6 +637,7 @@ function CreateLeadModal({
               <label className="label">Courriel</label>
               <input
                 type="email"
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="input"
@@ -644,6 +647,8 @@ function CreateLeadModal({
             <div>
               <label className="label">Téléphone</label>
               <input
+                type="tel"
+                autoComplete="tel"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 className="input"
@@ -653,10 +658,14 @@ function CreateLeadModal({
           </div>
           <div>
             <label className="label">Nom de l&apos;entreprise</label>
-            <AddressInput
+            <input
+              type="text"
+              autoComplete="organization"
+              name="company"
               value={address}
-              onChange={setAddress}
-              placeholder="Ex. 158 Rue Maurice, Saint-Sauveur, QC"
+              onChange={(e) => setAddress(e.target.value)}
+              className="input"
+              placeholder="Ex. Acme inc."
             />
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -688,6 +697,7 @@ function CreateLeadModal({
                 <option value="50_100">50 000 $ – 100 000 $</option>
                 <option value="over_100">Plus de 100 000 $</option>
                 <option value="unsure">Indéterminé</option>
+                <option value="a_determiner">À déterminer</option>
               </select>
             </div>
           </div>
