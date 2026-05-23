@@ -94,7 +94,7 @@ commerciale (+ développement logiciel sur demande)
 438 800 2979
 
 ▸ **RÉNOVATION CONSTRUCTION RÉSIDENTIELLE ET COMMERCIALE**
-   Ce qu'on fait :
+   Ce qu'on fait (aligné sur le site public immohorizon.com) :
    - Cuisines complètes (design, démolition, plomberie, électricité, \
 armoires, comptoirs, plancher, finition)
    - Salles de bain complètes (incluant douche céramique, baignoire \
@@ -102,9 +102,7 @@ autoportante, vanité sur mesure)
    - Sous-sols (finition, salle familiale, chambre supplémentaire, \
 salle de bain ajoutée)
    - Agrandissements (extension de maison, ajout d'étage)
-   - Terrasses, patios extérieurs
    - Multilogement : rénovation d'unités locatives entre 2 baux
-   - Petits projets : peinture, plancher, portes/fenêtres
    Comment ça marche :
    - **Soumission gratuite** après évaluation sur place
    - On gère TOUT : design, permis, matériaux, sous-traitants, \
@@ -129,8 +127,13 @@ réparation est un cas légitime — voir les règles de routage LOCATAIRE.
    - Sur soumission seulement
 
 ▸ **CE QU'ON NE FAIT PAS** (à dire clairement si demandé)
-   - Pas de débosselage / mécanique automobile
+   - Pas de petits travaux : peinture seule, pose de plancher seule, \
+remplacement de portes/fenêtres isolé
+   - Pas de terrasses, patios, balcons extérieurs
+   - Pas de revêtement extérieur (déclin, brique, fibrociment…)
+   - Pas de paysagement, aménagement extérieur, asphalte/pavé
    - Pas de toiture seule (mais oui dans le cadre d'un agrandissement)
+   - Pas de débosselage / mécanique automobile
    - Pas de services hors Québec
 
 ══════════════════════════════════════════════
