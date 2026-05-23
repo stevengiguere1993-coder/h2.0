@@ -314,8 +314,9 @@ export function LoginForm() {
             </button>
           ) : null}
 
-          {/* Pôle Développement logiciel — visible pour tous les
-              utilisateurs (nouveau pôle interne). */}
+          {/* Pôle Développement logiciel — réservé admin/owner
+              (Phil + Steven). Caché aux autres rôles. */}
+          {isAdminOrOwner ? (
           <button
             type="button"
             onClick={() => {
@@ -340,6 +341,7 @@ export function LoginForm() {
               En développement
             </span>
           </button>
+          ) : null}
           </div>
 
           {/* Colonne droite : volets en développement, partenaires,

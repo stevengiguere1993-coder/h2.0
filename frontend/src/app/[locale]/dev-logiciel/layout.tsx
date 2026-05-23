@@ -1,8 +1,9 @@
 "use client";
 
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 
+import { useRouter } from "@/i18n/navigation";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { HelpButton } from "@/components/help-button";
 import { KratosFloating } from "@/components/kratos-floating";
@@ -17,6 +18,19 @@ export default function DevlogLayout({
 }) {
   const { user, loading, signOut } = useCurrentUser();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const router = useRouter();
+
+  // Le pôle Dev Logiciel est réservé aux admin/owner (Phil + Steven).
+  // Si un user authentifié mais sans le bon rôle atterrit ici, on le
+  // renvoie vers l'accueil du portail. La garde API renvoie déjà 403,
+  // mais ce redirect évite l'écran vide qui en résulterait.
+  useEffect(() => {
+    if (loading || !user) return;
+    if (user.role !== "owner" && user.role !== "admin") {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      router.replace("/connexion" as any);
+    }
+  }, [loading, user, router]);
 
   if (loading) {
     return (
@@ -26,6 +40,7 @@ export default function DevlogLayout({
     );
   }
   if (!user) return null;
+  if (user.role !== "owner" && user.role !== "admin") return null;
 
   const initialTheme = (user.theme_preference as Theme) || "light";
 

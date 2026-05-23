@@ -113,10 +113,28 @@ get_current_admin_role = _require_min_role("admin")
 get_current_owner = _require_min_role("owner")
 
 
+async def get_current_admin_or_owner(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """Guard dédié au pôle Dev Logiciel — admin ou owner uniquement.
+
+    Diffère de ``get_current_admin_role`` (qui partage le message générique
+    « Permissions insuffisantes. ») par un libellé explicite côté UI :
+    le pôle est réservé à l'équipe interne (Phil et Steven).
+    """
+    if current_user.role not in ("owner", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Accès réservé aux administrateurs",
+        )
+    return current_user
+
+
 # Type aliases for cleaner dependency injection
 CurrentUser = Annotated[User, Depends(get_current_user)]
 CurrentAdmin = Annotated[User, Depends(get_current_admin)]
 RequireManager = Annotated[User, Depends(get_current_manager)]
 RequireAdminRole = Annotated[User, Depends(get_current_admin_role)]
+RequireAdminOrOwner = Annotated[User, Depends(get_current_admin_or_owner)]
 RequireOwner = Annotated[User, Depends(get_current_owner)]
 DBSession = Annotated[AsyncSession, Depends(get_db)]
