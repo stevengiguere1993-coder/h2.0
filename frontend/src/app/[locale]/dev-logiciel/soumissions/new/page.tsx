@@ -29,6 +29,19 @@ type ClientLite = {
   address: string | null;
 };
 
+// Libellés courts des statuts de prospect, affichés dans le picker
+// pour aider à distinguer rapidement un prospect actif d'un prospect
+// gagné/perdu/spam quand on lui crée une soumission.
+const PROSPECT_STATUS_LABEL: Record<string, string> = {
+  new: "Nouveau",
+  contacted: "À rappeler",
+  qualified: "Qualifié",
+  quoted: "Soumission envoyée",
+  won: "Soumission acceptée",
+  lost: "Soumission refusée",
+  spam: "Spam"
+};
+
 function yyyyMmDd(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -81,12 +94,22 @@ export default function NewSoumissionPage() {
 
   const targetOptions = useMemo<TargetPickerOption[]>(
     () => [
-      ...prospects.map((p) => ({
-        value: `prospect:${p.id}`,
-        label: p.name,
-        sub: p.email || null,
-        kind: "prospect" as const
-      })),
+      // Tous les prospects (n'importe quel statut, incluant
+      // « Soumission refusée » / « Spam ») peuvent recevoir une
+      // soumission — on retombe parfois sur un ancien prospect qu'on
+      // a perdu mais qui revient quelques mois plus tard.
+      ...prospects.map((p) => {
+        const statusLabel = PROSPECT_STATUS_LABEL[p.status] || p.status;
+        const sub = p.email
+          ? `${statusLabel} · ${p.email}`
+          : statusLabel;
+        return {
+          value: `prospect:${p.id}`,
+          label: p.name,
+          sub,
+          kind: "prospect" as const
+        };
+      }),
       ...clients.map((c) => ({
         value: `client:${c.id}`,
         label: c.name,
@@ -284,10 +307,12 @@ export default function NewSoumissionPage() {
             />
             <p className="mt-1 text-xs text-white/50">
               Tape les premières lettres du nom ou du courriel — les
-              résultats s'affichent au fur et à mesure. Un prospect
-              devient un client une fois sa soumission acceptée — choisis
-              un <strong>client existant</strong> pour ajouter une
-              soumission complémentaire.
+              résultats s&apos;affichent au fur et à mesure. Tu peux lier la
+              soumission à <strong>n&apos;importe quel prospect</strong>
+              {" "}
+              (tous statuts confondus, incluant « refusé » qu&apos;on relance)
+              ou à un <strong>client existant</strong> pour une soumission
+              complémentaire.
             </p>
           </div>
 
