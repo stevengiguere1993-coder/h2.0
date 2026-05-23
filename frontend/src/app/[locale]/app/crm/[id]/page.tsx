@@ -26,6 +26,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
 import { CallButton } from "@/components/call-button";
+import { CallHistoryDropdown } from "@/components/call-history-dropdown";
 import { CommunicationsTimeline } from "@/components/communications-timeline";
 import { FollowUpTimeline } from "@/components/follow-up-timeline";
 import { MeasurementsPanel } from "@/components/measurements-panel";
@@ -581,13 +582,19 @@ export default function ProspectDetailPage() {
               ) : null}
 
               {tab === "communications" ? (
-                <CommunicationsTimeline
-                  entityType="contact_request"
-                  entityId={p.id}
-                  title="Appels & SMS"
-                  emptyHint="Aucun appel ni SMS lié à ce prospect. Utilise « Appeler » dans la fiche pour démarrer."
-                  replyToE164={p.phone || null}
-                />
+                <div className="space-y-4">
+                  <CallHistoryDropdown
+                    initialQuery={p.phone || p.name || ""}
+                    title={`Historique d'appels — ${p.name || p.phone || "prospect"}`}
+                  />
+                  <CommunicationsTimeline
+                    entityType="contact_request"
+                    entityId={p.id}
+                    title="Appels & SMS"
+                    emptyHint="Aucun appel ni SMS lié à ce prospect. Utilise « Appeler » dans la fiche pour démarrer."
+                    replyToE164={p.phone || null}
+                  />
+                </div>
               ) : null}
               {tab === "rendez-vous" ? (
                 <AppointmentScheduler
