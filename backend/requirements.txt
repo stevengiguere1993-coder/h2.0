@@ -70,3 +70,11 @@ pytesseract>=0.3.10,<1.0.0
 Pillow>=10.0.0,<12.0.0
 pdf2image>=1.16.0,<2.0.0
 pillow-heif>=0.13.0,<1.0.0
+
+# Excel (.xlsx) — Phil reçoit des listes d'immeubles à vendre
+# exportées par des courtiers en .xlsx. openpyxl lit ces fichiers
+# en pur Python (data_only pour récupérer les valeurs calculées).
+# Pour .xls (ancien format binaire OLE), parse_excel tente xlrd s'il
+# est présent mais ne l'épingle pas — .xlsx est le standard depuis
+# Excel 2007 et couvre 100% des fichiers vus en prod.
+openpyxl>=3.1.0,<4.0.0
