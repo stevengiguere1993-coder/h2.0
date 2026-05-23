@@ -1941,11 +1941,17 @@ async def twilio_sdk_outbound(request: Request) -> Response:
         )
         return Response(content=twiml, media_type="application/xml")
     # CallerID = notre numéro principal (1er PhoneNumber actif).
+    # `record="record-from-answer-dual"` : Twilio enregistre les
+    # deux canaux (notre côté + côté distant) dès que l'appel est
+    # décroché — pas durant la sonnerie. Les enregistrements sont
+    # visibles dans Twilio Console (Voice → Logs → Recordings) et
+    # serviront de base pour la transcription verbatim (étape
+    # suivante : callback + service de transcription).
     twiml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
         f'<Dial callerId="{os.getenv("TWILIO_PHONE_NUMBER", "")}" '
-        'timeout="20">'
+        'timeout="20" record="record-from-answer-dual">'
         f"{to}"
         "</Dial>"
         "</Response>"
