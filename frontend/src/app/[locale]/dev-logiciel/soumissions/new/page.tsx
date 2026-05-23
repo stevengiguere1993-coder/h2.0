@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter as useNextRouter, useSearchParams } from "next/navigation";
@@ -44,7 +44,8 @@ export default function NewSoumissionPage() {
   const { onOpenSidebar } = useDevlogLayout();
   const router = useNextRouter();
   const searchParams = useSearchParams();
-  const prefilledContactId = searchParams.get("lead_id");
+  const prefilledLeadId = searchParams.get("lead_id");
+  const prefilledClientId = searchParams.get("client_id");
 
   const [prospects, setProspects] = useState<Prospect[]>([]);
   const [clients, setClients] = useState<ClientLite[]>([]);
@@ -53,8 +54,16 @@ export default function NewSoumissionPage() {
   // Une soumission peut viser un prospect OU un client existant. On
   // encode le choix dans une seule valeur « prospect:{id} » ou
   // « client:{id} », puis on éclate en payload au submit.
+  //
+  // Pré-remplissage : si on arrive avec ``?client_id=X`` (lancée depuis
+  // la fiche client) on cible directement le client ; sinon ``?lead_id=X``
+  // (lancée depuis un prospect) cible le prospect.
   const [target, setTarget] = useState<string>(
-    prefilledContactId ? `prospect:${prefilledContactId}` : ""
+    prefilledClientId
+      ? `client:${prefilledClientId}`
+      : prefilledLeadId
+        ? `prospect:${prefilledLeadId}`
+        : ""
   );
   const [title, setTitle] = useState("");
   const [propertyAddress, setPropertyAddress] = useState("");
@@ -104,9 +113,15 @@ export default function NewSoumissionPage() {
         if (!cancelled) {
           setProspects(prospectsData);
           setClients(clientsData);
-          if (prefilledContactId) {
+          if (prefilledClientId) {
+            const c = clientsData.find(
+              (x) => String(x.id) === prefilledClientId
+            );
+            if (c?.address) setPropertyAddress(c.address);
+            if (c && !title) setTitle(`Projet — ${c.name}`);
+          } else if (prefilledLeadId) {
             const p = prospectsData.find(
-              (x) => String(x.id) === prefilledContactId
+              (x) => String(x.id) === prefilledLeadId
             );
             if (p?.address) setPropertyAddress(p.address);
           }
@@ -121,7 +136,8 @@ export default function NewSoumissionPage() {
     return () => {
       cancelled = true;
     };
-  }, [prefilledContactId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefilledLeadId, prefilledClientId]);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();

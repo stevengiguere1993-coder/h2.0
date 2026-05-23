@@ -108,6 +108,12 @@ type DevisPreview = {
       description: string;
       cost_per_unit: number;
     }>;
+    // Taxes (Québec) appliquées sur total_client_amount
+    tps_amount: number;
+    tvq_amount: number;
+    tps_pct: number;
+    tvq_pct: number;
+    total_client_amount_taxe: number;
   };
   initial: {
     couts_dev: number;
@@ -136,7 +142,22 @@ type DevisPreview = {
       cost_per_unit: number;
       prix_client: number;
     }>;
+    // Taxes (Québec) appliquées sur total_final (qui inclut déjà le closer)
+    tps_amount: number;
+    tvq_amount: number;
+    tps_pct: number;
+    tvq_pct: number;
+    total_final_taxe: number;
   };
+};
+
+type ClientInfo = {
+  id: number;
+  name: string;
+  company: string | null;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -354,6 +375,7 @@ export default function SoumissionDetailPage() {
   const [items, setItems] = useState<Item[]>([]);
   const [totals, setTotals] = useState<Totals>({ initial: 0, monthly: 0 });
   const [preview, setPreview] = useState<DevisPreview | null>(null);
+  const [client, setClient] = useState<ClientInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // adminView pour legacy, ownerView pour devis_dev (sémantique inverse,
@@ -381,6 +403,21 @@ export default function SoumissionDetailPage() {
           `/api/v1/devlog/soumissions/${id}/devis-preview`
         );
         if (pr.ok) setPreview((await pr.json()) as DevisPreview);
+      }
+      // Charge l'info client (encadré en haut de page) si la soumission
+      // est liée à un client.
+      if (sData.client_id) {
+        try {
+          const cr = await authedFetch(
+            `/api/v1/devlog/clients/${sData.client_id}`
+          );
+          if (cr.ok) setClient((await cr.json()) as ClientInfo);
+          else setClient(null);
+        } catch {
+          setClient(null);
+        }
+      } else {
+        setClient(null);
       }
       setError(null);
     } catch (e) {
@@ -808,7 +845,7 @@ export default function SoumissionDetailPage() {
                   <button
                     type="button"
                     onClick={() => void downloadPdf()}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-slate-500/40 bg-slate-500/10 px-3 py-1.5 font-semibold text-slate-200 hover:brightness-110"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 font-semibold text-emerald-300 hover:bg-emerald-500/20"
                   >
                     <Download className="h-3.5 w-3.5" />
                     Télécharger PDF
@@ -837,6 +874,15 @@ export default function SoumissionDetailPage() {
                 </div>
               ) : null}
             </header>
+
+            {/* Encadré client (fix #6) — toujours visible en haut sous le
+                header, qu'on soit en vue propriétaire ou client. */}
+            <ClientBox
+              client={client}
+              soumissionId={id}
+              hasLead={s.lead_id != null}
+              onLinked={() => void loadAll()}
+            />
 
             {isDevisDev ? (
               <DevisDevEditor
@@ -907,17 +953,17 @@ function DevisDevEditor({
 
   return (
     <>
-      {/* Totaux haut de page */}
+      {/* Totaux haut de page — affichés TTC (taxes incluses) */}
       <div className="mb-5 grid gap-3 sm:grid-cols-2">
         <TotalCard
-          label="Investissement initial"
-          value={init?.total_final ?? 0}
+          label="Investissement initial (TTC)"
+          value={init?.total_final_taxe ?? 0}
           icon={<Briefcase className="h-5 w-5 text-blue-300" />}
           accent="blue"
         />
         <TotalCard
-          label="Frais mensuels (récurrent)"
-          value={rec?.total_client_amount ?? 0}
+          label="Frais mensuels (TTC)"
+          value={rec?.total_client_amount_taxe ?? 0}
           icon={<Repeat className="h-5 w-5 text-emerald-300" />}
           accent="emerald"
           suffix=" / mois"
@@ -1015,34 +1061,38 @@ function DevisDevEditor({
                   ))}
                 </tbody>
                 <tfoot className="border-t border-emerald-500/30 text-xs">
+                  {/* Récap aligné sous la colonne « COÛT MENSUEL »
+                      (2e colonne). Labels dans la 1re colonne, valeurs
+                      dans la 2e ; la colonne « Total ligne » reste
+                      vide pour préserver le tableau. (fix #2) */}
                   <tr>
-                    <td className="pt-2 text-right text-white/60" colSpan={2}>
+                    <td className="pt-2 text-right text-white/60">
                       Coût interne mensuel
                     </td>
                     <td className="pt-2 text-right font-semibold text-white">
                       {fmtAmount(rec?.total_owner_cost ?? 0)}
                     </td>
                     <td></td>
+                    <td></td>
                   </tr>
                   <tr>
-                    <td className="text-right text-white/60" colSpan={2}>
+                    <td className="text-right text-white/60">
                       Marge ({s.marge_recurrente_pct ?? 50}%)
                     </td>
                     <td className="text-right text-white/80">
                       + {fmtAmount(rec?.marge_amount ?? 0)}
                     </td>
                     <td></td>
+                    <td></td>
                   </tr>
                   <tr>
-                    <td
-                      className="pb-1 text-right text-sm font-bold text-emerald-300"
-                      colSpan={2}
-                    >
+                    <td className="pb-1 text-right text-sm font-bold text-emerald-300">
                       Mensuel client
                     </td>
                     <td className="pb-1 text-right text-base font-bold text-emerald-300">
                       {fmtAmount(rec?.total_client_amount ?? 0)} / mois
                     </td>
+                    <td></td>
                     <td></td>
                   </tr>
                 </tfoot>
@@ -1064,6 +1114,11 @@ function DevisDevEditor({
             soumission={s}
             recurringItems={recurringItems}
             totalClientAmount={rec?.total_client_amount ?? 0}
+            totalClientAmountTaxe={rec?.total_client_amount_taxe ?? 0}
+            tpsAmount={rec?.tps_amount ?? 0}
+            tvqAmount={rec?.tvq_amount ?? 0}
+            tpsPct={rec?.tps_pct ?? 5}
+            tvqPct={rec?.tvq_pct ?? 9.975}
             onPatchSoumission={onPatchSoumission}
           />
         )}
@@ -1152,7 +1207,10 @@ function DevisDevOwnerInitial({
   const init = preview?.initial;
   return (
     <div className="space-y-4">
-      {/* Gestionnaire */}
+      {/* Gestionnaire — inputs compacts (fix #4, fix #5). Les inputs
+          Taux horaire et Heures sont à `w-28`, alignés à gauche dans
+          leur cellule grid. Le « Coût manager » est aligné en
+          baseline avec eux via `sm:items-end` sur la grille. */}
       <div className="rounded-xl border border-blue-500/20 bg-brand-950/40 p-3">
         <h3 className="text-xs font-bold uppercase tracking-wider text-blue-200">
           Gestionnaire de projet
@@ -1165,7 +1223,7 @@ function DevisDevOwnerInitial({
               onCommit={(n) =>
                 onPatchSoumission({ taux_manager_horaire: n })
               }
-              className="mt-1 block w-full rounded border border-blue-500/30 bg-brand-950 px-1.5 py-1 text-right text-white focus:outline-none"
+              className="mt-1 block w-28 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-1 text-right text-white focus:outline-none"
             />
           </label>
           <label className="text-xs text-white/70">
@@ -1173,14 +1231,14 @@ function DevisDevOwnerInitial({
             <HoursInput
               value={Number(s.heures_manager ?? 0)}
               onCommit={(n) => onPatchSoumission({ heures_manager: n })}
-              className="mt-1 block w-full rounded border border-blue-500/30 bg-brand-950 px-1.5 py-1 text-right text-white focus:outline-none"
+              className="mt-1 block w-28 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-1 text-right text-white focus:outline-none"
             />
           </label>
           <div className="text-xs text-white/70">
             Coût manager
             {/* Hauteur identique aux inputs voisins (py-1 + border)
                 pour que la valeur s'aligne sur la même ligne. */}
-            <p className="mt-1 block w-full rounded border border-transparent px-1.5 py-1 text-right text-base font-semibold text-white">
+            <p className="mt-1 block w-28 rounded border border-transparent px-1.5 py-1 text-right text-base font-semibold text-white">
               {fmtMoneyShort(Number(init?.cout_manager ?? 0))}
             </p>
           </div>
@@ -1383,10 +1441,31 @@ function DevisDevOwnerInitial({
             + {fmtAmount(init?.marge_amount ?? 0)}
           </dd>
           <dt className="border-t border-amber-500/40 pt-1 text-base text-amber-200">
-            Total final (client)
+            Total final (avant taxes)
           </dt>
           <dd className="border-t border-amber-500/40 pt-1 text-right text-base font-bold text-amber-200">
             {fmtAmount(init?.total_final ?? 0)}
+          </dd>
+          {/* Taxes Québec — appliquées sur total_final qui inclut déjà
+              le closer (10%) et la marge initiale. Le closer reste
+              calculé AVANT taxes. (fix #3) */}
+          <dt className="text-white/60">
+            + TPS ({init?.tps_pct ?? 5}%)
+          </dt>
+          <dd className="text-right text-white/80">
+            {fmtAmount(init?.tps_amount ?? 0)}
+          </dd>
+          <dt className="text-white/60">
+            + TVQ ({init?.tvq_pct ?? 9.975}%)
+          </dt>
+          <dd className="text-right text-white/80">
+            {fmtAmount(init?.tvq_amount ?? 0)}
+          </dd>
+          <dt className="border-t border-emerald-500/40 pt-1 text-base font-bold text-emerald-300">
+            Total final TTC
+          </dt>
+          <dd className="border-t border-emerald-500/40 pt-1 text-right text-base font-bold text-emerald-300">
+            {fmtAmount(init?.total_final_taxe ?? 0)}
           </dd>
         </dl>
       </div>
@@ -1398,11 +1477,21 @@ function DevisDevClientRecurring({
   soumission: s,
   recurringItems,
   totalClientAmount,
+  totalClientAmountTaxe,
+  tpsAmount,
+  tvqAmount,
+  tpsPct,
+  tvqPct,
   onPatchSoumission
 }: {
   soumission: Soumission;
   recurringItems: Item[];
   totalClientAmount: number;
+  totalClientAmountTaxe: number;
+  tpsAmount: number;
+  tvqAmount: number;
+  tpsPct: number;
+  tvqPct: number;
   onPatchSoumission: (patch: Partial<Soumission>) => void;
 }) {
   // Notes optionnelles : on garde un state local pour que la frappe
@@ -1436,16 +1525,35 @@ function DevisDevClientRecurring({
         </div>
       )}
 
-      <div className="flex items-center justify-between rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2">
-        <span className="text-sm font-semibold text-emerald-200">
-          Total mensuel
-        </span>
-        <span className="text-2xl font-bold text-emerald-200">
-          {fmtAmount(totalClientAmount)}
-          <span className="ml-1 text-sm font-normal text-emerald-200/70">
-            / mois
+      <div className="space-y-1 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm">
+        <div className="flex items-center justify-between text-white/80">
+          <span>Sous-total mensuel</span>
+          <span className="font-semibold text-white">
+            {fmtAmount(totalClientAmount)}
           </span>
-        </span>
+        </div>
+        <div className="flex items-center justify-between text-white/70">
+          <span>+ TPS ({tpsPct}%)</span>
+          <span>{fmtAmount(tpsAmount)}</span>
+        </div>
+        <div className="flex items-center justify-between text-white/70">
+          <span>+ TVQ ({tvqPct}%)</span>
+          <span>{fmtAmount(tvqAmount)}</span>
+        </div>
+        <div className="flex items-center justify-between border-t border-emerald-500/30 pt-1">
+          <span className="text-sm font-semibold text-emerald-200">
+            Total mensuel TTC
+          </span>
+          <span className="text-2xl font-bold text-emerald-200">
+            {fmtAmount(totalClientAmountTaxe)}
+            {/* Fix #9 — "/mois" lisible sur fond vert : on passe à
+                text-white/70 (au lieu de l'ancien emerald-200/70 qui
+                disparaissait sur le bg emerald-500/10). */}
+            <span className="ml-1 text-sm font-normal text-white/70">
+              / mois
+            </span>
+          </span>
+        </div>
       </div>
 
       <div>
@@ -1530,11 +1638,29 @@ function DevisDevClientInitial({
         </div>
       ) : null}
 
-      <div className="flex items-center justify-between rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2">
-        <span className="text-sm font-semibold text-blue-200">Total</span>
-        <span className="text-2xl font-bold text-blue-200">
-          {fmtAmount(init.total_final)}
-        </span>
+      <div className="space-y-1 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm">
+        <div className="flex items-center justify-between text-white/80">
+          <span>Sous-total</span>
+          <span className="font-semibold text-white">
+            {fmtAmount(init.total_final)}
+          </span>
+        </div>
+        <div className="flex items-center justify-between text-white/70">
+          <span>+ TPS ({init.tps_pct}%)</span>
+          <span>{fmtAmount(init.tps_amount)}</span>
+        </div>
+        <div className="flex items-center justify-between text-white/70">
+          <span>+ TVQ ({init.tvq_pct}%)</span>
+          <span>{fmtAmount(init.tvq_amount)}</span>
+        </div>
+        <div className="flex items-center justify-between border-t border-blue-500/30 pt-1">
+          <span className="text-sm font-semibold text-blue-200">
+            Total TTC
+          </span>
+          <span className="text-2xl font-bold text-blue-200">
+            {fmtAmount(init.total_final_taxe)}
+          </span>
+        </div>
       </div>
     </div>
   );
@@ -1658,6 +1784,182 @@ function LegacyView({
         </section>
       ) : null}
     </>
+  );
+}
+
+// Encadré client (fix #6) — affiche nom + email + téléphone +
+// adresse du client lié à la soumission. Si aucun client n'est lié,
+// affiche un message d'erreur subtil + un bouton « Lier un client »
+// qui ouvre un mini-picker. Le picker poste un PATCH sur la
+// soumission pour mettre à jour ``client_id``.
+function ClientBox({
+  client,
+  soumissionId,
+  hasLead,
+  onLinked
+}: {
+  client: ClientInfo | null;
+  soumissionId: number;
+  hasLead: boolean;
+  onLinked: () => void;
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [candidates, setCandidates] = useState<ClientInfo[]>([]);
+  const [loadingCandidates, setLoadingCandidates] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!pickerOpen) return;
+    let cancelled = false;
+    setLoadingCandidates(true);
+    void (async () => {
+      try {
+        const r = await authedFetch(
+          `/api/v1/devlog/clients?limit=500`
+        );
+        if (r.ok && !cancelled) {
+          setCandidates((await r.json()) as ClientInfo[]);
+        }
+      } catch {
+        /* ignore */
+      } finally {
+        if (!cancelled) setLoadingCandidates(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pickerOpen]);
+
+  async function linkClient(clientId: number) {
+    setLinkError(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/devlog/soumissions/${soumissionId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ client_id: clientId })
+        }
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setPickerOpen(false);
+      setQuery("");
+      onLinked();
+    } catch (e) {
+      setLinkError((e as Error).message || "Liaison impossible.");
+    }
+  }
+
+  const filteredCandidates = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return candidates.slice(0, 50);
+    return candidates
+      .filter(
+        (c) =>
+          (c.name || "").toLowerCase().includes(q) ||
+          (c.email || "").toLowerCase().includes(q) ||
+          (c.company || "").toLowerCase().includes(q)
+      )
+      .slice(0, 50);
+  }, [candidates, query]);
+
+  if (client) {
+    return (
+      <div className="mb-5 rounded-lg border border-brand-800 bg-brand-900/40 px-4 py-3">
+        <div className="flex flex-wrap items-start gap-x-6 gap-y-2 text-sm">
+          <div className="min-w-0">
+            <p className="text-[10px] uppercase tracking-wider text-white/40">
+              Client
+            </p>
+            <p className="font-semibold text-white/90">{client.name}</p>
+            {client.company ? (
+              <p className="text-xs text-white/60">{client.company}</p>
+            ) : null}
+          </div>
+          {client.email ? (
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-wider text-white/40">
+                Courriel
+              </p>
+              <p className="text-white/90">{client.email}</p>
+            </div>
+          ) : null}
+          {client.phone ? (
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-wider text-white/40">
+                Téléphone
+              </p>
+              <p className="text-white/90">{client.phone}</p>
+            </div>
+          ) : null}
+          {client.address ? (
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-wider text-white/40">
+                Adresse
+              </p>
+              <p className="text-white/90">{client.address}</p>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-amber-200">
+          {hasLead
+            ? "Aucun client lié à cette soumission. Le client sera créé automatiquement à l'envoi (à partir du prospect)."
+            : "Aucun client lié à cette soumission. Lier un client pour pouvoir envoyer."}
+        </p>
+        <button
+          type="button"
+          onClick={() => setPickerOpen((v) => !v)}
+          className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/20"
+        >
+          {pickerOpen ? "Annuler" : "Lier un client"}
+        </button>
+      </div>
+      {pickerOpen ? (
+        <div className="mt-3 space-y-2">
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Rechercher un client par nom, courriel ou entreprise…"
+            className="w-full rounded border border-amber-500/40 bg-brand-950 px-3 py-2 text-sm text-white focus:outline-none"
+            autoFocus
+          />
+          {linkError ? (
+            <p className="text-xs text-rose-300">{linkError}</p>
+          ) : null}
+          {loadingCandidates ? (
+            <p className="text-xs text-white/40">Chargement…</p>
+          ) : filteredCandidates.length === 0 ? (
+            <p className="text-xs text-white/40">Aucun client trouvé.</p>
+          ) : (
+            <ul className="max-h-56 overflow-y-auto rounded border border-amber-500/20 bg-brand-950/60">
+              {filteredCandidates.map((c) => (
+                <li key={c.id}>
+                  <button
+                    type="button"
+                    onClick={() => void linkClient(c.id)}
+                    className="flex w-full items-start justify-between gap-3 px-3 py-2 text-left hover:bg-amber-500/10"
+                  >
+                    <span className="text-sm text-white">{c.name}</span>
+                    <span className="text-xs text-white/50">
+                      {c.email ?? c.company ?? "—"}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

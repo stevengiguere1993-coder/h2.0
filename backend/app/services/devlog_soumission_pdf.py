@@ -297,13 +297,16 @@ def _render_bytes(
     # --- 2. Section Frais Mensuels Récurrents (si présents) ---
     recurring_items_breakdown = recurring.get("items_breakdown") or []
     total_monthly_client = float(recurring.get("total_client_amount") or 0)
+    tps_rec = float(recurring.get("tps_amount") or 0)
+    tvq_rec = float(recurring.get("tvq_amount") or 0)
+    total_monthly_taxe = float(recurring.get("total_client_amount_taxe") or 0)
     if recurring_items_breakdown or total_monthly_client > 0:
         story.append(Paragraph("FRAIS MENSUELS RÉCURRENTS", s["section"]))
-        # Encadré « X $ / mois »
+        # Encadré « X $ / mois » (TTC — taxes incluses)
         encadre = Table(
             [[
                 Paragraph(
-                    f"<b>{_fmt_money(total_monthly_client)} / mois</b>",
+                    f"<b>{_fmt_money(total_monthly_taxe)} / mois</b>",
                     s["big_amount"],
                 )
             ]],
@@ -323,6 +326,43 @@ def _render_bytes(
         story.append(encadre)
         story.append(Spacer(1, 4))
 
+        # Détail des taxes (TPS / TVQ) sous l'encadré récurrent
+        if total_monthly_client > 0:
+            tax_rows = [
+                [
+                    Paragraph("Sous-total mensuel", s["body"]),
+                    Paragraph(_fmt_money(total_monthly_client), s["body"]),
+                ],
+                [
+                    Paragraph("TPS (5%)", s["body"]),
+                    Paragraph(_fmt_money(tps_rec), s["body"]),
+                ],
+                [
+                    Paragraph("TVQ (9,975%)", s["body"]),
+                    Paragraph(_fmt_money(tvq_rec), s["body"]),
+                ],
+                [
+                    Paragraph("<b>Total mensuel TTC</b>", s["body_bold"]),
+                    Paragraph(
+                        f"<b>{_fmt_money(total_monthly_taxe)}</b>",
+                        s["body_bold"],
+                    ),
+                ],
+            ]
+            tax_table = Table(tax_rows, colWidths=["72%", "28%"])
+            tax_table.setStyle(
+                TableStyle([
+                    ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+                    ("LINEABOVE", (0, -1), (-1, -1), 0.5, colors.HexColor("#1e40af")),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ])
+            )
+            story.append(tax_table)
+            story.append(Spacer(1, 4))
+
         client_recurring_desc = (
             soumission.client_recurring_description or ""
         ).strip()
@@ -338,6 +378,9 @@ def _render_bytes(
     features_client = initial.get("features_client") or []
     frais_fixes_client = initial.get("frais_fixes_client") or []
     total_initial = float(initial.get("total_final") or 0)
+    tps_init = float(initial.get("tps_amount") or 0)
+    tvq_init = float(initial.get("tvq_amount") or 0)
+    total_initial_taxe = float(initial.get("total_final_taxe") or 0)
 
     if features_client or frais_fixes_client or total_initial > 0:
         story.append(Paragraph("INVESTISSEMENT INITIAL", s["section"]))
@@ -369,25 +412,44 @@ def _render_bytes(
                     Paragraph(_fmt_money(prix), s["body"]),
                 ])
         rows.append([
-            Paragraph("<b>Total</b>", s["body_bold"]),
+            Paragraph("<b>Sous-total</b>", s["body_bold"]),
             Paragraph(
                 f"<b>{_fmt_money(total_initial)}</b>", s["body_bold"]
             ),
         ])
+        rows.append([
+            Paragraph("TPS (5%)", s["body"]),
+            Paragraph(_fmt_money(tps_init), s["body"]),
+        ])
+        rows.append([
+            Paragraph("TVQ (9,975%)", s["body"]),
+            Paragraph(_fmt_money(tvq_init), s["body"]),
+        ])
+        rows.append([
+            Paragraph("<b>Total TTC</b>", s["body_bold"]),
+            Paragraph(
+                f"<b>{_fmt_money(total_initial_taxe)}</b>", s["body_bold"]
+            ),
+        ])
 
         table = Table(rows, colWidths=["72%", "28%"])
+        # Indice des lignes spéciales : sous-total (4 lignes avant la
+        # fin), Total TTC (dernière ligne).
+        subtotal_row = len(rows) - 4
+        ttc_row = len(rows) - 1
         table.setStyle(
             TableStyle([
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("ALIGN", (1, 0), (1, -1), "RIGHT"),
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
-                ("LINEABOVE", (0, -1), (-1, -1), 1, colors.HexColor("#1e40af")),
-                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#eff6ff")),
+                ("LINEABOVE", (0, subtotal_row), (-1, subtotal_row), 0.5, colors.HexColor("#1e40af")),
+                ("LINEABOVE", (0, ttc_row), (-1, ttc_row), 1, colors.HexColor("#1e40af")),
+                ("BACKGROUND", (0, ttc_row), (-1, ttc_row), colors.HexColor("#eff6ff")),
                 ("LEFTPADDING", (0, 0), (-1, -1), 6),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 6),
                 ("TOPPADDING", (0, 0), (-1, -1), 5),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#fafafa")]),
+                ("ROWBACKGROUNDS", (0, 1), (-1, subtotal_row - 1), [colors.white, colors.HexColor("#fafafa")]),
             ])
         )
         story.append(table)

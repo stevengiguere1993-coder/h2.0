@@ -49,6 +49,14 @@ from typing import Any, Iterable
 # Tolérance d'arrondi pour les comparaisons finales (cents).
 _EPS = 0.01
 
+# Taxes Québec — appliquées sur le total final (qui inclut déjà la
+# commission closer et la marge). Le 10% closer reste calculé AVANT
+# taxes : l'assiette taxable inclut le closer, et les taxes sont
+# appliquées par-dessus.
+TPS_RATE = 0.05
+TVQ_RATE = 0.09975
+TPS_TVQ_FACTOR = 1.0 + TPS_RATE + TVQ_RATE  # 1.14975
+
 
 def _f(value: Any, default: float = 0.0) -> float:
     """Convertit Decimal / int / str / None en ``float`` sûr."""
@@ -131,12 +139,24 @@ def compute_devis(
     total_client_recurring = total_owner_recurring * (1 + marge_rec_pct)
     marge_rec_amount = total_client_recurring - total_owner_recurring
 
+    # Taxes mensuelles — appliquées sur total_client_amount (qui inclut
+    # déjà la marge). Le client paie HT + TPS + TVQ chaque mois.
+    tps_mensuelle = total_client_recurring * TPS_RATE
+    tvq_mensuelle = total_client_recurring * TVQ_RATE
+    total_mensuel_client_taxe = total_client_recurring * TPS_TVQ_FACTOR
+
     recurring_block = {
         "total_owner_cost": _round(total_owner_recurring),
         "total_client_amount": _round(total_client_recurring),
         "marge_amount": _round(marge_rec_amount),
         "marge_pct": _round(marge_rec_pct * 100, 4),
         "items_breakdown": recurring_breakdown,
+        # --- Taxes (Québec) -----------------------------------------
+        "tps_amount": _round(tps_mensuelle),
+        "tvq_amount": _round(tvq_mensuelle),
+        "tps_pct": _round(TPS_RATE * 100, 4),
+        "tvq_pct": _round(TVQ_RATE * 100, 4),
+        "total_client_amount_taxe": _round(total_mensuel_client_taxe),
     }
 
     # ================================================================
@@ -250,6 +270,13 @@ def compute_devis(
                 frais_fixes_client[-1]["prix_client"] + delta
             )
 
+    # Taxes initiales — appliquées sur total_final (qui inclut déjà
+    # commission closer + marge). Le 10% closer reste calculé AVANT
+    # taxes : l'assiette taxable inclut le closer.
+    tps_initiale = total_final * TPS_RATE
+    tvq_initiale = total_final * TVQ_RATE
+    total_initial_taxe = total_final * TPS_TVQ_FACTOR
+
     initial_block = {
         "couts_dev": _round(couts_dev),
         "cout_manager": _round(cout_manager),
@@ -267,6 +294,12 @@ def compute_devis(
         "heures_manager": _round(heures_manager),
         "features_client": features_client,
         "frais_fixes_client": frais_fixes_client,
+        # --- Taxes (Québec) -----------------------------------------
+        "tps_amount": _round(tps_initiale),
+        "tvq_amount": _round(tvq_initiale),
+        "tps_pct": _round(TPS_RATE * 100, 4),
+        "tvq_pct": _round(TVQ_RATE * 100, 4),
+        "total_final_taxe": _round(total_initial_taxe),
     }
 
     return {
