@@ -6,6 +6,7 @@ import { ArrowLeft, Loader2, Save, Trash2 } from "lucide-react";
 
 import { AddressInput } from "@/components/address-input";
 import { AppTopbar } from "@/components/app-topbar";
+import { CallHistoryDropdown } from "@/components/call-history-dropdown";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -443,6 +444,13 @@ export default function EmployeDetailPage() {
                 </button>
               </div>
             </header>
+
+            <div className="mt-4">
+              <CallHistoryDropdown
+                initialQuery={emp.phone || emp.full_name}
+                title={`Historique d'appels — ${emp.full_name}`}
+              />
+            </div>
 
             {error ? (
               <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">

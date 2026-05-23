@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { CallHistoryDropdown } from "@/components/call-history-dropdown";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { useProspectionLayout } from "../layout";
@@ -643,6 +644,15 @@ export default function ProspectionDetailPage() {
         >
           <ArrowLeft className="mr-1 h-4 w-4" /> Retour à la carte
         </Link>
+
+        {lead ? (
+          <div className="mt-4">
+            <CallHistoryDropdown
+              initialQuery={lead.name || lead.address || ""}
+              title={`Historique d'appels — ${lead.name || lead.address || "lead"}`}
+            />
+          </div>
+        ) : null}
 
         {loading ? (
           <div className="flex min-h-[40vh] items-center justify-center">

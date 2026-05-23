@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { CallHistoryDropdown } from "@/components/call-history-dropdown";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -321,6 +322,13 @@ export default function SousTraitantDetailPage() {
                 </button>
               </div>
             </header>
+
+            <div className="mt-4">
+              <CallHistoryDropdown
+                initialQuery={st.phone || st.full_name}
+                title={`Historique d'appels — ${st.full_name}`}
+              />
+            </div>
 
             {error ? (
               <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">

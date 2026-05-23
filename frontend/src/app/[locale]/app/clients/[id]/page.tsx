@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { CallHistoryDropdown } from "@/components/call-history-dropdown";
 import { AddressInput } from "@/components/address-input";
 import { CallButton } from "@/components/call-button";
 import { CommunicationsTimeline } from "@/components/communications-timeline";
@@ -216,6 +217,13 @@ export default function ClientDetailPage() {
                 </button>
               </div>
             </header>
+
+            <div className="mt-4">
+              <CallHistoryDropdown
+                initialQuery={c.phone || c.name}
+                title={`Historique d'appels — ${c.name}`}
+              />
+            </div>
 
             {error ? (
               <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
