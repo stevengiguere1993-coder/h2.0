@@ -1,4 +1,4 @@
-﻿"""Endpoints — pôle Développement logiciel.
+"""Endpoints — pôle Développement logiciel.
 
 Ressources :
   * /api/v1/devlog/clients — clients du pôle (boîtes pour qui on
@@ -756,6 +756,21 @@ async def send_soumission(
             detail=(
                 "Les soumissions au format legacy ne peuvent pas être "
                 "envoyées par ce flow. Utilise une soumission « devis_dev »."
+            ),
+        )
+    # Si la soumission est rattachée à un lead mais pas encore à un
+    # client, on provisionne le client (idempotent). Sans ça, l'envoi
+    # échoue silencieusement avec « Adresse courriel du client manquante »
+    # alors qu'on a en fait l'email côté lead — c'était le bug #7 du
+    # batch 1 (feedback Phil 22 mai).
+    await _ensure_client_for_soumission(db, soumission)
+    if soumission.client_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "La soumission n'est rattachée à aucun client ni à aucun "
+                "prospect — impossible d'envoyer. Lie un client à la "
+                "soumission, puis réessaie."
             ),
         )
     try:
