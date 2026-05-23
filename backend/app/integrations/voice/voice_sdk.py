@@ -145,8 +145,30 @@ async def list_online_user_ids(db: AsyncSession) -> List[int]:
     return list(rows)
 
 
-def build_dial_clients_xml(user_ids: List[int]) -> str:
-    """Renvoie une portion `<Client>user_X</Client>` pour chaque user."""
+def build_dial_clients_xml(
+    user_ids: List[int],
+    parent_call_sid: Optional[str] = None,
+) -> str:
+    """Renvoie une portion ``<Client>user_X</Client>`` pour chaque user.
+
+    Si ``parent_call_sid`` est fourni, on inclut un
+    ``<Parameter name="ParentCallSid">`` dans chaque tag Client. Le
+    SDK navigateur peut alors lire cette valeur via
+    ``call.customParameters.get("ParentCallSid")`` et l'envoyer avec
+    le verbatim, pour qu'il soit attaché à la bonne Call parent
+    (sinon le SDK ne voit que son CallSid enfant, qui ne correspond
+    à aucune Call en base).
+    """
+    extras = ""
+    if parent_call_sid:
+        # CallSid Twilio = ASCII safe en pratique, mais on filtre
+        # défensivement les caractères pouvant casser le XML.
+        safe = "".join(
+            c for c in parent_call_sid if c.isalnum() or c in "._-"
+        )
+        if safe:
+            extras = f'<Parameter name="ParentCallSid" value="{safe}"/>'
     return "".join(
-        f"<Client>{client_identity_for_user(uid)}</Client>" for uid in user_ids
+        f"<Client>{client_identity_for_user(uid)}{extras}</Client>"
+        for uid in user_ids
     )

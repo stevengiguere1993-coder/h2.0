@@ -1407,7 +1407,7 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
                 db, call=call
             )
             if online_uids:
-                clients_xml = build_dial_clients_xml(online_uids)
+                clients_xml = build_dial_clients_xml(online_uids, parent_call_sid=call.provider_sid)
                 fallback_url = (
                     f"{_secretary_base_url()}/api/v1/voice/twilio/"
                     f"clients-fallback?call_id={call.id}"
@@ -1567,7 +1567,7 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
             online_uids = await list_online_user_ids(db)
             if online_uids:
                 call.forwarded_to_e164 = forward_to or None
-                clients_xml = build_dial_clients_xml(online_uids)
+                clients_xml = build_dial_clients_xml(online_uids, parent_call_sid=call.provider_sid)
                 fallback_url = (
                     f"{_secretary_base_url()}/api/v1/voice/twilio/"
                     f"clients-fallback?call_id={call.id}"
@@ -2897,6 +2897,7 @@ class CallRead(BaseModel):
     voicemail_transcription: Optional[str] = None
     voicemail_summary: Optional[str] = None
     recording_url: Optional[str] = None
+    verbatim_transcript: Optional[str] = None
     entity_type: Optional[str] = None
     entity_id: Optional[int] = None
     followup_suggestion: Optional[str] = None
@@ -2965,6 +2966,46 @@ async def patch_phone_number(
         pn.active = payload.active
     await db.flush()
     return PhoneNumberRead.model_validate(pn)
+
+
+class _CallDetail(BaseModel):
+    """Détail d'un appel pour le modal côté UI."""
+
+    call: CallRead
+    turns: List["CallTurnRead"]
+
+
+@router.get(
+    "/calls/{call_id}/detail",
+    response_model=_CallDetail,
+    summary=(
+        "Détail complet d'un appel (call + tours IA) — "
+        "accessible à tout utilisateur authentifié"
+    ),
+)
+async def get_call_detail(
+    call_id: int, _: CurrentUser, db: DBSession
+) -> _CallDetail:
+    """Renvoie la Call + ses tours IA, pour l'affichage dans le
+    modal de détail ouvert depuis CallHistoryDropdown."""
+    call = (
+        await db.execute(select(Call).where(Call.id == call_id))
+    ).scalar_one_or_none()
+    if call is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail="Call not found"
+        )
+    turns = (
+        await db.execute(
+            select(CallTurn)
+            .where(CallTurn.call_id == call_id)
+            .order_by(CallTurn.turn_index)
+        )
+    ).scalars().all()
+    return _CallDetail(
+        call=CallRead.model_validate(call),
+        turns=[CallTurnRead.model_validate(t) for t in turns],
+    )
 
 
 @router.get(

@@ -23,6 +23,8 @@ import {
 
 import { authedFetch } from "@/lib/auth";
 
+import { CallDetailModal } from "./call-detail-modal";
+
 type Call = {
   id: number;
   from_e164: string;
@@ -57,6 +59,9 @@ export function CallHistoryDropdown({
   const [query, setQuery] = useState(initialQuery);
   const [items, setItems] = useState<Call[]>([]);
   const [loading, setLoading] = useState(false);
+  // Quand non-null, le modal de détail s'affiche pour cet appel.
+  // Comportement par défaut si le parent n'a pas passé `onSelect`.
+  const [modalCallId, setModalCallId] = useState<number | null>(null);
 
   // Si le parent change `initialQuery` (ex. l'utilisateur clique un
   // autre contact), on resynchronise le champ.
@@ -95,6 +100,11 @@ export function CallHistoryDropdown({
   }, [open, query]);
 
   return (
+    <>
+    <CallDetailModal
+      callId={modalCallId}
+      onClose={() => setModalCallId(null)}
+    />
     <div className="rounded-2xl border border-brand-800 bg-brand-900">
       <button
         type="button"
@@ -149,13 +159,10 @@ export function CallHistoryDropdown({
                     onClick={() => {
                       if (onSelect) {
                         onSelect(c.id);
-                      } else if (typeof window !== "undefined") {
-                        const path = window.location.pathname;
-                        const locale =
-                          path.startsWith("/en/") || path === "/en"
-                            ? "/en"
-                            : "/fr";
-                        window.location.href = `${locale}/telephonie?call=${c.id}`;
+                      } else {
+                        // Par défaut : modal sur place, plutôt
+                        // que de quitter la fiche en cours.
+                        setModalCallId(c.id);
                       }
                     }}
                     className="w-full rounded-md px-2 py-1.5 text-left text-xs transition hover:bg-brand-800"
@@ -199,5 +206,6 @@ export function CallHistoryDropdown({
         </div>
       ) : null}
     </div>
+    </>
   );
 }
