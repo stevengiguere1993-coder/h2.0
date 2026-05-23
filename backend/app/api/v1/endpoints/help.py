@@ -11,6 +11,7 @@
 """
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -21,6 +22,84 @@ from sqlalchemy import select, update
 from app.api.deps import CurrentUser, DBSession, RequireOwner
 from app.core.config import settings
 from app.models.help_request import HelpRequest, HelpRequestKind, HelpRequestStatus
+from app.models.voice import Call
+
+
+# Mots à 4+ lettres considérés non-pertinents pour la recherche
+# d'appels — évite de matcher l'univers entier sur des questions
+# pleines de connecteurs ou de verbes très courants.
+_STOPWORDS_FR = {
+    "avec", "sans", "pour", "dans", "vous", "nous", "leur", "leurs",
+    "elle", "elles", "cette", "cela", "celui", "celle", "ceux", "celles",
+    "alors", "donc", "mais", "comme", "quand", "quoi", "quel", "quels",
+    "quelle", "quelles", "tout", "tous", "toute", "toutes", "plus",
+    "moins", "encore", "déjà", "deja", "très", "tres", "bien", "peut",
+    "peux", "veut", "veux", "faire", "fait", "faites", "savoir", "sais",
+    "voir", "voici", "voilà", "voila", "été", "ete", "était", "etait",
+    "sont", "suis", "est-ce", "est",
+}
+
+
+async def _find_calls_for_question(
+    db, question: str, limit: int = 5
+) -> List[Call]:
+    """Recherche les appels potentiellement liés à la question posée
+    à l'aide. Extrait les mots significatifs (4+ lettres, hors
+    stopwords), puis LIKE sur lead_name / lead_reason /
+    verbatim_transcript / voicemail_transcription. Trié desc."""
+    words = re.findall(r"\b\w{4,}\b", question.lower())
+    keywords = [
+        w for w in words if w not in _STOPWORDS_FR
+    ][:8]
+    if not keywords:
+        return []
+    clauses = []
+    for w in keywords:
+        like = f"%{w}%"
+        clauses.append(Call.lead_name.ilike(like))
+        clauses.append(Call.lead_reason.ilike(like))
+        clauses.append(Call.verbatim_transcript.ilike(like))
+        clauses.append(Call.voicemail_transcription.ilike(like))
+    cond = clauses[0]
+    for c in clauses[1:]:
+        cond = cond | c
+    rows = (
+        await db.execute(
+            select(Call)
+            .where(cond)
+            .order_by(Call.started_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+def _format_call_for_context(call: Call) -> str:
+    """Représentation textuelle compacte d'un appel pour l'inclure
+    dans le contexte LLM. On limite la longueur du verbatim pour ne
+    pas exploser le prompt."""
+    parts = [
+        f"Appel #{call.id} · "
+        f"{call.started_at.strftime('%Y-%m-%d %H:%M')} · "
+        f"{call.from_e164} → {call.to_e164}"
+    ]
+    if call.lead_name:
+        parts.append(f"Contact : {call.lead_name}")
+    if call.intent:
+        parts.append(f"Intent : {call.intent}")
+    if call.lead_reason:
+        parts.append(f"Raison : {call.lead_reason}")
+    verb = (call.verbatim_transcript or "").strip()
+    if verb:
+        if len(verb) > 600:
+            verb = verb[:600] + "…"
+        parts.append(f"Verbatim : {verb}")
+    vm = (call.voicemail_transcription or "").strip()
+    if vm:
+        if len(vm) > 400:
+            vm = vm[:400] + "…"
+        parts.append(f"Boîte vocale : {vm}")
+    return "\n".join(parts)
 
 log = logging.getLogger(__name__)
 
@@ -120,6 +199,31 @@ async def ask(
     # Import paresseux pour ne pas planter au démarrage si la lib bouge.
     import anthropic
 
+    # Pré-recherche les appels qui mentionnent les mots-clés de la
+    # question — permet à Claude de répondre à « est-ce qu'on a parlé
+    # de X avec Y ? » en se basant sur les verbatim et transcriptions
+    # réels stockés dans le volet téléphonie.
+    try:
+        call_matches = await _find_calls_for_question(db, body.question)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("help: call search failed: %s", exc)
+        call_matches = []
+
+    if call_matches:
+        calls_ctx = "\n\n---\n".join(
+            _format_call_for_context(c) for c in call_matches
+        )
+        user_content = (
+            "Voici quelques appels récents qui mentionnent les mots-clés "
+            "de la question. Utilise-les si pertinents pour répondre, "
+            "ignore-les sinon. Cite les Appel #ID si tu t'appuies sur "
+            "leur contenu.\n\n"
+            f"{calls_ctx}\n\n---\n\n"
+            f"Question de l'utilisateur : {body.question}"
+        )
+    else:
+        user_content = body.question
+
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     try:
         msg = client.messages.create(
@@ -134,7 +238,7 @@ async def ask(
                     "cache_control": {"type": "ephemeral"},
                 }
             ],
-            messages=[{"role": "user", "content": body.question}],
+            messages=[{"role": "user", "content": user_content}],
         )
         answer_parts = [b.text for b in msg.content if b.type == "text"]
         answer = "\n".join(answer_parts).strip() or "(réponse vide)"

@@ -3038,7 +3038,18 @@ async def search_calls(
             clauses.append(Call.from_e164.ilike(like))
             clauses.append(Call.to_e164.ilike(like))
             clauses.append(Call.forwarded_to_e164.ilike(like))
-        clauses.append(Call.lead_name.ilike(f"%{q}%"))
+        # Match texte sur :
+        #  - lead_name : nom capturé pendant l'appel,
+        #  - lead_reason : raison brève captée par Léa,
+        #  - verbatim_transcript : ce qu'on a dit côté navigateur,
+        #  - voicemail_transcription : transcription auto Twilio.
+        # Permet une recherche du genre « est-ce qu'on a parlé de
+        # cuisine avec Steven ? » via le champ unique du dropdown.
+        text_like = f"%{q}%"
+        clauses.append(Call.lead_name.ilike(text_like))
+        clauses.append(Call.lead_reason.ilike(text_like))
+        clauses.append(Call.verbatim_transcript.ilike(text_like))
+        clauses.append(Call.voicemail_transcription.ilike(text_like))
         # OR sur tous les critères — au moins un match suffit.
         cond = clauses[0]
         for extra in clauses[1:]:
