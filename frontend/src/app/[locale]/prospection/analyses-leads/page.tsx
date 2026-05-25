@@ -62,9 +62,32 @@ type Lead = {
   type_batiment: string | null;
   converted_to_lead_id: number | null;
   converted_to_deal_id: number | null;
+  model_used: string | null;
   created_at: string;
   attachments_count: number;
 };
+
+/**
+ * Mapping du champ ``model_used`` (cascade tri-couche d'extraction) vers
+ * un badge visuel { label, color } cohérent avec ``LeadAnalysisCardBadge``.
+ *
+ *   - ``local``                      -> gris  (Parser local)
+ *   - ``local + gemini``             -> bleu  (Local + Gemini)
+ *   - ``gemini``                     -> violet(Gemini)
+ *   - ``claude-sonnet-4-6 (manual)`` -> ambre (Claude — manuel)
+ *   - ``none`` / ``null``            -> rose  (Aucune extraction)
+ */
+function extractionBadge(
+  modelUsed: string | null | undefined
+): LeadAnalysisCardBadge {
+  const m = (modelUsed || "").toLowerCase();
+  if (m.startsWith("claude")) return { label: "Claude", color: "amber" };
+  if (m === "local + gemini")
+    return { label: "Local + Gemini", color: "blue" };
+  if (m === "gemini") return { label: "Gemini", color: "violet" };
+  if (m === "local") return { label: "Parser local", color: "slate" };
+  return { label: "Aucune extraction", color: "rose" };
+}
 
 type ExtractResult = {
   created: Lead[];
@@ -699,6 +722,7 @@ function LeadCard({
           mdf_preteur_b: lead.mdf_preteur_b
         }}
         badge={STATUS_BADGE[lead.status]}
+        extraBadge={extractionBadge(lead.model_used)}
         onClick={onView}
         actions={
           <>
@@ -890,6 +914,8 @@ type LeadDetail = Lead & {
   frais_demarrage_financables_json: string | null;
   // Résultats analyse
   analysis_results_json: string | null;
+  // Modèle d'extraction utilisé (cascade tri-couche).
+  model_used: string | null;
   attachments: Array<{
     id: number;
     filename: string;
@@ -1057,6 +1083,7 @@ function LeadDetailModal({
             <h2 className="mt-0.5 truncate text-base font-bold text-white">
               {data?.address || `Lead #${id}`}
             </h2>
+            {data ? <ExtractionBadgeInline modelUsed={data.model_used} /> : null}
           </div>
           <button
             type="button"
@@ -1283,9 +1310,28 @@ function LeadDetailModal({
               {/* Sources originales */}
               {data.source_urls || data.source_text || data.attachments?.length ? (
                 <section>
-                  <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-                    Sources originales
-                  </h3>
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+                      Sources originales
+                    </h3>
+                    <ReExtractClaudeButton
+                      id={id}
+                      hasSources={
+                        !!(
+                          data.source_urls ||
+                          data.source_text ||
+                          (data.attachments && data.attachments.length > 0)
+                        )
+                      }
+                      onSuccess={async () => {
+                        const r = await authedFetch(
+                          `/api/v1/lead-analyses/${id}`
+                        );
+                        if (r.ok) setData((await r.json()) as LeadDetail);
+                        onSaved();
+                      }}
+                    />
+                  </div>
                   {data.source_urls ? (
                     <div className="mt-2 space-y-1">
                       {data.source_urls
@@ -3444,6 +3490,178 @@ function BestRefiSubsection({ data }: { data: AnalysisResults }) {
           </tr>
         </tbody>
       </table>
+    </div>
+  );
+}
+
+
+
+// ─── Phase A2 : Badge "Extrait par" + bouton "Re-extraire avec Claude" ─
+
+/**
+ * Mapping ``model_used`` -> classes Tailwind statiques (badge inline
+ * dans le header du modal LeadDetailModal).
+ *
+ * Toutes les classes sont en clair pour rester purge-safe au build.
+ */
+const EXTRACTION_BADGE_CLS: Record<string, string> = {
+  local: "border-slate-500/30 bg-slate-500/10 text-slate-300",
+  "local + gemini": "border-blue-500/30 bg-blue-500/10 text-blue-300",
+  gemini: "border-violet-500/30 bg-violet-500/10 text-violet-300",
+  claude: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+  none: "border-rose-500/30 bg-rose-500/10 text-rose-300"
+};
+
+function extractionBadgeMeta(
+  modelUsed: string | null | undefined
+): { label: string; cls: string } {
+  const m = (modelUsed || "").toLowerCase();
+  if (m.startsWith("claude"))
+    return { label: "Claude", cls: EXTRACTION_BADGE_CLS.claude };
+  if (m === "local + gemini")
+    return {
+      label: "Local + Gemini",
+      cls: EXTRACTION_BADGE_CLS["local + gemini"]
+    };
+  if (m === "gemini")
+    return { label: "Gemini", cls: EXTRACTION_BADGE_CLS.gemini };
+  if (m === "local")
+    return { label: "Parser local", cls: EXTRACTION_BADGE_CLS.local };
+  return { label: "Aucune extraction", cls: EXTRACTION_BADGE_CLS.none };
+}
+
+/** Badge inline dans le header du modal — sous l'adresse. */
+function ExtractionBadgeInline({
+  modelUsed
+}: {
+  modelUsed: string | null | undefined;
+}) {
+  const meta = extractionBadgeMeta(modelUsed);
+  return (
+    <span
+      title={`Extrait par : ${modelUsed || "aucun modele"}`}
+      className={`mt-1 inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${meta.cls}`}
+    >
+      <Sparkles className="h-3 w-3" />
+      Extrait par : {meta.label}
+    </span>
+  );
+}
+
+/**
+ * Bouton « Re-extraire avec Claude » dans la section Sources originales
+ * du modal LeadDetailModal. Couche 3 du pipeline tri-couche (manuelle,
+ * payante ~3 cents par appel).
+ *
+ *   - Desactive si la fiche n'a aucune source originale (URLs / texte /
+ *     attachments) — tooltip explicite.
+ *   - Confirm dialog avec mention du cout avant lancement.
+ *   - Toast vert / rouge selon resultat ; reload la fiche au succes.
+ */
+function ReExtractClaudeButton({
+  id,
+  hasSources,
+  onSuccess
+}: {
+  id: number;
+  hasSources: boolean;
+  onSuccess: () => Promise<void>;
+}) {
+  const confirm = useConfirm();
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState<{
+    text: string;
+    kind: "ok" | "err";
+  } | null>(null);
+
+  // Auto-dismiss du toast apres 6 s.
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  async function run() {
+    if (!hasSources || busy) return;
+    const ok = await confirm({
+      title: "Re-extraire avec Claude ?",
+      description:
+        "Cette operation coute environ 3 cents (Claude Sonnet 4.6, multimodal). " +
+        "Claude relit les sources originales de la fiche et remplit les " +
+        "champs vides. Les champs deja saisis ne sont pas ecrases (sauf " +
+        "adresse/ville). Continuer ?",
+      confirmLabel: "Lancer Claude"
+    });
+    if (!ok) return;
+    setBusy(true);
+    setToast(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/lead-analyses/${id}/re-extract-with-claude`,
+        { method: "POST" }
+      );
+      if (!r.ok) {
+        const detail = await r
+          .json()
+          .then((j: { detail?: string }) => j.detail || `HTTP ${r.status}`)
+          .catch(() => `HTTP ${r.status}`);
+        setToast({ text: `Re-extraction echouee : ${detail}`, kind: "err" });
+        return;
+      }
+      const out = (await r.json()) as {
+        fields_patched: string[];
+        model_used: string;
+      };
+      await onSuccess();
+      const n = out.fields_patched?.length || 0;
+      setToast({
+        text:
+          n > 0
+            ? `Champs re-extraits par Claude (${n}). Verifie les modifications.`
+            : "Claude n'a pas trouve de nouveaux champs a remplir.",
+        kind: "ok"
+      });
+    } catch (e) {
+      setToast({
+        text: `Re-extraction echouee : ${(e as Error).message}`,
+        kind: "err"
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-end">
+      <button
+        type="button"
+        onClick={() => void run()}
+        disabled={!hasSources || busy}
+        title={
+          hasSources
+            ? "Relance Claude Sonnet 4.6 sur les sources originales (~3 cents)"
+            : "Aucune source a re-extraire — colle une URL/texte ou ajoute un fichier"
+        }
+        className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] font-medium text-amber-300 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {busy ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : (
+          <Sparkles className="h-3 w-3" />
+        )}
+        Re-extraire avec Claude
+      </button>
+      {toast ? (
+        <p
+          className={`mt-1 max-w-[280px] rounded-md border px-2 py-1 text-right text-[10px] ${
+            toast.kind === "ok"
+              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+              : "border-rose-500/40 bg-rose-500/10 text-rose-300"
+          }`}
+        >
+          {toast.text}
+        </p>
+      ) : null}
     </div>
   );
 }

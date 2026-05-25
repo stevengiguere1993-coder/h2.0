@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import type { ReactNode } from "react";
 import { Building, DollarSign, Flame } from "lucide-react";
@@ -53,6 +53,10 @@ export type LeadAnalysisCardBadge = {
 export type LeadAnalysisCardProps = {
   data: LeadAnalysisCardData;
   badge: LeadAnalysisCardBadge;
+  /** Badge secondaire optionnel (ex. modèle d'extraction utilisé :
+   * « Parser local », « Gemini », « Claude »). Affiché à droite du
+   * badge principal dans le footer. */
+  extraBadge?: LeadAnalysisCardBadge;
   /** Boutons / icones a placer en bas a droite du footer. */
   actions?: ReactNode;
   /** Optionnel — clic global sur la card (hors zone actions). */
@@ -85,6 +89,7 @@ export function fmtMoney(n: number | null | undefined): string {
 export function LeadAnalysisCard({
   data,
   badge,
+  extraBadge,
   actions,
   onClick,
   className
@@ -190,6 +195,14 @@ export function LeadAnalysisCard({
         >
           {badge.label}
         </span>
+        {extraBadge ? (
+          <span
+            title="Modele d'extraction utilise"
+            className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${BADGE_CLS[extraBadge.color]}`}
+          >
+            {extraBadge.label}
+          </span>
+        ) : null}
         {actions ? (
           <div
             data-card-actions
@@ -205,3 +218,4 @@ export function LeadAnalysisCard({
 }
 
 export default LeadAnalysisCard;
+

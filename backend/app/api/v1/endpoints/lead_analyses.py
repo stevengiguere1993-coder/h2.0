@@ -38,6 +38,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, DBSession
+from app.services.audit import log_action
 from app.models.lead_analysis import (
     LeadAnalysis,
     LeadAnalysisAttachment,
@@ -143,6 +144,10 @@ class LeadAnalysisRead(BaseModel):
     converted_to_lead_id: Optional[int] = None
     converted_to_deal_id: Optional[int] = None
 
+    # Modèle d'extraction (cascade tri-couche) — affiché via le
+    # badge « Extrait par » dans la fiche et sur les cards kanban.
+    model_used: Optional[str] = None
+
     created_at: datetime
     updated_at: datetime
 
@@ -168,6 +173,8 @@ class LeadAnalysisListItem(BaseModel):
     type_batiment: Optional[str]
     converted_to_lead_id: Optional[int]
     converted_to_deal_id: Optional[int] = None
+    # Modèle d'extraction — affiché via badge sur la card kanban.
+    model_used: Optional[str] = None
     created_at: datetime
     attachments_count: int = 0
 
@@ -270,6 +277,7 @@ def _to_list_item(rec: LeadAnalysis, attachments_count: int) -> LeadAnalysisList
         type_batiment=rec.type_batiment,
         converted_to_lead_id=rec.converted_to_lead_id,
         converted_to_deal_id=rec.converted_to_deal_id,
+        model_used=rec.model_used,
         created_at=rec.created_at,
         attachments_count=attachments_count,
     )
@@ -429,6 +437,7 @@ async def extract_and_create(
             source_urls=src_url_str if idx == 0 else None,
             source_text=src_text if idx == 0 else None,
             extracted_json=json.dumps(item, ensure_ascii=False)[:50_000],
+            model_used=res.model_used,
             created_by_user_id=getattr(user, "id", None),
             **kwargs,
         )
@@ -481,6 +490,7 @@ async def extract_and_create(
             source_urls=src_url_str,
             source_text=src_text,
             extracted_json=None,
+            model_used=res.model_used,
             created_by_user_id=getattr(user, "id", None),
             **DEFAULTS_NEW_ANALYSIS,
             notes=notes_text,
@@ -1110,6 +1120,334 @@ async def debug_extract_url(
     }
 
 
+# ─── Ré-extraction manuelle avec Claude Sonnet 4.6 (Couche 3) ─────
+#
+# Phase A2 du pipeline tri-couche d'extraction.
+#  - Couche 1 : parser local (regex + heuristiques) — gratuit, rapide
+#  - Couche 2 : Gemini Flash 2.0 — gratuit (tier Google AI Studio)
+#  - Couche 3 : Claude Sonnet 4.6 (CET endpoint) — payant ~3 ¢ /call,
+#               déclenché manuellement par l'utilisateur sur une fiche
+#               existante quand les couches 1+2 n'ont pas suffi.
+#
+# L'endpoint réutilise les sources déjà attachées à la `LeadAnalysis`
+# (URLs collées, texte brut, attachments PDF/image). Claude renvoie un
+# patch des champs qu'il a pu extraire. On n'écrase JAMAIS un champ
+# déjà rempli par l'utilisateur — on remplit seulement les trous.
+
+
+class ReExtractClaudeResponse(BaseModel):
+    """Réponse de /re-extract-with-claude. Le frontend reload la fiche
+    via GET /lead-analyses/{id} pour voir tous les nouveaux champs ;
+    on retourne quand même la liste des champs modifiés pour le toast
+    et pour les tests."""
+
+    fields_patched: List[str]
+    model_used: str
+    cost_usd_estimate: float = 0.03
+
+
+# Tool schema aligné sur LeadAnalysis (mêmes noms de champs). Plus
+# large que le _EXTRACT_TOOL de l'endpoint orphelin (qui était pour
+# le calculateur Excel historique).
+_RE_EXTRACT_TOOL = {
+    "name": "save_lead_fields",
+    "description": (
+        "Sauvegarde les champs extraits d'une fiche d'analyse d'un "
+        "immeuble multi-logements québécois. Ne fournis QUE les "
+        "champs explicitement présents dans les sources."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "address": {"type": "string", "description": "Adresse civique complète."},
+            "city": {"type": "string", "description": "Ville."},
+            "postal_code": {"type": "string", "description": "Code postal canadien (A1A 1A1)."},
+            "province": {"type": "string", "description": "Province (ex. QC)."},
+            "asking_price": {"type": "number", "description": "Prix demandé en CAD (sans symbole)."},
+            "nb_logements": {"type": "integer", "description": "Nombre total de logements."},
+            "typology_json": {
+                "type": "string",
+                "description": (
+                    "Répartition par typologie au format JSON string, ex. "
+                    "'{\"3.5\": 4, \"4.5\": 2}'. Inclus seulement les types présents."
+                ),
+            },
+            "revenus_bruts": {"type": "number", "description": "Revenus bruts annuels en CAD."},
+            "taxes_municipales": {"type": "number", "description": "Taxes municipales annuelles en CAD."},
+            "taxes_scolaires": {"type": "number", "description": "Taxes scolaires annuelles en CAD."},
+            "assurances": {"type": "number", "description": "Prime d'assurance annuelle en CAD."},
+            "energie": {"type": "number", "description": "Coût annuel d'énergie commune en CAD."},
+            "depenses_autres": {"type": "number", "description": "Autres dépenses annuelles en CAD."},
+            "annee_construction": {"type": "integer", "description": "Année de construction."},
+            "superficie_terrain": {"type": "number", "description": "Superficie terrain (pi² ou m², pris tel quel)."},
+            "superficie_batiment": {"type": "number", "description": "Superficie bâtiment (pi² ou m², pris tel quel)."},
+            "evaluation_municipale": {"type": "number", "description": "Évaluation municipale en CAD."},
+            "description": {"type": "string", "description": "Description / commentaire du courtier."},
+            "courtier_nom": {"type": "string", "description": "Nom du courtier inscripteur."},
+            "courtier_contact": {"type": "string", "description": "Téléphone ou courriel du courtier."},
+            "type_batiment": {"type": "string", "description": "Type de bâtiment (ex. 6-plex, immeuble à appartements)."},
+            "nb_stationnements": {"type": "integer", "description": "Nombre de stationnements."},
+        },
+        "required": [],
+    },
+}
+
+
+_RE_EXTRACT_SYSTEM = """\
+Tu es un assistant spécialisé dans l'extraction de données immobilières \
+québécoises (multi-logements 4+ portes). Tu reçois plusieurs sources \
+sur le même immeuble : URLs (texte HTML extrait), texte brut collé, \
+et fichiers PDF/image.
+
+Règles :
+1. Extrais UNIQUEMENT ce qui est explicitement présent. N'invente pas.
+2. Convertis les chiffres en valeurs numériques pures (sans $, sans \
+virgules de milliers). Ex: "2 450,75 $" → 2450.75
+3. Pour les % exprimés, divise par 100 si tu retournes un taux (TGA, etc.).
+4. Si plusieurs valeurs candidates pour un même champ (ex. 2 années de \
+taxes), prends la plus récente.
+5. Pour `typology_json`, retourne une chaîne JSON valide, ex. \
+'{"3.5": 4, "4.5": 2}'.
+
+Appelle TOUJOURS l'outil `save_lead_fields` avec ce que tu trouves, \
+même si tu ne trouves qu'un seul champ.
+"""
+
+
+# Champs qu'on accepte de patcher depuis la ré-extraction Claude
+# (mêmes que ceux scalaires de _map_extracted_to_lead).
+_PATCHABLE_FIELDS = {
+    "address", "city", "postal_code", "province",
+    "asking_price", "nb_logements", "revenus_bruts",
+    "taxes_municipales", "taxes_scolaires", "assurances",
+    "energie", "depenses_autres", "annee_construction",
+    "superficie_terrain", "superficie_batiment",
+    "evaluation_municipale", "description",
+    "courtier_nom", "courtier_contact", "type_batiment",
+    "nb_stationnements", "typology_json",
+}
+
+
+@router.post(
+    "/{analysis_id}/re-extract-with-claude",
+    response_model=ReExtractClaudeResponse,
+    summary=(
+        "Couche 3 : ré-extraction manuelle d'une fiche via Claude "
+        "Sonnet 4.6 (multimodal, payant ~3 ¢)."
+    ),
+)
+async def re_extract_with_claude(
+    analysis_id: int,
+    db: DBSession,
+    user: CurrentUser,
+) -> ReExtractClaudeResponse:
+    """Relance l'extraction sur une `LeadAnalysis` existante en
+    utilisant Claude Sonnet 4.6 (multimodal). Reprend les sources
+    déjà attachées à la fiche (URLs, texte, attachments). Patch les
+    champs où Claude trouve une valeur — ne casse JAMAIS un champ
+    déjà saisi par l'utilisateur (sauf adresse/ville où on remplace
+    si Claude a une valeur plus précise).
+    """
+    _require_prospection(user)
+
+    if not settings.anthropic_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Ré-extraction Claude désactivée : ANTHROPIC_API_KEY "
+                "n'est pas configuré sur le serveur."
+            ),
+        )
+
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+
+    # Récupère les attachments (blob inclus).
+    atts = (
+        await db.execute(
+            select(LeadAnalysisAttachment)
+            .where(LeadAnalysisAttachment.lead_analysis_id == analysis_id)
+            .order_by(LeadAnalysisAttachment.id.asc())
+        )
+    ).scalars().all()
+
+    url_lines = [
+        u.strip()
+        for u in (rec.source_urls or "").splitlines()
+        if u.strip()
+    ]
+    src_text = (rec.source_text or "").strip() or None
+
+    if not url_lines and not src_text and not atts:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Aucune source originale sur cette fiche — rien à "
+                "ré-extraire. Recolle des URLs/texte ou ajoute des "
+                "fichiers d'abord."
+            ),
+        )
+
+    # Fetch URLs (best-effort, on continue même si certaines échouent).
+    url_texts: List[str] = []
+    if url_lines:
+        from app.services.lead_extraction import _fetch_url_text
+        for u in url_lines:
+            try:
+                t = await _fetch_url_text(u)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Re-extract: fetch URL %s failed: %s", u, exc)
+                t = None
+            if t:
+                url_texts.append(f"=== URL: {u} ===\n{t}")
+
+    # Build the content blocks for Claude (multimodal).
+    import base64 as _b64
+    content_blocks: list = []
+
+    # 1) Files first (PDFs as document blocks, images as image blocks).
+    for att in atts:
+        ct = (att.content_type or "").lower()
+        if ct == "application/pdf":
+            content_blocks.append({
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": _b64.standard_b64encode(att.blob).decode("ascii"),
+                },
+            })
+        elif ct in ("image/jpeg", "image/jpg", "image/png", "image/webp"):
+            content_blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg" if ct == "image/jpg" else ct,
+                    "data": _b64.standard_b64encode(att.blob).decode("ascii"),
+                },
+            })
+        # Autres types : on les saute (Claude ne les supporte pas en
+        # multimodal). Tesseract a déjà tourné côté Couche 1/2.
+
+    # 2) Concatène le texte (URLs + source_text + extracted_json brut).
+    text_parts: List[str] = []
+    if url_texts:
+        text_parts.append("\n\n".join(url_texts))
+    if src_text:
+        text_parts.append(f"=== Texte brut collé par l'utilisateur ===\n{src_text}")
+    if rec.extracted_json:
+        # Donne le contexte de ce que les couches précédentes ont vu
+        # (utile pour que Claude raffine plutôt que repartir de zéro).
+        text_parts.append(
+            "=== Extraction des couches précédentes (référence) ===\n"
+            + rec.extracted_json[:8000]
+        )
+    if text_parts:
+        content_blocks.append({
+            "type": "text",
+            "text": (
+                "Voici les sources originales de cette fiche. "
+                "Ré-extrais tous les champs que tu peux identifier "
+                "de façon fiable.\n\n"
+                + "\n\n".join(text_parts)
+            ),
+        })
+    else:
+        # Pas de texte (que des fichiers) — ajoute juste l'instruction.
+        content_blocks.append({
+            "type": "text",
+            "text": (
+                "Voici les fichiers attachés à cette fiche. "
+                "Ré-extrais tous les champs que tu peux identifier."
+            ),
+        })
+
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    try:
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=3072,
+            system=[
+                {
+                    "type": "text",
+                    "text": _RE_EXTRACT_SYSTEM,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            tools=[_RE_EXTRACT_TOOL],
+            tool_choice={"type": "tool", "name": "save_lead_fields"},
+            messages=[{"role": "user", "content": content_blocks}],
+        )
+    except anthropic.APIError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Claude API : {getattr(e, 'message', str(e))[:200]}",
+        )
+    except Exception as e:  # noqa: BLE001
+        log.exception("Re-extract Claude failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erreur ré-extraction : {str(e)[:200]}",
+        )
+
+    # Extrait le tool_use block.
+    extracted: dict = {}
+    for block in msg.content:
+        if (
+            getattr(block, "type", None) == "tool_use"
+            and getattr(block, "name", None) == "save_lead_fields"
+        ):
+            extracted = getattr(block, "input", None) or {}
+            break
+
+    # Patch « doux » : on remplit les champs vides + on remplace
+    # l'adresse/ville (champs identifiants où Claude est souvent plus
+    # précis que les couches précédentes). Pour le reste, on ne touche
+    # PAS un champ déjà saisi (l'utilisateur a peut-être corrigé).
+    REPLACE_ALWAYS = {"address", "city", "postal_code", "province"}
+    fields_patched: List[str] = []
+    for k, v in (extracted or {}).items():
+        if k not in _PATCHABLE_FIELDS:
+            continue
+        if v in (None, "", "null"):
+            continue
+        current = getattr(rec, k, None)
+        if k in REPLACE_ALWAYS or current is None or current == "":
+            setattr(rec, k, v)
+            fields_patched.append(k)
+
+    # MAJ model_used : on garde la trace que la ré-extraction Claude
+    # a été utilisée (peu importe ce qu'il y avait avant).
+    rec.model_used = "claude-sonnet-4-6 (manual)"
+    rec.updated_at = datetime.now(timezone.utc)
+
+    # Audit log
+    await log_action(
+        db,
+        user=user,
+        action="lead_analysis.re_extracted_with_claude",
+        entity_type="lead_analysis",
+        entity_id=rec.id,
+        details={
+            "fields_patched": fields_patched,
+            "model": "claude-sonnet-4-6",
+            "n_attachments": len(atts),
+            "n_urls": len(url_lines),
+            "has_text": bool(src_text),
+        },
+    )
+
+    await db.commit()
+
+    return ReExtractClaudeResponse(
+        fields_patched=fields_patched,
+        model_used="claude-sonnet-4-6 (manual)",
+    )
+
+
 @router.get(
     "/ocr-health",
     summary="Diagnostic Tesseract serveur (utile si extraction d'image vide).",
@@ -1130,3 +1468,4 @@ async def ocr_health(user: CurrentUser) -> dict:
         except ImportError as exc:
             result[f"{pkg}_installed"] = f"NON installe : {exc}"
     return result
+
