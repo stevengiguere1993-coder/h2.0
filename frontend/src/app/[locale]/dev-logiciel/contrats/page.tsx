@@ -4,13 +4,16 @@ import { useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
   Copy,
+  ExternalLink,
   FileSignature,
   Loader2,
   Plus,
   Send,
   Trash2,
+  Wallet,
   X
 } from "lucide-react";
+import Link from "next/link";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -29,12 +32,22 @@ type Contract = {
   sent_at: string | null;
   signed_at: string | null;
   signed_name: string | null;
+  deposit_required_cents: number | null;
+  deposit_paid_at: string | null;
+  deposit_paid_amount_cents: number | null;
   created_at: string;
+};
+
+type Project = {
+  id: number;
+  name: string;
+  status: string;
+  started_at: string | null;
 };
 
 type RefItem = { id: number; name: string };
 type SoumRef = { id: number; title: string };
-type ProjectRef = { id: number; name: string };
+type ProjectRef = { id: number; name: string; started_at?: string | null };
 
 type Column = {
   id: string;
@@ -139,6 +152,11 @@ export default function DevlogContractsPage() {
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [saving, setSaving] = useState(false);
   const [linkCopied, setLinkCopied] = useState<number | null>(null);
+
+  // Modal "marquer dépôt payé" — id du contrat ciblé + montant saisi (en $).
+  const [depositTarget, setDepositTarget] = useState<Contract | null>(null);
+  const [depositAmount, setDepositAmount] = useState("");
+  const [depositSaving, setDepositSaving] = useState(false);
 
   // Drag-and-drop state — identique au pattern soumissions kanban.
   const [dragging, setDragging] = useState<number | null>(null);
@@ -288,6 +306,49 @@ export default function DevlogContractsPage() {
     }
   }
 
+  /** Ouvre la modal de saisie du dépôt. Pré-remplit avec le dépôt
+   *  requis si disponible, sinon avec la moitié du montant détecté
+   *  dans le body du contrat (heuristique : 50 % du forfait initial). */
+  function openDepositModal(c: Contract) {
+    setDepositTarget(c);
+    if (c.deposit_paid_amount_cents != null) {
+      setDepositAmount((c.deposit_paid_amount_cents / 100).toFixed(2));
+    } else if (c.deposit_required_cents != null) {
+      setDepositAmount((c.deposit_required_cents / 100).toFixed(2));
+    } else {
+      const amt = extractAmount(c.body);
+      setDepositAmount(amt != null ? (amt / 2).toFixed(2) : "");
+    }
+  }
+
+  async function saveDepositPayment() {
+    if (!depositTarget) return;
+    const dollars = Number(depositAmount.replace(",", "."));
+    if (!Number.isFinite(dollars) || dollars < 0) {
+      setError("Montant invalide");
+      return;
+    }
+    const amount_cents = Math.round(dollars * 100);
+    setDepositSaving(true);
+    try {
+      const r = await authedFetch(
+        `/api/v1/devlog/contracts/${depositTarget.id}/mark-deposit-paid`,
+        {
+          method: "POST",
+          body: JSON.stringify({ amount_cents })
+        }
+      );
+      if (!r.ok) throw new Error();
+      setDepositTarget(null);
+      setDepositAmount("");
+      await loadAll();
+    } catch {
+      setError("Marquage du dépôt impossible");
+    } finally {
+      setDepositSaving(false);
+    }
+  }
+
   async function copyLink(c: Contract) {
     if (!c.signature_token) return;
     const url = `${window.location.origin}/sign-devlog/${c.signature_token}`;
@@ -415,28 +476,36 @@ export default function DevlogContractsPage() {
                         Aucun contrat
                       </p>
                     ) : (
-                      cards.map((c) => (
-                        <ContractCard
-                          key={c.id}
-                          contract={c}
-                          clientName={
-                            c.client_id
-                              ? clientName.get(c.client_id) ?? null
-                              : null
-                          }
-                          amount={extractAmount(c.body)}
-                          dragging={dragging === c.id}
-                          linkCopied={linkCopied === c.id}
-                          onDragStart={() => setDragging(c.id)}
-                          onDragEnd={() => {
-                            setDragging(null);
-                            setHoverCol(null);
-                          }}
-                          onOpen={() => openEdit(c)}
-                          onSend={() => void sendContract(c.id)}
-                          onCopyLink={() => void copyLink(c)}
-                        />
-                      ))
+                      cards.map((c) => {
+                        const proj = c.project_id
+                          ? projects.find((p) => p.id === c.project_id) ??
+                            null
+                          : null;
+                        return (
+                          <ContractCard
+                            key={c.id}
+                            contract={c}
+                            clientName={
+                              c.client_id
+                                ? clientName.get(c.client_id) ?? null
+                                : null
+                            }
+                            amount={extractAmount(c.body)}
+                            project={proj}
+                            dragging={dragging === c.id}
+                            linkCopied={linkCopied === c.id}
+                            onDragStart={() => setDragging(c.id)}
+                            onDragEnd={() => {
+                              setDragging(null);
+                              setHoverCol(null);
+                            }}
+                            onOpen={() => openEdit(c)}
+                            onSend={() => void sendContract(c.id)}
+                            onCopyLink={() => void copyLink(c)}
+                            onMarkDeposit={() => openDepositModal(c)}
+                          />
+                        );
+                      })
                     )}
                   </div>
                 </div>
@@ -466,6 +535,99 @@ export default function DevlogContractsPage() {
           }
         />
       ) : null}
+
+      {depositTarget != null ? (
+        <DepositModal
+          contract={depositTarget}
+          amount={depositAmount}
+          saving={depositSaving}
+          onAmountChange={setDepositAmount}
+          onClose={() => {
+            setDepositTarget(null);
+            setDepositAmount("");
+          }}
+          onSave={() => void saveDepositPayment()}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function DepositModal({
+  contract,
+  amount,
+  saving,
+  onAmountChange,
+  onClose,
+  onSave
+}: {
+  contract: Contract;
+  amount: string;
+  saving: boolean;
+  onAmountChange: (v: string) => void;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <button
+        type="button"
+        aria-label="Fermer"
+        onClick={onClose}
+        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+      />
+      <div className="relative w-full max-w-md rounded-xl border border-brand-800 bg-brand-950 p-5">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-bold text-white">
+            Marquer le dépôt payé
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-1 text-white/50 hover:bg-brand-900 hover:text-white"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <p className="mb-3 text-xs text-white/60">
+          Contrat <strong className="text-white">{contract.title}</strong>.
+          Saisis le montant exact reçu (en $ CA). Si le contrat est déjà
+          signé, le projet sera démarré automatiquement.
+        </p>
+        <label className="mb-3 block">
+          <span className="mb-1 block text-xs font-medium text-white/60">
+            Montant reçu ($)
+          </span>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={amount}
+            onChange={(e) => onAmountChange(e.target.value)}
+            className="input text-sm"
+            placeholder="Ex. 2500.00"
+            autoFocus
+          />
+        </label>
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-sm font-semibold text-white/70 hover:bg-white/10"
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={saving || !amount.trim()}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-400 disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Confirmer
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -474,17 +636,20 @@ function ContractCard({
   contract: c,
   clientName,
   amount,
+  project,
   dragging,
   linkCopied,
   onDragStart,
   onDragEnd,
   onOpen,
   onSend,
-  onCopyLink
+  onCopyLink,
+  onMarkDeposit
 }: {
   contract: Contract;
   clientName: string | null;
   amount: number | null;
+  project: ProjectRef | null;
   dragging: boolean;
   linkCopied: boolean;
   onDragStart: () => void;
@@ -492,7 +657,10 @@ function ContractCard({
   onOpen: () => void;
   onSend: () => void;
   onCopyLink: () => void;
+  onMarkDeposit: () => void;
 }) {
+  const depositPaid = c.deposit_paid_at != null;
+  const projectStarted = project?.started_at != null;
   return (
     <div
       draggable
@@ -556,6 +724,31 @@ function ContractCard({
             Créé le {new Date(c.created_at).toLocaleDateString("fr-CA")}
           </p>
         )}
+
+        {/* Badge dépôt — visible sur la colonne "signé". */}
+        {c.status === "signe" ? (
+          <p
+            className={`mt-1 text-[11px] ${
+              depositPaid ? "text-emerald-300" : "text-amber-300"
+            }`}
+          >
+            {depositPaid
+              ? `💰 Dépôt payé${
+                  c.deposit_paid_amount_cents != null
+                    ? " — " + fmtMoney(c.deposit_paid_amount_cents / 100)
+                    : ""
+                }`
+              : "⏳ Dépôt à recevoir"}
+          </p>
+        ) : null}
+
+        {/* Bandeau projet démarré */}
+        {projectStarted && project?.started_at ? (
+          <p className="mt-1 rounded-md bg-emerald-500/15 px-2 py-1 text-[11px] font-semibold text-emerald-300">
+            Projet démarré le{" "}
+            {new Date(project.started_at).toLocaleDateString("fr-CA")}
+          </p>
+        ) : null}
       </button>
 
       {/* Actions rapides — visibles sous la carte. */}
@@ -595,6 +788,30 @@ function ContractCard({
               </>
             )}
           </button>
+        ) : null}
+        {!depositPaid ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onMarkDeposit();
+            }}
+            title="Marquer le dépôt comme reçu"
+            className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200 hover:brightness-110"
+          >
+            <Wallet className="h-3 w-3" /> Dépôt
+          </button>
+        ) : null}
+        {project ? (
+          <Link
+            href={`/fr/app/dev-logiciel/projets/${project.id}` as any}
+            onClick={(e) => e.stopPropagation()}
+            title="Ouvrir le projet"
+            className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:brightness-110"
+          >
+            <ExternalLink className="h-3 w-3" /> Projet
+          </Link>
         ) : null}
         <button
           type="button"

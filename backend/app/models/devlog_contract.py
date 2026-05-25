@@ -12,7 +12,7 @@ projet pour traçabilité.
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -70,6 +70,24 @@ class DevlogContract(Base, TimestampUpdateMixin):
     )
     signed_ip: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
+    )
+
+    # --- Dépôt initial ----------------------------------------------------
+    # Phil saisit le dépôt à exiger lors de la création du contrat
+    # (souvent 50 % du forfait initial). NULL = pas de dépôt requis.
+    # Quand le dépôt est marqué payé (manuellement par Phil après
+    # virement / chèque), on stocke ici l'horodatage et le montant
+    # effectivement reçu. Le couple « contrat signé + dépôt payé »
+    # déclenche automatiquement le démarrage du projet
+    # (voir ``services.devlog_project_provision``).
+    deposit_required_cents: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    deposit_paid_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deposit_paid_amount_cents: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
     )
 
     def __repr__(self) -> str:

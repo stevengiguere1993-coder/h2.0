@@ -520,6 +520,7 @@ class DevlogProjectRead(BaseModel):
     status: str
     start_date: Optional[date]
     due_date: Optional[date]
+    started_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -679,6 +680,7 @@ class DevlogContractCreate(BaseModel):
     soumission_id: Optional[int] = None
     client_id: Optional[int] = None
     project_id: Optional[int] = None
+    deposit_required_cents: Optional[int] = Field(default=None, ge=0)
 
 
 class DevlogContractUpdate(BaseModel):
@@ -688,6 +690,7 @@ class DevlogContractUpdate(BaseModel):
     soumission_id: Optional[int] = None
     client_id: Optional[int] = None
     project_id: Optional[int] = None
+    deposit_required_cents: Optional[int] = Field(default=None, ge=0)
 
 
 class DevlogContractRead(BaseModel):
@@ -705,8 +708,20 @@ class DevlogContractRead(BaseModel):
     signed_at: Optional[datetime]
     signed_name: Optional[str]
     signed_ip: Optional[str]
+    deposit_required_cents: Optional[int] = None
+    deposit_paid_at: Optional[datetime] = None
+    deposit_paid_amount_cents: Optional[int] = None
     created_at: datetime
     updated_at: datetime
+
+
+class DevlogContractMarkDepositPaid(BaseModel):
+    """Payload de ``POST /devlog/contracts/{id}/mark-deposit-paid``.
+
+    Le montant est passé en cents pour éviter les imprécisions float
+    (cohérent avec le reste de la facturation Dev Logiciel)."""
+
+    amount_cents: int = Field(..., ge=0)
 
 
 class DevlogContractPublicRead(BaseModel):

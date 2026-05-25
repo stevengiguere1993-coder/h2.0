@@ -703,6 +703,31 @@ async def init_db() -> None:
             # Phase A2 (tri-couche extraction) : modèle utilisé pour
             # l'extraction (local / gemini / claude-sonnet-4-6).
             ("lead_analyses", "model_used", "VARCHAR(64)"),
+            # Chantier "contrat signé + dépôt payé → projet démarré"
+            # (mai 2026). Sur DevlogContract : dépôt initial requis +
+            # trace du paiement manuel + lien vers le projet provisionné.
+            # Sur DevlogProject : horodatage de démarrage effectif.
+            (
+                "devlog_contracts",
+                "deposit_required_cents",
+                "INTEGER",
+            ),
+            (
+                "devlog_contracts",
+                "deposit_paid_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
+            (
+                "devlog_contracts",
+                "deposit_paid_amount_cents",
+                "INTEGER",
+            ),
+            ("devlog_contracts", "project_id", "INTEGER"),
+            (
+                "devlog_projects",
+                "started_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
