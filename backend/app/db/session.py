@@ -746,6 +746,10 @@ async def init_db() -> None:
             # Phase A2 (tri-couche extraction) : modèle utilisé pour
             # l'extraction (local / gemini / claude-sonnet-4-6).
             ("lead_analyses", "model_used", "VARCHAR(64)"),
+            # Phase A3 (validation post-extraction) : liste JSONB des
+            # anomalies détectées (bornes hors-limites, divergences
+            # local↔gemini). Cf. app.services.lead_validation.
+            ("lead_analyses", "validation_warnings", "JSONB"),
             # Chantier "contrat signé + dépôt payé → projet démarré"
             # (mai 2026). Sur DevlogContract : dépôt initial requis +
             # trace du paiement manuel + lien vers le projet provisionné.

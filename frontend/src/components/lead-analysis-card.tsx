@@ -1,7 +1,7 @@
-﻿"use client";
+"use client";
 
 import type { ReactNode } from "react";
-import { Building, DollarSign, Flame } from "lucide-react";
+import { AlertTriangle, Ban, Building, DollarSign, Flame } from "lucide-react";
 
 /**
  * Card visuelle partagee entre le kanban "Analyses des leads"
@@ -57,6 +57,18 @@ export type LeadAnalysisCardProps = {
    * « Parser local », « Gemini », « Claude »). Affiché à droite du
    * badge principal dans le footer. */
   extraBadge?: LeadAnalysisCardBadge;
+  /** Phase A3 — Indicateur d'anomalie post-extraction (bornes ou
+   * divergence local↔gemini). Affiché à côté du badge extraBadge :
+   *   - "error"   -> 🚫 rouge   (asking_price aberrant, etc.)
+   *   - "warning" -> ⚠️ ambre   (nb_logements / taxes hors-bornes ou divergence)
+   *   - "info"    -> ⓘ  bleu    (réservé)
+   * `validationCount` est utilisé dans le tooltip (« 3 anomalies détectées »). */
+  validationSeverity?: "error" | "warning" | "info" | null;
+  validationCount?: number;
+  /** Top-N messages d'anomalies pour le tooltip au survol (3 max
+   * recommandé). Affichage compact, lien "Voir détails" géré par
+   * le parent via `onClick`. */
+  validationMessages?: string[];
   /** Boutons / icones a placer en bas a droite du footer. */
   actions?: ReactNode;
   /** Optionnel — clic global sur la card (hors zone actions). */
@@ -90,6 +102,9 @@ export function LeadAnalysisCard({
   data,
   badge,
   extraBadge,
+  validationSeverity,
+  validationCount,
+  validationMessages,
   actions,
   onClick,
   className
@@ -203,6 +218,13 @@ export function LeadAnalysisCard({
             {extraBadge.label}
           </span>
         ) : null}
+        {validationSeverity ? (
+          <ValidationIndicator
+            severity={validationSeverity}
+            count={validationCount ?? 0}
+            messages={validationMessages}
+          />
+        ) : null}
         {actions ? (
           <div
             data-card-actions
@@ -214,6 +236,64 @@ export function LeadAnalysisCard({
         ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * Phase A3 — Petit indicateur visuel a cote du badge extraBadge :
+ *   - severity = "error"   -> Ban    icon, rouge
+ *   - severity = "warning" -> AlertTriangle icon, ambre
+ *   - severity = "info"    -> AlertTriangle icon, bleu
+ *
+ * Le tooltip (attribut `title`) liste compactement les top-3 messages
+ * d'anomalies pour que l'utilisateur voie en un coup d'oeil sans avoir
+ * a ouvrir la fiche. Pour le detail complet -> ouvrir le modal detail
+ * (le parent gere le clic global, ce composant n'est qu'un indicateur).
+ */
+function ValidationIndicator({
+  severity,
+  count,
+  messages
+}: {
+  severity: "error" | "warning" | "info";
+  count: number;
+  messages?: string[];
+}) {
+  const sevCls =
+    severity === "error"
+      ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+      : severity === "warning"
+      ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+      : "border-blue-500/40 bg-blue-500/10 text-blue-300";
+
+  const Icon = severity === "error" ? Ban : AlertTriangle;
+
+  const tooltipLines: string[] = [];
+  const label =
+    severity === "error"
+      ? "Erreur(s) detectee(s)"
+      : severity === "warning"
+      ? "Anomalie(s) detectee(s)"
+      : "Info(s) detectee(s)";
+  tooltipLines.push(`${label} : ${count}`);
+  if (messages && messages.length > 0) {
+    for (const m of messages.slice(0, 3)) {
+      tooltipLines.push(`- ${m}`);
+    }
+    if (messages.length > 3) {
+      tooltipLines.push(`(+${messages.length - 3} autre(s) — voir details)`);
+    }
+  }
+
+  return (
+    <span
+      title={tooltipLines.join("\n")}
+      aria-label={`${label}: ${count}`}
+      className={`inline-flex items-center gap-0.5 rounded-md border px-1 py-0.5 text-[10px] font-medium ${sevCls}`}
+    >
+      <Icon className="h-3 w-3" />
+      {count > 1 ? count : null}
+    </span>
   );
 }
 

@@ -2,10 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
+  Ban,
+  CheckCircle2,
   Eye,
   FileText,
   Flame,
   Image as ImageIcon,
+  Info,
   Link2,
   Loader2,
   Pause,
@@ -63,8 +67,21 @@ type Lead = {
   converted_to_lead_id: number | null;
   converted_to_deal_id: number | null;
   model_used: string | null;
+  // Phase A3 — sévérité max + nombre d'anomalies (résumé pour card).
+  validation_severity: "error" | "warning" | "info" | null;
+  validation_count: number;
   created_at: string;
   attachments_count: number;
+};
+
+/** Phase A3 — entrée individuelle d'anomalie post-extraction. */
+type ValidationWarning = {
+  field: string;
+  severity: "error" | "warning" | "info";
+  message: string;
+  source_local?: number | string | null;
+  source_gemini?: number | string | null;
+  source_claude?: number | string | null;
 };
 
 /**
@@ -723,6 +740,8 @@ function LeadCard({
         }}
         badge={STATUS_BADGE[lead.status]}
         extraBadge={extractionBadge(lead.model_used)}
+        validationSeverity={lead.validation_severity}
+        validationCount={lead.validation_count}
         onClick={onView}
         actions={
           <>
@@ -916,6 +935,10 @@ type LeadDetail = Lead & {
   analysis_results_json: string | null;
   // Modèle d'extraction utilisé (cascade tri-couche).
   model_used: string | null;
+  // Phase A3 — détail complet des anomalies post-extraction (bornes
+  // + divergences local↔gemini). Affiché dans la fiche, panneau
+  // « Validation de l'extraction ».
+  validation_warnings: ValidationWarning[] | null;
   attachments: Array<{
     id: number;
     filename: string;
@@ -1373,6 +1396,9 @@ function LeadDetailModal({
                   ) : null}
                 </section>
               ) : null}
+
+              {/* Phase A3 — Panneau "Validation de l'extraction" */}
+              <ValidationPanel warnings={data.validation_warnings} />
 
               {/* Section Analyse financière — inputs manuels + bouton */}
               <ManualAnalysisSection
@@ -3494,6 +3520,143 @@ function BestRefiSubsection({ data }: { data: AnalysisResults }) {
   );
 }
 
+
+
+// ─── Phase A3 : Panneau "Validation de l'extraction" ──────────────
+//
+// Affiche les anomalies détectées par `app.services.lead_validation`
+// après chaque extraction. Pour chaque warning :
+//   - icône colorée (info bleu / warning ambre / error rouge),
+//   - nom du champ + message,
+//   - si dispo, valeurs des 3 couches (Local / Gemini / Claude)
+//     côte à côte pour comparaison rapide.
+//
+// Si la liste est vide ou null → bandeau vert "Aucune anomalie".
+
+const FIELD_LABELS: Record<string, string> = {
+  asking_price: "Prix demandé",
+  nb_logements: "Nombre de logements",
+  revenus_bruts: "Revenus bruts",
+  taxes_municipales: "Taxes municipales",
+  taxes_scolaires: "Taxes scolaires",
+  assurances: "Assurances",
+  energie: "Énergie",
+  evaluation_municipale: "Évaluation municipale",
+  superficie_terrain: "Superficie terrain",
+  superficie_batiment: "Superficie bâtiment",
+  annee_construction: "Année construction"
+};
+
+function _fmtSourceValue(v: number | string | null | undefined): string {
+  if (v == null || v === "") return "—";
+  if (typeof v === "number") {
+    const rounded = Math.round(v);
+    const sign = rounded < 0 ? "-" : "";
+    const abs = Math.abs(rounded).toString();
+    const withSep = abs.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+    return `${sign}${withSep}`;
+  }
+  return String(v);
+}
+
+function ValidationPanel({
+  warnings
+}: {
+  warnings: ValidationWarning[] | null;
+}) {
+  const list = warnings || [];
+
+  if (list.length === 0) {
+    return (
+      <section>
+        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+          Validation de l&apos;extraction
+        </h3>
+        <div className="mt-2 flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+          <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+          <span>Aucune anomalie détectée sur les champs extraits.</span>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section>
+      <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+        Validation de l&apos;extraction ({list.length})
+      </h3>
+      <ul className="mt-2 space-y-2">
+        {list.map((w, i) => {
+          const sevCls =
+            w.severity === "error"
+              ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+              : w.severity === "warning"
+              ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+              : "border-blue-500/40 bg-blue-500/10 text-blue-300";
+          const Icon =
+            w.severity === "error"
+              ? Ban
+              : w.severity === "warning"
+              ? AlertTriangle
+              : Info;
+          const fieldLabel = FIELD_LABELS[w.field] || w.field;
+          const hasSources =
+            w.source_local != null ||
+            w.source_gemini != null ||
+            w.source_claude != null;
+          return (
+            <li
+              key={i}
+              className={`rounded-md border px-3 py-2 text-xs ${sevCls}`}
+            >
+              <div className="flex items-start gap-2">
+                <Icon className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold">{fieldLabel}</p>
+                  <p className="mt-0.5 text-white/80">{w.message}</p>
+                  {hasSources ? (
+                    <div className="mt-1.5 flex flex-wrap gap-3 text-[10px] text-white/60">
+                      {w.source_local != null ? (
+                        <span>
+                          <span className="font-semibold text-white/70">
+                            Local :
+                          </span>{" "}
+                          <span className="font-mono tabular-nums">
+                            {_fmtSourceValue(w.source_local)}
+                          </span>
+                        </span>
+                      ) : null}
+                      {w.source_gemini != null ? (
+                        <span>
+                          <span className="font-semibold text-white/70">
+                            Gemini :
+                          </span>{" "}
+                          <span className="font-mono tabular-nums">
+                            {_fmtSourceValue(w.source_gemini)}
+                          </span>
+                        </span>
+                      ) : null}
+                      {w.source_claude != null ? (
+                        <span>
+                          <span className="font-semibold text-white/70">
+                            Claude :
+                          </span>{" "}
+                          <span className="font-mono tabular-nums">
+                            {_fmtSourceValue(w.source_claude)}
+                          </span>
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
 
 
 // ─── Phase A2 : Badge "Extrait par" + bouton "Re-extraire avec Claude" ─
