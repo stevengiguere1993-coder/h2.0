@@ -7,7 +7,13 @@ Main router that aggregates all API v1 endpoints.
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_current_admin_or_owner
-from app.api.v1.endpoints import devlog_notes_ai
+from app.api.v1.endpoints import (
+    devlog_notes_ai,
+    devlog_project_finances,
+    devlog_project_members,
+    devlog_project_phases,
+    devlog_project_tasks,
+)
 from app.api.v1.endpoints import (
     admin_data,
     agenda_availability,
@@ -322,4 +328,24 @@ api_router.include_router(public_devlog_contact.router)
 # Isole de devlog.py pour minimiser les conflits de merge entre chantiers.
 # Protege par la meme garde admin/owner que les autres routers internes du pole.
 api_router.include_router(devlog_notes_ai.router, dependencies=_devlog_admin_only)
+
+# Vague 2 - endpoints projet (phases, taches, membres, finances). Tous
+# nested sous /devlog/projects/{id}/* donc DOIVENT etre registered
+# AVANT devlog.projects_router (deja registered plus haut). FastAPI
+# match dans l'ordre d'enregistrement : on s'en sort parce que les
+# paths nested portent un suffixe litteral (/phases, /tasks, ...) qui
+# n'entre pas en collision avec le PATCH /devlog/projects/{item_id} du
+# CRUD generique tant que {item_id} n'est pas suivi d'un segment.
+api_router.include_router(
+    devlog_project_phases.router, dependencies=_devlog_admin_only
+)
+api_router.include_router(
+    devlog_project_tasks.router, dependencies=_devlog_admin_only
+)
+api_router.include_router(
+    devlog_project_members.router, dependencies=_devlog_admin_only
+)
+api_router.include_router(
+    devlog_project_finances.router, dependencies=_devlog_admin_only
+)
 
