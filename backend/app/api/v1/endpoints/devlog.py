@@ -2305,6 +2305,292 @@ async def send_contract(
     return DevlogContractRead.model_validate(obj)
 
 
+# --- Auto-remplissage depuis une soumission acceptee -----------------------
+
+# Template Markdown du contrat - placeholders entre accolades, formates
+# via str.format(). Toute valeur fournie par l'utilisateur est nettoyee
+# en amont (pas d'echappement specifique : Markdown sans rendu HTML).
+_CONTRACT_TEMPLATE = (
+    "# Contrat de developpement logiciel\n"
+    "\n"
+    "## Parties\n"
+    "\n"
+    "**Prestataire** : Horizon Services Immobiliers inc.\n"
+    "\n"
+    "**Client** : {client_nom}\n"
+    "{client_adresse_line}"
+    "{client_email_line}"
+    "\n"
+    "## Objet du contrat\n"
+    "\n"
+    "Le Prestataire s'engage a fournir au Client les services de "
+    "developpement logiciel suivants, tels que detailles dans la "
+    "soumission n^o {soumission_numero} acceptee le {date_acceptation} :\n"
+    "\n"
+    "**{soumission_titre}**\n"
+    "\n"
+    "{sections_resumees}\n"
+    "\n"
+    "## Conditions financieres\n"
+    "\n"
+    "**Frais de mise en oeuvre** (paiement unique) : "
+    "{prix_initial_ttc} $ taxes incluses\n"
+    "  - Depot a la signature : 50 % ({depot_ttc} $)\n"
+    "  - Solde a la livraison : 50 % ({solde_ttc} $)\n"
+    "\n"
+    "**Frais mensuels recurrents** : {prix_mensuel_ttc} $ / mois "
+    "taxes incluses\n"
+    "\n"
+    "Toutes les sommes sont payables dans les 15 jours suivant "
+    "l'emission de la facture.\n"
+    "\n"
+    "## Duree\n"
+    "\n"
+    "Le projet demarre des la signature du present contrat et le "
+    "versement du depot. La livraison est estimee au "
+    "{date_livraison_estimee}.\n"
+    "\n"
+    "## Propriete intellectuelle\n"
+    "\n"
+    "Le code source, les designs et les livrables deviennent la "
+    "propriete du Client a la reception du paiement final. Le "
+    "Prestataire conserve le droit de reutiliser les composants "
+    "generiques et non confidentiels pour ses autres projets.\n"
+    "\n"
+    "## Garanties\n"
+    "\n"
+    "Le Prestataire garantit ses livrables contre les defauts de "
+    "fonctionnement pendant 90 jours suivant la livraison. Cette "
+    "garantie ne couvre pas les modifications apportees par le Client "
+    "ou par un tiers.\n"
+    "\n"
+    "## Confidentialite\n"
+    "\n"
+    "Les deux parties s'engagent a respecter la confidentialite des "
+    "informations echangees dans le cadre du present contrat.\n"
+    "\n"
+    "## Resiliation\n"
+    "\n"
+    "Toute resiliation anticipee par le Client donne lieu au paiement "
+    "des heures effectuees + 20 % de penalite sur le solde du "
+    "contrat.\n"
+    "\n"
+    "## Signatures\n"
+    "\n"
+    "**Pour le Prestataire** : Philippe Meuser, Horizon Services "
+    "Immobiliers inc.\n"
+    "Date : {date_emission}\n"
+    "\n"
+    "**Pour le Client** : ________________________\n"
+    "Date : ________________________\n"
+)
+
+
+def _fmt_money(n: float) -> str:
+    """Formate un montant en CAD style 'X XXX.XX' (separateur espace
+    insecable, deux decimales). Reste compatible Markdown brut."""
+    try:
+        s = f"{float(n):,.2f}"
+    except (TypeError, ValueError):
+        s = "0.00"
+    # Espace fine insecable comme separateur de milliers (style fr-CA).
+    return s.replace(",", " ")
+
+
+def _fmt_date_fr(d) -> str:
+    """Formate une date / datetime en 'JJ mois YYYY' (francais)."""
+    if d is None:
+        return "________________"
+    mois = [
+        "janvier", "fevrier", "mars", "avril", "mai", "juin",
+        "juillet", "aout", "septembre", "octobre", "novembre", "decembre",
+    ]
+    return f"{d.day} {mois[d.month - 1]} {d.year}"
+
+
+@contracts_router.post(
+    "/contracts/from-soumission/{soumission_id}",
+    response_model=DevlogContractRead,
+    status_code=status.HTTP_201_CREATED,
+    summary=(
+        "Cree un contrat brouillon auto-rempli a partir d'une soumission "
+        "acceptee : parties, objet, conditions financieres, clauses "
+        "standards."
+    ),
+)
+async def create_contract_from_soumission(
+    soumission_id: int, db: DBSession, user: CurrentUser
+):
+    from datetime import timedelta
+
+    soum = await GenericCrud(db, DevlogSoumission).get(soumission_id)
+    if soum is None:
+        raise HTTPException(
+            status_code=404, detail="Soumission introuvable"
+        )
+    if soum.status != "acceptee":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "La soumission doit etre acceptee pour generer un "
+                "contrat (statut actuel : " + soum.status + ")."
+            ),
+        )
+
+    # --- Client (peut etre absent si soumission liee a un lead seul) ---
+    client = None
+    if soum.client_id is not None:
+        client = await GenericCrud(db, DevlogClient).get(soum.client_id)
+
+    # --- Sections + items pour le resume objet du contrat -------------
+    sections = (
+        (
+            await db.execute(
+                select(DevlogSoumissionSection)
+                .where(
+                    DevlogSoumissionSection.soumission_id == soumission_id
+                )
+                .order_by(
+                    DevlogSoumissionSection.position.asc(),
+                    DevlogSoumissionSection.id.asc(),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    items = (
+        (
+            await db.execute(
+                select(DevlogSoumissionItem)
+                .where(
+                    DevlogSoumissionItem.soumission_id == soumission_id
+                )
+                .order_by(
+                    DevlogSoumissionItem.position.asc(),
+                    DevlogSoumissionItem.id.asc(),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    # --- Prix : prefere compute_devis pour les devis_dev, sinon
+    # fallback sur soumission.amount + somme des items recurring. ----
+    prix_initial_ttc = 0.0
+    prix_mensuel_ttc = 0.0
+    if soum.is_devis_dev:
+        try:
+            preview = compute_devis(soum, items)
+            if not preview.get("is_invalid"):
+                prix_initial_ttc = float(
+                    preview["initial"].get("total_final_taxe", 0.0)
+                )
+                prix_mensuel_ttc = float(
+                    preview["recurring"].get(
+                        "total_client_amount_taxe", 0.0
+                    )
+                )
+        except Exception:
+            # Fallback silencieux : le calcul circulaire peut etre
+            # invalide (divisor <= 0). On laisse les montants a 0,
+            # Phil ajustera dans l'editeur.
+            prix_initial_ttc = 0.0
+            prix_mensuel_ttc = 0.0
+    else:
+        # Legacy : utilise amount (initial) ; pas de recurrent identifiable.
+        if soum.amount is not None:
+            # On suppose amount HT, on applique 1.14975 (TPS+TVQ Qc).
+            prix_initial_ttc = float(soum.amount) * 1.14975
+        prix_mensuel_ttc = 0.0
+
+    depot_ttc = prix_initial_ttc / 2.0
+    solde_ttc = prix_initial_ttc - depot_ttc
+
+    # --- Resume des sections (objet du contrat) -----------------------
+    if sections:
+        # Une ligne par section, en utilisant client_label si present.
+        lignes = []
+        for sec in sections:
+            label = (sec.client_label or sec.name or "").strip()
+            kind = (
+                "mensuel" if sec.billing_kind == "recurring" else "livraison"
+            )
+            lignes.append(f"- **{label}** ({kind})")
+        sections_resumees = "\n".join(lignes)
+    elif soum.summary:
+        sections_resumees = soum.summary.strip()
+    else:
+        sections_resumees = (
+            "- Livraison conforme a la soumission acceptee."
+        )
+
+    # --- Dates ---------------------------------------------------------
+    now = datetime.now(timezone.utc)
+    date_acceptation = _fmt_date_fr(soum.signed_at or soum.updated_at or now)
+    date_emission = _fmt_date_fr(now)
+    date_livraison_estimee = _fmt_date_fr(now + timedelta(days=60))
+
+    # --- Champs client -------------------------------------------------
+    if client is not None:
+        client_nom = client.name
+        if client.company:
+            client_nom = f"{client_nom} ({client.company})"
+        client_adresse_line = (
+            f"{client.address}\n" if client.address else ""
+        )
+        client_email_line = (
+            f"{client.email}\n" if client.email else ""
+        )
+    else:
+        client_nom = "________________________"
+        client_adresse_line = ""
+        client_email_line = ""
+
+    body = _CONTRACT_TEMPLATE.format(
+        client_nom=client_nom,
+        client_adresse_line=client_adresse_line,
+        client_email_line=client_email_line,
+        soumission_numero=str(soum.id),
+        soumission_titre=soum.title,
+        date_acceptation=date_acceptation,
+        sections_resumees=sections_resumees,
+        prix_initial_ttc=_fmt_money(prix_initial_ttc),
+        depot_ttc=_fmt_money(depot_ttc),
+        solde_ttc=_fmt_money(solde_ttc),
+        prix_mensuel_ttc=_fmt_money(prix_mensuel_ttc),
+        date_livraison_estimee=date_livraison_estimee,
+        date_emission=date_emission,
+    )
+
+    title = f"Contrat - {soum.title}"
+    contract = DevlogContract(
+        title=title[:255],
+        body=body,
+        status="brouillon",
+        soumission_id=soum.id,
+        client_id=soum.client_id,
+        project_id=None,
+    )
+    db.add(contract)
+    await db.flush()
+    await log_action(
+        db,
+        user=user,
+        action="devlog_contract.created_from_soumission",
+        entity_type="devlog_contract",
+        entity_id=contract.id,
+        details={
+            "soumission_id": soum.id,
+            "client_id": soum.client_id,
+            "prix_initial_ttc": round(prix_initial_ttc, 2),
+            "prix_mensuel_ttc": round(prix_mensuel_ttc, 2),
+        },
+    )
+    return DevlogContractRead.model_validate(contract)
+
+
 # --- Endpoints publics (sans auth - acces par lien token) ---
 
 public_contracts_router = APIRouter(
