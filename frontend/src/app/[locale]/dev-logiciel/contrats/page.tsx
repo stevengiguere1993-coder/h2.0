@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   Copy,
   FileSignature,
-  Link2,
   Loader2,
   Plus,
   Send,
@@ -37,19 +36,22 @@ type RefItem = { id: number; name: string };
 type SoumRef = { id: number; title: string };
 type ProjectRef = { id: number; name: string };
 
-const STATUS_OPTIONS = [
-  { key: "brouillon", label: "Brouillon" },
-  { key: "envoye", label: "Envoyé" },
-  { key: "signe", label: "Signé" },
-  { key: "annule", label: "Annulé" }
+type Column = {
+  id: string;
+  label: string;
+  dot: string;
+};
+
+// Colonnes du kanban — alignees sur les statuts backend
+// (DevlogContract.status : brouillon | envoye | signe | annule).
+const COLUMNS: Column[] = [
+  { id: "brouillon", label: "Brouillon", dot: "bg-white/40" },
+  { id: "envoye", label: "Envoyé", dot: "bg-blue-400" },
+  { id: "signe", label: "Signé", dot: "bg-emerald-400" },
+  { id: "annule", label: "Annulé/Refusé", dot: "bg-rose-500" }
 ];
 
-const STATUS_CLS: Record<string, string> = {
-  brouillon: "bg-white/5 text-white/60",
-  envoye: "bg-blue-500/15 text-blue-300",
-  signe: "bg-emerald-500/15 text-emerald-300",
-  annule: "bg-rose-500/15 text-rose-300"
-};
+const STATUS_OPTIONS = COLUMNS.map((c) => ({ key: c.id, label: c.label }));
 
 type Draft = {
   title: string;
@@ -99,6 +101,29 @@ Les parties s'engagent à respecter la confidentialité des informations échang
 
 Signé par les parties.`;
 
+/** Extrait un montant TTC depuis le body Markdown (cherche
+ *  "Frais de mise en oeuvre ... : X $") — best-effort pour
+ *  afficher un prix sur la carte kanban. */
+function extractAmount(body: string | null): number | null {
+  if (!body) return null;
+  // Cherche un nombre format "X XXX.XX" ou "X,XXX.XX" apres "Frais de mise en oeuvre"
+  const re = /[Ff]rais de mise en [oô]euvre[^:]*:\s*([\d\s,.]+)\s*\$/;
+  const m = body.match(re);
+  if (!m) return null;
+  const raw = m[1].replace(/\s/g, "").replace(/,/g, "");
+  const v = Number(raw);
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+function fmtMoney(n: number | null): string {
+  if (n == null) return "—";
+  return new Intl.NumberFormat("fr-CA", {
+    style: "currency",
+    currency: "CAD",
+    maximumFractionDigits: 2
+  }).format(n);
+}
+
 export default function DevlogContractsPage() {
   const { onOpenSidebar } = useDevlogLayout();
   const confirm = useConfirm();
@@ -114,6 +139,10 @@ export default function DevlogContractsPage() {
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [saving, setSaving] = useState(false);
   const [linkCopied, setLinkCopied] = useState<number | null>(null);
+
+  // Drag-and-drop state — identique au pattern soumissions kanban.
+  const [dragging, setDragging] = useState<number | null>(null);
+  const [hoverCol, setHoverCol] = useState<string | null>(null);
 
   async function loadAll() {
     try {
@@ -155,6 +184,41 @@ export default function DevlogContractsPage() {
         : true
     );
   }, [items, search]);
+
+  // Regroupement par colonne. Tout statut inconnu retombe sur "brouillon".
+  const byColumn = useMemo(() => {
+    const map: Record<string, Contract[]> = Object.fromEntries(
+      COLUMNS.map((c) => [c.id, [] as Contract[]])
+    );
+    for (const c of filtered) {
+      const target = COLUMNS.find((col) => col.id === c.status)
+        ? c.status
+        : "brouillon";
+      map[target].push(c);
+    }
+    return map;
+  }, [filtered]);
+
+  /** Deplace un contrat vers un nouveau statut via PATCH (idempotent).
+   *  Update optimiste avec rollback en cas d'erreur. */
+  async function moveContract(id: number, newStatus: string) {
+    const prev = items;
+    setItems((xs) =>
+      xs.map((x) => (x.id === id ? { ...x, status: newStatus } : x))
+    );
+    try {
+      const res = await authedFetch(`/api/v1/devlog/contracts/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: newStatus })
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      setItems(prev);
+      setError(
+        "Mise à jour du statut impossible (contrat signé verrouillé ?)."
+      );
+    }
+  }
 
   function openNew() {
     setDraft({ ...EMPTY_DRAFT, body: DEFAULT_TEMPLATE });
@@ -278,7 +342,7 @@ export default function DevlogContractsPage() {
         }
       />
 
-      <div className="mx-auto max-w-4xl px-4 py-4 lg:px-6">
+      <div className="p-4 lg:p-6">
         {error ? (
           <div className="mb-3 flex items-start justify-between gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             <span>{error}</span>
@@ -292,75 +356,93 @@ export default function DevlogContractsPage() {
           <div className="mt-10 flex justify-center">
             <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
           </div>
-        ) : filtered.length === 0 ? (
+        ) : items.length === 0 ? (
           <p className="mt-10 text-center text-sm text-white/40">
             Aucun contrat. Clique sur « Nouveau contrat ».
           </p>
         ) : (
-          <ul className="space-y-2">
-            {filtered.map((c) => (
-              <li
-                key={c.id}
-                className="rounded-xl border border-brand-800 bg-brand-900 p-3"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={() => openEdit(c)}
-                    className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                  >
-                    <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-blue-500/15 text-blue-300">
-                      <FileSignature className="h-4 w-4" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-white">
-                        {c.title}
-                      </p>
-                      <p className="mt-0.5 truncate text-xs text-white/50">
-                        {c.client_id
-                          ? clientName.get(c.client_id) ?? "Client supprimé"
-                          : "Sans client"}
-                        {c.signed_name ? ` · Signé par ${c.signed_name}` : ""}
-                      </p>
+          <div className="flex gap-4 overflow-x-auto pb-4">
+            {COLUMNS.map((col) => {
+              const cards = byColumn[col.id] || [];
+              const isHover = hoverCol === col.id;
+              return (
+                <div
+                  key={col.id}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setHoverCol(col.id);
+                  }}
+                  onDragLeave={() =>
+                    setHoverCol((h) => (h === col.id ? null : h))
+                  }
+                  onDrop={() => {
+                    if (dragging == null) return;
+                    const item = items.find((c) => c.id === dragging);
+                    if (item && item.status !== col.id)
+                      void moveContract(dragging, col.id);
+                    setDragging(null);
+                    setHoverCol(null);
+                  }}
+                  className={`flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
+                    isHover
+                      ? "border-blue-500 bg-brand-900"
+                      : "border-brand-800"
+                  }`}
+                >
+                  <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <span className={`h-2 w-2 rounded-full ${col.dot}`} />
+                      <h2 className="text-sm font-semibold text-white">
+                        {col.label}
+                      </h2>
+                      <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
+                        {cards.length}
+                      </span>
                     </div>
-                  </button>
-                  <div className="flex flex-shrink-0 items-center gap-2">
-                    <span
-                      className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
-                        STATUS_CLS[c.status] ?? "bg-white/5 text-white/50"
-                      }`}
-                    >
-                      {STATUS_OPTIONS.find((s) => s.key === c.status)?.label ?? c.status}
+                    <span className="text-xs font-semibold text-emerald-300">
+                      {fmtMoney(
+                        cards.reduce(
+                          (sum, c) => sum + (extractAmount(c.body) || 0),
+                          0
+                        )
+                      )}
                     </span>
-                    {c.status === "brouillon" ? (
-                      <button
-                        type="button"
-                        onClick={() => void sendContract(c.id)}
-                        title="Générer le lien de signature"
-                        className="rounded-md border border-blue-500/40 bg-blue-500/10 px-2 py-1 text-[10px] font-semibold text-blue-300 hover:bg-blue-500/20"
-                      >
-                        <Send className="h-3 w-3" />
-                      </button>
-                    ) : null}
-                    {c.signature_token ? (
-                      <button
-                        type="button"
-                        onClick={() => void copyLink(c)}
-                        title="Copier le lien de signature"
-                        className="rounded-md border border-white/15 bg-white/5 px-2 py-1 text-[10px] font-semibold text-white/70 hover:bg-white/10"
-                      >
-                        {linkCopied === c.id ? (
-                          <CheckCircle2 className="h-3 w-3 text-emerald-300" />
-                        ) : (
-                          <Copy className="h-3 w-3" />
-                        )}
-                      </button>
-                    ) : null}
+                  </div>
+
+                  <div className="flex-1 space-y-3 p-3">
+                    {cards.length === 0 ? (
+                      <p className="py-8 text-center text-xs text-white/40">
+                        Aucun contrat
+                      </p>
+                    ) : (
+                      cards.map((c) => (
+                        <ContractCard
+                          key={c.id}
+                          contract={c}
+                          clientName={
+                            c.client_id
+                              ? clientName.get(c.client_id) ?? null
+                              : null
+                          }
+                          amount={extractAmount(c.body)}
+                          dragging={dragging === c.id}
+                          linkCopied={linkCopied === c.id}
+                          onDragStart={() => setDragging(c.id)}
+                          onDragEnd={() => {
+                            setDragging(null);
+                            setHoverCol(null);
+                          }}
+                          onOpen={() => openEdit(c)}
+                          onSend={() => void sendContract(c.id)}
+                          onCopyLink={() => void copyLink(c)}
+                        />
+                      ))
+                    )}
                   </div>
                 </div>
-              </li>
-            ))}
-          </ul>
+              );
+            })}
+          </div>
         )}
       </div>
 
@@ -384,6 +466,148 @@ export default function DevlogContractsPage() {
           }
         />
       ) : null}
+    </div>
+  );
+}
+
+function ContractCard({
+  contract: c,
+  clientName,
+  amount,
+  dragging,
+  linkCopied,
+  onDragStart,
+  onDragEnd,
+  onOpen,
+  onSend,
+  onCopyLink
+}: {
+  contract: Contract;
+  clientName: string | null;
+  amount: number | null;
+  dragging: boolean;
+  linkCopied: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onOpen: () => void;
+  onSend: () => void;
+  onCopyLink: () => void;
+}) {
+  return (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      className={`group relative cursor-grab rounded-lg border border-brand-800 bg-brand-950 p-3 transition hover:border-blue-500 active:cursor-grabbing ${
+        dragging ? "opacity-40" : ""
+      }`}
+    >
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onOpen();
+        }}
+        className="block w-full text-left"
+      >
+        <div className="flex items-start gap-2">
+          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-blue-500/15 text-blue-300">
+            <FileSignature className="h-4 w-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="line-clamp-2 text-sm font-semibold text-white">
+              {c.title}
+            </p>
+            {clientName ? (
+              <p className="mt-0.5 truncate text-xs font-medium text-white/70">
+                {clientName}
+              </p>
+            ) : (
+              <p className="mt-0.5 truncate text-xs italic text-white/40">
+                Sans client
+              </p>
+            )}
+          </div>
+        </div>
+
+        {amount != null ? (
+          <p className="mt-2 text-sm font-bold text-white">
+            {fmtMoney(amount)}
+            <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+              TTC
+            </span>
+          </p>
+        ) : null}
+
+        {/* Trace de signature ou d'envoi */}
+        {c.status === "signe" && c.signed_at ? (
+          <p className="mt-1.5 text-[11px] text-emerald-300">
+            Signé le{" "}
+            {new Date(c.signed_at).toLocaleDateString("fr-CA")}
+            {c.signed_name ? ` par ${c.signed_name}` : ""}
+          </p>
+        ) : c.status === "envoye" && c.sent_at ? (
+          <p className="mt-1.5 text-[11px] text-blue-300">
+            Envoyé le {new Date(c.sent_at).toLocaleDateString("fr-CA")}
+          </p>
+        ) : (
+          <p className="mt-1.5 text-[11px] text-white/40">
+            Créé le {new Date(c.created_at).toLocaleDateString("fr-CA")}
+          </p>
+        )}
+      </button>
+
+      {/* Actions rapides — visibles sous la carte. */}
+      <div className="mt-2 flex items-center gap-1.5 border-t border-brand-800 pt-2">
+        {c.status === "brouillon" ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onSend();
+            }}
+            title="Générer le lien de signature"
+            className="inline-flex items-center gap-1 rounded-md border border-blue-500/40 bg-blue-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-200 hover:brightness-110"
+          >
+            <Send className="h-3 w-3" /> Envoyer
+          </button>
+        ) : null}
+        {c.signature_token ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onCopyLink();
+            }}
+            title="Copier le lien de signature"
+            className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white/70 hover:bg-white/10"
+          >
+            {linkCopied ? (
+              <>
+                <CheckCircle2 className="h-3 w-3 text-emerald-300" /> Copié
+              </>
+            ) : (
+              <>
+                <Copy className="h-3 w-3" /> Lien
+              </>
+            )}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onOpen();
+          }}
+          className="ml-auto inline-flex items-center rounded-md border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white/70 hover:bg-white/10"
+        >
+          Voir
+        </button>
+      </div>
     </div>
   );
 }
@@ -463,6 +687,22 @@ function Drawer({
                 ))}
               </select>
             </Field>
+            <Field label="Statut">
+              <select
+                value={draft.status}
+                onChange={(e) => set("status", e.target.value)}
+                disabled={locked}
+                className={inputCls}
+              >
+                {STATUS_OPTIONS.map((s) => (
+                  <option key={s.key} value={s.key}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
             <Field label="Projet">
               <select
                 value={draft.project_id}
@@ -478,22 +718,22 @@ function Drawer({
                 ))}
               </select>
             </Field>
+            <Field label="Soumission liée">
+              <select
+                value={draft.soumission_id}
+                onChange={(e) => set("soumission_id", e.target.value)}
+                disabled={locked}
+                className={inputCls}
+              >
+                <option value="">—</option>
+                {soumissions.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.title}
+                  </option>
+                ))}
+              </select>
+            </Field>
           </div>
-          <Field label="Soumission liée">
-            <select
-              value={draft.soumission_id}
-              onChange={(e) => set("soumission_id", e.target.value)}
-              disabled={locked}
-              className={inputCls}
-            >
-              <option value="">—</option>
-              {soumissions.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.title}
-                </option>
-              ))}
-            </select>
-          </Field>
           <Field label="Contenu du contrat (Markdown)">
             <textarea
               value={draft.body}

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
@@ -10,6 +10,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  FileSignature,
   Loader2,
   Plus,
   Repeat,
@@ -635,6 +636,42 @@ export default function SoumissionDetailPage() {
 
   const [sending, setSending] = useState(false);
   const [copyOk, setCopyOk] = useState(false);
+  const [generatingContract, setGeneratingContract] = useState(false);
+
+  // Auto-remplissage : cree un brouillon de contrat a partir de la
+  // soumission acceptee (parties + objet + conditions financieres +
+  // clauses standards), puis redirige vers la page contrats ou Phil
+  // peut ajuster le body Markdown avant d'envoyer.
+  async function generateContract() {
+    if (generatingContract) return;
+    const ok = await confirm({
+      title: "Générer le contrat à partir de cette soumission ?",
+      description:
+        "Un nouveau contrat brouillon sera créé avec les parties, l'objet, les conditions financières et les clauses standards pré-remplies. Tu pourras l'éditer avant de l'envoyer.",
+      confirmLabel: "Générer"
+    });
+    if (!ok) return;
+    setGeneratingContract(true);
+    try {
+      const r = await authedFetch(
+        `/api/v1/devlog/contracts/from-soumission/${id}`,
+        { method: "POST" }
+      );
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      // Redirige vers la page contrats (le drawer du nouveau contrat
+      // sera ouvrable en cliquant la carte dans le kanban).
+      window.location.href = "/dev-logiciel/contrats";
+    } catch (e) {
+      setError(
+        (e as Error).message || "Génération du contrat impossible."
+      );
+    } finally {
+      setGeneratingContract(false);
+    }
+  }
 
   async function sendToClient() {
     if (sending) return;
@@ -877,6 +914,27 @@ export default function SoumissionDetailPage() {
                       )}
                     </button>
                   ) : null}
+                </div>
+              ) : null}
+              {/* Auto-remplissage contrat — visible uniquement quand la
+                  soumission est acceptee. Cree un brouillon de contrat
+                  avec parties + objet + conditions + clauses pre-remplis. */}
+              {s.status === "acceptee" ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => void generateContract()}
+                    disabled={generatingContract}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-violet-500/40 bg-violet-500/10 px-3 py-1.5 font-semibold text-violet-200 hover:brightness-110 disabled:opacity-60"
+                    title="Crée un contrat brouillon auto-rempli depuis cette soumission"
+                  >
+                    {generatingContract ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <FileSignature className="h-3.5 w-3.5" />
+                    )}
+                    Générer le contrat
+                  </button>
                 </div>
               ) : null}
             </header>
