@@ -5,10 +5,10 @@ travail de développement est suivi comme un projet : statut,
 échéancier, description.
 """
 
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Date, ForeignKey, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -49,6 +49,14 @@ class DevlogProject(Base, TimestampUpdateMixin):
     )
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+    # Horodatage du démarrage effectif. Posé automatiquement par le
+    # service ``devlog_project_provision.start_project_from_contract``
+    # quand le contrat est signé ET le dépôt encaissé. NULL tant que
+    # le projet n'est pas démarré.
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     def __repr__(self) -> str:
         return f"<DevlogProject(id={self.id}, name='{self.name}', status='{self.status}')>"

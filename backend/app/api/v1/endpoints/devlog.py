@@ -38,6 +38,7 @@ from app.schemas.devlog import (
     DevlogClientRead,
     DevlogClientUpdate,
     DevlogContractCreate,
+    DevlogContractMarkDepositPaid,
     DevlogContractPublicRead,
     DevlogContractRead,
     DevlogContractSignRequest,
@@ -80,6 +81,7 @@ from app.schemas.devlog import (
 )
 from app.services.audit import log_action
 from app.services.devlog_devis_calc import compute_devis
+from app.services.devlog_project_provision import maybe_start_project
 from app.services.devlog_invoice_pdf import (
     compute_invoice_totals,
     generate_invoice_pdf,
@@ -2236,11 +2238,23 @@ async def update_contract(
     obj = await crud.get(contract_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Contrat introuvable")
+    update_data = data.model_dump(exclude_unset=True)
+    # Verrouillage d'edition une fois signe — sauf si le PATCH ne porte
+    # QUE sur le champ status (drag-and-drop kanban vers "annule" par ex.)
+    # ou sur les champs depot (Phil peut marquer le depot apres coup).
     if obj.status == "signe":
-        raise HTTPException(
-            status_code=400,
-            detail="Contrat signe - edition verrouillee.",
-        )
+        allowed_post_sign = {
+            "status",
+            "deposit_required_cents",
+            "project_id",
+        }
+        forbidden = set(update_data.keys()) - allowed_post_sign
+        if forbidden:
+            raise HTTPException(
+                status_code=400,
+                detail="Contrat signe - edition verrouillee.",
+            )
+    previous_status = obj.status
     obj = await crud.update(obj, data)
     await log_action(
         db,
@@ -2248,8 +2262,19 @@ async def update_contract(
         action="devlog_contract.updated",
         entity_type="devlog_contract",
         entity_id=contract_id,
-        details=data.model_dump(exclude_unset=True),
+        details=update_data,
     )
+    # Si le statut passe a "signe" via PATCH (drag-and-drop kanban) et
+    # que le depot est deja paye, on declenche le demarrage projet.
+    if previous_status != "signe" and obj.status == "signe":
+        try:
+            await maybe_start_project(db, obj, user=user)
+        except Exception:
+            import logging as _logging
+            _logging.getLogger(__name__).exception(
+                "auto-start project apres PATCH contrat %s a echoue",
+                contract_id,
+            )
     return DevlogContractRead.model_validate(obj)
 
 
@@ -2302,6 +2327,56 @@ async def send_contract(
         entity_id=contract_id,
         details={"signature_token": obj.signature_token},
     )
+    return DevlogContractRead.model_validate(obj)
+
+
+@contracts_router.post(
+    "/contracts/{contract_id}/mark-deposit-paid",
+    response_model=DevlogContractRead,
+    summary=(
+        "Marque le depot initial comme paye (manuel, apres virement / "
+        "cheque). Si le contrat est deja signe, declenche automatiquement "
+        "le demarrage du projet (generation phases/taches depuis la "
+        "soumission, notification email Phil)."
+    ),
+)
+async def mark_deposit_paid(
+    contract_id: int,
+    body: DevlogContractMarkDepositPaid,
+    db: DBSession,
+    user: CurrentUser,
+):
+    obj = await GenericCrud(db, DevlogContract).get(contract_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Contrat introuvable")
+    # Idempotent : un re-marquage met simplement a jour le montant.
+    obj.deposit_paid_amount_cents = body.amount_cents
+    if obj.deposit_paid_at is None:
+        obj.deposit_paid_at = datetime.now(timezone.utc)
+    await db.flush()
+    await log_action(
+        db,
+        user=user,
+        action="devlog_contract.deposit_paid",
+        entity_type="devlog_contract",
+        entity_id=contract_id,
+        details={
+            "amount_cents": body.amount_cents,
+            "deposit_paid_at": obj.deposit_paid_at.isoformat()
+            if obj.deposit_paid_at
+            else None,
+        },
+    )
+    # Si le contrat est deja signe, on demarre le projet maintenant.
+    if obj.status == "signe":
+        try:
+            await maybe_start_project(db, obj, user=user)
+        except Exception:
+            import logging as _logging
+            _logging.getLogger(__name__).exception(
+                "auto-start project apres mark-deposit-paid contrat %s a echoue",
+                contract_id,
+            )
     return DevlogContractRead.model_validate(obj)
 
 
@@ -2660,5 +2735,19 @@ async def public_sign_contract(
             "signed_ip": obj.signed_ip,
         },
     )
+
+    # Cas : Phil a deja marque le depot paye AVANT la signature publique.
+    # On declenche le demarrage projet automatique. Best-effort : si
+    # quoi que ce soit rate, on ne casse pas la signature (qui est
+    # juridiquement engageante cote client).
+    try:
+        await maybe_start_project(db, obj, user=None)
+    except Exception:
+        import logging as _logging
+        _logging.getLogger(__name__).exception(
+            "auto-start project apres signature contrat %s a echoue",
+            obj.id,
+        )
+
     return DevlogContractPublicRead.model_validate(obj)
 
