@@ -320,8 +320,8 @@ export default function NewSoumissionPage() {
               {" "}
               (tous statuts confondus, incluant « refusé » qu&apos;on relance)
               ou à un <strong>client existant</strong> pour une soumission
-              complémentaire. Si tu choisis un prospect, il sera converti
-              automatiquement en client à la création.
+              complémentaire. Le prospect ne devient client qu&apos;à la
+              signature du devis.
             </p>
           </div>
 

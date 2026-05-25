@@ -322,6 +322,99 @@ async def get_client(client_id: int, db: DBSession, _: CurrentUser):
     return DevlogClientRead.model_validate(obj)
 
 
+class _ClientFullHistory(BaseModel):
+    """Vue fusionnee de la fiche client : ses propres infos + l'historique
+    du prospect d'origine s'il y en a un. Source de verite pour
+    /dev-logiciel/clients/[id] qui doit montrer tout — peu importe que
+    les entites aient ete creees avant ou apres la conversion."""
+
+    client: DevlogClientRead
+    source_lead: Optional[DevlogLeadRead] = None
+    soumissions: List[DevlogSoumissionRead] = Field(default_factory=list)
+    projects: List[DevlogProjectRead] = Field(default_factory=list)
+    contracts: List[DevlogContractRead] = Field(default_factory=list)
+
+
+@clients_router.get(
+    "/{client_id}/full-history",
+    response_model=_ClientFullHistory,
+    summary=(
+        "Vue unifiee prospect/client : infos du client + lead source + "
+        "soumissions/projets/contrats fusionnes (du lead OU du client)"
+    ),
+)
+async def get_client_full_history(
+    client_id: int, db: DBSession, _: CurrentUser
+):
+    """Retourne un payload unique avec toute l'histoire de la fiche
+    client : ses infos, le prospect d'origine s'il y en a un, et la
+    fusion des soumissions/projets/contrats lies au lead OU au client.
+
+    Phil : "quand un prospect devient client, c'est la meme fiche qui
+    suit le contact bout-en-bout (notes, attachments, soumissions,
+    projet conserves)". Ce endpoint evite que la fiche client n'ait
+    pas l'historique du prospect d'origine.
+    """
+    client = await GenericCrud(db, DevlogClient).get(client_id)
+    if client is None:
+        raise HTTPException(status_code=404, detail="Client introuvable")
+
+    source_lead = None
+    lead_id = getattr(client, "converted_from_lead_id", None)
+    if lead_id is not None:
+        source_lead = await GenericCrud(db, DevlogLead).get(lead_id)
+
+    # Soumissions liees soit au client (priorite), soit a son prospect
+    # source. La meme soumission peut avoir lead_id ET client_id remplis
+    # apres signature — on deduplique sur l'id.
+    soum_stmt = select(DevlogSoumission).where(
+        DevlogSoumission.client_id == client_id
+    )
+    if lead_id is not None:
+        soum_stmt = select(DevlogSoumission).where(
+            (DevlogSoumission.client_id == client_id)
+            | (DevlogSoumission.lead_id == lead_id)
+        )
+    soum_rows = (
+        await db.execute(soum_stmt.order_by(DevlogSoumission.id.desc()))
+    ).scalars().all()
+    seen_ids: set[int] = set()
+    soumissions: list[DevlogSoumission] = []
+    for s in soum_rows:
+        if s.id in seen_ids:
+            continue
+        seen_ids.add(s.id)
+        soumissions.append(s)
+
+    projects = (
+        await db.execute(
+            select(DevlogProject)
+            .where(DevlogProject.client_id == client_id)
+            .order_by(DevlogProject.id.desc())
+        )
+    ).scalars().all()
+
+    contracts = (
+        await db.execute(
+            select(DevlogContract)
+            .where(DevlogContract.client_id == client_id)
+            .order_by(DevlogContract.id.desc())
+        )
+    ).scalars().all()
+
+    return _ClientFullHistory(
+        client=DevlogClientRead.model_validate(client),
+        source_lead=(
+            DevlogLeadRead.model_validate(source_lead)
+            if source_lead is not None
+            else None
+        ),
+        soumissions=[DevlogSoumissionRead.model_validate(s) for s in soumissions],
+        projects=[DevlogProjectRead.model_validate(p) for p in projects],
+        contracts=[DevlogContractRead.model_validate(c) for c in contracts],
+    )
+
+
 @clients_router.patch("/{client_id}", response_model=DevlogClientRead)
 async def update_client(
     client_id: int,
@@ -542,47 +635,40 @@ soumission_automations_router = APIRouter(
     response_model=DevlogSoumissionRead,
     status_code=status.HTTP_201_CREATED,
     summary=(
-        "Crée une soumission devlog. Si ``lead_id`` est fourni sans "
-        "``client_id``, le lead est converti automatiquement en client."
+        "Crée une soumission devlog. Si ``lead_id`` est fourni, la "
+        "soumission reste liée au prospect — la conversion en client "
+        "n'a lieu qu'à la signature publique de la soumission."
     ),
 )
 async def create_soumission_with_automations(
     data: DevlogSoumissionCreate, db: DBSession, user: CurrentUser
 ):
     """Override du POST générique : la création d'une soumission liée à
-    un prospect convertit le prospect en client AVANT la création, et
-    lie la soumission au client résultant. Évite que la fiche client
-    n'affiche pas la soumission tant qu'elle n'a pas été acceptée (la
-    fiche filtre sur ``client_id``).
+    un prospect garde le ``lead_id`` mais NE convertit PAS le prospect en
+    client (revert PR #495 — la conversion se fait uniquement quand le
+    client signe la soumission via la page publique).
 
-    Idempotent : si ``client_id`` est déjà présent, ou si ``lead_id``
-    pointe vers un lead déjà converti, on lie simplement au client
-    existant. Audit log : ``devlog_lead.converted_for_soumission`` en
-    plus du log standard de création.
+    Validation : si ``lead_id`` est fourni on vérifie que le lead existe ;
+    si ``client_id`` est fourni on vérifie le client. Pas de side-effect
+    sur le statut du lead à ce stade.
     """
     payload = data.model_dump(exclude_unset=True)
 
     lead_id = payload.get("lead_id")
     client_id = payload.get("client_id")
 
-    # Cas 1 : lead fourni sans client → conversion auto + lien.
-    if lead_id is not None and client_id is None:
-        converted_client = await _convert_lead_to_client_service(
-            db,
-            lead_id,
-            user=user,
-            audit_action="devlog_lead.converted_for_soumission",
-            audit_details_extra={"trigger": "soumission_create"},
-        )
-        if converted_client is None:
+    # Validation : le lead doit exister s'il est fourni (mais on ne le
+    # convertit PAS — le statut reste tel quel jusqu'a la signature).
+    if lead_id is not None:
+        lead = await GenericCrud(db, DevlogLead).get(lead_id)
+        if lead is None:
             raise HTTPException(
                 status_code=404, detail="Lead introuvable"
             )
-        payload["client_id"] = converted_client.id
 
-    # Cas 2 : client fourni sans lead → on vérifie qu'il existe.
-    if payload.get("client_id") is not None:
-        client = await GenericCrud(db, DevlogClient).get(payload["client_id"])
+    # Validation : le client doit exister s'il est fourni.
+    if client_id is not None:
+        client = await GenericCrud(db, DevlogClient).get(client_id)
         if client is None:
             raise HTTPException(status_code=404, detail="Client introuvable")
 
@@ -610,63 +696,38 @@ async def create_soumission_with_automations(
 async def _ensure_client_for_soumission(
     db, soumission: DevlogSoumission, user=None
 ) -> Optional[DevlogClient]:
-    """Si la soumission est rattachée à un lead sans client, crée le
-    client à partir du lead et lie le lead au client. Idempotent.
+    """Si la soumission est rattachée à un lead sans client, convertit
+    le lead en client via ``convert_lead_to_client`` (qui pose
+    ``client.converted_from_lead_id`` + ``client.converted_at`` pour la
+    fiche unifiee) et lie la soumission au client résultant. Idempotent.
 
-    Si ``user`` est fourni (transition manuelle ou signature publique),
-    on log l'auto-création dans l'audit log et on notifie les managers /
-    admins via une notification interne best-effort.
+    Appelee uniquement par les flows d'ACCEPTATION (signature publique,
+    transition manuelle vers "acceptee", convert-to-project). PLUS appelee
+    a la creation ni a l'envoi — Phil veut que la conversion arrive
+    uniquement quand le client signe vraiment.
+
+    Si ``user`` est fourni on log l'action ; notifie les managers /
+    admins via notification interne best-effort.
     """
     if soumission.client_id is not None:
         return await GenericCrud(db, DevlogClient).get(soumission.client_id)
     if soumission.lead_id is None:
         return None
-    lead = await GenericCrud(db, DevlogLead).get(soumission.lead_id)
-    if lead is None:
-        return None
-    if lead.client_id is not None:
-        client = await GenericCrud(db, DevlogClient).get(lead.client_id)
-        if client is not None:
-            soumission.client_id = client.id
-            # Statut lead aligné sur la conversion (cas où un lead
-            # déjà-client n'aurait pas été marqué "won").
-            if lead.status not in ("won", "lost"):
-                lead.status = "won"
-            await db.flush()
-            return client
-    client = DevlogClient(
-        name=lead.name,
-        company=lead.company,
-        email=lead.email,
-        phone=lead.phone,
-        notes=lead.project_summary,
-        status="active",
+
+    # Conversion centralisee via le service (pose les liens bidirectionnels
+    # prospect ↔ client, l'horodatage, le statut "won", l'audit log).
+    client = await _convert_lead_to_client_service(
+        db,
+        soumission.lead_id,
+        user=user,
+        audit_action="devlog_client.auto_created_from_lead",
+        audit_details_extra={"soumission_id": soumission.id},
     )
-    db.add(client)
-    await db.flush()
-    await db.refresh(client)
-    previous_lead_status = lead.status
-    lead.client_id = client.id
-    lead.status = "won"
+    if client is None:
+        return None
+
     soumission.client_id = client.id
     await db.flush()
-
-    # Audit log de l'auto-création (visibilité dans le journal admin).
-    try:
-        await log_action(
-            db,
-            user=user,
-            action="devlog_client.auto_created_from_lead",
-            entity_type="devlog_client",
-            entity_id=client.id,
-            details={
-                "lead_id": lead.id,
-                "soumission_id": soumission.id,
-                "previous_lead_status": previous_lead_status,
-            },
-        )
-    except Exception:
-        pass
 
     # Notification best-effort aux managers / admins (Phil + Steven).
     # On n'échoue jamais la signature / l'acceptation si la notif rate.
@@ -679,9 +740,9 @@ async def _ensure_client_for_soumission(
             kind="devlog.client.auto_created",
             title=f"Nouveau client devlog : {client.name}",
             body=(
-                f"Le prospect #{lead.id} a été converti automatiquement en "
-                f"client suite à l'acceptation de la soumission "
-                f"#{soumission.id}."
+                f"Le prospect #{soumission.lead_id} a été converti "
+                f"automatiquement en client suite à l'acceptation de la "
+                f"soumission #{soumission.id}."
             ),
             href=f"/dev-logiciel/clients/{client.id}",
         )
@@ -953,19 +1014,18 @@ async def send_soumission(
                 "envoyées par ce flow. Utilise une soumission « devis_dev »."
             ),
         )
-    # Si la soumission est rattachée à un lead mais pas encore à un
-    # client, on provisionne le client (idempotent). Sans ça, l'envoi
-    # échoue silencieusement avec « Adresse courriel du client manquante »
-    # alors qu'on a en fait l'email côté lead — c'était le bug #7 du
-    # batch 1 (feedback Phil 22 mai).
-    await _ensure_client_for_soumission(db, soumission, user=user)
-    if soumission.client_id is None:
+    # Note (mai 2026) : avant on convertissait le lead en client ici via
+    # _ensure_client_for_soumission. Phil veut que la conversion arrive
+    # UNIQUEMENT a la signature publique. ``send_devis_email`` charge
+    # maintenant directement le destinataire (client ou lead) — la
+    # soumission peut etre envoyee a un prospect sans creer de client.
+    if soumission.client_id is None and soumission.lead_id is None:
         raise HTTPException(
             status_code=400,
             detail=(
                 "La soumission n'est rattachée à aucun client ni à aucun "
-                "prospect — impossible d'envoyer. Lie un client à la "
-                "soumission, puis réessaie."
+                "prospect — impossible d'envoyer. Lie un destinataire à "
+                "la soumission, puis réessaie."
             ),
         )
     try:

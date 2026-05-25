@@ -34,8 +34,38 @@ type Client = {
   notes: string | null;
   contact_request_id: number | null;
   qbo_customer_id: string | null;
+  // Fiche unifiee (mai 2026) : si le client provient d'une conversion
+  // de prospect (signature de soumission), ces deux champs sont remplis.
+  // Sert a afficher le badge "Prospect depuis ... Converti le ..." dans
+  // le header et a inclure l'historique du prospect d'origine.
+  converted_from_lead_id: number | null;
+  converted_at: string | null;
   created_at: string;
   projects?: Array<{ id: number; name: string; status: string }>;
+};
+
+// Payload du nouvel endpoint GET /devlog/clients/{id}/full-history.
+// Fusionne les soumissions/projets/contrats lies au client OU a son
+// prospect source — la fiche client devient la fiche unique du contact
+// bout-en-bout (Phil mai 2026).
+type ClientFullHistory = {
+  client: Client;
+  source_lead: {
+    id: number;
+    name: string;
+    email: string | null;
+    created_at: string;
+    project_summary: string | null;
+    notes: string | null;
+    meeting_notes: string | null;
+  } | null;
+  soumissions: Array<{
+    id: number;
+    title: string;
+    status: string;
+    lead_id: number | null;
+    client_id: number | null;
+  }>;
 };
 
 export default function ClientDetailPage() {
@@ -46,6 +76,7 @@ export default function ClientDetailPage() {
   const router = useNextRouter();
 
   const [c, setC] = useState<Client | null>(null);
+  const [history, setHistory] = useState<ClientFullHistory | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -63,16 +94,24 @@ export default function ClientDetailPage() {
       setLoading(true);
       setError(null);
       try {
-        const res = await authedFetch(`/api/v1/devlog/clients/${id}`);
+        // Single fetch endpoint qui retourne le client + son lead source +
+        // l'historique fusionne (soumissions liees au client OU au lead).
+        // Phil : la fiche client doit avoir l'historique COMPLET, peu
+        // importe que les entites aient ete creees avant ou apres la
+        // conversion.
+        const res = await authedFetch(
+          `/api/v1/devlog/clients/${id}/full-history`
+        );
         if (!res.ok) throw new Error(`http_${res.status}`);
-        const data = (await res.json()) as Client;
+        const data = (await res.json()) as ClientFullHistory;
         if (cancelled) return;
-        setC(data);
-        setName(data.name);
-        setEmail(data.email || "");
-        setPhone(data.phone || "");
-        setAddress(data.address || "");
-        setNotes(data.notes || "");
+        setHistory(data);
+        setC(data.client);
+        setName(data.client.name);
+        setEmail(data.client.email || "");
+        setPhone(data.client.phone || "");
+        setAddress(data.client.address || "");
+        setNotes(data.client.notes || "");
       } catch {
         if (!cancelled) setError("Client introuvable.");
       } finally {
@@ -169,12 +208,34 @@ export default function ClientDetailPage() {
               <div>
                 <h1 className="text-2xl font-bold text-white">{c.name}</h1>
                 <p className="mt-1 text-xs text-white/50">
-                  Client depuis le{" "}
-                  {new Date(c.created_at).toLocaleDateString("fr-CA", {
-                    day: "numeric",
-                    month: "long",
-                    year: "numeric"
-                  })}
+                  {history?.source_lead ? (
+                    <>
+                      Prospect depuis le{" "}
+                      {new Date(history.source_lead.created_at).toLocaleDateString(
+                        "fr-CA",
+                        { day: "numeric", month: "long", year: "numeric" }
+                      )}
+                      {c.converted_at ? (
+                        <>
+                          {" · Converti le "}
+                          {new Date(c.converted_at).toLocaleDateString("fr-CA", {
+                            day: "numeric",
+                            month: "long",
+                            year: "numeric"
+                          })}
+                        </>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      Client depuis le{" "}
+                      {new Date(c.created_at).toLocaleDateString("fr-CA", {
+                        day: "numeric",
+                        month: "long",
+                        year: "numeric"
+                      })}
+                    </>
+                  )}
                   {c.contact_request_id ? (
                     <>
                       {" · "}
@@ -471,6 +532,7 @@ function ClientTabs({
         <ClientDocuments
           clientId={client.id}
           contactRequestId={client.contact_request_id}
+          convertedFromLeadId={client.converted_from_lead_id}
         />
       ) : null}
 
@@ -658,10 +720,15 @@ function DocSection({
 
 function ClientDocuments({
   clientId,
-  contactRequestId
+  contactRequestId,
+  convertedFromLeadId
 }: {
   clientId: number;
   contactRequestId: number | null;
+  // Fiche unifiee : ID du DevlogLead d'origine si conversion. Sert a
+  // inclure dans l'historique les soumissions creees pour le prospect
+  // AVANT la signature (lead_id rempli, client_id encore vide).
+  convertedFromLeadId: number | null;
 }) {
   const [soumissions, setSoumissions] = useState<Soumission[]>([]);
   const [factures, setFactures] = useState<Facture[]>([]);
@@ -702,9 +769,19 @@ function ClientDocuments({
         if (cancelled) return;
         if (sRes.ok) {
           const all = (await sRes.json()) as Array<
-            Soumission & { client_id: number | null }
+            Soumission & { client_id: number | null; lead_id: number | null }
           >;
-          setSoumissions(all.filter((x) => x.client_id === clientId));
+          // Fiche unifiee : on garde les soumissions liees au client OU
+          // a son prospect source (pour que les soumissions creees AVANT
+          // la signature soient visibles).
+          setSoumissions(
+            all.filter(
+              (x) =>
+                x.client_id === clientId ||
+                (convertedFromLeadId !== null &&
+                  x.lead_id === convertedFromLeadId)
+            )
+          );
         }
         if (fRes.ok) {
           const all = (await fRes.json()) as Array<
@@ -733,7 +810,7 @@ function ClientDocuments({
     return () => {
       cancelled = true;
     };
-  }, [clientId, contactRequestId]);
+  }, [clientId, contactRequestId, convertedFromLeadId]);
 
   // Blob URLs for the prospect-era files (images + PDFs alike).
   useEffect(() => {

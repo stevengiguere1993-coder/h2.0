@@ -650,6 +650,23 @@ async def init_db() -> None:
             # Notes de rencontre client (texte libre, peut etre tres
             # long). Resume par Gemini via /devlog/leads/{id}/summarize-notes.
             ("devlog_leads", "meeting_notes", "TEXT"),
+            # Fiche client unifiee (mai 2026) — quand un prospect est
+            # converti en client, on garde le lien bidirectionnel
+            # (`devlog_leads.client_id` ↔ `devlog_clients.converted_from_lead_id`)
+            # + l'horodatage de la conversion pour afficher le badge
+            # "Prospect depuis ... · Converti le ..." sur la fiche client
+            # et pour permettre le merge de l'historique (notes, soumissions,
+            # attachments) entre les deux entites.
+            (
+                "devlog_clients",
+                "converted_from_lead_id",
+                "INTEGER REFERENCES devlog_leads(id) ON DELETE SET NULL",
+            ),
+            (
+                "devlog_clients",
+                "converted_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
             # Téléphonie Phase 2 — secrétaire IA. La table CallTurn est
             # créée par create_all ; les colonnes ci-dessous étendent
             # PhoneNumber et Call (créés en Phase 1).

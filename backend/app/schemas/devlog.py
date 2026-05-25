@@ -46,6 +46,10 @@ class DevlogClientRead(BaseModel):
     website: Optional[str]
     status: str
     notes: Optional[str]
+    # Fiche unifiee prospect/client : si le client provient d'une
+    # conversion, on expose le lien vers le prospect source + date.
+    converted_from_lead_id: Optional[int] = None
+    converted_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

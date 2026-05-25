@@ -1,4 +1,4 @@
-"""Provisioning client devlog à partir d'un lead.
+﻿"""Provisioning client devlog à partir d'un lead.
 
 Centralise la logique de conversion ``DevlogLead`` → ``DevlogClient``
 qui était jusqu'ici dispersée entre l'endpoint
@@ -18,6 +18,7 @@ Utilisé par :
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.models.devlog_client import DevlogClient
@@ -40,8 +41,9 @@ async def convert_lead_to_client(
     * Si le lead a déjà un ``client_id`` qui pointe vers un client
       existant → retourne ce client tel quel (rien à faire).
     * Sinon : crée un ``DevlogClient`` à partir des champs du lead,
-      met à jour ``lead.client_id`` + ``lead.status = "won"`` et
-      log l'action.
+      remplit le lien bidirectionnel (``client.converted_from_lead_id``
+      ↔ ``lead.client_id``), horodate ``client.converted_at``, met le
+      lead en statut ``"won"`` et log l'action.
 
     ``audit_action`` permet aux callers de distinguer une conversion
     explicite (bouton "Convertir") d'une conversion implicite (création
@@ -58,6 +60,7 @@ async def convert_lead_to_client(
         if existing is not None:
             return existing
 
+    now = datetime.now(timezone.utc)
     client = DevlogClient(
         name=lead.name,
         company=lead.company,
@@ -66,6 +69,12 @@ async def convert_lead_to_client(
         address=lead.address,
         notes=lead.project_summary,
         status="active",
+        # Lien bidirectionnel prospect → client + horodatage de la
+        # conversion. Permet a la fiche client d'afficher l'historique
+        # complet (notes, soumissions, attachments du prospect) et le
+        # badge "Prospect depuis ... Converti le ...".
+        converted_from_lead_id=lead.id,
+        converted_at=now,
     )
     db.add(client)
     await db.flush()
@@ -98,3 +107,4 @@ async def convert_lead_to_client(
         pass
 
     return client
+
