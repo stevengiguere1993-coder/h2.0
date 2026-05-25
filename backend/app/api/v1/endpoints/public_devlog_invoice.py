@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DBSession
+from app.core.config import settings
 from app.models.devlog_client import DevlogClient
 from app.models.devlog_invoice import DevlogInvoice
 from app.models.devlog_invoice_item import DevlogInvoiceItem
@@ -75,6 +76,14 @@ class PublicInvoice(BaseModel):
     tvq: float
     total: float
     payment_instructions: str
+    # Méthodes de paiement disponibles (exposées à la page publique).
+    # Stripe est cachée derrière un feature flag (Settings.stripe_enabled).
+    # Quand False, le bouton "Payer par carte" n'est pas rendu côté
+    # frontend et seul le bloc Interac/chèque s'affiche.
+    stripe_enabled: bool
+    # Email destinataire pour les virements Interac affiché en gros sur
+    # la page publique (copiable au clic).
+    interac_email: str
 
 
 # --------------------------- Helpers ---------------------------
@@ -159,6 +168,8 @@ async def _to_public(
         tvq=totals["tvq"],
         total=totals["total"],
         payment_instructions=PAYMENT_INSTRUCTIONS,
+        stripe_enabled=settings.stripe_enabled,
+        interac_email=settings.devlog_interac_email,
     )
 
 
@@ -212,6 +223,14 @@ class _CheckoutResponse(BaseModel):
 async def create_invoice_checkout_session(
     token: str, db: DBSession
 ) -> _CheckoutResponse:
+    # Feature flag : tant que stripe_enabled=False (défaut depuis
+    # mai 2026), on refuse les tentatives de création de session même
+    # si quelqu'un POST directement. Le frontend, lui, cache le bouton.
+    if not settings.stripe_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Paiement par carte temporairement désactivé.",
+        )
     invoice = await _load_by_token(db, token)
     if invoice.status == "payee":
         raise HTTPException(

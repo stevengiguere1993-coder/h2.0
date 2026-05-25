@@ -145,6 +145,14 @@ class Settings(BaseSettings):
     stripe_devlog_success_url_base: str = (
         "https://kratos.immohorizon.com/fr/devlog/pay-invoice"
     )
+    # Feature flag pour activer/desactiver le bouton Stripe sur la page
+    # publique de paiement de facture. OFF par defaut (mai 2026) — le
+    # client est invite a payer par virement Interac en priorite. Mettre
+    # a True pour reactiver le bouton Stripe sans toucher au code.
+    stripe_enabled: bool = False
+    # Email destinataire pour les virements Interac affiches sur la page
+    # publique de paiement de facture devlog.
+    devlog_interac_email: str = "philippe.meuser@immohorizon.com"
 
     @property
     def is_production(self) -> bool:
