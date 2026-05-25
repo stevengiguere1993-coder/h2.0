@@ -700,6 +700,9 @@ async def init_db() -> None:
             ("voice_calls", "session_state", "TEXT"),
             ("prospection_deals", "lead_analysis_id", "INTEGER"),
             ("lead_analyses", "converted_to_deal_id", "INTEGER"),
+            # Phase A2 (tri-couche extraction) : modèle utilisé pour
+            # l'extraction (local / gemini / claude-sonnet-4-6).
+            ("lead_analyses", "model_used", "VARCHAR(64)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
@@ -1216,4 +1219,5 @@ async def close_db() -> None:
     Should be called on application shutdown.
     """
     await engine.dispose()
+
 

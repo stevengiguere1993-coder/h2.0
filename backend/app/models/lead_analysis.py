@@ -158,6 +158,18 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
         Text, nullable=True
     )
 
+    # Modèle d'extraction utilisé (cascade tri-couche) :
+    #   - ``"local"``                    : parser local uniquement
+    #   - ``"gemini"``                   : Gemini uniquement
+    #   - ``"local + gemini"``           : les deux ont contribué
+    #   - ``"claude-sonnet-4-6 (manual)"``: ré-extraction manuelle Claude
+    #   - ``"none"``                     : aucune extraction (sources vides)
+    # Renseigné par l'endpoint /extract (Phase A1) et par
+    # /re-extract-with-claude (Phase A2, manuel).
+    model_used: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+
     # ── Champs manuels d'analyse (Phase 2 — réservés pour l'instant) ──
 
     # Loyers projetés par typologie : { "3.5": 1200, "4.5": 1400 }
@@ -302,3 +314,4 @@ class LeadAnalysisAttachment(Base):
         nullable=False,
         server_default=func.now(),
     )
+
