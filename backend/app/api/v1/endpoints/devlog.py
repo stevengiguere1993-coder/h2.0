@@ -1,4 +1,4 @@
-﻿"""Endpoints — pôle Développement logiciel.
+"""Endpoints — pôle Développement logiciel.
 
 Ressources :
   * /api/v1/devlog/clients — clients du pôle (boîtes pour qui on
