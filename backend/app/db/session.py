@@ -775,6 +775,15 @@ async def init_db() -> None:
                 "started_at",
                 "TIMESTAMP WITH TIME ZONE",
             ),
+            # Horodatage du passage en status='livre' — sert au cron
+            # ``devlog_nps_dispatch`` (envoi NPS 7 jours après livraison).
+            # Posé automatiquement par l'event listener du modèle
+            # ``DevlogProject``.
+            (
+                "devlog_projects",
+                "delivered_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
             # Hook post-signature contrat (mai 2026, PR Phil). 4 side-effects
             # best-effort déclenchés depuis le endpoint public sign — chaque
             # horodatage marque le succès de l'étape (NULL = pas encore /

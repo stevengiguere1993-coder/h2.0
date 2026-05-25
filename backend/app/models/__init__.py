@@ -28,6 +28,7 @@ from app.models.devlog_invoice import DevlogInvoice  # noqa: F401
 from app.models.devlog_invoice_item import DevlogInvoiceItem  # noqa: F401
 from app.models.devlog_lead import DevlogLead  # noqa: F401
 from app.models.devlog_lead_need import DevlogLeadNeed  # noqa: F401
+from app.models.devlog_nps_response import DevlogNpsResponse  # noqa: F401
 from app.models.devlog_project import DevlogProject  # noqa: F401
 from app.models.devlog_project_member import DevlogProjectMember  # noqa: F401
 from app.models.devlog_project_phase import DevlogProjectPhase  # noqa: F401
@@ -234,6 +235,7 @@ __all__ = [
     "DevlogInvoice",
     "DevlogInvoiceItem",
     "DevlogLead",
+    "DevlogNpsResponse",
     "DevlogProject",
     "DevlogProjectMember",
     "DevlogProjectPhase",
