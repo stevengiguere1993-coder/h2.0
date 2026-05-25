@@ -10,20 +10,27 @@
  * Thème clair (slate-50) — pattern inspiré de /devlog/sign-soumission/[token]
  * (PR #473).
  *
- * Pas de bouton "Payer maintenant" pour l'instant : Stripe arrivera dans
- * une PR ultérieure. Le client paie hors-ligne (virement / chèque) et
- * Phil marque la facture comme payée depuis le portail interne.
+ * Méthodes de paiement (mai 2026) :
+ *  - Virement Interac (mis en avant en gros bloc principal) : email
+ *    destinataire copiable + numéro de facture en référence copiable.
+ *  - Chèque (bloc secondaire, en dessous).
+ *  - Stripe (carte de crédit) : ne s'affiche QUE si le backend retourne
+ *    `stripe_enabled: true`. Désactivé par défaut depuis mai 2026, le
+ *    code Stripe reste en place pour réactivation future via env var.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
+  Copy,
   CreditCard,
   Download,
   FileText,
   Loader2,
+  Mail,
   Receipt,
   XCircle
 } from "lucide-react";
@@ -54,6 +61,8 @@ type PublicInvoice = {
   tvq: number;
   total: number;
   payment_instructions: string;
+  stripe_enabled: boolean;
+  interac_email: string;
 };
 
 function fmtMoney(n: number | null | undefined): string {
@@ -75,6 +84,67 @@ function fmtDate(iso: string | null): string {
   });
 }
 
+/**
+ * Bouton de copie inline — copie `value` dans le presse-papier et affiche
+ * un check pendant 2s. Réutilisé pour l'email Interac et le numéro de
+ * facture (référence du virement).
+ */
+function CopyButton({
+  value,
+  onCopied,
+  label
+}: {
+  value: string;
+  onCopied: (msg: string) => void;
+  label: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback(async () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        // Fallback browsers anciens / contextes non sécurisés.
+        const ta = document.createElement("textarea");
+        ta.value = value;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "absolute";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      onCopied(`${label} copié`);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      onCopied("Impossible de copier — copiez manuellement.");
+    }
+  }, [value, label, onCopied]);
+
+  return (
+    <button
+      type="button"
+      onClick={() => void handleCopy()}
+      className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-emerald-800 shadow-sm hover:bg-emerald-50"
+      aria-label={`Copier ${label.toLowerCase()}`}
+    >
+      {copied ? (
+        <>
+          <Check className="h-3.5 w-3.5" />
+          Copié
+        </>
+      ) : (
+        <>
+          <Copy className="h-3.5 w-3.5" />
+          Copier
+        </>
+      )}
+    </button>
+  );
+}
+
 export default function PayInvoicePage() {
   const params = useParams<{ token: string }>();
   const token = params.token;
@@ -88,6 +158,14 @@ export default function PayInvoicePage() {
     | { kind: "success" | "info"; message: string }
     | null
   >(null);
+
+  const showToast = useCallback(
+    (message: string, kind: "success" | "info" = "success") => {
+      setToast({ kind, message });
+      window.setTimeout(() => setToast(null), 2500);
+    },
+    []
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -112,6 +190,8 @@ export default function PayInvoicePage() {
 
   // Retour Stripe : ?paid=1 → toast + poll jusqu'à confirmation
   // webhook (statut passe à `payee`). ?cancelled=1 → message neutre.
+  // Conservé même si Stripe est OFF, pour réactivation future sans
+  // re-toucher au frontend.
   useEffect(() => {
     if (typeof window === "undefined" || !token) return;
     const url = new URL(window.location.href);
@@ -120,8 +200,6 @@ export default function PayInvoicePage() {
         kind: "success",
         message: "Paiement reçu, merci !"
       });
-      // Polling — le webhook peut prendre 1-2s avant que le statut
-      // soit visible côté API (Stripe POST, FastAPI traite, flush).
       let attempts = 0;
       const interval = window.setInterval(() => {
         attempts += 1;
@@ -144,7 +222,6 @@ export default function PayInvoicePage() {
           if (attempts >= 5) window.clearInterval(interval);
         })();
       }, 2000);
-      // Nettoie le query param (UX)
       url.searchParams.delete("paid");
       window.history.replaceState({}, "", url.toString());
       return () => window.clearInterval(interval);
@@ -215,6 +292,11 @@ export default function PayInvoicePage() {
 
   const paid = data.status === "payee";
   const invoiceLabel = data.number ?? `Facture #${data.id}`;
+  // Référence à mettre dans la note du virement Interac. On préfère le
+  // numéro de facture (lisible humain) ; fallback sur l'ID interne si
+  // le numéro est null (cas théorique — une facture envoyée a toujours
+  // un numéro).
+  const interacReference = data.number ?? `FACTURE-${data.id}`;
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-8">
@@ -419,19 +501,112 @@ export default function PayInvoicePage() {
             </a>
           </div>
 
-          {/* Paiement en ligne par carte */}
+          {/* ============================================================ */}
+          {/* BLOC PRINCIPAL : Virement Interac (mis en avant)              */}
+          {/* ============================================================ */}
           {!paid ? (
-            <section className="mt-6">
+            <section className="mt-6 rounded-2xl border-2 border-emerald-400 bg-gradient-to-br from-emerald-50 to-white px-5 py-5 shadow-sm sm:px-6 sm:py-6">
+              <div className="flex items-center gap-2">
+                <Mail className="h-6 w-6 text-emerald-700" />
+                <h2 className="text-xl font-bold text-emerald-900 sm:text-2xl">
+                  Payer par virement Interac
+                </h2>
+              </div>
+              <p className="mt-1 text-sm text-emerald-900/80">
+                Méthode recommandée — sans frais, instantané.
+              </p>
+
+              {/* Montant */}
+              <div className="mt-5 rounded-xl border border-emerald-200 bg-white px-4 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700">
+                  Montant à envoyer
+                </p>
+                <p className="mt-1 text-3xl font-bold text-emerald-900 sm:text-4xl">
+                  {fmtMoney(data.total)}
+                </p>
+              </div>
+
+              {/* Email destinataire */}
+              <div className="mt-3 rounded-xl border border-emerald-200 bg-white px-4 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700">
+                  Envoyer à cette adresse courriel
+                </p>
+                <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
+                  <p className="break-all font-mono text-lg font-bold text-emerald-900 sm:text-xl">
+                    {data.interac_email}
+                  </p>
+                  <CopyButton
+                    value={data.interac_email}
+                    onCopied={(m) => showToast(m, "success")}
+                    label="Courriel"
+                  />
+                </div>
+              </div>
+
+              {/* Référence */}
+              <div className="mt-3 rounded-xl border border-emerald-200 bg-white px-4 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700">
+                  Référence à inscrire dans la note du virement
+                </p>
+                <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
+                  <p className="break-all font-mono text-lg font-bold text-emerald-900 sm:text-xl">
+                    {interacReference}
+                  </p>
+                  <CopyButton
+                    value={interacReference}
+                    onCopied={(m) => showToast(m, "success")}
+                    label="Référence"
+                  />
+                </div>
+              </div>
+
+              <p className="mt-4 rounded-lg bg-emerald-100/60 px-3 py-2 text-xs text-emerald-900">
+                <span className="font-semibold">Bon à savoir :</span> le
+                virement est automatiquement accepté (pas de question de
+                sécurité à configurer).
+              </p>
+            </section>
+          ) : null}
+
+          {/* ============================================================ */}
+          {/* BLOC SECONDAIRE : Autres méthodes (chèque)                    */}
+          {/* ============================================================ */}
+          {!paid ? (
+            <section className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-600">
+                Autres méthodes : chèque
+              </h3>
+              <p className="mt-1.5 text-xs leading-relaxed text-slate-700">
+                {data.payment_instructions}
+              </p>
+              <p className="mt-2 text-xs text-slate-600">
+                Pour toute question, écrivez-nous à{" "}
+                <a
+                  href="mailto:comptabilite@immohorizon.com"
+                  className="font-semibold text-slate-800 underline"
+                >
+                  comptabilite@immohorizon.com
+                </a>
+                .
+              </p>
+            </section>
+          ) : null}
+
+          {/* ============================================================ */}
+          {/* BLOC OPTIONNEL : Stripe — masqué tant que stripe_enabled=false */}
+          {/* ============================================================ */}
+          {!paid && data.stripe_enabled ? (
+            <section className="mt-4">
               <button
                 type="button"
                 onClick={() => void startCheckout()}
                 disabled={payLoading}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-base font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-400 sm:text-lg"
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {payLoading ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
-                  <CreditCard className="h-5 w-5" />
+                  <CreditCard className="h-4 w-4" />
                 )}
                 {payLoading
                   ? "Redirection vers Stripe…"
@@ -443,32 +618,10 @@ export default function PayInvoicePage() {
                   <span>{payError}</span>
                 </p>
               ) : (
-                <p className="mt-2 text-center text-xs text-slate-500">
+                <p className="mt-2 text-center text-[11px] text-slate-500">
                   Paiement sécurisé par Stripe. Visa, Mastercard, Amex.
                 </p>
               )}
-            </section>
-          ) : null}
-
-          {/* Ou par virement / chèque */}
-          {!paid ? (
-            <section className="mt-6 rounded-xl border border-blue-200 bg-blue-50 px-4 py-4">
-              <h3 className="text-sm font-bold text-blue-900">
-                Ou par virement / chèque
-              </h3>
-              <p className="mt-2 text-sm leading-relaxed text-blue-900">
-                {data.payment_instructions}
-              </p>
-              <p className="mt-3 text-xs text-blue-800">
-                Pour toute question, écrivez-nous à{" "}
-                <a
-                  href="mailto:comptabilite@immohorizon.com"
-                  className="font-semibold underline"
-                >
-                  comptabilite@immohorizon.com
-                </a>
-                .
-              </p>
             </section>
           ) : null}
 
