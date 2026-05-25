@@ -76,18 +76,20 @@ type TabId =
 // trop éloigné du modèle devlog (juste name/description/dates/status).
 // Une refonte dédiée sera faite plus tard.
 //
-// Photos / Achats / Récap / Agenda chantier restent désactivés —
-// endpoints backend pas encore couverts pour devlog.
+// Vague 2.5 (2026-05-25) : Planification, Photos, Achats et Recap
+// reactives via les nouveaux endpoints /devlog/projects/{id}/(phases
+// existant + photos / purchases / recap). Agenda chantier reste off
+// (pas d'equivalent devlog, c'est un clone Construction lourd).
 const TABS: { id: TabId; label: string; available: boolean }[] = [
   { id: "summary", label: "Résumé", available: true },
   { id: "tasks", label: "Tâches", available: true },
+  { id: "planification", label: "Planification", available: true },
   { id: "finances", label: "Finances", available: true },
+  { id: "achats", label: "Achats", available: true },
+  { id: "photos", label: "Photos", available: true },
+  { id: "recap", label: "Récap", available: true },
   { id: "members", label: "Membres", available: true },
-  { id: "planification", label: "Planification", available: false },
-  { id: "agenda", label: "Agenda chantier", available: false },
-  { id: "achats", label: "Achats / PO", available: false },
-  { id: "recap", label: "Récap", available: false },
-  { id: "photos", label: "Photos", available: false }
+  { id: "agenda", label: "Agenda chantier", available: false }
 ];
 
 function fmtMoney(n: number | string | null): string {
@@ -568,12 +570,17 @@ export default function ProjectDetailPage() {
                 <DevlogFinancesTab projectId={id} />
               ) : tab === "members" ? (
                 <DevlogMembersTab projectId={id} />
+              ) : tab === "planification" ? (
+                <DevlogPlanificationTab projectId={id} />
+              ) : tab === "photos" ? (
+                <DevlogPhotosTab projectId={id} />
+              ) : tab === "achats" ? (
+                <DevlogAchatsTab projectId={id} />
+              ) : tab === "recap" ? (
+                <DevlogRecapTab projectId={id} />
               ) : (
-                // Vague 2 : Planification / Photos / Achats / Récap / Agenda
-                // chantier restent désactivés. Soit le composant Construction
-                // est trop éloigné du modèle devlog (Planification), soit les
-                // endpoints backend dédiés n'existent pas encore. Le
-                // placeholder explique la situation.
+                // Agenda chantier reste off : composant Construction trop
+                // dependant des creneaux et de l'assignation multi.
                 <UnavailableSection />
               )}
             </div>
@@ -6028,6 +6035,1418 @@ function DevlogMembersTab({ projectId }: { projectId: number }) {
           </ul>
         )}
       </section>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Vague 2.5 (2026-05-25) — Onglets Planification / Photos / Achats / Recap.
+// Composants dedies au pole dev-logiciel, alignes sur les schemas Pydantic
+// /api/v1/devlog/projects/{id}/(phases|photos|purchases|recap).
+// ---------------------------------------------------------------------------
+
+type DevlogPhase = {
+  id: number;
+  project_id: number;
+  name: string;
+  description: string | null;
+  position: number;
+  start_date: string | null;
+  end_date: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+const DEVLOG_PHASE_STATUSES: { value: string; label: string; cls: string }[] = [
+  { value: "planifie", label: "À venir", cls: "bg-white/10 text-white/80 border-white/20" },
+  { value: "en_cours", label: "En cours", cls: "bg-blue-500/20 text-blue-300 border-blue-500/30" },
+  { value: "termine", label: "Terminé", cls: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" }
+];
+
+function phaseStatusMeta(status: string) {
+  return (
+    DEVLOG_PHASE_STATUSES.find((s) => s.value === status) ||
+    DEVLOG_PHASE_STATUSES[0]
+  );
+}
+
+function durationLabel(start: string | null, end: string | null): string {
+  if (!start || !end) return "—";
+  const s = new Date(start);
+  const e = new Date(end);
+  const ms = e.getTime() - s.getTime();
+  if (Number.isNaN(ms)) return "—";
+  const days = Math.round(ms / 86_400_000) + 1;
+  if (days <= 0) return "—";
+  if (days === 1) return "1 jour";
+  if (days < 14) return `${days} jours`;
+  const weeks = Math.round(days / 7);
+  return `${weeks} sem.`;
+}
+
+function DevlogPlanificationTab({ projectId }: { projectId: number }) {
+  const confirm = useConfirm();
+  const [phases, setPhases] = useState<DevlogPhase[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  // form etat
+  const [newName, setNewName] = useState("");
+  const [newStart, setNewStart] = useState("");
+  const [newEnd, setNewEnd] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  // drag-and-drop : id de la phase en cours de drag
+  const [dragId, setDragId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const res = await authedFetch(
+          `/api/v1/devlog/projects/${projectId}/phases`
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as DevlogPhase[];
+        if (!cancelled) setPhases(data);
+      } catch (e) {
+        if (!cancelled) setErr(`Chargement échoué : ${(e as Error).message}`);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    if (projectId) load();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  async function addPhase() {
+    if (!newName.trim()) return;
+    setCreating(true);
+    setErr(null);
+    try {
+      const payload: Record<string, unknown> = {
+        name: newName.trim(),
+        position: 0,
+        status: "planifie"
+      };
+      if (newStart) payload.start_date = newStart;
+      if (newEnd) payload.end_date = newEnd;
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/phases`,
+        { method: "POST", body: JSON.stringify(payload) }
+      );
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(
+          `HTTP ${res.status}${txt ? ` — ${txt.slice(0, 200)}` : ""}`
+        );
+      }
+      const created = (await res.json()) as DevlogPhase;
+      setPhases((xs) => [...xs, created]);
+      setNewName("");
+      setNewStart("");
+      setNewEnd("");
+    } catch (e) {
+      setErr(`Ajout échoué : ${(e as Error).message}`);
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function patchPhase(id: number, patch: Partial<DevlogPhase>) {
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/phases/${id}`,
+        { method: "PATCH", body: JSON.stringify(patch) }
+      );
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(
+          `HTTP ${res.status}${txt ? ` — ${txt.slice(0, 200)}` : ""}`
+        );
+      }
+      const updated = (await res.json()) as DevlogPhase;
+      setPhases((xs) => xs.map((x) => (x.id === id ? updated : x)));
+    } catch (e) {
+      setErr(`Mise à jour échouée : ${(e as Error).message}`);
+    }
+  }
+
+  async function removePhase(id: number) {
+    if (!(await confirm("Supprimer cette phase ?"))) return;
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/phases/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      setPhases((xs) => xs.filter((x) => x.id !== id));
+    } catch (e) {
+      setErr(`Suppression échouée : ${(e as Error).message}`);
+    }
+  }
+
+  async function reorder(newOrder: number[]) {
+    // Optimistic update local : on reattribue les positions immediatement.
+    setPhases((xs) => {
+      const byId = new Map(xs.map((p) => [p.id, p]));
+      const reordered: DevlogPhase[] = [];
+      newOrder.forEach((id, idx) => {
+        const ph = byId.get(id);
+        if (ph) {
+          reordered.push({ ...ph, position: idx });
+          byId.delete(id);
+        }
+      });
+      // Append phases non mentionnees (ne devrait pas arriver normalement)
+      Array.from(byId.values()).forEach((ph) =>
+        reordered.push({ ...ph, position: reordered.length })
+      );
+      return reordered;
+    });
+    try {
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/phases/reorder`,
+        { method: "POST", body: JSON.stringify({ phase_ids: newOrder }) }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const updated = (await res.json()) as DevlogPhase[];
+      setPhases(updated);
+    } catch (e) {
+      setErr(`Réordonnancement échoué : ${(e as Error).message}`);
+    }
+  }
+
+  function onDragStart(id: number) {
+    setDragId(id);
+  }
+  function onDragOver(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+  }
+  function onDrop(targetId: number) {
+    if (dragId == null || dragId === targetId) return;
+    const ids = phases.map((p) => p.id);
+    const from = ids.indexOf(dragId);
+    const to = ids.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    const next = [...ids];
+    next.splice(from, 1);
+    next.splice(to, 0, dragId);
+    setDragId(null);
+    void reorder(next);
+  }
+
+  const sorted = useMemo(
+    () => [...phases].sort((a, b) => a.position - b.position || a.id - b.id),
+    [phases]
+  );
+
+  return (
+    <div className="space-y-5">
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+          Nouvelle phase
+        </h2>
+        <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_160px_160px_auto]">
+          <input
+            type="text"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="Ex. Design UI, Dev sprint 1, Recette client…"
+            className="input"
+          />
+          <input
+            type="date"
+            value={newStart}
+            onChange={(e) => setNewStart(e.target.value)}
+            placeholder="Début"
+            className="input"
+          />
+          <input
+            type="date"
+            value={newEnd}
+            onChange={(e) => setNewEnd(e.target.value)}
+            placeholder="Fin"
+            className="input"
+          />
+          <button
+            type="button"
+            onClick={addPhase}
+            disabled={creating || !newName.trim()}
+            className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm disabled:opacity-60"
+          >
+            {creating ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Plus className="mr-2 h-4 w-4" />
+            )}
+            Ajouter
+          </button>
+        </div>
+        {err ? <p className="mt-3 text-sm text-rose-300">{err}</p> : null}
+      </section>
+
+      <section>
+        {loading ? (
+          <div className="flex min-h-[30vh] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+          </div>
+        ) : sorted.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
+            Aucune phase. Décompose ton projet en étapes pour suivre l&apos;avancement.
+          </p>
+        ) : (
+          <ol className="space-y-3">
+            {sorted.map((ph, idx) => {
+              const meta = phaseStatusMeta(ph.status);
+              return (
+                <li
+                  key={ph.id}
+                  draggable
+                  onDragStart={() => onDragStart(ph.id)}
+                  onDragOver={onDragOver}
+                  onDrop={() => onDrop(ph.id)}
+                  className={`flex flex-col gap-3 rounded-xl border bg-brand-900 p-4 transition sm:flex-row sm:items-center ${
+                    dragId === ph.id
+                      ? "border-blue-500/60 bg-brand-900/60"
+                      : "border-brand-800 hover:border-brand-700"
+                  }`}
+                >
+                  <div className="flex shrink-0 items-center gap-3 sm:w-20">
+                    <span
+                      className="cursor-grab text-white/30 hover:text-white/60"
+                      title="Glisser pour réordonner"
+                      aria-hidden="true"
+                    >
+                      ⠿
+                    </span>
+                    <span className="rounded-full bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
+                      #{idx + 1}
+                    </span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <input
+                      type="text"
+                      value={ph.name}
+                      onChange={(e) =>
+                        setPhases((xs) =>
+                          xs.map((x) =>
+                            x.id === ph.id ? { ...x, name: e.target.value } : x
+                          )
+                        )
+                      }
+                      onBlur={(e) => {
+                        const v = e.target.value.trim();
+                        if (v && v !== ph.name) patchPhase(ph.id, { name: v });
+                      }}
+                      className="w-full bg-transparent text-base font-semibold text-white focus:outline-none"
+                      placeholder="Nom de la phase"
+                    />
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-white/50">
+                      <span>
+                        Durée :{" "}
+                        <span className="text-white/70">
+                          {durationLabel(ph.start_date, ph.end_date)}
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                  <div className="grid w-full grid-cols-2 gap-2 sm:w-auto sm:grid-cols-[140px_140px_140px_auto]">
+                    <input
+                      type="date"
+                      value={ph.start_date || ""}
+                      onChange={(e) =>
+                        patchPhase(ph.id, {
+                          start_date: e.target.value || null
+                        } as Partial<DevlogPhase>)
+                      }
+                      className="input text-xs"
+                    />
+                    <input
+                      type="date"
+                      value={ph.end_date || ""}
+                      onChange={(e) =>
+                        patchPhase(ph.id, {
+                          end_date: e.target.value || null
+                        } as Partial<DevlogPhase>)
+                      }
+                      className="input text-xs"
+                    />
+                    <select
+                      value={ph.status}
+                      onChange={(e) =>
+                        patchPhase(ph.id, { status: e.target.value })
+                      }
+                      className={`rounded-full border px-2 py-1 text-[11px] font-semibold ${meta.cls}`}
+                    >
+                      {DEVLOG_PHASE_STATUSES.map((s) => (
+                        <option
+                          key={s.value}
+                          value={s.value}
+                          className="bg-brand-950 text-white"
+                        >
+                          {s.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => removePhase(ph.id)}
+                      className="text-rose-400 hover:text-rose-300"
+                      aria-label="Supprimer la phase"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </section>
+      <p className="text-[11px] text-white/40">
+        Astuce : glisse une phase par sa poignée pour la réordonner. Les dates
+        et le statut se sauvegardent automatiquement.
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Photos
+// ---------------------------------------------------------------------------
+
+type DevlogPhoto = {
+  id: number;
+  project_id: number;
+  content_type: string;
+  filename: string | null;
+  size_bytes: number | null;
+  caption: string | null;
+  uploaded_by_user_id: number | null;
+  uploaded_by_email: string | null;
+  created_at: string;
+};
+
+function DevlogPhotosTab({ projectId }: { projectId: number }) {
+  const confirm = useConfirm();
+  const [photos, setPhotos] = useState<DevlogPhoto[]>([]);
+  const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(
+    null
+  );
+  const [err, setErr] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<DevlogPhoto | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const res = await authedFetch(
+          `/api/v1/devlog/projects/${projectId}/photos`
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!cancelled) setPhotos((await res.json()) as DevlogPhoto[]);
+      } catch (e) {
+        if (!cancelled)
+          setErr(`Chargement échoué : ${(e as Error).message}`);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  // Charge les blobs images via authedFetch pour pouvoir envoyer le Bearer.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      for (const p of photos) {
+        if (photoUrls[p.id]) continue;
+        if (p.content_type === "application/pdf") continue;
+        try {
+          const r = await authedFetch(
+            `/api/v1/devlog/projects/${projectId}/photos/${p.id}/image`
+          );
+          if (!r.ok) continue;
+          const blob = await r.blob();
+          const url = URL.createObjectURL(blob);
+          if (cancelled) {
+            URL.revokeObjectURL(url);
+            continue;
+          }
+          setPhotoUrls((prev) => ({ ...prev, [p.id]: url }));
+        } catch {
+          /* ignore */
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photos, projectId]);
+
+  // Cleanup global au demontage.
+  useEffect(() => {
+    return () => {
+      Object.values(photoUrls).forEach((url) => URL.revokeObjectURL(url));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function uploadOne(file: File): Promise<DevlogPhoto> {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    const res = await authedFetch(
+      `/api/v1/devlog/projects/${projectId}/photos`,
+      { method: "POST", body: fd }
+    );
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(txt.slice(0, 240) || `HTTP ${res.status}`);
+    }
+    return (await res.json()) as DevlogPhoto;
+  }
+
+  async function upload(files: File[]) {
+    if (!files.length) return;
+    setBusy(true);
+    setErr(null);
+    setProgress({ done: 0, total: files.length });
+    const created: DevlogPhoto[] = [];
+    const failures: string[] = [];
+    let done = 0;
+    await Promise.all(
+      files.map(async (f) => {
+        try {
+          const ph = await uploadOne(f);
+          created.push(ph);
+        } catch (e) {
+          failures.push(`${f.name}: ${(e as Error).message}`);
+        } finally {
+          done += 1;
+          setProgress({ done, total: files.length });
+        }
+      })
+    );
+    if (created.length) {
+      created.sort((a, b) => b.id - a.id);
+      setPhotos((xs) => [...created, ...xs]);
+    }
+    if (failures.length) {
+      setErr(
+        `${failures.length} échec(s) : ${failures.slice(0, 3).join(" ; ")}` +
+          (failures.length > 3 ? "…" : "")
+      );
+    }
+    setProgress(null);
+    setBusy(false);
+  }
+
+  async function remove(id: number) {
+    if (!(await confirm("Supprimer cette photo ?"))) return;
+    try {
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/photos/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) throw new Error();
+      setPhotos((xs) => xs.filter((p) => p.id !== id));
+      setPhotoUrls((prev) => {
+        const url = prev[id];
+        if (url) URL.revokeObjectURL(url);
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      if (lightbox?.id === id) setLightbox(null);
+    } catch {
+      setErr("Suppression échouée.");
+    }
+  }
+
+  async function updateCaption(p: DevlogPhoto, caption: string) {
+    try {
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/photos/${p.id}`,
+        { method: "PATCH", body: JSON.stringify({ caption: caption || null }) }
+      );
+      if (!res.ok) throw new Error();
+      const updated = (await res.json()) as DevlogPhoto;
+      setPhotos((xs) => xs.map((x) => (x.id === p.id ? updated : x)));
+    } catch {
+      setErr("Mise à jour de la légende échouée.");
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+          Ajouter des photos
+        </h2>
+        <p className="mt-1 text-xs text-white/60">
+          JPG / PNG / WEBP / HEIC / GIF / PDF, 15 Mo max par fichier. Glisse les
+          fichiers ou utilise le sélecteur ci-dessous.
+        </p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <label
+            className="flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-brand-700 bg-brand-950/60 p-6 text-center text-sm text-white/70 transition hover:border-blue-500 hover:bg-blue-500/5"
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.currentTarget.classList.add("border-blue-500", "bg-blue-500/10");
+            }}
+            onDragLeave={(e) => {
+              e.currentTarget.classList.remove(
+                "border-blue-500",
+                "bg-blue-500/10"
+              );
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.currentTarget.classList.remove(
+                "border-blue-500",
+                "bg-blue-500/10"
+              );
+              const files = Array.from(e.dataTransfer.files ?? []);
+              if (files.length) upload(files);
+            }}
+          >
+            <input
+              type="file"
+              multiple
+              accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/gif,application/pdf"
+              disabled={busy}
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? []);
+                e.target.value = "";
+                if (files.length) upload(files);
+              }}
+              className="hidden"
+            />
+            <span className="text-2xl" aria-hidden="true">
+              📁
+            </span>
+            <span className="mt-2 font-semibold text-white">
+              Glisse-dépose ou clique pour sélectionner
+            </span>
+            <span className="mt-1 text-xs text-white/50">
+              Multi-sélection supportée
+            </span>
+          </label>
+          <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border border-brand-700 bg-brand-950/60 p-6 text-center text-sm text-white/70 transition hover:border-blue-500 hover:bg-blue-500/5">
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              disabled={busy}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (f) upload([f]);
+              }}
+              className="hidden"
+            />
+            <span className="text-2xl" aria-hidden="true">
+              📷
+            </span>
+            <span className="mt-2 font-semibold text-white">
+              Caméra (mobile)
+            </span>
+            <span className="mt-1 text-xs text-white/50">
+              Photo immédiate
+            </span>
+          </label>
+        </div>
+        {progress ? (
+          <p className="mt-3 text-sm text-white/70">
+            Upload en cours… {progress.done}/{progress.total}
+          </p>
+        ) : null}
+        {err ? <p className="mt-3 text-sm text-rose-300">{err}</p> : null}
+      </section>
+
+      <section>
+        {loading ? (
+          <div className="flex min-h-[30vh] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+          </div>
+        ) : photos.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
+            Aucune photo pour ce projet.
+          </p>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {photos.map((p) => (
+              <div
+                key={p.id}
+                className="overflow-hidden rounded-xl border border-brand-800 bg-brand-900"
+              >
+                <button
+                  type="button"
+                  onClick={() => setLightbox(p)}
+                  className="block aspect-video w-full overflow-hidden bg-brand-950"
+                >
+                  {p.content_type === "application/pdf" ? (
+                    <div className="flex h-full items-center justify-center text-sm text-white/60">
+                      📄 PDF
+                    </div>
+                  ) : photoUrls[p.id] ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={photoUrls[p.id]}
+                      alt={p.caption || "Photo"}
+                      className="h-full w-full object-cover transition hover:scale-105"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-xs text-white/30">
+                      Chargement…
+                    </div>
+                  )}
+                </button>
+                <div className="p-3">
+                  <input
+                    type="text"
+                    defaultValue={p.caption || ""}
+                    placeholder="Légende…"
+                    onBlur={(e) => {
+                      const v = e.target.value.trim();
+                      if (v !== (p.caption || "")) updateCaption(p, v);
+                    }}
+                    className="w-full rounded-md border border-brand-800 bg-brand-950 px-2 py-1 text-xs text-white/80 focus:border-blue-500 focus:outline-none"
+                  />
+                  <div className="mt-2 flex items-center justify-between text-[10px] text-white/40">
+                    <span>
+                      {new Date(p.created_at).toLocaleDateString("fr-CA")}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => remove(p.id)}
+                      className="text-rose-400 hover:text-rose-300"
+                      aria-label="Supprimer la photo"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {lightbox ? (
+        <div
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/90 p-6"
+          onClick={() => setLightbox(null)}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setLightbox(null);
+            }}
+            className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20"
+            aria-label="Fermer"
+          >
+            ✕
+          </button>
+          {lightbox.content_type === "application/pdf" ? (
+            <a
+              href={photoUrls[lightbox.id] || "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white"
+            >
+              Ouvrir le PDF
+            </a>
+          ) : photoUrls[lightbox.id] ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={photoUrls[lightbox.id]}
+              alt={lightbox.caption || ""}
+              className="max-h-[85vh] max-w-[90vw] rounded-lg object-contain"
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <Loader2 className="h-8 w-8 animate-spin text-white" />
+          )}
+          {lightbox.caption ? (
+            <p
+              className="mt-4 max-w-[90vw] text-center text-sm text-white/80"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {lightbox.caption}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Achats
+// ---------------------------------------------------------------------------
+
+type DevlogPurchase = {
+  id: number;
+  project_id: number;
+  description: string;
+  amount_cents: number;
+  supplier: string | null;
+  purchased_at: string | null;
+  notes: string | null;
+  has_receipt: boolean;
+  receipt_filename: string | null;
+  receipt_content_type: string | null;
+  created_by_user_id: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+function DevlogAchatsTab({ projectId }: { projectId: number }) {
+  const confirm = useConfirm();
+  const [items, setItems] = useState<DevlogPurchase[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  // form state
+  const [fDesc, setFDesc] = useState("");
+  const [fAmount, setFAmount] = useState("");
+  const [fSupplier, setFSupplier] = useState("");
+  const [fDate, setFDate] = useState("");
+  const [fNotes, setFNotes] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const res = await authedFetch(
+          `/api/v1/devlog/projects/${projectId}/purchases`
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!cancelled) setItems((await res.json()) as DevlogPurchase[]);
+      } catch (e) {
+        if (!cancelled)
+          setErr(`Chargement échoué : ${(e as Error).message}`);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  function resetForm() {
+    setFDesc("");
+    setFAmount("");
+    setFSupplier("");
+    setFDate("");
+    setFNotes("");
+  }
+
+  async function addPurchase() {
+    const amount = Number(fAmount);
+    if (!fDesc.trim() || !Number.isFinite(amount) || amount < 0) {
+      setErr("Description et montant requis.");
+      return;
+    }
+    setCreating(true);
+    setErr(null);
+    try {
+      const payload: Record<string, unknown> = {
+        description: fDesc.trim(),
+        amount_cents: Math.round(amount * 100)
+      };
+      if (fSupplier.trim()) payload.supplier = fSupplier.trim();
+      if (fDate) payload.purchased_at = fDate;
+      if (fNotes.trim()) payload.notes = fNotes.trim();
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/purchases`,
+        { method: "POST", body: JSON.stringify(payload) }
+      );
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(
+          `HTTP ${res.status}${txt ? ` — ${txt.slice(0, 200)}` : ""}`
+        );
+      }
+      const created = (await res.json()) as DevlogPurchase;
+      setItems((xs) => [created, ...xs]);
+      resetForm();
+      setModalOpen(false);
+    } catch (e) {
+      setErr(`Ajout échoué : ${(e as Error).message}`);
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function removePurchase(id: number) {
+    if (!(await confirm("Supprimer cet achat ?"))) return;
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/purchases/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      setItems((xs) => xs.filter((x) => x.id !== id));
+    } catch (e) {
+      setErr(`Suppression échouée : ${(e as Error).message}`);
+    }
+  }
+
+  async function uploadReceipt(id: number, file: File) {
+    setErr(null);
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    try {
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/purchases/${id}/receipt`,
+        { method: "POST", body: fd }
+      );
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(
+          `HTTP ${res.status}${txt ? ` — ${txt.slice(0, 200)}` : ""}`
+        );
+      }
+      const updated = (await res.json()) as DevlogPurchase;
+      setItems((xs) => xs.map((x) => (x.id === id ? updated : x)));
+    } catch (e) {
+      setErr(`Upload reçu échoué : ${(e as Error).message}`);
+    }
+  }
+
+  async function viewReceipt(id: number) {
+    try {
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/purchases/${id}/receipt`
+      );
+      if (!res.ok) throw new Error();
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      setErr("Ouverture reçu échouée.");
+    }
+  }
+
+  const total = items.reduce((acc, x) => acc + x.amount_cents, 0);
+
+  return (
+    <div className="space-y-5">
+      <section className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+            Achats / Dépenses
+          </h2>
+          <p className="mt-1 text-xs text-white/60">
+            Suivi des achats liés au projet (matériel, licences, sous-traitance
+            ponctuelle…). Total cumulé en bas de la liste.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setModalOpen(true)}
+          className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-4 py-2.5 font-semibold text-white transition hover:bg-blue-400 text-sm"
+        >
+          <Plus className="mr-2 h-4 w-4" />
+          Ajouter un achat
+        </button>
+      </section>
+
+      <section className="overflow-hidden rounded-xl border border-brand-800 bg-brand-900">
+        {loading ? (
+          <div className="flex min-h-[30vh] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+          </div>
+        ) : items.length === 0 ? (
+          <p className="px-5 py-10 text-center text-sm text-white/60">
+            Aucun achat pour ce projet.
+          </p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="bg-brand-950/50 text-[11px] uppercase tracking-wider text-white/50">
+              <tr>
+                <th className="px-4 py-2 text-left">Date</th>
+                <th className="px-4 py-2 text-left">Description</th>
+                <th className="px-4 py-2 text-left">Fournisseur</th>
+                <th className="px-4 py-2 text-right">Montant</th>
+                <th className="px-4 py-2 text-center">Reçu</th>
+                <th className="px-4 py-2"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-brand-800">
+              {items.map((it) => (
+                <tr key={it.id}>
+                  <td className="px-4 py-2 text-white/70">
+                    {it.purchased_at || "—"}
+                  </td>
+                  <td className="px-4 py-2 text-white">
+                    <div className="font-medium">{it.description}</div>
+                    {it.notes ? (
+                      <div className="mt-0.5 text-[11px] text-white/40">
+                        {it.notes}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-2 text-white/70">
+                    {it.supplier || "—"}
+                  </td>
+                  <td className="px-4 py-2 text-right font-semibold text-white">
+                    {fmtMoney(it.amount_cents / 100)}
+                  </td>
+                  <td className="px-4 py-2 text-center">
+                    {it.has_receipt ? (
+                      <button
+                        type="button"
+                        onClick={() => viewReceipt(it.id)}
+                        className="text-xs text-blue-300 underline decoration-dotted hover:text-blue-200"
+                      >
+                        Voir
+                      </button>
+                    ) : (
+                      <label className="inline-flex cursor-pointer items-center gap-1 text-xs text-white/50 hover:text-white/80">
+                        <input
+                          type="file"
+                          accept="image/*,application/pdf"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            e.target.value = "";
+                            if (f) uploadReceipt(it.id, f);
+                          }}
+                        />
+                        + Joindre
+                      </label>
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    <button
+                      type="button"
+                      onClick={() => removePurchase(it.id)}
+                      className="text-rose-400 hover:text-rose-300"
+                      aria-label="Supprimer"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot className="bg-brand-950/40 text-sm font-semibold text-white">
+              <tr>
+                <td className="px-4 py-3" colSpan={3}>
+                  Total ({items.length} achat{items.length > 1 ? "s" : ""})
+                </td>
+                <td className="px-4 py-3 text-right text-blue-300">
+                  {fmtMoney(total / 100)}
+                </td>
+                <td colSpan={2}></td>
+              </tr>
+            </tfoot>
+          </table>
+        )}
+      </section>
+      {err ? <p className="text-sm text-rose-300">{err}</p> : null}
+
+      {modalOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => (!creating ? setModalOpen(false) : null)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-bold text-white">Nouvel achat</h3>
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="label" htmlFor="ach_desc">
+                  Description *
+                </label>
+                <input
+                  id="ach_desc"
+                  type="text"
+                  value={fDesc}
+                  onChange={(e) => setFDesc(e.target.value)}
+                  placeholder="Ex. Licences Figma 3 mois"
+                  className="input"
+                />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="label" htmlFor="ach_amount">
+                    Montant (CAD) *
+                  </label>
+                  <input
+                    id="ach_amount"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={fAmount}
+                    onChange={(e) => setFAmount(e.target.value)}
+                    className="input"
+                  />
+                </div>
+                <div>
+                  <label className="label" htmlFor="ach_date">
+                    Date
+                  </label>
+                  <input
+                    id="ach_date"
+                    type="date"
+                    value={fDate}
+                    onChange={(e) => setFDate(e.target.value)}
+                    className="input"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="label" htmlFor="ach_sup">
+                  Fournisseur
+                </label>
+                <input
+                  id="ach_sup"
+                  type="text"
+                  value={fSupplier}
+                  onChange={(e) => setFSupplier(e.target.value)}
+                  placeholder="Ex. Figma Inc."
+                  className="input"
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="ach_notes">
+                  Notes
+                </label>
+                <textarea
+                  id="ach_notes"
+                  value={fNotes}
+                  onChange={(e) => setFNotes(e.target.value)}
+                  rows={2}
+                  className="input"
+                />
+              </div>
+            </div>
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setModalOpen(false)}
+                disabled={creating}
+                className="btn-secondary text-sm"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={addPurchase}
+                disabled={creating || !fDesc.trim() || !fAmount}
+                className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm disabled:opacity-60"
+              >
+                {creating ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Création…
+                  </>
+                ) : (
+                  "Créer l'achat"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Recap
+// ---------------------------------------------------------------------------
+
+type DevlogRecapEvent = {
+  id: number;
+  action: string;
+  entity_type: string | null;
+  entity_id: number | null;
+  user_email: string | null;
+  created_at: string;
+  details_json: string | null;
+};
+
+type DevlogRecapPhase = {
+  id: number;
+  name: string;
+  status: string;
+  position: number;
+  start_date: string | null;
+  end_date: string | null;
+};
+
+type DevlogRecap = {
+  project_id: number;
+  name: string;
+  status: string;
+  started_at: string | null;
+  start_date: string | null;
+  due_date: string | null;
+  nb_phases: number;
+  nb_phases_terminees: number;
+  pct_phases_terminees: number;
+  phases: DevlogRecapPhase[];
+  total_heures: number;
+  total_facture: number;
+  total_paye: number;
+  total_reste_a_facturer: number;
+  total_soumission: number;
+  marge_estimee: number;
+  total_achats_cents: number;
+  nb_achats: number;
+  events: DevlogRecapEvent[];
+};
+
+function actionLabel(action: string): string {
+  const labels: Record<string, string> = {
+    "devlog_project.created": "Projet créé",
+    "devlog_project.updated": "Projet mis à jour",
+    "devlog_project.deleted": "Projet supprimé",
+    "devlog_project_phase.created": "Phase ajoutée",
+    "devlog_project_phase.updated": "Phase mise à jour",
+    "devlog_project_phase.deleted": "Phase supprimée",
+    "devlog_project_phase.reordered": "Phases réordonnées",
+    "devlog_project_task.created": "Tâche ajoutée",
+    "devlog_project_task.updated": "Tâche mise à jour",
+    "devlog_project_task.deleted": "Tâche supprimée",
+    "devlog_project_member.created": "Membre ajouté",
+    "devlog_project_member.deleted": "Membre retiré",
+    "devlog_project_photo.created": "Photo ajoutée",
+    "devlog_project_photo.deleted": "Photo supprimée",
+    "devlog_project_photo.updated": "Légende modifiée",
+    "devlog_project_purchase.created": "Achat ajouté",
+    "devlog_project_purchase.updated": "Achat modifié",
+    "devlog_project_purchase.deleted": "Achat supprimé",
+    "devlog_project_purchase.receipt_uploaded": "Reçu joint",
+    "devlog_invoice.created": "Facture créée",
+    "devlog_invoice.sent": "Facture envoyée",
+    "devlog_invoice.marked_paid": "Facture payée",
+    "devlog_time_entry.created": "Heures saisies",
+    "devlog_contract.signed": "Contrat signé"
+  };
+  return labels[action] || action;
+}
+
+function daysSince(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  const ms = Date.now() - d.getTime();
+  if (Number.isNaN(ms) || ms < 0) return "—";
+  const days = Math.round(ms / 86_400_000);
+  if (days === 0) return "Aujourd'hui";
+  if (days === 1) return "1 jour";
+  if (days < 30) return `${days} jours`;
+  const months = Math.round(days / 30);
+  if (months === 1) return "1 mois";
+  if (months < 12) return `${months} mois`;
+  const years = Math.round(months / 12);
+  return years === 1 ? "1 an" : `${years} ans`;
+}
+
+function DevlogRecapTab({ projectId }: { projectId: number }) {
+  const [data, setData] = useState<DevlogRecap | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const res = await authedFetch(
+          `/api/v1/devlog/projects/${projectId}/recap`
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!cancelled) setData((await res.json()) as DevlogRecap);
+      } catch (e) {
+        if (!cancelled)
+          setErr(`Chargement récap échoué : ${(e as Error).message}`);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[30vh] items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+      </div>
+    );
+  }
+  if (err || !data) {
+    return (
+      <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
+        {err || "Données indisponibles."}
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+            Statut
+          </p>
+          <p className="mt-2 text-xl font-bold text-white">
+            {STATUS_LABELS[data.status] || data.status}
+          </p>
+          <p className="mt-1 text-[11px] text-white/40">
+            Démarré : {data.started_at ? daysSince(data.started_at) : "non démarré"}
+          </p>
+        </div>
+        <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+            Avancement
+          </p>
+          <p className="mt-2 text-xl font-bold text-blue-300">
+            {data.pct_phases_terminees.toFixed(0)} %
+          </p>
+          <p className="mt-1 text-[11px] text-white/40">
+            {data.nb_phases_terminees} / {data.nb_phases} phase
+            {data.nb_phases > 1 ? "s" : ""} terminée
+            {data.nb_phases_terminees > 1 ? "s" : ""}
+          </p>
+        </div>
+        <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+            Total facturé
+          </p>
+          <p className="mt-2 text-xl font-bold text-white">
+            {fmtMoney(data.total_facture)}
+          </p>
+          <p className="mt-1 text-[11px] text-white/40">
+            Encaissé : {fmtMoney(data.total_paye)} · Reste :{" "}
+            {fmtMoney(data.total_reste_a_facturer)}
+          </p>
+        </div>
+        <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+            Marge estimée
+          </p>
+          <p
+            className={`mt-2 text-xl font-bold ${
+              data.marge_estimee >= 0 ? "text-emerald-300" : "text-rose-300"
+            }`}
+          >
+            {fmtMoney(data.marge_estimee)}
+          </p>
+          <p className="mt-1 text-[11px] text-white/40">
+            {data.total_heures.toFixed(1)} h saisies ·{" "}
+            {fmtMoney(data.total_achats_cents / 100)} d&apos;achats
+          </p>
+        </div>
+      </div>
+
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+          Jalons
+        </h3>
+        {data.phases.length === 0 ? (
+          <p className="mt-3 text-sm text-white/60">
+            Aucune phase. Crée-les depuis l&apos;onglet Planification.
+          </p>
+        ) : (
+          <ul className="mt-4 space-y-2">
+            {data.phases.map((p, idx) => {
+              const meta = phaseStatusMeta(p.status);
+              return (
+                <li
+                  key={p.id}
+                  className="grid grid-cols-[40px_1fr_160px_120px] items-center gap-3 rounded-lg border border-brand-800 bg-brand-950/40 px-3 py-2 text-sm"
+                >
+                  <span className="rounded-full bg-brand-950 px-2 py-0.5 text-center text-xs font-semibold text-white/60">
+                    #{idx + 1}
+                  </span>
+                  <span className="truncate text-white">{p.name}</span>
+                  <span className="text-[11px] text-white/50">
+                    {p.start_date || "?"} → {p.end_date || "?"}
+                  </span>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-center text-[11px] font-semibold ${meta.cls}`}
+                  >
+                    {meta.label}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+          Historique récent
+        </h3>
+        {data.events.length === 0 ? (
+          <p className="mt-3 text-sm text-white/60">
+            Aucune activité enregistrée pour ce projet.
+          </p>
+        ) : (
+          <ol className="mt-4 space-y-2">
+            {data.events.map((e) => (
+              <li
+                key={e.id}
+                className="flex items-start gap-3 rounded-lg border border-brand-800 bg-brand-950/40 px-3 py-2 text-sm"
+              >
+                <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-blue-400" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-white">{actionLabel(e.action)}</p>
+                  <p className="mt-0.5 text-[11px] text-white/50">
+                    {new Date(e.created_at).toLocaleString("fr-CA", {
+                      dateStyle: "medium",
+                      timeStyle: "short"
+                    })}
+                    {e.user_email ? ` · ${e.user_email}` : ""}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
+
+      <p className="text-[11px] text-white/40">
+        Vue agrégée lecture seule. La marge estimée valorise les heures saisies
+        à 75 $/h par défaut.
+      </p>
     </div>
   );
 }

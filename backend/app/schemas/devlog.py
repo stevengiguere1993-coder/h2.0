@@ -862,3 +862,124 @@ class DevlogProjectFinances(BaseModel):
     total_heures_facturables: float
     marge_estimee: float
     nb_sections_soumission: int
+
+
+# --------------------------------------------------------------------------
+# DevlogProjectPhoto / Purchase / Recap (vague 2 - mai 2026, suite)
+# --------------------------------------------------------------------------
+
+
+class DevlogProjectPhotoRead(BaseModel):
+    """Metadonnees d'une photo de projet (sans blob)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    content_type: str
+    filename: Optional[str]
+    size_bytes: Optional[int]
+    caption: Optional[str]
+    uploaded_by_user_id: Optional[int]
+    uploaded_by_email: Optional[str]
+    created_at: datetime
+
+
+class DevlogProjectPhotoCaptionUpdate(BaseModel):
+    caption: Optional[str] = Field(default=None, max_length=500)
+
+
+class DevlogProjectPurchaseCreate(BaseModel):
+    description: str = Field(..., min_length=1, max_length=500)
+    amount_cents: int = Field(..., ge=0)
+    supplier: Optional[str] = Field(default=None, max_length=255)
+    purchased_at: Optional[date] = None
+    notes: Optional[str] = None
+
+
+class DevlogProjectPurchaseUpdate(BaseModel):
+    description: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    amount_cents: Optional[int] = Field(default=None, ge=0)
+    supplier: Optional[str] = Field(default=None, max_length=255)
+    purchased_at: Optional[date] = None
+    notes: Optional[str] = None
+
+
+class DevlogProjectPurchaseRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    description: str
+    amount_cents: int
+    supplier: Optional[str]
+    purchased_at: Optional[date]
+    notes: Optional[str]
+    has_receipt: bool = False
+    receipt_filename: Optional[str]
+    receipt_content_type: Optional[str]
+    created_by_user_id: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+
+class DevlogProjectRecapEvent(BaseModel):
+    """Une entree d'audit log resumee pour la frise d'evenements."""
+
+    id: int
+    action: str
+    entity_type: Optional[str]
+    entity_id: Optional[int]
+    user_email: Optional[str]
+    created_at: datetime
+    details_json: Optional[str] = None
+
+
+class DevlogProjectRecapPhase(BaseModel):
+    """Resume d'une phase pour la section Jalons du recap."""
+
+    id: int
+    name: str
+    status: str
+    position: int
+    start_date: Optional[date]
+    end_date: Optional[date]
+
+
+class DevlogProjectRecap(BaseModel):
+    """Vue lecture seule consolidee d'un projet Dev Logiciel.
+
+    Agrege le statut, les jalons (phases), les KPIs financiers et les
+    derniers evenements (audit log) en un seul payload pour l'onglet
+    Recap.
+    """
+
+    project_id: int
+    name: str
+    status: str
+    started_at: Optional[datetime]
+    start_date: Optional[date]
+    due_date: Optional[date]
+
+    # Avancement
+    nb_phases: int
+    nb_phases_terminees: int
+    pct_phases_terminees: float
+    phases: list[DevlogProjectRecapPhase] = Field(default_factory=list)
+
+    # Heures saisies
+    total_heures: float
+
+    # Finances (reuse subset of DevlogProjectFinances)
+    total_facture: float
+    total_paye: float
+    total_reste_a_facturer: float
+    total_soumission: float
+    marge_estimee: float
+
+    # Achats du projet (cumul)
+    total_achats_cents: int
+    nb_achats: int
+
+    # Activite recente
+    events: list[DevlogProjectRecapEvent] = Field(default_factory=list)
