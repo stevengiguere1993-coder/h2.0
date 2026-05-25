@@ -62,24 +62,32 @@ type TabId =
   | "photos"
   | "tasks"
   | "finances"
-  | "recap";
+  | "recap"
+  | "members";
 
-// Vague 1 (2026-05) : seul l'onglet Résumé est fonctionnel pour le pôle
-// dev-logiciel. Les 7 autres sont des clones visuels du pôle Construction
-// dont les endpoints backend dédiés n'existent pas encore (le backend
-// monte /api/v1/projects/... pour le modèle Construction, pas
-// /api/v1/devlog/projects/...). On garde les onglets visibles mais
-// désactivés avec un placeholder, en attendant la Vague 2 qui créera
-// les endpoints devlog/projects/{id}/(phases|tasks|photos|finances...).
+// Vague 2 (2026-05) : suite à la PR backend qui livre les endpoints
+// /api/v1/devlog/projects/{id}/(phases|tasks|members|finances), on
+// réactive 3 onglets (Tâches, Finances, Membres) via des composants
+// simplifiés alignés sur les schémas Pydantic devlog (différents des
+// clones Construction lourds).
+//
+// Planification reste désactivée : le composant Construction utilise
+// sous-traitants + créneaux horaires + agenda + détection de conflits,
+// trop éloigné du modèle devlog (juste name/description/dates/status).
+// Une refonte dédiée sera faite plus tard.
+//
+// Photos / Achats / Récap / Agenda chantier restent désactivés —
+// endpoints backend pas encore couverts pour devlog.
 const TABS: { id: TabId; label: string; available: boolean }[] = [
   { id: "summary", label: "Résumé", available: true },
+  { id: "tasks", label: "Tâches", available: true },
+  { id: "finances", label: "Finances", available: true },
+  { id: "members", label: "Membres", available: true },
   { id: "planification", label: "Planification", available: false },
   { id: "agenda", label: "Agenda chantier", available: false },
   { id: "achats", label: "Achats / PO", available: false },
-  { id: "finances", label: "Finances", available: false },
   { id: "recap", label: "Récap", available: false },
-  { id: "photos", label: "Photos", available: false },
-  { id: "tasks", label: "Tâches", available: false }
+  { id: "photos", label: "Photos", available: false }
 ];
 
 function fmtMoney(n: number | string | null): string {
@@ -133,7 +141,8 @@ export default function ProjectDetailPage() {
       "photos",
       "tasks",
       "finances",
-      "recap"
+      "recap",
+      "members"
     ];
     if (valid.includes(hash)) setTab(hash);
   }, []);
@@ -553,14 +562,18 @@ export default function ProjectDetailPage() {
                   saving={saving}
                   onSave={saveAll}
                 />
+              ) : tab === "tasks" ? (
+                <DevlogTasksTab projectId={id} />
+              ) : tab === "finances" ? (
+                <DevlogFinancesTab projectId={id} />
+              ) : tab === "members" ? (
+                <DevlogMembersTab projectId={id} />
               ) : (
-                // Vague 1 : tous les autres onglets (planification, agenda,
-                // achats, finances, récap, photos, tâches) sont clones
-                // visuels du pôle Construction. Leurs sous-composants
-                // appellent des endpoints /api/v1/devlog/projects/{id}/...
-                // qui n'existent pas — on ne les rend donc PAS du tout
-                // (pas de fetch 404 dans le vide). Le placeholder explique
-                // la situation. Vague 2 créera les endpoints dédiés.
+                // Vague 2 : Planification / Photos / Achats / Récap / Agenda
+                // chantier restent désactivés. Soit le composant Construction
+                // est trop éloigné du modèle devlog (Planification), soit les
+                // endpoints backend dédiés n'existent pas encore. Le
+                // placeholder explique la situation.
                 <UnavailableSection />
               )}
             </div>
@@ -5230,5 +5243,791 @@ function InvoiceRow({ inv }: { inv: InvoiceLine }) {
         </span>
       </Link>
     </li>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Vague 2 (2026-05) — Onglets dev-logiciel dédiés.
+// Composants simplifiés alignés sur les schémas Pydantic des endpoints
+// /api/v1/devlog/projects/{id}/(tasks|finances|members). Volontairement
+// plus légers que les clones Construction (pas de sous-traitants pour
+// les phases, pas de service/material lines pour les finances, etc.).
+// ---------------------------------------------------------------------------
+
+type DevlogTask = {
+  id: number;
+  project_id: number;
+  phase_id: number | null;
+  title: string;
+  description: string | null;
+  assignee_user_id: number | null;
+  status: string;
+  priority: string;
+  due_date: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+const DEVLOG_TASK_STATUSES: { value: string; label: string }[] = [
+  { value: "a_faire", label: "À faire" },
+  { value: "en_cours", label: "En cours" },
+  { value: "en_revue", label: "En revue" },
+  { value: "termine", label: "Terminé" },
+  { value: "bloque", label: "Bloqué" }
+];
+
+const DEVLOG_TASK_PRIORITIES: { value: string; label: string }[] = [
+  { value: "basse", label: "Basse" },
+  { value: "moyenne", label: "Moyenne" },
+  { value: "haute", label: "Haute" },
+  { value: "urgente", label: "Urgente" }
+];
+
+function DevlogTasksTab({ projectId }: { projectId: number }) {
+  const confirm = useConfirm();
+  const [tasks, setTasks] = useState<DevlogTask[]>([]);
+  const [users, setUsers] = useState<TeamMember[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const [newTitle, setNewTitle] = useState("");
+  const [newAssignee, setNewAssignee] = useState("");
+  const [newPriority, setNewPriority] = useState("moyenne");
+  const [newDue, setNewDue] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const [tRes, uRes] = await Promise.all([
+          authedFetch(`/api/v1/devlog/projects/${projectId}/tasks`),
+          authedFetch("/api/v1/users")
+        ]);
+        if (!tRes.ok) throw new Error(`HTTP ${tRes.status}`);
+        const ts = (await tRes.json()) as DevlogTask[];
+        const us = uRes.ok ? ((await uRes.json()) as TeamMember[]) : [];
+        if (cancelled) return;
+        setTasks(ts);
+        setUsers(us);
+      } catch (e) {
+        if (!cancelled) setErr(`Chargement échoué : ${(e as Error).message}`);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  async function addTask() {
+    if (!newTitle.trim()) return;
+    setCreating(true);
+    setErr(null);
+    try {
+      const payload: Record<string, unknown> = {
+        title: newTitle.trim(),
+        priority: newPriority,
+        status: "a_faire"
+      };
+      if (newAssignee) payload.assignee_user_id = Number(newAssignee);
+      if (newDue) payload.due_date = newDue;
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/tasks`,
+        { method: "POST", body: JSON.stringify(payload) }
+      );
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status}${txt ? ` — ${txt.slice(0, 200)}` : ""}`);
+      }
+      const created = (await res.json()) as DevlogTask;
+      setTasks((xs) => [...xs, created]);
+      setNewTitle("");
+      setNewAssignee("");
+      setNewPriority("moyenne");
+      setNewDue("");
+    } catch (e) {
+      setErr(`Ajout échoué : ${(e as Error).message}`);
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function patchTask(id: number, patch: Partial<DevlogTask>) {
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/tasks/${id}`,
+        { method: "PATCH", body: JSON.stringify(patch) }
+      );
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status}${txt ? ` — ${txt.slice(0, 200)}` : ""}`);
+      }
+      const updated = (await res.json()) as DevlogTask;
+      setTasks((xs) => xs.map((x) => (x.id === id ? updated : x)));
+    } catch (e) {
+      setErr(`Mise à jour échouée : ${(e as Error).message}`);
+    }
+  }
+
+  async function removeTask(id: number) {
+    if (!(await confirm("Supprimer cette tâche ?"))) return;
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/tasks/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      setTasks((xs) => xs.filter((x) => x.id !== id));
+    } catch (e) {
+      setErr(`Suppression échouée : ${(e as Error).message}`);
+    }
+  }
+
+  const userName = (uid: number | null) => {
+    if (!uid) return "—";
+    const u = users.find((x) => x.id === uid);
+    return u ? u.full_name || u.email : `#${uid}`;
+  };
+
+  const statusBadge = (status: string) => {
+    const map: Record<string, string> = {
+      a_faire: "bg-white/10 text-white/80 border-white/20",
+      en_cours: "bg-blue-500/20 text-blue-300 border-blue-500/30",
+      en_revue: "bg-amber-500/20 text-amber-300 border-amber-500/30",
+      termine: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
+      bloque: "bg-rose-500/20 text-rose-300 border-rose-500/30"
+    };
+    return map[status] || map.a_faire;
+  };
+
+  return (
+    <div className="space-y-5">
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+          Nouvelle tâche
+        </h2>
+        <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_200px_140px_160px_auto]">
+          <input
+            type="text"
+            value={newTitle}
+            onChange={(e) => setNewTitle(e.target.value)}
+            placeholder="Ex. Implémenter écran login"
+            className="input"
+          />
+          <select
+            value={newAssignee}
+            onChange={(e) => setNewAssignee(e.target.value)}
+            className="input"
+          >
+            <option value="">— Assignée à —</option>
+            {users.map((u) => (
+              <option key={u.id} value={String(u.id)}>
+                {u.full_name || u.email}
+              </option>
+            ))}
+          </select>
+          <select
+            value={newPriority}
+            onChange={(e) => setNewPriority(e.target.value)}
+            className="input"
+          >
+            {DEVLOG_TASK_PRIORITIES.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          <input
+            type="date"
+            value={newDue}
+            onChange={(e) => setNewDue(e.target.value)}
+            className="input"
+          />
+          <button
+            type="button"
+            onClick={addTask}
+            disabled={creating || !newTitle.trim()}
+            className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm disabled:opacity-60"
+          >
+            {creating ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Plus className="mr-2 h-4 w-4" />
+            )}
+            Ajouter
+          </button>
+        </div>
+        {err ? <p className="mt-3 text-sm text-rose-300">{err}</p> : null}
+      </section>
+
+      <section className="rounded-xl border border-brand-800 bg-brand-900">
+        {loading ? (
+          <div className="flex min-h-[30vh] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+          </div>
+        ) : tasks.length === 0 ? (
+          <p className="px-5 py-8 text-center text-sm text-white/60">
+            Aucune tâche pour ce projet. Crée la première ci-dessus.
+          </p>
+        ) : (
+          <ul className="divide-y divide-brand-800">
+            {tasks.map((t) => (
+              <li
+                key={t.id}
+                className="grid gap-3 px-4 py-3 text-sm sm:grid-cols-[1fr_180px_140px_120px_auto] sm:items-center"
+              >
+                <div className="min-w-0">
+                  <p
+                    className={`truncate font-medium ${
+                      t.status === "termine"
+                        ? "text-white/40 line-through"
+                        : "text-white"
+                    }`}
+                  >
+                    {t.title}
+                  </p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-white/50">
+                    <span>Assignée : {userName(t.assignee_user_id)}</span>
+                    {t.due_date ? <span>Échéance : {t.due_date}</span> : null}
+                  </div>
+                </div>
+                <select
+                  value={t.status}
+                  onChange={(e) => patchTask(t.id, { status: e.target.value })}
+                  className={`rounded-full border px-2 py-1 text-[11px] font-semibold ${statusBadge(t.status)}`}
+                >
+                  {DEVLOG_TASK_STATUSES.map((s) => (
+                    <option
+                      key={s.value}
+                      value={s.value}
+                      className="bg-brand-950 text-white"
+                    >
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={t.priority}
+                  onChange={(e) =>
+                    patchTask(t.id, { priority: e.target.value })
+                  }
+                  className="input text-xs"
+                >
+                  {DEVLOG_TASK_PRIORITIES.map((p) => (
+                    <option key={p.value} value={p.value}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="date"
+                  value={t.due_date || ""}
+                  onChange={(e) =>
+                    patchTask(t.id, { due_date: e.target.value || null })
+                  }
+                  className="input text-xs"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeTask(t.id)}
+                  className="text-rose-400 hover:text-rose-300"
+                  aria-label="Supprimer"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Onglet Finances dev-logiciel — vue lecture seule alignée sur
+// DevlogProjectFinances (total_facture / total_paye / reste / soumission /
+// heures / marge_estimee). Pas de KPI projected vs actual : le backend
+// ne distingue pas (encore) les coûts internes par type.
+// ---------------------------------------------------------------------------
+
+type DevlogFinancesData = {
+  project_id: number;
+  soumission_id: number | null;
+  total_facture: number;
+  total_paye: number;
+  total_reste_a_facturer: number;
+  total_soumission: number;
+  total_heures_facturables: number;
+  marge_estimee: number;
+  nb_sections_soumission: number;
+};
+
+function DevlogFinancesTab({ projectId }: { projectId: number }) {
+  const [data, setData] = useState<DevlogFinancesData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const res = await authedFetch(
+          `/api/v1/devlog/projects/${projectId}/finances`
+        );
+        if (!res.ok) {
+          const txt = await res.text().catch(() => "");
+          throw new Error(
+            `HTTP ${res.status}${txt ? ` — ${txt.slice(0, 200)}` : ""}`
+          );
+        }
+        if (!cancelled) setData((await res.json()) as DevlogFinancesData);
+      } catch (e) {
+        if (!cancelled)
+          setErr(`Chargement des finances échoué : ${(e as Error).message}`);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    if (projectId) load();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[30vh] items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+      </div>
+    );
+  }
+  if (err || !data) {
+    return (
+      <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
+        {err || "Données indisponibles."}
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <DevlogFinanceKpi
+          label="Total facturé"
+          value={fmtMoney(data.total_facture)}
+          sub="Factures envoyées + payées"
+          tone="white"
+        />
+        <DevlogFinanceKpi
+          label="Encaissé"
+          value={fmtMoney(data.total_paye)}
+          sub={`${
+            data.total_facture > 0
+              ? ((data.total_paye / data.total_facture) * 100).toFixed(1)
+              : "0.0"
+          } % du facturé`}
+          tone="emerald"
+        />
+        <DevlogFinanceKpi
+          label="Reste à facturer"
+          value={fmtMoney(data.total_reste_a_facturer)}
+          sub={`Sur soumission ${fmtMoney(data.total_soumission)}`}
+          tone={data.total_reste_a_facturer >= 0 ? "white" : "rose"}
+        />
+        <DevlogFinanceKpi
+          label="Marge estimée"
+          value={fmtMoney(data.marge_estimee)}
+          sub={`${data.total_heures_facturables.toFixed(1)} h saisies`}
+          tone={data.marge_estimee >= 0 ? "emerald" : "rose"}
+        />
+      </div>
+
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+          Soumission liée
+        </h3>
+        {data.soumission_id ? (
+          <div className="mt-3 grid gap-3 sm:grid-cols-3 text-sm">
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-white/50">
+                Montant total
+              </p>
+              <p className="mt-1 font-semibold text-white">
+                {fmtMoney(data.total_soumission)}
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-white/50">
+                Sections
+              </p>
+              <p className="mt-1 font-semibold text-white">
+                {data.nb_sections_soumission}
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-white/50">
+                Soumission ID
+              </p>
+              <Link
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                href={`/dev-logiciel/soumissions/${data.soumission_id}` as any}
+                className="mt-1 inline-block font-semibold text-blue-300 underline decoration-dotted hover:text-blue-200"
+              >
+                #{data.soumission_id} →
+              </Link>
+            </div>
+          </div>
+        ) : (
+          <p className="mt-2 text-sm text-white/60">
+            Aucune soumission liée à ce projet. Le reste à facturer et la marge
+            estimée sont basés sur la soumission acceptée — relie-en une depuis
+            l&apos;onglet Résumé pour activer ces calculs.
+          </p>
+        )}
+      </section>
+
+      <p className="text-[11px] text-white/40">
+        Vue agrégée lecture seule. La marge estimée valorise les heures saisies
+        à un taux par défaut de 75 $/h ; un calcul précis arrivera quand les
+        taux par membre seront branchés.
+      </p>
+    </div>
+  );
+}
+
+function DevlogFinanceKpi({
+  label,
+  value,
+  sub,
+  tone
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tone: "white" | "emerald" | "rose";
+}) {
+  const toneClass =
+    tone === "emerald"
+      ? "text-emerald-300"
+      : tone === "rose"
+        ? "text-rose-300"
+        : "text-white";
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+      <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+        {label}
+      </p>
+      <p className={`mt-2 text-xl font-bold ${toneClass}`}>{value}</p>
+      {sub ? <p className="mt-1 text-[11px] text-white/40">{sub}</p> : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Onglet Membres dev-logiciel — assignation user / sous-traitant XOR
+// avec rôle et taux horaire. DELETE utilise le member_id (PK), pas le
+// user_id. Le composant Construction utilisait PUT user_ids[] (refonte
+// incompatible avec le modèle XOR du backend devlog).
+// ---------------------------------------------------------------------------
+
+type DevlogMember = {
+  id: number;
+  project_id: number;
+  user_id: number | null;
+  sous_traitant_id: number | null;
+  role: string | null;
+  hourly_rate: number | null;
+  added_by_user_id: number | null;
+  added_at: string;
+};
+
+type DevlogSousTraitant = {
+  id: number;
+  name: string;
+  company: string | null;
+  specialty: string | null;
+  hourly_rate: number | null;
+  active: boolean;
+};
+
+function DevlogMembersTab({ projectId }: { projectId: number }) {
+  const confirm = useConfirm();
+  const [members, setMembers] = useState<DevlogMember[]>([]);
+  const [users, setUsers] = useState<TeamMember[]>([]);
+  const [sousTraitants, setSousTraitants] = useState<DevlogSousTraitant[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+
+  const [pickKind, setPickKind] = useState<"user" | "sous_traitant">("user");
+  const [pickId, setPickId] = useState("");
+  const [pickRole, setPickRole] = useState("");
+  const [pickRate, setPickRate] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [mRes, uRes, sRes] = await Promise.all([
+        authedFetch(`/api/v1/devlog/projects/${projectId}/members`),
+        authedFetch("/api/v1/users"),
+        authedFetch("/api/v1/devlog/sous-traitants?limit=500")
+      ]);
+      if (!mRes.ok) throw new Error(`HTTP ${mRes.status}`);
+      setMembers((await mRes.json()) as DevlogMember[]);
+      if (uRes.ok) setUsers((await uRes.json()) as TeamMember[]);
+      if (sRes.ok) {
+        const all = (await sRes.json()) as DevlogSousTraitant[];
+        setSousTraitants(all.filter((s) => s.active));
+      }
+    } catch (e) {
+      setErr(`Chargement de l'équipe échoué : ${(e as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function addMember() {
+    if (!pickId) {
+      setErr("Choisis une personne à ajouter.");
+      return;
+    }
+    setAdding(true);
+    setErr(null);
+    try {
+      const payload: Record<string, unknown> = {};
+      if (pickKind === "user") payload.user_id = Number(pickId);
+      else payload.sous_traitant_id = Number(pickId);
+      if (pickRole.trim()) payload.role = pickRole.trim();
+      if (pickRate.trim()) payload.hourly_rate = Number(pickRate);
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/members`,
+        { method: "POST", body: JSON.stringify(payload) }
+      );
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status}${txt ? ` — ${txt.slice(0, 200)}` : ""}`);
+      }
+      const created = (await res.json()) as DevlogMember;
+      setMembers((xs) => [...xs, created]);
+      setPickId("");
+      setPickRole("");
+      setPickRate("");
+    } catch (e) {
+      setErr(`Ajout membre échoué : ${(e as Error).message}`);
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function removeMember(memberId: number) {
+    if (!(await confirm("Retirer cette personne du projet ?"))) return;
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/members/${memberId}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      setMembers((xs) => xs.filter((m) => m.id !== memberId));
+    } catch (e) {
+      setErr(`Retrait échoué : ${(e as Error).message}`);
+    }
+  }
+
+  const userById = useMemo(() => {
+    const m = new Map<number, TeamMember>();
+    users.forEach((u) => m.set(u.id, u));
+    return m;
+  }, [users]);
+
+  const sousTraitantById = useMemo(() => {
+    const m = new Map<number, DevlogSousTraitant>();
+    sousTraitants.forEach((s) => m.set(s.id, s));
+    return m;
+  }, [sousTraitants]);
+
+  // Pour le picker : exclut ceux déjà membres (selon le type courant).
+  const availableUsers = useMemo(() => {
+    const taken = new Set(
+      members.filter((m) => m.user_id != null).map((m) => m.user_id as number)
+    );
+    return users.filter((u) => !taken.has(u.id));
+  }, [users, members]);
+
+  const availableSousTraitants = useMemo(() => {
+    const taken = new Set(
+      members
+        .filter((m) => m.sous_traitant_id != null)
+        .map((m) => m.sous_traitant_id as number)
+    );
+    return sousTraitants.filter((s) => !taken.has(s.id));
+  }, [sousTraitants, members]);
+
+  function memberLabel(m: DevlogMember): {
+    name: string;
+    kind: "Interne" | "Sous-traitant";
+    sub: string | null;
+  } {
+    if (m.user_id != null) {
+      const u = userById.get(m.user_id);
+      return {
+        name: u ? u.full_name || u.email : `User #${m.user_id}`,
+        kind: "Interne",
+        sub: u?.full_name ? u.email : null
+      };
+    }
+    if (m.sous_traitant_id != null) {
+      const s = sousTraitantById.get(m.sous_traitant_id);
+      return {
+        name: s ? s.name : `Sous-traitant #${m.sous_traitant_id}`,
+        kind: "Sous-traitant",
+        sub: s?.company || s?.specialty || null
+      };
+    }
+    return { name: "—", kind: "Interne", sub: null };
+  }
+
+  return (
+    <div className="space-y-5">
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+          Ajouter un membre
+        </h2>
+        <div className="mt-4 grid gap-3 sm:grid-cols-[140px_1fr_180px_140px_auto]">
+          <select
+            value={pickKind}
+            onChange={(e) => {
+              setPickKind(e.target.value as "user" | "sous_traitant");
+              setPickId("");
+            }}
+            className="input"
+          >
+            <option value="user">Interne</option>
+            <option value="sous_traitant">Sous-traitant</option>
+          </select>
+          <select
+            value={pickId}
+            onChange={(e) => setPickId(e.target.value)}
+            className="input"
+          >
+            <option value="">
+              — {pickKind === "user" ? "Personne" : "Sous-traitant"} —
+            </option>
+            {pickKind === "user"
+              ? availableUsers.map((u) => (
+                  <option key={u.id} value={String(u.id)}>
+                    {u.full_name || u.email}
+                  </option>
+                ))
+              : availableSousTraitants.map((s) => (
+                  <option key={s.id} value={String(s.id)}>
+                    {s.name}
+                    {s.specialty ? ` — ${s.specialty}` : ""}
+                  </option>
+                ))}
+          </select>
+          <input
+            type="text"
+            value={pickRole}
+            onChange={(e) => setPickRole(e.target.value)}
+            placeholder="Rôle (ex. Dev backend)"
+            className="input"
+          />
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={pickRate}
+            onChange={(e) => setPickRate(e.target.value)}
+            placeholder="Taux $/h"
+            className="input"
+          />
+          <button
+            type="button"
+            onClick={addMember}
+            disabled={adding || !pickId}
+            className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm disabled:opacity-60"
+          >
+            {adding ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Plus className="mr-2 h-4 w-4" />
+            )}
+            Ajouter
+          </button>
+        </div>
+        {err ? <p className="mt-3 text-sm text-rose-300">{err}</p> : null}
+      </section>
+
+      <section className="rounded-xl border border-brand-800 bg-brand-900">
+        {loading ? (
+          <div className="flex min-h-[30vh] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+          </div>
+        ) : members.length === 0 ? (
+          <p className="px-5 py-8 text-center text-sm text-white/60">
+            Aucune personne n&apos;est assignée à ce projet pour le moment.
+          </p>
+        ) : (
+          <ul className="divide-y divide-brand-800">
+            {members.map((m) => {
+              const meta = memberLabel(m);
+              return (
+                <li
+                  key={m.id}
+                  className="grid gap-3 px-4 py-3 text-sm sm:grid-cols-[1fr_120px_180px_140px_auto] sm:items-center"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate font-medium text-white">
+                      {meta.name}
+                    </p>
+                    {meta.sub ? (
+                      <p className="mt-0.5 truncate text-[11px] text-white/50">
+                        {meta.sub}
+                      </p>
+                    ) : null}
+                  </div>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-center text-[11px] font-semibold ${
+                      meta.kind === "Interne"
+                        ? "border-blue-500/30 bg-blue-500/15 text-blue-300"
+                        : "border-amber-500/30 bg-amber-500/15 text-amber-300"
+                    }`}
+                  >
+                    {meta.kind}
+                  </span>
+                  <span className="text-white/80">{m.role || "—"}</span>
+                  <span className="text-white/70">
+                    {m.hourly_rate != null
+                      ? `${fmtMoney(m.hourly_rate)} / h`
+                      : "—"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeMember(m.id)}
+                    className="text-rose-400 hover:text-rose-300"
+                    aria-label="Retirer du projet"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+    </div>
   );
 }
