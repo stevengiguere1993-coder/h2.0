@@ -582,6 +582,12 @@ async def init_db() -> None:
             ),
             ("devlog_soumissions", "signed_name", "VARCHAR(255)"),
             ("devlog_soumissions", "signed_ip", "VARCHAR(64)"),
+            # PDF signé — généré à la signature publique, contient l'encart
+            # « Signée électroniquement le ... par ... IP : ... » en bas
+            # de chaque page. Stocké en BYTEA pour rester self-contained
+            # (pas de bucket externe). Récupérable via
+            # GET /devlog/soumissions/{id}/signed-pdf (auth admin/owner).
+            ("devlog_soumissions", "signed_pdf_blob", "BYTEA"),
             # Envoi PDF + consultation publique des factures devlog
             # (pièce #5 vague 1). `due_date` existe déjà dans le modèle,
             # on ajoute le token public, l'horodatage d'envoi et celui

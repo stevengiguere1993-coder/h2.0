@@ -7,12 +7,15 @@
  * Pas d'authentification — le token (32 octets URL-safe) authentifie
  * le destinataire et sert d'audit trail (IP capturée serveur).
  *
- * Thème clair (slate-50) — inspiré de /sign-offer/[token] (PR #445).
+ * Refonte mai 2026 (#496) : UX inspirée de la vue client interne
+ * (`dev-logiciel/soumissions/[id]`). Pour CHAQUE bloc (récurrent +
+ * investissement initial) on affiche un grand cartouche avec le prix
+ * TTC en gros, puis le détail sous-total / TPS / TVQ / total TTC.
  *
  * ⚠️ Vue client uniquement — aucun coût interne, aucune marge, aucun
  * taux horaire, aucune heure. Le payload servi par
  * /api/v1/public/devlog/soumissions/{token} est déjà filtré côté
- * backend (PublicDevisPreview), on ne fait que l'afficher.
+ * backend (PublicDevisPreview).
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -23,6 +26,7 @@ import {
   FileText,
   Loader2,
   Repeat,
+  Sparkles,
   XCircle
 } from "lucide-react";
 
@@ -42,14 +46,24 @@ type FraisFixeClient = {
 
 type DevisPreview = {
   recurring: {
-    total_client_amount: number;
+    total_client_amount: number; // HT (sous-total mensuel)
     items: RecurringItem[];
     description: string | null;
+    tps_amount: number;
+    tvq_amount: number;
+    tps_pct: number;
+    tvq_pct: number;
+    total_client_amount_taxe: number; // TTC mensuel
   };
   initial: {
     features: FeatureClient[];
     frais_fixes: FraisFixeClient[];
-    total_final: number;
+    total_final: number; // HT (sous-total initial)
+    tps_amount: number;
+    tvq_amount: number;
+    tps_pct: number;
+    tvq_pct: number;
+    total_final_taxe: number; // TTC initial
   };
 };
 
@@ -187,79 +201,163 @@ export default function SignSoumissionPage() {
   const accepted =
     data.status === "acceptee" || doneMessage?.includes("acceptation");
 
-  const monthly = data.devis.recurring.total_client_amount || 0;
-  const hasRecurring =
-    monthly > 0 || (data.devis.recurring.items || []).length > 0;
-  const features = data.devis.initial.features || [];
-  const fraisFixes = data.devis.initial.frais_fixes || [];
-  const totalInitial = data.devis.initial.total_final || 0;
+  const rec = data.devis.recurring;
+  const init = data.devis.initial;
+  const monthlyTTC = rec.total_client_amount_taxe || 0;
+  const monthlyHT = rec.total_client_amount || 0;
+  const hasRecurring = monthlyHT > 0 || (rec.items || []).length > 0;
+  const features = init.features || [];
+  const fraisFixes = init.frais_fixes || [];
+  const initialHT = init.total_final || 0;
+  const initialTTC = init.total_final_taxe || 0;
+  const hasInitial =
+    features.length > 0 || fraisFixes.length > 0 || initialHT > 0;
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-8">
-      <div className="mx-auto max-w-2xl">
+      <div className="mx-auto max-w-3xl">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
           {/* Header */}
-          <div className="border-b border-slate-200 pb-4">
-            <p className="text-xs font-semibold uppercase tracking-wider text-blue-700">
-              Horizon Services Immobiliers &middot; Pôle Développement logiciel
-            </p>
-            <h1 className="mt-1 text-2xl font-bold text-slate-900">
+          <div className="border-b border-slate-200 pb-5">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-blue-600" />
+              <p className="text-xs font-semibold uppercase tracking-wider text-blue-700">
+                Horizon Services Immobiliers &middot; Pôle Développement
+                logiciel
+              </p>
+            </div>
+            <h1 className="mt-2 text-3xl font-bold text-slate-900">
               Soumission #{data.id}
             </h1>
-            <p className="mt-1 text-sm text-slate-600">{data.title}</p>
-            {data.client_name ? (
-              <p className="mt-2 text-sm text-slate-700">
-                <span className="font-semibold">Client :</span>{" "}
-                {data.client_name}
-                {data.client_address ? ` — ${data.client_address}` : ""}
-              </p>
-            ) : null}
-            {data.sent_at ? (
-              <p className="mt-1 text-xs text-slate-500">
-                Envoyée le {fmtDate(data.sent_at)}
-              </p>
-            ) : null}
+            <p className="mt-1 text-base text-slate-700">{data.title}</p>
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600">
+              {data.client_name ? (
+                <span>
+                  <span className="font-semibold text-slate-700">
+                    Client :
+                  </span>{" "}
+                  {data.client_name}
+                  {data.client_address ? ` — ${data.client_address}` : ""}
+                </span>
+              ) : null}
+              {data.sent_at ? (
+                <span className="text-xs text-slate-500">
+                  Envoyée le {fmtDate(data.sent_at)}
+                </span>
+              ) : null}
+            </div>
           </div>
 
-          {/* Section 1 — Frais mensuels récurrents */}
+          {/* Section 1 — Frais mensuels récurrents (vert / emerald) */}
           {hasRecurring ? (
-            <section className="mt-5">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-blue-700">
-                Frais mensuels récurrents
-              </h2>
-              <div className="mt-2 rounded-xl border-2 border-blue-200 bg-blue-50 p-5 text-center">
-                <Repeat className="mx-auto h-5 w-5 text-blue-600" />
-                <p className="mt-1 text-2xl font-bold text-blue-700">
-                  {fmtMoney(monthly)}{" "}
-                  <span className="text-base font-normal text-blue-600">
-                    / mois
-                  </span>
+            <section className="mt-6">
+              <div className="flex items-center gap-2">
+                <Repeat className="h-4 w-4 text-emerald-700" />
+                <h2 className="text-xs font-semibold uppercase tracking-wider text-emerald-700">
+                  Frais mensuels récurrents
+                </h2>
+              </div>
+              {/* Grand cartouche prix TTC */}
+              <div className="mt-2 rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-6 text-center shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700">
+                  Total mensuel taxes incluses
+                </p>
+                <p className="mt-1 text-4xl font-extrabold text-emerald-700 sm:text-5xl">
+                  {fmtMoney(monthlyTTC)}
+                </p>
+                <p className="mt-1 text-sm font-medium text-emerald-700">
+                  par mois
                 </p>
               </div>
-              {data.devis.recurring.description ? (
-                <p className="mt-3 text-sm text-slate-700">
-                  {data.devis.recurring.description}
+              {/* Inclusions */}
+              {rec.description ? (
+                <p className="mt-4 text-sm text-slate-700">
+                  {rec.description}
                 </p>
-              ) : data.devis.recurring.items.length > 0 ? (
-                <ul className="mt-3 space-y-1 text-sm text-slate-700">
-                  {data.devis.recurring.items.map((it, idx) => (
-                    <li key={idx} className="flex items-start gap-2">
-                      <span className="mt-1.5 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-blue-500" />
-                      <span>{it.description}</span>
-                    </li>
-                  ))}
-                </ul>
+              ) : rec.items.length > 0 ? (
+                <div className="mt-4">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Inclut
+                  </p>
+                  <ul className="mt-1 space-y-1 text-sm text-slate-700">
+                    {rec.items.map((it, idx) => (
+                      <li key={idx} className="flex items-start gap-2">
+                        <span className="mt-1.5 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-500" />
+                        <span>{it.description}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {/* Détail taxes */}
+              {monthlyHT > 0 ? (
+                <div className="mt-4 overflow-hidden rounded-xl border border-emerald-200 bg-white">
+                  <table className="w-full text-sm">
+                    <tbody className="divide-y divide-emerald-100">
+                      <tr>
+                        <td className="px-4 py-2 text-slate-700">
+                          Sous-total mensuel
+                        </td>
+                        <td className="px-4 py-2 text-right text-slate-800">
+                          {fmtMoney(monthlyHT)}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-4 py-2 text-slate-700">
+                          TPS ({rec.tps_pct}%)
+                        </td>
+                        <td className="px-4 py-2 text-right text-slate-800">
+                          {fmtMoney(rec.tps_amount)}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-4 py-2 text-slate-700">
+                          TVQ ({rec.tvq_pct}%)
+                        </td>
+                        <td className="px-4 py-2 text-right text-slate-800">
+                          {fmtMoney(rec.tvq_amount)}
+                        </td>
+                      </tr>
+                    </tbody>
+                    <tfoot className="bg-emerald-50">
+                      <tr>
+                        <td className="px-4 py-3 text-sm font-bold text-emerald-900">
+                          Total mensuel TTC
+                        </td>
+                        <td className="px-4 py-3 text-right text-base font-bold text-emerald-900">
+                          {fmtMoney(monthlyTTC)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
               ) : null}
             </section>
           ) : null}
 
-          {/* Section 2 — Investissement initial */}
-          {features.length > 0 || fraisFixes.length > 0 || totalInitial > 0 ? (
-            <section className="mt-6">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-blue-700">
-                Investissement initial
-              </h2>
-              <div className="mt-2 overflow-hidden rounded-xl border border-slate-200">
+          {/* Section 2 — Investissement initial (bleu) */}
+          {hasInitial ? (
+            <section className="mt-8">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-blue-700" />
+                <h2 className="text-xs font-semibold uppercase tracking-wider text-blue-700">
+                  Investissement initial
+                </h2>
+              </div>
+              {/* Grand cartouche prix TTC */}
+              <div className="mt-2 rounded-2xl border-2 border-blue-300 bg-blue-50 p-6 text-center shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wider text-blue-700">
+                  Total taxes incluses
+                </p>
+                <p className="mt-1 text-4xl font-extrabold text-blue-700 sm:text-5xl">
+                  {fmtMoney(initialTTC)}
+                </p>
+                <p className="mt-1 text-sm font-medium text-blue-700">
+                  paiement unique
+                </p>
+              </div>
+              {/* Détail features + frais fixes + récap taxes */}
+              <div className="mt-4 overflow-hidden rounded-xl border border-blue-200 bg-white">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-100">
                     <tr>
@@ -302,14 +400,39 @@ export default function SignSoumissionPage() {
                         </td>
                       </tr>
                     ))}
+                    {/* Sous-total + taxes */}
+                    <tr className="border-t-2 border-blue-200">
+                      <td className="px-4 py-2 font-semibold text-slate-800">
+                        Sous-total
+                      </td>
+                      <td className="px-4 py-2 text-right font-semibold text-slate-800">
+                        {fmtMoney(initialHT)}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="px-4 py-2 text-slate-700">
+                        TPS ({init.tps_pct}%)
+                      </td>
+                      <td className="px-4 py-2 text-right text-slate-800">
+                        {fmtMoney(init.tps_amount)}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="px-4 py-2 text-slate-700">
+                        TVQ ({init.tvq_pct}%)
+                      </td>
+                      <td className="px-4 py-2 text-right text-slate-800">
+                        {fmtMoney(init.tvq_amount)}
+                      </td>
+                    </tr>
                   </tbody>
                   <tfoot className="bg-blue-50">
                     <tr>
                       <td className="px-4 py-3 text-sm font-bold text-blue-900">
-                        Total
+                        Total TTC
                       </td>
                       <td className="px-4 py-3 text-right text-base font-bold text-blue-900">
-                        {fmtMoney(totalInitial)}
+                        {fmtMoney(initialTTC)}
                       </td>
                     </tr>
                   </tfoot>

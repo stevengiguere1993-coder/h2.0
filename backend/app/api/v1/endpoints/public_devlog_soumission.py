@@ -37,7 +37,10 @@ from app.models.devlog_soumission import DevlogSoumission
 from app.models.devlog_soumission_item import DevlogSoumissionItem
 from app.services.audit import log_action
 from app.services.devlog_devis_calc import compute_devis
-from app.services.devlog_soumission_pdf import generate_devis_pdf
+from app.services.devlog_soumission_pdf import (
+    generate_devis_pdf,
+    generate_signed_pdf,
+)
 
 
 router = APIRouter(prefix="/public/devlog/soumissions", tags=["devlog-public"])
@@ -54,11 +57,25 @@ class _PublicRecurringItem(BaseModel):
 
 
 class _PublicRecurringBlock(BaseModel):
-    """Encadré « X $ / mois » + liste des libellés."""
+    """Encadré « X $ / mois » + liste des libellés.
+
+    ⚠️ ``total_client_amount`` est HT (sous-total avant taxes). Pour
+    afficher le montant payé chaque mois par le client il faut utiliser
+    ``total_client_amount_taxe`` (TTC, taxes Québec incluses). Avant la
+    refonte mai 2026 #496 le frontend public utilisait à tort le HT —
+    d'où l'écart visible entre la page publique et le PDF / vue admin.
+    """
 
     total_client_amount: float
     items: list[_PublicRecurringItem]
     description: Optional[str] = None  # client_recurring_description override
+    # Taxes Québec — TPS 5%, TVQ 9,975%. Toujours servies pour que le
+    # frontend public puisse afficher le détail proprement.
+    tps_amount: float = 0.0
+    tvq_amount: float = 0.0
+    tps_pct: float = 5.0
+    tvq_pct: float = 9.975
+    total_client_amount_taxe: float = 0.0
 
 
 class _PublicFeatureClient(BaseModel):
@@ -72,9 +89,20 @@ class _PublicFraisFixeClient(BaseModel):
 
 
 class _PublicInitialBlock(BaseModel):
+    """Bloc « Investissement initial » — facturé en one-shot.
+
+    Idem : ``total_final`` reste le HT, et ``total_final_taxe`` est le
+    TTC (taxes Québec incluses) à montrer au client comme prix final.
+    """
+
     features: list[_PublicFeatureClient]
     frais_fixes: list[_PublicFraisFixeClient]
     total_final: float
+    tps_amount: float = 0.0
+    tvq_amount: float = 0.0
+    tps_pct: float = 5.0
+    tvq_pct: float = 9.975
+    total_final_taxe: float = 0.0
 
 
 class PublicDevisPreview(BaseModel):
@@ -180,6 +208,13 @@ def _to_public_devis(devis: dict[str, Any], soumission: DevlogSoumission) -> Pub
                 for it in (rec.get("items_breakdown") or [])
             ],
             description=(soumission.client_recurring_description or None),
+            tps_amount=float(rec.get("tps_amount") or 0),
+            tvq_amount=float(rec.get("tvq_amount") or 0),
+            tps_pct=float(rec.get("tps_pct") or 5.0),
+            tvq_pct=float(rec.get("tvq_pct") or 9.975),
+            total_client_amount_taxe=float(
+                rec.get("total_client_amount_taxe") or 0
+            ),
         ),
         initial=_PublicInitialBlock(
             features=[
@@ -197,6 +232,11 @@ def _to_public_devis(devis: dict[str, Any], soumission: DevlogSoumission) -> Pub
                 for ff in (init.get("frais_fixes_client") or [])
             ],
             total_final=float(init.get("total_final") or 0),
+            tps_amount=float(init.get("tps_amount") or 0),
+            tvq_amount=float(init.get("tvq_amount") or 0),
+            tps_pct=float(init.get("tps_pct") or 5.0),
+            tvq_pct=float(init.get("tvq_pct") or 9.975),
+            total_final_taxe=float(init.get("total_final_taxe") or 0),
         ),
     )
 
@@ -274,6 +314,26 @@ async def sign_public_soumission(
     soumission.status = "acceptee" if data.accept else "refusee"
     await db.flush()
     await db.refresh(soumission)
+
+    # PDF signé — figé au moment de la signature publique pour servir de
+    # preuve d'audit immuable (IP + horodatage + nom dans un bandeau
+    # vert proéminent). Stocké en BYTEA dans ``signed_pdf_blob`` ; le
+    # endpoint admin ``GET /devlog/soumissions/{id}/signed-pdf`` le
+    # restitue tel quel sans recalcul. Best-effort : si la génération
+    # échoue (lib reportlab/pypdf indisponible), on n'échoue pas la
+    # signature (la trace texte signed_at / signed_name / signed_ip
+    # reste suffisante pour l'audit).
+    if data.accept:
+        try:
+            pdf_bytes = await generate_signed_pdf(db, soumission.id)
+            soumission.signed_pdf_blob = pdf_bytes
+            await db.flush()
+        except Exception:
+            log_pdf = logging.getLogger(__name__)
+            log_pdf.exception(
+                "génération PDF signé soumission %s a échoué",
+                soumission.id,
+            )
 
     # Audit trail (action publique - user=None, IP capturee dans details).
     await log_action(

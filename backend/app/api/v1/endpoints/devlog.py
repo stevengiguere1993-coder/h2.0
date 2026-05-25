@@ -1084,6 +1084,60 @@ async def get_soumission_pdf(
     )
 
 
+@soumission_automations_router.get(
+    "/{soumission_id}/signed-pdf",
+    summary=(
+        "PDF *signé* de la soumission — gelé à la signature publique, "
+        "contient le bandeau « SIGNÉE ÉLECTRONIQUEMENT » + IP + "
+        "horodatage. Réservé aux soumissions effectivement signées."
+    ),
+)
+async def get_soumission_signed_pdf(
+    soumission_id: int, db: DBSession, _: CurrentUser
+):
+    soumission = await GenericCrud(db, DevlogSoumission).get(soumission_id)
+    if soumission is None:
+        raise HTTPException(status_code=404, detail="Soumission introuvable")
+    if not getattr(soumission, "is_devis_dev", False):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Les soumissions au format legacy n'ont pas de PDF "
+                "signé. Utilise une soumission « devis_dev »."
+            ),
+        )
+    if soumission.signed_at is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Cette soumission n'a pas encore été signée.",
+        )
+    # Fallback : si le blob est absent (signature antérieure à la mise
+    # en place de cette fonctionnalité), on génère le PDF signé à la
+    # volée et on le persiste pour les prochains accès.
+    pdf_bytes = soumission.signed_pdf_blob
+    if not pdf_bytes:
+        try:
+            from app.services.devlog_soumission_pdf import (
+                generate_signed_pdf as _gen_signed,
+            )
+            pdf_bytes = await _gen_signed(db, soumission_id)
+            soumission.signed_pdf_blob = pdf_bytes
+            await db.flush()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Régénération PDF signé impossible : {exc}",
+            ) from exc
+    filename = f"soumission-{soumission_id}-signee.pdf"
+    return Response(
+        content=bytes(pdf_bytes),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+        },
+    )
+
+
 # --------------------------------------------------------------------------
 # Projets de développement
 # --------------------------------------------------------------------------
@@ -2506,11 +2560,48 @@ async def send_contract(
     obj = await GenericCrud(db, DevlogContract).get(contract_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Contrat introuvable")
-    if not obj.signature_token:
+    # Idempotence + robustesse (fix bug "erreur generation de lien
+    # impossible") : on regenere un token si l'existant est vide OU
+    # incoherent (chaine vide vs NULL en base), et on retente une fois
+    # sur IntegrityError (collision token theoriquement impossible
+    # mais coute zero de proteger). Sans ce filet, un contrat re-envoye
+    # avec un token corrompu plantait silencieusement la requete cote
+    # backend - le frontend ne voyait qu'un 500 generique.
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    if not (obj.signature_token or "").strip():
         obj.signature_token = _gen_token()
     obj.status = "envoye"
     obj.sent_at = datetime.now(timezone.utc)
-    await db.flush()
+    try:
+        await db.flush()
+    except Exception as exc:
+        # Collision sur unique(signature_token) - rarissime mais on
+        # regenere et on retente une fois.
+        _log.warning(
+            "send_contract %s: flush a echoue (%s) - regeneration token",
+            contract_id, exc,
+        )
+        await db.rollback()
+        obj = await GenericCrud(db, DevlogContract).get(contract_id)
+        if obj is None:
+            raise HTTPException(
+                status_code=404, detail="Contrat introuvable"
+            )
+        obj.signature_token = _gen_token()
+        obj.status = "envoye"
+        obj.sent_at = datetime.now(timezone.utc)
+        try:
+            await db.flush()
+        except Exception as exc2:
+            _log.exception(
+                "send_contract %s: 2eme flush a aussi echoue",
+                contract_id,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Generation du lien impossible : {exc2}",
+            ) from exc2
     await log_action(
         db,
         user=user,
