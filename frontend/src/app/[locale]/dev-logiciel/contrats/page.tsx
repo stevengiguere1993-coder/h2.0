@@ -14,6 +14,7 @@ import {
   X
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -140,6 +141,7 @@ function fmtMoney(n: number | null): string {
 export default function DevlogContractsPage() {
   const { onOpenSidebar } = useDevlogLayout();
   const confirm = useConfirm();
+  const router = useRouter();
   const [items, setItems] = useState<Contract[]>([]);
   const [clients, setClients] = useState<RefItem[]>([]);
   const [projects, setProjects] = useState<ProjectRef[]>([]);
@@ -243,17 +245,10 @@ export default function DevlogContractsPage() {
     setEditing("new");
   }
 
-  function openEdit(c: Contract) {
-    setDraft({
-      title: c.title,
-      body: c.body ?? "",
-      status: c.status,
-      soumission_id: c.soumission_id ? String(c.soumission_id) : "",
-      client_id: c.client_id ? String(c.client_id) : "",
-      project_id: c.project_id ? String(c.project_id) : ""
-    });
-    setEditing(c.id);
-  }
+  // openEdit retiré (mai 2026 #496) — l'ouverture d'un contrat existant
+  // navigue désormais vers la page complète /dev-logiciel/contrats/[id]
+  // au lieu du drawer latéral (UX cohérente avec les autres entités
+  // du pôle : soumissions, projets, factures).
 
   async function saveDraft() {
     if (!draft.title.trim()) return;
@@ -499,7 +494,11 @@ export default function DevlogContractsPage() {
                               setDragging(null);
                               setHoverCol(null);
                             }}
-                            onOpen={() => openEdit(c)}
+                            onOpen={() =>
+                              router.push(
+                                `/dev-logiciel/contrats/${c.id}` as any
+                              )
+                            }
                             onSend={() => void sendContract(c.id)}
                             onCopyLink={() => void copyLink(c)}
                             onMarkDeposit={() => openDepositModal(c)}

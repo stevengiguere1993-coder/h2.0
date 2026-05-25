@@ -535,3 +535,110 @@ async def generate_devis_pdf(
             "peuvent générer un PDF."
         )
     return _render_bytes(soumission, items, client)
+
+
+def _render_signed_bytes(
+    soumission: DevlogSoumission,
+    items: list[DevlogSoumissionItem],
+    client: Optional[DevlogClient],
+) -> bytes:
+    """Variante de ``_render_bytes`` avec un cartouche très visible
+    « SIGNÉ ÉLECTRONIQUEMENT » en haut de la première page + IP +
+    horodatage précis. Le reste du document est identique au PDF
+    normal (qui mentionne déjà nom + date dans la section Signatures).
+
+    Implémentation : on inline une copie du builder pour pouvoir
+    glisser le cartouche en tout début de story sans casser
+    ``_render_bytes`` (utilisé par le PDF non-signé / preview public).
+    """
+    rl = _lazy_reportlab()
+    Paragraph = rl["Paragraph"]
+    Spacer = rl["Spacer"]
+    Table = rl["Table"]
+    TableStyle = rl["TableStyle"]
+    mm = rl["mm"]
+    colors = rl["colors"]
+    SimpleDocTemplate = rl["SimpleDocTemplate"]
+
+    base_pdf = _render_bytes(soumission, items, client)
+    # Si reportlab n'est pas dispo, on retombe sur le PDF de base.
+    try:
+        from pypdf import PdfReader, PdfWriter  # type: ignore
+        from reportlab.pdfgen import canvas  # type: ignore
+    except Exception:
+        log.warning(
+            "pypdf indisponible — PDF signé sans bandeau overlay."
+        )
+        return base_pdf
+
+    # Construit un overlay 1-page : bandeau en haut.
+    signed_at = getattr(soumission, "signed_at", None)
+    signed_name = getattr(soumission, "signed_name", None) or "—"
+    signed_ip = getattr(soumission, "signed_ip", None) or "—"
+    signed_at_txt = (
+        signed_at.strftime("%Y-%m-%d à %H:%M UTC")
+        if signed_at is not None
+        else "—"
+    )
+
+    overlay_buf = io.BytesIO()
+    page_w_pt, page_h_pt = rl["A4"]
+    c = canvas.Canvas(overlay_buf, pagesize=rl["A4"])
+    # Bandeau vert tout en haut de la page.
+    band_h = 16 * mm
+    band_y = page_h_pt - band_h
+    c.setFillColor(colors.HexColor("#059669"))  # emerald-600
+    c.rect(0, band_y, page_w_pt, band_h, fill=1, stroke=0)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(
+        15 * mm,
+        band_y + band_h - 6 * mm,
+        "✓ SOUMISSION SIGNÉE ÉLECTRONIQUEMENT",
+    )
+    c.setFont("Helvetica", 8)
+    c.drawString(
+        15 * mm,
+        band_y + 4 * mm,
+        f"Le {signed_at_txt} — Par : {signed_name} — IP : {signed_ip}",
+    )
+    c.save()
+    overlay_buf.seek(0)
+
+    reader_base = PdfReader(io.BytesIO(base_pdf))
+    reader_overlay = PdfReader(overlay_buf)
+    writer = PdfWriter()
+    overlay_page = reader_overlay.pages[0]
+    for idx, page in enumerate(reader_base.pages):
+        if idx == 0:
+            try:
+                page.merge_page(overlay_page)
+            except Exception:
+                log.exception(
+                    "Overlay PDF signé fusion impossible (page 0)"
+                )
+        writer.add_page(page)
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+async def generate_signed_pdf(
+    db: AsyncSession, soumission_id: int
+) -> bytes:
+    """Rend le PDF *signé* de la soumission — appelé au moment de la
+    signature publique. Le PDF contient le bandeau « ✓ SIGNÉ ÉLECTRO-
+    NIQUEMENT » + IP + horodatage en plus du document normal (qui
+    inclut déjà la section Signatures avec nom + date).
+
+    À stocker dans ``DevlogSoumission.signed_pdf_blob`` pour pouvoir
+    le servir tel quel via ``GET /devlog/soumissions/{id}/signed-pdf``
+    (audit immuable — pas de recalcul à chaque téléchargement)."""
+    soumission, items, client = await _load(db, soumission_id)
+    if soumission is None:
+        raise ValueError(f"Soumission {soumission_id} introuvable.")
+    if not getattr(soumission, "is_devis_dev", False):
+        raise ValueError(
+            "Seules les soumissions devis_dev ont un PDF signé."
+        )
+    return _render_signed_bytes(soumission, items, client)

@@ -741,6 +741,32 @@ export default function SoumissionDetailPage() {
     }
   }
 
+  // PDF *signé* — gelé au moment de la signature publique, avec un
+  // bandeau vert proéminent « SIGNÉE ÉLECTRONIQUEMENT » + IP +
+  // horodatage. Préfère ce PDF quand la soumission est signée
+  // (audit trail immuable, vs PDF normal recalculé à chaque fois).
+  async function downloadSignedPdf() {
+    try {
+      const r = await authedFetch(
+        `/api/v1/devlog/soumissions/${id}/signed-pdf`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `soumission-${id}-signee.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(
+        (e as Error).message || "Téléchargement du PDF signé impossible."
+      );
+    }
+  }
+
   const initialSections = sections.filter((x) => x.billing_kind === "initial");
   const recurringSections = sections.filter((x) => x.billing_kind === "recurring");
   const itemsBySection = useMemo(() => {
@@ -893,6 +919,21 @@ export default function SoumissionDetailPage() {
                     <Download className="h-3.5 w-3.5" />
                     Télécharger PDF
                   </button>
+                  {/* PDF signé — disponible uniquement quand la soumission
+                      est signée (acceptée OU refusée — la signature
+                      électronique reste valable comme trace dans les deux
+                      cas). Pointe vers le blob figé côté backend. */}
+                  {s.signed_at ? (
+                    <button
+                      type="button"
+                      onClick={() => void downloadSignedPdf()}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-emerald-400 bg-emerald-500/25 px-3 py-1.5 font-bold text-emerald-200 hover:bg-emerald-500/40"
+                      title="PDF avec bandeau SIGNÉE + IP + horodatage"
+                    >
+                      <FileSignature className="h-3.5 w-3.5" />
+                      Télécharger PDF signé
+                    </button>
+                  ) : null}
                   {s.signature_token && s.sent_at ? (
                     <button
                       type="button"

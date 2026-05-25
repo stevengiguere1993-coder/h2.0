@@ -20,7 +20,16 @@ publique — ``signature_token`` opaque + ``sent_at`` /
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Numeric, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    LargeBinary,
+    Numeric,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -121,6 +130,15 @@ class DevlogSoumission(Base, TimestampUpdateMixin):
     )
     signed_ip: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
+    )
+    # PDF figé au moment de la signature publique (vague 2, mai 2026).
+    # Le PDF normal (généré à la volée) reste accessible via
+    # /devlog/soumissions/{id}/pdf — celui-ci est le PDF *signé*
+    # (avec encart "Signée électroniquement le ... par ... IP ..." sur
+    # chaque page). Stocké en BYTEA pour rester self-contained, sans
+    # dépendance à un bucket externe.
+    signed_pdf_blob: Mapped[Optional[bytes]] = mapped_column(
+        LargeBinary, nullable=True
     )
 
     def __repr__(self) -> str:
