@@ -415,6 +415,94 @@ async def trigger_bail_renouvellement_tasks(
     )
 
 
+class DevlogWeeklyReportResult(CronResult):
+    """Résultat du cron hebdo : récap d'envois aux clients."""
+    projects_total: int = 0
+    emails_sent: int = 0
+    skipped_no_activity: int = 0
+    skipped_no_client_email: int = 0
+
+
+@router.api_route(
+    "/run/devlog-weekly-client-reports",
+    methods=["GET", "POST"],
+    response_model=DevlogWeeklyReportResult,
+)
+async def trigger_devlog_weekly_client_reports(
+    x_cron_secret: Optional[str] = Header(default=None),
+    secret: Optional[str] = Query(default=None),
+) -> DevlogWeeklyReportResult:
+    """Cron hebdo : rapport d'activité par projet devlog aux clients.
+
+    À planifier vendredi 16h heure Montréal via cron-job.org (cron
+    ``0 21 * * 5`` en UTC ≈ vendredi 16h-17h EDT/EST selon DST).
+    Skip silencieusement les projets sans activité dans la semaine."""
+    _check_secret(x_cron_secret, secret)
+    from app.db.session import AsyncSessionLocal
+    from app.jobs.devlog_weekly_client_report import run_weekly_client_reports
+
+    try:
+        async with AsyncSessionLocal() as db:
+            res = await run_weekly_client_reports(db)
+    except Exception as exc:
+        log.exception("Cron devlog_weekly_client_reports failed: %s", exc)
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Job a échoué : {exc}",
+        )
+    return DevlogWeeklyReportResult(
+        ok=True,
+        job="devlog-weekly-client-reports",
+        projects_total=res.get("projects_total", 0),
+        emails_sent=res.get("emails_sent", 0),
+        skipped_no_activity=res.get("skipped_no_activity", 0),
+        skipped_no_client_email=res.get("skipped_no_client_email", 0),
+    )
+
+
+class DevlogNpsDispatchResult(CronResult):
+    """Résultat du cron NPS : projets éligibles + envois effectifs."""
+    eligible_projects: int = 0
+    dispatched: int = 0
+    skipped_no_client_email: int = 0
+
+
+@router.api_route(
+    "/run/devlog-nps-dispatch",
+    methods=["GET", "POST"],
+    response_model=DevlogNpsDispatchResult,
+)
+async def trigger_devlog_nps_dispatch(
+    x_cron_secret: Optional[str] = Header(default=None),
+    secret: Optional[str] = Query(default=None),
+) -> DevlogNpsDispatchResult:
+    """Cron quotidien : envoi du formulaire NPS 7j après livraison.
+
+    À planifier ~10h heure locale via cron-job.org. Idempotent —
+    n'envoie pas deux fois pour le même projet (table
+    ``devlog_nps_responses`` sert d'état)."""
+    _check_secret(x_cron_secret, secret)
+    from app.db.session import AsyncSessionLocal
+    from app.jobs.devlog_nps_dispatch import run_nps_dispatch
+
+    try:
+        async with AsyncSessionLocal() as db:
+            res = await run_nps_dispatch(db)
+    except Exception as exc:
+        log.exception("Cron devlog_nps_dispatch failed: %s", exc)
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Job a échoué : {exc}",
+        )
+    return DevlogNpsDispatchResult(
+        ok=True,
+        job="devlog-nps-dispatch",
+        eligible_projects=res.get("eligible_projects", 0),
+        dispatched=res.get("dispatched", 0),
+        skipped_no_client_email=res.get("skipped_no_client_email", 0),
+    )
+
+
 # ─── Mega-cron : exécute tous les jobs daily en un seul appel ──────────
 
 
@@ -511,6 +599,16 @@ async def trigger_all_daily(
             return r
 
     await _safe("qg-weekly-insights", _run_qg_insights, details)
+
+    # NPS post-livraison (envoi 7j après status='livre'). Daily idempotent.
+    async def _run_devlog_nps_dispatch():
+        from app.jobs.devlog_nps_dispatch import run_nps_dispatch
+
+        async with AsyncSessionLocal() as db:
+            r = await run_nps_dispatch(db)
+            return r
+
+    await _safe("devlog-nps-dispatch", _run_devlog_nps_dispatch, details)
 
     ok_count = sum(1 for v in details.values() if v.get("ok"))
     fail_count = sum(1 for v in details.values() if not v.get("ok"))

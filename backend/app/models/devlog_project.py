@@ -5,10 +5,10 @@ travail de développement est suivi comme un projet : statut,
 échéancier, description.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, ForeignKey, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, String, Text, event
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -58,5 +58,28 @@ class DevlogProject(Base, TimestampUpdateMixin):
         DateTime(timezone=True), nullable=True
     )
 
+    # Horodatage du passage en status='livre'. Posé automatiquement par
+    # l'event listener ci-dessous quand le status passe de tout autre
+    # valeur à 'livre'. Sert au cron ``devlog_nps_dispatch`` qui envoie
+    # un mini-formulaire NPS 7 jours après la livraison. NULL tant que
+    # le projet n'a jamais été marqué livré.
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     def __repr__(self) -> str:
         return f"<DevlogProject(id={self.id}, name='{self.name}', status='{self.status}')>"
+
+
+# Event listener : pose ``delivered_at`` automatiquement quand le status
+# passe à 'livre'. Évite de toucher aux endpoints / services qui muent le
+# status (PATCH /devlog/projects/{id}, kanban drag, automations).
+# Idempotent : si delivered_at est déjà posé, on ne l'écrase pas.
+@event.listens_for(DevlogProject.status, "set", propagate=True)
+def _devlog_project_status_set(target, value, oldvalue, initiator):
+    try:
+        if value == "livre" and oldvalue != "livre":
+            if getattr(target, "delivered_at", None) is None:
+                target.delivered_at = datetime.now(timezone.utc)
+    except Exception:  # pragma: no cover - never break the write path
+        pass

@@ -81,6 +81,7 @@ from app.api.v1.endpoints import (
     public_bon,
     public_devlog_contact,
     public_devlog_invoice,
+    public_devlog_nps,
     push,
     public_contract,
     public_devlog_soumission,
@@ -173,6 +174,8 @@ api_router.include_router(devlog.public_contracts_router)
 api_router.include_router(public_devlog_soumission.router)
 # Page publique consultation facture devlog — /public/devlog/invoices/{token}
 api_router.include_router(public_devlog_invoice.router)
+# Page publique NPS post-livraison — /public/devlog/nps/{token}
+api_router.include_router(public_devlog_nps.router)
 # Nested project routes MUST be registered before projects.router so
 # /projects/{id}/photos etc. are matched before /projects/{item_id}.
 api_router.include_router(project_photos.router)
