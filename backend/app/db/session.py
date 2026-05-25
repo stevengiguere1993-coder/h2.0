@@ -597,6 +597,18 @@ async def init_db() -> None:
                 "paid_at",
                 "TIMESTAMP WITH TIME ZONE",
             ),
+            # Relances automatiques des factures Dev logiciel
+            # (cron ``app.jobs.devlog_facture_reminders``).
+            (
+                "devlog_invoices",
+                "last_reminder_sent_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
+            (
+                "devlog_invoices",
+                "reminder_count",
+                "INTEGER NOT NULL DEFAULT 0",
+            ),
             (
                 "devlog_soumission_items",
                 "item_kind",
