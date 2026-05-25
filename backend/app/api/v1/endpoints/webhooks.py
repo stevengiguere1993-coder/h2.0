@@ -17,6 +17,10 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from app.api.deps import DBSession
 from app.models.contact_request import ContactRequest
+from app.services.devlog_stripe import (
+    DevlogStripeError,
+    handle_stripe_webhook,
+)
 
 log = logging.getLogger(__name__)
 
@@ -118,3 +122,53 @@ def base64_hmac(secret: str, raw: bytes) -> str:
     return base64.b64encode(
         hmac.new(secret.encode(), raw, hashlib.sha256).digest()
     ).decode("ascii")
+
+
+@router.post(
+    "/stripe/devlog",
+    status_code=status.HTTP_200_OK,
+    summary=(
+        "Stripe webhook — encaissement d'une facture Dev logiciel "
+        "(checkout.session.completed)."
+    ),
+)
+async def webhook_stripe_devlog(
+    request: Request,
+    db: DBSession,
+    stripe_signature: str | None = Header(None, alias="stripe-signature"),
+) -> Dict[str, Any]:
+    """Réceptionne les events Stripe Checkout pour les factures Dev
+    logiciel.
+
+    La signature `Stripe-Signature` est vérifiée par
+    `stripe.Webhook.construct_event` (HMAC-SHA256 + timestamp window).
+    Tout payload sans signature valide → 400.
+
+    Seul `checkout.session.completed` déclenche un changement d'état
+    (facture → `payee`). Les autres events sont acquittés en silence
+    pour éviter que Stripe ne les retentent indéfiniment.
+    """
+    raw = await request.body()
+    if not stripe_signature:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Stripe-Signature manquante.",
+        )
+    try:
+        result = await handle_stripe_webhook(
+            payload=raw, signature=stripe_signature, db=db
+        )
+    except DevlogStripeError as exc:
+        msg = str(exc)
+        if "non configuré" in msg or "non installée" in msg:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=msg,
+            ) from exc
+        # Signature invalide / payload mal formé → 400 (Stripe ne
+        # retentera pas une signature invalide).
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=msg,
+        ) from exc
+    return result

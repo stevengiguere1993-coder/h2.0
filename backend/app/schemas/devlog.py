@@ -602,6 +602,10 @@ class DevlogInvoiceRead(BaseModel):
     signature_token: Optional[str] = None
     sent_at: Optional[datetime] = None
     paid_at: Optional[datetime] = None
+    # Paiement en ligne via Stripe Checkout (chantier #4, mai 2026).
+    stripe_session_id: Optional[str] = None
+    stripe_payment_intent_id: Optional[str] = None
+    payment_method: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

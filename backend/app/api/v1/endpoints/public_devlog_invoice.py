@@ -2,14 +2,16 @@
 
 Flow client :
 
-    GET  /api/v1/public/devlog/invoices/{token}        -> JSON
-    GET  /api/v1/public/devlog/invoices/{token}/pdf    -> PDF
+    GET  /api/v1/public/devlog/invoices/{token}                       -> JSON
+    GET  /api/v1/public/devlog/invoices/{token}/pdf                   -> PDF
+    POST /api/v1/public/devlog/invoices/{token}/checkout-session      -> {url}
 
 Le token est opaque (32 octets URL-safe) et fait office
 d'authentification. Pas d'expiration (contrairement à une soumission,
 une facture reste consultable indéfiniment par le client).
 
-Pas de paiement en ligne dans cette PR — Stripe arrivera plus tard.
+Paiement en ligne via Stripe Checkout hosted depuis le chantier #4
+(mai 2026) — voir `app.services.devlog_stripe`.
 """
 
 from __future__ import annotations
@@ -27,10 +29,15 @@ from app.api.deps import DBSession
 from app.models.devlog_client import DevlogClient
 from app.models.devlog_invoice import DevlogInvoice
 from app.models.devlog_invoice_item import DevlogInvoiceItem
+from app.services.audit import log_action
 from app.services.devlog_invoice_pdf import (
     PAYMENT_INSTRUCTIONS,
     compute_invoice_totals,
     generate_invoice_pdf,
+)
+from app.services.devlog_stripe import (
+    DevlogStripeError,
+    create_checkout_session,
 )
 
 
@@ -185,3 +192,61 @@ async def public_invoice_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="{label}.pdf"'},
     )
+
+
+# --------------------------- Stripe Checkout ---------------------------
+
+
+class _CheckoutResponse(BaseModel):
+    url: str
+
+
+@router.post(
+    "/{token}/checkout-session",
+    response_model=_CheckoutResponse,
+    summary=(
+        "Crée une Stripe Checkout Session pour la facture et retourne "
+        "l'URL hostée vers laquelle rediriger le client."
+    ),
+)
+async def create_invoice_checkout_session(
+    token: str, db: DBSession
+) -> _CheckoutResponse:
+    invoice = await _load_by_token(db, token)
+    if invoice.status == "payee":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cette facture est déjà payée.",
+        )
+    if invoice.status == "annulee":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cette facture est annulée.",
+        )
+    try:
+        url = await create_checkout_session(invoice, db)
+    except DevlogStripeError as exc:
+        # 503 si Stripe n'est pas configuré, 400 sinon (montant nul…).
+        msg = str(exc)
+        if "non configuré" in msg or "non installée" in msg:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=msg,
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=msg,
+        ) from exc
+
+    await log_action(
+        db,
+        user=None,
+        action="devlog_invoice.stripe_checkout_started",
+        entity_type="devlog_invoice",
+        entity_id=invoice.id,
+        details={
+            "number": invoice.number,
+            "stripe_session_id": invoice.stripe_session_id,
+        },
+    )
+    return _CheckoutResponse(url=url)
