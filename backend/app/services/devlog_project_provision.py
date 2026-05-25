@@ -5,9 +5,13 @@ projet démarré » :
 
     1. Marquage du projet comme démarré (``status='en_cours'``,
        ``started_at=now()``).
-    2. Génération du planning depuis la soumission source : une
-       :class:`DevlogProjectPhase` par section de soumission, et une
-       :class:`DevlogProjectTask` par item de section.
+    2. Génération du planning depuis la soumission source. Refonte
+       (mai 2026) : seules les sections / items « Investissement
+       initial » deviennent des :class:`DevlogProjectPhase` +
+       :class:`DevlogProjectTask`. Les « Frais Mensuels Récurrents »
+       (hébergement, maintenance, abonnements) deviennent des
+       :class:`DevlogProjectRecurringService` séparés — un service
+       récurrent n'est pas une phase de projet.
     3. Notification interne à Phil (Microsoft Graph) et audit log
        complet sur chaque étape.
 
@@ -18,6 +22,20 @@ depuis :
     - ``POST /devlog/contracts/{id}/mark-deposit-paid`` (endpoint admin)
     - ``POST /public/devlog/contracts/{token}/sign`` (signature publique,
       cas où le dépôt avait été marqué payé AVANT la signature en ligne)
+
+Distinction initial / récurrent
+--------------------------------
+
+Deux signaux coexistent dans le modèle soumission :
+
+* **Mode devis_dev** (``soumission.is_devis_dev = True``) : ``section_id``
+  n'est pas utilisé sur les items ; on regarde ``item.item_kind`` :
+    - ``recurring_cost`` → service récurrent
+    - ``feature`` / ``fixed_cost`` → initial (deviennent des tâches)
+* **Mode legacy** (``soumission.is_devis_dev = False``) : on regarde
+  ``section.billing_kind`` qui vaut ``initial`` ou ``recurring``.
+
+Fallback : si rien n'est explicite, on traite comme du ``initial``.
 """
 
 from __future__ import annotations
@@ -33,6 +51,9 @@ from app.models.devlog_client import DevlogClient
 from app.models.devlog_contract import DevlogContract
 from app.models.devlog_project import DevlogProject
 from app.models.devlog_project_phase import DevlogProjectPhase
+from app.models.devlog_project_recurring_service import (
+    DevlogProjectRecurringService,
+)
 from app.models.devlog_project_task import DevlogProjectTask
 from app.models.devlog_soumission import DevlogSoumission
 from app.models.devlog_soumission_item import DevlogSoumissionItem
@@ -135,17 +156,97 @@ async def _load_soumission_with_planning(
     return soumission, sections, items
 
 
+def _is_recurring_item(
+    item: DevlogSoumissionItem,
+    section: Optional[DevlogSoumissionSection],
+    soumission: Optional[DevlogSoumission],
+) -> bool:
+    """Détermine si un item de soumission est récurrent (mensuel).
+
+    Règles (cf. docstring du module) :
+      1. Mode devis_dev : ``item_kind == 'recurring_cost'``.
+      2. Mode legacy : ``section.billing_kind == 'recurring'``.
+      3. Sinon : initial (False).
+    """
+    kind = getattr(item, "item_kind", None)
+    if kind == "recurring_cost":
+        return True
+    if section is not None and getattr(section, "billing_kind", None) == "recurring":
+        return True
+    return False
+
+
+async def _create_recurring_service_from_item(
+    db: AsyncSession,
+    project: DevlogProject,
+    item: DevlogSoumissionItem,
+    section: Optional[DevlogSoumissionSection],
+    is_project_delivered: bool,
+) -> Optional[DevlogProjectRecurringService]:
+    """Crée un :class:`DevlogProjectRecurringService` à partir d'un item.
+
+    Le statut initial est ``pending`` tant que le projet n'est pas livré
+    (``delivered_at is None``) ; ``active`` (avec ``start_date`` posé)
+    une fois la livraison effective.
+    """
+    label_source = item.description or (
+        section.client_label if section else None
+    ) or "Service récurrent"
+    name = label_source.strip()[:255]
+    # Coût interne mensuel en cents — on prend ``cost_per_unit`` (float
+    # en dollars) et on convertit. Si le legacy a un ``unit_price`` plus
+    # juste (marge déjà appliquée), on garde quand même le coût interne
+    # pour rester aligné avec l'item de soumission (la marge sera
+    # reconstituée au moment de la facturation).
+    cost = float(item.cost_per_unit or 0.0)
+    monthly_amount_cents = max(0, int(round(cost * 100)))
+
+    status = "active" if is_project_delivered else "pending"
+    start_date = None
+    if is_project_delivered and project.delivered_at is not None:
+        start_date = project.delivered_at.date()
+
+    svc = DevlogProjectRecurringService(
+        project_id=project.id,
+        name=name,
+        monthly_amount_cents=monthly_amount_cents,
+        status=status,
+        start_date=start_date,
+        source_soumission_item_id=item.id,
+    )
+    db.add(svc)
+    await db.flush()
+    await db.refresh(svc)
+    await log_action(
+        db,
+        user=None,
+        action="devlog_project_recurring_service.auto_created",
+        entity_type="devlog_project_recurring_service",
+        entity_id=svc.id,
+        details={
+            "project_id": project.id,
+            "source_item_id": item.id,
+            "section_id": section.id if section else None,
+            "monthly_amount_cents": monthly_amount_cents,
+            "status": status,
+        },
+    )
+    return svc
+
+
 async def _build_planning_from_soumission(
     db: AsyncSession,
     project: DevlogProject,
+    soumission: Optional[DevlogSoumission],
     sections: list[DevlogSoumissionSection],
     items: list[DevlogSoumissionItem],
-) -> tuple[int, int]:
-    """Crée phases + tâches depuis la soumission source.
+) -> tuple[int, int, int]:
+    """Crée phases + tâches (initial) et services récurrents.
 
-    Retourne ``(nb_phases_creees, nb_tasks_creees)``. Best-effort par
-    section : si une section n'a aucun item, on crée quand même la
-    phase pour préserver la structure de la soumission.
+    Retourne ``(nb_phases_creees, nb_tasks_creees, nb_recurring_services)``.
+    Best-effort par section : si une section initiale n'a aucun item,
+    on crée quand même la phase pour préserver la structure de la
+    soumission. Les sections récurrentes ne génèrent jamais de phase.
 
     NOTE : cette fonction ne dé-duplique pas. Le caller est responsable
     de l'idempotence (voir ``start_project_from_contract`` qui no-op si
@@ -153,44 +254,127 @@ async def _build_planning_from_soumission(
     """
     nb_phases = 0
     nb_tasks = 0
+    nb_recurring = 0
 
-    # Map section_id → liste d'items (one pass sur items).
+    is_delivered = project.delivered_at is not None
+
+    # Index pour retrouver la section parente d'un item rapidement.
+    section_by_id: dict[int, DevlogSoumissionSection] = {
+        sec.id: sec for sec in sections
+    }
     items_by_section: dict[Optional[int], list[DevlogSoumissionItem]] = {}
     for it in items:
         items_by_section.setdefault(it.section_id, []).append(it)
 
+    # ----------------------------------------------------------------
+    # Cas 1 : pas de section explicite (mode devis_dev — section_id NULL
+    # sur tous les items). On dispatche par item_kind directement.
+    # ----------------------------------------------------------------
     if not sections:
-        # Pas de sections : on retombe sur une phase "Livraison" unique
-        # qui regroupe tous les items de la soumission.
-        phase = DevlogProjectPhase(
-            project_id=project.id,
-            name="Livraison",
-            position=0,
-            status="planifie",
-        )
-        db.add(phase)
-        await db.flush()
-        await db.refresh(phase)
-        nb_phases += 1
-        await log_action(
-            db,
-            user=None,
-            action="devlog_phase_auto_created",
-            entity_type="devlog_project_phase",
-            entity_id=phase.id,
-            details={
-                "project_id": project.id,
-                "name": phase.name,
-                "fallback_no_sections": True,
-            },
-        )
+        # Items récurrents → services récurrents (un par item).
+        # Items initial → une phase fourre-tout « Livraison » + une
+        # tâche par item.
+        recurring_items: list[DevlogSoumissionItem] = []
+        initial_items: list[DevlogSoumissionItem] = []
         for it in items:
-            task = await _create_task_from_item(db, project.id, phase.id, it)
-            if task is not None:
-                nb_tasks += 1
-        return nb_phases, nb_tasks
+            if _is_recurring_item(it, None, soumission):
+                recurring_items.append(it)
+            else:
+                initial_items.append(it)
 
+        for it in recurring_items:
+            svc = await _create_recurring_service_from_item(
+                db, project, it, None, is_delivered
+            )
+            if svc is not None:
+                nb_recurring += 1
+
+        if initial_items:
+            phase = DevlogProjectPhase(
+                project_id=project.id,
+                name="Livraison",
+                position=0,
+                status="planifie",
+            )
+            db.add(phase)
+            await db.flush()
+            await db.refresh(phase)
+            nb_phases += 1
+            await log_action(
+                db,
+                user=None,
+                action="devlog_phase_auto_created",
+                entity_type="devlog_project_phase",
+                entity_id=phase.id,
+                details={
+                    "project_id": project.id,
+                    "name": phase.name,
+                    "fallback_no_sections": True,
+                },
+            )
+            for it in initial_items:
+                task = await _create_task_from_item(
+                    db, project.id, phase.id, it
+                )
+                if task is not None:
+                    nb_tasks += 1
+
+        return nb_phases, nb_tasks, nb_recurring
+
+    # ----------------------------------------------------------------
+    # Cas 2 : sections présentes (mode legacy). On boucle sur les
+    # sections en distinguant initial / récurrent.
+    # ----------------------------------------------------------------
     for sec in sections:
+        sec_items = items_by_section.get(sec.id, [])
+        is_recurring_section = (
+            getattr(sec, "billing_kind", "initial") == "recurring"
+        )
+
+        if is_recurring_section:
+            # Section récurrente → 1 service récurrent par item.
+            # Si la section n'a aucun item, on en crée quand même un
+            # avec le client_label de la section comme nom et
+            # monthly_amount_cents=0 (sera ajusté manuellement).
+            if not sec_items:
+                placeholder = DevlogProjectRecurringService(
+                    project_id=project.id,
+                    name=(sec.client_label or sec.name or "Service récurrent").strip()[:255],
+                    monthly_amount_cents=0,
+                    status="active" if is_delivered else "pending",
+                    start_date=(
+                        project.delivered_at.date()
+                        if is_delivered and project.delivered_at is not None
+                        else None
+                    ),
+                )
+                db.add(placeholder)
+                await db.flush()
+                await db.refresh(placeholder)
+                nb_recurring += 1
+                await log_action(
+                    db,
+                    user=None,
+                    action="devlog_project_recurring_service.auto_created",
+                    entity_type="devlog_project_recurring_service",
+                    entity_id=placeholder.id,
+                    details={
+                        "project_id": project.id,
+                        "section_id": sec.id,
+                        "section_placeholder": True,
+                    },
+                )
+                continue
+
+            for it in sec_items:
+                svc = await _create_recurring_service_from_item(
+                    db, project, it, sec, is_delivered
+                )
+                if svc is not None:
+                    nb_recurring += 1
+            continue
+
+        # --- Section initiale → phase + tasks --------------------------
         phase_name = (sec.client_label or sec.name or "Section").strip()[:255]
         phase = DevlogProjectPhase(
             project_id=project.id,
@@ -217,49 +401,68 @@ async def _build_planning_from_soumission(
             },
         )
 
-        for it in items_by_section.get(sec.id, []):
+        for it in sec_items:
             task = await _create_task_from_item(db, project.id, phase.id, it)
             if task is not None:
                 nb_tasks += 1
 
-    # Items orphelins (sans section_id ou avec section_id absent des
-    # sections de la soumission, p.ex. mode devis_dev où section_id
-    # n'est pas utilisé). On les rattache à une phase fourre-tout.
-    orphans = items_by_section.get(None, [])
-    known_section_ids = {sec.id for sec in sections}
+    # ----------------------------------------------------------------
+    # Items orphelins (sans section_id ou avec un section_id absent des
+    # sections de la soumission). On les dispatche par item_kind.
+    # ----------------------------------------------------------------
+    orphans: list[DevlogSoumissionItem] = list(items_by_section.get(None, []))
+    known_section_ids = set(section_by_id.keys())
     for sec_id, sec_items in items_by_section.items():
         if sec_id is not None and sec_id not in known_section_ids:
             orphans.extend(sec_items)
 
     if orphans:
-        phase = DevlogProjectPhase(
-            project_id=project.id,
-            name="Tâches diverses",
-            position=len(sections),
-            status="planifie",
-        )
-        db.add(phase)
-        await db.flush()
-        await db.refresh(phase)
-        nb_phases += 1
-        await log_action(
-            db,
-            user=None,
-            action="devlog_phase_auto_created",
-            entity_type="devlog_project_phase",
-            entity_id=phase.id,
-            details={
-                "project_id": project.id,
-                "name": phase.name,
-                "orphan_items": True,
-            },
-        )
+        orphan_recurring: list[DevlogSoumissionItem] = []
+        orphan_initial: list[DevlogSoumissionItem] = []
         for it in orphans:
-            task = await _create_task_from_item(db, project.id, phase.id, it)
-            if task is not None:
-                nb_tasks += 1
+            if _is_recurring_item(it, None, soumission):
+                orphan_recurring.append(it)
+            else:
+                orphan_initial.append(it)
 
-    return nb_phases, nb_tasks
+        for it in orphan_recurring:
+            svc = await _create_recurring_service_from_item(
+                db, project, it, None, is_delivered
+            )
+            if svc is not None:
+                nb_recurring += 1
+
+        if orphan_initial:
+            phase = DevlogProjectPhase(
+                project_id=project.id,
+                name="Tâches diverses",
+                position=len(sections),
+                status="planifie",
+            )
+            db.add(phase)
+            await db.flush()
+            await db.refresh(phase)
+            nb_phases += 1
+            await log_action(
+                db,
+                user=None,
+                action="devlog_phase_auto_created",
+                entity_type="devlog_project_phase",
+                entity_id=phase.id,
+                details={
+                    "project_id": project.id,
+                    "name": phase.name,
+                    "orphan_items": True,
+                },
+            )
+            for it in orphan_initial:
+                task = await _create_task_from_item(
+                    db, project.id, phase.id, it
+                )
+                if task is not None:
+                    nb_tasks += 1
+
+    return nb_phases, nb_tasks, nb_recurring
 
 
 async def _create_task_from_item(
@@ -428,15 +631,16 @@ async def start_project_from_contract(
     await db.refresh(project)
 
     # Charge la soumission source si dispo, sinon planning vide.
+    soumission: Optional[DevlogSoumission] = None
     sections: list[DevlogSoumissionSection] = []
     items: list[DevlogSoumissionItem] = []
     if project.soumission_id is not None:
-        _, sections, items = await _load_soumission_with_planning(
+        soumission, sections, items = await _load_soumission_with_planning(
             db, project.soumission_id
         )
 
-    nb_phases, nb_tasks = await _build_planning_from_soumission(
-        db, project, sections, items
+    nb_phases, nb_tasks, nb_recurring = await _build_planning_from_soumission(
+        db, project, soumission, sections, items
     )
 
     # Audit log principal — résumé.
@@ -451,6 +655,7 @@ async def start_project_from_contract(
             "soumission_id": project.soumission_id,
             "phases_created": nb_phases,
             "tasks_created": nb_tasks,
+            "recurring_services_created": nb_recurring,
             "trigger": "contract_signed_and_deposit_paid",
         },
     )
@@ -489,3 +694,54 @@ async def maybe_start_project(
     if contract.deposit_paid_at is None:
         return None
     return await start_project_from_contract(db, contract, user=user)
+
+
+# ---------------------------------------------------------------------------
+# Activation auto des services récurrents à la livraison
+# ---------------------------------------------------------------------------
+
+
+async def activate_recurring_services_on_delivery(
+    db: AsyncSession,
+    project: DevlogProject,
+) -> int:
+    """Bascule en ``active`` tous les services récurrents ``pending`` du
+    projet, pose leur ``start_date`` à ``project.delivered_at``.
+
+    À appeler depuis l'event listener du modèle ``DevlogProject`` (ou
+    depuis un endpoint admin pour rejouer manuellement). Retourne le
+    nombre de services activés. Idempotent : les services déjà actifs
+    ou en pause/cancelled ne sont pas touchés.
+    """
+    if project.delivered_at is None:
+        return 0
+    services = list(
+        (
+            await db.execute(
+                select(DevlogProjectRecurringService).where(
+                    DevlogProjectRecurringService.project_id == project.id,
+                    DevlogProjectRecurringService.status == "pending",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    n = 0
+    target_date = project.delivered_at.date()
+    for svc in services:
+        svc.status = "active"
+        if svc.start_date is None:
+            svc.start_date = target_date
+        n += 1
+    if n > 0:
+        await db.flush()
+        await log_action(
+            db,
+            user=None,
+            action="devlog_project_recurring_service.activated_on_delivery",
+            entity_type="devlog_project",
+            entity_id=project.id,
+            details={"count": n, "delivered_at": project.delivered_at.isoformat()},
+        )
+    return n

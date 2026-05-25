@@ -525,6 +525,7 @@ class DevlogProjectRead(BaseModel):
     start_date: Optional[date]
     due_date: Optional[date]
     started_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -851,17 +852,32 @@ class DevlogProjectMemberRead(BaseModel):
 
 
 class DevlogProjectFinances(BaseModel):
-    """Vue agregee lecture seule des finances d'un projet Dev Logiciel."""
+    """Vue agregee lecture seule des finances d'un projet Dev Logiciel.
+
+    Refonte (mai 2026) : split initial / recurrent. ``total_soumission``
+    et ``total_reste_a_facturer`` ne couvrent plus que la partie
+    investissement initial. Les services recurrents ont leurs propres
+    KPIs (MRR + nombre de services actifs).
+    """
 
     project_id: int
     soumission_id: Optional[int]
     total_facture: float
     total_paye: float
     total_reste_a_facturer: float
+    # Total de l'investissement initial (mise en oeuvre uniquement,
+    # sans le recurrent).
     total_soumission: float
     total_heures_facturables: float
     marge_estimee: float
     nb_sections_soumission: int
+
+    # --- Bloc recurrent (mai 2026) ---
+    mrr_active_cents: int = 0
+    nb_recurring_services_active: int = 0
+    nb_recurring_services_pending: int = 0
+    nb_recurring_services_paused: int = 0
+    nb_recurring_services_cancelled: int = 0
 
 
 # --------------------------------------------------------------------------
@@ -980,6 +996,12 @@ class DevlogProjectRecap(BaseModel):
     # Achats du projet (cumul)
     total_achats_cents: int
     nb_achats: int
+
+    # --- Services recurrents (mai 2026) ---
+    mrr_active_cents: int = 0
+    nb_recurring_services_active: int = 0
+    nb_recurring_services_pending: int = 0
+    delivered_at: Optional[datetime] = None
 
     # Activite recente
     events: list[DevlogProjectRecapEvent] = Field(default_factory=list)
