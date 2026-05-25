@@ -55,6 +55,10 @@ type Prospect = {
   assigned_to_user_id: number | null;
   gdpr_consent: boolean;
   marketing_consent: boolean;
+  // Si le prospect a ete converti en client (signature de soumission),
+  // ce champ pointe vers la fiche client. La page se redirige alors
+  // automatiquement vers /dev-logiciel/clients/{client_id}.
+  client_id: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -195,11 +199,19 @@ export default function ProspectDetailPage() {
         const res = await authedFetch(`/api/v1/devlog/leads/${id}`);
         if (!res.ok) throw new Error(`http_${res.status}`);
         const data = (await res.json()) as Prospect;
-        if (!cancelled) {
-          setP(data);
-          setNotes(data.internal_notes || "");
-          setMeetingNotes(data.meeting_notes || "");
+        if (cancelled) return;
+        // Fiche unifiee : si le prospect a deja ete converti en client
+        // (signature de soumission), on redirige vers /clients/{id} —
+        // l'utilisateur ne doit jamais atterrir sur la "vieille" fiche
+        // prospect une fois la conversion faite, c'est la meme fiche
+        // qui suit le contact bout-en-bout.
+        if (data.client_id) {
+          router.replace(`/dev-logiciel/clients/${data.client_id}`);
+          return;
         }
+        setP(data);
+        setNotes(data.internal_notes || "");
+        setMeetingNotes(data.meeting_notes || "");
       } catch {
         if (!cancelled) setError("Prospect introuvable.");
       } finally {
@@ -210,7 +222,7 @@ export default function ProspectDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, router]);
 
   async function updateStatus(newStatus: string) {
     if (!p) return;

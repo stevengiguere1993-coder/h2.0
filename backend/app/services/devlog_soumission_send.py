@@ -1,4 +1,4 @@
-"""Envoi par email d'une soumission devis_dev au client.
+﻿"""Envoi par email d'une soumission devis_dev au client.
 
 Pattern calqué sur ``app.services.offer_send`` :
 
@@ -19,11 +19,13 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
+from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.email_graph import EmailAttachment, get_mailer
 from app.models.devlog_client import DevlogClient
+from app.models.devlog_lead import DevlogLead
 from app.models.devlog_soumission import DevlogSoumission
 from app.services.devlog_soumission_pdf import (
     BUYER_ENTITY_NAME,
@@ -44,27 +46,50 @@ class DevlogSoumissionSendError(Exception):
     pass
 
 
-async def _load_client(
-    db: AsyncSession, client_id: Optional[int]
-) -> Optional[DevlogClient]:
-    if client_id is None:
-        return None
-    return (
-        await db.execute(
-            select(DevlogClient).where(DevlogClient.id == client_id)
-        )
-    ).scalar_one_or_none()
+@dataclass
+class _Recipient:
+    """Destinataire d'une soumission. Peut etre un client deja existant
+    OU un prospect (lead) qui n'a pas encore ete converti — la conversion
+    n'a lieu qu'a la signature publique."""
+
+    name: Optional[str]
+    email: Optional[str]
+
+
+async def _load_recipient(
+    db: AsyncSession, soumission: DevlogSoumission
+) -> Optional[_Recipient]:
+    """Charge le destinataire : priorite au client, fallback au lead."""
+    if soumission.client_id is not None:
+        client = (
+            await db.execute(
+                select(DevlogClient).where(
+                    DevlogClient.id == soumission.client_id
+                )
+            )
+        ).scalar_one_or_none()
+        if client is not None:
+            return _Recipient(name=client.name, email=client.email)
+    if soumission.lead_id is not None:
+        lead = (
+            await db.execute(
+                select(DevlogLead).where(DevlogLead.id == soumission.lead_id)
+            )
+        ).scalar_one_or_none()
+        if lead is not None:
+            return _Recipient(name=lead.name, email=lead.email)
+    return None
 
 
 def _client_body(
     soumission: DevlogSoumission,
-    client: Optional[DevlogClient],
+    recipient: Optional[_Recipient],
     sign_url: str,
 ) -> str:
-    """Email court et engageant au client."""
+    """Email court et engageant au client (ou prospect)."""
     salutation = (
-        f"Bonjour {client.name},"
-        if client is not None and client.name
+        f"Bonjour {recipient.name},"
+        if recipient is not None and recipient.name
         else "Bonjour,"
     )
     project_label = soumission.title or "votre projet"
@@ -134,11 +159,12 @@ async def send_devis_email(
             "envoi impossible."
         )
 
-    client = await _load_client(db, soumission.client_id)
-    if client is None or not (client.email or "").strip():
+    recipient = await _load_recipient(db, soumission)
+    if recipient is None or not (recipient.email or "").strip():
         raise DevlogSoumissionSendError(
-            "Adresse courriel du client manquante — impossible "
-            "d'envoyer la soumission."
+            "Adresse courriel du destinataire manquante — impossible "
+            "d'envoyer la soumission. Renseigne l'email du prospect "
+            "ou du client avant de réessayer."
         )
 
     if not getattr(soumission, "signature_token", None):
@@ -156,13 +182,13 @@ async def send_devis_email(
         f"{_public_base()}/devlog/sign-soumission/{soumission.signature_token}"
     )
     subject = "Soumission de développement — Horizon Services Immobiliers"
-    body = _client_body(soumission, client, sign_url)
+    body = _client_body(soumission, recipient, sign_url)
 
     mailer = get_mailer()
     if mailer.ready:
         try:
             await mailer.send(
-                to=[client.email],
+                to=[recipient.email],
                 subject=subject,
                 html_body=body,
                 reply_to=mailer.sender,
@@ -186,3 +212,4 @@ async def send_devis_email(
     await db.flush()
     await db.refresh(soumission)
     return soumission
+
