@@ -21,6 +21,7 @@ uniquement (libellés + ``prix_client`` + total).
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -291,6 +292,29 @@ async def sign_public_soumission(
             "accept": data.accept,
         },
     )
+
+    # Auto-flow closing : sur acceptation publique, on convertit le
+    # prospect lié en client et on provisionne le projet — sinon la
+    # soumission acceptée reste orpheline côté CRM. Best-effort : si
+    # une étape rate, on n'échoue pas la signature (le client a déjà
+    # signé, sa signature ne doit jamais être perdue).
+    if data.accept:
+        try:
+            from app.api.v1.endpoints.devlog import (
+                _ensure_client_for_soumission,
+                _provision_project_for_soumission,
+            )
+
+            await _ensure_client_for_soumission(db, soumission, user=None)
+            await _provision_project_for_soumission(
+                db, soumission, user=None
+            )
+        except Exception:
+            log_exc = logging.getLogger(__name__)
+            log_exc.exception(
+                "auto-flow soumission %s post-signature a échoué",
+                soumission.id,
+            )
 
     # Notification interne best-effort (ne fait pas échouer la signature).
     try:
