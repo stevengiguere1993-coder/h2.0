@@ -21,7 +21,7 @@ import logging
 import os
 import re
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
 
@@ -52,6 +52,10 @@ from app.models.prospection_lead import (
 )
 from app.models.prospection_deal import ProspectionDeal
 from app.services.lead_extraction import extract_lead_info, _check_tesseract_status
+from app.services.lead_validation import (
+    validate_extraction,
+    summarize_severity,
+)
 
 
 log = logging.getLogger(__name__)
@@ -148,6 +152,12 @@ class LeadAnalysisRead(BaseModel):
     # badge « Extrait par » dans la fiche et sur les cards kanban.
     model_used: Optional[str] = None
 
+    # Phase A3 — Anomalies détectées par le validator post-extraction
+    # (bornes + divergences local↔gemini). Liste structurée :
+    # [{field, severity, message, source_local?, source_gemini?,
+    #   source_claude?}, …]. None ou [] si rien à signaler.
+    validation_warnings: Optional[List[dict]] = None
+
     created_at: datetime
     updated_at: datetime
 
@@ -175,6 +185,11 @@ class LeadAnalysisListItem(BaseModel):
     converted_to_deal_id: Optional[int] = None
     # Modèle d'extraction — affiché via badge sur la card kanban.
     model_used: Optional[str] = None
+    # Phase A3 : indicateur compact pour la card kanban — sévérité max
+    # ("error" / "warning" / "info" / null) + nombre total d'anomalies.
+    # Le détail complet est dans /lead-analyses/{id} (fiche).
+    validation_severity: Optional[str] = None
+    validation_count: int = 0
     created_at: datetime
     attachments_count: int = 0
 
@@ -254,6 +269,9 @@ class ConvertDealResult(BaseModel):
 
 
 def _to_list_item(rec: LeadAnalysis, attachments_count: int) -> LeadAnalysisListItem:
+    # Phase A3 : résumé compact des anomalies pour la card kanban.
+    vw = rec.validation_warnings or []
+    val_severity = summarize_severity(vw) if vw else None
     return LeadAnalysisListItem(
         id=rec.id,
         status=rec.status,
@@ -278,6 +296,8 @@ def _to_list_item(rec: LeadAnalysis, attachments_count: int) -> LeadAnalysisList
         converted_to_lead_id=rec.converted_to_lead_id,
         converted_to_deal_id=rec.converted_to_deal_id,
         model_used=rec.model_used,
+        validation_severity=val_severity,
+        validation_count=len(vw),
         created_at=rec.created_at,
         attachments_count=attachments_count,
     )
@@ -445,6 +465,34 @@ async def extract_and_create(
         rec.updated_at = now
         db.add(rec)
         await db.flush()
+
+        # Phase A3 — Validation post-extraction. Combine les bornes
+        # numériques avec les valeurs par couche (local/gemini) pour
+        # détecter les divergences. Stocké en JSONB sur la fiche.
+        per_src = None
+        if res.per_source_values and idx < len(res.per_source_values):
+            per_src = res.per_source_values[idx]
+        vw = validate_extraction(rec, per_source_values=per_src)
+        rec.validation_warnings = vw or None
+        if vw:
+            # Audit log : on garde une trace quand des anomalies sont
+            # détectées (utile pour stats / dashboard santé extraction).
+            try:
+                await log_action(
+                    db,
+                    user=user,
+                    action="lead_analysis.validation_warnings_updated",
+                    entity_type="lead_analysis",
+                    entity_id=rec.id,
+                    details={
+                        "source": "extract",
+                        "count": len(vw),
+                        "max_severity": summarize_severity(vw),
+                        "fields": sorted({w.get("field") for w in vw if w.get("field")}),
+                    },
+                )
+            except Exception:  # noqa: BLE001 — l'audit ne doit pas planter l'extract
+                log.exception("Audit log validation_warnings failed")
 
         # Attache les fichiers seulement sur la 1re fiche (sinon on
         # duplique du gros blob inutilement).
@@ -622,9 +670,45 @@ async def update_analysis(
     rec = await db.get(LeadAnalysis, analysis_id)
     if rec is None:
         raise HTTPException(404, "Analyse introuvable.")
+    touched_validated_field = False
+    validated_fields = {
+        "asking_price", "nb_logements", "revenus_bruts",
+        "taxes_municipales", "taxes_scolaires", "assurances",
+        "energie",
+    }
     for k, v in payload.model_dump(exclude_unset=True).items():
         setattr(rec, k, v)
+        if k in validated_fields:
+            touched_validated_field = True
     rec.updated_at = datetime.now(timezone.utc)
+
+    # Phase A3 — si l'utilisateur a édité un champ borné, on
+    # re-valide la fiche pour synchroniser les warnings (on garde
+    # le `source_*` existant — la révalidation ne connaît plus
+    # les valeurs des couches d'origine, mais les bornes restent
+    # cohérentes).
+    if touched_validated_field:
+        # On préserve les sources_* connues : on reconstruit per_src
+        # à partir des warnings actuels (utile pour ne pas perdre la
+        # mémoire local/gemini en cas de tooltip).
+        old_vw = rec.validation_warnings or []
+        per_src: Dict[str, Dict[str, Any]] = {}
+        for w in old_vw:
+            f = w.get("field")
+            if not f:
+                continue
+            sub: Dict[str, Any] = {}
+            if w.get("source_local") is not None:
+                sub["local"] = w["source_local"]
+            if w.get("source_gemini") is not None:
+                sub["gemini"] = w["source_gemini"]
+            if w.get("source_claude") is not None:
+                sub["claude"] = w["source_claude"]
+            if sub:
+                per_src[f] = sub
+        new_vw = validate_extraction(rec, per_source_values=per_src)
+        rec.validation_warnings = new_vw or None
+
     await db.commit()
     await db.refresh(rec)
     return await get_analysis(analysis_id, db, user)
@@ -1423,6 +1507,39 @@ async def re_extract_with_claude(
     # a été utilisée (peu importe ce qu'il y avait avant).
     rec.model_used = "claude-sonnet-4-6 (manual)"
     rec.updated_at = datetime.now(timezone.utc)
+
+    # Phase A3 — Re-valide la fiche après le patch Claude. On
+    # construit un `per_source_values` qui réinjecte les valeurs
+    # Claude pour les champs qu'il a écrits (utile pour le tooltip
+    # côté UI). Les anciennes valeurs local/gemini ne sont pas
+    # rejouées ici (elles étaient déjà dans extracted_json mais
+    # pas typées) — Claude prime sur la divergence.
+    claude_src: Dict[str, Dict[str, Any]] = {}
+    for k in fields_patched:
+        v = extracted.get(k) if extracted else None
+        if v not in (None, "", "null"):
+            claude_src[k] = {"claude": v}
+    new_vw = validate_extraction(rec, per_source_values=claude_src)
+    rec.validation_warnings = new_vw or None
+    if new_vw:
+        try:
+            await log_action(
+                db,
+                user=user,
+                action="lead_analysis.validation_warnings_updated",
+                entity_type="lead_analysis",
+                entity_id=rec.id,
+                details={
+                    "source": "re_extract_claude",
+                    "count": len(new_vw),
+                    "max_severity": summarize_severity(new_vw),
+                    "fields": sorted(
+                        {w.get("field") for w in new_vw if w.get("field")}
+                    ),
+                },
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("Audit log validation_warnings (claude) failed")
 
     # Audit log
     await log_action(

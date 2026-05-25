@@ -29,6 +29,7 @@ from sqlalchemy import (
     Text,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -168,6 +169,31 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
     # /re-extract-with-claude (Phase A2, manuel).
     model_used: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
+    )
+
+    # ── Validation post-extraction (Phase A3) ─────────────────────
+    #
+    # Liste structurée des anomalies détectées par
+    # `app.services.lead_validation.validate_extraction()` :
+    #
+    #   [
+    #     {
+    #       "field": "asking_price",
+    #       "severity": "error" | "warning" | "info",
+    #       "message": "...",
+    #       "source_local": 30 | null,
+    #       "source_gemini": 50000 | null,
+    #       "source_claude": null,
+    #     },
+    #     ...
+    #   ]
+    #
+    # Affiché côté UI : indicateur ⚠/🚫 sur le badge kanban + panneau
+    # « Validation de l'extraction » dans la fiche détail.
+    # JSONB pour interroger facilement (futur dashboard global des
+    # leads avec anomalies).
+    validation_warnings: Mapped[Optional[list]] = mapped_column(
+        JSONB, nullable=True
     )
 
     # ── Champs manuels d'analyse (Phase 2 — réservés pour l'instant) ──

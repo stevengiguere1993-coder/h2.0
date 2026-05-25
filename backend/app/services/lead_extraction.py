@@ -486,12 +486,24 @@ class ExtractionInput:
 @dataclass
 class ExtractionResult:
     """Résultat d'une extraction. `data` est une liste de dicts (un
-    par immeuble distinct détecté — souvent un seul)."""
+    par immeuble distinct détecté — souvent un seul).
+
+    ``per_source_values`` (Phase A3, validation post-extraction)
+    contient, POUR CHAQUE IMMEUBLE de ``data`` (même ordre, même
+    index), un mapping ``{field: {"local": ..., "gemini": ...}}``
+    qui conserve la valeur vue par chaque couche AVANT le merge.
+    Sert au service ``lead_validation`` pour détecter les divergences
+    et alimenter le tooltip côté UI ("Local : X / Gemini : Y").
+    Reste vide ``[]`` si une seule couche a contribué.
+    """
 
     data: List[dict] = field(default_factory=list)
     model_used: Optional[str] = None
     raw_response: Optional[str] = None
     warnings: List[str] = field(default_factory=list)
+    per_source_values: List[Dict[str, Dict[str, Any]]] = field(
+        default_factory=list
+    )
 
 
 # ── Helpers numériques ────────────────────────────────────────────
@@ -2121,6 +2133,48 @@ def _merge_local_gemini(
     return merged, divergence_warnings, divergences
 
 
+# Champs pour lesquels on conserve la trace par couche (utile pour le
+# tooltip côté UI + la détection de divergence post-merge). Sous-set
+# numérique principalement — les strings (description, courtier…) ne
+# sont pas utiles à comparer.
+_PER_SOURCE_TRACKED: Tuple[str, ...] = (
+    "address", "city", "postal_code",
+    "asking_price", "nb_logements", "revenus_bruts",
+    "taxes_municipales", "taxes_scolaires", "assurances",
+    "energie", "depenses_autres",
+    "annee_construction",
+    "superficie_terrain", "superficie_batiment",
+    "evaluation_municipale",
+    "nb_stationnements",
+)
+
+
+def _build_per_source(
+    local: Optional[Dict[str, Any]],
+    gemini: Optional[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """Construit le dict ``{field: {"local": x, "gemini": y}}`` qui
+    accompagnera la fiche extraite vers le validator (Phase A3).
+    Garde uniquement les champs ``_PER_SOURCE_TRACKED`` où au moins
+    une des deux couches a une valeur."""
+    out: Dict[str, Dict[str, Any]] = {}
+    loc = local or {}
+    gem = gemini or {}
+    for f in _PER_SOURCE_TRACKED:
+        v_loc = loc.get(f)
+        v_gem = gem.get(f)
+        has_loc = v_loc not in (None, "", {}, [])
+        has_gem = v_gem not in (None, "", {}, [])
+        if has_loc or has_gem:
+            entry: Dict[str, Any] = {}
+            if has_loc:
+                entry["local"] = v_loc
+            if has_gem:
+                entry["gemini"] = v_gem
+            out[f] = entry
+    return out
+
+
 def _count_fields(d: Dict[str, Any]) -> int:
     """Nb de champs non-vides dans un dict (exclut source_url qui
     est de la métadonnée, pas un champ extrait)."""
@@ -2490,6 +2544,11 @@ async def extract_lead_info(
             gemini_by_addr[gk] = g
 
     data_out: List[Dict[str, Any]] = []
+    # Phase A3 : pour chaque fiche de ``data_out``, on conserve la
+    # valeur vue par chaque couche (avant merge) — sert au
+    # `lead_validation.validate_extraction()` pour détecter les
+    # divergences et alimenter le tooltip côté UI.
+    per_source_values_out: List[Dict[str, Dict[str, Any]]] = []
     total_divergences = 0
     used_gemini_keys: set = set()
 
@@ -2517,8 +2576,10 @@ async def extract_lead_info(
             warnings.extend(div_warns)
             total_divergences += n_div
             data_out.append(merged)
+            per_source_values_out.append(_build_per_source(loc, gem))
         else:
             data_out.append(loc)
+            per_source_values_out.append(_build_per_source(loc, None))
 
     # Fiches Gemini sans pendant local (Gemini a détecté un immeuble
     # que le parser local n'a pas su extraire) → on les ajoute.
@@ -2526,6 +2587,7 @@ async def extract_lead_info(
         if gk in used_gemini_keys:
             continue
         data_out.append(dict(gem))
+        per_source_values_out.append(_build_per_source(None, gem))
 
     # ── Logging détaillé ───
     n_local_total = sum(_count_fields(d) for d in local_data_list)
@@ -2569,6 +2631,7 @@ async def extract_lead_info(
             data=data_out,
             model_used=model_used,
             warnings=warnings,
+            per_source_values=per_source_values_out,
         )
 
     if not warnings:
