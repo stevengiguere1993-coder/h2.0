@@ -13,28 +13,32 @@ import { Link } from "@/i18n/navigation";
 import { useDevlogLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 
-type Prospect = {
-  id: number;
-  name: string;
-  email: string;
-  status: string;
-  project_type: string;
-  address: string | null;
-};
-
-type ClientLite = {
-  id: number;
-  name: string;
+// Entree unifiee retournee par /api/v1/devlog/clients/picker-options.
+// Source de verite pour le selector — fusionne leads (prospects) +
+// clients pour qu'on puisse creer une soumission pour n'importe quel
+// destinataire (un prospect "perdu" qu'on relance, un client existant
+// pour une 2e soumission, etc.).
+type PickerOption = {
+  value: string; // "prospect:{id}" | "client:{id}"
+  type: "lead" | "client";
+  label: string;
+  sub: string | null;
   email: string | null;
+  phone: string | null;
   address: string | null;
+  status: string | null;
+  lead_id: number | null;
+  client_id: number | null;
+  project_type: string | null;
 };
 
-// Libellés courts des statuts de prospect, affichés dans le picker
-// pour aider à distinguer rapidement un prospect actif d'un prospect
-// gagné/perdu/spam quand on lui crée une soumission.
+// Libelles courts des statuts de prospect, affiches dans le picker
+// pour aider a distinguer rapidement un prospect actif d'un prospect
+// gagne/perdu/spam quand on lui cree une soumission.
 const PROSPECT_STATUS_LABEL: Record<string, string> = {
   new: "Nouveau",
   contacted: "À rappeler",
+  meeting: "Rencontre",
   qualified: "Qualifié",
   quoted: "Soumission envoyée",
   won: "Soumission acceptée",
@@ -49,28 +53,31 @@ function yyyyMmDd(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-// Référence séquentielle (devis 1011, 1012, …) attribuée par le
-// backend via /api/v1/settings/numbering — alignée sur la suite
-// QuickBooks. Plus de génération côté client.
+// Reference sequentielle (devis 1011, 1012, …) attribuee par le
+// backend via /api/v1/settings/numbering — alignee sur la suite
+// QuickBooks. Plus de generation cote client.
 
 export default function NewSoumissionPage() {
   const { onOpenSidebar } = useDevlogLayout();
   const router = useNextRouter();
   const searchParams = useSearchParams();
-  const prefilledLeadId = searchParams.get("lead_id");
-  const prefilledClientId = searchParams.get("client_id");
+  // Supporte les deux conventions (lead_id underscore + leadId camelCase)
+  // pour ne casser aucun lien existant dans l'app.
+  const prefilledLeadId =
+    searchParams.get("lead_id") || searchParams.get("leadId");
+  const prefilledClientId =
+    searchParams.get("client_id") || searchParams.get("clientId");
 
-  const [prospects, setProspects] = useState<Prospect[]>([]);
-  const [clients, setClients] = useState<ClientLite[]>([]);
+  const [options, setOptions] = useState<PickerOption[]>([]);
   const [loadingTargets, setLoadingTargets] = useState(true);
 
   // Une soumission peut viser un prospect OU un client existant. On
   // encode le choix dans une seule valeur « prospect:{id} » ou
-  // « client:{id} », puis on éclate en payload au submit.
+  // « client:{id} », puis on eclate en payload au submit.
   //
-  // Pré-remplissage : si on arrive avec ``?client_id=X`` (lancée depuis
+  // Pre-remplissage : si on arrive avec ``?client_id=X`` (lancee depuis
   // la fiche client) on cible directement le client ; sinon ``?lead_id=X``
-  // (lancée depuis un prospect) cible le prospect.
+  // (lancee depuis un prospect) cible le prospect.
   const [target, setTarget] = useState<string>(
     prefilledClientId
       ? `client:${prefilledClientId}`
@@ -81,8 +88,8 @@ export default function NewSoumissionPage() {
   const [title, setTitle] = useState("");
   const [propertyAddress, setPropertyAddress] = useState("");
   // Type de document : devis classique (items) ou contrat d'entreprise
-  // (formulaire structuré rempli sur la page suivante). Le mode de
-  // prix (forfaitaire / estimé) se règle ensuite sur la soumission.
+  // (formulaire structure rempli sur la page suivante). Le mode de
+  // prix (forfaitaire / estime) se regle ensuite sur la soumission.
   const [kind, setKind] = useState<"quote" | "contract">("quote");
   const [validUntil, setValidUntil] = useState<string>(() => {
     const d = new Date();
@@ -93,64 +100,60 @@ export default function NewSoumissionPage() {
   const [error, setError] = useState<string | null>(null);
 
   const targetOptions = useMemo<TargetPickerOption[]>(
-    () => [
-      // Tous les prospects (n'importe quel statut, incluant
-      // « Soumission refusée » / « Spam ») peuvent recevoir une
-      // soumission — on retombe parfois sur un ancien prospect qu'on
-      // a perdu mais qui revient quelques mois plus tard.
-      ...prospects.map((p) => {
-        const statusLabel = PROSPECT_STATUS_LABEL[p.status] || p.status;
-        const sub = p.email
-          ? `${statusLabel} · ${p.email}`
-          : statusLabel;
+    () =>
+      options.map((o) => {
+        const isLead = o.type === "lead";
+        let sub = o.sub || null;
+        if (isLead && o.status) {
+          const statusLabel = PROSPECT_STATUS_LABEL[o.status] || o.status;
+          sub = o.email ? `${statusLabel} · ${o.email}` : statusLabel;
+        }
         return {
-          value: `prospect:${p.id}`,
-          label: p.name,
+          value: o.value,
+          label: o.label,
           sub,
-          kind: "prospect" as const
+          kind: isLead ? ("prospect" as const) : ("client" as const)
         };
       }),
-      ...clients.map((c) => ({
-        value: `client:${c.id}`,
-        label: c.name,
-        sub: c.email || null,
-        kind: "client" as const
-      }))
-    ],
-    [prospects, clients]
+    [options]
   );
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
-        const [prospectsRes, clientsRes] = await Promise.all([
-          authedFetch("/api/v1/devlog/leads?limit=200"),
-          authedFetch("/api/v1/devlog/clients?limit=500")
-        ]);
-        if (!prospectsRes.ok) throw new Error();
-        const prospectsData = (await prospectsRes.json()) as Prospect[];
-        const clientsData = clientsRes.ok
-          ? ((await clientsRes.json()) as ClientLite[])
-          : [];
-        if (!cancelled) {
-          setProspects(prospectsData);
-          setClients(clientsData);
-          if (prefilledClientId) {
-            const c = clientsData.find(
-              (x) => String(x.id) === prefilledClientId
-            );
-            if (c?.address) setPropertyAddress(c.address);
-            if (c && !title) setTitle(`Projet — ${c.name}`);
-          } else if (prefilledLeadId) {
-            const p = prospectsData.find(
-              (x) => String(x.id) === prefilledLeadId
-            );
-            if (p?.address) setPropertyAddress(p.address);
+        // Endpoint unifie : retourne prospects + clients en une seule
+        // requete avec un type explicite. Resout le bug ou le selector
+        // affichait "pas de client a lier" parce qu'un des deux fetches
+        // echouait silencieusement.
+        const res = await authedFetch(
+          "/api/v1/devlog/clients/picker-options"
+        );
+        if (!res.ok) throw new Error(`http_${res.status}`);
+        const data = (await res.json()) as PickerOption[];
+        if (cancelled) return;
+        setOptions(data);
+
+        // Pre-remplissage du titre + adresse depuis l'entree pre-selectionnee.
+        if (prefilledClientId) {
+          const c = data.find(
+            (x) => x.type === "client" && String(x.client_id) === prefilledClientId
+          );
+          if (c?.address) setPropertyAddress(c.address);
+          if (c && !title) setTitle(`Projet — ${c.label}`);
+        } else if (prefilledLeadId) {
+          const p = data.find(
+            (x) => x.type === "lead" && String(x.lead_id) === prefilledLeadId
+          );
+          if (p?.address) setPropertyAddress(p.address);
+          if (p && !title) {
+            const pt = p.project_type || "logiciel";
+            setTitle(`Projet ${pt} — ${p.label}`);
           }
         }
       } catch {
-        /* ignore — dropdown will be empty */
+        /* ignore — dropdown will be empty mais on laisse le user creer
+           une soumission sans destinataire (cas rare). */
       } finally {
         if (!cancelled) setLoadingTargets(false);
       }
@@ -286,18 +289,23 @@ export default function NewSoumissionPage() {
                 setTarget(val);
                 if (val.startsWith("prospect:")) {
                   const id = val.slice("prospect:".length);
-                  const p = prospects.find((x) => String(x.id) === id);
+                  const p = options.find(
+                    (x) => x.type === "lead" && String(x.lead_id) === id
+                  );
                   if (p && !title) {
-                    setTitle(`Projet ${p.project_type} — ${p.name}`);
+                    const pt = p.project_type || "logiciel";
+                    setTitle(`Projet ${pt} — ${p.label}`);
                   }
                   if (p?.address && !propertyAddress) {
                     setPropertyAddress(p.address);
                   }
                 } else if (val.startsWith("client:")) {
                   const id = val.slice("client:".length);
-                  const c = clients.find((x) => String(x.id) === id);
+                  const c = options.find(
+                    (x) => x.type === "client" && String(x.client_id) === id
+                  );
                   if (c && !title) {
-                    setTitle(`Projet — ${c.name}`);
+                    setTitle(`Projet — ${c.label}`);
                   }
                   if (c?.address && !propertyAddress) {
                     setPropertyAddress(c.address);
@@ -312,7 +320,8 @@ export default function NewSoumissionPage() {
               {" "}
               (tous statuts confondus, incluant « refusé » qu&apos;on relance)
               ou à un <strong>client existant</strong> pour une soumission
-              complémentaire.
+              complémentaire. Si tu choisis un prospect, il sera converti
+              automatiquement en client à la création.
             </p>
           </div>
 

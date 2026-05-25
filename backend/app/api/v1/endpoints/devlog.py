@@ -80,6 +80,9 @@ from app.schemas.devlog import (
     DevlogTimeEntryUpdate,
 )
 from app.services.audit import log_action
+from app.services.devlog_client_provision import (
+    convert_lead_to_client as _convert_lead_to_client_service,
+)
 from app.services.devlog_devis_calc import compute_devis
 from app.services.devlog_project_provision import maybe_start_project
 from app.services.devlog_invoice_pdf import (
@@ -226,6 +229,88 @@ async def list_clients(
 ):
     crud = GenericCrud(db, DevlogClient)
     return list(await crud.list(skip=skip, limit=limit))
+
+
+class _PickerOption(BaseModel):
+    """Entrée unifiée prospect|client pour les selectors UI (création
+    de soumission, etc.)."""
+
+    value: str  # "prospect:{id}" | "client:{id}"
+    type: str  # "lead" | "client"
+    label: str
+    sub: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    status: Optional[str] = None  # status du lead pour affichage
+    lead_id: Optional[int] = None
+    client_id: Optional[int] = None
+    project_type: Optional[str] = None
+
+
+@clients_router.get(
+    "/picker-options",
+    response_model=List[_PickerOption],
+    summary=(
+        "Liste unifiée des prospects + clients pour le selector du "
+        "wizard de création de soumission"
+    ),
+)
+async def list_picker_options(db: DBSession, _: CurrentUser):
+    """Retourne la liste fusionnée des leads (prospects) ET clients du
+    pôle, avec un type explicite pour distinguer les deux côté UI.
+
+    Source de vérité pour les selectors qui doivent permettre de viser
+    un prospect ou un client indifféremment (création de soumission,
+    etc.). Évite le double fetch /leads + /clients qui pose problème
+    quand l'une des routes répond en erreur."""
+    # Charge tous les leads (peu importe le statut — on peut créer une
+    # soumission pour un prospect refusé qu'on relance) et tous les
+    # clients actifs.
+    leads = (
+        await db.execute(select(DevlogLead).order_by(DevlogLead.id.desc()))
+    ).scalars().all()
+    clients = (
+        await db.execute(select(DevlogClient).order_by(DevlogClient.id.desc()))
+    ).scalars().all()
+
+    options: List[_PickerOption] = []
+    # Leads (prospects) en tête : c'est typiquement ce qu'on veut
+    # quand on crée une soumission pour la première fois.
+    for lead in leads:
+        # On laisse de côté les leads déjà convertis pour éviter le
+        # double affichage (le client correspondant est aussi listé).
+        if lead.client_id is not None:
+            continue
+        options.append(
+            _PickerOption(
+                value=f"prospect:{lead.id}",
+                type="lead",
+                label=lead.name,
+                sub=lead.email or lead.company,
+                email=lead.email,
+                phone=lead.phone,
+                address=lead.address,
+                status=lead.status,
+                lead_id=lead.id,
+                project_type=lead.project_type,
+            )
+        )
+    for client in clients:
+        options.append(
+            _PickerOption(
+                value=f"client:{client.id}",
+                type="client",
+                label=client.name,
+                sub=client.email or client.company,
+                email=client.email,
+                phone=client.phone,
+                address=client.address,
+                status=client.status,
+                client_id=client.id,
+            )
+        )
+    return options
 
 
 @clients_router.get("/{client_id}", response_model=DevlogClientRead)
@@ -394,42 +479,19 @@ async def convert_lead_to_client(
     lead_id: int, db: DBSession, user: CurrentUser
 ):
     """Convertit un lead « gagné » en client du pôle. Idempotent :
-    si le lead a déjà un client lié, on renvoie ce client."""
-    lead_crud = GenericCrud(db, DevlogLead)
-    lead = await lead_crud.get(lead_id)
-    if lead is None:
-        raise HTTPException(status_code=404, detail="Lead introuvable")
+    si le lead a déjà un client lié, on renvoie ce client.
 
-    client_crud = GenericCrud(db, DevlogClient)
-    if lead.client_id is not None:
-        existing = await client_crud.get(lead.client_id)
-        if existing is not None:
-            return DevlogClientRead.model_validate(existing)
-
-    client = DevlogClient(
-        name=lead.name,
-        company=lead.company,
-        email=lead.email,
-        phone=lead.phone,
-        notes=lead.project_summary,
-        status="active",
-    )
-    db.add(client)
-    await db.flush()
-    await db.refresh(client)
-
-    lead.client_id = client.id
-    lead.status = "won"
-    await db.flush()
-
-    await log_action(
+    Logique centralisée dans ``app.services.devlog_client_provision``
+    pour être réutilisée par les autres flows (auto-conversion à la
+    création de soumission, à l'acceptation, etc.)."""
+    client = await _convert_lead_to_client_service(
         db,
+        lead_id,
         user=user,
-        action="devlog_lead.converted_to_client",
-        entity_type="devlog_lead",
-        entity_id=lead_id,
-        details={"client_id": client.id},
+        audit_action="devlog_lead.converted_to_client",
     )
+    if client is None:
+        raise HTTPException(status_code=404, detail="Lead introuvable")
     return DevlogClientRead.model_validate(client)
 
 
@@ -473,6 +535,76 @@ soumissions_router = _make_crud_router(
 soumission_automations_router = APIRouter(
     prefix="/devlog/soumissions", tags=["devlog"]
 )
+
+
+@soumission_automations_router.post(
+    "",
+    response_model=DevlogSoumissionRead,
+    status_code=status.HTTP_201_CREATED,
+    summary=(
+        "Crée une soumission devlog. Si ``lead_id`` est fourni sans "
+        "``client_id``, le lead est converti automatiquement en client."
+    ),
+)
+async def create_soumission_with_automations(
+    data: DevlogSoumissionCreate, db: DBSession, user: CurrentUser
+):
+    """Override du POST générique : la création d'une soumission liée à
+    un prospect convertit le prospect en client AVANT la création, et
+    lie la soumission au client résultant. Évite que la fiche client
+    n'affiche pas la soumission tant qu'elle n'a pas été acceptée (la
+    fiche filtre sur ``client_id``).
+
+    Idempotent : si ``client_id`` est déjà présent, ou si ``lead_id``
+    pointe vers un lead déjà converti, on lie simplement au client
+    existant. Audit log : ``devlog_lead.converted_for_soumission`` en
+    plus du log standard de création.
+    """
+    payload = data.model_dump(exclude_unset=True)
+
+    lead_id = payload.get("lead_id")
+    client_id = payload.get("client_id")
+
+    # Cas 1 : lead fourni sans client → conversion auto + lien.
+    if lead_id is not None and client_id is None:
+        converted_client = await _convert_lead_to_client_service(
+            db,
+            lead_id,
+            user=user,
+            audit_action="devlog_lead.converted_for_soumission",
+            audit_details_extra={"trigger": "soumission_create"},
+        )
+        if converted_client is None:
+            raise HTTPException(
+                status_code=404, detail="Lead introuvable"
+            )
+        payload["client_id"] = converted_client.id
+
+    # Cas 2 : client fourni sans lead → on vérifie qu'il existe.
+    if payload.get("client_id") is not None:
+        client = await GenericCrud(db, DevlogClient).get(payload["client_id"])
+        if client is None:
+            raise HTTPException(status_code=404, detail="Client introuvable")
+
+    obj = DevlogSoumission(**payload)
+    db.add(obj)
+    await db.flush()
+    await db.refresh(obj)
+
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission.created",
+        entity_type="devlog_soumission",
+        entity_id=obj.id,
+        details={
+            "title": obj.title,
+            "lead_id": obj.lead_id,
+            "client_id": obj.client_id,
+            "is_devis_dev": getattr(obj, "is_devis_dev", False),
+        },
+    )
+    return DevlogSoumissionRead.model_validate(obj)
 
 
 async def _ensure_client_for_soumission(
