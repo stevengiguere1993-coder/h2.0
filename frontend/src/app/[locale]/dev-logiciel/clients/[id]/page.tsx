@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ExternalLink,
   FileText,
+  FilePlus2,
   Image as ImageIcon,
   Loader2,
   Save,
@@ -189,6 +190,16 @@ export default function ClientDetailPage() {
                 </p>
               </div>
               <div className="flex flex-wrap items-start gap-2">
+                <Link
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  href={
+                    `/dev-logiciel/soumissions/new?client_id=${c.id}` as any
+                  }
+                  className="inline-flex items-center gap-2 self-start rounded-lg bg-blue-500 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-400"
+                >
+                  <FilePlus2 className="h-4 w-4" />
+                  Nouvelle soumission
+                </Link>
                 <QboPushButton client={c} onSynced={(qboId) =>
                   setC((prev) =>
                     prev ? { ...prev, qbo_customer_id: qboId } : prev
