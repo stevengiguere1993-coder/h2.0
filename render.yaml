@@ -183,6 +183,44 @@ services:
         value: "Horizon Services Immobiliers"
 
   # --------------------------------------------------------------
+  # Cron — daily Devlog invoice reminders (4 paliers d'escalade) :
+  #   - J+1 à J+6   → rappel courtois (1×/24 h)
+  #   - J+7 à J+13  → rappel ferme (1×/48 h)
+  #   - J+14 à J+29 → rappel sérieux (hebdo)
+  #   - J+30+       → escalade unique + notif interne admin
+  # Calque sur h2-0-facture-reminders (Construction).
+  # --------------------------------------------------------------
+  - type: cron
+    name: h2-0-devlog-facture-reminders
+    runtime: python
+    region: oregon
+    plan: free
+    rootDir: backend
+    branch: main
+    schedule: "30 13 * * *"   # 09:30 America/Montreal (13:30 UTC)
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.jobs.devlog_facture_reminders
+    envVars:
+      # Python 3.11 épinglé : le défaut Render (Python 3.14) n'a pas de
+      # wheel pillow-heif et le build échoue à la compilation native.
+      - key: PYTHON_VERSION
+        value: "3.11.11"
+      - key: ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: AZURE_TENANT_ID
+        sync: false
+      - key: AZURE_CLIENT_ID
+        sync: false
+      - key: AZURE_CLIENT_SECRET
+        sync: false
+      - key: MAIL_FROM_EMAIL
+        value: "info@immohorizon.com"
+      - key: MAIL_FROM_NAME
+        value: "Horizon Services Immobiliers"
+
+  # --------------------------------------------------------------
   # Cron — hourly follow-up reminders (notif cloche) :
   #   - relances de suivi en retard (overdue)
   #   - prospects créés depuis +24 h sans aucun contact
