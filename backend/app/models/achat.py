@@ -117,8 +117,17 @@ class Achat(Base, TimestampUpdateMixin):
     )
 
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    # Montant RÉEL de la transaction (le PO source avait amount_max).
+    # Montant HT (avant taxes) — c'est sur ce montant qu'on applique le
+    # markup au moment de la refacturation client, pour ne pas refacturer
+    # de markup sur des taxes déjà payées au fournisseur.
     amount: Mapped[Optional[float]] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    # Portion des taxes payées au fournisseur (TPS + TVQ ou autre).
+    # Sépare-toi de amount pour qu'on n'applique pas le markup sur les
+    # taxes lors de la refacturation au client. Le total TTC payé au
+    # fournisseur = amount + amount_taxes.
+    amount_taxes: Mapped[Optional[float]] = mapped_column(
         Numeric(12, 2), nullable=True
     )
 

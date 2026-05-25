@@ -454,6 +454,7 @@ class AchatCreate(BaseModel):
     project_id: Optional[int] = None
     description: Optional[str] = None
     amount: Optional[float] = None
+    amount_taxes: Optional[float] = None
     supplier_invoice_number: Optional[str] = Field(default=None, max_length=64)
     invoice_date: Optional[date] = None
     payment_method: Optional[str] = Field(default=None, max_length=32)
@@ -470,6 +471,7 @@ class AchatUpdate(BaseModel):
     purchase_order_id: Optional[int] = None
     description: Optional[str] = None
     amount: Optional[float] = None
+    amount_taxes: Optional[float] = None
     status: Optional[str] = None
     received_at: Optional[datetime] = None
     paid_at: Optional[datetime] = None
@@ -495,6 +497,7 @@ class AchatRead(_Base):
     project_id: Optional[int]
     description: Optional[str]
     amount: Optional[float]
+    amount_taxes: Optional[float] = None
     supplier_invoice_number: Optional[str]
     invoice_date: Optional[date]
     status: str

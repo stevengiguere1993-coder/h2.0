@@ -131,13 +131,20 @@ async def provision_project_for_soumission(
             )
         ).scalar_one_or_none()
 
+    # Adresse du projet = adresse du CHANTIER (sm.property_address), pas
+    # l'adresse civique du client. Le client peut habiter à une adresse
+    # différente du lieu des travaux (ex. immeuble locatif, futur achat).
+    # Fallback sur l'adresse du contact si la soumission n'en a pas.
+    project_address = sm.property_address or (
+        contact.address if contact else None
+    )
     project = Project(
         name=sm.title or f"Projet {sm.reference}",
         contact_request_id=sm.contact_request_id,
         soumission_id=sm.id,
         client_id=sm.client_id,
         status=ProjectStatus.PLANNED.value,
-        address=(contact.address if contact else None),
+        address=project_address,
         description=sm.description,
         budget=sm.total,
     )

@@ -1754,6 +1754,17 @@ function RecapTab({ project }: { project: Project | null }) {
             />
           </div>
 
+          {/* Avancement contrat — coût réel actuel vs soumission acceptée
+              (hors extras). Permet de voir d'un coup d'œil si on est en
+              train de manger la marge prévue. */}
+          <RecapContractProgressCard
+            actualCost={finances.actual_total_cost}
+            contractRevenueExTax={finances.projected_revenue_ex_tax}
+            invoicedExTax={finances.invoiced_amount_ex_tax}
+            paidAmount={finances.paid_amount}
+            invoicedAmount={finances.invoiced_amount}
+          />
+
           {/* Taxes à remettre au gouvernement — TPS (Receveur général)
               + TVQ (Revenu Québec). Calculées sur le facturé. */}
           {finances.taxes_collected > 0 ? (
@@ -1952,6 +1963,134 @@ function RecapCostCard({
           </span>
           <span className="font-mono font-semibold text-white">
             {fmtMoney(actualCost)}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RecapContractProgressCard({
+  actualCost,
+  contractRevenueExTax,
+  invoicedExTax,
+  paidAmount,
+  invoicedAmount
+}: {
+  actualCost: number;
+  contractRevenueExTax: number;
+  invoicedExTax: number;
+  paidAmount: number;
+  invoicedAmount: number;
+}) {
+  // Avancement = part du contrat de BASE consommée par les coûts réels.
+  // L'idée : voir d'un coup d'œil si on a déjà brûlé 90 % du budget
+  // contracté en n'ayant fait que 60 % du job → signal d'alerte.
+  const pctSpent =
+    contractRevenueExTax > 0
+      ? Math.min(200, (actualCost / contractRevenueExTax) * 100)
+      : 0;
+  const remainingBudget = Math.max(0, contractRevenueExTax - actualCost);
+  // Base facturée vs extras facturés (au-delà du contrat initial).
+  const baseInvoiced = Math.min(invoicedExTax, contractRevenueExTax);
+  const extrasInvoiced = Math.max(0, invoicedExTax - contractRevenueExTax);
+  const baseRemaining = Math.max(0, contractRevenueExTax - baseInvoiced);
+  const balanceDue = Math.max(0, invoicedAmount - paidAmount);
+  const overRun = actualCost > contractRevenueExTax;
+
+  if (contractRevenueExTax <= 0) return null;
+
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-[10px] uppercase tracking-wider text-white/50">
+          Avancement du contrat
+        </h3>
+        <span
+          className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+            overRun
+              ? "border-rose-500/40 bg-rose-500/15 text-rose-300"
+              : pctSpent > 80
+                ? "border-amber-500/40 bg-amber-500/15 text-amber-300"
+                : "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+          }`}
+        >
+          {pctSpent.toFixed(0)} % consommé
+        </span>
+      </div>
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-brand-950">
+        <div
+          className={`h-full ${
+            overRun
+              ? "bg-rose-500"
+              : pctSpent > 80
+                ? "bg-amber-500"
+                : "bg-emerald-500"
+          }`}
+          style={{ width: `${Math.min(100, pctSpent)}%` }}
+        />
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+        <div>
+          <p className="text-white/50">Soumission acceptée (HT)</p>
+          <p className="font-mono text-base font-semibold text-white">
+            {fmtMoney(contractRevenueExTax)}
+          </p>
+        </div>
+        <div>
+          <p className="text-white/50">Coût réel à ce jour</p>
+          <p
+            className={`font-mono text-base font-semibold ${
+              overRun ? "text-rose-300" : "text-white"
+            }`}
+          >
+            {fmtMoney(actualCost)}
+          </p>
+        </div>
+        <div>
+          <p className="text-white/50">
+            {overRun ? "Dépassement" : "Reste avant dépassement"}
+          </p>
+          <p
+            className={`font-mono text-sm font-semibold ${
+              overRun ? "text-rose-300" : "text-emerald-300"
+            }`}
+          >
+            {overRun
+              ? `−${fmtMoney(actualCost - contractRevenueExTax)}`
+              : fmtMoney(remainingBudget)}
+          </p>
+        </div>
+        <div>
+          <p className="text-white/50">Reste à facturer (base)</p>
+          <p className="font-mono text-sm font-semibold text-white/90">
+            {fmtMoney(baseRemaining)}
+          </p>
+        </div>
+      </div>
+      <div className="mt-3 space-y-1 border-t border-brand-800 pt-3 text-xs">
+        <div className="flex justify-between">
+          <span className="text-white/60">Facturé sur la base</span>
+          <span className="font-mono text-white">
+            {fmtMoney(baseInvoiced)}
+          </span>
+        </div>
+        {extrasInvoiced > 0 ? (
+          <div className="flex justify-between">
+            <span className="text-white/60">Facturé en extras</span>
+            <span className="font-mono text-amber-300">
+              +{fmtMoney(extrasInvoiced)}
+            </span>
+          </div>
+        ) : null}
+        <div className="flex justify-between border-t border-brand-800 pt-1 font-semibold">
+          <span className="text-white">Client nous doit</span>
+          <span
+            className={`font-mono ${
+              balanceDue > 0 ? "text-amber-300" : "text-emerald-300"
+            }`}
+          >
+            {fmtMoney(balanceDue)}
           </span>
         </div>
       </div>
@@ -2446,7 +2585,7 @@ function FinancesTab({ projectId }: { projectId: number }) {
       {/* Material (achats) */}
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
         <h3 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
-          Coûts supplémentaires (achats)
+          Coûts réels (achats)
         </h3>
         {data.material_lines.length === 0 ? (
           <p className="mt-3 text-xs text-white/50">

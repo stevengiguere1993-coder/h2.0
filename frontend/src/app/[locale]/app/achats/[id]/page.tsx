@@ -43,6 +43,7 @@ type Achat = {
   project_id: number | null;
   description: string | null;
   amount: number | string | null;
+  amount_taxes: number | string | null;
   status: string;
   received_at: string | null;
   paid_at: string | null;
@@ -96,6 +97,7 @@ export default function AchatDetailPage() {
   const [fournisseurId, setFournisseurId] = useState("");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
+  const [amountTaxes, setAmountTaxes] = useState("");
   const [isBillable, setIsBillable] = useState(true);
   const [markupPercent, setMarkupPercent] = useState("");
   const [statusStr, setStatusStr] = useState("received");
@@ -131,6 +133,9 @@ export default function AchatDetailPage() {
         );
         setDescription(data.description || "");
         setAmount(data.amount != null ? String(data.amount) : "");
+        setAmountTaxes(
+          data.amount_taxes != null ? String(data.amount_taxes) : ""
+        );
         setIsBillable(data.is_billable !== false);
         setMarkupPercent(
           data.markup_percent != null ? String(data.markup_percent) : ""
@@ -166,6 +171,8 @@ export default function AchatDetailPage() {
       fournisseurId !== (a.fournisseur_id ? String(a.fournisseur_id) : "") ||
       description !== (a.description || "") ||
       amount !== (a.amount != null ? String(a.amount) : "") ||
+      amountTaxes !==
+        (a.amount_taxes != null ? String(a.amount_taxes) : "") ||
       statusStr !== a.status ||
       invoiceDate !==
         (a.invoice_date ? a.invoice_date.slice(0, 10) : "") ||
@@ -176,9 +183,9 @@ export default function AchatDetailPage() {
       paymentMethod !== (a.payment_method || "")
     );
   }, [
-    a, projectId, fournisseurId, description, amount, statusStr,
-    invoiceDate, supplierInvoiceNumber, receivedAt, receiptUrl,
-    notes, paymentMethod
+    a, projectId, fournisseurId, description, amount, amountTaxes,
+    statusStr, invoiceDate, supplierInvoiceNumber, receivedAt,
+    receiptUrl, notes, paymentMethod
   ]);
 
   async function saveAll() {
@@ -189,6 +196,7 @@ export default function AchatDetailPage() {
       const payload: Record<string, unknown> = {
         description: description.trim() || null,
         amount: amount ? Number(amount) : null,
+        amount_taxes: amountTaxes ? Number(amountTaxes) : null,
         status: statusStr,
         invoice_date: invoiceDate || null,
         supplier_invoice_number: supplierInvoiceNumber.trim() || null,
@@ -456,7 +464,7 @@ export default function AchatDetailPage() {
                   <div className="grid gap-4 sm:grid-cols-3">
                     <div>
                       <label htmlFor="aamount" className="label">
-                        Montant (CAD)
+                        Montant HT (avant taxes)
                       </label>
                       <input
                         id="aamount"
@@ -466,6 +474,21 @@ export default function AchatDetailPage() {
                         value={amount}
                         onChange={(e) => setAmount(e.target.value)}
                         className="input"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="aamounttaxes" className="label">
+                        Taxes (CAD)
+                      </label>
+                      <input
+                        id="aamounttaxes"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={amountTaxes}
+                        onChange={(e) => setAmountTaxes(e.target.value)}
+                        className="input"
+                        placeholder="0.00"
                       />
                     </div>
                     <div>
@@ -482,6 +505,21 @@ export default function AchatDetailPage() {
                       </select>
                     </div>
                   </div>
+                  {(amount || amountTaxes) ? (
+                    <p className="-mt-1 text-[11px] text-white/50">
+                      Total TTC payé au fournisseur :{" "}
+                      <strong className="text-white/80">
+                        {new Intl.NumberFormat("fr-CA", {
+                          style: "currency",
+                          currency: "CAD"
+                        }).format(
+                          (Number(amount) || 0) + (Number(amountTaxes) || 0)
+                        )}
+                      </strong>
+                      . Le markup pour refacturation est appliqué sur le
+                      HT seulement.
+                    </p>
+                  ) : null}
 
                   {/* Refacturation client */}
                   <div className="rounded-xl border border-brand-800 bg-brand-900/40 p-4">
@@ -514,7 +552,7 @@ export default function AchatDetailPage() {
                       Refacturable au client
                     </label>
                     <label htmlFor="amarkup" className="label">
-                      Majoration (%) — appliquée à l&apos;import facture
+                      Majoration (%) — appliquée sur le HT à l&apos;import facture
                     </label>
                     <input
                       id="amarkup"
