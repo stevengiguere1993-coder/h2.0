@@ -323,6 +323,34 @@ async def get_client(client_id: int, db: DBSession, _: CurrentUser):
     return DevlogClientRead.model_validate(obj)
 
 
+class _ClientKpis(BaseModel):
+    """KPIs cumules d'un client — alimente le header de la fiche client
+    "compte mature" (mai 2026). Montants en cents pour rester precis ; la
+    UI divise par 100 pour l'affichage.
+
+    Conventions :
+      * ``total_invoiced_lifetime_cents`` : somme des totaux TTC des
+        factures *non annulees* (status != 'annulee'). On reutilise le
+        calcul officiel ``compute_invoice_totals`` quand des items
+        existent, sinon on retombe sur ``invoice.amount`` (legacy /
+        soumissions converties sans items detailles).
+      * ``total_paid_lifetime_cents`` : meme calcul, restreint aux
+        factures ``status == 'payee'``.
+      * ``outstanding_cents`` : invoiced - paid (positif = reste a
+        encaisser ; toujours >= 0 dans la pratique).
+      * ``mrr_recurring_cents`` : somme du bloc recurring TTC des
+        soumissions acceptees qui alimentent un projet *actif*
+        (``en_cours`` ou ``livre``). Plusieurs projets actifs avec
+        recurrent => cumul. Cle metier pour la sante du portefeuille.
+    """
+
+    active_projects_count: int = 0
+    total_invoiced_lifetime_cents: int = 0
+    total_paid_lifetime_cents: int = 0
+    outstanding_cents: int = 0
+    mrr_recurring_cents: int = 0
+
+
 class _ClientFullHistory(BaseModel):
     """Vue fusionnee de la fiche client : ses propres infos + l'historique
     du prospect d'origine s'il y en a un. Source de verite pour
@@ -331,9 +359,11 @@ class _ClientFullHistory(BaseModel):
 
     client: DevlogClientRead
     source_lead: Optional[DevlogLeadRead] = None
+    kpis: _ClientKpis = Field(default_factory=_ClientKpis)
     soumissions: List[DevlogSoumissionRead] = Field(default_factory=list)
     projects: List[DevlogProjectRead] = Field(default_factory=list)
     contracts: List[DevlogContractRead] = Field(default_factory=list)
+    invoices: List[DevlogInvoiceRead] = Field(default_factory=list)
 
 
 @clients_router.get(
@@ -341,20 +371,26 @@ class _ClientFullHistory(BaseModel):
     response_model=_ClientFullHistory,
     summary=(
         "Vue unifiee prospect/client : infos du client + lead source + "
-        "soumissions/projets/contrats fusionnes (du lead OU du client)"
+        "soumissions/projets/contrats/factures + KPIs cumules"
     ),
 )
 async def get_client_full_history(
     client_id: int, db: DBSession, _: CurrentUser
 ):
     """Retourne un payload unique avec toute l'histoire de la fiche
-    client : ses infos, le prospect d'origine s'il y en a un, et la
-    fusion des soumissions/projets/contrats lies au lead OU au client.
+    client : ses infos, le prospect d'origine s'il y en a un, la fusion
+    des soumissions/projets/contrats/factures lies au lead OU au client,
+    et les KPIs cumules (projets actifs, facture/encaisse a vie, MRR).
 
     Phil : "quand un prospect devient client, c'est la meme fiche qui
     suit le contact bout-en-bout (notes, attachments, soumissions,
     projet conserves)". Ce endpoint evite que la fiche client n'ait
     pas l'historique du prospect d'origine.
+
+    Vague "fiche client mature" (mai 2026) : ajout du bloc ``kpis``
+    pour faire de cette page un *compte client* (header de cards,
+    MRR, factures recentes) plutot qu'un simple miroir de la fiche
+    prospect.
     """
     client = await GenericCrud(db, DevlogClient).get(client_id)
     if client is None:
@@ -403,6 +439,21 @@ async def get_client_full_history(
         )
     ).scalars().all()
 
+    invoices = (
+        await db.execute(
+            select(DevlogInvoice)
+            .where(DevlogInvoice.client_id == client_id)
+            .order_by(DevlogInvoice.id.desc())
+        )
+    ).scalars().all()
+
+    kpis = await _compute_client_kpis(
+        db,
+        projects=list(projects),
+        soumissions=list(soumissions),
+        invoices=list(invoices),
+    )
+
     return _ClientFullHistory(
         client=DevlogClientRead.model_validate(client),
         source_lead=(
@@ -410,9 +461,127 @@ async def get_client_full_history(
             if source_lead is not None
             else None
         ),
+        kpis=kpis,
         soumissions=[DevlogSoumissionRead.model_validate(s) for s in soumissions],
         projects=[DevlogProjectRead.model_validate(p) for p in projects],
         contracts=[DevlogContractRead.model_validate(c) for c in contracts],
+        invoices=[DevlogInvoiceRead.model_validate(i) for i in invoices],
+    )
+
+
+# ---------- helpers KPIs (fiche client mature, mai 2026) ----------
+
+_ACTIVE_PROJECT_STATUSES = ("en_cours", "livre")
+
+
+async def _compute_client_kpis(
+    db,
+    *,
+    projects: list[DevlogProject],
+    soumissions: list[DevlogSoumission],
+    invoices: list[DevlogInvoice],
+) -> "_ClientKpis":
+    """Calcule les KPIs cumules d'un client a partir de ses entites.
+
+    * **MRR recurrent** : pour chaque projet actif (``en_cours`` ou
+      ``livre``), on retrouve la soumission liee via
+      ``project.soumission_id``. Si la soumission est en mode
+      ``is_devis_dev`` (nouveau format), on charge ses items et on passe
+      par ``compute_devis`` pour obtenir le ``total_client_amount_taxe``
+      du bloc recurring. C'est la verite arithmetique cote client
+      (taxes Qc incluses). Si la soumission n'a aucun item recurring,
+      le bloc renvoie 0 et le projet ne contribue pas au MRR.
+    * **Facture/Encaisse** : on totalise TTC. Quand des items existent
+      on reutilise ``compute_invoice_totals`` (somme HT + TPS + TVQ).
+      Sinon on retombe sur ``invoice.amount`` (compatibilite avec les
+      factures importees / legacy sans items detailles).
+    """
+    active_projects = [
+        p for p in projects if p.status in _ACTIVE_PROJECT_STATUSES
+    ]
+
+    # ---- MRR : on charge en bloc les items des soumissions actives ----
+    mrr_total_cents = 0
+    sub_by_id = {s.id: s for s in soumissions}
+    soum_ids_for_mrr: set[int] = set()
+    for p in active_projects:
+        sid = getattr(p, "soumission_id", None)
+        if sid is None:
+            continue
+        soum = sub_by_id.get(sid)
+        # La soumission peut ne pas etre dans le bundle (rare : projet
+        # raccroche a un devis d'un autre client) — on la skippe alors.
+        if soum is None:
+            continue
+        # On ne calcule le MRR que pour les soumissions devis_dev avec un
+        # statut "acceptee" (la signature implique l'engagement). Pour
+        # le legacy (is_devis_dev=False), pas de notion de recurrent
+        # structuree => skip plutot que d'inventer un montant.
+        if not getattr(soum, "is_devis_dev", False):
+            continue
+        if soum.status != "acceptee":
+            continue
+        soum_ids_for_mrr.add(soum.id)
+
+    if soum_ids_for_mrr:
+        items_rows = (
+            await db.execute(
+                select(DevlogSoumissionItem).where(
+                    DevlogSoumissionItem.soumission_id.in_(soum_ids_for_mrr)
+                )
+            )
+        ).scalars().all()
+        items_by_soum: dict[int, list[DevlogSoumissionItem]] = {}
+        for it in items_rows:
+            items_by_soum.setdefault(it.soumission_id, []).append(it)
+        for sid in soum_ids_for_mrr:
+            soum = sub_by_id[sid]
+            preview = compute_devis(soum, items_by_soum.get(sid, []))
+            recurring = preview.get("recurring", {}) or {}
+            total_taxe = float(
+                recurring.get("total_client_amount_taxe", 0) or 0
+            )
+            mrr_total_cents += int(round(total_taxe * 100))
+
+    # ---- Facture / encaisse : on charge en bloc les items des factures
+    # non-annulees, et on retombe sur invoice.amount sinon. -------------
+    invoice_ids = [i.id for i in invoices if i.status != "annulee"]
+    items_by_invoice: dict[int, list[DevlogInvoiceItem]] = {}
+    if invoice_ids:
+        inv_items = (
+            await db.execute(
+                select(DevlogInvoiceItem).where(
+                    DevlogInvoiceItem.invoice_id.in_(invoice_ids)
+                )
+            )
+        ).scalars().all()
+        for it in inv_items:
+            items_by_invoice.setdefault(it.invoice_id, []).append(it)
+
+    invoiced_cents = 0
+    paid_cents = 0
+    for inv in invoices:
+        if inv.status == "annulee":
+            continue
+        items_for_inv = items_by_invoice.get(inv.id, [])
+        if items_for_inv:
+            totals = compute_invoice_totals(items_for_inv)
+            total_ttc = float(totals.get("total", 0) or 0)
+        else:
+            total_ttc = float(inv.amount or 0)
+        cents = int(round(total_ttc * 100))
+        invoiced_cents += cents
+        if inv.status == "payee":
+            paid_cents += cents
+
+    outstanding_cents = max(0, invoiced_cents - paid_cents)
+
+    return _ClientKpis(
+        active_projects_count=len(active_projects),
+        total_invoiced_lifetime_cents=invoiced_cents,
+        total_paid_lifetime_cents=paid_cents,
+        outstanding_cents=outstanding_cents,
+        mrr_recurring_cents=mrr_total_cents,
     )
 
 
@@ -3043,4 +3212,5 @@ async def public_sign_contract(
     await on_contract_signed(obj, db)
 
     return DevlogContractPublicRead.model_validate(obj)
+
 
