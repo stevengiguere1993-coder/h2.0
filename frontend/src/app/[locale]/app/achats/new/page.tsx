@@ -62,6 +62,7 @@ export default function NewAchatPage() {
   >([]);
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
+  const [amountTaxes, setAmountTaxes] = useState("");
   // Refacturation client.
   const [isBillable, setIsBillable] = useState(true);
   const [markupPercent, setMarkupPercent] = useState("");
@@ -137,6 +138,7 @@ export default function NewAchatPage() {
       if (hours.trim()) payload.hours = Number(hours);
       if (description.trim()) payload.description = description.trim();
       if (amount) payload.amount = Number(amount);
+      if (amountTaxes) payload.amount_taxes = Number(amountTaxes);
       payload.is_billable = isBillable;
       if (markupPercent.trim()) {
         payload.markup_percent = Number(markupPercent);
@@ -368,10 +370,10 @@ export default function NewAchatPage() {
             </div>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-3">
             <div>
               <label htmlFor="amount" className="label">
-                Montant (CAD)
+                Montant HT (avant taxes)
               </label>
               <input
                 id="amount"
@@ -380,6 +382,21 @@ export default function NewAchatPage() {
                 min="0"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
+                placeholder="0.00"
+                className="input"
+              />
+            </div>
+            <div>
+              <label htmlFor="amounttaxes" className="label">
+                Taxes (CAD)
+              </label>
+              <input
+                id="amounttaxes"
+                type="number"
+                step="0.01"
+                min="0"
+                value={amountTaxes}
+                onChange={(e) => setAmountTaxes(e.target.value)}
                 placeholder="0.00"
                 className="input"
               />

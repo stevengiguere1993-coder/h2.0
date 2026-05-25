@@ -213,10 +213,38 @@ async def get_kpis(
         func.count(Soumission.id),
     ).where(
         Soumission.status == SoumissionStatus.ACCEPTED.value,
+        Soumission.kind != "contract",
         accepted_ts >= p_start_dt,
         accepted_ts <= p_end_dt,
     )
     ventes_total, ventes_count = (await db.execute(ventes_sum_stmt)).one()
+
+    # Les contrats d'entreprise (kind="contract") n'utilisent pas les
+    # colonnes total/subtotal — leur prix vit dans contract_data.prix_estime
+    # (JSON). On les ajoute séparément pour qu'ils comptent dans les ventes.
+    import json as _json
+    contracts_stmt = select(Soumission.contract_data).where(
+        Soumission.status == SoumissionStatus.ACCEPTED.value,
+        Soumission.kind == "contract",
+        accepted_ts >= p_start_dt,
+        accepted_ts <= p_end_dt,
+    )
+    contracts_rows = (await db.execute(contracts_stmt)).scalars().all()
+    contracts_total = 0.0
+    contracts_count = 0
+    for raw in contracts_rows:
+        contracts_count += 1
+        if not raw:
+            continue
+        try:
+            cd = _json.loads(raw)
+            val = float(cd.get("prix_estime") or 0)
+            if val > 0:
+                contracts_total += val
+        except (ValueError, TypeError):
+            continue
+    ventes_total = float(ventes_total or 0) + contracts_total
+    ventes_count = int(ventes_count or 0) + contracts_count
 
     conversion = (
         (float(ventes_count) / float(soum_sent_count) * 100.0)

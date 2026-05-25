@@ -509,6 +509,9 @@ async def init_db() -> None:
             ("achats", "markup_percent", "NUMERIC(6, 2)"),
             ("achats", "invoiced_at", "TIMESTAMP WITH TIME ZONE"),
             ("achats", "facture_item_id", "INTEGER"),
+            # Sépare taxes payées au fournisseur du HT — pour ne pas
+            # appliquer le markup sur des taxes lors de la refacturation.
+            ("achats", "amount_taxes", "NUMERIC(12, 2)"),
             # Phase B — taux facturable employés + flag refacturé punches.
             ("employes", "billing_rate", "NUMERIC(10, 2)"),
             ("punches", "invoiced_at", "TIMESTAMP WITH TIME ZONE"),

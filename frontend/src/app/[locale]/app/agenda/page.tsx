@@ -423,10 +423,16 @@ export default function AgendaPage() {
         const dur = Math.max(0.125, Number(p.duration_days) || 1);
         const t = (p.start_time || "00:00:00").slice(0, 8);
         const sMs = new Date(`${p.start_date!}T${t}`).getTime();
+        // Pour les phases « journée complète » (start_time null) on
+        // retire 1 ms à la fin pour que l'événement se termine à
+        // 23:59:59.999 du DERNIER jour au lieu de 00:00:00 du jour
+        // SUIVANT — sinon le rendu calendrier croit que la phase
+        // déborde sur un 2e jour (1 jour de travail apparaissait sur
+        // 2 cases du mois).
         const eMs =
           p.start_time != null
             ? sMs + dur * 8 * 3_600_000
-            : sMs + dur * 86_400_000;
+            : sMs + dur * 86_400_000 - 1;
         const s = new Date(sMs);
         const e = new Date(eMs);
         return {

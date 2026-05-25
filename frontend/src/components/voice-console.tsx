@@ -42,6 +42,12 @@ type IncomingMeta = {
   callerKindHint?: string;
 };
 
+// Seul cet utilisateur voit la bannière d'erreur Voice en bas de
+// page. Pour les autres on échoue silencieusement — un token Twilio
+// invalide n'a aucune action utile pour eux, le bruit visuel n'aide
+// personne.
+const OWNER_EMAIL = "sgiguere@immohorizon.com";
+
 export function VoiceConsole() {
   const deviceRef = useRef<DeviceAny | null>(null);
   const [status, setStatus] = useState<"idle" | "ready" | "error">("idle");
@@ -49,6 +55,24 @@ export function VoiceConsole() {
   const [incoming, setIncoming] = useState<{ call: CallAny; meta: IncomingMeta } | null>(null);
   const [active, setActive] = useState<CallAny | null>(null);
   const [muted, setMuted] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await authedFetch("/api/v1/auth/me");
+        if (!res.ok) return;
+        const me = (await res.json()) as { email?: string };
+        if (!cancelled) setUserEmail(me.email ?? null);
+      } catch {
+        /* silencieux */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Verbatim de l'appel — Web Speech API du navigateur (ne capte
   // QUE le micro local, pas la voix du distant via WebRTC). Le buffer
@@ -354,7 +378,7 @@ export function VoiceConsole() {
         </div>
       ) : null}
 
-      {errorMsg ? (
+      {errorMsg && userEmail === OWNER_EMAIL ? (
         <div className="fixed bottom-4 left-4 z-[100] max-w-xs rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[10px] text-rose-200">
           Voice : {errorMsg}
         </div>

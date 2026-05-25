@@ -15,6 +15,7 @@ type Achat = {
   project_id: number | null;
   description: string | null;
   amount: number | string | null;
+  amount_taxes: number | string | null;
   status: string;
   ordered_at: string | null;
   received_at: string | null;
@@ -133,7 +134,10 @@ export default function AchatsPage() {
   const total = useMemo(
     () =>
       filtered.reduce(
-        (sum, a) => sum + (a.amount != null ? Number(a.amount) : 0),
+        (sum, a) =>
+          sum +
+          (a.amount != null ? Number(a.amount) : 0) +
+          (a.amount_taxes != null ? Number(a.amount_taxes) : 0),
         0
       ),
     [filtered]
@@ -297,7 +301,12 @@ export default function AchatsPage() {
                         <span className="line-clamp-1">{a.description || "—"}</span>
                       </td>
                       <td className="px-4 py-3 text-right font-semibold text-white">
-                        {fmtMoney(a.amount)}
+                        {fmtMoney(
+                          (a.amount != null ? Number(a.amount) : 0) +
+                            (a.amount_taxes != null
+                              ? Number(a.amount_taxes)
+                              : 0)
+                        )}
                       </td>
                       <td className="px-4 py-3 text-white/70">
                         {fmtDate(a.ordered_at)}

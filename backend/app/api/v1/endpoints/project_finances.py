@@ -378,12 +378,15 @@ async def _compute_finances(
     # --- Actuals ---
     achats_stmt = select(Achat).where(Achat.project_id == project_id)
     achats = (await db.execute(achats_stmt)).scalars().all()
+    # Coût réel matériel = HT + taxes payées au fournisseur (TTC) — on
+    # affiche ce qui a vraiment été déboursé sur le compte de la
+    # compagnie, pas seulement la portion HT utilisée pour le markup.
     material_lines = [
         CostLine(
             label=(a.description or a.reference or f"Achat #{a.id}"),
             quantity=1,
-            unit_cost=float(a.amount or 0),
-            total=float(a.amount or 0),
+            unit_cost=float(a.amount or 0) + float(a.amount_taxes or 0),
+            total=float(a.amount or 0) + float(a.amount_taxes or 0),
         )
         for a in achats
     ]

@@ -5,6 +5,8 @@ import {
   Briefcase,
   Building2,
   Code2,
+  Eye,
+  EyeOff,
   Loader2,
   MapPin,
   Monitor,
@@ -51,6 +53,7 @@ export function LoginForm() {
   const [userVolets, setUserVolets] = useState<string[]>([]);
   const [userRole, setUserRole] = useState<string>("");
   const [pendingHelp, setPendingHelp] = useState(0);
+  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -484,9 +487,35 @@ export function LoginForm() {
       </div>
       <div>
         <label htmlFor="password" className="label">Mot de passe</label>
-        <input id="password" name="password" type="password" required autoComplete="current-password" className="input" />
+        <div className="relative">
+          <input
+            id="password"
+            name="password"
+            type={showPassword ? "text" : "password"}
+            required
+            autoComplete="current-password"
+            className="input pr-10"
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword((v) => !v)}
+            className="absolute inset-y-0 right-0 flex items-center px-3 text-brand-600 hover:text-brand-900"
+            aria-label={
+              showPassword
+                ? "Masquer le mot de passe"
+                : "Afficher le mot de passe"
+            }
+            tabIndex={-1}
+          >
+            {showPassword ? (
+              <EyeOff className="h-4 w-4" />
+            ) : (
+              <Eye className="h-4 w-4" />
+            )}
+          </button>
+        </div>
       </div>
-      <label className="flex cursor-pointer items-center gap-2 text-sm text-brand-700">
+      <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-brand-900">
         <input
           type="checkbox"
           name="remember_me"
