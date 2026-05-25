@@ -18,6 +18,9 @@ from app.api.deps import CurrentUser, DBSession
 from app.models.devlog_invoice import DevlogInvoice
 from app.models.devlog_invoice_item import DevlogInvoiceItem
 from app.models.devlog_project import DevlogProject
+from app.models.devlog_project_recurring_service import (
+    DevlogProjectRecurringService,
+)
 from app.models.devlog_soumission import DevlogSoumission
 from app.models.devlog_soumission_item import DevlogSoumissionItem
 from app.models.devlog_soumission_section import DevlogSoumissionSection
@@ -94,18 +97,39 @@ async def get_project_finances(
 
     # --- Reste a facturer : a partir de la soumission acceptee
     # rattachee au projet (DevlogProject.soumission_id). On somme les
-    # totaux client (unit_price * quantity) et on soustrait ce qui a
-    # deja ete facture (total_facture). Negatif possible si surfacturation.
+    # totaux client (unit_price * quantity) en EXCLUANT les items
+    # recurrents (mensuel) — ces derniers ne font pas partie de
+    # l'investissement initial.
+    #
+    # Distinction :
+    #   * Mode devis_dev : item.item_kind in ('feature','fixed_cost')
+    #     pour l'initial ; 'recurring_cost' = mensuel exclu.
+    #   * Mode legacy : on exclut les items dont la section parente a
+    #     billing_kind = 'recurring'.
     total_soumission = 0.0
     if project.soumission_id is not None:
-        # Mode legacy : section_id renseigne -> on somme item.total.
-        # Mode devis_dev : on additionne aussi item.total (calcule par
-        # devlog_devis_calc et persiste). Dans les deux cas, ``total``
-        # represente la part client.
+        # Récupère les ids de sections récurrentes pour exclusion.
+        recurring_section_ids_rows = (
+            await db.execute(
+                select(DevlogSoumissionSection.id).where(
+                    DevlogSoumissionSection.soumission_id
+                    == project.soumission_id,
+                    DevlogSoumissionSection.billing_kind == "recurring",
+                )
+            )
+        ).all()
+        recurring_section_ids = {r[0] for r in recurring_section_ids_rows}
+
         total_soumission_val = (
             await db.execute(
                 select(func.coalesce(func.sum(DevlogSoumissionItem.total), 0))
-                .where(DevlogSoumissionItem.soumission_id == project.soumission_id)
+                .where(
+                    DevlogSoumissionItem.soumission_id == project.soumission_id,
+                    DevlogSoumissionItem.item_kind != "recurring_cost",
+                    ~DevlogSoumissionItem.section_id.in_(recurring_section_ids)
+                    if recurring_section_ids
+                    else True,  # type: ignore[arg-type]
+                )
             )
         ).scalar_one()
         total_soumission = float(total_soumission_val or 0)
@@ -150,7 +174,11 @@ async def get_project_finances(
                         0,
                     )
                 ).where(
-                    DevlogSoumissionItem.soumission_id == project.soumission_id
+                    DevlogSoumissionItem.soumission_id == project.soumission_id,
+                    DevlogSoumissionItem.item_kind != "recurring_cost",
+                    ~DevlogSoumissionItem.section_id.in_(recurring_section_ids)
+                    if recurring_section_ids
+                    else True,  # type: ignore[arg-type]
                 )
             )
         ).scalar_one()
@@ -172,6 +200,33 @@ async def get_project_finances(
         ).scalar_one()
         nb_sections = int(nb_sections_val or 0)
 
+    # --- KPIs services récurrents : MRR + comptes par statut ---
+    svc_rows = (
+        await db.execute(
+            select(
+                DevlogProjectRecurringService.status,
+                func.count(DevlogProjectRecurringService.id),
+                func.coalesce(
+                    func.sum(DevlogProjectRecurringService.monthly_amount_cents),
+                    0,
+                ),
+            )
+            .where(DevlogProjectRecurringService.project_id == project_id)
+            .group_by(DevlogProjectRecurringService.status)
+        )
+    ).all()
+    mrr_active = 0
+    counts: dict[str, int] = {
+        "active": 0,
+        "pending": 0,
+        "paused": 0,
+        "cancelled": 0,
+    }
+    for status_value, count_value, sum_value in svc_rows:
+        counts[status_value] = int(count_value or 0)
+        if status_value == "active":
+            mrr_active = int(sum_value or 0)
+
     return DevlogProjectFinances(
         project_id=project_id,
         soumission_id=project.soumission_id,
@@ -182,4 +237,9 @@ async def get_project_finances(
         total_heures_facturables=round(total_heures_facturables, 2),
         marge_estimee=round(marge_estimee, 2),
         nb_sections_soumission=nb_sections,
+        mrr_active_cents=mrr_active,
+        nb_recurring_services_active=counts["active"],
+        nb_recurring_services_pending=counts["pending"],
+        nb_recurring_services_paused=counts["paused"],
+        nb_recurring_services_cancelled=counts["cancelled"],
     )

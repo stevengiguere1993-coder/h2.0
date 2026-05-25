@@ -28,8 +28,12 @@ from app.models.devlog_invoice_item import DevlogInvoiceItem
 from app.models.devlog_project import DevlogProject
 from app.models.devlog_project_phase import DevlogProjectPhase
 from app.models.devlog_project_purchase import DevlogProjectPurchase
+from app.models.devlog_project_recurring_service import (
+    DevlogProjectRecurringService,
+)
 from app.models.devlog_soumission import DevlogSoumission
 from app.models.devlog_soumission_item import DevlogSoumissionItem
+from app.models.devlog_soumission_section import DevlogSoumissionSection
 from app.models.devlog_time_entry import DevlogTimeEntry
 from app.schemas.devlog import (
     DevlogProjectRecap,
@@ -137,13 +141,29 @@ async def get_project_recap(
             total_paye += eff
 
     total_soumission = 0.0
+    recurring_section_ids: set[int] = set()
     if project.soumission_id is not None:
+        recurring_section_ids_rows = (
+            await db.execute(
+                select(DevlogSoumissionSection.id).where(
+                    DevlogSoumissionSection.soumission_id
+                    == project.soumission_id,
+                    DevlogSoumissionSection.billing_kind == "recurring",
+                )
+            )
+        ).all()
+        recurring_section_ids = {r[0] for r in recurring_section_ids_rows}
+
         total_soumission_val = (
             await db.execute(
                 select(
                     func.coalesce(func.sum(DevlogSoumissionItem.total), 0)
                 ).where(
-                    DevlogSoumissionItem.soumission_id == project.soumission_id
+                    DevlogSoumissionItem.soumission_id == project.soumission_id,
+                    DevlogSoumissionItem.item_kind != "recurring_cost",
+                    ~DevlogSoumissionItem.section_id.in_(recurring_section_ids)
+                    if recurring_section_ids
+                    else True,  # type: ignore[arg-type]
                 )
             )
         ).scalar_one()
@@ -175,7 +195,11 @@ async def get_project_recap(
                     )
                 ).where(
                     DevlogSoumissionItem.soumission_id
-                    == project.soumission_id
+                    == project.soumission_id,
+                    DevlogSoumissionItem.item_kind != "recurring_cost",
+                    ~DevlogSoumissionItem.section_id.in_(recurring_section_ids)
+                    if recurring_section_ids
+                    else True,  # type: ignore[arg-type]
                 )
             )
         ).scalar_one()
@@ -196,6 +220,33 @@ async def get_project_recap(
     ).one()
     total_achats_cents = int(purchases_total[0] or 0)
     nb_achats = int(purchases_total[1] or 0)
+
+    # --- Services récurrents : MRR + comptes par statut --------------------
+    svc_rows = (
+        await db.execute(
+            select(
+                DevlogProjectRecurringService.status,
+                func.count(DevlogProjectRecurringService.id),
+                func.coalesce(
+                    func.sum(
+                        DevlogProjectRecurringService.monthly_amount_cents
+                    ),
+                    0,
+                ),
+            )
+            .where(DevlogProjectRecurringService.project_id == project_id)
+            .group_by(DevlogProjectRecurringService.status)
+        )
+    ).all()
+    mrr_active_cents = 0
+    nb_svc_active = 0
+    nb_svc_pending = 0
+    for status_value, count_value, sum_value in svc_rows:
+        if status_value == "active":
+            mrr_active_cents = int(sum_value or 0)
+            nb_svc_active = int(count_value or 0)
+        elif status_value == "pending":
+            nb_svc_pending = int(count_value or 0)
 
     # --- Derniere activite : 10 derniers audit_logs lies au projet ---------
     # On capture :
@@ -280,5 +331,9 @@ async def get_project_recap(
         marge_estimee=round(marge_estimee, 2),
         total_achats_cents=total_achats_cents,
         nb_achats=nb_achats,
+        mrr_active_cents=mrr_active_cents,
+        nb_recurring_services_active=nb_svc_active,
+        nb_recurring_services_pending=nb_svc_pending,
+        delivered_at=project.delivered_at,
         events=events_payload,
     )

@@ -4,11 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter as useNextRouter } from "next/navigation";
 import {
   ArrowLeft,
-  Calendar,
   DollarSign,
-  FileText,
   Loader2,
-  MapPin,
   Plus,
   Save,
   Trash2
@@ -41,13 +38,24 @@ type Project = {
 };
 
 const STATUS_LABELS: Record<string, string> = {
-  planned: "Prévu",
+  planifie: "Planifié",
+  en_attente: "En attente",
+  en_cours: "En cours",
+  suspendu: "Suspendu",
+  livre: "Livré",
+  // Backward compat avec d'anciens statuts EN.
+  planned: "Planifié",
   in_progress: "En cours",
   suspended: "Suspendu",
   delivered: "Livré"
 };
 
 const STATUS_CLASS: Record<string, string> = {
+  planifie: "bg-white/10 text-white",
+  en_attente: "bg-white/10 text-white",
+  en_cours: "bg-blue-500/20 text-blue-300",
+  suspendu: "bg-amber-500/20 text-amber-300",
+  livre: "bg-emerald-500/20 text-emerald-300",
   planned: "bg-white/10 text-white",
   in_progress: "bg-blue-500/20 text-blue-300",
   suspended: "bg-amber-500/20 text-amber-300",
@@ -57,39 +65,29 @@ const STATUS_CLASS: Record<string, string> = {
 type TabId =
   | "summary"
   | "planification"
-  | "agenda"
   | "achats"
   | "photos"
   | "tasks"
   | "finances"
+  | "recurring"
   | "recap"
   | "members";
 
-// Vague 2 (2026-05) : suite à la PR backend qui livre les endpoints
-// /api/v1/devlog/projects/{id}/(phases|tasks|members|finances), on
-// réactive 3 onglets (Tâches, Finances, Membres) via des composants
-// simplifiés alignés sur les schémas Pydantic devlog (différents des
-// clones Construction lourds).
-//
-// Planification reste désactivée : le composant Construction utilise
-// sous-traitants + créneaux horaires + agenda + détection de conflits,
-// trop éloigné du modèle devlog (juste name/description/dates/status).
-// Une refonte dédiée sera faite plus tard.
-//
-// Vague 2.5 (2026-05-25) : Planification, Photos, Achats et Recap
-// reactives via les nouveaux endpoints /devlog/projects/{id}/(phases
-// existant + photos / purchases / recap). Agenda chantier reste off
-// (pas d'equivalent devlog, c'est un clone Construction lourd).
+// Refonte Dev Logiciel 2026-05-25 — onglets dédiés au pôle, ré-alignés
+// sur la dualité « investissement initial / services récurrents » du
+// devis_dev. L'onglet « Agenda chantier » du pôle Construction est
+// retiré (pas pertinent en dev). Nouvel onglet « Services récurrents »
+// pour le MRR (DevlogProjectRecurringService).
 const TABS: { id: TabId; label: string; available: boolean }[] = [
   { id: "summary", label: "Résumé", available: true },
+  { id: "planification", label: "Phases du projet", available: true },
   { id: "tasks", label: "Tâches", available: true },
-  { id: "planification", label: "Planification", available: true },
+  { id: "members", label: "Équipe", available: true },
+  { id: "achats", label: "Outils & licences", available: true },
+  { id: "photos", label: "Captures & documents", available: true },
   { id: "finances", label: "Finances", available: true },
-  { id: "achats", label: "Achats", available: true },
-  { id: "photos", label: "Photos", available: true },
-  { id: "recap", label: "Récap", available: true },
-  { id: "members", label: "Membres", available: true },
-  { id: "agenda", label: "Agenda chantier", available: false }
+  { id: "recurring", label: "Services récurrents", available: true },
+  { id: "recap", label: "Récap", available: true }
 ];
 
 function fmtMoney(n: number | string | null): string {
@@ -138,11 +136,11 @@ export default function ProjectDetailPage() {
     const valid: TabId[] = [
       "summary",
       "planification",
-      "agenda",
       "achats",
       "photos",
       "tasks",
       "finances",
+      "recurring",
       "recap",
       "members"
     ];
@@ -264,12 +262,27 @@ export default function ProjectDetailPage() {
     setP({ ...p, status: newStatus });
     try {
       const res = await authedFetch(`/api/v1/devlog/projects/${id}`, {
-        method: "PUT",
+        method: "PATCH",
         body: JSON.stringify({ status: newStatus })
       });
       if (!res.ok) throw new Error();
       const updated = (await res.json()) as Project;
       setP(updated);
+      // Refonte mai 2026 — quand un projet passe en « livre », bascule
+      // automatiquement les services récurrents pending → active
+      // (le backend SQLAlchemy event listener pose delivered_at mais
+      // ne peut pas appeler un service async ; on déclenche depuis le
+      // frontend une fois le PATCH terminé). Idempotent côté API.
+      if (newStatus === "livre") {
+        try {
+          await authedFetch(
+            `/api/v1/devlog/projects/${id}/recurring-services/activate-pending`,
+            { method: "POST" }
+          );
+        } catch {
+          /* best-effort — Phil peut activer manuellement depuis l'onglet */
+        }
+      }
     } catch {
       setP(prev);
       setError("Changement de statut échoué.");
@@ -295,7 +308,7 @@ export default function ProjectDetailPage() {
         notes: notes.trim() || null
       };
       const res = await authedFetch(`/api/v1/devlog/projects/${id}`, {
-        method: "PUT",
+        method: "PATCH",
         body: JSON.stringify(payload)
       });
       if (!res.ok) throw new Error();
@@ -427,7 +440,13 @@ export default function ProjectDetailPage() {
                   onChange={(e) => updateStatus(e.target.value)}
                   className="input w-40"
                 >
-                  {Object.entries(STATUS_LABELS).map(([k, v]) => (
+                  {[
+                    ["planifie", "Planifié"],
+                    ["en_attente", "En attente"],
+                    ["en_cours", "En cours"],
+                    ["suspendu", "Suspendu"],
+                    ["livre", "Livré"]
+                  ].map(([k, v]) => (
                     <option key={k} value={k}>
                       {v}
                     </option>
@@ -471,27 +490,23 @@ export default function ProjectDetailPage() {
               </p>
             </div>
 
-            {/* Header KPIs */}
-            <section className="mt-6 grid gap-3 sm:grid-cols-3">
-              <Kpi
-                icon={MapPin}
-                label="Adresse"
-                value={p.address || "Non renseignée"}
-              />
-              <Kpi
-                icon={Calendar}
-                label="Calendrier"
-                value={
-                  p.start_date || p.end_date
-                    ? `${p.start_date || "?"} → ${p.end_date || "?"}`
-                    : "Non planifié"
-                }
-              />
-              <Kpi
-                icon={DollarSign}
-                label="Budget"
-                value={fmtMoney(p.budget)}
-              />
+            {/* Header KPIs Dev Logiciel — 4 cards alignées sur le devis_dev :
+                investissement initial + MRR + heures + marge. */}
+            <DevlogHeaderKpis projectId={id} />
+            <section className="mt-4 flex flex-wrap items-center gap-3 text-xs text-white/50">
+              <span>
+                Démarré :{" "}
+                {p.start_date
+                  ? new Date(p.start_date).toLocaleDateString("fr-CA")
+                  : "—"}
+              </span>
+              <span>·</span>
+              <span>
+                Échéance :{" "}
+                {p.end_date
+                  ? new Date(p.end_date).toLocaleDateString("fr-CA")
+                  : "—"}
+              </span>
             </section>
 
             {/* Tabs */}
@@ -576,13 +591,11 @@ export default function ProjectDetailPage() {
                 <DevlogPhotosTab projectId={id} />
               ) : tab === "achats" ? (
                 <DevlogAchatsTab projectId={id} />
+              ) : tab === "recurring" ? (
+                <DevlogRecurringServicesTab projectId={id} />
               ) : tab === "recap" ? (
                 <DevlogRecapTab projectId={id} />
-              ) : (
-                // Agenda chantier reste off : composant Construction trop
-                // dependant des creneaux et de l'assignation multi.
-                <UnavailableSection />
-              )}
+              ) : null}
             </div>
           </>
         ) : null}
@@ -5574,6 +5587,12 @@ type DevlogFinancesData = {
   total_heures_facturables: number;
   marge_estimee: number;
   nb_sections_soumission: number;
+  // Refonte mai 2026 — bloc récurrent
+  mrr_active_cents?: number;
+  nb_recurring_services_active?: number;
+  nb_recurring_services_pending?: number;
+  nb_recurring_services_paused?: number;
+  nb_recurring_services_cancelled?: number;
 };
 
 function DevlogFinancesTab({ projectId }: { projectId: number }) {
@@ -5624,38 +5643,112 @@ function DevlogFinancesTab({ projectId }: { projectId: number }) {
     );
   }
 
+  const mrr = (data.mrr_active_cents ?? 0) / 100;
+
   return (
-    <div className="space-y-5">
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <DevlogFinanceKpi
-          label="Total facturé"
-          value={fmtMoney(data.total_facture)}
-          sub="Factures envoyées + payées"
-          tone="white"
-        />
-        <DevlogFinanceKpi
-          label="Encaissé"
-          value={fmtMoney(data.total_paye)}
-          sub={`${
-            data.total_facture > 0
-              ? ((data.total_paye / data.total_facture) * 100).toFixed(1)
-              : "0.0"
-          } % du facturé`}
-          tone="emerald"
-        />
-        <DevlogFinanceKpi
-          label="Reste à facturer"
-          value={fmtMoney(data.total_reste_a_facturer)}
-          sub={`Sur soumission ${fmtMoney(data.total_soumission)}`}
-          tone={data.total_reste_a_facturer >= 0 ? "white" : "rose"}
-        />
-        <DevlogFinanceKpi
-          label="Marge estimée"
-          value={fmtMoney(data.marge_estimee)}
-          sub={`${data.total_heures_facturables.toFixed(1)} h saisies`}
-          tone={data.marge_estimee >= 0 ? "emerald" : "rose"}
-        />
-      </div>
+    <div className="space-y-6">
+      {/* Bloc 1 : INVESTISSEMENT INITIAL */}
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+            Investissement initial
+          </h3>
+          <span className="text-[11px] text-white/50">
+            Mise en oeuvre — facturé à la livraison
+          </span>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <DevlogFinanceKpi
+            label="Soumission"
+            value={fmtMoney(data.total_soumission)}
+            sub="Total initial accepté"
+            tone="white"
+          />
+          <DevlogFinanceKpi
+            label="Facturé"
+            value={fmtMoney(data.total_facture)}
+            sub="Factures envoyées + payées"
+            tone="white"
+          />
+          <DevlogFinanceKpi
+            label="Encaissé"
+            value={fmtMoney(data.total_paye)}
+            sub={`${
+              data.total_facture > 0
+                ? ((data.total_paye / data.total_facture) * 100).toFixed(1)
+                : "0.0"
+            } % du facturé`}
+            tone="emerald"
+          />
+          <DevlogFinanceKpi
+            label="Reste à facturer"
+            value={fmtMoney(data.total_reste_a_facturer)}
+            sub={`Sur ${fmtMoney(data.total_soumission)}`}
+            tone={data.total_reste_a_facturer >= 0 ? "white" : "rose"}
+          />
+        </div>
+      </section>
+
+      {/* Bloc 2 : SERVICES RÉCURRENTS */}
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+            Services récurrents
+          </h3>
+          <span className="text-[11px] text-white/50">
+            MRR — facturé chaque mois après livraison
+          </span>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <DevlogFinanceKpi
+            label="MRR actif"
+            value={`${fmtMoney(mrr)} / mois`}
+            sub={`${data.nb_recurring_services_active ?? 0} service${
+              (data.nb_recurring_services_active ?? 0) > 1 ? "s" : ""
+            } actif${(data.nb_recurring_services_active ?? 0) > 1 ? "s" : ""}`}
+            tone="emerald"
+          />
+          <DevlogFinanceKpi
+            label="En attente"
+            value={String(data.nb_recurring_services_pending ?? 0)}
+            sub="Activé à la livraison"
+            tone="white"
+          />
+          <DevlogFinanceKpi
+            label="ARR projeté"
+            value={`${fmtMoney(mrr * 12)} / an`}
+            sub="MRR actif × 12"
+            tone="emerald"
+          />
+        </div>
+        <p className="mt-3 text-[11px] text-white/40">
+          Détail dans l&apos;onglet « Services récurrents » — ajout / pause /
+          génération de facture mensuelle.
+        </p>
+      </section>
+
+      {/* Bloc 3 : Marge */}
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+            Marge & efficacité
+          </h3>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <DevlogFinanceKpi
+            label="Marge estimée (initial)"
+            value={fmtMoney(data.marge_estimee)}
+            sub={`${data.total_heures_facturables.toFixed(1)} h saisies × 75 $/h`}
+            tone={data.marge_estimee >= 0 ? "emerald" : "rose"}
+          />
+          <DevlogFinanceKpi
+            label="Heures saisies"
+            value={`${data.total_heures_facturables.toFixed(1)} h`}
+            sub="Total cumulé sur le projet"
+            tone="white"
+          />
+        </div>
+      </section>
 
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
         <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
@@ -5665,7 +5758,7 @@ function DevlogFinancesTab({ projectId }: { projectId: number }) {
           <div className="mt-3 grid gap-3 sm:grid-cols-3 text-sm">
             <div>
               <p className="text-[11px] uppercase tracking-wider text-white/50">
-                Montant total
+                Initial (mise en oeuvre)
               </p>
               <p className="mt-1 font-semibold text-white">
                 {fmtMoney(data.total_soumission)}
@@ -5910,8 +6003,12 @@ function DevlogMembersTab({ projectId }: { projectId: number }) {
     <div className="space-y-5">
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
-          Ajouter un membre
+          Équipe du projet
         </h2>
+        <p className="mt-1 text-xs text-white/60">
+          Ajoute les membres internes ou sous-traitants assignés au projet,
+          avec leur taux horaire pour le calcul des coûts.
+        </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-[140px_1fr_180px_140px_auto]">
           <select
             value={pickKind}
@@ -6251,8 +6348,13 @@ function DevlogPlanificationTab({ projectId }: { projectId: number }) {
     <div className="space-y-5">
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
-          Nouvelle phase
+          Phases du projet
         </h2>
+        <p className="mt-1 text-xs text-white/60">
+          Phases dérivées de la section « Investissement initial » de la
+          soumission. Les services récurrents sont gérés dans l&apos;onglet
+          dédié (ils ne sont pas des phases).
+        </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_160px_160px_auto]">
           <input
             type="text"
@@ -6596,11 +6698,12 @@ function DevlogPhotosTab({ projectId }: { projectId: number }) {
     <div className="space-y-5">
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
-          Ajouter des photos
+          Captures & documents
         </h2>
         <p className="mt-1 text-xs text-white/60">
-          JPG / PNG / WEBP / HEIC / GIF / PDF, 15 Mo max par fichier. Glisse les
-          fichiers ou utilise le sélecteur ci-dessous.
+          Screenshots, wireframes, spécifications PDF, exports Figma…
+          JPG / PNG / WEBP / HEIC / GIF / PDF, 15 Mo max par fichier.
+          Glisse les fichiers ou utilise le sélecteur ci-dessous.
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <label
@@ -6686,7 +6789,7 @@ function DevlogPhotosTab({ projectId }: { projectId: number }) {
           </div>
         ) : photos.length === 0 ? (
           <p className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
-            Aucune photo pour ce projet.
+            Aucune capture ou document pour ce projet.
           </p>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -6962,11 +7065,12 @@ function DevlogAchatsTab({ projectId }: { projectId: number }) {
       <section className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
-            Achats / Dépenses
+            Outils & licences
           </h2>
           <p className="mt-1 text-xs text-white/60">
-            Suivi des achats liés au projet (matériel, licences, sous-traitance
-            ponctuelle…). Total cumulé en bas de la liste.
+            Suivi des outils, licences et abonnements du projet (Figma,
+            Stripe, AWS, dépendances payantes, sous-traitance ponctuelle…).
+            Total cumulé en bas de la liste.
           </p>
         </div>
         <button
@@ -6975,7 +7079,7 @@ function DevlogAchatsTab({ projectId }: { projectId: number }) {
           className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-4 py-2.5 font-semibold text-white transition hover:bg-blue-400 text-sm"
         >
           <Plus className="mr-2 h-4 w-4" />
-          Ajouter un achat
+          Ajouter une dépense
         </button>
       </section>
 
@@ -7226,6 +7330,11 @@ type DevlogRecap = {
   marge_estimee: number;
   total_achats_cents: number;
   nb_achats: number;
+  // Refonte mai 2026 — bloc récurrent
+  mrr_active_cents?: number;
+  nb_recurring_services_active?: number;
+  nb_recurring_services_pending?: number;
+  delivered_at?: string | null;
   events: DevlogRecapEvent[];
 };
 
@@ -7375,13 +7484,53 @@ function DevlogRecapTab({ projectId }: { projectId: number }) {
         </div>
       </div>
 
+      {/* Bloc récurrent : MRR + nb services */}
+      {(data.mrr_active_cents ?? 0) > 0 ||
+      (data.nb_recurring_services_active ?? 0) > 0 ||
+      (data.nb_recurring_services_pending ?? 0) > 0 ? (
+        <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+            Services récurrents
+          </h3>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3 text-sm">
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-white/50">
+                MRR actif
+              </p>
+              <p className="mt-1 text-lg font-bold text-emerald-300">
+                {fmtMoney((data.mrr_active_cents ?? 0) / 100)}{" "}
+                <span className="text-xs font-normal text-white/50">
+                  / mois
+                </span>
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-white/50">
+                Services actifs
+              </p>
+              <p className="mt-1 text-lg font-bold text-white">
+                {data.nb_recurring_services_active ?? 0}
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-white/50">
+                En attente livraison
+              </p>
+              <p className="mt-1 text-lg font-bold text-white">
+                {data.nb_recurring_services_pending ?? 0}
+              </p>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
         <h3 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
-          Jalons
+          Jalons (investissement initial)
         </h3>
         {data.phases.length === 0 ? (
           <p className="mt-3 text-sm text-white/60">
-            Aucune phase. Crée-les depuis l&apos;onglet Planification.
+            Aucune phase. Crée-les depuis l&apos;onglet « Phases du projet ».
           </p>
         ) : (
           <ul className="mt-4 space-y-2">
@@ -7446,6 +7595,548 @@ function DevlogRecapTab({ projectId }: { projectId: number }) {
       <p className="text-[11px] text-white/40">
         Vue agrégée lecture seule. La marge estimée valorise les heures saisies
         à 75 $/h par défaut.
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Header KPIs Dev Logiciel — 4 cards : initial / MRR / heures / marge
+// Charge /finances pour avoir tous les chiffres en un seul appel.
+// ---------------------------------------------------------------------------
+
+function DevlogHeaderKpis({ projectId }: { projectId: number }) {
+  const [data, setData] = useState<DevlogFinancesData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authedFetch(
+          `/api/v1/devlog/projects/${projectId}/finances`
+        );
+        if (!res.ok) return;
+        if (!cancelled) setData((await res.json()) as DevlogFinancesData);
+      } catch {
+        /* ignore */
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  if (loading) {
+    return (
+      <section className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <div
+            key={i}
+            className="h-24 animate-pulse rounded-xl border border-brand-800 bg-brand-900"
+          />
+        ))}
+      </section>
+    );
+  }
+
+  const mrr = (data?.mrr_active_cents ?? 0) / 100;
+  const factPct =
+    data && data.total_soumission > 0
+      ? Math.min(
+          100,
+          Math.round((data.total_facture / data.total_soumission) * 100)
+        )
+      : 0;
+
+  return (
+    <section className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {/* KPI 1 : Investissement initial */}
+      <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+        <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+          Budget initial
+        </p>
+        <p className="mt-2 text-xl font-bold text-white">
+          {fmtMoney(data?.total_facture ?? 0)}
+        </p>
+        <p className="mt-1 text-[11px] text-white/40">
+          sur {fmtMoney(data?.total_soumission ?? 0)} ({factPct}%)
+        </p>
+        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-brand-950">
+          <div
+            className="h-full bg-blue-500 transition-all"
+            style={{ width: `${factPct}%` }}
+          />
+        </div>
+      </div>
+
+      {/* KPI 2 : MRR */}
+      <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+        <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+          MRR actif
+        </p>
+        <p className="mt-2 text-xl font-bold text-emerald-300">
+          {fmtMoney(mrr)} <span className="text-xs text-white/50">/ mois</span>
+        </p>
+        <p className="mt-1 text-[11px] text-white/40">
+          {data?.nb_recurring_services_active ?? 0} service
+          {(data?.nb_recurring_services_active ?? 0) > 1 ? "s" : ""} actif
+          {(data?.nb_recurring_services_active ?? 0) > 1 ? "s" : ""}
+          {(data?.nb_recurring_services_pending ?? 0) > 0
+            ? ` · ${data?.nb_recurring_services_pending} en attente`
+            : ""}
+        </p>
+      </div>
+
+      {/* KPI 3 : Heures */}
+      <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+        <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+          Heures saisies
+        </p>
+        <p className="mt-2 text-xl font-bold text-white">
+          {(data?.total_heures_facturables ?? 0).toFixed(1)} h
+        </p>
+        <p className="mt-1 text-[11px] text-white/40">Cumul du projet</p>
+      </div>
+
+      {/* KPI 4 : Marge estimée */}
+      <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
+        <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
+          Marge estimée
+        </p>
+        <p
+          className={`mt-2 text-xl font-bold ${
+            (data?.marge_estimee ?? 0) >= 0 ? "text-emerald-300" : "text-rose-300"
+          }`}
+        >
+          {fmtMoney(data?.marge_estimee ?? 0)}
+        </p>
+        <p className="mt-1 text-[11px] text-white/40">
+          Initial — heures × 75 $/h
+        </p>
+      </div>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Services récurrents — liste + CRUD + toggle status + génération facture.
+// Aligné sur les endpoints /api/v1/devlog/projects/{id}/recurring-services
+// ajoutés en mai 2026 par la refonte « initial / récurrent ».
+// ---------------------------------------------------------------------------
+
+type DevlogRecurringService = {
+  id: number;
+  project_id: number;
+  name: string;
+  monthly_amount_cents: number;
+  start_date: string | null;
+  status: "pending" | "active" | "paused" | "cancelled";
+  last_invoiced_at: string | null;
+  source_soumission_item_id: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+const RECURRING_STATUS_META: Record<
+  string,
+  { label: string; cls: string }
+> = {
+  pending: {
+    label: "En attente",
+    cls: "bg-white/10 text-white/80 border-white/20"
+  },
+  active: {
+    label: "Actif",
+    cls: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+  },
+  paused: {
+    label: "En pause",
+    cls: "bg-amber-500/20 text-amber-300 border-amber-500/30"
+  },
+  cancelled: {
+    label: "Annulé",
+    cls: "bg-rose-500/20 text-rose-300 border-rose-500/30"
+  }
+};
+
+function DevlogRecurringServicesTab({
+  projectId
+}: {
+  projectId: number;
+}) {
+  const confirm = useConfirm();
+  const [services, setServices] = useState<DevlogRecurringService[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Form ajout
+  const [fName, setFName] = useState("");
+  const [fAmount, setFAmount] = useState("");
+  const [fStart, setFStart] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const res = await authedFetch(
+          `/api/v1/devlog/projects/${projectId}/recurring-services`
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!cancelled)
+          setServices((await res.json()) as DevlogRecurringService[]);
+      } catch (e) {
+        if (!cancelled)
+          setErr(`Chargement échoué : ${(e as Error).message}`);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  async function addService() {
+    const amount = Number(fAmount);
+    if (!fName.trim() || !Number.isFinite(amount) || amount < 0) {
+      setErr("Nom et montant requis.");
+      return;
+    }
+    setCreating(true);
+    setErr(null);
+    try {
+      const payload: Record<string, unknown> = {
+        name: fName.trim(),
+        monthly_amount_cents: Math.round(amount * 100),
+        status: "pending"
+      };
+      if (fStart) payload.start_date = fStart;
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/recurring-services`,
+        { method: "POST", body: JSON.stringify(payload) }
+      );
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(
+          `HTTP ${res.status}${txt ? ` — ${txt.slice(0, 200)}` : ""}`
+        );
+      }
+      const created = (await res.json()) as DevlogRecurringService;
+      setServices((xs) => [...xs, created]);
+      setFName("");
+      setFAmount("");
+      setFStart("");
+    } catch (e) {
+      setErr(`Ajout échoué : ${(e as Error).message}`);
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function patchService(
+    id: number,
+    patch: Partial<DevlogRecurringService>
+  ) {
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/recurring-services/${id}`,
+        { method: "PATCH", body: JSON.stringify(patch) }
+      );
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(
+          `HTTP ${res.status}${txt ? ` — ${txt.slice(0, 200)}` : ""}`
+        );
+      }
+      const updated = (await res.json()) as DevlogRecurringService;
+      setServices((xs) => xs.map((x) => (x.id === id ? updated : x)));
+    } catch (e) {
+      setErr(`Mise à jour échouée : ${(e as Error).message}`);
+    }
+  }
+
+  async function removeService(id: number) {
+    if (!(await confirm("Supprimer ce service récurrent ?"))) return;
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/recurring-services/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      setServices((xs) => xs.filter((x) => x.id !== id));
+    } catch (e) {
+      setErr(`Suppression échouée : ${(e as Error).message}`);
+    }
+  }
+
+  async function generateInvoice(id: number, name: string) {
+    if (
+      !(await confirm(
+        `Générer la facture mensuelle brouillon pour « ${name} » ?`
+      ))
+    )
+      return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/recurring-services/${id}/generate-invoice`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(
+          `HTTP ${res.status}${txt ? ` — ${txt.slice(0, 200)}` : ""}`
+        );
+      }
+      const data = (await res.json()) as { invoice_id: number };
+      // Refresh la liste pour récupérer last_invoiced_at.
+      const lr = await authedFetch(
+        `/api/v1/devlog/projects/${projectId}/recurring-services`
+      );
+      if (lr.ok) setServices((await lr.json()) as DevlogRecurringService[]);
+      alert(`Facture brouillon #${data.invoice_id} créée.`);
+    } catch (e) {
+      setErr(`Génération facture échouée : ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const totalMrrActive = services
+    .filter((s) => s.status === "active")
+    .reduce((acc, s) => acc + s.monthly_amount_cents, 0);
+
+  return (
+    <div className="space-y-5">
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+              Services récurrents
+            </h2>
+            <p className="mt-1 text-xs text-white/60">
+              Hébergement, support, maintenance, abonnements… facturés
+              automatiquement chaque mois après livraison du projet. Le
+              MRR (montant mensuel récurrent) cumule les services en statut
+              « actif ».
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-[11px] uppercase tracking-wider text-white/50">
+              MRR total actif
+            </p>
+            <p className="mt-1 text-xl font-bold text-emerald-300">
+              {fmtMoney(totalMrrActive / 100)}{" "}
+              <span className="text-xs font-normal text-white/50">/ mois</span>
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">
+          Ajouter un service récurrent
+        </h2>
+        <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_180px_180px_auto]">
+          <input
+            type="text"
+            value={fName}
+            onChange={(e) => setFName(e.target.value)}
+            placeholder="Ex. Hébergement et maintenance Pro"
+            className="input"
+          />
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={fAmount}
+            onChange={(e) => setFAmount(e.target.value)}
+            placeholder="Montant mensuel HT"
+            className="input"
+          />
+          <input
+            type="date"
+            value={fStart}
+            onChange={(e) => setFStart(e.target.value)}
+            placeholder="Démarrage"
+            className="input"
+          />
+          <button
+            type="button"
+            onClick={addService}
+            disabled={creating || !fName.trim() || !fAmount}
+            className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm disabled:opacity-60"
+          >
+            {creating ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Plus className="mr-2 h-4 w-4" />
+            )}
+            Ajouter
+          </button>
+        </div>
+        {err ? <p className="mt-3 text-sm text-rose-300">{err}</p> : null}
+      </section>
+
+      <section>
+        {loading ? (
+          <div className="flex min-h-[30vh] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+          </div>
+        ) : services.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-10 text-center text-sm text-white/60">
+            Aucun service récurrent. Les services issus de la soumission
+            seront ajoutés automatiquement au démarrage du projet ; tu peux
+            aussi en ajouter manuellement ci-dessus.
+          </p>
+        ) : (
+          <ul className="space-y-3">
+            {services.map((s) => {
+              const meta =
+                RECURRING_STATUS_META[s.status] ||
+                RECURRING_STATUS_META.pending;
+              return (
+                <li
+                  key={s.id}
+                  className="rounded-xl border border-brand-800 bg-brand-900 p-4"
+                >
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <input
+                        type="text"
+                        value={s.name}
+                        onChange={(e) =>
+                          setServices((xs) =>
+                            xs.map((x) =>
+                              x.id === s.id
+                                ? { ...x, name: e.target.value }
+                                : x
+                            )
+                          )
+                        }
+                        onBlur={(e) => {
+                          const v = e.target.value.trim();
+                          if (v && v !== s.name)
+                            patchService(s.id, { name: v });
+                        }}
+                        className="w-full bg-transparent text-base font-semibold text-white focus:outline-none"
+                        placeholder="Nom du service"
+                      />
+                      <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px] text-white/50">
+                        <span>
+                          Démarrage :{" "}
+                          {s.start_date
+                            ? new Date(s.start_date).toLocaleDateString("fr-CA")
+                            : "—"}
+                        </span>
+                        <span>·</span>
+                        <span>
+                          Dernière facturation :{" "}
+                          {s.last_invoiced_at
+                            ? new Date(s.last_invoiced_at).toLocaleDateString(
+                                "fr-CA"
+                              )
+                            : "jamais"}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-[140px_120px_auto_auto] items-center gap-2 sm:grid-cols-[160px_140px_auto_auto]">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={(s.monthly_amount_cents / 100).toString()}
+                        onChange={(e) => {
+                          const v = Math.max(
+                            0,
+                            Math.round(Number(e.target.value || 0) * 100)
+                          );
+                          setServices((xs) =>
+                            xs.map((x) =>
+                              x.id === s.id
+                                ? { ...x, monthly_amount_cents: v }
+                                : x
+                            )
+                          );
+                        }}
+                        onBlur={(e) => {
+                          const v = Math.max(
+                            0,
+                            Math.round(Number(e.target.value || 0) * 100)
+                          );
+                          if (v !== s.monthly_amount_cents)
+                            patchService(s.id, { monthly_amount_cents: v });
+                        }}
+                        className="input text-sm"
+                        title="Montant mensuel HT (CAD)"
+                      />
+                      <select
+                        value={s.status}
+                        onChange={(e) =>
+                          patchService(s.id, {
+                            status: e.target.value as DevlogRecurringService["status"]
+                          })
+                        }
+                        className={`rounded-full border px-2 py-1 text-[11px] font-semibold ${meta.cls}`}
+                      >
+                        {Object.entries(RECURRING_STATUS_META).map(
+                          ([k, v]) => (
+                            <option
+                              key={k}
+                              value={k}
+                              className="bg-brand-950 text-white"
+                            >
+                              {v.label}
+                            </option>
+                          )
+                        )}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => generateInvoice(s.id, s.name)}
+                        disabled={busy || s.status !== "active"}
+                        className="inline-flex items-center gap-1 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-1.5 text-xs font-medium text-blue-200 hover:bg-blue-500/20 disabled:opacity-50"
+                        title={
+                          s.status === "active"
+                            ? "Générer la facture du mois (brouillon)"
+                            : "Service non actif"
+                        }
+                      >
+                        <DollarSign className="h-3.5 w-3.5" />
+                        Facture
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeService(s.id)}
+                        className="text-rose-400 hover:text-rose-300"
+                        aria-label="Supprimer"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      <p className="text-[11px] text-white/40">
+        Le bouton « Facture » crée une facture brouillon avec une ligne au
+        montant mensuel TTC (TPS + TVQ ajoutées automatiquement). Tu peux
+        ensuite l&apos;ouvrir et l&apos;envoyer depuis l&apos;onglet
+        Facturation. L&apos;automatisation cron arrivera plus tard.
       </p>
     </div>
   );
