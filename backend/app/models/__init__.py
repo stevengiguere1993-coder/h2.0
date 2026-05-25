@@ -31,6 +31,8 @@ from app.models.devlog_lead_need import DevlogLeadNeed  # noqa: F401
 from app.models.devlog_project import DevlogProject  # noqa: F401
 from app.models.devlog_project_member import DevlogProjectMember  # noqa: F401
 from app.models.devlog_project_phase import DevlogProjectPhase  # noqa: F401
+from app.models.devlog_project_photo import DevlogProjectPhoto  # noqa: F401
+from app.models.devlog_project_purchase import DevlogProjectPurchase  # noqa: F401
 from app.models.devlog_project_task import DevlogProjectTask  # noqa: F401
 from app.models.devlog_soumission import DevlogSoumission  # noqa: F401
 from app.models.devlog_soumission_item import DevlogSoumissionItem  # noqa: F401
@@ -235,6 +237,8 @@ __all__ = [
     "DevlogProject",
     "DevlogProjectMember",
     "DevlogProjectPhase",
+    "DevlogProjectPhoto",
+    "DevlogProjectPurchase",
     "DevlogProjectTask",
     "DevlogSoumission",
     "DevlogSoumissionItem",

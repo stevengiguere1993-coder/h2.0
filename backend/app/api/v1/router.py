@@ -12,6 +12,9 @@ from app.api.v1.endpoints import (
     devlog_project_finances,
     devlog_project_members,
     devlog_project_phases,
+    devlog_project_photos,
+    devlog_project_purchases,
+    devlog_project_recap,
     devlog_project_tasks,
 )
 from app.api.v1.endpoints import (
@@ -347,5 +350,14 @@ api_router.include_router(
 )
 api_router.include_router(
     devlog_project_finances.router, dependencies=_devlog_admin_only
+)
+api_router.include_router(
+    devlog_project_photos.router, dependencies=_devlog_admin_only
+)
+api_router.include_router(
+    devlog_project_purchases.router, dependencies=_devlog_admin_only
+)
+api_router.include_router(
+    devlog_project_recap.router, dependencies=_devlog_admin_only
 )
 
