@@ -18,7 +18,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
+  AlertTriangle,
   CheckCircle2,
+  CreditCard,
   Download,
   FileText,
   Loader2,
@@ -80,6 +82,12 @@ export default function PayInvoicePage() {
   const [data, setData] = useState<PublicInvoice | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [payLoading, setPayLoading] = useState(false);
+  const [payError, setPayError] = useState<string | null>(null);
+  const [toast, setToast] = useState<
+    | { kind: "success" | "info"; message: string }
+    | null
+  >(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -101,6 +109,85 @@ export default function PayInvoicePage() {
   useEffect(() => {
     if (token) void load();
   }, [token, load]);
+
+  // Retour Stripe : ?paid=1 → toast + poll jusqu'à confirmation
+  // webhook (statut passe à `payee`). ?cancelled=1 → message neutre.
+  useEffect(() => {
+    if (typeof window === "undefined" || !token) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("paid") === "1") {
+      setToast({
+        kind: "success",
+        message: "Paiement reçu, merci !"
+      });
+      // Polling — le webhook peut prendre 1-2s avant que le statut
+      // soit visible côté API (Stripe POST, FastAPI traite, flush).
+      let attempts = 0;
+      const interval = window.setInterval(() => {
+        attempts += 1;
+        void (async () => {
+          try {
+            const r = await fetch(
+              `/api/v1/public/devlog/invoices/${token}`,
+              { cache: "no-store" }
+            );
+            if (r.ok) {
+              const fresh = (await r.json()) as PublicInvoice;
+              setData(fresh);
+              if (fresh.status === "payee") {
+                window.clearInterval(interval);
+              }
+            }
+          } catch {
+            /* silencieux — on retentera au prochain tick */
+          }
+          if (attempts >= 5) window.clearInterval(interval);
+        })();
+      }, 2000);
+      // Nettoie le query param (UX)
+      url.searchParams.delete("paid");
+      window.history.replaceState({}, "", url.toString());
+      return () => window.clearInterval(interval);
+    }
+    if (url.searchParams.get("cancelled") === "1") {
+      setToast({
+        kind: "info",
+        message: "Paiement annulé, vous pouvez réessayer."
+      });
+      url.searchParams.delete("cancelled");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, [token]);
+
+  const startCheckout = useCallback(async () => {
+    setPayLoading(true);
+    setPayError(null);
+    try {
+      const res = await fetch(
+        `/api/v1/public/devlog/invoices/${token}/checkout-session`,
+        { method: "POST", cache: "no-store" }
+      );
+      if (!res.ok) {
+        const detail = await res
+          .json()
+          .then((b) => (b && b.detail) || null)
+          .catch(() => null);
+        throw new Error(
+          detail || "Impossible de démarrer le paiement en ligne."
+        );
+      }
+      const body = (await res.json()) as { url: string };
+      if (!body.url) throw new Error("URL Stripe manquante.");
+      window.location.href = body.url;
+    } catch (exc) {
+      const msg =
+        exc instanceof Error
+          ? exc.message
+          : "Impossible de démarrer le paiement en ligne.";
+      setPayError(msg);
+      setPayLoading(false);
+    }
+  }, [token]);
 
   if (loading) {
     return (
@@ -132,6 +219,24 @@ export default function PayInvoicePage() {
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-8">
       <div className="mx-auto max-w-2xl">
+        {toast ? (
+          <div
+            className={
+              "mb-4 flex items-start gap-2 rounded-lg border px-4 py-3 text-sm " +
+              (toast.kind === "success"
+                ? "border-emerald-300 bg-emerald-50 text-emerald-900"
+                : "border-slate-300 bg-white text-slate-700")
+            }
+            role="status"
+          >
+            {toast.kind === "success" ? (
+              <CheckCircle2 className="h-5 w-5 flex-none text-emerald-600" />
+            ) : (
+              <AlertTriangle className="h-5 w-5 flex-none text-slate-500" />
+            )}
+            <p className="leading-snug">{toast.message}</p>
+          </div>
+        ) : null}
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
           {/* Header */}
           <div className="flex items-start justify-between border-b border-slate-200 pb-4">
@@ -314,11 +419,42 @@ export default function PayInvoicePage() {
             </a>
           </div>
 
-          {/* Comment payer */}
+          {/* Paiement en ligne par carte */}
+          {!paid ? (
+            <section className="mt-6">
+              <button
+                type="button"
+                onClick={() => void startCheckout()}
+                disabled={payLoading}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-base font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-400 sm:text-lg"
+              >
+                {payLoading ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <CreditCard className="h-5 w-5" />
+                )}
+                {payLoading
+                  ? "Redirection vers Stripe…"
+                  : "Payer en ligne par carte de crédit"}
+              </button>
+              {payError ? (
+                <p className="mt-2 flex items-start gap-1 text-xs text-rose-700">
+                  <AlertTriangle className="h-3.5 w-3.5 flex-none" />
+                  <span>{payError}</span>
+                </p>
+              ) : (
+                <p className="mt-2 text-center text-xs text-slate-500">
+                  Paiement sécurisé par Stripe. Visa, Mastercard, Amex.
+                </p>
+              )}
+            </section>
+          ) : null}
+
+          {/* Ou par virement / chèque */}
           {!paid ? (
             <section className="mt-6 rounded-xl border border-blue-200 bg-blue-50 px-4 py-4">
               <h3 className="text-sm font-bold text-blue-900">
-                Comment payer ?
+                Ou par virement / chèque
               </h3>
               <p className="mt-2 text-sm leading-relaxed text-blue-900">
                 {data.payment_instructions}

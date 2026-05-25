@@ -125,6 +125,27 @@ class Settings(BaseSettings):
     twilio_api_key_sid: Optional[str] = None
     twilio_api_key_secret: Optional[str] = None
 
+    # Stripe — paiement en ligne des factures Dev logiciel via
+    # Checkout hosted (PR chantier #4, mai 2026). Voir
+    # `app/services/devlog_stripe.py`.
+    # Clés secrètes (sk_live_... + whsec_...) à provisionner sur
+    # Render avant le premier paiement ; tant qu'elles sont absentes,
+    # la création de session répond 503 et le webhook 503.
+    stripe_secret_key: Optional[str] = None
+    stripe_webhook_secret: Optional[str] = None
+    # Clé publique (pk_live_...) — utile si on passe un jour à
+    # Stripe.js côté frontend. Avec le mode Checkout hosted, le
+    # frontend n'a besoin de rien : on lui retourne déjà l'URL
+    # hostée par Stripe.
+    stripe_publishable_key: Optional[str] = None
+    # Base d'URL des success/cancel URLs Stripe : on y append
+    # `/{token}?paid=1` (ou `?cancelled=1`). Le domaine peut
+    # changer entre prod (kratos.immohorizon.com) et un éventuel
+    # preview Render — d'où la variable.
+    stripe_devlog_success_url_base: str = (
+        "https://kratos.immohorizon.com/fr/devlog/pay-invoice"
+    )
+
     @property
     def is_production(self) -> bool:
         return self.env.lower() == "production"

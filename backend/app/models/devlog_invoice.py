@@ -57,5 +57,23 @@ class DevlogInvoice(Base, TimestampUpdateMixin):
         DateTime(timezone=True), nullable=True
     )
 
+    # --- Paiement en ligne via Stripe Checkout (mai 2026) ---
+    # ID de la Checkout Session courante (cs_live_...). Sert au mapping
+    # webhook → facture si l'event ne porte pas metadata.invoice_id.
+    stripe_session_id: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True, index=True
+    )
+    # PaymentIntent associé (pi_live_...). Conservé pour réconciliation
+    # comptable / remboursements éventuels.
+    stripe_payment_intent_id: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    # Méthode de paiement effective : stripe | virement | cheque | manuel.
+    # Renseigné automatiquement à l'encaissement Stripe, ou par l'admin
+    # lors d'un mark-paid manuel (legacy = NULL).
+    payment_method: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+
     def __repr__(self) -> str:
         return f"<DevlogInvoice(id={self.id}, number='{self.number}', status='{self.status}')>"

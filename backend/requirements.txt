@@ -78,3 +78,9 @@ pillow-heif>=0.13.0,<1.0.0
 # est présent mais ne l'épingle pas — .xlsx est le standard depuis
 # Excel 2007 et couvre 100% des fichiers vus en prod.
 openpyxl>=3.1.0,<4.0.0
+
+# Stripe — paiement en ligne par Checkout hosted pour les factures
+# Dev logiciel (chantier #4 mai 2026). Voir
+# `app/services/devlog_stripe.py` + `app/api/v1/endpoints/webhooks.py`.
+# 11.x minimum pour le typage natif `Webhook.construct_event`.
+stripe>=11.0.0,<16.0.0

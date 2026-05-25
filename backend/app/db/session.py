@@ -609,6 +609,26 @@ async def init_db() -> None:
                 "reminder_count",
                 "INTEGER NOT NULL DEFAULT 0",
             ),
+            # Stripe Checkout pour les factures devlog (chantier #4,
+            # mai 2026). `stripe_session_id` sert au mapping webhook
+            # → facture ; `payment_method` distingue les paiements en
+            # ligne ('stripe') des paiements manuels ('virement',
+            # 'cheque', 'manuel').
+            (
+                "devlog_invoices",
+                "stripe_session_id",
+                "VARCHAR(128)",
+            ),
+            (
+                "devlog_invoices",
+                "stripe_payment_intent_id",
+                "VARCHAR(128)",
+            ),
+            (
+                "devlog_invoices",
+                "payment_method",
+                "VARCHAR(32)",
+            ),
             (
                 "devlog_soumission_items",
                 "item_kind",
