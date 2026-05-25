@@ -83,6 +83,7 @@ from app.services.audit import log_action
 from app.services.devlog_client_provision import (
     convert_lead_to_client as _convert_lead_to_client_service,
 )
+from app.services.devlog_contract_signed_hook import on_contract_signed
 from app.services.devlog_devis_calc import compute_devis
 from app.services.devlog_project_provision import maybe_start_project
 from app.services.devlog_invoice_pdf import (
@@ -3031,6 +3032,15 @@ async def public_sign_contract(
             "auto-start project apres signature contrat %s a echoue",
             obj.id,
         )
+
+    # Hook post-signature : 4 side-effects best-effort (email welcome,
+    # notif Teams, repo GitHub, push QBO). Chaque action est encapsulée
+    # individuellement — l'orchestrateur ``on_contract_signed`` ne lève
+    # jamais, donc pas besoin d'un try/except ici. Le tout est conçu
+    # pour rester < 3-5 s ; au pire on dégrade en no-op si une intégra-
+    # tion n'est pas configurée (cf. les ENV vars optionnelles
+    # TEAMS_WEBHOOK_URL_DEVLOG / GITHUB_AUTOMATION_TOKEN / etc.).
+    await on_contract_signed(obj, db)
 
     return DevlogContractPublicRead.model_validate(obj)
 

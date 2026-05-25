@@ -90,5 +90,24 @@ class DevlogContract(Base, TimestampUpdateMixin):
         Integer, nullable=True
     )
 
+    # --- Hook post-signature (mai 2026) ----------------------------------
+    # Les 4 side-effects déclenchés à la signature publique du contrat
+    # (cf. ``app.services.devlog_contract_signed_hook``). Chaque
+    # horodatage marque le succès de l'étape (NULL = pas encore tenté,
+    # raté, ou skipé silencieusement). github_repo_url stocke l'URL HTML
+    # du repo GitHub privé provisionné automatiquement.
+    welcome_email_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    teams_notified_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    github_repo_url: Mapped[Optional[str]] = mapped_column(
+        String(512), nullable=True
+    )
+    qbo_pushed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     def __repr__(self) -> str:
         return f"<DevlogContract(id={self.id}, title='{self.title}', status='{self.status}')>"

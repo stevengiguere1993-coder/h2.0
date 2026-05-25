@@ -771,6 +771,31 @@ async def init_db() -> None:
                 "started_at",
                 "TIMESTAMP WITH TIME ZONE",
             ),
+            # Hook post-signature contrat (mai 2026, PR Phil). 4 side-effects
+            # best-effort déclenchés depuis le endpoint public sign — chaque
+            # horodatage marque le succès de l'étape (NULL = pas encore /
+            # rate ou skip). github_repo_url contient l'URL HTML du repo
+            # provisionné par GITHUB_AUTOMATION_TOKEN.
+            (
+                "devlog_contracts",
+                "github_repo_url",
+                "VARCHAR(512)",
+            ),
+            (
+                "devlog_contracts",
+                "welcome_email_sent_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
+            (
+                "devlog_contracts",
+                "qbo_pushed_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
+            (
+                "devlog_contracts",
+                "teams_notified_at",
+                "TIMESTAMP WITH TIME ZONE",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
