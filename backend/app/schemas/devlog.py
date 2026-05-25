@@ -722,3 +722,120 @@ class DevlogContractPublicRead(BaseModel):
 
 class DevlogContractSignRequest(BaseModel):
     name: str = Field(..., min_length=2, max_length=255)
+
+
+# --------------------------------------------------------------------------
+# DevlogProjectPhase / Task / Member / Finances (vague 2, mai 2026)
+# --------------------------------------------------------------------------
+
+
+class DevlogProjectPhaseCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    position: int = Field(default=0, ge=0)
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    status: str = Field(default="planifie", max_length=16)
+
+
+class DevlogProjectPhaseUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    position: Optional[int] = Field(default=None, ge=0)
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    status: Optional[str] = Field(default=None, max_length=16)
+
+
+class DevlogProjectPhaseRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    name: str
+    description: Optional[str]
+    position: int
+    start_date: Optional[date]
+    end_date: Optional[date]
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class DevlogProjectPhaseReorder(BaseModel):
+    phase_ids: list[int] = Field(default_factory=list)
+
+
+class DevlogProjectTaskCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    phase_id: Optional[int] = Field(default=None, gt=0)
+    assignee_user_id: Optional[int] = Field(default=None, gt=0)
+    status: str = Field(default="a_faire", max_length=16)
+    priority: str = Field(default="moyenne", max_length=16)
+    due_date: Optional[date] = None
+
+
+class DevlogProjectTaskUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    phase_id: Optional[int] = None
+    assignee_user_id: Optional[int] = None
+    status: Optional[str] = Field(default=None, max_length=16)
+    priority: Optional[str] = Field(default=None, max_length=16)
+    due_date: Optional[date] = None
+
+
+class DevlogProjectTaskRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    phase_id: Optional[int]
+    title: str
+    description: Optional[str]
+    assignee_user_id: Optional[int]
+    status: str
+    priority: str
+    due_date: Optional[date]
+    created_at: datetime
+    updated_at: datetime
+
+
+class DevlogProjectMemberCreate(BaseModel):
+    user_id: Optional[int] = Field(default=None, gt=0)
+    sous_traitant_id: Optional[int] = Field(default=None, gt=0)
+    role: Optional[str] = Field(default=None, max_length=64)
+    hourly_rate: Optional[float] = Field(default=None, ge=0)
+
+
+class DevlogProjectMemberUpdate(BaseModel):
+    role: Optional[str] = Field(default=None, max_length=64)
+    hourly_rate: Optional[float] = Field(default=None, ge=0)
+
+
+class DevlogProjectMemberRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    user_id: Optional[int]
+    sous_traitant_id: Optional[int]
+    role: Optional[str]
+    hourly_rate: Optional[float]
+    added_by_user_id: Optional[int]
+    added_at: datetime
+
+
+class DevlogProjectFinances(BaseModel):
+    """Vue agregee lecture seule des finances d'un projet Dev Logiciel."""
+
+    project_id: int
+    soumission_id: Optional[int]
+    total_facture: float
+    total_paye: float
+    total_reste_a_facturer: float
+    total_soumission: float
+    total_heures_facturables: float
+    marge_estimee: float
+    nb_sections_soumission: int
