@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { FileText, Loader2, Plus, Trash2 } from "lucide-react";
@@ -46,15 +46,30 @@ function contractEstimate(s: Soumission): number | null {
   }
 }
 
-type Column = { id: string; label: string; dot: string };
+type Column = {
+  id: string;
+  label: string;
+  dot: string;
+  /** Colonne virtuelle : pas un statut DB, calculée côté front (ex.
+   *  "En projet" = acceptees ayant un projet lié). Pas de drop. */
+  virtual?: boolean;
+};
 
 // IDs alignés sur les valeurs backend DevlogSoumission.status (français).
+// "en_projet" est une colonne virtuelle calculée côté frontend : la
+// soumission est ``acceptee`` ET un DevlogProject existe pour elle.
 const COLUMNS: Column[] = [
   { id: "brouillon", label: "Brouillons", dot: "bg-white/40" },
   { id: "envoyee", label: "Envoyées", dot: "bg-blue-400" },
   { id: "acceptee", label: "Acceptées", dot: "bg-emerald-400" },
   { id: "refusee", label: "Refusées", dot: "bg-rose-500" },
-  { id: "expiree", label: "Expirées", dot: "bg-amber-400" }
+  { id: "expiree", label: "Expirées", dot: "bg-amber-400" },
+  {
+    id: "en_projet",
+    label: "En projet",
+    dot: "bg-violet-400",
+    virtual: true
+  }
 ];
 
 function fmtMoney(n: number | null): string {
@@ -226,11 +241,20 @@ export default function SoumissionsPage() {
       COLUMNS.map((c) => [c.id, [] as Soumission[]])
     );
     for (const s of filtered) {
-      const target = COLUMNS.find((c) => c.id === s.status) ? s.status : "brouillon";
+      // Colonne virtuelle "En projet" : soumission acceptée ET un
+      // projet existe pour elle. Toutes les autres acceptées restent
+      // dans "Acceptées" en attente de conversion.
+      if (s.status === "acceptee" && projectAddrBySoumission.has(s.id)) {
+        map["en_projet"].push(s);
+        continue;
+      }
+      const target = COLUMNS.find((c) => c.id === s.status && !c.virtual)
+        ? s.status
+        : "brouillon";
       map[target].push(s);
     }
     return map;
-  }, [filtered]);
+  }, [filtered, projectAddrBySoumission]);
 
   async function moveSoumission(id: number, newStatus: string) {
     const prev = items;
@@ -309,6 +333,7 @@ export default function SoumissionsPage() {
                 <div
                   key={col.id}
                   onDragOver={(e) => {
+                    if (col.virtual) return;
                     e.preventDefault();
                     setHoverCol(col.id);
                   }}
@@ -316,6 +341,11 @@ export default function SoumissionsPage() {
                     setHoverCol((h) => (h === col.id ? null : h))
                   }
                   onDrop={() => {
+                    if (col.virtual) {
+                      setDragging(null);
+                      setHoverCol(null);
+                      return;
+                    }
                     if (dragging == null) return;
                     const item = items.find((s) => s.id === dragging);
                     if (item && item.status !== col.id)

@@ -474,10 +474,15 @@ soumission_automations_router = APIRouter(
 
 
 async def _ensure_client_for_soumission(
-    db, soumission: DevlogSoumission
+    db, soumission: DevlogSoumission, user=None
 ) -> Optional[DevlogClient]:
     """Si la soumission est rattachée à un lead sans client, crée le
-    client à partir du lead et lie le lead au client. Idempotent."""
+    client à partir du lead et lie le lead au client. Idempotent.
+
+    Si ``user`` est fourni (transition manuelle ou signature publique),
+    on log l'auto-création dans l'audit log et on notifie les managers /
+    admins via une notification interne best-effort.
+    """
     if soumission.client_id is not None:
         return await GenericCrud(db, DevlogClient).get(soumission.client_id)
     if soumission.lead_id is None:
@@ -489,6 +494,10 @@ async def _ensure_client_for_soumission(
         client = await GenericCrud(db, DevlogClient).get(lead.client_id)
         if client is not None:
             soumission.client_id = client.id
+            # Statut lead aligné sur la conversion (cas où un lead
+            # déjà-client n'aurait pas été marqué "won").
+            if lead.status not in ("won", "lost"):
+                lead.status = "won"
             await db.flush()
             return client
     client = DevlogClient(
@@ -502,15 +511,54 @@ async def _ensure_client_for_soumission(
     db.add(client)
     await db.flush()
     await db.refresh(client)
+    previous_lead_status = lead.status
     lead.client_id = client.id
     lead.status = "won"
     soumission.client_id = client.id
     await db.flush()
+
+    # Audit log de l'auto-création (visibilité dans le journal admin).
+    try:
+        await log_action(
+            db,
+            user=user,
+            action="devlog_client.auto_created_from_lead",
+            entity_type="devlog_client",
+            entity_id=client.id,
+            details={
+                "lead_id": lead.id,
+                "soumission_id": soumission.id,
+                "previous_lead_status": previous_lead_status,
+            },
+        )
+    except Exception:
+        pass
+
+    # Notification best-effort aux managers / admins (Phil + Steven).
+    # On n'échoue jamais la signature / l'acceptation si la notif rate.
+    try:
+        from app.services.notifications import notify_role
+
+        await notify_role(
+            db,
+            min_role="manager",
+            kind="devlog.client.auto_created",
+            title=f"Nouveau client devlog : {client.name}",
+            body=(
+                f"Le prospect #{lead.id} a été converti automatiquement en "
+                f"client suite à l'acceptation de la soumission "
+                f"#{soumission.id}."
+            ),
+            href=f"/dev-logiciel/clients/{client.id}",
+        )
+    except Exception:
+        pass
+
     return client
 
 
 async def _provision_project_for_soumission(
-    db, soumission: DevlogSoumission
+    db, soumission: DevlogSoumission, user=None
 ) -> DevlogProject:
     """Crée le projet Dev logiciel rattaché à une soumission acceptée.
     Idempotent : si un projet existe déjà pour cette soumission, on le
@@ -525,7 +573,7 @@ async def _provision_project_for_soumission(
     if existing is not None:
         return existing
 
-    client = await _ensure_client_for_soumission(db, soumission)
+    client = await _ensure_client_for_soumission(db, soumission, user=user)
     project = DevlogProject(
         name=soumission.title,
         client_id=client.id if client else soumission.client_id,
@@ -593,7 +641,10 @@ async def update_soumission_with_automations(
         obj.status == "acceptee"
         and previous_status != "acceptee"
     ):
-        await _provision_project_for_soumission(db, obj)
+        # Auto-flow closing : assure que le prospect lié devient client,
+        # puis provisionne le projet (idempotent côté projet).
+        await _ensure_client_for_soumission(db, obj, user=user)
+        await _provision_project_for_soumission(db, obj, user=user)
     await log_action(
         db,
         user=user,
@@ -660,7 +711,10 @@ async def update_soumission_status(
         soumission.status == "acceptee"
         and previous_status != "acceptee"
     ):
-        await _provision_project_for_soumission(db, soumission)
+        # Auto-flow closing : lead → client puis client → projet, sur
+        # toute transition manuelle vers acceptee depuis le kanban.
+        await _ensure_client_for_soumission(db, soumission, user=user)
+        await _provision_project_for_soumission(db, soumission, user=user)
 
     await db.refresh(soumission)
     return DevlogSoumissionRead.model_validate(soumission)
@@ -710,10 +764,17 @@ async def convert_soumission_to_project(
     soumission = await GenericCrud(db, DevlogSoumission).get(soumission_id)
     if soumission is None:
         raise HTTPException(status_code=404, detail="Soumission introuvable")
+    previous_status = soumission.status
     if soumission.status != "acceptee":
         soumission.status = "acceptee"
         await db.flush()
-    project = await _provision_project_for_soumission(db, soumission)
+    # Idempotent : si déjà acceptee, _ensure_client_for_soumission ne
+    # recrée rien (court-circuit sur client_id déjà présent).
+    if previous_status != "acceptee":
+        await _ensure_client_for_soumission(db, soumission, user=user)
+    project = await _provision_project_for_soumission(
+        db, soumission, user=user
+    )
     await log_action(
         db,
         user=user,
@@ -763,7 +824,7 @@ async def send_soumission(
     # échoue silencieusement avec « Adresse courriel du client manquante »
     # alors qu'on a en fait l'email côté lead — c'était le bug #7 du
     # batch 1 (feedback Phil 22 mai).
-    await _ensure_client_for_soumission(db, soumission)
+    await _ensure_client_for_soumission(db, soumission, user=user)
     if soumission.client_id is None:
         raise HTTPException(
             status_code=400,
