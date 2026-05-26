@@ -78,7 +78,18 @@ def _verify_signature(raw_body: bytes, signature_header: str) -> bool:
     Meta envoie ``X-Hub-Signature-256: sha256=<hex>``. Sans
     ``META_APP_SECRET`` configuré, on accepte (mais on logge) — utile
     en mise en route. À configurer dès que possible.
+
+    Bypass dev : si ``META_SKIP_SIGNATURE=1`` est posé, on accepte
+    SANS vérifier. À utiliser UNIQUEMENT pour des tests manuels
+    (replay curl avec un vrai leadgen_id) — JAMAIS en production
+    long-terme, ça désactive la sécurité du webhook.
     """
+    if (os.environ.get("META_SKIP_SIGNATURE") or "").strip() == "1":
+        log.warning(
+            "META_SKIP_SIGNATURE=1 — vérification HMAC désactivée "
+            "(mode debug). Retire la variable d'env pour réactiver."
+        )
+        return True
     secret = (os.environ.get("META_APP_SECRET") or "").strip()
     if not secret:
         log.warning(
