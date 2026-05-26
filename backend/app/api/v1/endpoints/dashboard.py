@@ -15,6 +15,7 @@ from sqlalchemy import cast, Date, func, select
 from app.api.deps import CurrentAdmin, CurrentUser, DBSession
 from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.models.facture import Facture, FactureStatus
+from app.models.payment import Payment
 from app.models.project import Project, ProjectStatus
 from app.models.punch import Punch
 from app.models.soumission import Soumission, SoumissionStatus
@@ -111,24 +112,53 @@ async def get_kpis(
     week_start = _week_start_utc()
     seven_days_ago = now - timedelta(days=7)
 
-    # Factures: unpaid = sent+overdue. Sum total of those; count rows.
-    unpaid_sum_stmt = select(
-        func.coalesce(func.sum(Facture.total), 0),
-        func.count(Facture.id),
-    ).where(
-        Facture.status.in_(
-            [FactureStatus.SENT.value, FactureStatus.OVERDUE.value]
+    # Factures: unpaid = sent+overdue. Sum SOLDE RESTANT (= total − somme
+    # des paiements partiels enregistrés dans facture_payments), pas le
+    # total brut — sinon une facture de 13K avec 10K déjà encaissés
+    # apparaîtrait toujours pour 13K dans le tuile « impayées ».
+    payments_per_facture = (
+        select(
+            Payment.facture_id.label("fid"),
+            func.coalesce(func.sum(Payment.amount), 0).label("paid_sum"),
+        )
+        .group_by(Payment.facture_id)
+        .subquery()
+    )
+    outstanding_expr = func.coalesce(Facture.total, 0) - func.coalesce(
+        payments_per_facture.c.paid_sum, 0
+    )
+
+    unpaid_sum_stmt = (
+        select(
+            func.coalesce(func.sum(outstanding_expr), 0),
+            func.count(Facture.id),
+        )
+        .select_from(Facture)
+        .outerjoin(
+            payments_per_facture,
+            payments_per_facture.c.fid == Facture.id,
+        )
+        .where(
+            Facture.status.in_(
+                [FactureStatus.SENT.value, FactureStatus.OVERDUE.value]
+            )
         )
     )
     unpaid_total, unpaid_count = (
         await db.execute(unpaid_sum_stmt)
     ).one()
 
-    overdue_sum_stmt = select(
-        func.coalesce(func.sum(Facture.total), 0),
-        func.count(Facture.id),
-    ).where(
-        Facture.status == FactureStatus.OVERDUE.value,
+    overdue_sum_stmt = (
+        select(
+            func.coalesce(func.sum(outstanding_expr), 0),
+            func.count(Facture.id),
+        )
+        .select_from(Facture)
+        .outerjoin(
+            payments_per_facture,
+            payments_per_facture.c.fid == Facture.id,
+        )
+        .where(Facture.status == FactureStatus.OVERDUE.value)
     )
     overdue_total, overdue_count = (
         await db.execute(overdue_sum_stmt)
