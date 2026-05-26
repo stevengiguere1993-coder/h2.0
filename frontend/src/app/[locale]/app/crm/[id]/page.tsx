@@ -1288,12 +1288,6 @@ type Appointment = {
   confirmation_sent_at?: string | null;
 };
 
-function todayIso(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
 type Employe = { id: number; full_name: string };
 
 function AppointmentScheduler({
@@ -1310,11 +1304,13 @@ function AppointmentScheduler({
   const [error, setError] = useState<string | null>(null);
   const [employes, setEmployes] = useState<Employe[]>([]);
 
-  // Form state
+  // Form state — plages de RDV laissées vides pour éviter les
+  // erreurs de saisie (clic sur submit sans réaliser que la plage
+  // par défaut n'a pas été ajustée).
   const [title, setTitle] = useState(`Visite — ${prospectName}`);
-  const [date, setDate] = useState(todayIso());
-  const [startHm, setStartHm] = useState("10:00");
-  const [endHm, setEndHm] = useState("11:00");
+  const [date, setDate] = useState("");
+  const [startHm, setStartHm] = useState("");
+  const [endHm, setEndHm] = useState("");
   const [location, setLocation] = useState(prospectAddress || "");
   const [eventType, setEventType] = useState("visite");
   const [assigneeId, setAssigneeId] = useState<string>("");
