@@ -506,7 +506,9 @@ export default function MobileProspectionPage() {
             <button
               type="button"
               onClick={submit}
-              disabled={submitting || name.trim().length < 1}
+              disabled={
+                submitting || (!geo && address.trim().length < 3)
+              }
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 py-3 text-base font-bold text-brand-950 disabled:opacity-50"
             >
               {submitting ? (
