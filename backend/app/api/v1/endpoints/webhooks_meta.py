@@ -117,8 +117,29 @@ async def _fetch_lead_detail(leadgen_id: str) -> Optional[Dict[str, Any]]:
             r = await client.get(url, params=params)
             r.raise_for_status()
             return r.json()
+    except httpx.HTTPStatusError as exc:
+        # raise_for_status() inclut la full URL (avec ?access_token=…)
+        # dans le message d'exception — on extrait juste le code de
+        # statut + le body pour ne JAMAIS leaker le token dans les logs.
+        body = ""
+        try:
+            body = exc.response.text[:300]
+        except Exception:  # noqa: BLE001
+            pass
+        log.warning(
+            "Fetch lead %s failed: HTTP %s — %s",
+            leadgen_id,
+            exc.response.status_code,
+            body,
+        )
+        return None
     except Exception as exc:  # noqa: BLE001
-        log.warning("Fetch lead %s failed: %s", leadgen_id, exc)
+        # Pour les autres erreurs (timeout, DNS, etc.), on log la classe
+        # d'exception seulement — pas str(exc) qui peut éventuellement
+        # contenir l'URL avec le token.
+        log.warning(
+            "Fetch lead %s failed: %s", leadgen_id, type(exc).__name__
+        )
         return None
 
 
