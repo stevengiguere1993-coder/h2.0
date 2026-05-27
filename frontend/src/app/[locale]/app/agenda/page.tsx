@@ -183,6 +183,13 @@ function monthLabel(d: Date): string {
   return `${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
 
+// Etiquette d'un projet : l'adresse en priorite (comme sur la
+// liste /app/projets), fallback au nom interne s'il n'y a pas
+// encore d'adresse saisie.
+function projectLabel(p: { name: string; address?: string | null }): string {
+  return (p.address || "").trim() || p.name;
+}
+
 function isoLocal(d: Date): string {
   // Format YYYY-MM-DDTHH:MM for <input type="datetime-local">
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -753,7 +760,7 @@ export default function AgendaPage() {
               <option value="">Tous les projets</option>
               {projects.map((p) => (
                 <option key={p.id} value={String(p.id)}>
-                  {p.name}
+                  {projectLabel(p)}
                 </option>
               ))}
             </select>
@@ -967,11 +974,13 @@ function MonthView({
         }
       }
       for (const ev of multiDayEventsByDay.get(key) || []) {
-        // Si l'event est lié à un projet ET que ce projet a une bande
-        // active ce jour-là ET qu'il n'est pas déplié → cacher l'event
-        // (il sera vu en cliquant sur la bande). Si pas de bande
-        // (hors-délai), l'event reste visible.
+        // Phases d'un projet : on les cache quand la bande projet est
+        // repliee (la bande sert deja a representer la phase). Les
+        // autres events (livraison, visite, etc.) liés au meme projet
+        // restent toujours visibles — ils representent une action
+        // concrete que l'utilisateur a besoin de voir.
         if (
+          ev.event_type === "phase" &&
           ev.project_id != null &&
           !expandedProjects.has(ev.project_id)
         ) {
@@ -1082,9 +1091,15 @@ function MonthView({
               );
               const dayEvents = allDayEvents.filter((e) => {
                 if (e.project_id == null) return true;
+                // Les events concrets (livraison, visite, chantier…)
+                // sont toujours visibles. Seules les phases peuvent
+                // etre cachees sous la bande projet repliee, parce
+                // qu'elles sont deja representees visuellement par
+                // la bande elle-meme.
+                if (e.event_type !== "phase") return true;
                 if (expandedProjects.has(e.project_id)) return true;
                 // Pas de bande active pour ce projet aujourd'hui →
-                // toujours afficher l'event individuellement.
+                // toujours afficher la phase individuellement.
                 return !projectsHereIds.has(e.project_id);
               });
               return (
@@ -1215,7 +1230,7 @@ function MonthView({
                       (expanded
                         ? "Cliquer pour replier"
                         : "Cliquer pour voir les phases & événements") +
-                      ` — ${bar.project.name}` +
+                      ` — ${projectLabel(bar.project)}` +
                       (hasTeam ? "" : " · aucune équipe assignée")
                     }
                     className="absolute z-[2] flex items-center gap-1 overflow-hidden rounded-md border px-1.5 text-left text-[10px] font-bold shadow-sm transition hover:opacity-90"
@@ -1230,7 +1245,7 @@ function MonthView({
                       {expanded ? "▼" : "▶"}
                     </span>
                     <span className="truncate">
-                      {hasTeam ? "🛠️" : "⚠️"} {bar.project.name}
+                      {hasTeam ? "🛠️" : "⚠️"} {projectLabel(bar.project)}
                     </span>
                   </button>
                 );
@@ -1588,7 +1603,7 @@ function EventModal({
                 <option value="">—</option>
                 {projects.map((p) => (
                   <option key={p.id} value={String(p.id)}>
-                    {p.name}
+                    {projectLabel(p)}
                   </option>
                 ))}
               </select>
@@ -2010,13 +2025,13 @@ function WeeklyTeamGridView({
                               border: `1px solid ${c.border}`
                             }}
                             title={`${b.phase.name}${
-                              b.project ? ` · ${b.project.name}` : ""
+                              b.project ? ` · ${projectLabel(b.project)}` : ""
                             }`}
                           >
                             <span className="block">📐 {b.phase.name}</span>
                             {b.project ? (
                               <span className="block text-[9px] opacity-80">
-                                {b.project.name}
+                                {projectLabel(b.project)}
                               </span>
                             ) : null}
                           </span>
