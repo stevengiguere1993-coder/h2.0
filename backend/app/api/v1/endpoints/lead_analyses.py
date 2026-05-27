@@ -1,4 +1,4 @@
-﻿"""API pour les analyses de leads immobiliers.
+"""API pour les analyses de leads immobiliers.
 
 Endpoints :
     POST   /lead-analyses/extract   multipart : urls + text + files
@@ -389,13 +389,52 @@ _DEFAULTS_FALLBACK: dict = {
 
 
 # Mapping clé en BD ↔ champ stocké sur LeadAnalysis.
-# Tous les défauts modifiables depuis l'UI sont stockés en
-# ``ProspectionAnalysisDefault`` en pourcentage (3.75, 25.0, 8.0).
-# Les autres champs (booléens, JSON figés) restent dans `_DEFAULTS_FALLBACK`.
+# Tous les défauts ``inputs_manuels`` qui ont une colonne sur
+# ``LeadAnalysis`` sont mappés ici pour pré-remplir une nouvelle
+# fiche. Stockés en pourcentage (3.75, 25.0, 8.0) ou unités entières.
+# Les autres champs (booléens, JSON figés, ou défauts utilisés
+# uniquement au runtime comme ``taux_inoccupation_pct`` /
+# ``frais_*`` MDF) ne sont PAS dans ce mapping.
 _DB_KEY_TO_FIELD: dict[str, str] = {
     "taux_interet_refi": "taux_interet_refi_pct",
     "mdf_preteur_b_pct": "mdf_preteur_b_pct",
     "taux_interet_preteur_b_projet": "taux_interet_preteur_b_projet_pct",
+    "tga_pct": "tga_pct",
+    "taux_interet_achat_pct": "taux_interet_achat_pct",
+    "reduction_energie_pct": "reduction_energie_pct",
+    "duree_projet_annees": "duree_projet_annees",
+    "nb_logements_ajoutes": "nb_logements_ajoutes",
+    "nb_thermopompes_ajoutees": "nb_thermopompes_ajoutees",
+}
+
+# Champs entiers parmi ceux ci-dessus (les autres sont des floats).
+# Utilisé pour caster correctement la valeur lue en BD (Float) avant
+# de la passer au constructeur ``LeadAnalysis(...)``.
+_DB_KEY_INT_FIELDS: set[str] = {
+    "duree_projet_annees",
+    "nb_logements_ajoutes",
+    "nb_thermopompes_ajoutees",
+}
+
+
+# Mapping clé BD → poste FRAIS_FIXES (groupe ``mdf_frais``). Utilisé
+# au runtime ``run-financial-analysis`` pour overrider les frais
+# hardcoded dans ``lead_analysis_finance.FRAIS_FIXES``.
+_DB_KEY_TO_FRAIS_FIXE: dict[str, str] = {
+    "frais_evaluateur": "evaluateur",
+    "frais_evaluateur_2": "evaluateur_2",
+    "frais_inspection": "inspection",
+    "frais_avocat": "avocat",
+    "frais_notaire": "notaire",
+    "frais_notaire_2": "notaire_2",
+    "frais_rapport_efficacite": "rapport_efficacite",
+}
+
+# Mapping clé BD → % courtier hypothécaire (en fraction). Valeurs en
+# BD stockées en pct (1.0 = 1 %), converties en fraction (÷100) ici.
+_DB_KEY_TO_PCT_COURTIER: dict[str, str] = {
+    "pct_courtier_hypothecaire_1": "courtier_hypothecaire_1",
+    "pct_courtier_hypothecaire_2": "courtier_hypothecaire_2",
 }
 
 
@@ -408,7 +447,9 @@ async def _load_defaults_for_new_analysis(db) -> dict:
     retombe sur les défauts en dur (``_DEFAULTS_FALLBACK``).
 
     Retourne un dict prêt à passer en ``**kwargs`` au constructeur
-    ``LeadAnalysis(...)``.
+    ``LeadAnalysis(...)``. Couvre TOUS les inputs manuels pré-remplis
+    (taux refi, MDF %, taux prêteur B, TGA, taux achat, réduction
+    énergie, durée projet, nb logements/thermopompes ajoutés).
     """
     out = dict(_DEFAULTS_FALLBACK)
     try:
@@ -421,11 +462,48 @@ async def _load_defaults_for_new_analysis(db) -> dict:
                 continue
             if row.value_float is None:
                 continue
-            out[field] = float(row.value_float)
+            v = float(row.value_float)
+            out[field] = int(v) if field in _DB_KEY_INT_FIELDS else v
     except Exception as exc:  # noqa: BLE001
         # Table peut ne pas exister au tout premier boot — silencieux.
         log.warning("Failed to load analysis defaults from DB: %s", exc)
     return out
+
+
+async def _load_frais_mdf_overrides(db) -> tuple[dict, dict]:
+    """Charge les défauts globaux des frais MDF depuis la BD.
+
+    Retourne un tuple ``(frais_fixes_overrides, pct_courtiers_overrides)``
+    prêt à passer à ``FinanceInputs``. Les valeurs en BD sont :
+        - frais_* : montants $ directs (ex. 1500.0)
+        - pct_courtier_* : pourcentage (1.0 = 1 %), converti en
+          fraction (÷100) pour matcher ``PCT_COURTIERS``.
+
+    Si la table est vide ou manque, retourne `({}, {})` — le moteur
+    retombera sur les constantes hardcoded ``FRAIS_FIXES`` /
+    ``PCT_COURTIERS``.
+    """
+    frais_fixes: dict[str, float] = {}
+    pct_courtiers: dict[str, float] = {}
+    try:
+        rows = (
+            await db.execute(select(ProspectionAnalysisDefault))
+        ).scalars().all()
+        for row in rows:
+            if row.value_float is None:
+                continue
+            v = float(row.value_float)
+            if row.key in _DB_KEY_TO_FRAIS_FIXE:
+                frais_fixes[_DB_KEY_TO_FRAIS_FIXE[row.key]] = v
+            elif row.key in _DB_KEY_TO_PCT_COURTIER:
+                # BD stocke en pct (1.0 = 1 %), moteur attend une
+                # fraction (0.01 = 1 %).
+                pct_courtiers[_DB_KEY_TO_PCT_COURTIER[row.key]] = v / 100.0
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "Failed to load frais MDF overrides from DB: %s", exc
+        )
+    return frais_fixes, pct_courtiers
 
 
 @router.post(
@@ -965,6 +1043,16 @@ async def run_financial_analysis(
         except Exception:  # noqa: BLE001
             frais_overrides = {}
 
+    # Charge les overrides GLOBAUX des frais MDF (groupe ``mdf_frais``).
+    # Si Phil a modifié « Évaluateur 1 » de 1500 → 1800 dans la table
+    # de défauts, c'est appliqué ici à TOUTES les analyses (y compris
+    # cette fiche-ci si elle n'a pas d'override par fiche pour
+    # ``evaluateur``). Les overrides PAR FICHE (champ
+    # ``frais_demarrage_overrides_json``) restent prioritaires.
+    frais_fixes_overrides, pct_courtiers_overrides = (
+        await _load_frais_mdf_overrides(db)
+    )
+
     inputs = FinanceInputs(
         adresse=rec.address or "",
         prix_achat=float(rec.asking_price or 0),
@@ -1003,6 +1091,8 @@ async def run_financial_analysis(
         frais_demarrage_financables=_parse_financables(
             rec.frais_demarrage_financables_json
         ),
+        frais_fixes_overrides=frais_fixes_overrides,
+        pct_courtiers_overrides=pct_courtiers_overrides,
     )
 
     use_aph = loyer_abord > 0 and inputs.nombre_logements > 0
@@ -1782,5 +1872,6 @@ async def ocr_health(user: CurrentUser) -> dict:
         except ImportError as exc:
             result[f"{pkg}_installed"] = f"NON installe : {exc}"
     return result
+
 
 

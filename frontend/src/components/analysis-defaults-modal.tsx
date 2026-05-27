@@ -7,18 +7,32 @@ import { authedFetch } from "@/lib/auth";
 
 /**
  * Modal de modification des valeurs par défaut globales pour les
- * inputs manuels du calculateur d'analyse financière.
+ * inputs manuels et frais MDF du calculateur d'analyse financière.
  *
  * Phil veut pouvoir changer le taux d'intérêt refi par défaut (par
- * exemple 3.75 % → 4 %) ou le pourcentage de MDF prêteur B sans
- * devoir éditer le code. Quand un défaut est modifié, les nouvelles
- * analyses créées après le changement utilisent la nouvelle valeur.
- * Les analyses existantes ne sont PAS écrasées.
+ * exemple 3.75 % → 4 %), le pourcentage de MDF prêteur B, OU le
+ * montant des frais one-shot (Évaluateur, Notaire, Inspection, etc.)
+ * sans devoir éditer le code. Quand un défaut est modifié, les
+ * nouvelles analyses créées après le changement utilisent la nouvelle
+ * valeur. Les analyses existantes ne sont PAS écrasées.
  *
  * Restreint à admin/owner (backend renvoie 403 sinon).
+ *
+ * Groupes :
+ *   - inputs_manuels : taux refi, MDF %, taux prêteur B, TGA, durée
+ *                      projet, réduction énergie, etc.
+ *   - mdf_frais      : Évaluateur 1/2, Inspection, Notaire 1/2,
+ *                      Avocat, Rapport efficacité, % courtiers.
+ *
+ * Convention pour l'unité affichée : si ``step < 1``, on suppose un
+ * pourcentage (affiche « % » à droite) ; sinon on suppose un montant
+ * en dollars (affiche « $ »). Les défauts entiers comme « durée
+ * projet (années) » utilisent step = 1, donc affichés en « $ »
+ * implicitement — c'est OK puisqu'il n'y a pas d'unité native, et le
+ * label_fr clarifie déjà (« (années) »).
  */
 
-export type AnalysisDefaultGroup = "refi" | "mdf";
+export type AnalysisDefaultGroup = "inputs_manuels" | "mdf_frais";
 
 type AnalysisDefault = {
   id: number;
@@ -129,14 +143,20 @@ export function AnalysisDefaultsModal({
 
   if (!open) return null;
 
+  // Titre dynamique selon le groupe affiché.
+  const modalTitle =
+    group === "mdf_frais"
+      ? "Modifier les défauts des frais MDF"
+      : "Modifier les défauts des inputs manuels";
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-lg rounded-2xl border border-brand-700 bg-brand-900 shadow-2xl">
+      <div className="flex max-h-[90vh] w-full max-w-xl flex-col rounded-2xl border border-brand-700 bg-brand-900 shadow-2xl">
         <div className="flex items-center justify-between border-b border-brand-700 px-5 py-3">
           <div className="flex items-center gap-2">
             <Settings2 className="h-4 w-4 text-accent-500" />
             <h2 className="text-sm font-semibold text-white">
-              Modifier les défauts globaux
+              {modalTitle}
             </h2>
           </div>
           <button
@@ -149,7 +169,7 @@ export function AnalysisDefaultsModal({
           </button>
         </div>
 
-        <div className="px-5 py-4">
+        <div className="overflow-y-auto px-5 py-4">
           <p className="text-[11px] text-white/60">
             Modifier un défaut change la valeur pré-remplie pour les
             <strong className="text-white"> nouvelles analyses</strong>{" "}
@@ -185,6 +205,22 @@ export function AnalysisDefaultsModal({
               const dirty =
                 Number.isFinite(draftNum) &&
                 Math.abs(draftNum - (def.value_float ?? 0)) > 1e-9;
+              // Unité affichée à droite de l'input :
+              //   - step < 1     → pourcentage (%)
+              //   - step >= 1 et clé commence par "frais_" / "pct_" → $
+              //   - sinon (durée projet années, nb log, etc.) → pas
+              //     d'unité (le label_fr clarifie déjà).
+              const isPct = def.step < 1 && !def.key.startsWith("pct_");
+              const isMoney =
+                def.key.startsWith("frais_") ||
+                (def.step >= 1 &&
+                  !def.key.includes("annees") &&
+                  !def.key.includes("nb_") &&
+                  !def.key.includes("logements") &&
+                  !def.key.includes("thermopompes") &&
+                  !def.key.includes("pct"));
+              const isPctCourtier = def.key.startsWith("pct_");
+              const unit = isPct || isPctCourtier ? "%" : isMoney ? "$" : "";
               return (
                 <div
                   key={def.key}
@@ -211,7 +247,9 @@ export function AnalysisDefaultsModal({
                       className="input flex-1 font-mono text-xs"
                       disabled={saving}
                     />
-                    <span className="text-[10px] text-white/40">%</span>
+                    {unit ? (
+                      <span className="text-[10px] text-white/40">{unit}</span>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => void save(def)}
@@ -250,3 +288,4 @@ export function AnalysisDefaultsModal({
     </div>
   );
 }
+

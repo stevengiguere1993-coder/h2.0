@@ -44,6 +44,20 @@ BAREME: Dict[str, float] = {
 
 
 # ─── Frais fixes (L7..L13) ─────────────────────────────────────────
+#
+# Valeurs par défaut « historiques » (hardcoded). Depuis la PR
+# « extend-analysis-defaults-tous-champs » (mai 2026), ces frais sont
+# overridables globalement via la table ``prospection_analysis_defaults``
+# (groupe ``mdf_frais``). Les clés en BD sont préfixées ``frais_*`` pour
+# ne pas entrer en collision avec d'autres défauts numériques. Le
+# pourcentage des courtiers hypothécaires (1 %) est aussi rendu
+# paramétrable (clés ``pct_courtier_hypothecaire_1`` / ``_2``).
+#
+# Override de hiérarchie :
+#   1. Si l'utilisateur a saisi un override par fiche dans
+#      ``frais_demarrage_overrides_json`` → cette valeur GAGNE.
+#   2. Sinon, si un défaut global est présent en BD → on l'utilise.
+#   3. Sinon, on retombe sur les constantes ``FRAIS_FIXES`` ci-dessous.
 
 FRAIS_FIXES: Dict[str, float] = {
     "evaluateur":         1500.0,
@@ -53,6 +67,14 @@ FRAIS_FIXES: Dict[str, float] = {
     "notaire":            1600.0,
     "notaire_2":          1600.0,
     "rapport_efficacite": 4500.0,
+}
+
+# Pourcentages des courtiers hypothécaires (L4 et L5 dans l'Excel).
+# L4 = pct_courtier_hypothecaire_1 × prix d'achat.
+# L5 = pct_courtier_hypothecaire_2 × financement APH 100 pts.
+PCT_COURTIERS: Dict[str, float] = {
+    "courtier_hypothecaire_1": 0.01,
+    "courtier_hypothecaire_2": 0.01,
 }
 
 
@@ -508,23 +530,45 @@ def compute_frais_demarrage(
     frais_developpement: float = 0.0,
     frais_negociations: float = 0.0,
     frais_travaux: float = 0.0,
+    frais_fixes_overrides: Optional[Dict[str, float]] = None,
+    pct_courtiers_overrides: Optional[Dict[str, float]] = None,
 ) -> FraisDemarrage:
     """Calcule L4..L19. `financement_aph_100` est utilisé pour le
     courtier hyp. 2 (1 % du financement APH 100 pts, le plus généreux).
     L17 = intérêts pendant projet
         ((1 - mdf_preteur_b_pct) × prix × taux_interet_preteur_b_projet × durée).
-    L18 = revenus nets pendant projet (négatif si net négatif)."""
+    L18 = revenus nets pendant projet (négatif si net négatif).
+
+    ``frais_fixes_overrides`` (dict, optionnel) écrase les défauts
+    hardcoded de ``FRAIS_FIXES`` poste par poste. Provient des défauts
+    globaux ``ProspectionAnalysisDefault`` (groupe ``mdf_frais``).
+    ``pct_courtiers_overrides`` même chose pour les % courtiers
+    hypothécaires (clés ``courtier_hypothecaire_1`` / ``_2``)."""
+    ff = dict(FRAIS_FIXES)
+    if frais_fixes_overrides:
+        for k, v in frais_fixes_overrides.items():
+            if v is None:
+                continue
+            ff[k] = float(v)
+
+    pc = dict(PCT_COURTIERS)
+    if pct_courtiers_overrides:
+        for k, v in pct_courtiers_overrides.items():
+            if v is None:
+                continue
+            pc[k] = float(v)
+
     return FraisDemarrage(
-        courtier_hypothecaire_1=0.01 * prix_achat,
-        courtier_hypothecaire_2=0.01 * financement_aph_100,
+        courtier_hypothecaire_1=pc["courtier_hypothecaire_1"] * prix_achat,
+        courtier_hypothecaire_2=pc["courtier_hypothecaire_2"] * financement_aph_100,
         taxes_bienvenue=taxes_bienvenue_mtl(prix_achat),
-        evaluateur=FRAIS_FIXES["evaluateur"],
-        evaluateur_2=FRAIS_FIXES["evaluateur_2"],
-        inspection=FRAIS_FIXES["inspection"],
-        avocat=FRAIS_FIXES["avocat"],
-        notaire=FRAIS_FIXES["notaire"],
-        notaire_2=FRAIS_FIXES["notaire_2"],
-        rapport_efficacite=FRAIS_FIXES["rapport_efficacite"],
+        evaluateur=ff["evaluateur"],
+        evaluateur_2=ff["evaluateur_2"],
+        inspection=ff["inspection"],
+        avocat=ff["avocat"],
+        notaire=ff["notaire"],
+        notaire_2=ff["notaire_2"],
+        rapport_efficacite=ff["rapport_efficacite"],
         frais_developpement=frais_developpement,
         frais_negociations=frais_negociations,
         frais_travaux=frais_travaux,
@@ -601,6 +645,18 @@ class FinanceInputs:
     # le reste s'ajoute au prêt. Défaut : rapport_efficacite,
     # frais_developpement, frais_travaux.
     frais_demarrage_financables: list[str] = field(default_factory=list)
+
+    # Overrides GLOBAUX (par opposition à `frais_demarrage_overrides`
+    # qui est par fiche) des frais one-shot. Provient de la table
+    # ``prospection_analysis_defaults`` (groupe ``mdf_frais``) — chargé
+    # à la création/exécution d'une analyse. Clés = sans le préfixe
+    # ``frais_`` côté BD (ex. BD ``frais_evaluateur`` → ``evaluateur``).
+    frais_fixes_overrides: Dict[str, float] = field(default_factory=dict)
+
+    # Overrides globaux des pourcentages des courtiers hypothécaires
+    # (L4 et L5). Clés : ``courtier_hypothecaire_1`` / ``_2``. Valeurs
+    # en fraction (0.01 = 1 %).
+    pct_courtiers_overrides: Dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -880,6 +936,8 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         frais_developpement=inputs.frais_developpement,
         frais_negociations=inputs.frais_negociations,
         frais_travaux=inputs.frais_travaux,
+        frais_fixes_overrides=inputs.frais_fixes_overrides,
+        pct_courtiers_overrides=inputs.pct_courtiers_overrides,
     )
     # Overrides manuels : pour chaque clé fournie par l'utilisateur,
     # on remplace la valeur calculée par sa saisie. Permet d'ajuster

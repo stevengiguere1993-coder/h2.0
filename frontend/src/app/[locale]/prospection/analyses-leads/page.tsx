@@ -121,14 +121,17 @@ type ExtractResult = {
  * Visible uniquement pour admin/owner (Phil + Steven). Phil ne veut pas
  * que les employés bidouillent les défauts du calculateur.
  *
- * - `group="refi"` : taux refi + taux prêteur B.
- * - `group="mdf"`  : % MDF prêteur B.
+ * - `group="inputs_manuels"` : tous les inputs manuels (taux refi,
+ *   MDF %, taux prêteur B, TGA, durée projet, réduction énergie, etc.).
+ * - `group="mdf_frais"`      : tous les frais one-shot de la MDF
+ *   (Évaluateur 1/2, Inspection, Notaire 1/2, Avocat, Rapport eff,
+ *   % courtiers).
  */
 function DefaultsGearButton({
   group,
   title
 }: {
-  group: "refi" | "mdf";
+  group: "inputs_manuels" | "mdf_frais";
   title: string;
 }) {
   const { user } = useCurrentUser();
@@ -2066,7 +2069,7 @@ function ManualAnalysisSection({
             Analyse financière — inputs manuels
           </h3>
         </div>
-        <DefaultsGearButton group="refi" title="Modifier les défauts globaux (taux refi, taux prêteur B)" />
+        <DefaultsGearButton group="inputs_manuels" title="Modifier les défauts des inputs manuels (taux refi, MDF %, taux prêteur B, TGA, durée projet, etc.)" />
       </div>
 
       {missingRequired.length > 0 ? (
@@ -2768,7 +2771,7 @@ function FraisDemarrageBreakdownPanel({
         <h4 className="text-xs font-semibold uppercase tracking-wider text-amber-300">
           Composition de la MDF avec prêteur B
         </h4>
-        <DefaultsGearButton group="mdf" title="Modifier le % MDF prêteur B par défaut" />
+        <DefaultsGearButton group="mdf_frais" title="Modifier les défauts des frais MDF (Évaluateur, Inspection, Notaire, Avocat, Rapport efficacité, % courtiers)" />
       </div>
       <p className="mt-0.5 text-[10px] text-white/50">
         Total à sortir en cash = {_fmtPctShort(mdfPctNumeric)} du prix
@@ -3905,3 +3908,4 @@ function ReExtractClaudeButton({
     </div>
   );
 }
+
