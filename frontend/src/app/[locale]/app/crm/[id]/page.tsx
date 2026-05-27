@@ -60,6 +60,7 @@ type Prospect = {
 const STATUS_LABELS: Record<string, string> = {
   new: "Nouveau",
   contacted: "À rappeler",
+  rdv_prevu: "Rendez-vous prévu",
   qualified: "Qualifié",
   quoted: "Soumission envoyée",
   won: "Soumission acceptée",
