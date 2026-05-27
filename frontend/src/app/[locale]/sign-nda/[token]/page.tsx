@@ -7,18 +7,30 @@
  * Pas d'authentification — le token (32 octets URL-safe) authentifie
  * le destinataire et sert d'audit trail.
  *
- * UX :
- *   - Résumé clair de l'entente (propriété visée, émetteur,
- *     destinataire, durée 2 ans, juridiction Québec, 5 engagements)
- *   - Bouton « Télécharger l'entente en PDF »
- *   - Champ « Nom complet » (pré-rempli avec investor_name, éditable)
- *   - Un seul bouton vert : « Je m'engage à respecter cette entente »
+ * UX (post-fix légal #517+) :
+ *   - En-tête identifiant les Parties et la propriété visée
+ *   - Conteneur scrollable affichant le **texte intégral** du NDA
+ *     (11 articles, rendu en HTML via `marked` à partir du Markdown
+ *     fourni par le backend dans `full_text_markdown`)
+ *   - Bouton « Télécharger l'entente en PDF » disponible en
+ *     complément (pour archive perso, pas un prérequis)
+ *   - Le bouton « J'accepte et signe » est désactivé tant que :
+ *       1. l'utilisateur n'a PAS scrollé jusqu'en bas du conteneur
+ *       2. la checkbox d'attestation n'est PAS cochée
+ *   - Un seul bouton vert : « J'accepte et signe »
  *   - Pas de bouton « refuser » — ne rien faire suffit.
  *   - Si déjà signée : message neutre sans formulaire.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import { useParams } from "next/navigation";
+import { marked } from "marked";
 import {
   CheckCircle2,
   Download,
@@ -39,6 +51,8 @@ type PublicNDA = {
   signed_name: string | null;
   signed_at: string | null;
   sent_at: string | null;
+  full_text_markdown: string;
+  emission_date_formatted: string;
 };
 
 function fmtDate(iso: string | null): string {
@@ -50,6 +64,11 @@ function fmtDate(iso: string | null): string {
   });
 }
 
+// Tolérance en pixels pour considérer que l'utilisateur a atteint
+// le bas du conteneur de lecture. 20 px absorbe les sub-pixel sur
+// la plupart des navigateurs et l'overscroll iOS.
+const SCROLL_BOTTOM_TOLERANCE_PX = 20;
+
 export default function SignNDAPage() {
   const params = useParams<{ token: string }>();
   const token = params.token;
@@ -60,6 +79,10 @@ export default function SignNDAPage() {
   const [signedName, setSignedName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [doneMessage, setDoneMessage] = useState<string | null>(null);
+  const [hasReadFully, setHasReadFully] = useState(false);
+  const [checkboxConfirmed, setCheckboxConfirmed] = useState(false);
+
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -71,9 +94,6 @@ export default function SignNDAPage() {
       if (!res.ok) throw new Error(`http_${res.status}`);
       const json = (await res.json()) as PublicNDA;
       setData(json);
-      // Pré-remplir le nom avec investor_name mais l'investisseur
-      // peut le modifier s'il veut signer sous une variante (ex.
-      // « Jean-Marc Tremblay » au lieu de « JM Tremblay »).
       if (!signedName) setSignedName(json.investor_name || "");
     } catch {
       setError("Lien invalide ou expiré.");
@@ -87,8 +107,56 @@ export default function SignNDAPage() {
     if (token) void load();
   }, [token, load]);
 
+  // Conversion Markdown -> HTML. `marked` est synchrone quand
+  // `async: false` (cf. blog page). On force `gfm` pour les tables
+  // simples et `breaks: false` pour préserver la mise en page
+  // imposée par le backend.
+  const ndaHtml = useMemo(() => {
+    if (!data?.full_text_markdown) return "";
+    marked.setOptions({ gfm: true, breaks: false, async: false });
+    return marked.parse(data.full_text_markdown) as string;
+  }, [data?.full_text_markdown]);
+
+  // Re-vérifie le scroll après que le contenu est rendu : si le
+  // texte tient déjà entièrement dans le conteneur (très peu
+  // probable, mais possible sur grand écran), on considère que
+  // l'utilisateur a « tout lu » immédiatement.
+  useEffect(() => {
+    if (!ndaHtml) return;
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      if (el.scrollHeight <= el.clientHeight + SCROLL_BOTTOM_TOLERANCE_PX) {
+        setHasReadFully(true);
+      }
+    });
+  }, [ndaHtml]);
+
+  const onContainerScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      const el = e.currentTarget;
+      if (
+        el.scrollTop + el.clientHeight >=
+        el.scrollHeight - SCROLL_BOTTOM_TOLERANCE_PX
+      ) {
+        setHasReadFully(true);
+      }
+    },
+    []
+  );
+
   async function submit() {
     if (submitting) return;
+    if (!hasReadFully) {
+      setError("Veuillez lire l'intégralité de l'entente avant de signer.");
+      return;
+    }
+    if (!checkboxConfirmed) {
+      setError(
+        "Veuillez confirmer avoir lu et accepté les termes de l'entente."
+      );
+      return;
+    }
     if (!signedName.trim() || signedName.trim().length < 2) {
       setError("Veuillez entrer votre nom complet (au moins 2 caractères).");
       return;
@@ -99,7 +167,11 @@ export default function SignNDAPage() {
       const res = await fetch(`/api/v1/public/ndas/${token}/sign`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ signed_name: signedName.trim() })
+        body: JSON.stringify({
+          signed_name: signedName.trim(),
+          has_scrolled: hasReadFully,
+          checkbox_confirmed: checkboxConfirmed
+        })
       });
       if (!res.ok) {
         const t = await res.text();
@@ -142,10 +214,15 @@ export default function SignNDAPage() {
   if (!data) return null;
 
   const alreadyDone = data.status === "signe" || Boolean(doneMessage);
+  const canSubmit =
+    hasReadFully &&
+    checkboxConfirmed &&
+    signedName.trim().length >= 2 &&
+    !submitting;
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-8">
-      <div className="mx-auto max-w-2xl">
+      <div className="mx-auto max-w-3xl">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
           {/* Header */}
           <div className="border-b border-slate-200 pb-4">
@@ -162,75 +239,96 @@ export default function SignNDAPage() {
                 {data.property_address || "à confirmer"}
               </span>
             </p>
+            <p className="mt-1 text-xs text-slate-500">
+              Date d&apos;effet : {data.emission_date_formatted} &middot; Durée{" "}
+              {data.duration_years} ans &middot; Juridiction {data.jurisdiction}
+            </p>
           </div>
 
-          {/* Résumé */}
-          <dl className="mt-5 grid grid-cols-1 gap-y-3 sm:grid-cols-2">
-            <div>
-              <dt className="text-xs uppercase tracking-wider text-slate-500">
-                Émetteur
-              </dt>
-              <dd className="mt-0.5 text-sm font-semibold text-slate-800">
-                {data.issuer_name}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wider text-slate-500">
-                Destinataire
-              </dt>
-              <dd className="mt-0.5 text-sm font-semibold text-slate-800">
-                {data.investor_name}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wider text-slate-500">
-                Durée de l&apos;engagement
-              </dt>
-              <dd className="mt-0.5 text-sm text-slate-800">
-                {data.duration_years} ans à compter de la signature
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wider text-slate-500">
-                Juridiction
-              </dt>
-              <dd className="mt-0.5 text-sm text-slate-800">
-                {data.jurisdiction}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wider text-slate-500">
-                Date d&apos;émission
-              </dt>
-              <dd className="mt-0.5 text-sm text-slate-800">
-                {fmtDate(data.sent_at)}
-              </dd>
-            </div>
-          </dl>
-
-          {/* Engagements */}
-          <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-600">
-              En signant, le destinataire s&apos;engage à :
-            </h3>
-            <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-sm text-slate-800">
-              {data.engagement_items.map((item, i) => (
-                <li key={i}>{item}</li>
-              ))}
-            </ol>
-          </div>
-
-          {/* Lien PDF */}
-          <div className="mt-5">
+          {/* Téléchargement PDF en complément (archive perso) */}
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <p className="text-xs text-slate-600">
+              Le texte complet de l&apos;entente est ci-dessous. Vous pouvez
+              également en télécharger une copie PDF pour vos archives.
+            </p>
             <a
               href={`/api/v1/public/ndas/${token}/pdf`}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
             >
               <Download className="h-4 w-4" />
-              Télécharger l&apos;entente en PDF
+              Télécharger PDF
             </a>
+          </div>
+
+          {/* Conteneur scrollable du texte intégral */}
+          <div className="mt-4">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-600">
+                Texte intégral de l&apos;entente
+              </h3>
+              {hasReadFully ? (
+                <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Lecture complète
+                </span>
+              ) : (
+                <span className="text-xs text-slate-500">
+                  Faites défiler jusqu&apos;à la fin
+                </span>
+              )}
+            </div>
+            <div
+              ref={scrollContainerRef}
+              onScroll={onContainerScroll}
+              className="nda-prose h-[480px] overflow-y-auto rounded-lg border border-slate-300 bg-slate-50 p-5 text-sm leading-relaxed text-slate-800"
+              dangerouslySetInnerHTML={{ __html: ndaHtml }}
+            />
+            <style jsx>{`
+              .nda-prose :global(h1) {
+                font-size: 1.1rem;
+                font-weight: 700;
+                margin: 0 0 0.75rem 0;
+                color: #0f172a;
+              }
+              .nda-prose :global(h2) {
+                font-size: 0.95rem;
+                font-weight: 700;
+                margin: 1.25rem 0 0.5rem 0;
+                color: #1e3a8a;
+                background: #dbeafe;
+                padding: 0.25rem 0.5rem;
+                border-radius: 4px;
+              }
+              .nda-prose :global(p) {
+                margin: 0 0 0.6rem 0;
+                text-align: justify;
+              }
+              .nda-prose :global(ul) {
+                margin: 0 0 0.6rem 0;
+                padding-left: 1.2rem;
+                list-style: none;
+              }
+              .nda-prose :global(li) {
+                margin: 0.25rem 0;
+              }
+              .nda-prose :global(blockquote) {
+                margin: 0.75rem 0;
+                padding: 0.5rem 0.75rem;
+                border-left: 3px solid #1d4ed8;
+                background: #eff6ff;
+                font-style: italic;
+              }
+              .nda-prose :global(hr) {
+                margin: 1.25rem 0;
+                border: none;
+                border-top: 1px solid #cbd5e1;
+              }
+              .nda-prose :global(strong) {
+                color: #0f172a;
+              }
+            `}</style>
           </div>
 
           {/* Zone signature / statut */}
@@ -249,10 +347,10 @@ export default function SignNDAPage() {
                   Signature électronique
                 </h3>
                 <p className="mt-1 text-xs text-slate-600">
-                  En cliquant sur « Je m&apos;engage à respecter cette
-                  entente », vous signez électroniquement le présent NDA ; il
-                  vous lie pour une durée de {data.duration_years} ans en vertu
-                  du droit du {data.jurisdiction}.
+                  En cliquant sur « J&apos;accepte et signe », vous signez
+                  électroniquement le présent NDA ; il vous lie pour une durée
+                  de {data.duration_years} ans en vertu du droit du{" "}
+                  {data.jurisdiction}.
                 </p>
 
                 <label className="mt-4 block">
@@ -268,6 +366,27 @@ export default function SignNDAPage() {
                   />
                 </label>
 
+                {/* Checkbox d'attestation obligatoire */}
+                <label className="mt-4 flex cursor-pointer items-start gap-2 rounded-lg border border-slate-300 bg-slate-50 p-3">
+                  <input
+                    type="checkbox"
+                    checked={checkboxConfirmed}
+                    onChange={(e) => setCheckboxConfirmed(e.target.checked)}
+                    disabled={!hasReadFully}
+                    className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-400 text-emerald-600 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  />
+                  <span className="text-sm text-slate-800">
+                    J&apos;ai lu, compris et j&apos;accepte les termes de cette
+                    Entente de confidentialité et de non-contournement.
+                  </span>
+                </label>
+                {!hasReadFully ? (
+                  <p className="mt-2 text-xs italic text-slate-500">
+                    La case sera activable une fois que vous aurez fait défiler
+                    le texte de l&apos;entente jusqu&apos;à la fin.
+                  </p>
+                ) : null}
+
                 {error ? (
                   <p className="mt-3 rounded-md border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700">
                     {error}
@@ -278,15 +397,22 @@ export default function SignNDAPage() {
                   <button
                     type="button"
                     onClick={() => void submit()}
-                    disabled={submitting}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60"
+                    disabled={!canSubmit}
+                    title={
+                      !hasReadFully
+                        ? "Veuillez lire l'intégralité de l'entente avant de signer"
+                        : !checkboxConfirmed
+                          ? "Veuillez cocher la case d'attestation"
+                          : undefined
+                    }
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {submitting ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
                       <ShieldCheck className="h-4 w-4" />
                     )}
-                    Je m&apos;engage à respecter cette entente
+                    J&apos;accepte et signe
                   </button>
                 </div>
               </>

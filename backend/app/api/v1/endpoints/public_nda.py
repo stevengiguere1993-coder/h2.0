@@ -16,6 +16,7 @@ facto le statut par défaut, « non signé »).
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -28,13 +29,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import DBSession
 from app.models.nda import NDA, NDAStatus
 from app.models.prospection_deal import ProspectionDeal
-from app.services.nda_pdf import render_nda_pdf
+from app.services.nda_pdf import nda_pdf_filename, render_nda_pdf
 from app.services.nda_template import (
     ENGAGEMENT_ITEMS,
     ISSUER_ENTITY_NAME,
     NDA_DURATION_YEARS,
     NDA_JURISDICTION,
+    render_nda_markdown,
 )
+
+
+log = logging.getLogger(__name__)
+
+
+_MONTHS_FR_CA = (
+    "janvier", "février", "mars", "avril", "mai", "juin",
+    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+)
+
+
+def _date_fr_ca_long(d: Optional[datetime]) -> str:
+    if d is None:
+        return ""
+    dd = d.date() if isinstance(d, datetime) else d
+    return f"{dd.day} {_MONTHS_FR_CA[dd.month - 1]} {dd.year}"
 
 
 router = APIRouter(prefix="/public/ndas", tags=["public-ndas"])
@@ -59,10 +77,21 @@ class PublicNDA(BaseModel):
     signed_name: Optional[str]
     signed_at: Optional[datetime]
     sent_at: Optional[datetime]
+    # Texte intégral de l'entente, en Markdown, déjà rendu avec les
+    # variables substituées. Affiché côté frontend dans un conteneur
+    # scrollable — le destinataire doit avoir scrollé jusqu'en bas
+    # avant que le bouton de signature s'active (cf. PR #517 fix).
+    full_text_markdown: str
+    # Date d'effet formatée pour le bandeau frontend (« 27 mai 2026 »).
+    emission_date_formatted: str
 
 
 class SignRequest(BaseModel):
     signed_name: str = Field(..., min_length=2, max_length=255)
+    # Flags d'attestation côté investisseur. Non bloquants côté
+    # backend (l'UI gère le gating), mais loggés pour audit.
+    has_scrolled: bool = False
+    checkbox_confirmed: bool = False
 
 
 # --------------------------- Helpers ---------------------------
@@ -116,10 +145,23 @@ def _property_address(deal: Optional[ProspectionDeal]) -> Optional[str]:
 
 async def _to_public(db: AsyncSession, nda: NDA) -> PublicNDA:
     deal = await _load_deal(db, nda.deal_id)
+    property_address = _property_address(deal)
+    emission_date_obj = nda.sent_at or nda.signed_at
+    emission_date_fmt = _date_fr_ca_long(emission_date_obj) or _date_fr_ca_long(
+        datetime.now(timezone.utc)
+    )
+    signed_at_fmt = _date_fr_ca_long(nda.signed_at) if nda.signed_at else None
+    full_md = render_nda_markdown(
+        investor_name=nda.investor_name,
+        emission_date=emission_date_fmt,
+        property_address=property_address,
+        signed_name=nda.signed_name,
+        signed_at=signed_at_fmt,
+    )
     return PublicNDA(
         id=nda.id,
         status=nda.status,
-        property_address=_property_address(deal),
+        property_address=property_address,
         investor_name=nda.investor_name,
         issuer_name=ISSUER_ENTITY_NAME,
         duration_years=NDA_DURATION_YEARS,
@@ -128,6 +170,8 @@ async def _to_public(db: AsyncSession, nda: NDA) -> PublicNDA:
         signed_name=nda.signed_name,
         signed_at=nda.signed_at,
         sent_at=nda.sent_at,
+        full_text_markdown=full_md,
+        emission_date_formatted=emission_date_fmt,
     )
 
 
@@ -151,7 +195,7 @@ async def read_nda(token: str, db: DBSession) -> PublicNDA:
 async def public_nda_pdf(token: str, db: DBSession) -> Response:
     nda = await _load_by_token(db, token)
     pdf_bytes = await render_nda_pdf(db, nda.id)
-    filename = f"entente-confidentialite-{nda.id}.pdf"
+    filename = nda_pdf_filename(nda)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -182,6 +226,19 @@ async def sign_nda(
     nda.status = NDAStatus.SIGNE.value
     await db.flush()
     await db.refresh(nda)
+
+    # Audit best-effort des attestations UX. Pas de table dédiée :
+    # on logge dans les events serveur. Si Phil ajoute plus tard un
+    # audit_log structuré pour les NDAs, ces deux flags y trouveront
+    # naturellement leur place.
+    log.info(
+        "NDA %s signé par %s (IP=%s, scrolled=%s, checkbox=%s)",
+        nda.id,
+        nda.signed_name,
+        nda.signed_ip,
+        data.has_scrolled,
+        data.checkbox_confirmed,
+    )
 
     # Notification interne best-effort (ne fait pas échouer la
     # signature si la dépendance n'est pas dispo).

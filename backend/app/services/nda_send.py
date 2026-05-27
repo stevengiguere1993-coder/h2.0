@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.integrations.email_graph import EmailAttachment, get_mailer
 from app.models.nda import NDA, NDAStatus
 from app.models.prospection_deal import ProspectionDeal
-from app.services.nda_pdf import render_nda_pdf
+from app.services.nda_pdf import nda_pdf_filename, render_nda_pdf
 from app.services.nda_template import ISSUER_ENTITY_NAME
 
 
@@ -100,7 +100,7 @@ async def _load_deal(
 
 
 async def send_nda_to_investor(db: AsyncSession, nda_id: int) -> NDA:
-    """Envoie l'entente à l'investisseur — utilise `nda.investor_email`.
+    """Envoie l'entente à l'investisseur �� utilise `nda.investor_email`.
 
     - Génère un signature_token si absent
     - Génère le PDF
@@ -123,7 +123,7 @@ async def send_nda_to_investor(db: AsyncSession, nda_id: int) -> NDA:
     deal = await _load_deal(db, nda.deal_id)
     pdf_bytes = await render_nda_pdf(db, nda.id)
     attachment = EmailAttachment(
-        name=f"entente-confidentialite-{nda.id}.pdf",
+        name=nda_pdf_filename(nda),
         content_bytes=pdf_bytes,
         content_type="application/pdf",
     )
