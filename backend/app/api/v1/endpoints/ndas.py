@@ -27,7 +27,7 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DBSession
 from app.models.nda import NDA, NDAStatus
 from app.models.prospection_deal import ProspectionDeal
-from app.services.nda_pdf import render_nda_pdf
+from app.services.nda_pdf import nda_pdf_filename, render_nda_pdf
 from app.services.nda_send import NDASendError, send_nda_to_investor
 
 
@@ -181,7 +181,7 @@ async def get_nda_pdf(
 ) -> Response:
     nda = await _load_nda_or_404(db, nda_id)
     pdf_bytes = await render_nda_pdf(db, nda.id)
-    filename = f"entente-confidentialite-{nda.id}.pdf"
+    filename = nda_pdf_filename(nda)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

@@ -1,5 +1,5 @@
 """Génère le PDF d'une Entente de confidentialité et de
-non-contournement (NDA — modèle MGV Développement v2).
+non-contournement (NDA — mod��le MGV Développement v2).
 
 Document légal multi-pages — version v2 qui remplace l'ancien
 modèle Horizon Services Immobiliers (5 sections) par le modèle
@@ -24,6 +24,8 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
+import unicodedata
 from datetime import datetime
 from typing import Any, Optional
 
@@ -57,6 +59,23 @@ _LOGO_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "assets",
     "logo.png",
+)
+
+# Image de signature manuscrite MGV. Le fichier n'existe pas encore
+# dans le repo — Phil le déposera dans `backend/app/assets/` dans
+# une PR ultérieure. Si absent, le bloc signature MGV affiche
+# simplement un espace vide (pas de placeholder texte).
+MGV_SIGNATURE_IMAGE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "assets",
+    "mgv_signature.png",
+)
+
+# Mois français-CA pour formater la date d'effet et la date MGV
+# au format « 27 mai 2026 » plutôt que « 2026-05-27 ».
+_MONTHS_FR_CA = (
+    "janvier", "février", "mars", "avril", "mai", "juin",
+    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
 )
 
 
@@ -102,6 +121,19 @@ def _date_fr(d) -> str:
     if isinstance(d, datetime):
         d = d.date()
     return d.strftime("%Y-%m-%d")
+
+
+def _date_fr_ca_long(d) -> str:
+    """Formate une date au format français-CA long, ex: « 27 mai 2026 ».
+
+    Utilisé pour la Date d'effet et la date MGV du bloc signature
+    afin d'éviter le format ISO austère côté investisseur.
+    """
+    if d is None:
+        return "____________"
+    if isinstance(d, datetime):
+        d = d.date()
+    return f"{d.day} {_MONTHS_FR_CA[d.month - 1]} {d.year}"
 
 
 def _styles(rl: dict[str, Any]):
@@ -293,7 +325,12 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
     s = _styles(rl)
     story: list = []
 
-    emission_date = _date_fr(nda.sent_at or nda.signed_at)
+    # Date d'effet : utilisée à la fois dans l'entête (« CET ACCORD
+    # est conclu en date du … ») et dans la colonne MGV du bloc
+    # signatures (auto-remplie — Phil ne signe pas une seconde fois
+    # côté investisseur). Format long « 27 mai 2026 ».
+    emission_date_obj = nda.sent_at or nda.signed_at or datetime.utcnow()
+    emission_date = _date_fr_ca_long(emission_date_obj)
     investor_name = (
         nda.investor_name.strip()
         if nda.investor_name and nda.investor_name.strip()
@@ -345,7 +382,7 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
         f"{ISSUER_ENTITY_ADDRESS}, représentée aux fins des "
         f"présentes par {ISSUER_REPRESENTATIVE_NAME}, "
         f"{ISSUER_REPRESENTATIVE_TITLE}, dûment autorisé tel "
-        f"qu'il le déclare en signant (ci-après la « Société » ou "
+        f"qu'il le déclare en signant (ci-après la « Sociét�� » ou "
         f"« <b>MGV</b> »);",
         s["body"],
     ))
@@ -487,7 +524,7 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
               "divulgation, sans qu'il y ait eu bris du présent "
               "Accord par la Partie Réceptrice ou ses "
               "Représentants;"),
-        ("c", "Les informations reçues légitimement d'un tiers sans "
+        ("c", "Les informations re��ues légitimement d'un tiers sans "
               "obligation de confidentialité et sans bris d'une "
               "obligation de confidentialité;"),
         ("d", "Les informations dont la divulgation est "
@@ -588,7 +625,7 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
     story.append(Paragraph(
         "Tous les droits, titres et intérêts relatifs aux "
         "Informations Confidentielles, ainsi qu'à tous les supports "
-        "les contenant, demeurent la propriété exclusive de la "
+        "les contenant, demeurent la propriét�� exclusive de la "
         "Partie Divulgatrice. Le présent Accord ne concède aucun "
         "droit de licence, de propriété intellectuelle ou de "
         "quelque autre nature à la Partie Réceptrice.",
@@ -647,7 +684,7 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
         "<b>9.2</b> En cas de violation du présent Accord par la "
         "Partie Réceptrice ou ses Représentants, la Société pourra "
         "obtenir, sans préjudice de ses autres recours et de "
-        "manière cumulative :",
+        "mani��re cumulative :",
         s["body"],
     ))
     for letter, text in [
@@ -671,10 +708,10 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
               "ou frais de gestion que la Société aurait perçus si "
               "la transaction avait été conclue avec sa "
               "participation;"),
-        ("d", "Le remboursement intégral de tous les frais et "
+        ("d", "Le remboursement int��gral de tous les frais et "
               "honoraires (juridiques, judiciaires, "
               "extrajudiciaires, expertises, et autres) engagés par "
-              "la Société pour faire valoir ses droits aux termes "
+              "la Sociét�� pour faire valoir ses droits aux termes "
               "du présent Accord."),
     ]:
         story.append(Paragraph(f"({letter}) {text}", s["body_l1"]))
@@ -695,7 +732,7 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
     story.append(Paragraph("10. DIVULGATION OBLIGATOIRE", s["section"]))
     story.append(Paragraph(
         "Si la Partie Réceptrice est légalement tenue (par loi, "
-        "ordonnance judiciaire, ou autorité réglementaire) de "
+        "ordonnance judiciaire, ou autorité r��glementaire) de "
         "divulguer des Informations Confidentielles, elle devra :",
         s["body"],
     ))
@@ -785,9 +822,33 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
     ))
     story.append(Spacer(1, 10))
 
+    # Zone réservée à la signature manuscrite MGV : si le fichier
+    # `assets/mgv_signature.png` existe (Phil le déposera plus tard),
+    # on l'affiche au-dessus du nom. Sinon, on laisse un Spacer vide
+    # de même hauteur — pas de placeholder texte « [signature] ».
+    mgv_signature_block: Any
+    if os.path.exists(MGV_SIGNATURE_IMAGE_PATH):
+        try:
+            mgv_signature_block = Image(
+                MGV_SIGNATURE_IMAGE_PATH,
+                width=70 * mm,
+                height=22 * mm,
+                kind="proportional",
+            )
+        except Exception:
+            log.warning(
+                "MGV signature image illisible (%s) — espace vide.",
+                MGV_SIGNATURE_IMAGE_PATH,
+            )
+            mgv_signature_block = Spacer(1, 22 * mm)
+    else:
+        mgv_signature_block = Spacer(1, 22 * mm)
+
     sig_left = [
         Paragraph(f"<b>{ISSUER_ENTITY_NAME}</b>", s["small"]),
         Spacer(1, 6),
+        mgv_signature_block,
+        Spacer(1, 4),
         Paragraph(f"Par : {ISSUER_REPRESENTATIVE_NAME}", s["small"]),
         Paragraph(f"Titre : {ISSUER_REPRESENTATIVE_TITLE}", s["small"]),
         Paragraph(
@@ -800,7 +861,7 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
     ]
 
     signed_at_label = (
-        _date_fr(nda.signed_at) if nda.signed_at else "_____________________"
+        _date_fr_ca_long(nda.signed_at) if nda.signed_at else "_____________________"
     )
     signed_name_label = (
         nda.signed_name if nda.signed_name else "_____________________"
@@ -854,3 +915,39 @@ async def render_nda_pdf(db: AsyncSession, nda_id: int) -> bytes:
     if nda is None:
         raise ValueError(f"NDA {nda_id} introuvable")
     return _render_bytes(nda, deal)
+
+
+def _slugify_investor(name: Optional[str]) -> str:
+    """Convertit un nom d'investisseur en slug ASCII pour nom de fichier.
+
+    Ex: "Jean-Pierre Tremblay-Côté" -> "Jean_Pierre_Tremblay_Cote".
+    Retire les accents (NFKD + drop des combining marks), remplace
+    les espaces/tirets/apostrophes par `_`, supprime tout caractère
+    non alphanumérique restant, compresse les `_` consécutifs.
+    """
+    if not name or not name.strip():
+        return ""
+    # Décomposer les caractères accentués puis retirer les marques.
+    decomposed = unicodedata.normalize("NFKD", name.strip())
+    ascii_only = "".join(
+        ch for ch in decomposed if not unicodedata.combining(ch)
+    )
+    # Remplacer espaces, tirets, apostrophes par `_`.
+    underscored = re.sub(r"[\s\-'’]+", "_", ascii_only)
+    # Supprimer tout caractère non `[A-Za-z0-9_]`.
+    cleaned = re.sub(r"[^A-Za-z0-9_]", "", underscored)
+    # Compresser les `_` consécutifs et trim.
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    return cleaned
+
+
+def nda_pdf_filename(nda: NDA) -> str:
+    """Nom de fichier canonique du PDF d'un NDA.
+
+    Format : `Entente_Confidentialite_MGV_{Nom_Investisseur}.pdf`.
+    Si l'investor_name est absent (cas brouillon), fallback sur l'id
+    interne : `Entente_Confidentialite_MGV_{id}.pdf`.
+    """
+    slug = _slugify_investor(nda.investor_name)
+    suffix = slug if slug else str(nda.id)
+    return f"Entente_Confidentialite_MGV_{suffix}.pdf"
