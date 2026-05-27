@@ -231,3 +231,38 @@ async def delete_appointment(
     await db.delete(event)
     await db.flush()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{event_id}/resend-confirmation")
+async def resend_confirmation(
+    event_id: int,
+    db: DBSession,
+    user: RequireManager,
+) -> dict:
+    """Renvoie le courriel de confirmation du RDV au prospect, avec
+    le .ics joint. Met a jour confirmation_sent_at en cas de succes."""
+    event = await db.get(AgendaEvent, event_id)
+    if event is None or event.contact_request_id is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Rendez-vous introuvable."
+        )
+    prospect = (
+        await db.execute(
+            select(ContactRequest).where(
+                ContactRequest.id == event.contact_request_id
+            )
+        )
+    ).scalar_one_or_none()
+    if prospect is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Prospect introuvable."
+        )
+    ok = await send_appointment_confirmation(prospect, event)
+    if not ok:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            "Envoi du courriel echoue (mailer non configure ou rejet).",
+        )
+    event.confirmation_sent_at = datetime.now(timezone.utc)
+    await db.flush()
+    return {"sent": True}
