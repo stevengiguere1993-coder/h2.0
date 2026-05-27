@@ -1290,6 +1290,17 @@ type Appointment = {
 
 type Employe = { id: number; full_name: string };
 
+async function readErrorDetail(res: Response): Promise<string> {
+  const txt = (await res.text()).slice(0, 1000);
+  try {
+    const j = JSON.parse(txt) as { detail?: unknown };
+    if (typeof j?.detail === "string") return j.detail;
+  } catch {
+    /* not JSON — fall through */
+  }
+  return txt.slice(0, 240) || `Erreur HTTP ${res.status}`;
+}
+
 function AppointmentScheduler({
   contactRequestId,
   prospectName,
@@ -1364,12 +1375,16 @@ function AppointmentScheduler({
       setError("Tous les champs sont requis.");
       return;
     }
+    const startIso = new Date(`${date}T${startHm}:00`).toISOString();
+    const endIso = new Date(`${date}T${endHm}:00`).toISOString();
+    if (new Date(endIso) <= new Date(startIso)) {
+      setError("L'heure de fin doit être après l'heure de début.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     setSuccess(null);
     try {
-      const startIso = new Date(`${date}T${startHm}:00`).toISOString();
-      const endIso = new Date(`${date}T${endHm}:00`).toISOString();
       const res = await authedFetch("/api/v1/appointments", {
         method: "POST",
         body: JSON.stringify({
@@ -1383,8 +1398,7 @@ function AppointmentScheduler({
         })
       });
       if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt.slice(0, 240));
+        throw new Error(await readErrorDetail(res));
       }
       const created = (await res.json()) as Appointment;
       setPast((xs) => [created, ...xs]);
@@ -1425,20 +1439,23 @@ function AppointmentScheduler({
       setError("Date et plage horaire requises.");
       return;
     }
+    const startIso = new Date(
+      `${editDate}T${editStartHm}:00`
+    ).toISOString();
+    const endIso = new Date(`${editDate}T${editEndHm}:00`).toISOString();
+    if (new Date(endIso) <= new Date(startIso)) {
+      setError("L'heure de fin doit être après l'heure de début.");
+      return;
+    }
     setBusyId(id);
     setError(null);
     try {
-      const startIso = new Date(
-        `${editDate}T${editStartHm}:00`
-      ).toISOString();
-      const endIso = new Date(`${editDate}T${editEndHm}:00`).toISOString();
       const res = await authedFetch(`/api/v1/appointments/${id}`, {
         method: "PATCH",
         body: JSON.stringify({ start_at: startIso, end_at: endIso })
       });
       if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt.slice(0, 240));
+        throw new Error(await readErrorDetail(res));
       }
       const updated = (await res.json()) as Appointment;
       setPast((xs) =>
@@ -1474,8 +1491,7 @@ function AppointmentScheduler({
         method: "DELETE"
       });
       if (!res.ok && res.status !== 204) {
-        const txt = await res.text();
-        throw new Error(txt.slice(0, 240));
+        throw new Error(await readErrorDetail(res));
       }
       setPast((xs) => xs.filter((x) => x.id !== id));
     } catch (e) {
