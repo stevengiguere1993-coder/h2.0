@@ -15,6 +15,7 @@ import {
   Pause,
   Plus,
   Search,
+  Settings2,
   Sparkles,
   Trash2,
   Upload,
@@ -24,8 +25,10 @@ import {
 
 import { useSearchParams } from "next/navigation";
 
-import { authedFetch } from "@/lib/auth";
+import { authedFetch, hasMinRole } from "@/lib/auth";
+import { useCurrentUser } from "@/hooks/use-current-user";
 import { useConfirm } from "@/components/confirm-dialog";
+import { AnalysisDefaultsModal } from "@/components/analysis-defaults-modal";
 import { AppTopbar } from "@/components/app-topbar";
 import {
   LeadAnalysisCard,
@@ -111,6 +114,46 @@ type ExtractResult = {
   warnings: string[];
   model_used: string | null;
 };
+
+/**
+ * Bouton ⚙️ discret pour ouvrir la modal des défauts globaux.
+ *
+ * Visible uniquement pour admin/owner (Phil + Steven). Phil ne veut pas
+ * que les employés bidouillent les défauts du calculateur.
+ *
+ * - `group="refi"` : taux refi + taux prêteur B.
+ * - `group="mdf"`  : % MDF prêteur B.
+ */
+function DefaultsGearButton({
+  group,
+  title
+}: {
+  group: "refi" | "mdf";
+  title: string;
+}) {
+  const { user } = useCurrentUser();
+  const [open, setOpen] = useState(false);
+  if (!hasMinRole(user, "admin")) return null;
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        title={title}
+        aria-label="Modifier les défauts"
+        className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[10px] text-white/60 hover:bg-white/10 hover:text-white"
+      >
+        <Settings2 className="h-3 w-3" />
+        Défauts
+      </button>
+      <AnalysisDefaultsModal
+        open={open}
+        onClose={() => setOpen(false)}
+        group={group}
+      />
+    </>
+  );
+}
 
 const COLUMNS: Array<{
   key: Lead["status"];
@@ -929,6 +972,8 @@ type LeadDetail = Lead & {
   frais_negociations: number | null;
   // MDF prêteur B configurable + overrides frais démarrage
   mdf_preteur_b_pct: number | null;
+  // Taux d'intérêt prêteur B chantier (pré-rempli depuis défauts globaux).
+  taux_interet_preteur_b_projet_pct: number | null;
   frais_demarrage_overrides_json: string | null;
   frais_demarrage_financables_json: string | null;
   // Résultats analyse
@@ -2014,11 +2059,14 @@ function ManualAnalysisSection({
 
   return (
     <section className="rounded-xl border border-accent-500/30 bg-accent-500/5 p-4">
-      <div className="flex items-center gap-2">
-        <Sparkles className="h-4 w-4 text-accent-500" />
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-accent-500">
-          Analyse financière — inputs manuels
-        </h3>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-accent-500" />
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-accent-500">
+            Analyse financière — inputs manuels
+          </h3>
+        </div>
+        <DefaultsGearButton group="refi" title="Modifier les défauts globaux (taux refi, taux prêteur B)" />
       </div>
 
       {missingRequired.length > 0 ? (
@@ -2109,6 +2157,14 @@ function ManualAnalysisSection({
           label="Taux d'intérêt refi (%)"
           value={data.taux_interet_refi_pct}
           onSave={(v) => onPatch("taux_interet_refi_pct", v)}
+          format="percent"
+        />
+        <FieldNumber
+          label="Taux d'intérêt prêteur B (%)"
+          value={data.taux_interet_preteur_b_projet_pct ?? 8}
+          onSave={(v) =>
+            onPatch("taux_interet_preteur_b_projet_pct", v ?? 8)
+          }
           format="percent"
         />
         <FieldNumber
@@ -2708,9 +2764,12 @@ function FraisDemarrageBreakdownPanel({
 
   return (
     <section className="mt-4 rounded-lg border border-amber-400/30 bg-amber-500/5 p-4">
-      <h4 className="text-xs font-semibold uppercase tracking-wider text-amber-300">
-        Composition de la MDF avec prêteur B
-      </h4>
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-amber-300">
+          Composition de la MDF avec prêteur B
+        </h4>
+        <DefaultsGearButton group="mdf" title="Modifier le % MDF prêteur B par défaut" />
+      </div>
       <p className="mt-0.5 text-[10px] text-white/50">
         Total à sortir en cash = {_fmtPctShort(mdfPctNumeric)} du prix
         d&apos;achat + frais non finançables + {_fmtPctShort(mdfPctNumeric)}

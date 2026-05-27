@@ -271,6 +271,18 @@ class LeadAnalysis(Base, TimestampUpdateMixin):
         default=25.0,
         server_default="25.0",
     )
+    # Taux d'intérêt prêteur B pendant la phase chantier — défaut 8 %,
+    # modifiable selon les conditions de marché. Stocké en
+    # pourcentage (8.0 = 8 %). Utilisé pour calculer les intérêts
+    # de portage (L17 = (1 - MDF%) × prix × taux × durée) dans le
+    # moteur d'analyse financière. Pré-rempli à la création depuis
+    # ``ProspectionAnalysisDefault['taux_interet_preteur_b_projet']``.
+    taux_interet_preteur_b_projet_pct: Mapped[Optional[float]] = mapped_column(
+        Numeric(5, 3),
+        nullable=True,
+        default=8.0,
+        server_default="8.0",
+    )
     # Overrides manuels des frais de démarrage par poste.
     # JSON `{ "evaluateur": 1800, "inspection": 2000, ... }` : pour
     # chaque clé présente, on ignore le calcul automatique et on

@@ -158,6 +158,9 @@ from app.models.project_assignees import (
 from app.models.project_photo import ProjectPhoto
 from app.models.project_task import ProjectTask
 from app.models.prospection_analyse import ProspectionAnalyse
+from app.models.prospection_analysis_default import (  # noqa: F401
+    ProspectionAnalysisDefault,
+)
 from app.models.prospection_deal import ProspectionDeal
 from app.models.prospection_deal_task import ProspectionDealTask
 from app.models.prospection_deal_task_assignee import (

@@ -100,6 +100,7 @@ from app.api.v1.endpoints import (
     prospection,
     prospection_analyse_extract,
     prospection_analyses,
+    prospection_analysis_defaults,
     prospection_deals,
     prospection_lists,
     rental_comparables,
@@ -293,6 +294,10 @@ api_router.include_router(mtl_properties.router)
 # pour que le path littéral matche avant /prospection/analyses/{id}.
 api_router.include_router(prospection_analyse_extract.router)
 api_router.include_router(prospection_analyses.router)
+# /prospection/analysis-defaults — admin/owner only, defaults
+# globaux pour les inputs manuels du calculateur (taux refi, % MDF,
+# taux prêteur B). Doit matcher AVANT /prospection/{lead_id}.
+api_router.include_router(prospection_analysis_defaults.router)
 api_router.include_router(lead_analyses.router)
 # /prospection/deals DOIT être avant prospection.router pour la même
 # raison que les autres : éviter la collision avec /prospection/{lead_id}.
