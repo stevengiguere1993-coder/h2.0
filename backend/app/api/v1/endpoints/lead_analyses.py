@@ -1487,6 +1487,19 @@ async def re_extract_with_claude(
     """
     _require_prospection(user)
 
+    if not getattr(settings, "claude_reextract_enabled", False):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Ré-extraction Claude désactivée par feature flag "
+                "(CLAUDE_REEXTRACT_ENABLED=false). Le bouton « Ré-"
+                "extraire avec Groq » est gratuit et remplace Claude. "
+                "Si tu veux vraiment Claude (~3 ¢/appel), mets "
+                "CLAUDE_REEXTRACT_ENABLED=true dans les env vars "
+                "Render."
+            ),
+        )
+
     if not settings.anthropic_api_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1788,6 +1801,273 @@ async def re_extract_with_claude(
     )
 
 
+# ─── Ré-extraction manuelle avec Groq Llama 3.3 70B (Couche 3 v2) ───
+#
+# Remplaçant gratuit de l'endpoint Claude. Tier free Groq : 14 400
+# req/jour sur llama-3.3-70b-versatile. Comme Llama n'est pas
+# multi-modal natif, on OCR-ise les PDFs/images avant l'appel (les
+# fonctions OCR de la Couche 1 sont réutilisées : Tesseract + pypdf).
+
+
+class ReExtractGroqResponse(BaseModel):
+    """Réponse de /re-extract-with-groq. Le frontend reload la fiche
+    via GET /lead-analyses/{id} pour voir tous les nouveaux champs ;
+    on retourne quand même la liste des champs modifiés pour le toast
+    et pour les tests."""
+
+    fields_patched: List[str]
+    model_used: str
+    cost_usd_estimate: float = 0.0
+
+
+@router.post(
+    "/{analysis_id}/re-extract-with-groq",
+    response_model=ReExtractGroqResponse,
+    summary=(
+        "Couche 3 (gratuit) : ré-extraction manuelle d'une fiche via "
+        "Groq Llama 3.3 70B. PDF/images OCR-isés (Llama non "
+        "multi-modal). Tier free 14 400 req/jour."
+    ),
+)
+async def re_extract_with_groq(
+    analysis_id: int,
+    db: DBSession,
+    user: CurrentUser,
+) -> ReExtractGroqResponse:
+    """Relance l'extraction sur une `LeadAnalysis` existante en
+    utilisant Groq Llama 3.3 70B. Reprend les sources déjà attachées
+    à la fiche (URLs, texte, attachments OCR-isés).
+
+    Patch « doux » identique à Claude : adresse/ville/code postal/
+    province TOUJOURS remplacés si Groq propose une valeur (champs
+    identifiants — Groq voit en général la version la plus propre),
+    les autres champs uniquement si vides en base.
+    """
+    _require_prospection(user)
+
+    if not getattr(settings, "groq_api_key", None):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Ré-extraction Groq désactivée : GROQ_API_KEY n'est "
+                "pas configurée sur le serveur. Crée une clé gratuite "
+                "sur https://console.groq.com et ajoute-la dans les "
+                "env vars Render (Dashboard → h2-0 → Environment)."
+            ),
+        )
+
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+
+    atts = (
+        await db.execute(
+            select(LeadAnalysisAttachment)
+            .where(LeadAnalysisAttachment.lead_analysis_id == analysis_id)
+            .order_by(LeadAnalysisAttachment.id.asc())
+        )
+    ).scalars().all()
+
+    url_lines = [
+        u.strip()
+        for u in (rec.source_urls or "").splitlines()
+        if u.strip()
+    ]
+    src_text = (rec.source_text or "").strip() or None
+
+    if not url_lines and not src_text and not atts:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Aucune source originale sur cette fiche — rien à "
+                "ré-extraire. Recolle des URLs/texte ou ajoute des "
+                "fichiers d'abord."
+            ),
+        )
+
+    from app.services.lead_extraction_groq import reextract_with_groq
+
+    try:
+        result = await reextract_with_groq(rec, list(atts), force_ocr=True)
+    except Exception as exc:
+        log.exception("Re-extract Groq failed")
+        try:
+            await log_action(
+                db,
+                user=user,
+                action="lead_analysis.re_extract_failed",
+                entity_type="lead_analysis",
+                entity_id=rec.id,
+                details={
+                    "reason": "unexpected",
+                    "provider": "groq",
+                    "type": type(exc).__name__,
+                    "message": str(exc)[:500],
+                },
+            )
+            await db.commit()
+        except Exception:
+            log.exception("Audit log re_extract_failed (groq) failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erreur ré-extraction Groq : {str(exc)[:200]}",
+        )
+
+    if result.error:
+        try:
+            await log_action(
+                db,
+                user=user,
+                action="lead_analysis.re_extract_failed",
+                entity_type="lead_analysis",
+                entity_id=rec.id,
+                details={
+                    "reason": "groq_api_error",
+                    "message": result.error[:500],
+                },
+            )
+            await db.commit()
+        except Exception:
+            log.exception("Audit log re_extract_failed (groq api) failed")
+        is_no_extract = "n'a pas pu extraire" in result.error
+        raise HTTPException(
+            status_code=(
+                status.HTTP_422_UNPROCESSABLE_ENTITY
+                if is_no_extract
+                else status.HTTP_502_BAD_GATEWAY
+            ),
+            detail=result.error,
+        )
+
+    rec.model_used = result.model_used
+    rec.updated_at = datetime.now(timezone.utc)
+
+    # Re-valide la fiche après le patch Groq. On réinjecte les
+    # valeurs Groq pour les champs patchés (utile pour le tooltip
+    # côté UI). On réutilise la clé "claude" du validator pour
+    # conserver la compatibilité avec le validator existant.
+    groq_src: Dict[str, Dict[str, Any]] = {}
+    for k in result.fields_patched:
+        v = result.extracted.get(k) if result.extracted else None
+        if v not in (None, "", "null"):
+            groq_src[k] = {"claude": v}
+    new_vw = validate_extraction(rec, per_source_values=groq_src)
+    rec.validation_warnings = new_vw or None
+    if new_vw:
+        try:
+            await log_action(
+                db,
+                user=user,
+                action="lead_analysis.validation_warnings_updated",
+                entity_type="lead_analysis",
+                entity_id=rec.id,
+                details={
+                    "source": "re_extract_groq",
+                    "count": len(new_vw),
+                    "max_severity": summarize_severity(new_vw),
+                    "fields": sorted(
+                        {w.get("field") for w in new_vw if w.get("field")}
+                    ),
+                },
+            )
+        except Exception:
+            log.exception("Audit log validation_warnings (groq) failed")
+
+    await log_action(
+        db,
+        user=user,
+        action="lead_analysis.re_extracted_with_groq",
+        entity_type="lead_analysis",
+        entity_id=rec.id,
+        details={
+            "fields_patched": result.fields_patched,
+            "model": result.model_used,
+            "n_attachments": len(atts),
+            "n_urls": len(url_lines),
+            "has_text": bool(src_text),
+        },
+    )
+
+    await db.commit()
+
+    return ReExtractGroqResponse(
+        fields_patched=result.fields_patched,
+        model_used=result.model_used,
+    )
+
+
+@router.get(
+    "/check-groq-health",
+    summary=(
+        "Diagnostic : vérifie GROQ_API_KEY + ping Groq (utile "
+        "quand le bouton « Ré-extraire avec Groq » ne fonctionne pas)."
+    ),
+)
+async def check_groq_health(user: CurrentUser) -> dict:
+    """Endpoint diagnostic pour la stack Groq. Réponse :
+      {
+        "configured": bool,    # GROQ_API_KEY est-elle définie ?
+        "sdk_works": bool,     # un mini appel Groq réussit-il ?
+        "model": str,
+        "error": str|null
+      }
+    """
+    _require_prospection(user)
+    model = (
+        getattr(settings, "groq_model", None) or "llama-3.3-70b-versatile"
+    )
+    out: dict = {
+        "configured": bool(getattr(settings, "groq_api_key", None)),
+        "sdk_works": False,
+        "model": model,
+        "error": None,
+    }
+    if not out["configured"]:
+        out["error"] = (
+            "GROQ_API_KEY n'est pas configurée sur le serveur. "
+            "Crée une clé gratuite sur https://console.groq.com et "
+            "ajoute-la dans les env vars Render (Dashboard → h2-0 → "
+            "Environment)."
+        )
+        return out
+    try:
+        import httpx as _httpx
+        api_key = settings.groq_api_key.strip()
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "user", "content": "Réponds juste 'ok'."}
+                    ],
+                    "max_tokens": 10,
+                    "temperature": 0,
+                },
+            )
+        if resp.status_code >= 400:
+            out["error"] = (
+                f"Groq HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+            return out
+        body = resp.json()
+        choices = body.get("choices") or []
+        out["sdk_works"] = bool(
+            choices and (choices[0].get("message") or {}).get("content")
+        )
+        if not out["sdk_works"]:
+            out["error"] = "Groq a répondu sans contenu utilisable."
+    except Exception as exc:
+        out["sdk_works"] = False
+        out["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        log.exception("check_groq_health failed")
+    return out
+
+
 @router.get(
     "/check-claude-health",
     summary=(
@@ -1814,12 +2094,24 @@ async def check_claude_health(user: CurrentUser) -> dict:
     """
     _require_prospection(user)
     model = "claude-sonnet-4-6"
+    enabled = bool(getattr(settings, "claude_reextract_enabled", False))
     out: dict = {
         "configured": bool(settings.anthropic_api_key),
+        "enabled": enabled,
         "sdk_works": False,
         "model": model,
         "error": None,
     }
+    if not enabled:
+        # Feature flag OFF : Claude est désactivé indépendamment de
+        # la clé. Le frontend cache le bouton Claude dans ce cas et
+        # ne montre que Groq.
+        out["error"] = (
+            "Ré-extraction Claude désactivée par feature flag "
+            "(CLAUDE_REEXTRACT_ENABLED=false). Utilise Groq (gratuit) "
+            "à la place, ou mets le flag à true pour réactiver Claude."
+        )
+        return out
     if not out["configured"]:
         out["error"] = (
             "ANTHROPIC_API_KEY n'est pas configurée sur le serveur. "

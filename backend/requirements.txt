@@ -26,6 +26,14 @@ email-validator>=2.1.0,<3.0.0
 # Claude (SEO content + future validators — usage hors extraction lead)
 anthropic>=0.40.0,<1.0.0
 
+# Groq (Llama 3.3 70B) — remplaçant gratuit de Claude pour la
+# ré-extraction manuelle (Couche 3 du pipeline lead_extraction).
+# Tier gratuit : 14 400 req/jour sur llama-3.3-70b-versatile.
+# Pas de support multi-modal natif : on OCR-ise PDF/images via
+# Tesseract (déjà installé pour la Couche 1) et on envoie le texte
+# concaténé. Aucune carte de crédit requise (compte simple email).
+groq>=0.11.0,<1.0.0
+
 # Gemini (Google AI Studio) — extraction des leads immobiliers
 # (URLs, texte libre, images, PDFs). Tier gratuit suffisant pour les
 # volumes du pôle Prospection (1500 req/jour, 1M req/mois).

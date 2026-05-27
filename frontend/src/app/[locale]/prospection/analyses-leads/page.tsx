@@ -102,9 +102,11 @@ function extractionBadge(
 ): LeadAnalysisCardBadge {
   const m = (modelUsed || "").toLowerCase();
   if (m.startsWith("claude")) return { label: "Claude", color: "amber" };
-  if (m === "local + gemini")
+  if (m.includes("llama") || m.includes("groq"))
+    return { label: "Groq", color: "emerald" };
+  if (m.startsWith("local + gemini") || m === "local + gemini")
     return { label: "Local + Gemini", color: "blue" };
-  if (m === "gemini") return { label: "Gemini", color: "violet" };
+  if (m.startsWith("gemini")) return { label: "Gemini", color: "violet" };
   if (m === "local") return { label: "Parser local", color: "slate" };
   return { label: "Aucune extraction", color: "rose" };
 }
@@ -1385,7 +1387,7 @@ function LeadDetailModal({
                     <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
                       Sources originales
                     </h3>
-                    <ReExtractClaudeButton
+                    <ReExtractButtons
                       id={id}
                       hasSources={
                         !!(
@@ -3734,6 +3736,7 @@ const EXTRACTION_BADGE_CLS: Record<string, string> = {
   "local + gemini": "border-blue-500/30 bg-blue-500/10 text-blue-300",
   gemini: "border-violet-500/30 bg-violet-500/10 text-violet-300",
   claude: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+  groq: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
   none: "border-rose-500/30 bg-rose-500/10 text-rose-300"
 };
 
@@ -3743,12 +3746,14 @@ function extractionBadgeMeta(
   const m = (modelUsed || "").toLowerCase();
   if (m.startsWith("claude"))
     return { label: "Claude", cls: EXTRACTION_BADGE_CLS.claude };
-  if (m === "local + gemini")
+  if (m.includes("llama") || m.includes("groq"))
+    return { label: "Groq", cls: EXTRACTION_BADGE_CLS.groq };
+  if (m.startsWith("local + gemini") || m === "local + gemini")
     return {
       label: "Local + Gemini",
       cls: EXTRACTION_BADGE_CLS["local + gemini"]
     };
-  if (m === "gemini")
+  if (m.startsWith("gemini"))
     return { label: "Gemini", cls: EXTRACTION_BADGE_CLS.gemini };
   if (m === "local")
     return { label: "Parser local", cls: EXTRACTION_BADGE_CLS.local };
@@ -3774,16 +3779,19 @@ function ExtractionBadgeInline({
 }
 
 /**
- * Bouton « Re-extraire avec Claude » dans la section Sources originales
- * du modal LeadDetailModal. Couche 3 du pipeline tri-couche (manuelle,
- * payante ~3 cents par appel).
+ * Composant « Boutons de ré-extraction » dans la section Sources
+ * originales du modal LeadDetailModal. Couche 3 du pipeline.
  *
- *   - Desactive si la fiche n'a aucune source originale (URLs / texte /
- *     attachments) — tooltip explicite.
- *   - Confirm dialog avec mention du cout avant lancement.
- *   - Toast vert / rouge selon resultat ; reload la fiche au succes.
+ *   - Bouton principal Groq Llama 3.3 70B (GRATUIT, 14 400 req/jour).
+ *     Affiché par défaut, toujours.
+ *   - Bouton secondaire Claude Sonnet 4.6 (~3¢/appel). Affiché
+ *     UNIQUEMENT si le feature flag serveur claude_reextract_enabled
+ *     est ON (hit GET /check-claude-health pour le savoir).
+ *
+ * Confirm dialog explicite ; toast vert au succès, toast rouge
+ * persistant (avec X pour fermer) en cas d'erreur.
  */
-function ReExtractClaudeButton({
+function ReExtractButtons({
   id,
   hasSources,
   onSuccess
@@ -3793,37 +3801,63 @@ function ReExtractClaudeButton({
   onSuccess: () => Promise<void>;
 }) {
   const confirm = useConfirm();
-  const [busy, setBusy] = useState(false);
+  const [busyKind, setBusyKind] = useState<"groq" | "claude" | null>(null);
   const [toast, setToast] = useState<{
     text: string;
     kind: "ok" | "err";
   } | null>(null);
+  // Feature flag serveur — true si CLAUDE_REEXTRACT_ENABLED=true
+  // côté Render. Détecté via /check-claude-health (champ ``enabled``).
+  // null = pas encore résolu (on cache le bouton Claude tant qu'on
+  // ne sait pas).
+  const [claudeEnabled, setClaudeEnabled] = useState<boolean | null>(null);
 
-  // Auto-dismiss du toast OK apres 6 s. Les erreurs restent affichees
-  // jusqu'a ce que l'utilisateur les ferme (sinon il loupe le message).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await authedFetch(
+          "/api/v1/lead-analyses/check-claude-health"
+        );
+        if (!r.ok) {
+          if (!cancelled) setClaudeEnabled(false);
+          return;
+        }
+        const out = (await r.json()) as { enabled?: boolean };
+        if (!cancelled) setClaudeEnabled(out.enabled === true);
+      } catch {
+        if (!cancelled) setClaudeEnabled(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     if (!toast || toast.kind === "err") return;
     const t = setTimeout(() => setToast(null), 6000);
     return () => clearTimeout(t);
   }, [toast]);
 
-  async function run() {
-    if (!hasSources || busy) return;
+  async function runGroq() {
+    if (!hasSources || busyKind) return;
     const ok = await confirm({
-      title: "Re-extraire avec Claude ?",
+      title: "Ré-extraire avec Groq ?",
       description:
-        "Cette operation coute environ 3 cents (Claude Sonnet 4.6, multimodal). " +
-        "Claude relit les sources originales de la fiche et remplit les " +
-        "champs vides. Les champs deja saisis ne sont pas ecrases (sauf " +
-        "adresse/ville). Continuer ?",
-      confirmLabel: "Lancer Claude"
+        "Cette opération est gratuite (Groq Llama 3.3 70B). Groq " +
+        "relit les sources originales de la fiche (URLs, texte, PDF/" +
+        "images OCR-isés) et remplit les champs vides. Les champs " +
+        "déjà saisis ne sont pas écrasés (sauf adresse/ville). " +
+        "Continuer ?",
+      confirmLabel: "Lancer Groq"
     });
     if (!ok) return;
-    setBusy(true);
+    setBusyKind("groq");
     setToast(null);
     try {
       const r = await authedFetch(
-        `/api/v1/lead-analyses/${id}/re-extract-with-claude`,
+        `/api/v1/lead-analyses/${id}/re-extract-with-groq`,
         { method: "POST" }
       );
       if (!r.ok) {
@@ -3831,13 +3865,10 @@ function ReExtractClaudeButton({
           .json()
           .then((j: { detail?: string }) => j.detail || `HTTP ${r.status}`)
           .catch(() => `HTTP ${r.status}`);
-        // Message specifique 503 : cle Anthropic absente cote serveur.
-        // C'est la cause la plus probable du bug "rien ne se passe" :
-        // sans cle, l'endpoint repond 503 et le bouton revient idle.
         const text =
           r.status === 503
-            ? `Extraction Claude indisponible : ${detail} Contacte un admin pour configurer ANTHROPIC_API_KEY sur le serveur.`
-            : `Re-extraction echouee (HTTP ${r.status}) : ${detail}`;
+            ? `Extraction Groq indisponible : ${detail}`
+            : `Ré-extraction Groq échouée (HTTP ${r.status}) : ${detail}`;
         setToast({ text, kind: "err" });
         return;
       }
@@ -3850,40 +3881,118 @@ function ReExtractClaudeButton({
       setToast({
         text:
           n > 0
-            ? `Champs re-extraits par Claude (${n}). Verifie les modifications.`
-            : "Claude n'a pas trouve de nouveaux champs a remplir.",
+            ? `Champs ré-extraits par Groq (${n}). Vérifie les modifications.`
+            : "Groq n'a pas trouvé de nouveaux champs à remplir.",
         kind: "ok"
       });
     } catch (e) {
       setToast({
-        text: `Re-extraction echouee : ${(e as Error).message}`,
+        text: `Ré-extraction Groq échouée : ${(e as Error).message}`,
         kind: "err"
       });
     } finally {
-      setBusy(false);
+      setBusyKind(null);
     }
   }
 
+  async function runClaude() {
+    if (!hasSources || busyKind) return;
+    const ok = await confirm({
+      title: "Ré-extraire avec Claude ?",
+      description:
+        "Cette opération coûte environ 3 cents (Claude Sonnet 4.6, " +
+        "multimodal). Claude relit les sources originales et remplit " +
+        "les champs vides. Les champs déjà saisis ne sont pas écrasés " +
+        "(sauf adresse/ville). Continuer ?",
+      confirmLabel: "Lancer Claude (~3¢)"
+    });
+    if (!ok) return;
+    setBusyKind("claude");
+    setToast(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/lead-analyses/${id}/re-extract-with-claude`,
+        { method: "POST" }
+      );
+      if (!r.ok) {
+        const detail = await r
+          .json()
+          .then((j: { detail?: string }) => j.detail || `HTTP ${r.status}`)
+          .catch(() => `HTTP ${r.status}`);
+        const text =
+          r.status === 503
+            ? `Extraction Claude indisponible : ${detail}`
+            : `Ré-extraction Claude échouée (HTTP ${r.status}) : ${detail}`;
+        setToast({ text, kind: "err" });
+        return;
+      }
+      const out = (await r.json()) as {
+        fields_patched: string[];
+        model_used: string;
+      };
+      await onSuccess();
+      const n = out.fields_patched?.length || 0;
+      setToast({
+        text:
+          n > 0
+            ? `Champs ré-extraits par Claude (${n}). Vérifie les modifications.`
+            : "Claude n'a pas trouvé de nouveaux champs à remplir.",
+        kind: "ok"
+      });
+    } catch (e) {
+      setToast({
+        text: `Ré-extraction Claude échouée : ${(e as Error).message}`,
+        kind: "err"
+      });
+    } finally {
+      setBusyKind(null);
+    }
+  }
+
+  const isBusy = busyKind !== null;
+
   return (
-    <div className="flex flex-col items-end">
-      <button
-        type="button"
-        onClick={() => void run()}
-        disabled={!hasSources || busy}
-        title={
-          hasSources
-            ? "Relance Claude Sonnet 4.6 sur les sources originales (~3 cents)"
-            : "Aucune source a re-extraire — colle une URL/texte ou ajoute un fichier"
-        }
-        className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] font-medium text-amber-300 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        {busy ? (
-          <Loader2 className="h-3 w-3 animate-spin" />
-        ) : (
-          <Sparkles className="h-3 w-3" />
-        )}
-        Re-extraire avec Claude
-      </button>
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => void runGroq()}
+          disabled={!hasSources || isBusy}
+          title={
+            hasSources
+              ? "Relance Groq Llama 3.3 70B sur les sources originales (gratuit)"
+              : "Aucune source à ré-extraire — colle une URL/texte ou ajoute un fichier"
+          }
+          className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-medium text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {busyKind === "groq" ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Sparkles className="h-3 w-3" />
+          )}
+          Ré-extraire avec Groq
+        </button>
+        {claudeEnabled === true ? (
+          <button
+            type="button"
+            onClick={() => void runClaude()}
+            disabled={!hasSources || isBusy}
+            title={
+              hasSources
+                ? "Relance Claude Sonnet 4.6 (~3¢) — uniquement si tu veux comparer"
+                : "Aucune source à ré-extraire"
+            }
+            className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] font-medium text-amber-300 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {busyKind === "claude" ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Sparkles className="h-3 w-3" />
+            )}
+            Claude (~3¢)
+          </button>
+        ) : null}
+      </div>
       {toast ? (
         <div
           className={`mt-1 flex max-w-[320px] items-start gap-1 rounded-md border px-2 py-1 text-right text-[10px] ${
