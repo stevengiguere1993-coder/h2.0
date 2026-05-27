@@ -1491,6 +1491,36 @@ function AppointmentScheduler({
     }
   }
 
+  async function resendConfirmation(id: number) {
+    setBusyId(id);
+    setError(null);
+    setSuccess(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/appointments/${id}/resend-confirmation`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        throw new Error(await readErrorDetail(res));
+      }
+      // Patch local state pour refleter le nouveau confirmation_sent_at
+      setPast((xs) =>
+        xs.map((x) =>
+          x.id === id
+            ? { ...x, confirmation_sent_at: new Date().toISOString() }
+            : x
+        )
+      );
+      setSuccess(
+        "Confirmation renvoyée au prospect avec l'invitation calendrier (.ics)."
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function deleteAppt(id: number) {
     const ok = await confirm({
       title: "Supprimer ce rendez-vous ?",
@@ -1678,6 +1708,16 @@ function AppointmentScheduler({
                   </p>
                   {editingId !== a.id ? (
                     <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => resendConfirmation(a.id)}
+                        disabled={busyId !== null}
+                        className="rounded p-1 text-white/50 hover:bg-accent-500/20 hover:text-accent-300 disabled:opacity-40"
+                        aria-label="Renvoyer la confirmation au prospect"
+                        title="Renvoyer la confirmation (avec invitation calendrier .ics)"
+                      >
+                        <Mail className="h-3.5 w-3.5" />
+                      </button>
                       <button
                         type="button"
                         onClick={() => startEdit(a)}

@@ -41,6 +41,13 @@ def _body(
         if event.location
         else ""
     )
+    ics_line = (
+        ""
+        if reminder
+        else "<p>Une invitation calendrier (.ics) est jointe à ce courriel — "
+        "clique dessus pour ajouter le rendez-vous à ton agenda "
+        "(Outlook, Google, Apple).</p>"
+    )
     return f"""\
 <div style="font-family:Helvetica,Arial,sans-serif;color:#111;line-height:1.5;max-width:640px">
   <p>Bonjour {prospect_name},</p>
@@ -50,6 +57,7 @@ def _body(
     <p style="margin:4px 0"><strong>Quand :</strong> {when_phrase}</p>
     {loc_line}
   </div>
+  {ics_line}
   <p>Si tu dois modifier ou annuler, réponds simplement à ce courriel.</p>
   <p style="margin-top:24px;color:#555;font-size:12px">
     Horizon Services Immobiliers<br>
@@ -63,10 +71,16 @@ async def send_appointment_confirmation(
     prospect: ContactRequest,
     event: AgendaEvent,
 ) -> bool:
+    """Email de confirmation au prospect avec .ics joint.
+
+    Le .ics contient ORGANIZER + ATTENDEE pour que Outlook / Gmail /
+    Apple Mail proposent un bouton natif « Ajouter au calendrier ».
+    """
     mailer = get_mailer()
     if not mailer.ready or not prospect.email:
         return False
     try:
+        ics_bytes = render_event_ics(event, attendee_email=prospect.email)
         await mailer.send(
             to=[prospect.email],
             subject=f"Confirmation — {event.title}",
@@ -76,6 +90,13 @@ async def send_appointment_confirmation(
                 when_phrase=_fmt(event.start_at),
                 reminder=False,
             ),
+            attachments=[
+                EmailAttachment(
+                    name=f"rdv-{event.id}.ics",
+                    content_bytes=ics_bytes,
+                    content_type="text/calendar",
+                )
+            ],
         )
         return True
     except Exception as exc:
