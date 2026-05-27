@@ -134,11 +134,17 @@ class ExtractResult:
     version Claude : on retourne la liste des champs effectivement
     patchés (pour le toast + tests), le tag `model_used` à inscrire
     dans la fiche, et un éventuel error string si l'appel a échoué
-    pour une raison non-fatale (quota, etc.)."""
+    pour une raison non-fatale (quota, etc.).
+
+    ``error_reason`` est une clé courte pour l'audit log
+    (ex. ``"no_source"``, ``"ocr_unavailable"``, ``"ocr_empty"``,
+    ``"groq_api"``, ``"no_extract"``). Le caller (endpoint FastAPI)
+    l'enregistre dans ``lead_analysis.re_extract_failed``."""
 
     fields_patched: List[str] = field(default_factory=list)
     model_used: str = "llama-3.3-70b (manual, groq)"
     error: Optional[str] = None
+    error_reason: Optional[str] = None
     extracted: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -350,6 +356,7 @@ async def reextract_with_groq(
     api_key = (getattr(settings, "groq_api_key", None) or "").strip()
     if not api_key:
         return ExtractResult(
+            error_reason="no_api_key",
             error=(
                 "Ré-extraction Groq désactivée : GROQ_API_KEY n'est "
                 "pas configurée sur le serveur. Ajoute-la dans les "
@@ -410,7 +417,63 @@ async def reextract_with_groq(
         parts.append(prior_extraction)
 
     if not parts:
+        # Trois cas distincts à distinguer pour ne pas afficher le
+        # message trompeur « aucune source » alors qu'en réalité Phil
+        # a uploadé un screenshot mais Tesseract est mort côté serveur.
+        ocr_needed_attachments = [
+            a for a in attachments
+            if (a.content_type or "").lower().startswith("image/")
+            or (a.filename or "").lower().endswith(
+                (".png", ".jpg", ".jpeg", ".heic", ".heif", ".webp",
+                 ".tiff", ".bmp", ".pdf")
+            )
+        ]
+        has_text_source = bool(url_lines) or bool(src_text)
+
+        # Cas 1 : vraiment aucune source du tout.
+        if not attachments and not has_text_source:
+            return ExtractResult(
+                error_reason="no_source",
+                error=(
+                    "Aucune source originale exploitable sur cette fiche. "
+                    "Recolle des URLs/texte ou ajoute des fichiers d'abord."
+                ),
+            )
+
+        # Cas 2 : seules sources sont des images/PDFs ET Tesseract est
+        # indisponible côté serveur — message orienté admin/diagnostic.
+        if ocr_needed_attachments and not has_text_source:
+            # Import local pour éviter la circularité au load time.
+            from app.services.lead_extraction import _check_tesseract_status
+            tess = _check_tesseract_status()
+            if not tess.startswith("OK"):
+                return ExtractResult(
+                    error_reason="ocr_unavailable",
+                    error=(
+                        "Sources image/PDF présentes mais OCR indisponible "
+                        f"côté serveur (Tesseract — état : « {tess} »). "
+                        "Contacte un admin pour vérifier le déploiement "
+                        "(buildpack apt + Aptfile), OU recolle le texte "
+                        "directement dans la fiche."
+                    ),
+                )
+            # Cas 3 : Tesseract est OK mais n'a rien pu extraire (images
+            # floues, contraste insuffisant, etc.).
+            return ExtractResult(
+                error_reason="ocr_empty",
+                error=(
+                    "OCR n'a rien pu extraire des images/PDFs de cette "
+                    "fiche (images floues, mal cadrées ou texte trop "
+                    "petit). Essaie d'envoyer une version plus nette, "
+                    "ou colle le texte directement."
+                ),
+            )
+
+        # Fallback (sources texte présentes mais filtrées pour autre
+        # raison — ex. URLs toutes en erreur). On retombe sur le
+        # message générique.
         return ExtractResult(
+            error_reason="no_source",
             error=(
                 "Aucune source originale exploitable sur cette fiche. "
                 "Recolle des URLs/texte ou ajoute des fichiers d'abord."
@@ -427,16 +490,19 @@ async def reextract_with_groq(
         extracted = await _call_groq_api(user_text, api_key, model)
     except httpx.HTTPStatusError as exc:
         return ExtractResult(
+            error_reason="groq_api",
             error=f"Groq API : {str(exc)[:300]}",
         )
     except Exception as exc:
         log.exception("Groq: appel API échoué")
         return ExtractResult(
+            error_reason="groq_api",
             error=f"Erreur ré-extraction Groq : {str(exc)[:200]}",
         )
 
     if not extracted:
         return ExtractResult(
+            error_reason="no_extract",
             error=(
                 "Groq n'a pas pu extraire de champs. Réessaie ou "
                 "ajoute plus de sources."

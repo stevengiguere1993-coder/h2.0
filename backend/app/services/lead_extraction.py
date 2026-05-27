@@ -312,7 +312,7 @@ def parse_pdf_ocr(pdf_bytes: bytes, filename: str = "pdf") -> str:
 import os as _os
 
 EXTRACTION_MODEL = _os.environ.get(
-    "LEAD_EXTRACTION_MODEL", "gemini-2.0-flash"
+    "LEAD_EXTRACTION_MODEL", "gemini-2.5-flash"
 )
 
 SYSTEM_PROMPT = (
@@ -393,10 +393,10 @@ def _gemini_model_cascade() -> List[str]:
     l'env GEMINI_MODEL_CASCADE (liste séparée par virgules)."""
     raw = (
         getattr(settings, "gemini_model_cascade", None)
-        or "gemini-2.0-flash,gemini-1.5-flash,gemini-2.5-pro,gemini-1.5-pro"
+        or "gemini-2.5-flash,gemini-2.5-pro,gemini-2.0-flash"
     )
     models = [m.strip() for m in raw.split(",") if m.strip()]
-    return models or ["gemini-2.0-flash"]
+    return models or ["gemini-2.5-flash"]
 
 
 def _is_quota_error(status_code: int, body_text: str) -> bool:
@@ -420,24 +420,50 @@ def _is_quota_error(status_code: int, body_text: str) -> bool:
     return False
 
 
+def _is_model_not_found_error(status_code: int, body_text: str) -> bool:
+    """Detecte si une reponse Gemini correspond a un modele deprecie/inconnu.
+
+    Google retire progressivement les anciens modeles (gemini-1.5-* ont
+    ete deprecies courant 2025). L'API renvoie alors 404 (NOT_FOUND) ou
+    parfois 400 avec « model not found » dans le corps. On les filtre
+    pour pouvoir logger « modele X deprecie » et passer au suivant de
+    la cascade au lieu d'afficher un cryptique « HTTP 404 »."""
+    if status_code == 404:
+        return True
+    if status_code >= 400:
+        low = (body_text or "").lower()
+        if (
+            "model not found" in low
+            or "is not found" in low
+            or "not_found" in low
+            or "not supported" in low
+            or "deprecated" in low
+        ):
+            return True
+    return False
+
+
 async def _gemini_extract(
     material: str,
     images: List[Tuple[str, bytes]],
     model: Optional[str] = None,
-) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], bool]:
+) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], bool, bool]:
     """Extrait les champs immeuble via Gemini.
 
-    Retourne ``(data, raison, is_quota)`` :
+    Retourne ``(data, raison, is_quota, is_not_found)`` :
       - ``data`` : liste de dicts en cas de succès, ``None`` sinon.
       - ``raison`` : message lisible pour l'utilisateur si échec.
       - ``is_quota`` : True si l'échec est dû à un quota/rate limit
-        (le caller peut alors retry/cascade)."""
+        (le caller peut alors retry/cascade).
+      - ``is_not_found`` : True si le modèle Gemini est introuvable /
+        déprécié (HTTP 404). Le caller passe alors directement au
+        suivant de la cascade sans retry et logge en warning."""
     api_key = (getattr(settings, "gemini_api_key", None) or "").strip()
     if not api_key:
         log.warning("Gemini : GEMINI_API_KEY absente — parser local")
-        return None, "clé GEMINI_API_KEY absente du serveur", False
+        return None, "clé GEMINI_API_KEY absente du serveur", False, False
     if not material.strip() and not images:
-        return None, None, False
+        return None, None, False, False
 
     user_parts: List[Dict[str, Any]] = [{"text": SCHEMA_GUIDE}]
     if material.strip():
@@ -478,7 +504,20 @@ async def _gemini_extract(
                 effective_model,
                 resp.status_code,
             )
-            return None, "quota Gemini atteint", True
+            return None, "quota Gemini atteint", True, False
+        if _is_model_not_found_error(resp.status_code, resp.text or ""):
+            log.warning(
+                "Gemini[%s] : modèle déprécié ou introuvable (HTTP %s) "
+                "— retiré de la cascade",
+                effective_model,
+                resp.status_code,
+            )
+            return (
+                None,
+                f"modèle Gemini « {effective_model} » déprécié",
+                False,
+                True,
+            )
         if resp.status_code >= 400:
             log.warning(
                 "Gemini[%s] extraction HTTP %s : %s",
@@ -486,7 +525,12 @@ async def _gemini_extract(
                 resp.status_code,
                 resp.text[:300],
             )
-            return None, f"erreur Gemini HTTP {resp.status_code}", False
+            return (
+                None,
+                f"erreur Gemini HTTP {resp.status_code}",
+                False,
+                False,
+            )
         body = resp.json()
         text = (
             (body.get("candidates") or [{}])[0]
@@ -495,7 +539,7 @@ async def _gemini_extract(
             .get("text", "")
         )
         if not text.strip():
-            return None, "réponse Gemini vide", False
+            return None, "réponse Gemini vide", False, False
         parsed = json.loads(text)
     except Exception as exc:  # noqa: BLE001
         log.warning(
@@ -504,6 +548,7 @@ async def _gemini_extract(
         return (
             None,
             f"Gemini injoignable ({type(exc).__name__})",
+            False,
             False,
         )
 
@@ -520,8 +565,8 @@ async def _gemini_extract(
         if clean:
             out.append(clean)
     if not out:
-        return None, "Gemini n'a renvoyé aucun champ", False
-    return out, None, False
+        return None, "Gemini n'a renvoyé aucun champ", False, False
+    return out, None, False, False
 
 
 async def _gemini_extract_cascade(
@@ -538,11 +583,18 @@ async def _gemini_extract_cascade(
         (1 s → 5 s → 30 s, 3 tentatives)
       - si encore quota → passe au modèle suivant (quotas séparés
         par modèle sur le tier gratuit Google AI Studio)
+      - sur 404 / modèle déprécié → log warning et passe direct au
+        suivant sans retry (Google retire ses anciens modèles
+        progressivement, ex. gemini-1.5-* retirés courant 2025)
 
     Retourne ``(data, raison, model_used)`` :
       - ``model_used`` est le nom du modèle qui a effectivement
-        produit le résultat (ex. ``"gemini-1.5-flash"``), ou
+        produit le résultat (ex. ``"gemini-2.5-flash"``), ou
         ``None`` si tous les modèles ont échoué.
+      - ``raison`` agrège un message lisible quand la cascade est
+        épuisée (ex. « Cascade Gemini épuisée (tous les modèles 404
+        ou quota atteint) ») plutôt que le seul HTTP brut du
+        dernier essai.
       - Ajoute la mention ``" (cascade)"`` au nom si on a dû
         descendre dans la cascade (utile pour le suivi côté UI)."""
     api_key = (getattr(settings, "gemini_api_key", None) or "").strip()
@@ -553,9 +605,11 @@ async def _gemini_extract_cascade(
 
     cascade = _gemini_model_cascade()
     last_err: Optional[str] = None
+    deprecated_models: List[str] = []
+    quota_models: List[str] = []
     for idx, model in enumerate(cascade):
         for attempt, backoff in enumerate(_GEMINI_RETRY_BACKOFFS):
-            data, err, is_quota = await _gemini_extract(
+            data, err, is_quota, is_not_found = await _gemini_extract(
                 material, images, model=model
             )
             if data is not None:
@@ -567,10 +621,15 @@ async def _gemini_extract_cascade(
                     tag = f"{tag} (retry)"
                 return data, None, tag
             last_err = err
+            if is_not_found:
+                # Modèle déprécié / inconnu (HTTP 404). Inutile de
+                # retry : ce modèle n'existera pas dans 1 s ni dans
+                # 30 s. On le mémorise et on passe au suivant.
+                deprecated_models.append(model)
+                break
             if not is_quota:
-                # Erreur autre que quota → on ne retry pas, on
-                # passe direct au modèle suivant (utile si le
-                # modèle n'existe pas / est déprécié).
+                # Autre erreur (5xx, réseau, réponse vide…) → pas de
+                # retry, passe au modèle suivant.
                 break
             # Quota / 429 — on attend et on retente sur le même
             # modèle, sauf si c'est la dernière tentative.
@@ -591,7 +650,34 @@ async def _gemini_extract_cascade(
                     model,
                     len(_GEMINI_RETRY_BACKOFFS),
                 )
-    return None, last_err or "quota Gemini atteint", None
+                quota_models.append(model)
+
+    # Cascade épuisée — message diagnostic explicite (utile pour Phil
+    # qui voit le warning côté UI au lieu d'un cryptique « HTTP 404 »).
+    if deprecated_models and not quota_models:
+        if len(deprecated_models) == len(cascade):
+            summary = (
+                f"Cascade Gemini épuisée : tous les modèles "
+                f"({', '.join(deprecated_models)}) sont dépréciés/"
+                f"introuvables. Mets à jour GEMINI_MODEL_CASCADE."
+            )
+        else:
+            summary = (
+                f"Modèles Gemini dépréciés ignorés ({', '.join(deprecated_models)}) "
+                f"et la cascade restante a échoué : {last_err or 'erreur inconnue'}"
+            )
+        return None, summary, None
+    if deprecated_models and quota_models:
+        return None, (
+            f"Cascade Gemini épuisée (déprécié : {', '.join(deprecated_models)} ; "
+            f"quota : {', '.join(quota_models)})"
+        ), None
+    if quota_models and len(quota_models) == len(cascade):
+        return None, (
+            f"Cascade Gemini épuisée : quota atteint sur tous les modèles "
+            f"({', '.join(quota_models)})"
+        ), None
+    return None, last_err or "Cascade Gemini épuisée", None
 
 
 # ── Dataclasses publiques ─────────────────────────────────────────
