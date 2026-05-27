@@ -1290,6 +1290,21 @@ type Appointment = {
 
 type Employe = { id: number; full_name: string };
 
+// Ajoute `hours` heures a une string "HH:MM". Wrap modulo 24h —
+// les RDV qui traversent minuit ne s'appliquent pas (business
+// hours), donc la comparaison lexicographique reste valide.
+function addHour(hm: string, hours = 1): string {
+  if (!hm) return "";
+  const [h, m] = hm.split(":").map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return "";
+  const total = h * 60 + m + hours * 60;
+  const wrap = ((total % 1440) + 1440) % 1440;
+  const nh = Math.floor(wrap / 60);
+  const nm = wrap % 60;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(nh)}:${p(nm)}`;
+}
+
 async function readErrorDetail(res: Response): Promise<string> {
   const txt = (await res.text()).slice(0, 1000);
   try {
@@ -1549,7 +1564,17 @@ function AppointmentScheduler({
             <input
               type="time"
               value={startHm}
-              onChange={(e) => setStartHm(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setStartHm(v);
+                // Auto-cale la fin a debut + 1h si vide ou en-deca
+                if (v) {
+                  const minEnd = addHour(v, 1);
+                  if (!endHm || endHm <= v || endHm < minEnd) {
+                    setEndHm(minEnd);
+                  }
+                }
+              }}
               className="input"
             />
           </div>
@@ -1558,7 +1583,17 @@ function AppointmentScheduler({
             <input
               type="time"
               value={endHm}
-              onChange={(e) => setEndHm(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (startHm && v) {
+                  const minEnd = addHour(startHm, 1);
+                  if (v < minEnd) {
+                    setEndHm(minEnd);
+                    return;
+                  }
+                }
+                setEndHm(v);
+              }}
               className="input"
             />
           </div>
@@ -1679,7 +1714,20 @@ function AppointmentScheduler({
                       <input
                         type="time"
                         value={editStartHm}
-                        onChange={(e) => setEditStartHm(e.target.value)}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setEditStartHm(v);
+                          if (v) {
+                            const minEnd = addHour(v, 1);
+                            if (
+                              !editEndHm ||
+                              editEndHm <= v ||
+                              editEndHm < minEnd
+                            ) {
+                              setEditEndHm(minEnd);
+                            }
+                          }
+                        }}
                         className="input text-xs"
                       />
                     </div>
@@ -1688,7 +1736,17 @@ function AppointmentScheduler({
                       <input
                         type="time"
                         value={editEndHm}
-                        onChange={(e) => setEditEndHm(e.target.value)}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (editStartHm && v) {
+                            const minEnd = addHour(editStartHm, 1);
+                            if (v < minEnd) {
+                              setEditEndHm(minEnd);
+                              return;
+                            }
+                          }
+                          setEditEndHm(v);
+                        }}
                         className="input text-xs"
                       />
                     </div>
