@@ -3737,9 +3737,10 @@ function ReExtractClaudeButton({
     kind: "ok" | "err";
   } | null>(null);
 
-  // Auto-dismiss du toast apres 6 s.
+  // Auto-dismiss du toast OK apres 6 s. Les erreurs restent affichees
+  // jusqu'a ce que l'utilisateur les ferme (sinon il loupe le message).
   useEffect(() => {
-    if (!toast) return;
+    if (!toast || toast.kind === "err") return;
     const t = setTimeout(() => setToast(null), 6000);
     return () => clearTimeout(t);
   }, [toast]);
@@ -3768,7 +3769,14 @@ function ReExtractClaudeButton({
           .json()
           .then((j: { detail?: string }) => j.detail || `HTTP ${r.status}`)
           .catch(() => `HTTP ${r.status}`);
-        setToast({ text: `Re-extraction echouee : ${detail}`, kind: "err" });
+        // Message specifique 503 : cle Anthropic absente cote serveur.
+        // C'est la cause la plus probable du bug "rien ne se passe" :
+        // sans cle, l'endpoint repond 503 et le bouton revient idle.
+        const text =
+          r.status === 503
+            ? `Extraction Claude indisponible : ${detail} Contacte un admin pour configurer ANTHROPIC_API_KEY sur le serveur.`
+            : `Re-extraction echouee (HTTP ${r.status}) : ${detail}`;
+        setToast({ text, kind: "err" });
         return;
       }
       const out = (await r.json()) as {
@@ -3815,15 +3823,25 @@ function ReExtractClaudeButton({
         Re-extraire avec Claude
       </button>
       {toast ? (
-        <p
-          className={`mt-1 max-w-[280px] rounded-md border px-2 py-1 text-right text-[10px] ${
+        <div
+          className={`mt-1 flex max-w-[320px] items-start gap-1 rounded-md border px-2 py-1 text-right text-[10px] ${
             toast.kind === "ok"
               ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
               : "border-rose-500/40 bg-rose-500/10 text-rose-300"
           }`}
         >
-          {toast.text}
-        </p>
+          <p className="flex-1 whitespace-pre-line text-left">{toast.text}</p>
+          {toast.kind === "err" ? (
+            <button
+              type="button"
+              onClick={() => setToast(null)}
+              aria-label="Fermer le message"
+              className="ml-1 shrink-0 text-rose-300 hover:text-rose-100"
+            >
+              ✕
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
