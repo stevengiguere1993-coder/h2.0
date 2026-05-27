@@ -927,6 +927,22 @@ function MonthView({
 }) {
   const today = new Date();
 
+  // Cellules dépliées par l'utilisateur : on bascule la limite
+  // d'affichage des events de 3 a tous quand il clique sur le
+  // badge "+N". Sans ca, un event au-dela des 3 premiers (tri
+  // chronologique) est invisible sans alternative pour le voir.
+  const [expandedDays, setExpandedDays] = useState<Set<string>>(
+    () => new Set()
+  );
+  const toggleDayExpanded = useCallback((key: string) => {
+    setExpandedDays((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
   // Découpe la grille en 6 semaines pour dessiner des bandes de projet
   // continues qui traversent plusieurs cases (style Google Calendar).
   // Un projet qui dépasse le dimanche est scindé en 2 bandes — une par
@@ -974,13 +990,11 @@ function MonthView({
         }
       }
       for (const ev of multiDayEventsByDay.get(key) || []) {
-        // Phases d'un projet : on les cache quand la bande projet est
-        // repliee (la bande sert deja a representer la phase). Les
-        // autres events (livraison, visite, etc.) liés au meme projet
-        // restent toujours visibles — ils representent une action
-        // concrete que l'utilisateur a besoin de voir.
+        // Si l'event est lié à un projet ET que ce projet a une bande
+        // active ce jour-là ET qu'il n'est pas déplié → cacher l'event
+        // (il sera vu en cliquant sur la bande). Si pas de bande
+        // (hors-délai), l'event reste visible.
         if (
-          ev.event_type === "phase" &&
           ev.project_id != null &&
           !expandedProjects.has(ev.project_id)
         ) {
@@ -1089,19 +1103,28 @@ function MonthView({
               const projectsHereIds = new Set(
                 (projectsByDay.get(d.toDateString()) || []).map((p) => p.id)
               );
-              const dayEvents = allDayEvents.filter((e) => {
-                if (e.project_id == null) return true;
-                // Les events concrets (livraison, visite, chantier…)
-                // sont toujours visibles. Seules les phases peuvent
-                // etre cachees sous la bande projet repliee, parce
-                // qu'elles sont deja representees visuellement par
-                // la bande elle-meme.
-                if (e.event_type !== "phase") return true;
-                if (expandedProjects.has(e.project_id)) return true;
-                // Pas de bande active pour ce projet aujourd'hui →
-                // toujours afficher la phase individuellement.
-                return !projectsHereIds.has(e.project_id);
-              });
+              const dayKey = d.toDateString();
+              const isDayExpanded = expandedDays.has(dayKey);
+              // Quand la cellule est dépliée, on montre TOUT (y compris
+              // les events caches sous une bande projet repliee).
+              // Sinon on applique le masquage habituel.
+              const dayEvents = isDayExpanded
+                ? allDayEvents
+                : allDayEvents.filter((e) => {
+                    if (e.project_id == null) return true;
+                    if (expandedProjects.has(e.project_id)) return true;
+                    // Pas de bande active pour ce projet aujourd'hui →
+                    // toujours afficher l'event individuellement.
+                    return !projectsHereIds.has(e.project_id);
+                  });
+              // Cap visuel a 3 events par defaut, sauf si la cellule
+              // est explicitement dépliée par l'utilisateur.
+              const visibleEvents = isDayExpanded
+                ? dayEvents
+                : dayEvents.slice(0, 3);
+              const hiddenCount = isDayExpanded
+                ? 0
+                : allDayEvents.length - visibleEvents.length;
               return (
                 <div
                   key={i}
@@ -1126,10 +1149,22 @@ function MonthView({
                     >
                       {d.getDate()}
                     </span>
-                    {dayEvents.length > 3 ? (
-                      <span className="text-[10px] text-white/40">
-                        +{dayEvents.length - 3}
-                      </span>
+                    {hiddenCount > 0 || isDayExpanded ? (
+                      <button
+                        type="button"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          toggleDayExpanded(dayKey);
+                        }}
+                        className="rounded px-1 text-[10px] text-white/60 hover:bg-white/10 hover:text-white"
+                        title={
+                          isDayExpanded
+                            ? "Cliquer pour replier"
+                            : "Voir tous les événements de la journée"
+                        }
+                      >
+                        {isDayExpanded ? "−" : `+${hiddenCount}`}
+                      </button>
                     ) : null}
                   </div>
 
@@ -1138,7 +1173,7 @@ function MonthView({
                   ) : null}
 
                   <div className="mt-1 space-y-0.5">
-                    {dayEvents.slice(0, 3).map((e) => {
+                    {visibleEvents.map((e) => {
                       // Détecte event « hors délais » (après end_date
                       // du projet) → teinte jaune ambré au lieu de
                       // la couleur du chantier, peu importe la teinte
