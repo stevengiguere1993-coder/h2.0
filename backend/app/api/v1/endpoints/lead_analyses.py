@@ -1466,12 +1466,46 @@ async def re_extract_with_claude(
             messages=[{"role": "user", "content": content_blocks}],
         )
     except anthropic.APIError as e:
+        msg_detail = f"Claude API : {getattr(e, 'message', str(e))[:200]}"
+        try:
+            await log_action(
+                db,
+                user=user,
+                action="lead_analysis.re_extract_failed",
+                entity_type="lead_analysis",
+                entity_id=rec.id,
+                details={
+                    "reason": "anthropic_api_error",
+                    "type": type(e).__name__,
+                    "message": str(e)[:500],
+                    "status_code": getattr(e, "status_code", None),
+                },
+            )
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("Audit log re_extract_failed (api_error) failed")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Claude API : {getattr(e, 'message', str(e))[:200]}",
+            detail=msg_detail,
         )
     except Exception as e:  # noqa: BLE001
         log.exception("Re-extract Claude failed")
+        try:
+            await log_action(
+                db,
+                user=user,
+                action="lead_analysis.re_extract_failed",
+                entity_type="lead_analysis",
+                entity_id=rec.id,
+                details={
+                    "reason": "unexpected",
+                    "type": type(e).__name__,
+                    "message": str(e)[:500],
+                },
+            )
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("Audit log re_extract_failed (unexpected) failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erreur ré-extraction : {str(e)[:200]}",
@@ -1479,13 +1513,49 @@ async def re_extract_with_claude(
 
     # Extrait le tool_use block.
     extracted: dict = {}
+    found_tool_use = False
     for block in msg.content:
         if (
             getattr(block, "type", None) == "tool_use"
             and getattr(block, "name", None) == "save_lead_fields"
         ):
             extracted = getattr(block, "input", None) or {}
+            found_tool_use = True
             break
+
+    # Cas dégénéré : Claude n'a pas appelé l'outil (rare avec
+    # `tool_choice` forcé, mais possible si la réponse a été tronquée
+    # par max_tokens ou refusée pour cause de safety).
+    if not found_tool_use:
+        stop_reason = getattr(msg, "stop_reason", None)
+        text_preview = ""
+        for block in msg.content:
+            if getattr(block, "type", None) == "text":
+                text_preview = (getattr(block, "text", "") or "")[:200]
+                break
+        try:
+            await log_action(
+                db,
+                user=user,
+                action="lead_analysis.re_extract_failed",
+                entity_type="lead_analysis",
+                entity_id=rec.id,
+                details={
+                    "reason": "no_tool_use",
+                    "stop_reason": str(stop_reason),
+                    "text_preview": text_preview,
+                },
+            )
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("Audit log re_extract_failed (no_tool_use) failed")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Claude n'a pas pu extraire de champs (stop_reason="
+                f"{stop_reason!s}). Réessaie ou ajoute plus de sources."
+            ),
+        )
 
     # Patch « doux » : on remplit les champs vides + on remplace
     # l'adresse/ville (champs identifiants où Claude est souvent plus
@@ -1566,6 +1636,70 @@ async def re_extract_with_claude(
 
 
 @router.get(
+    "/check-claude-health",
+    summary=(
+        "Diagnostic : vérifie ANTHROPIC_API_KEY + ping Claude (utile "
+        "quand le bouton « Re-extraire avec Claude » ne fonctionne pas)."
+    ),
+)
+async def check_claude_health(user: CurrentUser) -> dict:
+    """Endpoint diagnostic indépendant du frontend, pour valider que
+    la ré-extraction Claude est opérationnelle côté serveur.
+
+    Réponse :
+      {
+        "configured": bool,    # ANTHROPIC_API_KEY est-elle définie ?
+        "sdk_works": bool,     # un mini appel Claude réussit-il ?
+        "model": str,          # modèle testé
+        "error": str|null      # détail si sdk_works=false
+      }
+
+    Si `configured=false` : Phil doit ajouter ANTHROPIC_API_KEY dans
+    les env vars Render (Dashboard → h2-0 → Environment).
+    Si `configured=true` et `sdk_works=false` : la clé est présente
+    mais invalide / expirée / quota dépassé.
+    """
+    _require_prospection(user)
+    model = "claude-sonnet-4-6"
+    out: dict = {
+        "configured": bool(settings.anthropic_api_key),
+        "sdk_works": False,
+        "model": model,
+        "error": None,
+    }
+    if not out["configured"]:
+        out["error"] = (
+            "ANTHROPIC_API_KEY n'est pas configurée sur le serveur. "
+            "Ajoute-la dans les env vars Render (Dashboard → h2-0 → "
+            "Environment)."
+        )
+        return out
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        msg = client.messages.create(
+            model=model,
+            max_tokens=20,
+            messages=[{"role": "user", "content": "Réponds juste 'ok'."}],
+        )
+        # On considère que ça marche si on a au moins un block text.
+        has_text = any(
+            getattr(b, "type", None) == "text" for b in (msg.content or [])
+        )
+        out["sdk_works"] = has_text
+        if not has_text:
+            out["error"] = (
+                "Claude a répondu mais sans bloc texte (stop_reason="
+                f"{getattr(msg, 'stop_reason', None)!s})."
+            )
+    except Exception as exc:  # noqa: BLE001
+        out["sdk_works"] = False
+        out["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        log.exception("check_claude_health failed")
+    return out
+
+
+@router.get(
     "/ocr-health",
     summary="Diagnostic Tesseract serveur (utile si extraction d'image vide).",
 )
@@ -1585,4 +1719,5 @@ async def ocr_health(user: CurrentUser) -> dict:
         except ImportError as exc:
             result[f"{pkg}_installed"] = f"NON installe : {exc}"
     return result
+
 
