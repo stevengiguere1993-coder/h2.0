@@ -1326,14 +1326,52 @@ async def init_db() -> None:
             except Exception:
                 pass
 
-        # Seed des défauts globaux d'analyse financière (mai 2026).
+        # Seed des défauts globaux d'analyse financière (mai 2026,
+        # étendu mai 2026 pour couvrir TOUS les inputs manuels +
+        # frais MDF — PR « extend-analysis-defaults-tous-champs »).
+        #
         # Permet à Phil de modifier les valeurs pré-remplies pour les
         # nouvelles fiches d'analyse depuis l'UI (bouton ⚙️ « Modifier
         # les défauts »). Stockés en pourcentage (3.75 = 3.75 %, 25.0
-        # = 25 %, 8.0 = 8 %) pour s'aligner sur ``LeadAnalysis.*_pct``.
-        # Idempotent : ON CONFLICT (key) DO NOTHING. Modifier un défaut
-        # ne change que les FUTURES analyses, pas les existantes.
+        # = 25 %, 8.0 = 8 %) ou en $ selon le champ. Le `step` permet
+        # à l'UI de deviner le format (< 1 → %, >= 1 → $).
+        # Idempotent :
+        #   - ON CONFLICT (key) DO UPDATE SET group_name pour garder
+        #     les renommages de groupes en sync sans toucher aux
+        #     valeurs déjà modifiées par Phil.
+        #   - INSERT des nouvelles clés via DO NOTHING équivalent.
+        # Modifier un défaut ne change que les FUTURES analyses, pas
+        # les existantes.
+        #
+        # Migration douce des anciens noms de groupes :
+        #   - 'refi' → 'inputs_manuels' (libellé plus clair)
+        #   - 'mdf'  → 'inputs_manuels' (mdf_preteur_b_pct est un
+        #              input manuel, pas un frais)
+        #   - nouveaux frais MDF → groupe 'mdf_frais'
+        try:
+            await conn.execute(
+                text(
+                    """
+                    UPDATE prospection_analysis_defaults
+                       SET group_name = 'inputs_manuels'
+                     WHERE group_name IN ('refi', 'mdf')
+                    """
+                )
+            )
+        except Exception:
+            # Table absente — sera créée par create_all + retentée
+            # au prochain boot.
+            pass
+
+        # Liste exhaustive des défauts.
+        # Champs des inputs manuels (groupe 'inputs_manuels') :
+        #   - stockés en pct (step < 1) ou unités entières (step >= 1).
+        # Frais MDF (groupe 'mdf_frais') :
+        #   - frais_* : montants $ one-shot (step = 50).
+        #   - pct_courtier_hypothecaire_* : %, appliqué au prix d'achat
+        #     ou financement APH (step = 0.05).
         for key, value_float, label_fr, description_fr, mn, mx, step, group in (
+                # ── Groupe : Inputs manuels ──────────────────────────
                 (
                     "taux_interet_refi",
                     3.75,
@@ -1343,34 +1381,213 @@ async def init_db() -> None:
                     0.0,
                     25.0,
                     0.05,
-                    "refi",
+                    "inputs_manuels",
+                ),
+                (
+                    "taux_interet_preteur_b_projet",
+                    8.0,
+                    "Taux d'intérêt prêteur B (pendant projet) (%)",
+                    "Taux d'intérêt appliqué par le prêteur B pendant la "
+                    "phase chantier (typique 8 % en 2024-2025). Utilisé "
+                    "pour calculer les intérêts de portage (L17).",
+                    0.0,
+                    30.0,
+                    0.05,
+                    "inputs_manuels",
                 ),
                 (
                     "mdf_preteur_b_pct",
                     25.0,
-                    "% MDF prêteur B",
+                    "% MDF prêteur B (%)",
                     "Pourcentage de mise de fonds requis par le prêteur B "
                     "(privé, hypothèque conventionnelle 75 % LTV). Varie "
                     "selon le prêteur (25 % typique, parfois 35 %).",
                     0.0,
                     100.0,
-                    1.0,
-                    "mdf",
+                    0.5,
+                    "inputs_manuels",
                 ),
                 (
-                    "taux_interet_preteur_b_projet",
-                    8.0,
-                    "Taux d'intérêt prêteur B (pendant projet)",
-                    "Taux d'intérêt appliqué par le prêteur B pendant la "
-                    "phase chantier (typique 8 % en 2024-2025). Utilisé "
-                    "pour calculer les intérêts de portage.",
+                    "tga_pct",
+                    4.0,
+                    "TGA — Taux global d'actualisation (%)",
+                    "Taux d'actualisation utilisé pour calculer la valeur "
+                    "économique TGA (R54 dans l'Excel). Défaut marché : 4 %.",
+                    0.0,
+                    20.0,
+                    0.05,
+                    "inputs_manuels",
+                ),
+                (
+                    "taux_interet_achat_pct",
+                    4.0,
+                    "Taux d'intérêt prêt à l'achat (%)",
+                    "Taux d'intérêt appliqué au scénario d'achat "
+                    "conventionnel (75 % LTV, 25 ans, RCD 1.20).",
+                    0.0,
+                    25.0,
+                    0.05,
+                    "inputs_manuels",
+                ),
+                (
+                    "reduction_energie_pct",
+                    0.0,
+                    "Réduction énergie post-refi (%)",
+                    "Réduction estimée de la facture d'énergie après "
+                    "travaux d'efficacité (appliquée seulement aux "
+                    "scénarios refi).",
+                    0.0,
+                    100.0,
+                    1.0,
+                    "inputs_manuels",
+                ),
+                (
+                    "duree_projet_annees",
+                    2.0,
+                    "Durée du projet (années)",
+                    "Durée typique chantier + lease-up avant refi. Utilisée "
+                    "pour calculer L17 (intérêts pendant projet) et L18 "
+                    "(revenus nets pendant projet).",
+                    1.0,
+                    10.0,
+                    1.0,
+                    "inputs_manuels",
+                ),
+                (
+                    "nb_logements_ajoutes",
+                    0.0,
+                    "Logements ajoutés par défaut",
+                    "Nombre de logements créés en moyenne par projet. "
+                    "Pré-rempli sur les nouvelles fiches (modifiable).",
+                    0.0,
+                    50.0,
+                    1.0,
+                    "inputs_manuels",
+                ),
+                (
+                    "nb_thermopompes_ajoutees",
+                    0.0,
+                    "Thermopompes ajoutées par défaut",
+                    "Nombre de thermopompes installées en moyenne (impacte "
+                    "uniquement les scénarios APH — efficacité énergétique).",
+                    0.0,
+                    50.0,
+                    1.0,
+                    "inputs_manuels",
+                ),
+                (
+                    "taux_inoccupation_pct",
+                    3.0,
+                    "Taux d'inoccupation (%)",
+                    "Pourcentage de perte de loyer hypothèse SCHL. Varie "
+                    "par marché (3 % Montréal, plus en région).",
                     0.0,
                     30.0,
+                    0.1,
+                    "inputs_manuels",
+                ),
+                # ── Groupe : Frais MDF (one-shot) ────────────────────
+                (
+                    "frais_evaluateur",
+                    1500.0,
+                    "Évaluateur agréé ($)",
+                    "Frais d'évaluation principal (un seul rapport).",
+                    0.0,
+                    20000.0,
+                    50.0,
+                    "mdf_frais",
+                ),
+                (
+                    "frais_evaluateur_2",
+                    1500.0,
+                    "Évaluateur agréé 2 ($)",
+                    "Deuxième évaluation (ex. refi SCHL exige souvent un "
+                    "second évaluateur indépendant).",
+                    0.0,
+                    20000.0,
+                    50.0,
+                    "mdf_frais",
+                ),
+                (
+                    "frais_inspection",
+                    1700.0,
+                    "Inspection ($)",
+                    "Inspection préachat (bâtiment + mécanique).",
+                    0.0,
+                    20000.0,
+                    50.0,
+                    "mdf_frais",
+                ),
+                (
+                    "frais_avocat",
+                    4000.0,
+                    "Avocat ($)",
+                    "Honoraires juridiques (vérification diligente, "
+                    "négociations, contrats).",
+                    0.0,
+                    50000.0,
+                    50.0,
+                    "mdf_frais",
+                ),
+                (
+                    "frais_notaire",
+                    1600.0,
+                    "Notaire ($)",
+                    "Frais de notaire pour l'acte d'achat (vente).",
+                    0.0,
+                    20000.0,
+                    50.0,
+                    "mdf_frais",
+                ),
+                (
+                    "frais_notaire_2",
+                    1600.0,
+                    "Notaire 2 ($)",
+                    "Frais de notaire pour l'acte de refinancement "
+                    "(hypothèque SCHL/APH après projet).",
+                    0.0,
+                    20000.0,
+                    50.0,
+                    "mdf_frais",
+                ),
+                (
+                    "frais_rapport_efficacite",
+                    4500.0,
+                    "Rapport d'efficacité énergétique ($)",
+                    "Rapport requis pour les programmes SCHL APH 50/100 "
+                    "(efficacité énergétique + abordabilité).",
+                    0.0,
+                    20000.0,
+                    50.0,
+                    "mdf_frais",
+                ),
+                (
+                    "pct_courtier_hypothecaire_1",
+                    1.0,
+                    "Courtier hypothécaire 1 (% × prix d'achat)",
+                    "Pourcentage facturé par le courtier hypothécaire sur "
+                    "le prêt à l'achat. Défaut 1 %.",
+                    0.0,
+                    5.0,
                     0.05,
-                    "refi",
+                    "mdf_frais",
+                ),
+                (
+                    "pct_courtier_hypothecaire_2",
+                    1.0,
+                    "Courtier hypothécaire 2 (% × financement APH)",
+                    "Pourcentage facturé par le courtier hypothécaire sur "
+                    "le financement refi APH (post-projet). Défaut 1 %.",
+                    0.0,
+                    5.0,
+                    0.05,
+                    "mdf_frais",
                 ),
         ):
             try:
+                # UPSERT : on insère si la clé n'existe pas, sinon on
+                # met UNIQUEMENT à jour les métadonnées (label, group,
+                # bornes) — pas la `value_float` modifiée par Phil.
                 await conn.execute(
                     text(
                         """
@@ -1381,7 +1598,13 @@ async def init_db() -> None:
                         VALUES (:key, :value_float, :label_fr,
                                 :description_fr, :mn, :mx, :step, :group,
                                 NOW())
-                        ON CONFLICT (key) DO NOTHING
+                        ON CONFLICT (key) DO UPDATE SET
+                            label_fr       = EXCLUDED.label_fr,
+                            description_fr = EXCLUDED.description_fr,
+                            min_value      = EXCLUDED.min_value,
+                            max_value      = EXCLUDED.max_value,
+                            step           = EXCLUDED.step,
+                            group_name     = EXCLUDED.group_name
                         """
                     ),
                     {
@@ -1408,5 +1631,6 @@ async def close_db() -> None:
     Should be called on application shutdown.
     """
     await engine.dispose()
+
 
 
