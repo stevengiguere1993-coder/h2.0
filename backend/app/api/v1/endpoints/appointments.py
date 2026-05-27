@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from app.api.deps import DBSession, RequireManager
 from app.models.agenda_event import AgendaEvent
-from app.models.contact_request import ContactRequest
+from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.models.employe import Employe
 from app.services.appointment_mail import (
     send_appointment_assignee_invite,
@@ -91,6 +91,16 @@ async def schedule_appointment(
     db.add(event)
     await db.flush()
     await db.refresh(event)
+
+    # Auto-transition vers "rdv_prevu" si le prospect est encore en
+    # debut de pipeline. On evite d'ecraser un statut deja avance
+    # (qualified/quoted/won/lost/spam) — la planification d'un RDV
+    # supplementaire ne doit pas faire reculer le pipeline.
+    if prospect.status in (
+        ContactRequestStatus.NEW.value,
+        ContactRequestStatus.CONTACTED.value,
+    ):
+        prospect.status = ContactRequestStatus.RDV_PREVU.value
 
     # Fire the confirmation email in the background. Worst case the
     # send fails — the agenda event is still created and the cron will

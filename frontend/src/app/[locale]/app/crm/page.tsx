@@ -44,6 +44,7 @@ type Column = { id: string; label: string; dot: string; custom?: boolean };
 const DEFAULT_COLUMNS: Column[] = [
   { id: "new", label: "Nouveaux", dot: "bg-emerald-400" },
   { id: "contacted", label: "Suivi à faire", dot: "bg-amber-400" },
+  { id: "rdv_prevu", label: "Rendez-vous prévu", dot: "bg-cyan-400" },
   { id: "qualified", label: "Soumission en préparation", dot: "bg-fuchsia-400" },
   { id: "quoted", label: "Soumission envoyée", dot: "bg-blue-400" },
   { id: "won", label: "Acceptée", dot: "bg-green-500" },

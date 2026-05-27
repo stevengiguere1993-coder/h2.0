@@ -2662,6 +2662,8 @@ async def _commit_lead_outcome(
         )
         db.add(ev)
         cr.kanban_column = "rdv_pris"
+        if cr.status in (_CRS.NEW.value, _CRS.CONTACTED.value):
+            cr.status = _CRS.RDV_PREVU.value
         await db.flush()
         log.info(
             "RDV auto-créé : contact=%d agenda=%d at %s",
