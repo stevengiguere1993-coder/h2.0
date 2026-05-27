@@ -102,8 +102,7 @@ class Settings(BaseSettings):
     # de noms séparés par virgule. Défaut couvre les 4 modèles texte
     # actuellement gratuits sur Google AI Studio.
     gemini_model_cascade: str = (
-        "gemini-2.0-flash,gemini-1.5-flash,"
-        "gemini-2.5-pro,gemini-1.5-pro"
+        "gemini-2.5-flash,gemini-2.5-pro,gemini-2.0-flash"
     )
 
     # Groq (Llama 3.3 70B) — remplaçant gratuit de Claude pour la

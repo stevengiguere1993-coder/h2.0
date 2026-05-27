@@ -34,7 +34,7 @@ GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 class GeminiProvider:
     name = "gemini"
-    default_completion_model = "gemini-2.0-flash"
+    default_completion_model = "gemini-2.5-flash"
     default_embedding_model = "text-embedding-004"
 
     def __init__(self, api_key: Optional[str] = None) -> None:

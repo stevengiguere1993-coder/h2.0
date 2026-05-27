@@ -1922,22 +1922,31 @@ async def re_extract_with_groq(
                 entity_type="lead_analysis",
                 entity_id=rec.id,
                 details={
-                    "reason": "groq_api_error",
+                    "reason": result.error_reason or "groq_api_error",
                     "message": result.error[:500],
                 },
             )
             await db.commit()
         except Exception:
             log.exception("Audit log re_extract_failed (groq api) failed")
-        is_no_extract = "n'a pas pu extraire" in result.error
-        raise HTTPException(
-            status_code=(
-                status.HTTP_422_UNPROCESSABLE_ENTITY
-                if is_no_extract
-                else status.HTTP_502_BAD_GATEWAY
-            ),
-            detail=result.error,
-        )
+        # Mapping status code par error_reason :
+        #   - no_source / no_extract / ocr_empty : 422 (input client à corriger)
+        #   - ocr_unavailable : 503 (problème serveur, admin à contacter)
+        #   - no_api_key : 503 (problème serveur)
+        #   - groq_api / autre : 502 (bad gateway upstream Groq)
+        client_422_reasons = {"no_source", "no_extract", "ocr_empty"}
+        server_503_reasons = {"ocr_unavailable", "no_api_key"}
+        reason = result.error_reason or ""
+        if reason in client_422_reasons:
+            sc = status.HTTP_422_UNPROCESSABLE_ENTITY
+        elif reason in server_503_reasons:
+            sc = status.HTTP_503_SERVICE_UNAVAILABLE
+        elif "n'a pas pu extraire" in result.error:
+            # Compat : ancien chemin sans error_reason.
+            sc = status.HTTP_422_UNPROCESSABLE_ENTITY
+        else:
+            sc = status.HTTP_502_BAD_GATEWAY
+        raise HTTPException(status_code=sc, detail=result.error)
 
     rec.model_used = result.model_used
     rec.updated_at = datetime.now(timezone.utc)
@@ -2144,19 +2153,51 @@ async def check_claude_health(user: CurrentUser) -> dict:
     return out
 
 
-@router.get(
-    "/ocr-health",
-    summary="Diagnostic Tesseract serveur (utile si extraction d'image vide).",
-)
-async def ocr_health(user: CurrentUser) -> dict:
-    """Renvoie le statut du binaire Tesseract installé sur le serveur.
-    Réponse type :
-      { "tesseract": "OK (Tesseract v5.3.0)", "pytesseract_installed": true,
-        "pdf2image_installed": true, "pillow_heif_installed": true }
-    Si l'extraction d'images retourne vide, hit cet endpoint dans le
-    navigateur ou via Postman pour confirmer si Tesseract est bien là."""
-    _require_prospection(user)
-    result: dict = {"tesseract": _check_tesseract_status()}
+def _ocr_health_payload() -> dict:
+    """Payload réutilisé par /ocr-health et /check-ocr-health.
+
+    Lance `subprocess.run(["tesseract", "--version"])` pour récupérer
+    la version exacte + le chemin du binaire (`shutil.which`). Retourne
+    aussi le statut des deps Python OCR (pytesseract, pdf2image,
+    pillow_heif). Utile après auto-deploy pour valider que le buildpack
+    apt a bien installé Tesseract/poppler côté Render."""
+    import shutil
+    import subprocess
+
+    result: dict = {
+        "installed": False,
+        "version": None,
+        "error": None,
+        "path": None,
+        # Backward-compat avec l'ancien payload (clé "tesseract" lisible).
+        "tesseract": _check_tesseract_status(),
+    }
+    tess_path = shutil.which("tesseract")
+    result["path"] = tess_path
+    if tess_path:
+        try:
+            proc = subprocess.run(
+                ["tesseract", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            # Tesseract écrit la version sur stderr (convention legacy).
+            raw = (proc.stderr or proc.stdout or "").strip()
+            first_line = raw.splitlines()[0] if raw else ""
+            result["installed"] = True
+            result["version"] = first_line or None
+        except Exception as exc:  # noqa: BLE001
+            result["error"] = (
+                f"{type(exc).__name__}: {str(exc)[:200]}"
+            )
+    else:
+        result["error"] = (
+            "tesseract binary not found on PATH — buildpack apt "
+            "non activé sur Render ou Aptfile non pris en compte. "
+            "Va dans Render Dashboard → service h2-0 → Manual Deploy "
+            "→ « Clear build cache & deploy »."
+        )
     for pkg in ("pytesseract", "pdf2image", "pillow_heif", "PIL"):
         try:
             __import__(pkg)
@@ -2164,6 +2205,35 @@ async def ocr_health(user: CurrentUser) -> dict:
         except ImportError as exc:
             result[f"{pkg}_installed"] = f"NON installe : {exc}"
     return result
+
+
+@router.get(
+    "/ocr-health",
+    summary="Diagnostic Tesseract serveur (utile si extraction d'image vide).",
+)
+async def ocr_health(user: CurrentUser) -> dict:
+    """Renvoie le statut du binaire Tesseract installé sur le serveur.
+    Format de réponse :
+      { "installed": bool, "version": str|null, "error": str|null,
+        "path": str|null, "tesseract": "OK (vX.Y.Z)" (legacy),
+        "pytesseract_installed": bool, "pdf2image_installed": bool, ... }
+    Si l'extraction d'images retourne vide, hit cet endpoint dans le
+    navigateur ou via Postman pour confirmer si Tesseract est bien là."""
+    _require_prospection(user)
+    return _ocr_health_payload()
+
+
+@router.get(
+    "/check-ocr-health",
+    summary="Alias diagnostic Tesseract (post-deploy Render).",
+)
+async def check_ocr_health(user: CurrentUser) -> dict:
+    """Alias de /ocr-health. Format documenté : {installed: bool,
+    version?: str, error?: str, path?: str}. À hit après un
+    auto-deploy Render pour confirmer que le buildpack apt a bien
+    installé tesseract/poppler."""
+    _require_prospection(user)
+    return _ocr_health_payload()
 
 
 
