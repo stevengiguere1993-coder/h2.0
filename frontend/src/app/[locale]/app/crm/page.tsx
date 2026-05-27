@@ -2,10 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
+  ChevronDown,
+  ChevronRight,
   FileText,
   GripVertical,
   Loader2,
   Mail,
+  Pencil,
   Phone,
   Plus,
   Trash2,
@@ -118,6 +121,35 @@ function saveCustomColumns(cols: Column[]) {
   }
 }
 
+const COLLAPSED_COLS_KEY = "hsi_crm_collapsed_columns_v1";
+// Colonnes repliées par défaut au premier chargement : Acceptée et
+// Refusée prennent de la place pour des leads "terminés" qu'on
+// consulte rarement.
+const DEFAULT_COLLAPSED = ["won", "lost"];
+
+function loadCollapsedColumns(): Set<string> {
+  if (typeof window === "undefined") return new Set(DEFAULT_COLLAPSED);
+  try {
+    const raw = window.localStorage.getItem(COLLAPSED_COLS_KEY);
+    if (raw === null) return new Set(DEFAULT_COLLAPSED);
+    const parsed = JSON.parse(raw) as string[];
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set(DEFAULT_COLLAPSED);
+  }
+}
+
+function saveCollapsedColumns(ids: Set<string>) {
+  try {
+    window.localStorage.setItem(
+      COLLAPSED_COLS_KEY,
+      JSON.stringify(Array.from(ids))
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
 export default function CrmKanbanPage() {
   const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
@@ -129,11 +161,25 @@ export default function CrmKanbanPage() {
   const [dragging, setDragging] = useState<number | null>(null);
   const [hoverCol, setHoverCol] = useState<string | null>(null);
   const [customColumns, setCustomColumns] = useState<Column[]>([]);
+  const [collapsedCols, setCollapsedCols] = useState<Set<string>>(
+    () => new Set(DEFAULT_COLLAPSED)
+  );
   const [createOpen, setCreateOpen] = useState(false);
 
   useEffect(() => {
     setCustomColumns(loadCustomColumns());
+    setCollapsedCols(loadCollapsedColumns());
   }, []);
+
+  function toggleColumnCollapsed(colId: string) {
+    setCollapsedCols((prev) => {
+      const next = new Set(prev);
+      if (next.has(colId)) next.delete(colId);
+      else next.add(colId);
+      saveCollapsedColumns(next);
+      return next;
+    });
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -359,6 +405,7 @@ export default function CrmKanbanPage() {
             {columns.map((col) => {
               const cards = byColumn[col.id] || [];
               const isHover = hoverCol === col.id;
+              const collapsed = collapsedCols.has(col.id);
               return (
                 <div
                   key={col.id}
@@ -379,12 +426,19 @@ export default function CrmKanbanPage() {
                   <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
                     <button
                       type="button"
-                      onClick={() =>
-                        col.custom ? renameCustomColumn(col.id) : null
+                      onClick={() => toggleColumnCollapsed(col.id)}
+                      className="flex flex-1 items-center gap-2 text-left"
+                      title={
+                        collapsed
+                          ? "Cliquer pour déplier"
+                          : "Cliquer pour replier"
                       }
-                      className="flex items-center gap-2 text-left"
-                      title={col.custom ? "Cliquer pour renommer" : ""}
                     >
+                      {collapsed ? (
+                        <ChevronRight className="h-3.5 w-3.5 text-white/50" />
+                      ) : (
+                        <ChevronDown className="h-3.5 w-3.5 text-white/50" />
+                      )}
                       <span
                         className={`h-2 w-2 rounded-full ${col.dot}`}
                       />
@@ -397,38 +451,51 @@ export default function CrmKanbanPage() {
                         {cards.length}
                       </span>
                       {col.custom ? (
-                        <button
-                          type="button"
-                          onClick={() => removeCustomColumn(col.id)}
-                          className="rounded p-1 text-white/40 hover:bg-rose-500/10 hover:text-rose-300"
-                          aria-label="Supprimer la colonne"
-                          title="Supprimer la colonne"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => renameCustomColumn(col.id)}
+                            className="rounded p-1 text-white/40 hover:bg-white/10 hover:text-white"
+                            aria-label="Renommer la colonne"
+                            title="Renommer la colonne"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeCustomColumn(col.id)}
+                            className="rounded p-1 text-white/40 hover:bg-rose-500/10 hover:text-rose-300"
+                            aria-label="Supprimer la colonne"
+                            title="Supprimer la colonne"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </>
                       ) : null}
                     </div>
                   </div>
 
-                  <div className="flex-1 space-y-3 p-3">
-                    {cards.length === 0 ? (
-                      <p className="py-8 text-center text-xs text-white/40">
-                        Aucun prospect
-                      </p>
-                    ) : (
-                      cards.map((p) => (
-                        <ProspectCard
-                          key={p.id}
-                          prospect={p}
-                          dragging={dragging === p.id}
-                          onDragStart={() => onDragStart(p.id)}
-                          onDragEnd={onDragEnd}
-                          onDelete={() => deleteProspect(p.id, p.name)}
-                          onCreateSoumission={() => startSoumission(p)}
-                        />
-                      ))
-                    )}
-                  </div>
+                  {collapsed ? null : (
+                    <div className="flex-1 space-y-3 p-3">
+                      {cards.length === 0 ? (
+                        <p className="py-8 text-center text-xs text-white/40">
+                          Aucun prospect
+                        </p>
+                      ) : (
+                        cards.map((p) => (
+                          <ProspectCard
+                            key={p.id}
+                            prospect={p}
+                            dragging={dragging === p.id}
+                            onDragStart={() => onDragStart(p.id)}
+                            onDragEnd={onDragEnd}
+                            onDelete={() => deleteProspect(p.id, p.name)}
+                            onCreateSoumission={() => startSoumission(p)}
+                          />
+                        ))
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
