@@ -471,6 +471,15 @@ async def init_db() -> None:
                 "frais_demarrage_overrides_json",
                 "TEXT",
             ),
+            # Nouveau champ paramétrable (mai 2026) : taux d'intérêt
+            # prêteur B pendant la phase chantier. Avant on utilisait
+            # le défaut hardcodé 0.08 (dataclass FinanceInputs) ;
+            # maintenant l'utilisateur peut surcharger par fiche.
+            (
+                "lead_analyses",
+                "taux_interet_preteur_b_projet_pct",
+                "NUMERIC(5,3) DEFAULT 8.0",
+            ),
             # Kratos : pivot vers le modèle user-driven (problème
             # écrit/dicté par l'utilisateur, solution générée par l'IA).
             ("kratos_problems", "problem_text", "TEXT"),
@@ -1315,6 +1324,80 @@ async def init_db() -> None:
                     },
                 )
             except Exception:
+                pass
+
+        # Seed des défauts globaux d'analyse financière (mai 2026).
+        # Permet à Phil de modifier les valeurs pré-remplies pour les
+        # nouvelles fiches d'analyse depuis l'UI (bouton ⚙️ « Modifier
+        # les défauts »). Stockés en pourcentage (3.75 = 3.75 %, 25.0
+        # = 25 %, 8.0 = 8 %) pour s'aligner sur ``LeadAnalysis.*_pct``.
+        # Idempotent : ON CONFLICT (key) DO NOTHING. Modifier un défaut
+        # ne change que les FUTURES analyses, pas les existantes.
+        for key, value_float, label_fr, description_fr, mn, mx, step, group in (
+                (
+                    "taux_interet_refi",
+                    3.75,
+                    "Taux d'intérêt refi (%)",
+                    "Taux d'intérêt utilisé pour calculer le refinancement "
+                    "(SCHL, APH 50, APH 100).",
+                    0.0,
+                    25.0,
+                    0.05,
+                    "refi",
+                ),
+                (
+                    "mdf_preteur_b_pct",
+                    25.0,
+                    "% MDF prêteur B",
+                    "Pourcentage de mise de fonds requis par le prêteur B "
+                    "(privé, hypothèque conventionnelle 75 % LTV). Varie "
+                    "selon le prêteur (25 % typique, parfois 35 %).",
+                    0.0,
+                    100.0,
+                    1.0,
+                    "mdf",
+                ),
+                (
+                    "taux_interet_preteur_b_projet",
+                    8.0,
+                    "Taux d'intérêt prêteur B (pendant projet)",
+                    "Taux d'intérêt appliqué par le prêteur B pendant la "
+                    "phase chantier (typique 8 % en 2024-2025). Utilisé "
+                    "pour calculer les intérêts de portage.",
+                    0.0,
+                    30.0,
+                    0.05,
+                    "refi",
+                ),
+        ):
+            try:
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO prospection_analysis_defaults
+                          (key, value_float, label_fr, description_fr,
+                           min_value, max_value, step, group_name,
+                           updated_at)
+                        VALUES (:key, :value_float, :label_fr,
+                                :description_fr, :mn, :mx, :step, :group,
+                                NOW())
+                        ON CONFLICT (key) DO NOTHING
+                        """
+                    ),
+                    {
+                        "key": key,
+                        "value_float": value_float,
+                        "label_fr": label_fr,
+                        "description_fr": description_fr,
+                        "mn": mn,
+                        "mx": mx,
+                        "step": step,
+                        "group": group,
+                    },
+                )
+            except Exception:
+                # Table absente au tout premier boot (create_all n'a
+                # pas encore tourné) — retentera au prochain démarrage.
                 pass
 
 

@@ -1,4 +1,4 @@
-"""API pour les analyses de leads immobiliers.
+﻿"""API pour les analyses de leads immobiliers.
 
 Endpoints :
     POST   /lead-analyses/extract   multipart : urls + text + files
@@ -43,6 +43,9 @@ from app.models.lead_analysis import (
     LeadAnalysis,
     LeadAnalysisAttachment,
     LeadAnalysisStatus,
+)
+from app.models.prospection_analysis_default import (
+    ProspectionAnalysisDefault,
 )
 from app.models.prospection_lead import (
     ProspectionLead,
@@ -142,6 +145,11 @@ class LeadAnalysisRead(BaseModel):
     best_refi_program: Optional[str] = None
     mdf_preteur_b: Optional[float] = None
     mdf_preteur_b_pct: Optional[float] = None
+    # Taux d'intérêt prêteur B pendant la phase chantier (défaut 8 %).
+    # Stocké en pourcentage (8.0 = 8 %), comme les autres `*_pct`.
+    # Utilisé pour calculer les intérêts du projet dans le moteur
+    # `lead_analysis_finance` (L17 = (1 - MDF%) × prix × taux × durée).
+    taux_interet_preteur_b_projet_pct: Optional[float] = None
     frais_demarrage_overrides_json: Optional[str] = None
     frais_demarrage_financables_json: Optional[str] = None
     notes: Optional[str] = None
@@ -242,6 +250,7 @@ class LeadAnalysisUpdate(BaseModel):
     frais_negociations: Optional[float] = None
 
     mdf_preteur_b_pct: Optional[float] = None
+    taux_interet_preteur_b_projet_pct: Optional[float] = None
     frais_demarrage_overrides_json: Optional[str] = None
     frais_demarrage_financables_json: Optional[str] = None
 
@@ -351,7 +360,11 @@ def _parse_financables(raw: Optional[str]) -> list[str]:
     return DEFAULT
 
 
-DEFAULTS_NEW_ANALYSIS: dict = {
+# Défauts "en dur" — valeurs initiales si la table
+# ``prospection_analysis_defaults`` n'a pas (encore) été seedée ou si
+# une clé manque (ex. nouveau défaut ajouté en code sans seed). Le
+# pourcentage est stocké en pct (8.0 = 8 %), comme dans ``LeadAnalysis``.
+_DEFAULTS_FALLBACK: dict = {
     "nb_logements_ajoutes": 0,
     "nb_thermopompes_ajoutees": 0,
     "reduction_energie_pct": 0,
@@ -359,6 +372,7 @@ DEFAULTS_NEW_ANALYSIS: dict = {
     "duree_projet_annees": 2,
     "tga_pct": 4.0,
     "taux_interet_achat_pct": 4.0,
+    "taux_interet_preteur_b_projet_pct": 8.0,
     "ajout_wifi": True,
     "loyers_max_abordabilite_json": json.dumps({"abordable": 1090}),
     "mdf_preteur_b_pct": 25.0,
@@ -372,6 +386,46 @@ DEFAULTS_NEW_ANALYSIS: dict = {
         "frais_travaux",
     ]),
 }
+
+
+# Mapping clé en BD ↔ champ stocké sur LeadAnalysis.
+# Tous les défauts modifiables depuis l'UI sont stockés en
+# ``ProspectionAnalysisDefault`` en pourcentage (3.75, 25.0, 8.0).
+# Les autres champs (booléens, JSON figés) restent dans `_DEFAULTS_FALLBACK`.
+_DB_KEY_TO_FIELD: dict[str, str] = {
+    "taux_interet_refi": "taux_interet_refi_pct",
+    "mdf_preteur_b_pct": "mdf_preteur_b_pct",
+    "taux_interet_preteur_b_projet": "taux_interet_preteur_b_projet_pct",
+}
+
+
+async def _load_defaults_for_new_analysis(db) -> dict:
+    """Charge les défauts depuis la BD et fusionne avec les fallbacks.
+
+    Les valeurs ``ProspectionAnalysisDefault.value_float`` sont stockées
+    en pourcentage (3.75, 25.0, 8.0) pour s'aligner sur la convention
+    ``LeadAnalysis.*_pct``. Si la table est vide ou manque une clé, on
+    retombe sur les défauts en dur (``_DEFAULTS_FALLBACK``).
+
+    Retourne un dict prêt à passer en ``**kwargs`` au constructeur
+    ``LeadAnalysis(...)``.
+    """
+    out = dict(_DEFAULTS_FALLBACK)
+    try:
+        rows = (
+            await db.execute(select(ProspectionAnalysisDefault))
+        ).scalars().all()
+        for row in rows:
+            field = _DB_KEY_TO_FIELD.get(row.key)
+            if field is None:
+                continue
+            if row.value_float is None:
+                continue
+            out[field] = float(row.value_float)
+    except Exception as exc:  # noqa: BLE001
+        # Table peut ne pas exister au tout premier boot — silencieux.
+        log.warning("Failed to load analysis defaults from DB: %s", exc)
+    return out
 
 
 @router.post(
@@ -441,12 +495,16 @@ async def extract_and_create(
         wlines = ["Diagnostic de l'extraction :"]
         wlines.extend(f"• {w}" for w in res.warnings)
         warnings_notes = "\n".join(wlines)
+    # Charge les défauts globaux depuis la BD (modifiables admin/owner
+    # via /api/v1/prospection/analysis-defaults). Une seule lecture
+    # pour tous les leads créés dans ce batch d'extraction.
+    defaults = await _load_defaults_for_new_analysis(db)
     for idx, item in enumerate(res.data or []):
         kwargs = _map_extracted_to_lead(item)
         # Applique les défauts pour les champs manuels d'analyse
         # avant les valeurs extraites (les extraites ne touchent
         # jamais ces champs de toute façon).
-        kwargs = {**DEFAULTS_NEW_ANALYSIS, **kwargs}
+        kwargs = {**defaults, **kwargs}
         # Si warnings et qu'on n'a pas déjà de notes (ie. l'extraction
         # n'a pas mis quelque chose dans `notes` via _map_extracted_to_lead),
         # on stocke les warnings comme notes pour visibilité.
@@ -540,7 +598,7 @@ async def extract_and_create(
             extracted_json=None,
             model_used=res.model_used,
             created_by_user_id=getattr(user, "id", None),
-            **DEFAULTS_NEW_ANALYSIS,
+            **defaults,
             notes=notes_text,
         )
         rec.created_at = now
@@ -935,6 +993,11 @@ async def run_financial_analysis(
             float(rec.mdf_preteur_b_pct) / 100.0
             if rec.mdf_preteur_b_pct is not None
             else 0.25
+        ),
+        taux_interet_preteur_b_projet=(
+            float(rec.taux_interet_preteur_b_projet_pct) / 100.0
+            if rec.taux_interet_preteur_b_projet_pct is not None
+            else 0.08
         ),
         frais_demarrage_overrides=frais_overrides,
         frais_demarrage_financables=_parse_financables(
