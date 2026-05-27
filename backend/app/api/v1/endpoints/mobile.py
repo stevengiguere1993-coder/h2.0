@@ -507,6 +507,7 @@ async def punch_contexts(
                 [
                     ContactRequestStatus.NEW.value,
                     ContactRequestStatus.CONTACTED.value,
+                    ContactRequestStatus.RDV_PREVU.value,
                     ContactRequestStatus.QUALIFIED.value,
                     ContactRequestStatus.QUOTED.value,
                 ]

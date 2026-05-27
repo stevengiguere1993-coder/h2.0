@@ -10,13 +10,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from app.api.deps import DBSession, RequireManager
 from app.models.agenda_event import AgendaEvent
-from app.models.contact_request import ContactRequest
+from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.models.employe import Employe
 from app.services.appointment_mail import (
     send_appointment_assignee_invite,
@@ -92,6 +92,16 @@ async def schedule_appointment(
     await db.flush()
     await db.refresh(event)
 
+    # Auto-transition vers "rdv_prevu" si le prospect est encore en
+    # debut de pipeline. On evite d'ecraser un statut deja avance
+    # (qualified/quoted/won/lost/spam) — la planification d'un RDV
+    # supplementaire ne doit pas faire reculer le pipeline.
+    if prospect.status in (
+        ContactRequestStatus.NEW.value,
+        ContactRequestStatus.CONTACTED.value,
+    ):
+        prospect.status = ContactRequestStatus.RDV_PREVU.value
+
     # Fire the confirmation email in the background. Worst case the
     # send fails — the agenda event is still created and the cron will
     # try the 24h reminder as a fallback.
@@ -153,3 +163,71 @@ async def schedule_appointment(
         bg.add_task(_invite_assignee, data.assignee_id, event.id)
 
     return AppointmentRead.model_validate(event)
+
+
+class AppointmentUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    start_at: Optional[datetime] = None
+    end_at: Optional[datetime] = None
+    location: Optional[str] = Field(default=None, max_length=500)
+    description: Optional[str] = None
+    assignee_id: Optional[int] = None
+    event_type: Optional[str] = Field(default=None, max_length=32)
+
+
+@router.patch("/{event_id}", response_model=AppointmentRead)
+async def update_appointment(
+    event_id: int,
+    data: AppointmentUpdate,
+    db: DBSession,
+    user: RequireManager,
+) -> AppointmentRead:
+    """Modifier un RDV prospect existant. Restreint aux events liés
+    a un ContactRequest pour éviter de toucher aux events agenda
+    génériques par ce endpoint."""
+    event = await db.get(AgendaEvent, event_id)
+    if event is None or event.contact_request_id is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Rendez-vous introuvable."
+        )
+
+    if data.start_at is not None:
+        event.start_at = data.start_at
+    if data.end_at is not None:
+        event.end_at = data.end_at
+    if event.end_at is not None and event.end_at <= event.start_at:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Plage horaire invalide."
+        )
+    if data.title is not None:
+        event.title = data.title.strip()
+    if data.location is not None:
+        event.location = data.location.strip() or None
+    if data.description is not None:
+        event.description = data.description or None
+    if data.event_type is not None:
+        event.event_type = data.event_type
+    if data.assignee_id is not None:
+        event.assignee_id = data.assignee_id or None
+
+    await db.flush()
+    await db.refresh(event)
+    return AppointmentRead.model_validate(event)
+
+
+@router.delete("/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_appointment(
+    event_id: int,
+    db: DBSession,
+    user: RequireManager,
+) -> Response:
+    """Supprimer un RDV prospect. Restreint aux events liés a un
+    ContactRequest."""
+    event = await db.get(AgendaEvent, event_id)
+    if event is None or event.contact_request_id is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Rendez-vous introuvable."
+        )
+    await db.delete(event)
+    await db.flush()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

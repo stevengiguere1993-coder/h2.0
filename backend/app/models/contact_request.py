@@ -37,6 +37,7 @@ class ContactRequestStatus(str, Enum):
 
     NEW = "new"
     CONTACTED = "contacted"
+    RDV_PREVU = "rdv_prevu"
     QUALIFIED = "qualified"
     QUOTED = "quoted"
     WON = "won"

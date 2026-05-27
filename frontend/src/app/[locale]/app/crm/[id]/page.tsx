@@ -1288,13 +1288,33 @@ type Appointment = {
   confirmation_sent_at?: string | null;
 };
 
-function todayIso(): string {
-  const d = new Date();
+type Employe = { id: number; full_name: string };
+
+// Ajoute `hours` heures a une string "HH:MM". Wrap modulo 24h —
+// les RDV qui traversent minuit ne s'appliquent pas (business
+// hours), donc la comparaison lexicographique reste valide.
+function addHour(hm: string, hours = 1): string {
+  if (!hm) return "";
+  const [h, m] = hm.split(":").map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return "";
+  const total = h * 60 + m + hours * 60;
+  const wrap = ((total % 1440) + 1440) % 1440;
+  const nh = Math.floor(wrap / 60);
+  const nm = wrap % 60;
   const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return `${p(nh)}:${p(nm)}`;
 }
 
-type Employe = { id: number; full_name: string };
+async function readErrorDetail(res: Response): Promise<string> {
+  const txt = (await res.text()).slice(0, 1000);
+  try {
+    const j = JSON.parse(txt) as { detail?: unknown };
+    if (typeof j?.detail === "string") return j.detail;
+  } catch {
+    /* not JSON — fall through */
+  }
+  return txt.slice(0, 240) || `Erreur HTTP ${res.status}`;
+}
 
 function AppointmentScheduler({
   contactRequestId,
@@ -1309,12 +1329,20 @@ function AppointmentScheduler({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [employes, setEmployes] = useState<Employe[]>([]);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editDate, setEditDate] = useState("");
+  const [editStartHm, setEditStartHm] = useState("");
+  const [editEndHm, setEditEndHm] = useState("");
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const confirm = useConfirm();
 
-  // Form state
+  // Form state — plages de RDV laissées vides pour éviter les
+  // erreurs de saisie (clic sur submit sans réaliser que la plage
+  // par défaut n'a pas été ajustée).
   const [title, setTitle] = useState(`Visite — ${prospectName}`);
-  const [date, setDate] = useState(todayIso());
-  const [startHm, setStartHm] = useState("10:00");
-  const [endHm, setEndHm] = useState("11:00");
+  const [date, setDate] = useState("");
+  const [startHm, setStartHm] = useState("");
+  const [endHm, setEndHm] = useState("");
   const [location, setLocation] = useState(prospectAddress || "");
   const [eventType, setEventType] = useState("visite");
   const [assigneeId, setAssigneeId] = useState<string>("");
@@ -1362,12 +1390,16 @@ function AppointmentScheduler({
       setError("Tous les champs sont requis.");
       return;
     }
+    const startIso = new Date(`${date}T${startHm}:00`).toISOString();
+    const endIso = new Date(`${date}T${endHm}:00`).toISOString();
+    if (new Date(endIso) <= new Date(startIso)) {
+      setError("L'heure de fin doit être après l'heure de début.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     setSuccess(null);
     try {
-      const startIso = new Date(`${date}T${startHm}:00`).toISOString();
-      const endIso = new Date(`${date}T${endHm}:00`).toISOString();
       const res = await authedFetch("/api/v1/appointments", {
         method: "POST",
         body: JSON.stringify({
@@ -1381,8 +1413,7 @@ function AppointmentScheduler({
         })
       });
       if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt.slice(0, 240));
+        throw new Error(await readErrorDetail(res));
       }
       const created = (await res.json()) as Appointment;
       setPast((xs) => [created, ...xs]);
@@ -1393,6 +1424,95 @@ function AppointmentScheduler({
       setError((e as Error).message);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  function startEdit(a: Appointment) {
+    const start = new Date(a.start_at);
+    const end = a.end_at ? new Date(a.end_at) : null;
+    const p = (n: number) => String(n).padStart(2, "0");
+    setEditingId(a.id);
+    setEditDate(
+      `${start.getFullYear()}-${p(start.getMonth() + 1)}-${p(start.getDate())}`
+    );
+    setEditStartHm(`${p(start.getHours())}:${p(start.getMinutes())}`);
+    setEditEndHm(
+      end ? `${p(end.getHours())}:${p(end.getMinutes())}` : ""
+    );
+    setError(null);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditDate("");
+    setEditStartHm("");
+    setEditEndHm("");
+  }
+
+  async function saveEdit(id: number) {
+    if (!editDate || !editStartHm || !editEndHm) {
+      setError("Date et plage horaire requises.");
+      return;
+    }
+    const startIso = new Date(
+      `${editDate}T${editStartHm}:00`
+    ).toISOString();
+    const endIso = new Date(`${editDate}T${editEndHm}:00`).toISOString();
+    if (new Date(endIso) <= new Date(startIso)) {
+      setError("L'heure de fin doit être après l'heure de début.");
+      return;
+    }
+    setBusyId(id);
+    setError(null);
+    try {
+      const res = await authedFetch(`/api/v1/appointments/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ start_at: startIso, end_at: endIso })
+      });
+      if (!res.ok) {
+        throw new Error(await readErrorDetail(res));
+      }
+      const updated = (await res.json()) as Appointment;
+      setPast((xs) =>
+        xs
+          .map((x) => (x.id === id ? updated : x))
+          .sort(
+            (a, b) =>
+              new Date(b.start_at).getTime() -
+              new Date(a.start_at).getTime()
+          )
+      );
+      cancelEdit();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function deleteAppt(id: number) {
+    const ok = await confirm({
+      title: "Supprimer ce rendez-vous ?",
+      description:
+        "Le RDV sera retiré de l'agenda. Cette action est irréversible.",
+      confirmLabel: "Supprimer",
+      destructive: true
+    });
+    if (!ok) return;
+    setBusyId(id);
+    setError(null);
+    try {
+      const res = await authedFetch(`/api/v1/appointments/${id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) {
+        throw new Error(await readErrorDetail(res));
+      }
+      setPast((xs) => xs.filter((x) => x.id !== id));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -1444,7 +1564,17 @@ function AppointmentScheduler({
             <input
               type="time"
               value={startHm}
-              onChange={(e) => setStartHm(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setStartHm(v);
+                // Auto-cale la fin a debut + 1h si vide ou en-deca
+                if (v) {
+                  const minEnd = addHour(v, 1);
+                  if (!endHm || endHm <= v || endHm < minEnd) {
+                    setEndHm(minEnd);
+                  }
+                }
+              }}
               className="input"
             />
           </div>
@@ -1453,7 +1583,17 @@ function AppointmentScheduler({
             <input
               type="time"
               value={endHm}
-              onChange={(e) => setEndHm(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (startHm && v) {
+                  const minEnd = addHour(startHm, 1);
+                  if (v < minEnd) {
+                    setEndHm(minEnd);
+                    return;
+                  }
+                }
+                setEndHm(v);
+              }}
               className="input"
             />
           </div>
@@ -1531,25 +1671,125 @@ function AppointmentScheduler({
                 key={a.id}
                 className="rounded-xl border border-brand-800 bg-brand-900 p-3"
               >
-                <p className="text-sm font-semibold text-white">
-                  {a.title}
-                </p>
-                <p className="mt-0.5 text-xs text-white/60">
-                  {new Date(a.start_at).toLocaleString("fr-CA", {
-                    weekday: "short",
-                    day: "numeric",
-                    month: "short",
-                    year: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit"
-                  })}
-                  {a.end_at
-                    ? ` → ${new Date(a.end_at).toLocaleTimeString(
-                        "fr-CA",
-                        { hour: "2-digit", minute: "2-digit" }
-                      )}`
-                    : ""}
-                </p>
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-sm font-semibold text-white">
+                    {a.title}
+                  </p>
+                  {editingId !== a.id ? (
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => startEdit(a)}
+                        disabled={busyId !== null}
+                        className="rounded p-1 text-white/50 hover:bg-white/10 hover:text-white disabled:opacity-40"
+                        aria-label="Modifier la date"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => deleteAppt(a.id)}
+                        disabled={busyId !== null}
+                        className="rounded p-1 text-white/50 hover:bg-rose-500/20 hover:text-rose-300 disabled:opacity-40"
+                        aria-label="Supprimer le rendez-vous"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+                {editingId === a.id ? (
+                  <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                    <div>
+                      <label className="label text-[10px]">Date</label>
+                      <input
+                        type="date"
+                        value={editDate}
+                        onChange={(e) => setEditDate(e.target.value)}
+                        className="input text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="label text-[10px]">Début</label>
+                      <input
+                        type="time"
+                        value={editStartHm}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setEditStartHm(v);
+                          if (v) {
+                            const minEnd = addHour(v, 1);
+                            if (
+                              !editEndHm ||
+                              editEndHm <= v ||
+                              editEndHm < minEnd
+                            ) {
+                              setEditEndHm(minEnd);
+                            }
+                          }
+                        }}
+                        className="input text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="label text-[10px]">Fin</label>
+                      <input
+                        type="time"
+                        value={editEndHm}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (editStartHm && v) {
+                            const minEnd = addHour(editStartHm, 1);
+                            if (v < minEnd) {
+                              setEditEndHm(minEnd);
+                              return;
+                            }
+                          }
+                          setEditEndHm(v);
+                        }}
+                        className="input text-xs"
+                      />
+                    </div>
+                    <div className="flex gap-2 sm:col-span-3">
+                      <button
+                        type="button"
+                        onClick={() => saveEdit(a.id)}
+                        disabled={busyId === a.id}
+                        className="btn-accent text-xs disabled:opacity-60"
+                      >
+                        {busyId === a.id ? (
+                          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                        ) : null}
+                        Enregistrer
+                      </button>
+                      <button
+                        type="button"
+                        onClick={cancelEdit}
+                        disabled={busyId === a.id}
+                        className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70 hover:bg-white/5"
+                      >
+                        Annuler
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-0.5 text-xs text-white/60">
+                    {new Date(a.start_at).toLocaleString("fr-CA", {
+                      weekday: "short",
+                      day: "numeric",
+                      month: "short",
+                      year: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit"
+                    })}
+                    {a.end_at
+                      ? ` → ${new Date(a.end_at).toLocaleTimeString(
+                          "fr-CA",
+                          { hour: "2-digit", minute: "2-digit" }
+                        )}`
+                      : ""}
+                  </p>
+                )}
                 <span className="mt-1 inline-flex rounded bg-white/5 px-1.5 py-0.5 text-[10px] uppercase text-white/50">
                   {a.event_type}
                 </span>
