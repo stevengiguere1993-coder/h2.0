@@ -79,8 +79,12 @@ class ProspectionAnalysisDefault(Base):
     # la section "Analyse financière — inputs manuels" filtre sur
     # group="refi", celui de "Composition MDF prêteur B" sur
     # group="mdf"). Optionnel — None = affiché partout.
+    #
+    # `group` est un mot-clé SQL réservé en Postgres, donc on force le
+    # nom de colonne à `group_name` côté DB tout en gardant l'attribut
+    # Python `group` (plus naturel à manipuler).
     group: Mapped[Optional[str]] = mapped_column(
-        String(32), nullable=True
+        "group_name", String(32), nullable=True
     )
 
     updated_at: Mapped[datetime] = mapped_column(

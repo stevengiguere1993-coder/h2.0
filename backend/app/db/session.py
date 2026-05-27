@@ -1376,7 +1376,8 @@ async def init_db() -> None:
                         """
                         INSERT INTO prospection_analysis_defaults
                           (key, value_float, label_fr, description_fr,
-                           min_value, max_value, step, "group", updated_at)
+                           min_value, max_value, step, group_name,
+                           updated_at)
                         VALUES (:key, :value_float, :label_fr,
                                 :description_fr, :mn, :mx, :step, :group,
                                 NOW())
