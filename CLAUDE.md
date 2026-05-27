@@ -2,18 +2,31 @@
 
 Notes de travail pour Claude Code sur ce repo (h2.0 — Horizon Services Immobiliers).
 
-## Workflow Git — merge automatique
+## Workflow Git — merge sans demander la permission
 
-Quand je termine une tâche de code (feature, fix, refactor) :
+Quand le code est prêt à partir en production, je commit + push + PR + merge
+**de mon propre chef**, sans demander « tu veux que je merge ? » à
+l'utilisateur. C'est mon jugement qui décide du bon moment, pas le sien.
 
-1. Commit + push sur la branche de session
-2. Création de la PR vers `main`
-3. Merge automatique de la PR (méthode `merge`, pour rester cohérent avec le pattern existant `Merge: <résumé>` ou `<titre> (#XXX)`)
+### Quand merger
+- Le code répond à la demande de l'utilisateur et tient debout.
+- Pas de TODO / debug / spike laissé en place.
+- La syntaxe / le type-check / les tests rapides que j'ai pu lancer
+  passent.
 
-### Conditions pour merger automatiquement
-- La tâche est **explicitement terminée** (pas un commit intermédiaire / spike / debug).
-- Le code semble cohérent (pas de syntax error évident, pas de TODO non résolu critique).
-- Si une CI / type-check / test échoue ou est suspect, on s'arrête et on signale avant de merger.
+### Quand ne PAS merger (et le dire à l'utilisateur)
+- Le code échoue à la CI, au type-check, ou aux tests.
+- J'ai une incertitude réelle sur la justesse du changement.
+- L'utilisateur m'a explicitement dit « ne push pas tout de suite » ou
+  « attend mon test » pour cette tâche.
+- Le changement touche `main` directement (force-push, reset, etc.) ou
+  a un blast radius hors du scope demandé.
+
+### Méthode de merge
+- Méthode `merge` (pas squash, pas rebase) — cohérent avec le pattern
+  existant `<titre> (#XXX)` ou `Merge: <résumé>`.
+- Un seul PR par tâche logique terminée. Plusieurs petits commits dans
+  la même tâche restent groupés.
 
 ### Ce qui reste hors limite
 - Force-push sur `main`
