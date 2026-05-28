@@ -5,6 +5,7 @@ Routes :
     GET    /api/v1/ndas?deal_id={id}      — lister les NDAs d'un deal
     GET    /api/v1/ndas/{id}              — détail d'un NDA
     GET    /api/v1/ndas/{id}/pdf          — preview PDF (auth)
+    GET    /api/v1/ndas/{id}/signed-pdf   — PDF signé immuable (auth)
     POST   /api/v1/ndas/{id}/send         — envoyer à l'investisseur
     DELETE /api/v1/ndas/{id}              — supprimer (si pas signé)
 
@@ -28,7 +29,11 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DBSession
 from app.models.nda import NDA, NDAStatus
 from app.models.prospection_deal import ProspectionDeal
-from app.services.nda_pdf import nda_pdf_filename, render_nda_pdf
+from app.services.nda_pdf import (
+    nda_pdf_filename,
+    render_nda_pdf,
+    signed_nda_pdf_filename,
+)
 from app.services.nda_send import NDASendError, send_nda_to_investor
 
 log = logging.getLogger(__name__)
@@ -206,6 +211,42 @@ async def get_nda_pdf(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
+@router.get(
+    "/{nda_id}/signed-pdf",
+    summary="PDF signé immuable (audit) — disponible après signature",
+)
+async def get_nda_signed_pdf(
+    nda_id: int,
+    db: DBSession,
+    _: CurrentUser,
+) -> Response:
+    """Retourne le PDF *signé* archivé en DB (`signed_pdf_blob`).
+
+    Différent de `/pdf` : ce PDF contient le bloc Récepteur rempli,
+    le bandeau emerald « SIGNEE ELECTRONIQUEMENT » avec horodatage,
+    IP de signature, et hash SHA-256 — c'est la pièce juridiquement
+    valable pour archivage et preuve. Pas re-rendu à chaque appel :
+    sert exactement les octets stockés au moment de la signature.
+
+    Renvoie 404 explicite si le NDA n'est pas encore signé (le
+    blob n'a pas été généré).
+    """
+    nda = await _load_nda_or_404(db, nda_id)
+    if not nda.signed_pdf_blob:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "PDF signé indisponible — entente pas encore signée.",
+        )
+    filename = signed_nda_pdf_filename(nda)
+    return Response(
+        content=bytes(nda.signed_pdf_blob),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
     )
 
 

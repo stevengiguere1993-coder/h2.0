@@ -28,7 +28,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DBSession
 from app.models.nda import NDA, NDAStatus
-from app.services.nda_pdf import nda_pdf_filename, render_nda_pdf
+from app.services.audit import log_action
+from app.services.nda_pdf import (
+    generate_signed_nda_pdf,
+    nda_pdf_filename,
+    render_nda_pdf,
+)
 from app.services.nda_template import (
     ENGAGEMENT_ITEMS,
     ISSUER_ENTITY_NAME,
@@ -206,6 +211,47 @@ async def sign_nda(
     nda.status = NDAStatus.SIGNE.value
     await db.flush()
     await db.refresh(nda)
+
+    # Génère le PDF signé immuable et le stocke en DB. Best-effort :
+    # si le rendu plante, la signature reste valide en DB mais le
+    # PDF signé sera marqué « indisponible » côté frontend (404 sur
+    # /signed-pdf) — Phil peut alors regénérer manuellement via un
+    # outil d'admin futur si besoin. Ne JAMAIS bloquer la signature
+    # parce que le rendu PDF a un bug : la signature DB est ce qui
+    # importe légalement.
+    try:
+        signed_bytes = await generate_signed_nda_pdf(db, nda.id)
+        nda.signed_pdf_blob = signed_bytes
+        await db.flush()
+        await db.refresh(nda)
+        log.info(
+            "[NDA_SIGN] PDF signé généré et stocké pour NDA %s "
+            "(%d octets)",
+            nda.id,
+            len(signed_bytes),
+        )
+        try:
+            await log_action(
+                db,
+                user=None,
+                action="nda.signed_pdf_generated",
+                entity_type="nda",
+                entity_id=nda.id,
+                details={
+                    "size_bytes": len(signed_bytes),
+                    "signed_name": nda.signed_name,
+                    "signed_ip": nda.signed_ip,
+                },
+            )
+        except Exception:
+            pass
+    except Exception as exc:
+        log.exception(
+            "[NDA_SIGN] Génération PDF signé échouée pour NDA %s — "
+            "signature DB conservée, blob laissé NULL. Erreur: %s",
+            nda.id,
+            exc,
+        )
 
     # Audit best-effort des attestations UX. Pas de table dédiée :
     # on logge dans les events serveur. Si Phil ajoute plus tard un

@@ -23,6 +23,8 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  FileCheck2,
+  FileText,
   Loader2,
   Plus,
   Send,
@@ -32,6 +34,43 @@ import {
 
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
+
+/**
+ * Ouvre un PDF authentifié dans un nouvel onglet.
+ *
+ * Pourquoi pas un simple `<a href={url} target="_blank">` :
+ * le browser ne joint PAS le `Authorization: Bearer …` header sur
+ * une nav top-level → l'API renvoie 401 `{"detail":"Not authenticated"}`.
+ *
+ * Pattern fix : on fait un fetch authentifié manuel, on récupère
+ * le blob PDF, on crée une URL blob locale, on ouvre cette URL
+ * dans un nouvel onglet, et on révoque l'URL ~60 s plus tard pour
+ * libérer la mémoire (l'onglet a déjà copié les bytes côté browser).
+ */
+async function openAuthedPdf(
+  path: string,
+  onError: (msg: string) => void
+): Promise<void> {
+  try {
+    const res = await authedFetch(path);
+    if (!res.ok) {
+      if (res.status === 404) {
+        onError("PDF indisponible — entente pas encore signée.");
+      } else if (res.status === 401) {
+        onError("Session expirée. Recharge la page et reconnecte-toi.");
+      } else {
+        onError(`Téléchargement du PDF échoué (HTTP ${res.status}).`);
+      }
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (e) {
+    onError((e as Error).message || "Téléchargement du PDF échoué.");
+  }
+}
 
 type NDA = {
   id: number;
@@ -283,14 +322,36 @@ export function NDASection({ dealId }: { dealId: number }) {
                     </dl>
 
                     <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <a
-                        href={`/api/v1/ndas/${n.id}/pdf`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 rounded-md border border-brand-800 bg-brand-900 px-2.5 py-1 text-[11px] text-white/80 hover:border-blue-500/40"
-                      >
-                        Voir le PDF
-                      </a>
+                      {n.status === "signe" ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void openAuthedPdf(
+                              `/api/v1/ndas/${n.id}/signed-pdf`,
+                              setError
+                            )
+                          }
+                          title="PDF immuable avec bandeau d'horodatage et IP de signature"
+                          className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-200 hover:bg-emerald-500/20"
+                        >
+                          <FileCheck2 className="h-3 w-3" />
+                          Voir le PDF signé
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void openAuthedPdf(
+                              `/api/v1/ndas/${n.id}/pdf`,
+                              setError
+                            )
+                          }
+                          className="inline-flex items-center gap-1 rounded-md border border-brand-800 bg-brand-900 px-2.5 py-1 text-[11px] text-white/80 hover:border-blue-500/40"
+                        >
+                          <FileText className="h-3 w-3" />
+                          Voir le PDF
+                        </button>
+                      )}
                       {n.signature_token ? (
                         <button
                           type="button"
