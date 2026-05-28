@@ -1,7 +1,18 @@
 {
-  "_doc": "Mapping de substitution pour le template horizon_v2.pptx (offre d'investissement Horizon Services Immobiliers — révision 2026-05-28). 16 slides. Différences vs v1 : (a) nouvelle slide 11 « TENDANCES » (Zipplex), (b) ~10 nouvelles variables (qualificatif_projet, levier_principal_phrase, gain_potentiel_callout, valeur_marchande_annotation, phase2_label, label/valeur_callout_refi, taxes_scolaires_incluses, tendances_*), (c) logique conditionnelle équité ± sur slide refi, (d) catalogue de rénovations explicite slide 8 (au lieu d'une checkbox value-add générique). Chaque entrée définit (a) la chaîne LITTÉRALE à chercher dans le pptx source, (b) la variable de contexte à substituer. La substitution s'opère via run.text.replace ou cell.text rewrite, en préservant les runs et leur formatting.",
+  "_doc": "Mapping de substitution pour le template horizon_v2.pptx (offre d'investissement Horizon Services Immobiliers — révision 2026-05-28). 16 slides. Note : ce fichier documente les substitutions appliquées par le service Python `offre_investissement_pptx.py` — le service ajoute aussi des substitutions dynamiques (charts, dates, cellules par position). Le mapping JSON listé ci-dessous est la base ; les substitutions runtime sont au-delà (voir docstring du module). Chaque entrée définit (a) la chaîne LITTÉRALE à chercher dans le pptx source, (b) la variable de contexte à substituer.",
   "_template_origin": "1660 Saint-Clément (16 slides) — version updated 2026-05-28",
-  "_version": "2.0.0",
+  "_version": "3.0.0",
+  "_service_version": "v3",
+  "_changelog_v3": [
+    "Slide 2 (Présentation projet) : nb_etages manuel, superficie_habitable/annee_construction/frais_energetiques/stationnements auto depuis fiche",
+    "Slide 3 (Opportunité unique) : Chart 79 + Chart 85 substitués dynamiquement, lien Centris paramétrable",
+    "Slide 4 (Plan création valeur) : valeur marchande source documentée (best_refi.valeur_economique)",
+    "Slide 5 (Échéancier) : dates auto-calculées + 5 overrides wizard",
+    "Slide 8 (Optimisation) : total rénos = travaux_estimes, frais détaillés depuis fiche",
+    "Slide 10 (ROI) : estimation_long_terme_callout configurable",
+    "Slide 11 (Tendances) : titre dynamique, chart substitué, callout via lookup Zipplex",
+    "Slide 12 (Valeur ajoutée) : chart trajectoire substitué dynamiquement"
+  ],
   "substitutions": [
     {"slide": 0, "find": "De l’achat au refinancement : un projet immobilier solide à Hochelaga-Maisonneuve", "var": "tagline_cover"},
     {"slide": 0, "find": "1660 Rue Saint-Clément, Montréal", "var": "adresse_complete"},
@@ -220,6 +231,22 @@
     "tendances_callout": {"type": "string", "source": "human", "max_chars": 20, "description": "Callout (ex: '+900$', '+450$') affiché en gros sur la slide TENDANCES"},
 
     "fonds_roulement_phrase": {"type": "string", "source": "constant", "value": "Fonds de roulement \n4 mois"},
-    "marge_contingence_phrase": {"type": "string", "source": "constant", "value": "Marge de contingence 10%"}
+    "marge_contingence_phrase": {"type": "string", "source": "constant", "value": "Marge de contingence 10%"},
+
+    "nb_etages": {"type": "integer", "source": "human", "description": "Nombre d'étages — varie 2-5 selon deal. Saisie manuelle (pas extrait Centris fiable)."},
+    "superficie_habitable": {"type": "string", "source": "auto", "kratos_field": "superficie_batiment", "fallback": "À déterminer"},
+    "annee_construction_str": {"type": "string", "source": "auto", "kratos_field": "annee_construction", "fallback": "À déterminer"},
+    "frais_energetiques_label": {"type": "string", "source": "auto", "rule": "'Propriétaire' si energie > 2000$/an sinon 'Locataire'"},
+    "stationnements_label": {"type": "string", "source": "auto", "kratos_field": "nb_stationnements", "rule": "0 → 'Aucun' sinon '{N} place(s)'"},
+    "lien_centris_comparable": {"type": "url", "source": "human", "max_chars": 500, "description": "URL Centris d'un comparable inséré slide 4"},
+    "date_m1_1": {"type": "date_iso", "source": "hybrid", "description": "Date M1.1 (lettre financement) — auto-suggérée + override wizard"},
+    "date_m1_2": {"type": "date_iso", "source": "hybrid"},
+    "date_m2_1": {"type": "date_iso", "source": "hybrid"},
+    "date_m2_4": {"type": "date_iso", "source": "hybrid"},
+    "date_m3_1": {"type": "date_iso", "source": "hybrid"},
+    "estimation_long_terme_callout": {"type": "string", "source": "human", "max_chars": 60, "default": "Estimations à plus de 3 M$!"},
+    "tendances_callout_manuel": {"type": "string", "source": "human", "max_chars": 20, "description": "Override manuel du callout Tendances (priorité sur Zipplex auto)"},
+    "tendances_moyenne_actuelle": {"type": "money", "source": "human", "description": "Override moyenne loyer quartier (sinon Zipplex lookup auto)"},
+    "tendances_titre": {"type": "string", "source": "auto", "format": "TENDANCES — {secteur}", "description": "Titre dynamique slide 11 incluant le quartier"}
   }
 }
