@@ -24,18 +24,28 @@ function fmt(n: number | null | undefined, suffix: string = "") {
 /**
  * Affichage en lecture seule d'un résumé de fiche d'analyse de lead,
  * embarquable dans une autre page (ex : page detail d'un Deal Pipeline).
- * Le bouton « Ouvrir la fiche complète » navigue vers la page Analyses
- * des leads avec `?openId={id}` (ouverture auto du modal). Si
- * `fromDealId` est fourni, on ajoute `&fromDeal={dealId}` pour que la
- * page d'analyses affiche un bouton « Retour au deal » dans le modal
- * et préserve le contexte du Deal d'origine.
+ *
+ * Comportement du bouton « Ouvrir la fiche complète » :
+ *   - Si `onOpenDetail` est fourni → appelle le callback (le parent
+ *     ouvre le modal LeadAnalysisDetailModal SUR PLACE, sans navigation).
+ *     C'est le cas sur la page d'un Deal Pipeline : Phil reste sur la
+ *     page du deal et voit le modal en overlay.
+ *   - Sinon → fallback navigation vers `/prospection/analyses-leads?
+ *     openId={id}` (+ `&fromDeal={dealId}` si fourni). C'est le
+ *     comportement historique pour les call sites qui ne veulent pas
+ *     gérer leur propre modal (sidebar, etc.).
  */
 export function LeadAnalysisSummary({
   id,
-  fromDealId
+  fromDealId,
+  onOpenDetail
 }: {
   id: number;
   fromDealId?: number;
+  /** Si fourni, le bouton « Ouvrir la fiche complète » appelle ce
+   *  callback au lieu de naviguer vers /analyses-leads. À utiliser
+   *  quand le parent rend lui-même un LeadAnalysisDetailModal. */
+  onOpenDetail?: () => void;
 }) {
   const [data, setData] = useState<Analysis | null>(null);
   const [loading, setLoading] = useState(true);
@@ -75,6 +85,9 @@ export function LeadAnalysisSummary({
 
   if (!data) return null;
 
+  const openBtnCls =
+    "inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/20";
+
   return (
     <section className="mt-4 rounded-lg border border-brand-800 bg-brand-900/40 px-4 py-3">
       <div className="flex items-center justify-between">
@@ -84,18 +97,30 @@ export function LeadAnalysisSummary({
             Fiche d&apos;analyse
           </h2>
         </div>
-        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-        <Link
-          href={
-            (fromDealId != null
-              ? `/prospection/analyses-leads?openId=${data.id}&fromDeal=${fromDealId}`
-              : `/prospection/analyses-leads?openId=${data.id}`) as any
-          }
-          className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/20"
-        >
-          Ouvrir la fiche complète
-          <ExternalLink className="h-3 w-3" />
-        </Link>
+        {onOpenDetail ? (
+          <button
+            type="button"
+            onClick={onOpenDetail}
+            className={openBtnCls}
+            title="Ouvrir la fiche d'analyse en plein écran"
+          >
+            Ouvrir la fiche complète
+            <ExternalLink className="h-3 w-3" />
+          </button>
+        ) : (
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          <Link
+            href={
+              (fromDealId != null
+                ? `/prospection/analyses-leads?openId=${data.id}&fromDeal=${fromDealId}`
+                : `/prospection/analyses-leads?openId=${data.id}`) as any
+            }
+            className={openBtnCls}
+          >
+            Ouvrir la fiche complète
+            <ExternalLink className="h-3 w-3" />
+          </Link>
+        )}
       </div>
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
         <div>
