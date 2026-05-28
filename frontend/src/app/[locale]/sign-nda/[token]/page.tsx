@@ -7,8 +7,15 @@
  * Pas d'authentification — le token (32 octets URL-safe) authentifie
  * le destinataire et sert d'audit trail.
  *
+ * ⚠️ NDA générique — pas d'adresse de propriété.
+ * Le NDA est signé AVANT que MGV identifie l'Opportunité à
+ * l'investisseur. L'adresse de l'immeuble n'apparaît donc NULLE
+ * PART sur cette page (ni dans le header, ni dans le texte intégral,
+ * ni dans le PDF téléchargeable).
+ *
  * UX (post-fix légal #517+) :
- *   - En-tête identifiant les Parties et la propriété visée
+ *   - En-tête identifiant uniquement la Société émettrice et la
+ *     date d'effet (pas d'adresse de propriété)
  *   - Conteneur scrollable affichant le **texte intégral** du NDA
  *     (11 articles, rendu en HTML via `marked` à partir du Markdown
  *     fourni par le backend dans `full_text_markdown`)
@@ -42,7 +49,6 @@ import {
 type PublicNDA = {
   id: number;
   status: string;
-  property_address: string | null;
   investor_name: string;
   issuer_name: string;
   duration_years: number;
@@ -224,7 +230,7 @@ export default function SignNDAPage() {
     <div className="min-h-screen bg-slate-50 px-4 py-8">
       <div className="mx-auto max-w-3xl">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-          {/* Header */}
+          {/* Header — pas d'adresse de propriété (cf. en-tête du fichier) */}
           <div className="border-b border-slate-200 pb-4">
             <p className="text-xs font-semibold uppercase tracking-wider text-blue-700">
               {data.issuer_name}
@@ -234,10 +240,8 @@ export default function SignNDAPage() {
               Entente de confidentialité
             </h1>
             <p className="mt-1 text-sm text-slate-600">
-              Concernant la propriété :{" "}
-              <span className="font-semibold">
-                {data.property_address || "à confirmer"}
-              </span>
+              Destinataire :{" "}
+              <span className="font-semibold">{data.investor_name}</span>
             </p>
             <p className="mt-1 text-xs text-slate-500">
               Date d&apos;effet : {data.emission_date_formatted} &middot; Durée{" "}

@@ -1,5 +1,5 @@
 """Génère le PDF d'une Entente de confidentialité et de
-non-contournement (NDA — mod��le MGV Développement v2).
+non-contournement (NDA — modèle MGV Développement v2).
 
 Document légal multi-pages — version v2 qui remplace l'ancien
 modèle Horizon Services Immobiliers (5 sections) par le modèle
@@ -8,11 +8,15 @@ MGV Développement (11 articles + préambule + bloc signatures).
 Structure :
 - Header (logo + titre)
 - Bloc d'ouverture (Date d'effet, identification des Parties)
-- Encart optionnel « Opportunité visée » si property_address dispo
 - PRÉAMBULE (ATTENDU QUE … + EN CONTREPARTIE)
 - 11 articles numérotés (avec sous-articles et listes (a)(b)(c)...)
 - Bloc signatures (MGV à gauche, Récepteur à droite)
 - Mentions légales en pied
+
+⚠️ Aucune référence à l'adresse de la propriété n'apparaît dans
+le NDA rendu. Le NDA est signé AVANT que MGV identifie
+l'Opportunité à l'investisseur. Faire apparaître l'adresse de
+l'immeuble dans le NDA défait son propre objet.
 
 ReportLab pur Python — pas de dépendance système, compatible
 Render Free comme `offer_pdf.py`. SimpleDocTemplate gère
@@ -47,7 +51,6 @@ from app.services.nda_template import (
     NDA_DAMAGES_FLOOR_CAD,
     NDA_DURATION_YEARS,
     NDA_VENUE,
-    format_property_address,
     resolve_investor_clauses,
 )
 
@@ -289,18 +292,6 @@ async def _load(
     return nda, deal
 
 
-def _property_address(deal: Optional[ProspectionDeal]) -> Optional[str]:
-    if deal is None:
-        return None
-    la = deal.lead_analysis
-    addr = format_property_address(
-        deal.address,
-        la.city if la is not None else None,
-        la.postal_code if la is not None else None,
-    )
-    return addr if addr != "____________" else None
-
-
 def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
     rl = _lazy_reportlab()
     Paragraph = rl["Paragraph"]
@@ -338,7 +329,11 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
     )
     type_cl, addr_cl, repr_cl = resolve_investor_clauses(None, None, None)
     damages_amount = f"{NDA_DAMAGES_FLOOR_CAD:,}".replace(",", " ")
-    property_address = _property_address(deal)
+    # NOTE: `deal` est désormais inutilisé pour le rendu (l'adresse de
+    # la propriété n'est PLUS injectée dans le NDA). On le garde dans
+    # la signature pour rétrocompat et pour permettre, à terme,
+    # d'éventuels métadonnées non-juridiques (ex: référence interne).
+    del deal  # silence linter
 
     # --- Header logo + titre ---
     if os.path.exists(_LOGO_PATH):
@@ -382,7 +377,7 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
         f"{ISSUER_ENTITY_ADDRESS}, représentée aux fins des "
         f"présentes par {ISSUER_REPRESENTATIVE_NAME}, "
         f"{ISSUER_REPRESENTATIVE_TITLE}, dûment autorisé tel "
-        f"qu'il le déclare en signant (ci-après la « Sociét�� » ou "
+        f"qu'il le déclare en signant (ci-après la « Société » ou "
         f"« <b>MGV</b> »);",
         s["body"],
     ))
@@ -401,19 +396,6 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
         "Collectivement désignés les « <b>Parties</b> ».",
         s["body"],
     ))
-
-    # --- Encart optionnel "Opportunité visée" ---
-    if property_address:
-        story.append(Spacer(1, 6))
-        story.append(Paragraph(
-            f"<b>Opportunité visée :</b> à titre informatif, "
-            f"l'Opportunité initialement considérée par les "
-            f"Parties concerne l'immeuble situé au "
-            f"<b>{property_address}</b>. Les obligations du "
-            f"présent Accord s'appliquent néanmoins à toute "
-            f"Opportunité partagée par MGV au Récepteur.",
-            s["opportunity"],
-        ))
 
     # --- Préambule ---
     story.append(Spacer(1, 8))
@@ -524,7 +506,7 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
               "divulgation, sans qu'il y ait eu bris du présent "
               "Accord par la Partie Réceptrice ou ses "
               "Représentants;"),
-        ("c", "Les informations re��ues légitimement d'un tiers sans "
+        ("c", "Les informations reçues légitimement d'un tiers sans "
               "obligation de confidentialité et sans bris d'une "
               "obligation de confidentialité;"),
         ("d", "Les informations dont la divulgation est "
@@ -625,7 +607,7 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
     story.append(Paragraph(
         "Tous les droits, titres et intérêts relatifs aux "
         "Informations Confidentielles, ainsi qu'à tous les supports "
-        "les contenant, demeurent la propriét�� exclusive de la "
+        "les contenant, demeurent la propriété exclusive de la "
         "Partie Divulgatrice. Le présent Accord ne concède aucun "
         "droit de licence, de propriété intellectuelle ou de "
         "quelque autre nature à la Partie Réceptrice.",
@@ -684,7 +666,7 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
         "<b>9.2</b> En cas de violation du présent Accord par la "
         "Partie Réceptrice ou ses Représentants, la Société pourra "
         "obtenir, sans préjudice de ses autres recours et de "
-        "mani��re cumulative :",
+        "manière cumulative :",
         s["body"],
     ))
     for letter, text in [
@@ -708,10 +690,10 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
               "ou frais de gestion que la Société aurait perçus si "
               "la transaction avait été conclue avec sa "
               "participation;"),
-        ("d", "Le remboursement int��gral de tous les frais et "
+        ("d", "Le remboursement intégral de tous les frais et "
               "honoraires (juridiques, judiciaires, "
               "extrajudiciaires, expertises, et autres) engagés par "
-              "la Sociét�� pour faire valoir ses droits aux termes "
+              "la Société pour faire valoir ses droits aux termes "
               "du présent Accord."),
     ]:
         story.append(Paragraph(f"({letter}) {text}", s["body_l1"]))
@@ -732,7 +714,7 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
     story.append(Paragraph("10. DIVULGATION OBLIGATOIRE", s["section"]))
     story.append(Paragraph(
         "Si la Partie Réceptrice est légalement tenue (par loi, "
-        "ordonnance judiciaire, ou autorité r��glementaire) de "
+        "ordonnance judiciaire, ou autorité réglementaire) de "
         "divulguer des Informations Confidentielles, elle devra :",
         s["body"],
     ))
@@ -826,36 +808,28 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
     # `assets/mgv_signature.png` existe, on l'affiche au-dessus du
     # nom. Sinon (ou si l'image plante au chargement / décodage),
     # on laisse un Spacer vide de même hauteur — pas de placeholder
-    # texte « [signature] ».
-    #
-    # ⚠️ Anti-bug reportlab : on précharge l'image via PIL avec le
-    # PATH (pas un file handle ouvert dans un `with` qui ferme le
-    # fh derrière), parce que reportlab `ImageReader` peut conserver
-    # une référence au fh fermé et planter au build avec un message
-    # opaque type `SyntaxError: \nidentity=[ImageReader@... filename=...] broken`.
-    # On dimensionne explicitement width/height (en respectant le
-    # ratio source) plutôt que `kind="proportional"` qui force
-    # reportlab à refaire un calcul PIL au build et risque de
-    # re-déclencher le bug.
-    mgv_signature_block: Any = Spacer(1, 18 * mm)
+    # texte « [signature] ». Cette robustesse est CRITIQUE : si le
+    # PNG est mal formé, reportlab plante au moment de `doc.build()`
+    # (lazy load), donc on force ici un préchargement via ImageReader
+    # afin d'attraper l'exception immédiatement.
+    mgv_signature_block: Any
+    mgv_signature_block = Spacer(1, 22 * mm)
     if os.path.exists(MGV_SIGNATURE_IMAGE_PATH):
         try:
-            # Préchargement via PIL avec le path direct — pas de
-            # file handle à gérer, et PIL ferme proprement après lecture.
-            from PIL import Image as PILImage  # type: ignore
+            # Préchargement strict via ImageReader : force le décodage
+            # du PNG ici plutôt qu'à `doc.build()`. Si le fichier est
+            # corrompu / format inattendu, l'exception est levée et
+            # attrapée localement — pas en plein milieu du rendu.
+            from reportlab.lib.utils import ImageReader  # type: ignore
 
-            with PILImage.open(MGV_SIGNATURE_IMAGE_PATH) as _probe:
-                _probe.load()
-                src_w, src_h = _probe.size
-            # Largeur cible 40 mm. On calcule la hauteur en gardant
-            # le ratio source — évite d'utiliser `kind="proportional"`
-            # qui re-décode l'image au build.
-            target_w_mm = 40.0
-            target_h_mm = target_w_mm * (src_h / src_w) if src_w else 18.0
+            with open(MGV_SIGNATURE_IMAGE_PATH, "rb") as fh:
+                _probe = ImageReader(fh)
+                _probe.getSize()
             mgv_signature_block = Image(
                 MGV_SIGNATURE_IMAGE_PATH,
-                width=target_w_mm * mm,
-                height=target_h_mm * mm,
+                width=70 * mm,
+                height=22 * mm,
+                kind="proportional",
             )
         except Exception as exc:
             log.warning(
@@ -863,18 +837,13 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
                 MGV_SIGNATURE_IMAGE_PATH,
                 exc,
             )
-            mgv_signature_block = Spacer(1, 18 * mm)
+            mgv_signature_block = Spacer(1, 22 * mm)
 
-    # Bloc MGV : on empile image + Paragraphs dans un `KeepTogether`
-    # pour éviter que reportlab tente d'étaler le contenu sur deux
-    # pages au milieu d'une cellule de Table (cas pathologique qui
-    # peut déclencher le rendu boguée de l'Image flowable).
-    KeepTogether = rl["KeepTogether"]
     sig_left = [
         Paragraph(f"<b>{ISSUER_ENTITY_NAME}</b>", s["small"]),
         Spacer(1, 6),
         mgv_signature_block,
-        Spacer(1, 2),
+        Spacer(1, 4),
         Paragraph(f"Par : {ISSUER_REPRESENTATIVE_NAME}", s["small"]),
         Paragraph(f"Titre : {ISSUER_REPRESENTATIVE_TITLE}", s["small"]),
         Paragraph(
@@ -885,7 +854,6 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
         Paragraph(f"Courriel : {ISSUER_EMAIL}", s["small"]),
         Paragraph(f"Téléphone : {ISSUER_PHONE}", s["small"]),
     ]
-    sig_left = [KeepTogether(sig_left)]
 
     signed_at_label = (
         _date_fr_ca_long(nda.signed_at) if nda.signed_at else "_____________________"
