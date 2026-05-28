@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   Ban,
   CheckCircle2,
+  Download,
   Flame,
   Info,
   Loader2,
@@ -316,6 +317,56 @@ export function LeadAnalysisDetailModal({
     }
   }, [data?.typology_json]);
 
+  // ── Export PDF de la fiche d'analyse ──────────────────────────
+  // Pattern `openAuthedPdf` repris de `nda-section.tsx` (PR #526) :
+  // le browser ne joint pas le header `Authorization` sur une nav
+  // top-level, donc on fetch en blob puis on ouvre une URL blob.
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfToast, setPdfToast] = useState<{
+    text: string;
+    kind: "ok" | "err";
+  } | null>(null);
+
+  useEffect(() => {
+    if (!pdfToast || pdfToast.kind === "err") return;
+    const t = setTimeout(() => setPdfToast(null), 4000);
+    return () => clearTimeout(t);
+  }, [pdfToast]);
+
+  async function downloadPdf() {
+    if (pdfBusy) return;
+    setPdfBusy(true);
+    setPdfToast(null);
+    try {
+      const r = await authedFetch(
+        `/api/v1/lead-analyses/${analysisId}/pdf`
+      );
+      if (!r.ok) {
+        const detail = await r
+          .json()
+          .then((j: { detail?: string }) => j.detail || `HTTP ${r.status}`)
+          .catch(() => `HTTP ${r.status}`);
+        setPdfToast({
+          text: `Génération PDF échouée : ${detail}`,
+          kind: "err"
+        });
+        return;
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      setPdfToast({ text: "PDF généré.", kind: "ok" });
+    } catch (e) {
+      setPdfToast({
+        text: `Génération PDF échouée : ${(e as Error).message}`,
+        kind: "err"
+      });
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
   if (!open) return null;
 
   return (
@@ -351,6 +402,20 @@ export function LeadAnalysisDetailModal({
             ) : null}
             <button
               type="button"
+              onClick={() => void downloadPdf()}
+              disabled={pdfBusy || !data}
+              title="Télécharger la fiche complète en PDF"
+              className="inline-flex items-center gap-1 rounded-md border border-blue-500/30 bg-blue-500/10 px-2 py-1 text-[11px] font-medium text-blue-300 transition hover:bg-blue-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {pdfBusy ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Download className="h-3 w-3" />
+              )}
+              {pdfBusy ? "Génération…" : "PDF"}
+            </button>
+            <button
+              type="button"
               onClick={onClose}
               className="rounded-md p-1 text-white/60 hover:bg-brand-900 hover:text-white"
               aria-label="Fermer"
@@ -359,6 +424,32 @@ export function LeadAnalysisDetailModal({
             </button>
           </div>
         </header>
+        {pdfToast ? (
+          <div
+            className={`flex items-start gap-2 border-b border-brand-800 px-5 py-2 text-[11px] ${
+              pdfToast.kind === "ok"
+                ? "bg-emerald-500/10 text-emerald-300"
+                : "bg-rose-500/10 text-rose-300"
+            }`}
+          >
+            {pdfToast.kind === "ok" ? (
+              <CheckCircle2 className="h-3 w-3 flex-shrink-0" />
+            ) : (
+              <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+            )}
+            <p className="flex-1">{pdfToast.text}</p>
+            {pdfToast.kind === "err" ? (
+              <button
+                type="button"
+                onClick={() => setPdfToast(null)}
+                className="ml-1 shrink-0 text-rose-300 hover:text-rose-100"
+                aria-label="Fermer le message"
+              >
+                ✕
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {loading ? (
