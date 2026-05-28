@@ -32,7 +32,7 @@ from typing import Optional
 # Émetteur du NDA — MGV Développement (Phil & co).
 ISSUER_ENTITY_NAME = "MGV DÉVELOPPEMENT INC."
 ISSUER_ENTITY_ADDRESS = (
-    "216 rue Louis-Lalande, Boucherville (Québec) J4B 2C1"
+    "1707 rue des Harfangs, Saint-Lin--Laurentides (Québec) J5M 1A7"
 )
 ISSUER_REPRESENTATIVE_NAME = "Philippe Meuser"
 ISSUER_REPRESENTATIVE_TITLE = "Président"
