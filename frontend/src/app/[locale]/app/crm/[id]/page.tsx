@@ -17,6 +17,7 @@ import {
   MapPin,
   Pencil,
   Phone,
+  RefreshCw,
   Ruler,
   Trash2,
   User,
@@ -112,6 +113,7 @@ export default function ProspectDetailPage() {
   const [notes, setNotes] = useState("");
   const [savingNotes, setSavingNotes] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [refreshingFb, setRefreshingFb] = useState(false);
   const [users, setUsers] = useState<
     { id: number; email: string; first_name?: string | null; last_name?: string | null }[]
   >([]);
@@ -270,6 +272,40 @@ export default function ProspectDetailPage() {
     }
   }
 
+  async function refreshFromFacebook() {
+    if (!p) return;
+    setRefreshingFb(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/webhooks/facebook-lead/reprocess/${id}`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const txt = await res.text();
+        let detail = txt;
+        try {
+          const j = JSON.parse(txt) as { detail?: string };
+          if (j.detail) detail = j.detail;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail.slice(0, 240));
+      }
+      // Recharge la fiche pour refleter les nouveaux champs
+      const reload = await authedFetch(`/api/v1/contact/${id}`);
+      if (reload.ok) {
+        const data = (await reload.json()) as Prospect;
+        setP(data);
+        setNotes(data.internal_notes || "");
+      }
+    } catch (e) {
+      setError(`Rafraichissement Facebook echoue : ${(e as Error).message}`);
+    } finally {
+      setRefreshingFb(false);
+    }
+  }
+
   return (
     <>
       <AppTopbar
@@ -363,6 +399,22 @@ export default function ProspectDetailPage() {
                   <FileText className="mr-1.5 h-4 w-4" />
                   Créer soumission
                 </Link>
+                {p.source === "facebook" ? (
+                  <button
+                    type="button"
+                    onClick={refreshFromFacebook}
+                    disabled={refreshingFb}
+                    className="inline-flex items-center gap-2 rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2.5 text-sm font-medium text-sky-300 transition hover:bg-sky-500/20 hover:text-sky-200 disabled:opacity-50"
+                    title="Re-récupère les données du lead depuis Meta et applique le mapping courant"
+                  >
+                    {refreshingFb ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4" />
+                    )}
+                    Rafraîchir depuis Meta
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={deleteProspect}

@@ -28,13 +28,14 @@ import hmac
 import json
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from sqlalchemy import select
 
-from app.api.deps import DBSession
+from app.api.deps import DBSession, RequireManager
 from app.models.contact_request import (
     ContactRequest,
     ContactRequestStatus,
@@ -300,147 +301,11 @@ async def receive_facebook_lead(
                 continue
             field_data = detail.get("field_data") or []
 
-            # Coordonnees. Les variantes couvrent le formulaire site
-            # public (full_name, email, phone) et le formulaire FB Lead
-            # Ads francophone (nom_complet, e-mail, numero_de_telephone).
-            name = (
-                _extract_field(
-                    field_data,
-                    "nom_complet", "nom", "full_name", "name",
-                )
-                or "Lead Facebook"
+            fields = _build_fields_from_lead_detail(
+                detail, leadgen_id, value=value
             )
-            email = (
-                _extract_field(field_data, "e_mail", "email", "courriel")
-                or ""
-            )
-            phone = (
-                _extract_field(
-                    field_data,
-                    "numero_de_telephone", "numero_telephone",
-                    "telephone", "phone_number", "phone", "numero",
-                )
-                or ""
-            )
-            address = _extract_field(
-                field_data, "adresse", "address", "street_address"
-            )
-            budget = _extract_field(
-                field_data, "budget", "budget_range"
-            )
-
-            # Type de projet : mapping explicite + heuristique de
-            # fallback. Le formulaire FB courant ne propose que des
-            # options multilogement (Duplex/Triplex, 4-6 logements,
-            # 7+ logements, plusieurs immeubles) donc toute reponse
-            # contenant "logement", "duplex", "triplex" ou "immeuble"
-            # tombe sur multilogement.
-            pt_raw = _extract_field(
-                field_data,
-                "quel_type_d_immeuble",
-                "type_d_immeuble",
-                "type_de_projet",
-                "type_projet",
-                "project_type",
-                "type_travaux",
-            )
-            project_type = _map_project_type(pt_raw)
-
-            # Reponses qualifiantes (intention, urgence, decideur). On
-            # les sort en tete du message pour qu'elles sautent aux
-            # yeux du conseiller dans la fiche prospect.
-            qualifiers: List[tuple[str, Optional[str]]] = [
-                (
-                    "Propriétaire/décideur",
-                    _extract_field(
-                        field_data,
-                        "proprietaire_ou_decideur",
-                        "decideur",
-                        "proprietaire",
-                    ),
-                ),
-                (
-                    "Type d'immeuble",
-                    pt_raw,
-                ),
-                (
-                    "Intention",
-                    _extract_field(
-                        field_data,
-                        "qu_est_ce_qui_vous_amene",
-                        "intention",
-                    ),
-                ),
-                (
-                    "Échéancier",
-                    _extract_field(
-                        field_data,
-                        "quand_souhaiteriez_vous_demarrer",
-                        "quand_demarrer",
-                        "echeancier",
-                        "delai",
-                    ),
-                ),
-                (
-                    "Région",
-                    _extract_field(
-                        field_data,
-                        "dans_quel_region", "region",
-                    ),
-                ),
-            ]
-
-            lines: List[str] = [
-                "Demande captée via formulaire Facebook (Lead Ads).",
-                "",
-                "Qualification :",
-            ]
-            for label, val in qualifiers:
-                if val:
-                    lines.append(f"- {label} : {val}")
-            # Dump complet des champs captes en bas pour tracabilite
-            # (utile si le formulaire est etendu sans qu'on update le
-            # mapping ici).
-            lines.append("")
-            lines.append("Champs bruts :")
-            for fd in field_data:
-                fname = fd.get("name") or ""
-                fvalues = fd.get("values") or []
-                if fname and fvalues:
-                    lines.append(
-                        f"- {fname} : "
-                        f"{', '.join(str(v) for v in fvalues)}"
-                    )
-            ad_id = detail.get("ad_id") or value.get("ad_id")
-            form_id = detail.get("form_id") or value.get("form_id")
-            if ad_id:
-                lines.append(f"- ad_id : {ad_id}")
-            if form_id:
-                lines.append(f"- form_id : {form_id}")
-            lines.append("")
-            lines.append(f"[leadgen_id={leadgen_id}]")
-            message = "\n".join(lines)
-
-            # Courriel synthétique si Facebook n'en fournit pas
-            # (rare). Respecte la contrainte NOT NULL de la colonne
-            # et reste identifiable côté CRM.
-            if not email or "@" not in email:
-                sanitized = (
-                    "".join(
-                        c for c in (phone or leadgen_id) if c.isalnum()
-                    )
-                    or leadgen_id
-                )
-                email = f"fb{sanitized}@facebook-lead.local"
-
             cr = ContactRequest(
-                name=name[:255],
-                email=email[:320],
-                phone=phone[:50] if phone else None,
-                address=address,
-                project_type=project_type,
-                budget_range=budget,
-                message=message[:5000],
+                **fields,
                 locale="fr",
                 source="facebook",
                 gdpr_consent=True,
@@ -451,3 +316,201 @@ async def receive_facebook_lead(
             created += 1
 
     return {"received": created}
+
+
+def _build_fields_from_lead_detail(
+    detail: Dict[str, Any],
+    leadgen_id: str,
+    *,
+    value: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Extrait + mappe les champs FB Lead Ads vers les colonnes d'un
+    ContactRequest. Retourne un dict pret a appliquer (insert ou
+    update). Utilise par le webhook initial et par l'endpoint de
+    reprocess.
+    """
+    field_data = detail.get("field_data") or []
+    value = value or {}
+
+    # Coordonnees. Les variantes couvrent le formulaire site public
+    # (full_name, email, phone) et le formulaire FB Lead Ads
+    # francophone (nom_complet, e-mail, numero_de_telephone).
+    name = (
+        _extract_field(
+            field_data, "nom_complet", "nom", "full_name", "name",
+        )
+        or "Lead Facebook"
+    )
+    email = (
+        _extract_field(field_data, "e_mail", "email", "courriel") or ""
+    )
+    phone = (
+        _extract_field(
+            field_data,
+            "numero_de_telephone", "numero_telephone",
+            "telephone", "phone_number", "phone", "numero",
+        )
+        or ""
+    )
+    address = _extract_field(
+        field_data, "adresse", "address", "street_address"
+    )
+    budget = _extract_field(field_data, "budget", "budget_range")
+
+    # Type de projet : mapping explicite + heuristique de fallback.
+    # Le formulaire FB courant ne propose que des options multilogement
+    # (Duplex/Triplex, 4-6 logements, 7+ logements, plusieurs
+    # immeubles) donc toute reponse contenant "logement", "duplex",
+    # "triplex" ou "immeuble" tombe sur multilogement.
+    pt_raw = _extract_field(
+        field_data,
+        "quel_type_d_immeuble",
+        "type_d_immeuble",
+        "type_de_projet",
+        "type_projet",
+        "project_type",
+        "type_travaux",
+    )
+    project_type = _map_project_type(pt_raw)
+
+    # Reponses qualifiantes (intention, urgence, decideur). On les
+    # sort en tete du message pour qu'elles sautent aux yeux du
+    # conseiller dans la fiche prospect.
+    qualifiers: List[tuple[str, Optional[str]]] = [
+        (
+            "Propriétaire/décideur",
+            _extract_field(
+                field_data,
+                "proprietaire_ou_decideur",
+                "decideur",
+                "proprietaire",
+            ),
+        ),
+        ("Type d'immeuble", pt_raw),
+        (
+            "Intention",
+            _extract_field(
+                field_data,
+                "qu_est_ce_qui_vous_amene",
+                "intention",
+            ),
+        ),
+        (
+            "Échéancier",
+            _extract_field(
+                field_data,
+                "quand_souhaiteriez_vous_demarrer",
+                "quand_demarrer",
+                "echeancier",
+                "delai",
+            ),
+        ),
+        (
+            "Région",
+            _extract_field(
+                field_data, "dans_quel_region", "region",
+            ),
+        ),
+    ]
+
+    lines: List[str] = [
+        "Demande captée via formulaire Facebook (Lead Ads).",
+        "",
+        "Qualification :",
+    ]
+    for label, val in qualifiers:
+        if val:
+            lines.append(f"- {label} : {val}")
+    lines.append("")
+    lines.append("Champs bruts :")
+    for fd in field_data:
+        fname = fd.get("name") or ""
+        fvalues = fd.get("values") or []
+        if fname and fvalues:
+            lines.append(
+                f"- {fname} : {', '.join(str(v) for v in fvalues)}"
+            )
+    ad_id = detail.get("ad_id") or value.get("ad_id")
+    form_id = detail.get("form_id") or value.get("form_id")
+    if ad_id:
+        lines.append(f"- ad_id : {ad_id}")
+    if form_id:
+        lines.append(f"- form_id : {form_id}")
+    lines.append("")
+    lines.append(f"[leadgen_id={leadgen_id}]")
+    message = "\n".join(lines)
+
+    # Courriel synthetique si Facebook n'en fournit pas (rare).
+    # Respecte la contrainte NOT NULL de la colonne et reste
+    # identifiable cote CRM.
+    if not email or "@" not in email:
+        sanitized = (
+            "".join(
+                c for c in (phone or leadgen_id) if c.isalnum()
+            )
+            or leadgen_id
+        )
+        email = f"fb{sanitized}@facebook-lead.local"
+
+    return {
+        "name": name[:255],
+        "email": email[:320],
+        "phone": phone[:50] if phone else None,
+        "address": address,
+        "project_type": project_type,
+        "budget_range": budget,
+        "message": message[:5000],
+    }
+
+
+_LEADGEN_ID_RE = re.compile(r"\[leadgen_id=(\d+)\]")
+
+
+@router.post("/facebook-lead/reprocess/{contact_request_id}")
+async def reprocess_facebook_lead(
+    contact_request_id: int,
+    db: DBSession,
+    user: RequireManager,
+) -> dict:
+    """Re-fetch le lead depuis Meta Graph API et re-applique le
+    mapping courant sur le ``ContactRequest`` existant. Utile apres
+    une mise a jour du mapping pour rafraichir un lead deja capte
+    avec l'ancien code. Limite aux ``source=facebook`` qui contiennent
+    encore leur ``leadgen_id`` dans le message.
+    """
+    cr = await db.get(ContactRequest, contact_request_id)
+    if cr is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Prospect introuvable."
+        )
+    if cr.source != "facebook":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Ce prospect ne vient pas de Facebook.",
+        )
+    match = _LEADGEN_ID_RE.search(cr.message or "")
+    if match is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "leadgen_id introuvable dans le message — impossible de "
+            "re-fetcher depuis Meta.",
+        )
+    leadgen_id = match.group(1)
+
+    detail = await _fetch_lead_detail(leadgen_id)
+    if detail is None:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            "Echec du fetch Graph API — verifie META_PAGE_ACCESS_TOKEN "
+            "et que le lead est toujours disponible cote Meta (90 jours).",
+        )
+
+    fields = _build_fields_from_lead_detail(detail, leadgen_id)
+    for key, val in fields.items():
+        setattr(cr, key, val)
+    await db.flush()
+    return {
+        "reprocessed": True,
+        "leadgen_id": leadgen_id,
+        "contact_request_id": cr.id,
+    }
