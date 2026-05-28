@@ -154,25 +154,76 @@ async def _fetch_lead_detail(leadgen_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _normalize_field_name(s: str) -> str:
+    """Normalise un nom (ou valeur) de champ pour matching robuste :
+    bas-de-casse, accents stries, tout caractere non alphanumerique
+    devient un underscore, runs d'underscores collapses.
+
+    Ex: ``Quel type d'immeuble souhaitez-vous faire renover ?``
+        -> ``quel_type_d_immeuble_souhaitez_vous_faire_renover``
+    """
+    import unicodedata
+
+    no_accents = "".join(
+        c for c in unicodedata.normalize("NFD", s or "")
+        if unicodedata.category(c) != "Mn"
+    ).lower()
+    cleaned = "".join(c if c.isalnum() else "_" for c in no_accents)
+    while "__" in cleaned:
+        cleaned = cleaned.replace("__", "_")
+    return cleaned.strip("_")
+
+
 def _extract_field(
     field_data: List[Dict[str, Any]], *names: str
 ) -> Optional[str]:
-    """Trouve dans ``field_data`` la première valeur pour l'un des
-    noms de champ donnés (insensible à la casse / séparateurs).
+    """Trouve dans ``field_data`` la premiere valeur dont le nom
+    contient l'un des libelles donnes (match par sous-chaine sur
+    nom normalise — accents stries, ponctuation -> underscore).
 
     Meta retourne ``field_data`` sous la forme
     ``[{"name": "...", "values": ["..."]}, ...]`` — les noms peuvent
-    varier d'un formulaire à l'autre.
+    varier d'un formulaire a l'autre, parfois avec apostrophes /
+    points d'interrogation / accents qui cassent le matching exact.
     """
-    targets = {n.lower().replace("-", "_").replace(" ", "_") for n in names}
+    targets = [_normalize_field_name(n) for n in names if n]
+    targets = [t for t in targets if t]
     for fd in field_data or []:
-        raw = (fd.get("name") or "").lower()
-        norm = raw.replace("-", "_").replace(" ", "_")
-        if norm in targets or raw in targets:
+        norm = _normalize_field_name(fd.get("name") or "")
+        if any(t in norm for t in targets):
             values = fd.get("values") or []
             if values:
                 return str(values[0])
     return None
+
+
+def _map_project_type(raw: Optional[str]) -> str:
+    """Mappe une reponse texte FB/web vers une valeur de ProjectType.
+
+    1. Lookup exact dans ``_PROJECT_TYPE_MAP`` apres normalisation.
+    2. Heuristique : recherche de mots-cles (logement, duplex, cuisine,
+       salle bain, etc.) dans la chaine normalisee.
+    3. Defaut ``autre``.
+    """
+    if not raw:
+        return ProjectType.AUTRE.value
+    norm = _normalize_field_name(raw)
+    if norm in _PROJECT_TYPE_MAP:
+        return _PROJECT_TYPE_MAP[norm]
+    # Heuristique mot-cle. Multilogement couvre toutes les options du
+    # formulaire FB courant (duplex/triplex, 4-6 logements, etc.).
+    if any(
+        k in norm
+        for k in ("logement", "duplex", "triplex", "immeuble", "multi")
+    ):
+        return ProjectType.MULTILOGEMENT.value
+    if "salle" in norm and "bain" in norm:
+        return ProjectType.SALLE_BAIN.value
+    if "cuisine" in norm:
+        return ProjectType.CUISINE.value
+    if "complet" in norm:
+        return ProjectType.RENOVATION_COMPLETE.value
+    return ProjectType.AUTRE.value
 
 
 _PROJECT_TYPE_MAP = {
@@ -249,36 +300,109 @@ async def receive_facebook_lead(
                 continue
             field_data = detail.get("field_data") or []
 
+            # Coordonnees. Les variantes couvrent le formulaire site
+            # public (full_name, email, phone) et le formulaire FB Lead
+            # Ads francophone (nom_complet, e-mail, numero_de_telephone).
             name = (
-                _extract_field(field_data, "full_name", "name")
+                _extract_field(
+                    field_data,
+                    "nom_complet", "nom", "full_name", "name",
+                )
                 or "Lead Facebook"
             )
-            email = _extract_field(field_data, "email") or ""
-            phone = _extract_field(
-                field_data, "phone_number", "phone"
-            ) or ""
+            email = (
+                _extract_field(field_data, "e_mail", "email", "courriel")
+                or ""
+            )
+            phone = (
+                _extract_field(
+                    field_data,
+                    "numero_de_telephone", "numero_telephone",
+                    "telephone", "phone_number", "phone", "numero",
+                )
+                or ""
+            )
             address = _extract_field(
                 field_data, "adresse", "address", "street_address"
             )
-            project_type_raw = (
-                _extract_field(
-                    field_data,
-                    "type_de_projet",
-                    "type_projet",
-                    "project_type",
-                    "type_travaux",
-                )
-                or ""
-            ).lower()
             budget = _extract_field(
                 field_data, "budget", "budget_range"
             )
 
-            # Message lisible pour la fiche kanban — on dump tous les
-            # champs captés, dans leur ordre d'apparition.
-            lines: List[str] = [
-                "Demande captée via formulaire Facebook (Lead Ads)."
+            # Type de projet : mapping explicite + heuristique de
+            # fallback. Le formulaire FB courant ne propose que des
+            # options multilogement (Duplex/Triplex, 4-6 logements,
+            # 7+ logements, plusieurs immeubles) donc toute reponse
+            # contenant "logement", "duplex", "triplex" ou "immeuble"
+            # tombe sur multilogement.
+            pt_raw = _extract_field(
+                field_data,
+                "quel_type_d_immeuble",
+                "type_d_immeuble",
+                "type_de_projet",
+                "type_projet",
+                "project_type",
+                "type_travaux",
+            )
+            project_type = _map_project_type(pt_raw)
+
+            # Reponses qualifiantes (intention, urgence, decideur). On
+            # les sort en tete du message pour qu'elles sautent aux
+            # yeux du conseiller dans la fiche prospect.
+            qualifiers: List[tuple[str, Optional[str]]] = [
+                (
+                    "Propriétaire/décideur",
+                    _extract_field(
+                        field_data,
+                        "proprietaire_ou_decideur",
+                        "decideur",
+                        "proprietaire",
+                    ),
+                ),
+                (
+                    "Type d'immeuble",
+                    pt_raw,
+                ),
+                (
+                    "Intention",
+                    _extract_field(
+                        field_data,
+                        "qu_est_ce_qui_vous_amene",
+                        "intention",
+                    ),
+                ),
+                (
+                    "Échéancier",
+                    _extract_field(
+                        field_data,
+                        "quand_souhaiteriez_vous_demarrer",
+                        "quand_demarrer",
+                        "echeancier",
+                        "delai",
+                    ),
+                ),
+                (
+                    "Région",
+                    _extract_field(
+                        field_data,
+                        "dans_quel_region", "region",
+                    ),
+                ),
             ]
+
+            lines: List[str] = [
+                "Demande captée via formulaire Facebook (Lead Ads).",
+                "",
+                "Qualification :",
+            ]
+            for label, val in qualifiers:
+                if val:
+                    lines.append(f"- {label} : {val}")
+            # Dump complet des champs captes en bas pour tracabilite
+            # (utile si le formulaire est etendu sans qu'on update le
+            # mapping ici).
+            lines.append("")
+            lines.append("Champs bruts :")
             for fd in field_data:
                 fname = fd.get("name") or ""
                 fvalues = fd.get("values") or []
@@ -308,11 +432,6 @@ async def receive_facebook_lead(
                     or leadgen_id
                 )
                 email = f"fb{sanitized}@facebook-lead.local"
-
-            project_type = _PROJECT_TYPE_MAP.get(
-                project_type_raw.replace(" ", "_"),
-                ProjectType.AUTRE.value,
-            )
 
             cr = ContactRequest(
                 name=name[:255],
