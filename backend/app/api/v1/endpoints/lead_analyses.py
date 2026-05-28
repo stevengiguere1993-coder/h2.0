@@ -1129,7 +1129,7 @@ async def export_offre_investissement(
                 photo_attachment_ids.append(p.attachment_id)
 
     try:
-        pptx_bytes = await generate_offre_investissement_pptx(
+        pptx_bytes, template_version = await generate_offre_investissement_pptx(
             db=db,
             analysis_id=analysis_id,
             value_add_strategy=body.value_add_strategy,
@@ -1164,6 +1164,7 @@ async def export_offre_investissement(
             details={
                 "filename": filename,
                 "size_bytes": len(pptx_bytes),
+                "template_version": template_version,
                 "value_add_keys": sorted(
                     body.value_add_strategy.keys()
                 )
@@ -1189,8 +1190,27 @@ async def export_offre_investissement(
                 f'attachment; filename="{filename}"'
             ),
             "Content-Length": str(len(pptx_bytes)),
+            "X-Template-Version": template_version,
         },
     )
+
+
+@router.get(
+    "/offre-investissement/catalogue-renovations",
+    summary=(
+        "Retourne le catalogue de rénovations cochables pour la slide 9 "
+        "du template v2 (utilisé par le wizard frontend)."
+    ),
+)
+async def get_offre_renovations_catalogue(user: CurrentUser) -> dict:
+    """Endpoint statique : expose la liste ``RENOVATIONS_CATALOGUE`` du
+    service ``offre_investissement_pptx``. Le wizard l'appelle au mount
+    pour afficher les checkboxes de la section value-add."""
+    _require_prospection(user)
+    from app.services.offre_investissement_pptx import (
+        get_renovations_catalogue,
+    )
+    return {"items": get_renovations_catalogue()}
 
 
 # ── Analyse financière (Phase 3b) ──────────────────────────────────
