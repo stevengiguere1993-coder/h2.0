@@ -52,6 +52,11 @@ reportlab>=4.0.0,<5.0.0
 # PDF parsing (JLR import). Pure Python.
 pypdf>=4.0.0,<6.0.0
 
+# PPTX generation (offre d'investissement Horizon — chantier mai 2026).
+# Permet de cloner un template .pptx et substituer les placeholders en
+# préservant polices/couleurs/charts. Pure Python, pas de dépendance OS.
+python-pptx>=0.6.21,<2.0.0
+
 # WebPush — notifications push navigateur (PWA). Sert à réveiller
 # l'utilisateur sur son téléphone pour les appels entrants, SMS et
 # urgences locataires, même quand l'app est fermée.

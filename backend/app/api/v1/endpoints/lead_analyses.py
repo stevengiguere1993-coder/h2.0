@@ -1031,6 +1031,168 @@ async def export_pdf(
     )
 
 
+# ── Offre d'investissement PPTX (Phase Offre 2026) ─────────────────
+
+
+class OffreInvestissementPhotoIn(BaseModel):
+    """Photo brute pour l'offre (base64 ou ID d'attachment existant)."""
+    model_config = ConfigDict(extra="forbid")
+
+    base64_data: Optional[str] = Field(
+        default=None,
+        description=(
+            "Photo encodée base64 (sans préfixe data:image/...). "
+            "Alternative : `attachment_id`."
+        ),
+    )
+    attachment_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "Si fourni, on utilise le blob d'un `LeadAnalysisAttachment` "
+            "déjà uploadé sur cette fiche."
+        ),
+    )
+
+
+class OffreInvestissementRequest(BaseModel):
+    """Inputs du wizard frontend."""
+    model_config = ConfigDict(extra="forbid")
+
+    value_add_strategy: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Inputs humains : tagline, bullets, flags value-add, programme "
+            "SCHL, etc. Schéma libre — interprété par "
+            "`offre_investissement_pptx.ValueAddStrategy.from_dict`."
+        ),
+    )
+    photos: Optional[List[OffreInvestissementPhotoIn]] = Field(
+        default=None,
+        description=(
+            "Liste ordonnée des photos (cover, exterieur, carte). MVP : "
+            "3 photos max. Si vide, les photos par défaut du template sont "
+            "conservées."
+        ),
+    )
+
+
+@router.post(
+    "/{analysis_id}/offre-investissement",
+    summary=(
+        "Génère un .pptx d'offre d'investissement Horizon "
+        "(template horizon_v1)."
+    ),
+)
+async def export_offre_investissement(
+    analysis_id: int,
+    body: OffreInvestissementRequest,
+    db: DBSession,
+    user: CurrentUser,
+):
+    """Génère à la volée le `.pptx` d'offre d'investissement pour la fiche.
+
+    Combine :
+      * Variables auto (~30 champs depuis la `LeadAnalysis`)
+      * Variables hybrides (résultats du moteur d'analyse financière le
+        plus récent)
+      * Inputs humains du wizard (tagline, bullets, flags value-add)
+      * Jusqu'à 3 photos (uploadées ou choisies parmi les attachments)
+
+    Aucune persistance. Audit log : `lead_analysis.offre_investissement_generated`.
+    """
+    import base64 as _b64
+
+    _require_prospection(user)
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+
+    from app.services.offre_investissement_pptx import (
+        generate_offre_investissement_pptx,
+        offre_investissement_pptx_filename,
+    )
+
+    # Resolve photos
+    photo_bytes: list[bytes] = []
+    photo_attachment_ids: list[int] = []
+    if body.photos:
+        for p in body.photos[:3]:  # MVP : max 3 photos
+            if p.base64_data:
+                try:
+                    photo_bytes.append(_b64.b64decode(p.base64_data))
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Photo base64 invalide : {exc}",
+                    ) from exc
+            elif p.attachment_id is not None:
+                photo_attachment_ids.append(p.attachment_id)
+
+    try:
+        pptx_bytes = await generate_offre_investissement_pptx(
+            db=db,
+            analysis_id=analysis_id,
+            value_add_strategy=body.value_add_strategy,
+            photos=photo_bytes if photo_bytes else None,
+            photo_attachment_ids=(
+                photo_attachment_ids if photo_attachment_ids else None
+            ),
+        )
+    except ValueError as exc:
+        log.exception(
+            "Génération offre PPTX fiche %s échouée", analysis_id
+        )
+        raise HTTPException(502, f"Génération PPTX échouée : {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        log.exception(
+            "Erreur inattendue lors de la génération de l'offre PPTX %s",
+            analysis_id,
+        )
+        raise HTTPException(
+            500, f"Erreur inattendue : {exc}"
+        ) from exc
+
+    filename = offre_investissement_pptx_filename(rec)
+
+    try:
+        await log_action(
+            db,
+            user=user,
+            action="lead_analysis.offre_investissement_generated",
+            entity_type="lead_analysis",
+            entity_id=rec.id,
+            details={
+                "filename": filename,
+                "size_bytes": len(pptx_bytes),
+                "value_add_keys": sorted(
+                    body.value_add_strategy.keys()
+                )
+                if body.value_add_strategy
+                else [],
+                "n_photos": len(photo_bytes) + len(photo_attachment_ids),
+            },
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "Audit log lead_analysis.offre_investissement_generated échoué"
+        )
+
+    return Response(
+        content=pptx_bytes,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument."
+            "presentationml.presentation"
+        ),
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{filename}"'
+            ),
+            "Content-Length": str(len(pptx_bytes)),
+        },
+    )
+
+
 # ── Analyse financière (Phase 3b) ──────────────────────────────────
 
 
