@@ -70,6 +70,7 @@ function fmtRate(n: number | null): string {
     new Intl.NumberFormat("fr-CA", {
       style: "currency",
       currency: "CAD",
+      minimumFractionDigits: 2,
       maximumFractionDigits: 2
     }).format(n) + "/h"
   );

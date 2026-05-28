@@ -101,7 +101,8 @@ function fmtAmount(n: number | null): string {
   return n.toLocaleString("fr-CA", {
     style: "currency",
     currency: "CAD",
-    maximumFractionDigits: 0
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
   });
 }
 

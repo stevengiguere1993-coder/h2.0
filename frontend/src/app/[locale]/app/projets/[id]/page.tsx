@@ -61,16 +61,14 @@ type TabId =
   | "achats"
   | "photos"
   | "tasks"
-  | "finances"
-  | "recap";
+  | "finances";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "summary", label: "Résumé" },
   { id: "planification", label: "Planification" },
   { id: "agenda", label: "Agenda chantier" },
   { id: "achats", label: "Achats / PO" },
-  { id: "finances", label: "Finances" },
-  { id: "recap", label: "Récap" },
+  { id: "finances", label: "Récap & finances" },
   { id: "photos", label: "Photos" },
   { id: "tasks", label: "Tâches" }
 ];
@@ -81,6 +79,7 @@ function fmtMoney(n: number | string | null): string {
   return new Intl.NumberFormat("fr-CA", {
     style: "currency",
     currency: "CAD",
+    minimumFractionDigits: 2,
     maximumFractionDigits: 2
   }).format(num);
 }
@@ -127,8 +126,7 @@ export default function ProjectDetailPage() {
       "achats",
       "photos",
       "tasks",
-      "finances",
-      "recap"
+      "finances"
     ];
     if (valid.includes(hash)) setTab(hash);
   }, []);
@@ -552,9 +550,7 @@ export default function ProjectDetailPage() {
               ) : tab === "achats" ? (
                 <ProjectAchatsTab projectId={id} />
               ) : tab === "finances" ? (
-                <FinancesTab projectId={id} />
-              ) : tab === "recap" ? (
-                <RecapTab project={p} />
+                <FinancesTab projectId={id} project={p} />
               ) : tab === "photos" ? (
                 <PhotosTab projectId={id} />
               ) : (
@@ -1612,232 +1608,8 @@ type Finances = {
   invoices?: InvoiceLine[];
 };
 
-// ─── Onglet « Récap » : synthèse délai + finances + profit ────
-
-function RecapTab({ project }: { project: Project | null }) {
-  const [finances, setFinances] = useState<{
-    projected_revenue: number;
-    projected_revenue_ex_tax: number;
-    projected_total_cost: number;
-    projected_profit: number;
-    projected_margin_pct: number;
-    projected_labour_hours: number;
-    actual_total_cost: number;
-    actual_profit: number;
-    actual_margin_pct: number;
-    actual_labour_hours: number;
-    actual_material_cost: number;
-    actual_labour_cost: number;
-    paid_amount: number;
-    invoiced_amount: number;
-    invoiced_amount_ex_tax: number;
-    tps_collected: number;
-    tvq_collected: number;
-    taxes_collected: number;
-  } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!project) return;
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    (async () => {
-      try {
-        const r = await authedFetch(
-          `/api/v1/projects/${project.id}/finances`
-        );
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        if (!cancelled) setFinances(await r.json());
-      } catch (e) {
-        if (!cancelled) setError((e as Error).message);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [project]);
-
-  if (!project) return null;
-
-  // Calcul du délai
-  const parseDate = (s: string | null): Date | null => {
-    if (!s) return null;
-    const [y, m, d] = s.split("-").map(Number);
-    if (!y || !m || !d) return null;
-    return new Date(y, m - 1, d);
-  };
-  const startDate = parseDate(project.start_date);
-  const endDate = parseDate(project.end_date);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const isDelivered = project.status === "delivered";
-  // Date de fin effective : si livré, on prend updated_at (à défaut
-  // d'un vrai `delivered_at` en base) ; sinon aujourd'hui.
-  const actualEnd = isDelivered
-    ? new Date(project.updated_at)
-    : today;
-  actualEnd.setHours(0, 0, 0, 0);
-
-  const plannedDays =
-    startDate && endDate
-      ? Math.round(
-          (endDate.getTime() - startDate.getTime()) / 86_400_000
-        ) + 1
-      : null;
-  const actualDays =
-    startDate
-      ? Math.round(
-          (actualEnd.getTime() - startDate.getTime()) / 86_400_000
-        ) + 1
-      : null;
-  // Dépassement signé : positif = retard, négatif = avance.
-  const overrunDays =
-    endDate
-      ? Math.round(
-          (actualEnd.getTime() - endDate.getTime()) / 86_400_000
-        )
-      : null;
-
-  return (
-    <div className="space-y-4">
-      <header>
-        <h2 className="text-lg font-bold text-white">
-          Récapitulatif du projet
-        </h2>
-        <p className="mt-0.5 text-xs text-white/50">
-          Synthèse délai + coûts + profit. Données à jour ·{" "}
-          {today.toLocaleDateString("fr-CA", {
-            day: "2-digit",
-            month: "short",
-            year: "numeric"
-          })}
-        </p>
-      </header>
-
-      {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-6 w-6 animate-spin text-accent-500" />
-        </div>
-      ) : error ? (
-        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
-          {error}
-        </p>
-      ) : finances ? (
-        <>
-          {/* Cards : Délai + Coûts + Profit */}
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <RecapDelayCard
-              plannedDays={plannedDays}
-              actualDays={actualDays}
-              overrunDays={overrunDays}
-              endDate={endDate}
-              isDelivered={isDelivered}
-            />
-            <RecapCostCard
-              projectedRevenue={finances.projected_revenue}
-              projectedCost={finances.projected_total_cost}
-              actualCost={finances.actual_total_cost}
-            />
-            <RecapProfitCard
-              projectedProfit={finances.projected_profit}
-              projectedMargin={finances.projected_margin_pct}
-              actualCost={finances.actual_total_cost}
-              projectedRevenueExTax={finances.projected_revenue_ex_tax}
-              paidAmount={finances.paid_amount}
-              invoicedAmount={finances.invoiced_amount}
-              invoicedAmountExTax={finances.invoiced_amount_ex_tax}
-              isDelivered={isDelivered}
-            />
-          </div>
-
-          {/* Avancement contrat — coût réel actuel vs soumission acceptée
-              (hors extras). Permet de voir d'un coup d'œil si on est en
-              train de manger la marge prévue. */}
-          <RecapContractProgressCard
-            actualCost={finances.actual_total_cost}
-            contractRevenueExTax={finances.projected_revenue_ex_tax}
-            invoicedExTax={finances.invoiced_amount_ex_tax}
-            paidAmount={finances.paid_amount}
-            invoicedAmount={finances.invoiced_amount}
-          />
-
-          {/* Taxes à remettre au gouvernement — TPS (Receveur général)
-              + TVQ (Revenu Québec). Calculées sur le facturé. */}
-          {finances.taxes_collected > 0 ? (
-            <RecapTaxesCard
-              tps={finances.tps_collected}
-              tvq={finances.tvq_collected}
-              total={finances.taxes_collected}
-            />
-          ) : null}
-
-          {/* Détail heures + ventilation coût réel */}
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
-              <h3 className="text-[10px] uppercase tracking-wider text-white/50">
-                Heures de main-d&apos;œuvre
-              </h3>
-              <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                <div>
-                  <p className="text-[10px] text-white/40">Prévu</p>
-                  <p className="text-base font-semibold text-white">
-                    {finances.projected_labour_hours.toFixed(1)} h
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-white/40">Réel (punché)</p>
-                  <p className="text-base font-semibold text-white">
-                    {finances.actual_labour_hours.toFixed(1)} h
-                  </p>
-                </div>
-              </div>
-              {finances.projected_labour_hours > 0 ? (
-                <p className="mt-1 text-[10px] text-white/40">
-                  {Math.round(
-                    (finances.actual_labour_hours /
-                      finances.projected_labour_hours) *
-                      100
-                  )}{" "}
-                  % consommé
-                </p>
-              ) : null}
-            </div>
-
-            <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
-              <h3 className="text-[10px] uppercase tracking-wider text-white/50">
-                Coût réel ventilé
-              </h3>
-              <div className="mt-2 space-y-1 text-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-white/60">Matériel / achats</span>
-                  <span className="font-mono text-white/90">
-                    {fmtMoney(finances.actual_material_cost)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-white/60">Main-d&apos;œuvre</span>
-                  <span className="font-mono text-white/90">
-                    {fmtMoney(finances.actual_labour_cost)}
-                  </span>
-                </div>
-                <div className="mt-1 flex items-center justify-between border-t border-brand-800 pt-1 font-semibold">
-                  <span className="text-white">Total</span>
-                  <span className="font-mono text-white">
-                    {fmtMoney(finances.actual_total_cost)}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </>
-      ) : null}
-    </div>
-  );
-}
+// ─── Cartes de synthèse (délai + avancement contrat) réutilisées
+//     dans l'onglet « Récap & finances » ────────────────────────
 
 function RecapDelayCard({
   plannedDays,
@@ -1913,59 +1685,6 @@ function RecapDelayCard({
       {detail ? (
         <p className="mt-1 text-[10px] text-white/50">{detail}</p>
       ) : null}
-    </div>
-  );
-}
-
-function RecapCostCard({
-  projectedRevenue,
-  projectedCost,
-  actualCost
-}: {
-  projectedRevenue: number;
-  projectedCost: number;
-  actualCost: number;
-}) {
-  const diff = actualCost - projectedCost;
-  const overBudget = diff > 0;
-  return (
-    <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
-      <h3 className="text-[10px] uppercase tracking-wider text-white/50">
-        Coûts
-      </h3>
-      <span
-        className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-          overBudget
-            ? "border-rose-500/30 bg-rose-500/15 text-rose-300"
-            : "border-emerald-500/30 bg-emerald-500/15 text-emerald-300"
-        }`}
-      >
-        {overBudget
-          ? `+${fmtMoney(diff)} de dépassement`
-          : `${fmtMoney(Math.abs(diff))} sous budget`}
-      </span>
-      <div className="mt-3 space-y-1 text-sm">
-        <div className="flex items-center justify-between">
-          <span className="text-white/50 text-xs">Soumission initiale</span>
-          <span className="font-mono text-white/80">
-            {fmtMoney(projectedRevenue)}
-          </span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-white/50 text-xs">Coût prévu</span>
-          <span className="font-mono text-white/80">
-            {fmtMoney(projectedCost)}
-          </span>
-        </div>
-        <div className="flex items-center justify-between border-t border-brand-800 pt-1">
-          <span className="text-xs font-semibold text-white">
-            Coût réel
-          </span>
-          <span className="font-mono font-semibold text-white">
-            {fmtMoney(actualCost)}
-          </span>
-        </div>
-      </div>
     </div>
   );
 }
@@ -2098,145 +1817,13 @@ function RecapContractProgressCard({
   );
 }
 
-function RecapProfitCard({
-  projectedProfit,
-  projectedMargin,
-  actualCost,
-  projectedRevenueExTax,
-  paidAmount,
-  invoicedAmount,
-  invoicedAmountExTax,
-  isDelivered
+function FinancesTab({
+  projectId,
+  project
 }: {
-  projectedProfit: number;
-  projectedMargin: number;
-  actualCost: number;
-  projectedRevenueExTax: number;
-  paidAmount: number;
-  invoicedAmount: number;
-  invoicedAmountExTax: number;
-  isDelivered: boolean;
+  projectId: number;
+  project: Project | null;
 }) {
-  // Profit réel calculé HORS TAXES : les TPS/TVQ ne sont pas un
-  // revenu (elles transitent vers le gouvernement). On prend le
-  // facturé HT s'il y a des factures, sinon la soumission HT. Évite
-  // de gonfler artificiellement le profit de ~15 % des taxes.
-  const revenueBase =
-    invoicedAmountExTax > 0 ? invoicedAmountExTax : projectedRevenueExTax;
-  const actualProfit = revenueBase - actualCost;
-  const actualMargin =
-    revenueBase > 0 ? (actualProfit / revenueBase) * 100 : 0;
-  const positive = actualProfit >= 0;
-  const profitDiff = actualProfit - projectedProfit;
-
-  return (
-    <div className="rounded-xl border border-brand-800 bg-brand-900 p-4">
-      <h3 className="text-[10px] uppercase tracking-wider text-white/50">
-        Profit
-      </h3>
-      <span
-        className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-          positive
-            ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-300"
-            : "border-rose-500/30 bg-rose-500/15 text-rose-300"
-        }`}
-      >
-        {fmtMoney(actualProfit)} · {actualMargin.toFixed(1)} %
-      </span>
-      <div className="mt-3 space-y-1 text-sm">
-        <div className="flex items-center justify-between">
-          <span className="text-white/50 text-xs">Profit prévu</span>
-          <span className="font-mono text-white/80">
-            {fmtMoney(projectedProfit)} · {projectedMargin.toFixed(1)} %
-          </span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-white/50 text-xs">
-            {profitDiff >= 0 ? "Gain vs prévu" : "Perte vs prévu"}
-          </span>
-          <span
-            className={`font-mono ${
-              profitDiff >= 0 ? "text-emerald-300" : "text-rose-300"
-            }`}
-          >
-            {profitDiff >= 0 ? "+" : ""}
-            {fmtMoney(profitDiff)}
-          </span>
-        </div>
-        <div className="flex items-center justify-between border-t border-brand-800 pt-1">
-          <span className="text-xs font-semibold text-white">
-            {isDelivered ? "Encaissé" : "Facturé"} à ce jour
-          </span>
-          <span className="font-mono font-semibold text-white">
-            {fmtMoney(isDelivered ? paidAmount : invoicedAmount)}
-            <span className="ml-1 text-[10px] font-normal text-white/40">
-              TTC
-            </span>
-          </span>
-        </div>
-        <p className="mt-1 text-[10px] text-white/40">
-          Profit calculé hors taxes (TPS/TVQ exclues).
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function RecapTaxesCard({
-  tps,
-  tvq,
-  total
-}: {
-  tps: number;
-  tvq: number;
-  total: number;
-}) {
-  return (
-    <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-[10px] uppercase tracking-wider text-blue-300/80">
-          🏛️ Taxes à remettre au gouvernement
-        </h3>
-        <span className="text-[10px] text-white/40">
-          Sur le facturé du projet (hors achats déductibles)
-        </span>
-      </div>
-      <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
-        <div>
-          <p className="text-[10px] uppercase tracking-wider text-white/50">
-            TPS (5 %)
-          </p>
-          <p className="mt-1 font-mono text-base font-semibold text-white">
-            {fmtMoney(tps)}
-          </p>
-          <p className="mt-0.5 text-[10px] text-white/40">Receveur général</p>
-        </div>
-        <div>
-          <p className="text-[10px] uppercase tracking-wider text-white/50">
-            TVQ (9,975 %)
-          </p>
-          <p className="mt-1 font-mono text-base font-semibold text-white">
-            {fmtMoney(tvq)}
-          </p>
-          <p className="mt-0.5 text-[10px] text-white/40">Revenu Québec</p>
-        </div>
-        <div>
-          <p className="text-[10px] uppercase tracking-wider text-blue-300">
-            Total à remettre
-          </p>
-          <p className="mt-1 font-mono text-base font-bold text-blue-300">
-            {fmtMoney(total)}
-          </p>
-          <p className="mt-0.5 text-[10px] text-white/40">
-            Avant déduction CTI/RTI
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function FinancesTab({ projectId }: { projectId: number }) {
   const [data, setData] = useState<Finances | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -2376,8 +1963,46 @@ function FinancesTab({ projectId }: { projectId: number }) {
     );
   }
 
+  // Délai (anciennement dans l'onglet Récap) : prévu vs réel.
+  const parseDate = (s: string | null): Date | null => {
+    if (!s) return null;
+    const [y, m, d] = s.split("-").map(Number);
+    if (!y || !m || !d) return null;
+    return new Date(y, m - 1, d);
+  };
+  const startDate = parseDate(project?.start_date ?? null);
+  const endDate = parseDate(project?.end_date ?? null);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const isDelivered = project?.status === "delivered";
+  const actualEnd = isDelivered ? new Date(project!.updated_at) : today;
+  actualEnd.setHours(0, 0, 0, 0);
+  const plannedDays =
+    startDate && endDate
+      ? Math.round((endDate.getTime() - startDate.getTime()) / 86_400_000) + 1
+      : null;
+  const actualDays = startDate
+    ? Math.round((actualEnd.getTime() - startDate.getTime()) / 86_400_000) + 1
+    : null;
+  const overrunDays = endDate
+    ? Math.round((actualEnd.getTime() - endDate.getTime()) / 86_400_000)
+    : null;
+  // Gain (ou perte) de profit par rapport au prévu.
+  const profitDiff = data.actual_profit - data.projected_profit;
+
   return (
     <div className="space-y-5">
+      {/* Délai prévu vs réel (synthèse importée du Récap). */}
+      {project ? (
+        <RecapDelayCard
+          plannedDays={plannedDays}
+          actualDays={actualDays}
+          overrunDays={overrunDays}
+          endDate={endDate}
+          isDelivered={!!isDelivered}
+        />
+      ) : null}
+
       {/* KPIs : projection vs réel — coût et profit côte à côte
           pour comparer ce qui était prévu et ce qui se matérialise. */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -2406,10 +2031,22 @@ function FinancesTab({ projectId }: { projectId: number }) {
         <FinanceKpi
           label="Profit réel"
           value={fmtMoney(data.actual_profit)}
-          sub={`${data.actual_margin_pct.toFixed(1)} % marge · Revenu HT ${fmtMoney(data.projected_revenue_ex_tax)} (taxes exclues)`}
+          sub={`${data.actual_margin_pct.toFixed(1)} % marge · ${
+            profitDiff >= 0 ? "+" : ""
+          }${fmtMoney(profitDiff)} vs prévu · hors taxes`}
           tone={data.actual_profit >= 0 ? "emerald" : "rose"}
         />
       </div>
+
+      {/* Avancement du contrat — coût réel vs soumission acceptée
+          (synthèse importée du Récap). */}
+      <RecapContractProgressCard
+        actualCost={data.actual_total_cost}
+        contractRevenueExTax={data.projected_revenue_ex_tax}
+        invoicedExTax={data.invoiced_amount_ex_tax}
+        paidAmount={data.paid_amount}
+        invoicedAmount={data.invoiced_amount}
+      />
 
       {/* Labour budget vs actual */}
       <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
@@ -2524,22 +2161,30 @@ function FinancesTab({ projectId }: { projectId: number }) {
           </div>
         </div>
         {data.projected_labour_hours > 0 ? (
-          <div className="mt-4 h-2 overflow-hidden rounded-full bg-brand-950">
-            <div
-              className={`h-full ${
-                data.actual_labour_hours > data.projected_labour_hours
-                  ? "bg-rose-500"
-                  : "bg-emerald-500"
-              }`}
-              style={{
-                width: `${Math.min(
-                  100,
-                  (data.actual_labour_hours / data.projected_labour_hours) *
-                    100
-                )}%`
-              }}
-            />
-          </div>
+          <>
+            <div className="mt-4 h-2 overflow-hidden rounded-full bg-brand-950">
+              <div
+                className={`h-full ${
+                  data.actual_labour_hours > data.projected_labour_hours
+                    ? "bg-rose-500"
+                    : "bg-emerald-500"
+                }`}
+                style={{
+                  width: `${Math.min(
+                    100,
+                    (data.actual_labour_hours / data.projected_labour_hours) *
+                      100
+                  )}%`
+                }}
+              />
+            </div>
+            <p className="mt-1 text-[11px] text-white/50">
+              {Math.round(
+                (data.actual_labour_hours / data.projected_labour_hours) * 100
+              )}{" "}
+              % des heures prévues consommées
+            </p>
+          </>
         ) : null}
       </section>
 
@@ -5252,6 +4897,10 @@ const ACHAT_PAYMENT_LABEL: Record<string, string> = {
 };
 
 function ProjectAchatsTab({ projectId }: { projectId: number }) {
+  // URL de retour passée aux pages de détail PO / achat : un clic sur
+  // « Retour » y ramène l'utilisateur sur cet onglet plutôt que sur la
+  // liste globale Achats / dépenses du menu latéral.
+  const backToTab = encodeURIComponent(`/app/projets/${projectId}#achats`);
   const [pos, setPos] = useState<ProjectPo[]>([]);
   const [achats, setAchats] = useState<ProjectAchat[]>([]);
   const [fournisseurs, setFournisseurs] = useState<ProjectFournisseur[]>([]);
@@ -5302,7 +4951,8 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
     return new Intl.NumberFormat("fr-CA", {
       style: "currency",
       currency: "CAD",
-      maximumFractionDigits: 0
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
     }).format(n);
   }
 
@@ -5390,7 +5040,7 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                           <td className="px-3 py-2">
                             <Link
                               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                              href={`/app/po/${p.id}` as any}
+                              href={`/app/po/${p.id}?from=${backToTab}` as any}
                               className="font-mono text-accent-400 hover:underline"
                             >
                               {p.reference}
@@ -5479,7 +5129,7 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                           <td className="px-3 py-2">
                             <Link
                               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                              href={`/app/achats/${a.id}` as any}
+                              href={`/app/achats/${a.id}?from=${backToTab}` as any}
                               className="font-mono text-accent-400 hover:underline"
                             >
                               {a.supplier_invoice_number ||
@@ -5491,7 +5141,7 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                             {linkedPo ? (
                               <Link
                                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                href={`/app/po/${linkedPo.id}` as any}
+                                href={`/app/po/${linkedPo.id}?from=${backToTab}` as any}
                                 className="text-accent-400 hover:underline"
                               >
                                 {linkedPo.reference}
