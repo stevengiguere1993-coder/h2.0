@@ -83,6 +83,7 @@ export default function SignNDAPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [signedName, setSignedName] = useState("");
+  const [signedPhone, setSignedPhone] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [doneMessage, setDoneMessage] = useState<string | null>(null);
   const [hasReadFully, setHasReadFully] = useState(false);
@@ -167,6 +168,14 @@ export default function SignNDAPage() {
       setError("Veuillez entrer votre nom complet (au moins 2 caractères).");
       return;
     }
+    const phoneTrim = signedPhone.trim();
+    const phoneDigitCount = phoneTrim.replace(/\D/g, "").length;
+    if (!phoneTrim || phoneDigitCount < 10) {
+      setError(
+        "Veuillez entrer un numéro de téléphone valide (au moins 10 chiffres)."
+      );
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -175,13 +184,41 @@ export default function SignNDAPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           signed_name: signedName.trim(),
+          phone: phoneTrim,
           has_scrolled: hasReadFully,
           checkbox_confirmed: checkboxConfirmed
         })
       });
       if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+        // On tente de parser le body en JSON (FastAPI renvoie
+        // {"detail": "..."}). Si le proxy Render répond une 502
+        // HTML brute (timeout), on remplace par un message clair
+        // au lieu d'afficher du `<!DOCTYPE html>...` dans le toast.
+        const ct = res.headers.get("content-type") || "";
+        let msg = `Erreur ${res.status}`;
+        if (ct.includes("application/json")) {
+          try {
+            const j = await res.json();
+            if (j && typeof j.detail === "string") msg = j.detail;
+          } catch {
+            // ignore — fallback msg
+          }
+        } else if (res.status === 502 || res.status === 504) {
+          msg =
+            "Le serveur a mis trop de temps à répondre. Réessayez dans " +
+            "quelques secondes — votre signature a peut-être déjà été " +
+            "enregistrée.";
+        } else {
+          // Dernier recours : on lit le texte mais on ne l'affiche
+          // PAS s'il ressemble à du HTML (page d'erreur générique).
+          try {
+            const t = await res.text();
+            if (t && !t.trim().startsWith("<")) msg = t.slice(0, 200);
+          } catch {
+            // ignore
+          }
+        }
+        throw new Error(msg);
       }
       const updated = (await res.json()) as PublicNDA;
       setData(updated);
@@ -220,10 +257,13 @@ export default function SignNDAPage() {
   if (!data) return null;
 
   const alreadyDone = data.status === "signe" || Boolean(doneMessage);
+  const phoneDigitsOk =
+    signedPhone.trim().replace(/\D/g, "").length >= 10;
   const canSubmit =
     hasReadFully &&
     checkboxConfirmed &&
     signedName.trim().length >= 2 &&
+    phoneDigitsOk &&
     !submitting;
 
   return (
@@ -382,16 +422,42 @@ export default function SignNDAPage() {
                 </p>
 
                 <label className="mt-4 block">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-700">
                     Nom complet *
                   </span>
+                  {/*
+                    Contraste WCAG AA explicite : fond blanc pur,
+                    texte slate-900, placeholder slate-400, border
+                    slate-300. Focus emerald (cohérent avec le bouton
+                    « J'accepte et signe »). Phil avait rapporté un
+                    rendu « gris foncé sur gris foncé » quasi
+                    invisible sur la version précédente.
+                  */}
                   <input
                     type="text"
                     placeholder="Prénom Nom"
                     value={signedName}
                     onChange={(e) => setSignedName(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-600/20"
                   />
+                </label>
+
+                <label className="mt-4 block">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-700">
+                    Téléphone *
+                  </span>
+                  <input
+                    type="tel"
+                    placeholder="514-555-1234"
+                    value={signedPhone}
+                    onChange={(e) => setSignedPhone(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-600/20"
+                  />
+                  {!phoneDigitsOk && signedPhone.length > 0 ? (
+                    <span className="mt-1 block text-xs text-amber-700">
+                      Au moins 10 chiffres requis.
+                    </span>
+                  ) : null}
                 </label>
 
                 {/* Checkbox d'attestation obligatoire */}
@@ -431,7 +497,11 @@ export default function SignNDAPage() {
                         ? "Veuillez lire l'intégralité de l'entente avant de signer"
                         : !checkboxConfirmed
                           ? "Veuillez cocher la case d'attestation"
-                          : undefined
+                          : signedName.trim().length < 2
+                            ? "Veuillez entrer votre nom complet"
+                            : !phoneDigitsOk
+                              ? "Veuillez entrer un numéro de téléphone valide"
+                              : undefined
                     }
                     className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >

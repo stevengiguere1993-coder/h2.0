@@ -77,6 +77,13 @@ class NDA(Base, TimestampUpdateMixin):
     signed_name: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
+    # Téléphone capturé sur le formulaire public de signature. Le NDA
+    # demande Nom + Email + Téléphone + Date + Signature côté Récepteur,
+    # et l'email est déjà connu (lien envoyé à cette adresse) → on ne
+    # collecte « en plus » que le téléphone côté formulaire public.
+    signed_phone: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
     signed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

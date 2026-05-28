@@ -75,10 +75,13 @@ _LOGO_PATH = os.path.join(
     "logo.png",
 )
 
-# Image de signature manuscrite MGV. Le fichier n'existe pas encore
-# dans le repo — Phil le déposera dans `backend/app/assets/` dans
-# une PR ultérieure. Si absent, le bloc signature MGV affiche
-# simplement un espace vide (pas de placeholder texte).
+# NOTE — Image signature MGV ABANDONNÉE après PR #522, #524, #526.
+# Le pattern reportlab + PIL (RGBA -> RGB sur disque) ne s'est jamais
+# stabilisé en prod Render. Phil préfère un texte explicite « Signée
+# électroniquement » dans le bloc signature MGV, cohérent avec le
+# pattern Récepteur du PDF signé. La constante ci-dessous est
+# conservée pour rétrocompat (imports externes éventuels) mais
+# n'est plus utilisée par `_render_bytes`.
 MGV_SIGNATURE_IMAGE_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "assets",
@@ -91,102 +94,6 @@ _MONTHS_FR_CA = (
     "janvier", "février", "mars", "avril", "mai", "juin",
     "juillet", "août", "septembre", "octobre", "novembre", "décembre",
 )
-
-
-# Cache du fichier RGB pré-converti — on évite de refaire la
-# conversion PIL à chaque génération de PDF (5+ par minute possible
-# en cas de relance massive). Le chemin est lazy-resolved à la
-# première utilisation et conservé jusqu'au prochain restart Render.
-_MGV_SIGNATURE_RGB_CACHE: Optional[str] = None
-
-
-def _prepare_mgv_signature_rgb_file() -> Optional[str]:
-    """Pré-convertit `mgv_signature.png` (RGBA) en RGB sur disque et
-    retourne le chemin du fichier prêt-à-consommer par reportlab.
-
-    Pourquoi cette approche fichier (vs BytesIO mémoire) :
-    après PR #524, le pattern « PIL → BytesIO → reportlab.Image(buf) »
-    ne semble TOUJOURS pas fonctionner en prod Render — le PDF arrive
-    sans la signature manuscrite. reportlab reconstruit en interne un
-    ImageReader, et selon les versions un BytesIO peut être consommé
-    une seule fois (premier `doc.build()` OK, suivants KO). En passant
-    par un chemin de fichier RGB stable, reportlab ouvre lui-même le
-    fichier à chaque build — c'est le pattern qui fonctionne pour le
-    logo (`_LOGO_PATH`) qui s'affiche, lui, correctement.
-
-    Retourne le path du PNG RGB temporaire, ou None si :
-    - le fichier source n'existe pas (asset pas déployé)
-    - PIL n'est pas installé
-    - la conversion échoue (PNG corrompu)
-    Dans ces trois cas, l'appelant retombe sur le `Spacer` fallback.
-    """
-    global _MGV_SIGNATURE_RGB_CACHE
-    if _MGV_SIGNATURE_RGB_CACHE and os.path.exists(_MGV_SIGNATURE_RGB_CACHE):
-        return _MGV_SIGNATURE_RGB_CACHE
-
-    src = MGV_SIGNATURE_IMAGE_PATH
-    if not os.path.exists(src):
-        log.warning(
-            "[NDA_PDF] Image signature MGV ABSENTE du disque "
-            "(path=%s). Le PDF sera généré sans signature manuscrite "
-            "(fallback Spacer). Vérifier que `backend/app/assets/"
-            "mgv_signature.png` est bien commité et déployé.",
-            src,
-        )
-        return None
-
-    dst = src.replace(".png", "_rgb.png")
-    # Si le fichier RGB existe déjà sur disque (générée par un
-    # process précédent), on le réutilise sans toucher PIL.
-    if os.path.exists(dst):
-        log.info("[NDA_PDF] Réutilisation cache RGB signature (%s)", dst)
-        _MGV_SIGNATURE_RGB_CACHE = dst
-        return dst
-
-    try:
-        from PIL import Image as PILImage  # type: ignore
-    except Exception as exc:
-        log.warning(
-            "[NDA_PDF] PIL/Pillow indisponible — impossible de "
-            "convertir mgv_signature.png en RGB : %s. Fallback Spacer.",
-            exc,
-        )
-        return None
-
-    try:
-        pil = PILImage.open(src)
-        log.info(
-            "[NDA_PDF] mgv_signature.png chargée : mode=%s size=%s",
-            pil.mode,
-            pil.size,
-        )
-        if pil.mode != "RGB":
-            bg = PILImage.new("RGB", pil.size, (255, 255, 255))
-            if pil.mode == "P":
-                pil = pil.convert("RGBA")
-            if pil.mode in ("RGBA", "LA"):
-                alpha = pil.split()[-1]
-                bg.paste(pil, mask=alpha)
-            else:
-                bg.paste(pil.convert("RGB"))
-            pil = bg
-        pil.save(dst, format="PNG")
-        log.info(
-            "[NDA_PDF] Conversion RGB de mgv_signature.png réussie "
-            "→ %s (%d octets)",
-            dst,
-            os.path.getsize(dst),
-        )
-        _MGV_SIGNATURE_RGB_CACHE = dst
-        return dst
-    except Exception as exc:
-        log.exception(
-            "[NDA_PDF] Conversion PNG signature MGV échouée (%s): %s. "
-            "Fallback Spacer activé pour ce build.",
-            src,
-            exc,
-        )
-        return None
 
 
 def _lazy_reportlab() -> dict[str, Any]:
@@ -923,54 +830,17 @@ def _render_bytes(
     ))
     story.append(Spacer(1, 10))
 
-    # Zone réservée à la signature manuscrite MGV : si le fichier
-    # `assets/mgv_signature.png` existe, on l'affiche au-dessus du
-    # nom. Sinon (ou si l'image plante au chargement / décodage),
-    # on laisse un Spacer vide de même hauteur — pas de placeholder
-    # texte « [signature] ». Cette robustesse est CRITIQUE : le NDA
-    # doit TOUJOURS pouvoir être généré et envoyé même sans l'image.
-    #
-    # Cause racine du bug `identity=[ImageReader@... broken]` :
-    # reportlab ne parse pas correctement les PNG avec canal alpha
-    # (RGBA). On pré-convertit donc le PNG en RGB sur disque (pattern
-    # similaire au `_LOGO_PATH` qui s'affiche correctement) — voir
-    # `_prepare_mgv_signature_rgb_file` pour le rationale détaillé.
-    mgv_signature_block: Any
-    mgv_signature_block = Spacer(1, 22 * mm)
-    sig_path = _prepare_mgv_signature_rgb_file()
-    if sig_path is not None:
-        try:
-            mgv_signature_block = Image(
-                sig_path,
-                width=70 * mm,
-                height=22 * mm,
-                kind="proportional",
-            )
-            log.info(
-                "[NDA_PDF] Image signature MGV chargée pour NDA %s "
-                "(path=%s)",
-                nda.id,
-                sig_path,
-            )
-        except Exception as exc:
-            log.warning(
-                "[NDA_PDF] Image signature MGV illisible par reportlab "
-                "(%s) — fallback Spacer activé. Erreur: %s",
-                sig_path,
-                exc,
-            )
-            mgv_signature_block = Spacer(1, 22 * mm)
-    else:
-        log.warning(
-            "[NDA_PDF] Pas de signature MGV pour NDA %s — fallback "
-            "Spacer activé (voir logs précédents pour la cause).",
-            nda.id,
-        )
-
+    # Bloc signature MGV : on abandonne définitivement l'image
+    # manuscrite (PR #522/#524/#526 jamais stabilisées) et on affiche
+    # la mention texte « ✓ Signée électroniquement », cohérente avec
+    # le bloc Récepteur du PDF signé.
     sig_left = [
         Paragraph(f"<b>{ISSUER_ENTITY_NAME}</b>", s["small"]),
         Spacer(1, 6),
-        mgv_signature_block,
+        Paragraph(
+            "Signature : <i>&#10004; Signée électroniquement</i>",
+            s["small"],
+        ),
         Spacer(1, 4),
         Paragraph(f"Par : {ISSUER_REPRESENTATIVE_NAME}", s["small"]),
         Paragraph(f"Titre : {ISSUER_REPRESENTATIVE_TITLE}", s["small"]),
@@ -1002,6 +872,13 @@ def _render_bytes(
         if is_signed and nda.investor_email
         else "_____________________"
     )
+    # Téléphone collecté lors de la signature publique (PR « 4 fixes »).
+    # Affiché uniquement après signature — vide pour la prévisualisation.
+    phone_label = (
+        getattr(nda, "signed_phone", None) or "_____________________"
+        if is_signed
+        else "_____________________"
+    )
     if is_signed:
         # Mention italique stylisée pour distinguer visuellement la
         # signature électronique d'une signature manuscrite.
@@ -1015,6 +892,7 @@ def _render_bytes(
         Spacer(1, 6),
         Paragraph(f"Nom : {signed_name_label}", s["small"]),
         Paragraph(f"Adresse courriel : {email_label}", s["small"]),
+        Paragraph(f"Téléphone : {phone_label}", s["small"]),
         Paragraph(f"Date : {signed_at_label}", s["small"]),
         Paragraph(f"Signature : {signature_label}", s["small"]),
     ]
