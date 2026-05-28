@@ -13,6 +13,7 @@ import { ReceiptScanner } from "@/components/receipt-scanner";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { splitFromTotal } from "@/lib/tax";
 
 type Project = { id: number; name: string };
 type Fournisseur = { id: number; name: string };
@@ -61,8 +62,34 @@ export default function NewAchatPage() {
     { id: number; full_name: string }[]
   >([]);
   const [description, setDescription] = useState("");
+  // L'employé saisit le total (TTC) de la facture ; le HT et les taxes
+  // sont décomposés automatiquement (TPS + TVQ) mais restent éditables.
+  const [total, setTotal] = useState("");
   const [amount, setAmount] = useState("");
   const [amountTaxes, setAmountTaxes] = useState("");
+
+  function onTotalChange(v: string) {
+    setTotal(v);
+    const n = Number(v);
+    if (v.trim() !== "" && !Number.isNaN(n) && n > 0) {
+      const { ht, taxes } = splitFromTotal(n);
+      setAmount(ht.toFixed(2));
+      setAmountTaxes(taxes.toFixed(2));
+    }
+  }
+
+  function syncTotal(htStr: string, taxStr: string) {
+    const sum = (Number(htStr) || 0) + (Number(taxStr) || 0);
+    setTotal(sum ? sum.toFixed(2) : "");
+  }
+  function onAmountChange(v: string) {
+    setAmount(v);
+    syncTotal(v, amountTaxes);
+  }
+  function onTaxesChange(v: string) {
+    setAmountTaxes(v);
+    syncTotal(amount, v);
+  }
   // Refacturation client.
   const [isBillable, setIsBillable] = useState(true);
   const [markupPercent, setMarkupPercent] = useState("");
@@ -236,8 +263,10 @@ export default function NewAchatPage() {
                       setPaymentMethod(po.payment_method);
                     if (po.description && !description)
                       setDescription(po.description);
-                    if (po.amount_max != null && !amount)
+                    if (po.amount_max != null && !amount) {
                       setAmount(String(po.amount_max));
+                      syncTotal(String(po.amount_max), amountTaxes);
+                    }
                   }
                 }
               }}
@@ -370,6 +399,27 @@ export default function NewAchatPage() {
             </div>
           </div>
 
+          <div>
+            <label htmlFor="atotal" className="label">
+              Montant total (TTC) — total de la facture
+            </label>
+            <input
+              id="atotal"
+              type="number"
+              step="0.01"
+              min="0"
+              value={total}
+              onChange={(e) => onTotalChange(e.target.value)}
+              placeholder="0.00"
+              className="input"
+            />
+            <p className="mt-1 text-xs text-white/40">
+              Le HT et les taxes (TPS 5 % + TVQ 9,975 %) sont calculés
+              automatiquement à partir du total. Ajustables si la facture a
+              des taxes non standard.
+            </p>
+          </div>
+
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
               <label htmlFor="amount" className="label">
@@ -381,7 +431,7 @@ export default function NewAchatPage() {
                 step="0.01"
                 min="0"
                 value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+                onChange={(e) => onAmountChange(e.target.value)}
                 placeholder="0.00"
                 className="input"
               />
@@ -396,7 +446,7 @@ export default function NewAchatPage() {
                 step="0.01"
                 min="0"
                 value={amountTaxes}
-                onChange={(e) => setAmountTaxes(e.target.value)}
+                onChange={(e) => onTaxesChange(e.target.value)}
                 placeholder="0.00"
                 className="input"
               />

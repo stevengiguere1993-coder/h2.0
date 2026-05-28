@@ -21,6 +21,7 @@ import { ReceiptScanner } from "@/components/receipt-scanner";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { splitFromTotal } from "@/lib/tax";
 import { useConfirm } from "@/components/confirm-dialog";
 
 const PAYMENT_OPTIONS = [
@@ -111,8 +112,33 @@ export default function AchatDetailPage() {
   const [projectId, setProjectId] = useState("");
   const [fournisseurId, setFournisseurId] = useState("");
   const [description, setDescription] = useState("");
+  // Total (TTC) éditable : décompose le HT + taxes automatiquement,
+  // tout en laissant l'employé ajuster le HT/taxes au besoin.
+  const [total, setTotal] = useState("");
   const [amount, setAmount] = useState("");
   const [amountTaxes, setAmountTaxes] = useState("");
+
+  function onTotalChange(v: string) {
+    setTotal(v);
+    const n = Number(v);
+    if (v.trim() !== "" && !Number.isNaN(n) && n > 0) {
+      const { ht, taxes } = splitFromTotal(n);
+      setAmount(ht.toFixed(2));
+      setAmountTaxes(taxes.toFixed(2));
+    }
+  }
+  function syncTotal(htStr: string, taxStr: string) {
+    const sum = (Number(htStr) || 0) + (Number(taxStr) || 0);
+    setTotal(sum ? sum.toFixed(2) : "");
+  }
+  function onAmountChange(v: string) {
+    setAmount(v);
+    syncTotal(v, amountTaxes);
+  }
+  function onTaxesChange(v: string) {
+    setAmountTaxes(v);
+    syncTotal(amount, v);
+  }
   const [isBillable, setIsBillable] = useState(true);
   const [markupPercent, setMarkupPercent] = useState("");
   const [statusStr, setStatusStr] = useState("received");
@@ -151,6 +177,11 @@ export default function AchatDetailPage() {
         setAmountTaxes(
           data.amount_taxes != null ? String(data.amount_taxes) : ""
         );
+        {
+          const sum =
+            (Number(data.amount) || 0) + (Number(data.amount_taxes) || 0);
+          setTotal(sum ? sum.toFixed(2) : "");
+        }
         setIsBillable(data.is_billable !== false);
         setMarkupPercent(
           data.markup_percent != null ? String(data.markup_percent) : ""
@@ -476,6 +507,26 @@ export default function AchatDetailPage() {
                       className="input"
                     />
                   </div>
+                  <div>
+                    <label htmlFor="atotal" className="label">
+                      Montant total (TTC) — total de la facture
+                    </label>
+                    <input
+                      id="atotal"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={total}
+                      onChange={(e) => onTotalChange(e.target.value)}
+                      className="input"
+                      placeholder="0.00"
+                    />
+                    <p className="mt-1 text-xs text-white/40">
+                      Le HT et les taxes (TPS 5 % + TVQ 9,975 %) sont calculés
+                      automatiquement. Ajustables si la facture a des taxes
+                      non standard.
+                    </p>
+                  </div>
                   <div className="grid gap-4 sm:grid-cols-3">
                     <div>
                       <label htmlFor="aamount" className="label">
@@ -487,7 +538,7 @@ export default function AchatDetailPage() {
                         step="0.01"
                         min="0"
                         value={amount}
-                        onChange={(e) => setAmount(e.target.value)}
+                        onChange={(e) => onAmountChange(e.target.value)}
                         className="input"
                       />
                     </div>
@@ -501,7 +552,7 @@ export default function AchatDetailPage() {
                         step="0.01"
                         min="0"
                         value={amountTaxes}
-                        onChange={(e) => setAmountTaxes(e.target.value)}
+                        onChange={(e) => onTaxesChange(e.target.value)}
                         className="input"
                         placeholder="0.00"
                       />
@@ -522,17 +573,9 @@ export default function AchatDetailPage() {
                   </div>
                   {(amount || amountTaxes) ? (
                     <p className="-mt-1 text-[11px] text-white/50">
-                      Total TTC payé au fournisseur :{" "}
-                      <strong className="text-white/80">
-                        {new Intl.NumberFormat("fr-CA", {
-                          style: "currency",
-                          currency: "CAD"
-                        }).format(
-                          (Number(amount) || 0) + (Number(amountTaxes) || 0)
-                        )}
-                      </strong>
-                      . Le markup pour refacturation est appliqué sur le
-                      HT seulement.
+                      Le markup pour refacturation est appliqué sur le
+                      HT seulement (les taxes payées au fournisseur ne sont
+                      pas majorées).
                     </p>
                   ) : null}
 
