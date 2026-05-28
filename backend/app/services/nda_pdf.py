@@ -82,6 +82,55 @@ _MONTHS_FR_CA = (
 )
 
 
+def _ensure_rgb_png_bytes(path: str) -> Optional[io.BytesIO]:
+    """Lit un PNG depuis le disque, force le mode RGB (fond blanc pour
+    les zones transparentes), et retourne un `BytesIO` prêt à être
+    consommé par `reportlab.platypus.Image`.
+
+    Pourquoi : reportlab a un bug connu où le parsing d'un PNG RGBA
+    (avec canal alpha) échoue avec une erreur opaque
+    `identity=[ImageReader@... broken]` au moment du `doc.build()`,
+    peu importe ce qu'on lui passe en entrée (chemin, file handle,
+    PIL.Image…). reportlab reconstruit son propre `ImageReader` en
+    interne. La seule façon fiable de contourner ça est de re-sauver
+    le PNG en RGB sans canal alpha avant de le lui donner.
+
+    Retourne `None` si le fichier n'existe pas ou si la conversion
+    échoue — l'appelant doit alors basculer sur un `Spacer` fallback
+    pour que la génération du NDA ne soit jamais bloquée.
+    """
+    if not os.path.exists(path):
+        return None
+    try:
+        from PIL import Image as PILImage  # type: ignore
+
+        pil = PILImage.open(path)
+        if pil.mode != "RGB":
+            if pil.mode in ("RGBA", "LA", "P"):
+                bg = PILImage.new("RGB", pil.size, (255, 255, 255))
+                if pil.mode == "P":
+                    pil = pil.convert("RGBA")
+                alpha = pil.split()[-1] if pil.mode in ("RGBA", "LA") else None
+                if alpha is not None:
+                    bg.paste(pil, mask=alpha)
+                else:
+                    bg.paste(pil)
+                pil = bg
+            else:
+                pil = pil.convert("RGB")
+        buf = io.BytesIO()
+        pil.save(buf, format="PNG")
+        buf.seek(0)
+        return buf
+    except Exception as exc:
+        log.warning(
+            "Conversion PNG signature MGV échouée (%s): %s",
+            path,
+            exc,
+        )
+        return None
+
+
 def _lazy_reportlab() -> dict[str, Any]:
     from reportlab.lib import colors  # type: ignore
     from reportlab.lib.pagesizes import A4  # type: ignore
@@ -808,25 +857,20 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
     # `assets/mgv_signature.png` existe, on l'affiche au-dessus du
     # nom. Sinon (ou si l'image plante au chargement / décodage),
     # on laisse un Spacer vide de même hauteur — pas de placeholder
-    # texte « [signature] ». Cette robustesse est CRITIQUE : si le
-    # PNG est mal formé, reportlab plante au moment de `doc.build()`
-    # (lazy load), donc on force ici un préchargement via ImageReader
-    # afin d'attraper l'exception immédiatement.
+    # texte « [signature] ». Cette robustesse est CRITIQUE : le NDA
+    # doit TOUJOURS pouvoir être généré et envoyé même sans l'image.
+    #
+    # Cause racine du bug `identity=[ImageReader@... broken]` :
+    # reportlab ne parse pas correctement les PNG avec canal alpha
+    # (RGBA). On force donc la conversion en RGB (fond blanc) via
+    # PIL en mémoire avant de passer le buffer à `Image()`.
     mgv_signature_block: Any
     mgv_signature_block = Spacer(1, 22 * mm)
-    if os.path.exists(MGV_SIGNATURE_IMAGE_PATH):
+    sig_buf = _ensure_rgb_png_bytes(MGV_SIGNATURE_IMAGE_PATH)
+    if sig_buf is not None:
         try:
-            # Préchargement strict via ImageReader : force le décodage
-            # du PNG ici plutôt qu'à `doc.build()`. Si le fichier est
-            # corrompu / format inattendu, l'exception est levée et
-            # attrapée localement — pas en plein milieu du rendu.
-            from reportlab.lib.utils import ImageReader  # type: ignore
-
-            with open(MGV_SIGNATURE_IMAGE_PATH, "rb") as fh:
-                _probe = ImageReader(fh)
-                _probe.getSize()
             mgv_signature_block = Image(
-                MGV_SIGNATURE_IMAGE_PATH,
+                sig_buf,
                 width=70 * mm,
                 height=22 * mm,
                 kind="proportional",
