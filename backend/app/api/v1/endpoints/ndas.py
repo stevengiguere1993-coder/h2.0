@@ -17,6 +17,7 @@ La page publique (signature sans auth) vit dans `public_nda.py`.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import List
 
@@ -29,6 +30,8 @@ from app.models.nda import NDA, NDAStatus
 from app.models.prospection_deal import ProspectionDeal
 from app.services.nda_pdf import nda_pdf_filename, render_nda_pdf
 from app.services.nda_send import NDASendError, send_nda_to_investor
+
+log = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/ndas", tags=["ndas"])
@@ -100,18 +103,35 @@ async def create_nda(
     db: DBSession,
     _: CurrentUser,
 ) -> NDARead:
-    await _ensure_deal(db, payload.deal_id)
+    # Try/except large : si la création échoue pour une raison
+    # inattendue (DB, contrainte, etc.), on remonte un 500 EXPLICITE
+    # avec le message d'erreur, pour que Phil voie le vrai problème
+    # côté frontend au lieu d'un "Internal Server Error" générique.
+    try:
+        await _ensure_deal(db, payload.deal_id)
 
-    nda = NDA(
-        deal_id=payload.deal_id,
-        investor_name=payload.investor_name.strip()[:255],
-        investor_email=str(payload.investor_email),
-        status=NDAStatus.BROUILLON.value,
-    )
-    db.add(nda)
-    await db.flush()
-    await db.refresh(nda)
-    return NDARead.model_validate(nda)
+        nda = NDA(
+            deal_id=payload.deal_id,
+            investor_name=payload.investor_name.strip()[:255],
+            investor_email=str(payload.investor_email),
+            status=NDAStatus.BROUILLON.value,
+        )
+        db.add(nda)
+        await db.flush()
+        await db.refresh(nda)
+        return NDARead.model_validate(nda)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception(
+            "Création NDA échouée (deal_id=%s, investor=%s)",
+            payload.deal_id,
+            payload.investor_email,
+        )
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Création du NDA échouée : {type(exc).__name__}: {exc}",
+        ) from exc
 
 
 @router.get(
@@ -216,8 +236,21 @@ async def send_nda(
     try:
         await send_nda_to_investor(db, nda.id)
     except NDASendError as exc:
+        # Erreur gérée (mailer absent, PDF rendu KO, Graph KO) :
+        # message clair côté frontend.
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, str(exc)
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Filet de sécurité : toute autre exception non gérée
+        # devient un 500 avec message explicite, pour éviter le
+        # "Internal Server Error" générique vu par Phil.
+        log.exception("Envoi NDA %s échoué (cause inattendue)", nda_id)
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Envoi du NDA échoué : {type(exc).__name__}: {exc}",
         ) from exc
     await db.refresh(nda)
     return NDARead.model_validate(nda)

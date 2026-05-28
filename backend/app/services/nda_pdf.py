@@ -823,26 +823,39 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
     story.append(Spacer(1, 10))
 
     # Zone réservée à la signature manuscrite MGV : si le fichier
-    # `assets/mgv_signature.png` existe (Phil le déposera plus tard),
-    # on l'affiche au-dessus du nom. Sinon, on laisse un Spacer vide
-    # de même hauteur — pas de placeholder texte « [signature] ».
+    # `assets/mgv_signature.png` existe, on l'affiche au-dessus du
+    # nom. Sinon (ou si l'image plante au chargement / décodage),
+    # on laisse un Spacer vide de même hauteur — pas de placeholder
+    # texte « [signature] ». Cette robustesse est CRITIQUE : si le
+    # PNG est mal formé, reportlab plante au moment de `doc.build()`
+    # (lazy load), donc on force ici un préchargement via ImageReader
+    # afin d'attraper l'exception immédiatement.
     mgv_signature_block: Any
+    mgv_signature_block = Spacer(1, 22 * mm)
     if os.path.exists(MGV_SIGNATURE_IMAGE_PATH):
         try:
+            # Préchargement strict via ImageReader : force le décodage
+            # du PNG ici plutôt qu'à `doc.build()`. Si le fichier est
+            # corrompu / format inattendu, l'exception est levée et
+            # attrapée localement — pas en plein milieu du rendu.
+            from reportlab.lib.utils import ImageReader  # type: ignore
+
+            with open(MGV_SIGNATURE_IMAGE_PATH, "rb") as fh:
+                _probe = ImageReader(fh)
+                _probe.getSize()
             mgv_signature_block = Image(
                 MGV_SIGNATURE_IMAGE_PATH,
                 width=70 * mm,
                 height=22 * mm,
                 kind="proportional",
             )
-        except Exception:
+        except Exception as exc:
             log.warning(
-                "MGV signature image illisible (%s) — espace vide.",
+                "MGV signature image illisible (%s) — espace vide. Erreur: %s",
                 MGV_SIGNATURE_IMAGE_PATH,
+                exc,
             )
             mgv_signature_block = Spacer(1, 22 * mm)
-    else:
-        mgv_signature_block = Spacer(1, 22 * mm)
 
     sig_left = [
         Paragraph(f"<b>{ISSUER_ENTITY_NAME}</b>", s["small"]),
@@ -906,7 +919,25 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
         s["legal"],
     ))
 
-    doc.build(story)
+    # `doc.build` peut planter si reportlab échoue sur un Paragraph
+    # (XML mal formé suite à un input inattendu) ou sur l'image MGV.
+    # On loggue l'exception avec le contexte NDA pour faciliter le
+    # debug, puis on remonte une ValueError descriptive — le service
+    # `nda_send.py` la convertit en NDASendError, et le endpoint
+    # POST /ndas/{id}/send la convertit en HTTP 502 avec message
+    # clair (au lieu d'un "Internal Server Error" générique).
+    try:
+        doc.build(story)
+    except Exception as exc:
+        log.exception(
+            "Rendu PDF NDA %s échoué (deal=%s) : %s",
+            nda.id,
+            nda.deal_id,
+            exc,
+        )
+        raise ValueError(
+            f"Rendu du PDF NDA échoué : {type(exc).__name__}: {exc}"
+        ) from exc
     return buf.getvalue()
 
 
