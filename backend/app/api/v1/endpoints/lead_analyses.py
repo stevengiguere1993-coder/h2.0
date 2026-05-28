@@ -1165,6 +1165,14 @@ async def export_offre_investissement(
                 "filename": filename,
                 "size_bytes": len(pptx_bytes),
                 "template_version": template_version,
+                # Version logique du service de génération. Bump à
+                # chaque PR qui change la sémantique de substitution
+                # (charts, dates auto-calculées, nouveaux champs
+                # wizard, etc.). v3 = corrections slide-par-slide
+                # (présentation projet, charts dynamiques slides 4/12/13,
+                # dates échéancier auto, totaux rénos depuis fiche,
+                # titre/chart Tendances dynamiques, estimation ROI).
+                "service_version": "v3",
                 "value_add_keys": sorted(
                     body.value_add_strategy.keys()
                 )

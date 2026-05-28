@@ -7,22 +7,32 @@ import { authedFetch } from "@/lib/auth";
 
 /**
  * Wizard de génération d'une offre d'investissement .pptx pour une
- * `LeadAnalysis`. v2 (2026-05-28) — alignement avec template horizon_v2
- * (16 slides, dont nouvelle slide TENDANCES) :
+ * `LeadAnalysis`. v3 (2026-05-28) — corrections slide-par-slide après
+ * tests de Phil sur 1660 + 5271 :
  *
  *   1. **Champs auto-remplis** (read-only) — Phil vérifie les chiffres
  *      qui seront injectés dans le template.
- *   2. **Cover + branding** : qualificatif projet (dropdown) + tagline
- *      auto-générée.
- *   3. **Opportunité unique** : 4 bullets + levier principal + gain $.
- *   4. **Plan création de valeur** : annotation valeur marchande.
- *   5. **Échéancier** : phase 2 label (auto-suggéré).
- *   6. **Stratégie value-add** : catalogue rénovations + flags + SCHL.
- *   7. **Tendances** (slide 12 NOUVELLE) : callout Zipplex + image.
+ *   2. **Cover + branding** : qualificatif projet + tagline.
+ *   2bis. **Présentation projet** (slide 3) : nb_etages (manuel).
+ *      Superficie, année, frais énergétiques, stationnements → auto
+ *      depuis la fiche.
+ *   3. **Opportunité unique** (slide 4) : 4 bullets + levier principal
+ *      + gain $ + lien Centris comparable (v3). Charts auto-substitués.
+ *   4. **Plan création de valeur** (slide 5) : annotation valeur
+ *      marchande. Source : `analysis.best_refi.valeur_economique`.
+ *   5. **Échéancier** (slide 6) : phase 2 label + 5 dates jalons
+ *      override (M1.1, M1.2, M2.1, M2.4, M3.1). Auto-suggérées selon
+ *      stratégies value-add cochées.
+ *   6. **Stratégie value-add** (slides 9 + 10) : rénos + flags + SCHL.
+ *      Totaux rénos = `analysis.travaux_estimes`. Frais détaillés =
+ *      `analysis.frais_developpement` + `frais_negociations` + autres.
+ *   6bis. **ROI estimation long terme** (slide 11) : callout libre.
+ *   7. **Tendances** (slide 12) : titre dynamique + Zipplex auto-lookup
+ *      (override callout + moyenne possible). Chart auto-substitué.
  *   8. **Photos** : 4 slots (cover, extérieur, carte, tendances).
  *
  * Au submit, POST `/api/v1/lead-analyses/{id}/offre-investissement` et
- * download du `.pptx` retourné.
+ * download du `.pptx` retourné (audit log avec `service_version: "v3"`).
  */
 
 type AutoFilledRow = { label: string; value: string };
@@ -112,8 +122,26 @@ export function OffreInvestissementWizard({
   const [levierPrincipalPhrase, setLevierPrincipalPhrase] = useState("");
   const [gainPotentielCallout, setGainPotentielCallout] = useState("");
   const [gainPotentielAuto, setGainPotentielAuto] = useState(true);
+  const [lienCentrisComparable, setLienCentrisComparable] = useState("");
   const [valeurMarchandeAnnotation, setValeurMarchandeAnnotation] = useState("");
   const [phase2Label, setPhase2Label] = useState("");
+
+  // Slide 3 — Présentation du projet (v3)
+  const [nbEtages, setNbEtages] = useState<number>(3);
+
+  // Slide 6 — Échéancier : 5 dates override (ISO yyyy-mm-dd)
+  const [dateM11, setDateM11] = useState("");
+  const [dateM12, setDateM12] = useState("");
+  const [dateM21, setDateM21] = useState("");
+  const [dateM24, setDateM24] = useState("");
+  const [dateM31, setDateM31] = useState("");
+
+  // Slide 11 — ROI : callout estimation long terme
+  const [estimationLongTermeCallout, setEstimationLongTermeCallout] = useState("");
+
+  // Slide 12 — Tendances : override callout (sinon Zipplex auto)
+  const [tendancesCalloutManuel, setTendancesCalloutManuel] = useState("");
+  const [tendancesMoyenneActuelle, setTendancesMoyenneActuelle] = useState<number>(0);
 
   // value-add flags
   const [conversionChambres, setConversionChambres] = useState(false);
@@ -184,8 +212,18 @@ export function OffreInvestissementWizard({
     setB4(data.bulletSuggestions.b4);
     setGainPotentielCallout("");
     setGainPotentielAuto(true);
+    setLienCentrisComparable("");
     setValeurMarchandeAnnotation("");
     setPhase2Label("");
+    setNbEtages(3);
+    setDateM11("");
+    setDateM12("");
+    setDateM21("");
+    setDateM24("");
+    setDateM31("");
+    setEstimationLongTermeCallout("");
+    setTendancesCalloutManuel("");
+    setTendancesMoyenneActuelle(0);
     setRenovationsSelectionnees(new Set());
     setAutresRenovations("");
     setTendancesCallout("");
@@ -341,8 +379,15 @@ export function OffreInvestissementWizard({
           bullet_opp_4: b4,
           gain_potentiel_callout: gainPotentielCallout,
           gain_potentiel_auto: gainPotentielAuto,
+          lien_centris_comparable: lienCentrisComparable,
           valeur_marchande_annotation: valeurMarchandeAnnotation,
           phase2_label: phase2Label,
+          nb_etages: nbEtages,
+          date_m1_1: dateM11,
+          date_m1_2: dateM12,
+          date_m2_1: dateM21,
+          date_m2_4: dateM24,
+          date_m3_1: dateM31,
           conversion_chambres: conversionChambres,
           nb_chambres_total: nbChambresTotal,
           loyer_par_chambre: loyerParChambre,
@@ -355,7 +400,10 @@ export function OffreInvestissementWizard({
           ajout_wifi: ajoutWifi,
           renovations_selectionnees: Array.from(renovationsSelectionnees),
           autres_renovations: autresRenovations,
+          estimation_long_terme_callout: estimationLongTermeCallout,
           tendances_callout: tendancesCallout,
+          tendances_callout_manuel: tendancesCalloutManuel,
+          tendances_moyenne_actuelle: tendancesMoyenneActuelle,
         },
         photos: buildPhotosPayload(),
       };
@@ -419,7 +467,7 @@ export function OffreInvestissementWizard({
               Génération d&apos;offre d&apos;investissement
             </p>
             <h2 className="mt-0.5 text-base font-bold text-white">
-              Template Horizon v2 — 16 slides (avec slide TENDANCES)
+              Template Horizon v2 — 16 slides (service v3 : charts dynamiques + auto-calculs)
             </h2>
           </div>
           <button
@@ -516,6 +564,32 @@ export function OffreInvestissementWizard({
             </div>
           </section>
 
+          {/* Section 2bis — Présentation du projet (v3) */}
+          <section className="mb-6">
+            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-emerald-300">
+              2bis. Présentation du projet (slide 3)
+            </h3>
+            <p className="mb-2 text-[11px] text-white/60">
+              Superficie habitable, année de construction, frais
+              énergétiques et stationnements sont auto-remplis depuis la
+              fiche. Seul le nombre d&apos;étages doit être saisi (varie
+              entre 2 et 5 selon le deal).
+            </p>
+            <label className="block max-w-[200px]">
+              <span className="mb-1 block text-[11px] font-medium text-white/80">
+                Nombre d&apos;étages
+              </span>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={nbEtages}
+                onChange={(e) => setNbEtages(Number(e.target.value) || 0)}
+                className="w-full rounded-md border border-brand-800 bg-brand-900/50 px-3 py-2 text-xs text-white focus:border-emerald-500/50 focus:outline-none"
+              />
+            </label>
+          </section>
+
           {/* Section 3 — Opportunité unique */}
           <section className="mb-6">
             <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-emerald-300">
@@ -574,6 +648,22 @@ export function OffreInvestissementWizard({
                 <span>Auto-calculer</span>
               </label>
             </div>
+            <label className="mt-2 block">
+              <span className="mb-1 block text-[11px] font-medium text-white/80">
+                Lien Centris d&apos;un comparable (URL)
+              </span>
+              <input
+                type="url"
+                value={lienCentrisComparable}
+                onChange={(e) => setLienCentrisComparable(e.target.value)}
+                maxLength={500}
+                placeholder="https://www.centris.ca/fr/..."
+                className="w-full rounded-md border border-brand-800 bg-brand-900/50 px-3 py-2 text-xs text-white placeholder-white/30 focus:border-emerald-500/50 focus:outline-none"
+              />
+              <span className="mt-1 block text-[10px] text-white/40">
+                Inséré dans la phrase « Similaire en vente à 2M$ ... ».
+              </span>
+            </label>
           </section>
 
           {/* Section 4 — Plan création de valeur */}
@@ -603,7 +693,7 @@ export function OffreInvestissementWizard({
             <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-emerald-300">
               5. Échéancier — Gantt (slide 6)
             </h3>
-            <label className="block">
+            <label className="mb-3 block">
               <span className="mb-1 block text-[11px] font-medium text-white/80">
                 Libellé phase 2 (auto-suggéré selon les leviers cochés)
               </span>
@@ -612,10 +702,38 @@ export function OffreInvestissementWizard({
                 value={phase2Label}
                 onChange={(e) => setPhase2Label(e.target.value)}
                 maxLength={40}
-                placeholder="ex: Création chambres, Rencontres, Conversion chauffage"
+                placeholder="ex: Création chambres, Travaux et rénovations, Conversion chauffage"
                 className="w-full rounded-md border border-brand-800 bg-brand-900/50 px-3 py-2 text-xs text-white placeholder-white/30 focus:border-emerald-500/50 focus:outline-none"
               />
             </label>
+            <div className="rounded-lg border border-brand-800 p-3">
+              <p className="mb-2 text-[11px] text-white/70">
+                Dates des jalons — auto-suggérées d&apos;après les
+                stratégies cochées ci-dessous. Override possible.
+                Laisser vide = auto.
+              </p>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                {[
+                  { v: dateM11, set: setDateM11, label: "M1.1 — Lettre de financement" },
+                  { v: dateM12, set: setDateM12, label: "M1.2 — Passage au notaire" },
+                  { v: dateM21, set: setDateM21, label: "M2.1 — Fin création chambres" },
+                  { v: dateM24, set: setDateM24, label: "M2.4 — Fin travaux / stabilisation" },
+                  { v: dateM31, set: setDateM31, label: "M3.1 — Remboursement partenaires" }
+                ].map((d) => (
+                  <label key={d.label} className="block">
+                    <span className="mb-1 block text-[10px] font-medium text-white/70">
+                      {d.label}
+                    </span>
+                    <input
+                      type="date"
+                      value={d.v}
+                      onChange={(e) => d.set(e.target.value)}
+                      className="w-full rounded-md border border-brand-800 bg-brand-900/50 px-2 py-1.5 text-[11px] text-white focus:border-emerald-500/50 focus:outline-none"
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
           </section>
 
           {/* Section 6 — Stratégie value-add */}
@@ -801,10 +919,33 @@ export function OffreInvestissementWizard({
             </div>
           </section>
 
-          {/* Section 7 — Tendances (slide 12 NOUVELLE) */}
+          {/* Section 6bis — ROI : estimation long terme (slide 11) */}
           <section className="mb-6">
             <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-emerald-300">
-              7. Tendances Zipplex (slide 12 — NOUVEAU)
+              6bis. ROI — estimation long terme (slide 11)
+            </h3>
+            <label className="block">
+              <span className="mb-1 block text-[11px] font-medium text-white/80">
+                Callout estimation long terme (bulle de la slide 11)
+              </span>
+              <input
+                type="text"
+                value={estimationLongTermeCallout}
+                onChange={(e) => setEstimationLongTermeCallout(e.target.value)}
+                maxLength={60}
+                placeholder="ex: Estimations à plus de 2,5 M$!"
+                className="w-full rounded-md border border-brand-800 bg-brand-900/50 px-3 py-2 text-xs text-white placeholder-white/30 focus:border-emerald-500/50 focus:outline-none"
+              />
+              <span className="mt-1 block text-[10px] text-white/40">
+                Laissé vide = défaut « Estimations à plus de 3 M$! ».
+              </span>
+            </label>
+          </section>
+
+          {/* Section 7 — Tendances (slide 12) */}
+          <section className="mb-6">
+            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-emerald-300">
+              7. Tendances Zipplex (slide 12)
             </h3>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <label className="block">
@@ -820,14 +961,41 @@ export function OffreInvestissementWizard({
               </label>
               <label className="block">
                 <span className="mb-1 block text-[11px] font-medium text-white/80">
-                  Callout (ex: +900$, +450$)
+                  Callout override (ex: +900$, +450$)
+                </span>
+                <input
+                  type="text"
+                  value={tendancesCalloutManuel}
+                  onChange={(e) => setTendancesCalloutManuel(e.target.value)}
+                  maxLength={20}
+                  placeholder="auto Zipplex si vide"
+                  className="w-full rounded-md border border-brand-800 bg-brand-900/50 px-3 py-2 text-xs text-white placeholder-white/30 focus:border-emerald-500/50 focus:outline-none"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[11px] font-medium text-white/80">
+                  Moyenne locative actuelle quartier (override $)
+                </span>
+                <input
+                  type="number"
+                  value={tendancesMoyenneActuelle}
+                  onChange={(e) =>
+                    setTendancesMoyenneActuelle(Number(e.target.value) || 0)
+                  }
+                  placeholder="auto Zipplex si 0"
+                  className="w-full rounded-md border border-brand-800 bg-brand-900/50 px-3 py-2 text-xs text-white placeholder-white/30 focus:border-emerald-500/50 focus:outline-none"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[11px] font-medium text-white/80">
+                  Callout (legacy — laissé vide de préférence)
                 </span>
                 <input
                   type="text"
                   value={tendancesCallout}
                   onChange={(e) => setTendancesCallout(e.target.value)}
                   maxLength={20}
-                  placeholder="+900$"
+                  placeholder="(legacy v2)"
                   className="w-full rounded-md border border-brand-800 bg-brand-900/50 px-3 py-2 text-xs text-white placeholder-white/30 focus:border-emerald-500/50 focus:outline-none"
                 />
               </label>
