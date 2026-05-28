@@ -1,6 +1,17 @@
 """Génère le PDF d'une Entente de confidentialité et de
 non-contournement (NDA — modèle MGV Développement v2).
 
+Deux variantes :
+- `render_nda_pdf` (PDF de prévisualisation, bloc Récepteur vide,
+  image MGV affichée mais zone signature investisseur en blanc)
+- `generate_signed_nda_pdf` (PDF post-signature, bloc Récepteur
+  rempli avec nom + email + date + mention « Signée électronique-
+  ment », et bandeau emerald-600 en haut + hash SHA-256 du document)
+
+Le PDF signé est stocké dans `NDA.signed_pdf_blob` au moment de la
+signature publique (cf. `public_nda.py::sign_nda`). Pattern repris
+de la PR #497 (devlog_soumission_pdf.generate_signed_pdf).
+
 Document légal multi-pages — version v2 qui remplace l'ancien
 modèle Horizon Services Immobiliers (5 sections) par le modèle
 MGV Développement (11 articles + préambule + bloc signatures).
@@ -82,50 +93,97 @@ _MONTHS_FR_CA = (
 )
 
 
-def _ensure_rgb_png_bytes(path: str) -> Optional[io.BytesIO]:
-    """Lit un PNG depuis le disque, force le mode RGB (fond blanc pour
-    les zones transparentes), et retourne un `BytesIO` prêt à être
-    consommé par `reportlab.platypus.Image`.
+# Cache du fichier RGB pré-converti — on évite de refaire la
+# conversion PIL à chaque génération de PDF (5+ par minute possible
+# en cas de relance massive). Le chemin est lazy-resolved à la
+# première utilisation et conservé jusqu'au prochain restart Render.
+_MGV_SIGNATURE_RGB_CACHE: Optional[str] = None
 
-    Pourquoi : reportlab a un bug connu où le parsing d'un PNG RGBA
-    (avec canal alpha) échoue avec une erreur opaque
-    `identity=[ImageReader@... broken]` au moment du `doc.build()`,
-    peu importe ce qu'on lui passe en entrée (chemin, file handle,
-    PIL.Image…). reportlab reconstruit son propre `ImageReader` en
-    interne. La seule façon fiable de contourner ça est de re-sauver
-    le PNG en RGB sans canal alpha avant de le lui donner.
 
-    Retourne `None` si le fichier n'existe pas ou si la conversion
-    échoue — l'appelant doit alors basculer sur un `Spacer` fallback
-    pour que la génération du NDA ne soit jamais bloquée.
+def _prepare_mgv_signature_rgb_file() -> Optional[str]:
+    """Pré-convertit `mgv_signature.png` (RGBA) en RGB sur disque et
+    retourne le chemin du fichier prêt-à-consommer par reportlab.
+
+    Pourquoi cette approche fichier (vs BytesIO mémoire) :
+    après PR #524, le pattern « PIL → BytesIO → reportlab.Image(buf) »
+    ne semble TOUJOURS pas fonctionner en prod Render — le PDF arrive
+    sans la signature manuscrite. reportlab reconstruit en interne un
+    ImageReader, et selon les versions un BytesIO peut être consommé
+    une seule fois (premier `doc.build()` OK, suivants KO). En passant
+    par un chemin de fichier RGB stable, reportlab ouvre lui-même le
+    fichier à chaque build — c'est le pattern qui fonctionne pour le
+    logo (`_LOGO_PATH`) qui s'affiche, lui, correctement.
+
+    Retourne le path du PNG RGB temporaire, ou None si :
+    - le fichier source n'existe pas (asset pas déployé)
+    - PIL n'est pas installé
+    - la conversion échoue (PNG corrompu)
+    Dans ces trois cas, l'appelant retombe sur le `Spacer` fallback.
     """
-    if not os.path.exists(path):
+    global _MGV_SIGNATURE_RGB_CACHE
+    if _MGV_SIGNATURE_RGB_CACHE and os.path.exists(_MGV_SIGNATURE_RGB_CACHE):
+        return _MGV_SIGNATURE_RGB_CACHE
+
+    src = MGV_SIGNATURE_IMAGE_PATH
+    if not os.path.exists(src):
+        log.warning(
+            "[NDA_PDF] Image signature MGV ABSENTE du disque "
+            "(path=%s). Le PDF sera généré sans signature manuscrite "
+            "(fallback Spacer). Vérifier que `backend/app/assets/"
+            "mgv_signature.png` est bien commité et déployé.",
+            src,
+        )
         return None
+
+    dst = src.replace(".png", "_rgb.png")
+    # Si le fichier RGB existe déjà sur disque (générée par un
+    # process précédent), on le réutilise sans toucher PIL.
+    if os.path.exists(dst):
+        log.info("[NDA_PDF] Réutilisation cache RGB signature (%s)", dst)
+        _MGV_SIGNATURE_RGB_CACHE = dst
+        return dst
+
     try:
         from PIL import Image as PILImage  # type: ignore
-
-        pil = PILImage.open(path)
-        if pil.mode != "RGB":
-            if pil.mode in ("RGBA", "LA", "P"):
-                bg = PILImage.new("RGB", pil.size, (255, 255, 255))
-                if pil.mode == "P":
-                    pil = pil.convert("RGBA")
-                alpha = pil.split()[-1] if pil.mode in ("RGBA", "LA") else None
-                if alpha is not None:
-                    bg.paste(pil, mask=alpha)
-                else:
-                    bg.paste(pil)
-                pil = bg
-            else:
-                pil = pil.convert("RGB")
-        buf = io.BytesIO()
-        pil.save(buf, format="PNG")
-        buf.seek(0)
-        return buf
     except Exception as exc:
         log.warning(
-            "Conversion PNG signature MGV échouée (%s): %s",
-            path,
+            "[NDA_PDF] PIL/Pillow indisponible — impossible de "
+            "convertir mgv_signature.png en RGB : %s. Fallback Spacer.",
+            exc,
+        )
+        return None
+
+    try:
+        pil = PILImage.open(src)
+        log.info(
+            "[NDA_PDF] mgv_signature.png chargée : mode=%s size=%s",
+            pil.mode,
+            pil.size,
+        )
+        if pil.mode != "RGB":
+            bg = PILImage.new("RGB", pil.size, (255, 255, 255))
+            if pil.mode == "P":
+                pil = pil.convert("RGBA")
+            if pil.mode in ("RGBA", "LA"):
+                alpha = pil.split()[-1]
+                bg.paste(pil, mask=alpha)
+            else:
+                bg.paste(pil.convert("RGB"))
+            pil = bg
+        pil.save(dst, format="PNG")
+        log.info(
+            "[NDA_PDF] Conversion RGB de mgv_signature.png réussie "
+            "→ %s (%d octets)",
+            dst,
+            os.path.getsize(dst),
+        )
+        _MGV_SIGNATURE_RGB_CACHE = dst
+        return dst
+    except Exception as exc:
+        log.exception(
+            "[NDA_PDF] Conversion PNG signature MGV échouée (%s): %s. "
+            "Fallback Spacer activé pour ce build.",
+            src,
             exc,
         )
         return None
@@ -341,7 +399,19 @@ async def _load(
     return nda, deal
 
 
-def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
+def _render_bytes(
+    nda: NDA,
+    deal: Optional[ProspectionDeal],
+    *,
+    force_signed_block: bool = False,
+) -> bytes:
+    """Rend le PDF du NDA.
+
+    `force_signed_block=True` : utilisé par `generate_signed_nda_pdf`
+    pour remplir le bloc Récepteur (nom, courriel, date, mention
+    « Signée électroniquement ») même si `nda.signed_at` n'est pas
+    encore committé en DB (cas du pipeline post-signature publique).
+    """
     rl = _lazy_reportlab()
     Paragraph = rl["Paragraph"]
     Spacer = rl["Spacer"]
@@ -862,26 +932,40 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
     #
     # Cause racine du bug `identity=[ImageReader@... broken]` :
     # reportlab ne parse pas correctement les PNG avec canal alpha
-    # (RGBA). On force donc la conversion en RGB (fond blanc) via
-    # PIL en mémoire avant de passer le buffer à `Image()`.
+    # (RGBA). On pré-convertit donc le PNG en RGB sur disque (pattern
+    # similaire au `_LOGO_PATH` qui s'affiche correctement) — voir
+    # `_prepare_mgv_signature_rgb_file` pour le rationale détaillé.
     mgv_signature_block: Any
     mgv_signature_block = Spacer(1, 22 * mm)
-    sig_buf = _ensure_rgb_png_bytes(MGV_SIGNATURE_IMAGE_PATH)
-    if sig_buf is not None:
+    sig_path = _prepare_mgv_signature_rgb_file()
+    if sig_path is not None:
         try:
             mgv_signature_block = Image(
-                sig_buf,
+                sig_path,
                 width=70 * mm,
                 height=22 * mm,
                 kind="proportional",
             )
+            log.info(
+                "[NDA_PDF] Image signature MGV chargée pour NDA %s "
+                "(path=%s)",
+                nda.id,
+                sig_path,
+            )
         except Exception as exc:
             log.warning(
-                "MGV signature image illisible (%s) — espace vide. Erreur: %s",
-                MGV_SIGNATURE_IMAGE_PATH,
+                "[NDA_PDF] Image signature MGV illisible par reportlab "
+                "(%s) — fallback Spacer activé. Erreur: %s",
+                sig_path,
                 exc,
             )
             mgv_signature_block = Spacer(1, 22 * mm)
+    else:
+        log.warning(
+            "[NDA_PDF] Pas de signature MGV pour NDA %s — fallback "
+            "Spacer activé (voir logs précédents pour la cause).",
+            nda.id,
+        )
 
     sig_left = [
         Paragraph(f"<b>{ISSUER_ENTITY_NAME}</b>", s["small"]),
@@ -899,23 +983,38 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
         Paragraph(f"Téléphone : {ISSUER_PHONE}", s["small"]),
     ]
 
+    # Le bloc Récepteur est rempli automatiquement dès que le NDA est
+    # signé via la page publique (signed_name + signed_at posés par
+    # le endpoint POST /public/ndas/{token}/sign). `force_signed_block`
+    # permet à `generate_signed_nda_pdf` de forcer le remplissage
+    # dans le même flush DB que la signature.
+    is_signed = force_signed_block or bool(
+        nda.signed_at and nda.signed_name
+    )
     signed_at_label = (
         _date_fr_ca_long(nda.signed_at) if nda.signed_at else "_____________________"
     )
     signed_name_label = (
         nda.signed_name if nda.signed_name else "_____________________"
     )
-    signature_label = (
-        f"Signé électroniquement par {nda.signed_name}"
-        if nda.signed_at and nda.signed_name
+    email_label = (
+        nda.investor_email
+        if is_signed and nda.investor_email
         else "_____________________"
     )
+    if is_signed:
+        # Mention italique stylisée pour distinguer visuellement la
+        # signature électronique d'une signature manuscrite.
+        signature_label = (
+            "<i>&#10004; Signée électroniquement</i>"
+        )
+    else:
+        signature_label = "_____________________"
     sig_right = [
         Paragraph("<b>LE RÉCEPTEUR</b>", s["small"]),
         Spacer(1, 6),
         Paragraph(f"Nom : {signed_name_label}", s["small"]),
-        Paragraph("Adresse courriel : _____________________", s["small"]),
-        Paragraph("Téléphone : _____________________", s["small"]),
+        Paragraph(f"Adresse courriel : {email_label}", s["small"]),
         Paragraph(f"Date : {signed_at_label}", s["small"]),
         Paragraph(f"Signature : {signature_label}", s["small"]),
     ]
@@ -972,6 +1071,140 @@ async def render_nda_pdf(db: AsyncSession, nda_id: int) -> bytes:
     if nda is None:
         raise ValueError(f"NDA {nda_id} introuvable")
     return _render_bytes(nda, deal)
+
+
+def _render_signed_bytes(
+    nda: NDA, deal: Optional[ProspectionDeal]
+) -> bytes:
+    """Variante post-signature : bloc Récepteur rempli + bandeau
+    emerald-600 en haut de la première page (« SIGNÉE ÉLECTRONIQUE-
+    MENT — {nom} le {date} à {HH:MM} UTC depuis IP {ip} ») + hash
+    SHA-256 du document de base ajouté en pied du bandeau pour
+    intégrité.
+
+    Pattern repris de `devlog_soumission_pdf._render_signed_bytes` :
+    on génère d'abord le PDF de base avec `force_signed_block=True`,
+    puis on overlay un bandeau via reportlab.canvas + pypdf.
+    """
+    import hashlib
+
+    base_pdf = _render_bytes(nda, deal, force_signed_block=True)
+    try:
+        from pypdf import PdfReader, PdfWriter  # type: ignore
+        from reportlab.pdfgen import canvas  # type: ignore
+    except Exception:
+        log.warning(
+            "[NDA_PDF] pypdf indisponible — PDF signé sans bandeau "
+            "overlay (NDA %s).",
+            nda.id,
+        )
+        return base_pdf
+
+    rl = _lazy_reportlab()
+    mm = rl["mm"]
+    colors = rl["colors"]
+
+    signed_at = nda.signed_at
+    signed_name = (nda.signed_name or "—").strip() or "—"
+    signed_ip = (nda.signed_ip or "—").strip() or "—"
+    if signed_at is not None:
+        signed_at_long = _date_fr_ca_long(signed_at)
+        signed_at_clock = signed_at.strftime("%H:%M UTC")
+    else:
+        signed_at_long = "—"
+        signed_at_clock = "—"
+
+    pdf_hash_short = hashlib.sha256(base_pdf).hexdigest()[:16]
+
+    overlay_buf = io.BytesIO()
+    page_w_pt, page_h_pt = rl["A4"]
+    c = canvas.Canvas(overlay_buf, pagesize=rl["A4"])
+    band_h = 18 * mm
+    band_y = page_h_pt - band_h
+    c.setFillColor(colors.HexColor("#059669"))  # emerald-600
+    c.rect(0, band_y, page_w_pt, band_h, fill=1, stroke=0)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(
+        15 * mm,
+        band_y + band_h - 6 * mm,
+        "✓ SIGNEE ELECTRONIQUEMENT",
+    )
+    c.setFont("Helvetica", 8)
+    c.drawString(
+        15 * mm,
+        band_y + band_h - 11 * mm,
+        f"{signed_name} le {signed_at_long} a {signed_at_clock} "
+        f"depuis IP {signed_ip}",
+    )
+    c.drawString(
+        15 * mm,
+        band_y + 3 * mm,
+        f"Hash du document (SHA-256, 16 premiers caracteres) : "
+        f"{pdf_hash_short}",
+    )
+    c.save()
+    overlay_buf.seek(0)
+
+    try:
+        reader_base = PdfReader(io.BytesIO(base_pdf))
+        reader_overlay = PdfReader(overlay_buf)
+        writer = PdfWriter()
+        overlay_page = reader_overlay.pages[0]
+        for idx, page in enumerate(reader_base.pages):
+            if idx == 0:
+                try:
+                    page.merge_page(overlay_page)
+                except Exception:
+                    log.exception(
+                        "[NDA_PDF] Overlay bandeau emerald échoué "
+                        "(NDA %s, page 0)",
+                        nda.id,
+                    )
+            writer.add_page(page)
+        out = io.BytesIO()
+        writer.write(out)
+        return out.getvalue()
+    except Exception as exc:
+        log.exception(
+            "[NDA_PDF] Fusion overlay signé échouée (NDA %s) — "
+            "retour au PDF de base avec bloc Récepteur rempli. Erreur: %s",
+            nda.id,
+            exc,
+        )
+        return base_pdf
+
+
+async def generate_signed_nda_pdf(
+    db: AsyncSession, nda_id: int
+) -> bytes:
+    """Rend le PDF *signé* du NDA — appelé au moment de la signature
+    publique (POST /public/ndas/{token}/sign).
+
+    Le PDF contient :
+    - Bloc Récepteur rempli (nom, courriel, date, « Signée électr. »)
+    - Bandeau emerald-600 plein largeur en haut de la 1ère page
+      avec horodatage + IP + hash SHA-256 du document de base
+    - Tout le reste identique au PDF non-signé
+
+    À stocker dans `NDA.signed_pdf_blob` pour pouvoir le servir tel
+    quel via `GET /ndas/{id}/signed-pdf` (audit immuable — pas de
+    re-rendu à chaque téléchargement).
+    """
+    nda, deal = await _load(db, nda_id)
+    if nda is None:
+        raise ValueError(f"NDA {nda_id} introuvable")
+    return _render_signed_bytes(nda, deal)
+
+
+def signed_nda_pdf_filename(nda: NDA) -> str:
+    """Nom de fichier canonique du PDF *signé* d'un NDA.
+
+    Format : `Entente_Confidentialite_MGV_{Nom_Investisseur}_SIGNEE.pdf`.
+    """
+    slug = _slugify_investor(nda.investor_name)
+    suffix = slug if slug else str(nda.id)
+    return f"Entente_Confidentialite_MGV_{suffix}_SIGNEE.pdf"
 
 
 def _slugify_investor(name: Optional[str]) -> str:

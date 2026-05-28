@@ -283,10 +283,23 @@ export default function SignNDAPage() {
                 </span>
               )}
             </div>
+            {/*
+              Contraste WCAG AA :
+              - Fond blanc pur (#ffffff) au lieu de slate-50 pour
+                maximiser le ratio sur le corps de texte.
+              - Texte du conteneur en slate-900 (#0f172a) — ratio
+                ~16:1 sur fond blanc, largement au-dessus du 4.5:1
+                requis pour le corps de texte. Phil rapportait du
+                « gris très pâle » sur la version précédente où le
+                texte héritait d'un slate-800 sur fond slate-50.
+              - Tous les <p>, <li>, <em> reprennent maintenant la
+                même couleur foncée — pas de risque de redescente
+                par héritage CSS sur certains nœuds.
+            */}
             <div
               ref={scrollContainerRef}
               onScroll={onContainerScroll}
-              className="nda-prose h-[480px] overflow-y-auto rounded-lg border border-slate-300 bg-slate-50 p-5 text-sm leading-relaxed text-slate-800"
+              className="nda-prose h-[480px] overflow-y-auto rounded-lg border border-slate-300 bg-white p-5 text-sm leading-relaxed text-slate-900"
               dangerouslySetInnerHTML={{ __html: ndaHtml }}
             />
             <style jsx>{`
@@ -308,14 +321,23 @@ export default function SignNDAPage() {
               .nda-prose :global(p) {
                 margin: 0 0 0.6rem 0;
                 text-align: justify;
+                color: #0f172a; /* slate-900 — lisible WCAG AA */
               }
               .nda-prose :global(ul) {
                 margin: 0 0 0.6rem 0;
                 padding-left: 1.2rem;
                 list-style: none;
+                color: #0f172a;
               }
               .nda-prose :global(li) {
                 margin: 0.25rem 0;
+                color: #0f172a;
+              }
+              .nda-prose :global(em) {
+                /* Italique légal : slate-700 — un peu plus pâle
+                   pour distinguer visuellement, mais reste >= 4.5:1
+                   sur fond blanc. */
+                color: #334155;
               }
               .nda-prose :global(blockquote) {
                 margin: 0.75rem 0;
@@ -323,6 +345,7 @@ export default function SignNDAPage() {
                 border-left: 3px solid #1d4ed8;
                 background: #eff6ff;
                 font-style: italic;
+                color: #1e293b;
               }
               .nda-prose :global(hr) {
                 margin: 1.25rem 0;
@@ -331,6 +354,7 @@ export default function SignNDAPage() {
               }
               .nda-prose :global(strong) {
                 color: #0f172a;
+                font-weight: 700;
               }
             `}</style>
           </div>

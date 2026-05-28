@@ -597,6 +597,14 @@ async def init_db() -> None:
             # (pas de bucket externe). Récupérable via
             # GET /devlog/soumissions/{id}/signed-pdf (auth admin/owner).
             ("devlog_soumissions", "signed_pdf_blob", "BYTEA"),
+            # NDA — PDF signé généré au moment de la signature publique
+            # (POST /public/ndas/{token}/sign). Contient le bloc Récepteur
+            # rempli (nom, courriel, date, mention « Signée électrique-
+            # ment ») + un bandeau emerald-600 « SIGNEE ELECTRONIQUEMENT »
+            # en haut de la première page avec horodatage, IP, et hash
+            # SHA-256 du document pour intégrité. Récupérable via
+            # GET /api/v1/ndas/{id}/signed-pdf (auth admin/owner).
+            ("ndas", "signed_pdf_blob", "BYTEA"),
             # Envoi PDF + consultation publique des factures devlog
             # (pièce #5 vague 1). `due_date` existe déjà dans le modèle,
             # on ajoute le token public, l'horodatage d'envoi et celui
