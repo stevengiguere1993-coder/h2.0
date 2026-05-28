@@ -1324,7 +1324,8 @@ export default function ProspectionDetailPage() {
                               {
                                 style: "currency",
                                 currency: "CAD",
-                                maximumFractionDigits: 0
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2
                               }
                             )}
                           </p>
@@ -1339,7 +1340,8 @@ export default function ProspectionDetailPage() {
                               {
                                 style: "currency",
                                 currency: "CAD",
-                                maximumFractionDigits: 0
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2
                               }
                             )}
                           </p>
@@ -1817,7 +1819,8 @@ function FinanceSection({
     return new Intl.NumberFormat("fr-CA", {
       style: "currency",
       currency: "CAD",
-      maximumFractionDigits: 0
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
     }).format(n);
   }
 
@@ -2191,7 +2194,8 @@ function BuyFlowSection({
     return new Intl.NumberFormat("fr-CA", {
       style: "currency",
       currency: "CAD",
-      maximumFractionDigits: 0
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
     }).format(n);
   }
 

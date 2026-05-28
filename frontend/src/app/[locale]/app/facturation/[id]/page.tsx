@@ -118,6 +118,7 @@ function fmtMoney(n: number | string | null): string {
   return new Intl.NumberFormat("fr-CA", {
     style: "currency",
     currency: "CAD",
+    minimumFractionDigits: 2,
     maximumFractionDigits: 2
   }).format(num);
 }
@@ -1185,7 +1186,8 @@ export default function FactureDetailPage() {
                       {projFin.projected_revenue.toLocaleString("fr-CA", {
                         style: "currency",
                         currency: "CAD",
-                        maximumFractionDigits: 0
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2
                       })}
                     </p>
                   </div>
@@ -1197,14 +1199,16 @@ export default function FactureDetailPage() {
                       {projFin.invoiced_amount.toLocaleString("fr-CA", {
                         style: "currency",
                         currency: "CAD",
-                        maximumFractionDigits: 0
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2
                       })}
                     </p>
                     <p className="mt-0.5 text-[10px] text-white/50">
                       dont {projFin.paid_amount.toLocaleString("fr-CA", {
                         style: "currency",
                         currency: "CAD",
-                        maximumFractionDigits: 0
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2
                       })}{" "}
                       payé
                     </p>
@@ -1235,7 +1239,8 @@ export default function FactureDetailPage() {
                       {projFin.balance_due.toLocaleString("fr-CA", {
                         style: "currency",
                         currency: "CAD",
-                        maximumFractionDigits: 0
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2
                       })}
                     </p>
                   </div>
@@ -1602,6 +1607,7 @@ export default function FactureDetailPage() {
                                   {(a.amount ?? 0).toLocaleString("fr-CA", {
                                     style: "currency",
                                     currency: "CAD",
+                                    minimumFractionDigits: 2,
                                     maximumFractionDigits: 2
                                   })}
                                 </span>
@@ -1630,6 +1636,7 @@ export default function FactureDetailPage() {
                                   {billed.toLocaleString("fr-CA", {
                                     style: "currency",
                                     currency: "CAD",
+                                    minimumFractionDigits: 2,
                                     maximumFractionDigits: 2
                                   })}
                                 </span>
