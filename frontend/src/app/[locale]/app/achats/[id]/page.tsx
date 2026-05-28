@@ -173,14 +173,26 @@ export default function AchatDetailPage() {
           data.fournisseur_id ? String(data.fournisseur_id) : ""
         );
         setDescription(data.description || "");
-        setAmount(data.amount != null ? String(data.amount) : "");
-        setAmountTaxes(
-          data.amount_taxes != null ? String(data.amount_taxes) : ""
-        );
         {
-          const sum =
-            (Number(data.amount) || 0) + (Number(data.amount_taxes) || 0);
-          setTotal(sum ? sum.toFixed(2) : "");
+          const amt = Number(data.amount) || 0;
+          const tax = Number(data.amount_taxes) || 0;
+          const sum = amt + tax;
+          if (sum > 0 && tax === 0) {
+            // Reçu legacy (ou saisi avant la décomposition TTC) : le
+            // montant stocké est le total de la facture. On applique la
+            // décomposition QC standard pour que le HT et les taxes ne
+            // restent pas à zéro. Ajustable ensuite si taxes non standard.
+            const { ht, taxes } = splitFromTotal(sum);
+            setAmount(ht.toFixed(2));
+            setAmountTaxes(taxes.toFixed(2));
+            setTotal(sum.toFixed(2));
+          } else {
+            setAmount(data.amount != null ? String(data.amount) : "");
+            setAmountTaxes(
+              data.amount_taxes != null ? String(data.amount_taxes) : ""
+            );
+            setTotal(sum ? sum.toFixed(2) : "");
+          }
         }
         setIsBillable(data.is_billable !== false);
         setMarkupPercent(
