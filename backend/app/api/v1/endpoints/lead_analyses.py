@@ -970,6 +970,67 @@ async def get_attachment(
     )
 
 
+@router.get(
+    "/{analysis_id}/pdf",
+    summary="Génère le PDF complet d'une fiche d'analyse (export).",
+)
+async def export_pdf(
+    analysis_id: int, db: DBSession, user: CurrentUser
+):
+    """Génère à la volée le PDF complet de la fiche d'analyse —
+    identité, financier, typologie, inputs manuels, frais de démarrage,
+    4 scénarios, meilleur refi (RCI/PVI), validation, sources/attachments.
+
+    L'export reflète toujours l'état courant — aucune persistance.
+    Audit log `lead_analysis.pdf_exported`.
+    """
+    _require_prospection(user)
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+
+    from app.services.lead_analysis_pdf import (
+        generate_lead_analysis_pdf,
+        lead_analysis_pdf_filename,
+    )
+
+    try:
+        pdf_bytes = await generate_lead_analysis_pdf(db, analysis_id)
+    except ValueError as exc:
+        log.exception("Génération PDF fiche %s échouée", analysis_id)
+        raise HTTPException(502, f"Génération PDF échouée : {exc}") from exc
+
+    filename = lead_analysis_pdf_filename(rec)
+
+    try:
+        await log_action(
+            db,
+            user=user,
+            action="lead_analysis.pdf_exported",
+            entity_type="lead_analysis",
+            entity_id=rec.id,
+            details={
+                "filename": filename,
+                "size_bytes": len(pdf_bytes),
+                "has_results": bool(rec.analysis_results_json),
+            },
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        log.exception("Audit log lead_analysis.pdf_exported échoué")
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{filename}"'
+            ),
+            "Content-Length": str(len(pdf_bytes)),
+        },
+    )
+
+
 # ── Analyse financière (Phase 3b) ──────────────────────────────────
 
 
