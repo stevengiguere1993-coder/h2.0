@@ -826,28 +826,36 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
     # `assets/mgv_signature.png` existe, on l'affiche au-dessus du
     # nom. Sinon (ou si l'image plante au chargement / décodage),
     # on laisse un Spacer vide de même hauteur — pas de placeholder
-    # texte « [signature] ». Cette robustesse est CRITIQUE : si le
-    # PNG est mal formé, reportlab plante au moment de `doc.build()`
-    # (lazy load), donc on force ici un préchargement via ImageReader
-    # afin d'attraper l'exception immédiatement.
-    mgv_signature_block: Any
-    mgv_signature_block = Spacer(1, 22 * mm)
+    # texte « [signature] ».
+    #
+    # ⚠️ Anti-bug reportlab : on précharge l'image via PIL avec le
+    # PATH (pas un file handle ouvert dans un `with` qui ferme le
+    # fh derrière), parce que reportlab `ImageReader` peut conserver
+    # une référence au fh fermé et planter au build avec un message
+    # opaque type `SyntaxError: \nidentity=[ImageReader@... filename=...] broken`.
+    # On dimensionne explicitement width/height (en respectant le
+    # ratio source) plutôt que `kind="proportional"` qui force
+    # reportlab à refaire un calcul PIL au build et risque de
+    # re-déclencher le bug.
+    mgv_signature_block: Any = Spacer(1, 18 * mm)
     if os.path.exists(MGV_SIGNATURE_IMAGE_PATH):
         try:
-            # Préchargement strict via ImageReader : force le décodage
-            # du PNG ici plutôt qu'à `doc.build()`. Si le fichier est
-            # corrompu / format inattendu, l'exception est levée et
-            # attrapée localement — pas en plein milieu du rendu.
-            from reportlab.lib.utils import ImageReader  # type: ignore
+            # Préchargement via PIL avec le path direct — pas de
+            # file handle à gérer, et PIL ferme proprement après lecture.
+            from PIL import Image as PILImage  # type: ignore
 
-            with open(MGV_SIGNATURE_IMAGE_PATH, "rb") as fh:
-                _probe = ImageReader(fh)
-                _probe.getSize()
+            with PILImage.open(MGV_SIGNATURE_IMAGE_PATH) as _probe:
+                _probe.load()
+                src_w, src_h = _probe.size
+            # Largeur cible 40 mm. On calcule la hauteur en gardant
+            # le ratio source — évite d'utiliser `kind="proportional"`
+            # qui re-décode l'image au build.
+            target_w_mm = 40.0
+            target_h_mm = target_w_mm * (src_h / src_w) if src_w else 18.0
             mgv_signature_block = Image(
                 MGV_SIGNATURE_IMAGE_PATH,
-                width=70 * mm,
-                height=22 * mm,
-                kind="proportional",
+                width=target_w_mm * mm,
+                height=target_h_mm * mm,
             )
         except Exception as exc:
             log.warning(
@@ -855,13 +863,18 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
                 MGV_SIGNATURE_IMAGE_PATH,
                 exc,
             )
-            mgv_signature_block = Spacer(1, 22 * mm)
+            mgv_signature_block = Spacer(1, 18 * mm)
 
+    # Bloc MGV : on empile image + Paragraphs dans un `KeepTogether`
+    # pour éviter que reportlab tente d'étaler le contenu sur deux
+    # pages au milieu d'une cellule de Table (cas pathologique qui
+    # peut déclencher le rendu boguée de l'Image flowable).
+    KeepTogether = rl["KeepTogether"]
     sig_left = [
         Paragraph(f"<b>{ISSUER_ENTITY_NAME}</b>", s["small"]),
         Spacer(1, 6),
         mgv_signature_block,
-        Spacer(1, 4),
+        Spacer(1, 2),
         Paragraph(f"Par : {ISSUER_REPRESENTATIVE_NAME}", s["small"]),
         Paragraph(f"Titre : {ISSUER_REPRESENTATIVE_TITLE}", s["small"]),
         Paragraph(
@@ -872,6 +885,7 @@ def _render_bytes(nda: NDA, deal: Optional[ProspectionDeal]) -> bytes:
         Paragraph(f"Courriel : {ISSUER_EMAIL}", s["small"]),
         Paragraph(f"Téléphone : {ISSUER_PHONE}", s["small"]),
     ]
+    sig_left = [KeepTogether(sig_left)]
 
     signed_at_label = (
         _date_fr_ca_long(nda.signed_at) if nda.signed_at else "_____________________"
