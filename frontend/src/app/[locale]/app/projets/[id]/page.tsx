@@ -68,7 +68,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "planification", label: "Planification" },
   { id: "agenda", label: "Agenda chantier" },
   { id: "achats", label: "Achats / PO" },
-  { id: "finances", label: "Finances" },
+  { id: "finances", label: "Récap & finances" },
   { id: "photos", label: "Photos" },
   { id: "tasks", label: "Tâches" }
 ];
@@ -1608,7 +1608,8 @@ type Finances = {
   invoices?: InvoiceLine[];
 };
 
-// ─── Onglet « Récap » : synthèse délai + finances + profit ────
+// ─── Cartes de synthèse (délai + avancement contrat) réutilisées
+//     dans l'onglet « Récap & finances » ────────────────────────
 
 function RecapDelayCard({
   plannedDays,
@@ -2160,22 +2161,30 @@ function FinancesTab({
           </div>
         </div>
         {data.projected_labour_hours > 0 ? (
-          <div className="mt-4 h-2 overflow-hidden rounded-full bg-brand-950">
-            <div
-              className={`h-full ${
-                data.actual_labour_hours > data.projected_labour_hours
-                  ? "bg-rose-500"
-                  : "bg-emerald-500"
-              }`}
-              style={{
-                width: `${Math.min(
-                  100,
-                  (data.actual_labour_hours / data.projected_labour_hours) *
-                    100
-                )}%`
-              }}
-            />
-          </div>
+          <>
+            <div className="mt-4 h-2 overflow-hidden rounded-full bg-brand-950">
+              <div
+                className={`h-full ${
+                  data.actual_labour_hours > data.projected_labour_hours
+                    ? "bg-rose-500"
+                    : "bg-emerald-500"
+                }`}
+                style={{
+                  width: `${Math.min(
+                    100,
+                    (data.actual_labour_hours / data.projected_labour_hours) *
+                      100
+                  )}%`
+                }}
+              />
+            </div>
+            <p className="mt-1 text-[11px] text-white/50">
+              {Math.round(
+                (data.actual_labour_hours / data.projected_labour_hours) * 100
+              )}{" "}
+              % des heures prévues consommées
+            </p>
+          </>
         ) : null}
       </section>
 
