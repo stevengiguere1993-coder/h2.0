@@ -25,10 +25,18 @@ function fmt(n: number | null | undefined, suffix: string = "") {
  * Affichage en lecture seule d'un résumé de fiche d'analyse de lead,
  * embarquable dans une autre page (ex : page detail d'un Deal Pipeline).
  * Le bouton « Ouvrir la fiche complète » navigue vers la page Analyses
- * des leads avec un paramètre `?openId={id}` qui pourrait être supporté
- * plus tard pour ouvrir directement le modal.
+ * des leads avec `?openId={id}` (ouverture auto du modal). Si
+ * `fromDealId` est fourni, on ajoute `&fromDeal={dealId}` pour que la
+ * page d'analyses affiche un bouton « Retour au deal » dans le modal
+ * et préserve le contexte du Deal d'origine.
  */
-export function LeadAnalysisSummary({ id }: { id: number }) {
+export function LeadAnalysisSummary({
+  id,
+  fromDealId
+}: {
+  id: number;
+  fromDealId?: number;
+}) {
   const [data, setData] = useState<Analysis | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -78,7 +86,11 @@ export function LeadAnalysisSummary({ id }: { id: number }) {
         </div>
         {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
         <Link
-          href={`/prospection/analyses-leads?openId=${data.id}` as any}
+          href={
+            (fromDealId != null
+              ? `/prospection/analyses-leads?openId=${data.id}&fromDeal=${fromDealId}`
+              : `/prospection/analyses-leads?openId=${data.id}`) as any
+          }
           className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/20"
         >
           Ouvrir la fiche complète

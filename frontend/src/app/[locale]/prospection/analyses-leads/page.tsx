@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ArrowLeft,
   Ban,
   CheckCircle2,
   Eye,
@@ -232,6 +233,11 @@ export default function AnalysesLeadsPage() {
 
   // ── Détail modal ──────────────────────────────────────────────
   const [detailId, setDetailId] = useState<number | null>(null);
+  // Si le modal a été ouvert depuis la page d'un Deal (param
+  // ?fromDeal={dealId}), on garde le dealId pour afficher un bouton
+  // « Retour au deal » dans le header du modal — Phil reste dans le
+  // contexte du Deal d'origine.
+  const [backToDealId, setBackToDealId] = useState<number | null>(null);
 
   // Ouverture automatique du modal via ?openId={id} (lien depuis la
   // page detail d'un deal — composant LeadAnalysisSummary).
@@ -242,6 +248,11 @@ export default function AnalysesLeadsPage() {
     const id = Number(raw);
     if (!Number.isFinite(id) || id <= 0) return;
     setDetailId(id);
+    const fromRaw = searchParams.get("fromDeal");
+    if (fromRaw) {
+      const fromId = Number(fromRaw);
+      if (Number.isFinite(fromId) && fromId > 0) setBackToDealId(fromId);
+    }
     // Nettoyage de l'URL pour eviter une re-ouverture en boucle au
     // reload / back-forward. On utilise history.replaceState plutot
     // que router.replace : on conserve l'etat React local (notamment
@@ -250,6 +261,7 @@ export default function AnalysesLeadsPage() {
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
       url.searchParams.delete("openId");
+      url.searchParams.delete("fromDeal");
       window.history.replaceState(null, "", url.toString());
     }
     // Volontairement sans dependance sur searchParams : on ne veut
@@ -257,6 +269,17 @@ export default function AnalysesLeadsPage() {
     // param de toute facon).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Navigation « Retour au deal » : ferme le modal et pousse vers la
+  // page Deal d'origine. Conservé en useCallback pour pouvoir
+  // passer une référence stable au modal.
+  const goBackToDeal = useCallback(() => {
+    if (backToDealId == null) return;
+    setDetailId(null);
+    setBackToDealId(null);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    router.push(`/prospection/pipeline/${backToDealId}` as any);
+  }, [backToDealId, router]);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -722,10 +745,14 @@ export default function AnalysesLeadsPage() {
       {detailId !== null ? (
         <LeadDetailModal
           id={detailId}
-          onClose={() => setDetailId(null)}
+          onClose={() => {
+            setDetailId(null);
+            setBackToDealId(null);
+          }}
           onSaved={() => {
             void reload();
           }}
+          onBackToDeal={backToDealId != null ? goBackToDeal : undefined}
         />
       ) : null}
     </div>
@@ -1002,11 +1029,16 @@ const TYPOLOGY_KEYS = ["1.5", "2.5", "3.5", "4.5", "5.5", "6.5", "7.5", "8.5"];
 function LeadDetailModal({
   id,
   onClose,
-  onSaved
+  onSaved,
+  onBackToDeal
 }: {
   id: number;
   onClose: () => void;
   onSaved: () => void;
+  /** Si défini, affiche un bouton « Retour au deal » dans le header
+   * du modal — set par <AnalysesLeadsPage> quand l'ouverture provient
+   * du composant <LeadAnalysisSummary> (param ?fromDeal={dealId}). */
+  onBackToDeal?: () => void;
 }) {
   const [data, setData] = useState<LeadDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1158,14 +1190,27 @@ function LeadDetailModal({
             </h2>
             {data ? <ExtractionBadgeInline modelUsed={data.model_used} /> : null}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md p-1 text-white/60 hover:bg-brand-900 hover:text-white"
-            aria-label="Fermer"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex flex-shrink-0 items-center gap-1">
+            {onBackToDeal ? (
+              <button
+                type="button"
+                onClick={onBackToDeal}
+                className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-300 hover:bg-emerald-500/20"
+                title="Revenir à la page du deal"
+              >
+                <ArrowLeft className="h-3 w-3" />
+                Retour au deal
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md p-1 text-white/60 hover:bg-brand-900 hover:text-white"
+              aria-label="Fermer"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto px-5 py-4">

@@ -398,7 +398,10 @@ export default function DealDetailPage() {
         ) : null}
 
         {deal?.lead_analysis_id ? (
-          <LeadAnalysisSummary id={deal.lead_analysis_id} />
+          <LeadAnalysisSummary
+            id={deal.lead_analysis_id}
+            fromDealId={dealId}
+          />
         ) : null}
 
         <OfferSection dealId={dealId} />

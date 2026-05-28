@@ -510,6 +510,17 @@ export function ProspectionSidebar({
  *   - sur l'en-tête d'un dossier → archive le deal traîné
  *     (priority = termine ou abandonne).
  */
+/**
+ * Extrait l'ID du deal courant à partir du pathname Next.js.
+ * Match strict sur le segment numérique pour éviter le bug de
+ * substring matching (ex. deal #420 surligné quand on est sur
+ * deal #2420). Retourne null si on n'est pas sur une page deal.
+ */
+function currentPipelineDealId(pathname: string): number | null {
+  const m = pathname.match(/\/prospection\/pipeline\/(\d+)(?:\/|$)/);
+  return m ? Number(m[1]) : null;
+}
+
 function PipelineDealsList({
   deals,
   pathname,
@@ -532,6 +543,7 @@ function PipelineDealsList({
 }) {
   const [openTermine, setOpenTermine] = useState(false);
   const [openAbandonne, setOpenAbandonne] = useState(false);
+  const activeDealId = currentPipelineDealId(pathname);
 
   const active = deals.filter(
     (d) => d.priority !== "termine" && d.priority !== "abandonne"
@@ -555,9 +567,11 @@ function PipelineDealsList({
       ) : null}
       {active.map((d) => {
         const dragging = dragDealId === d.id;
-        const onPath = pathname.includes(
-          `/prospection/pipeline/${d.id}`
-        );
+        // Match segment-aware : compare l'ID extrait du pathname
+        // strictement à d.id. Évite que /pipeline/2420 surligne
+        // aussi le deal #420 (cf. bug fixé en PR #430 sur la
+        // sidebar principale).
+        const onPath = activeDealId === d.id;
         return (
           <div
             key={d.id}
@@ -655,6 +669,7 @@ function ArchiveFolder({
     target: "active" | "termine" | "abandonne"
   ) => void;
 }) {
+  const activeDealId = currentPipelineDealId(pathname);
   return (
     <div
       className="mt-2"
@@ -689,9 +704,8 @@ function ArchiveFolder({
             </p>
           ) : null}
           {deals.map((d) => {
-            const onPath = pathname.includes(
-              `/prospection/pipeline/${d.id}`
-            );
+            // Match segment-aware — cf. PipelineDealsList.
+            const onPath = activeDealId === d.id;
             const dragging = dragDealId === d.id;
             return (
               <div
