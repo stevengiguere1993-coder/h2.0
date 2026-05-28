@@ -318,6 +318,20 @@ async def receive_facebook_lead(
     return {"received": created}
 
 
+def _clean_fb_value(v: Optional[str]) -> Optional[str]:
+    """Neutralise les valeurs factices des leads de TEST Meta
+    (ex. ``<test lead: dummy data for nom_complet>``). Retourne
+    ``None`` pour ces placeholders — un vrai lead aura une vraie
+    valeur. Sinon retourne la valeur trimmee."""
+    if not v:
+        return None
+    s = str(v).strip()
+    low = s.lower()
+    if low.startswith("<test lead") or "dummy data for" in low:
+        return None
+    return s or None
+
+
 def _build_fields_from_lead_detail(
     detail: Dict[str, Any],
     leadgen_id: str,
@@ -334,81 +348,97 @@ def _build_fields_from_lead_detail(
 
     # Coordonnees. Les variantes couvrent le formulaire site public
     # (full_name, email, phone) et le formulaire FB Lead Ads
-    # francophone (nom_complet, e-mail, numero_de_telephone).
+    # francophone (nom_complet, e-mail, numero_de_telephone). Les
+    # placeholders de test Meta sont neutralises via _clean_fb_value.
     name = (
-        _extract_field(
-            field_data, "nom_complet", "nom", "full_name", "name",
+        _clean_fb_value(
+            _extract_field(
+                field_data, "nom_complet", "nom", "full_name", "name",
+            )
         )
         or "Lead Facebook"
     )
     email = (
-        _extract_field(field_data, "e_mail", "email", "courriel") or ""
-    )
-    phone = (
-        _extract_field(
-            field_data,
-            "numero_de_telephone", "numero_telephone",
-            "telephone", "phone_number", "phone", "numero",
+        _clean_fb_value(
+            _extract_field(field_data, "e_mail", "email", "courriel")
         )
         or ""
     )
-    address = _extract_field(
-        field_data, "adresse", "address", "street_address"
+    phone = (
+        _clean_fb_value(
+            _extract_field(
+                field_data,
+                "numero_de_telephone", "numero_telephone",
+                "telephone", "phone_number", "phone", "numero",
+            )
+        )
+        or ""
     )
-    budget = _extract_field(field_data, "budget", "budget_range")
+    address = _clean_fb_value(
+        _extract_field(field_data, "adresse", "address", "street_address")
+    )
+    budget = _clean_fb_value(
+        _extract_field(field_data, "budget", "budget_range")
+    )
 
     # Type de projet : mapping explicite + heuristique de fallback.
     # Le formulaire FB courant ne propose que des options multilogement
     # (Duplex/Triplex, 4-6 logements, 7+ logements, plusieurs
     # immeubles) donc toute reponse contenant "logement", "duplex",
     # "triplex" ou "immeuble" tombe sur multilogement.
-    pt_raw = _extract_field(
-        field_data,
-        "quel_type_d_immeuble",
-        "type_d_immeuble",
-        "type_de_projet",
-        "type_projet",
-        "project_type",
-        "type_travaux",
+    pt_raw = _clean_fb_value(
+        _extract_field(
+            field_data,
+            "quel_type_d_immeuble",
+            "type_d_immeuble",
+            "type_de_projet",
+            "type_projet",
+            "project_type",
+            "type_travaux",
+        )
     )
     project_type = _map_project_type(pt_raw)
 
     # Reponses qualifiantes (intention, urgence, decideur). On les
     # sort en tete du message pour qu'elles sautent aux yeux du
-    # conseiller dans la fiche prospect.
+    # conseiller. Les placeholders de test sont filtres.
     qualifiers: List[tuple[str, Optional[str]]] = [
         (
             "Propriétaire/décideur",
-            _extract_field(
-                field_data,
-                "proprietaire_ou_decideur",
-                "decideur",
-                "proprietaire",
+            _clean_fb_value(
+                _extract_field(
+                    field_data,
+                    "proprietaire_ou_decideur",
+                    "decideur",
+                    "proprietaire",
+                )
             ),
         ),
         ("Type d'immeuble", pt_raw),
         (
             "Intention",
-            _extract_field(
-                field_data,
-                "qu_est_ce_qui_vous_amene",
-                "intention",
+            _clean_fb_value(
+                _extract_field(
+                    field_data, "qu_est_ce_qui_vous_amene", "intention",
+                )
             ),
         ),
         (
             "Échéancier",
-            _extract_field(
-                field_data,
-                "quand_souhaiteriez_vous_demarrer",
-                "quand_demarrer",
-                "echeancier",
-                "delai",
+            _clean_fb_value(
+                _extract_field(
+                    field_data,
+                    "quand_souhaiteriez_vous_demarrer",
+                    "quand_demarrer",
+                    "echeancier",
+                    "delai",
+                )
             ),
         ),
         (
             "Région",
-            _extract_field(
-                field_data, "dans_quel_region", "region",
+            _clean_fb_value(
+                _extract_field(field_data, "dans_quel_region", "region")
             ),
         ),
     ]
@@ -416,26 +446,18 @@ def _build_fields_from_lead_detail(
     lines: List[str] = [
         "Demande captée via formulaire Facebook (Lead Ads).",
         "",
-        "Qualification :",
     ]
-    for label, val in qualifiers:
-        if val:
-            lines.append(f"- {label} : {val}")
-    lines.append("")
-    lines.append("Champs bruts :")
-    for fd in field_data:
-        fname = fd.get("name") or ""
-        fvalues = fd.get("values") or []
-        if fname and fvalues:
-            lines.append(
-                f"- {fname} : {', '.join(str(v) for v in fvalues)}"
-            )
-    ad_id = detail.get("ad_id") or value.get("ad_id")
-    form_id = detail.get("form_id") or value.get("form_id")
-    if ad_id:
-        lines.append(f"- ad_id : {ad_id}")
-    if form_id:
-        lines.append(f"- form_id : {form_id}")
+    qual_lines = [
+        f"- {label} : {val}" for label, val in qualifiers if val
+    ]
+    if qual_lines:
+        lines.append("Qualification :")
+        lines.extend(qual_lines)
+    else:
+        lines.append(
+            "(Lead test Meta — aucune donnée réelle. Un vrai lead "
+            "affichera ici les réponses du formulaire.)"
+        )
     lines.append("")
     lines.append(f"[leadgen_id={leadgen_id}]")
     message = "\n".join(lines)
