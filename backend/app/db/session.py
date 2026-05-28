@@ -605,6 +605,12 @@ async def init_db() -> None:
             # SHA-256 du document pour intégrité. Récupérable via
             # GET /api/v1/ndas/{id}/signed-pdf (auth admin/owner).
             ("ndas", "signed_pdf_blob", "BYTEA"),
+            # Téléphone collecté sur le formulaire public de signature
+            # NDA. Le bloc Récepteur du NDA exige Nom + Email +
+            # Téléphone + Date + Signature ; l'email est déjà connu
+            # (lien envoyé à cette adresse), reste à collecter le
+            # téléphone côté formulaire public.
+            ("ndas", "signed_phone", "VARCHAR(32)"),
             # Envoi PDF + consultation publique des factures devlog
             # (pièce #5 vague 1). `due_date` existe déjà dans le modèle,
             # on ajoute le token public, l'horodatage d'envoi et celui

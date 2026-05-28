@@ -29,7 +29,9 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DBSession
 from app.models.nda import NDA, NDAStatus
 from app.models.prospection_deal import ProspectionDeal
+from app.services.audit import log_action
 from app.services.nda_pdf import (
+    generate_signed_nda_pdf,
     nda_pdf_filename,
     render_nda_pdf,
     signed_nda_pdf_filename,
@@ -228,17 +230,64 @@ async def get_nda_signed_pdf(
     Différent de `/pdf` : ce PDF contient le bloc Récepteur rempli,
     le bandeau emerald « SIGNEE ELECTRONIQUEMENT » avec horodatage,
     IP de signature, et hash SHA-256 — c'est la pièce juridiquement
-    valable pour archivage et preuve. Pas re-rendu à chaque appel :
-    sert exactement les octets stockés au moment de la signature.
+    valable pour archivage et preuve.
 
-    Renvoie 404 explicite si le NDA n'est pas encore signé (le
-    blob n'a pas été généré).
+    Stratégie :
+    - Si le NDA n'est pas signé → 404 explicite.
+    - Si le blob existe en DB → on le sert tel quel (immutable).
+    - Si le NDA est signé MAIS le blob est NULL (génération
+      best-effort au POST sign qui a planté ou été coupée par un
+      timeout proxy Render — cf. bug 502 HTML) → on tente une
+      **lazy generation** ici, on persiste le résultat en DB, puis
+      on sert. Si la génération replante, on remonte un 502 JSON
+      propre avec le message d'erreur.
     """
     nda = await _load_nda_or_404(db, nda_id)
-    if not nda.signed_pdf_blob:
+    if nda.status != NDAStatus.SIGNE.value:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
-            "PDF signé indisponible — entente pas encore signée.",
+            "NDA pas encore signé — PDF signé indisponible.",
+        )
+    if not nda.signed_pdf_blob:
+        # Lazy generation : le NDA est signé mais le blob n'a jamais
+        # été persisté. On regénère à la volée, on persiste, on sert.
+        try:
+            signed_bytes = await generate_signed_nda_pdf(db, nda.id)
+        except Exception as exc:
+            log.exception(
+                "[NDA_LAZY_PDF] Génération paresseuse échouée pour "
+                "NDA %s : %s",
+                nda.id,
+                exc,
+            )
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                f"Génération du PDF signé échouée : "
+                f"{type(exc).__name__}: {exc}",
+            ) from exc
+        nda.signed_pdf_blob = signed_bytes
+        await db.flush()
+        await db.commit()
+        await db.refresh(nda)
+        try:
+            await log_action(
+                db,
+                user=None,
+                action="nda.signed_pdf_lazy_generated",
+                entity_type="nda",
+                entity_id=nda.id,
+                details={
+                    "size_bytes": len(signed_bytes),
+                    "signed_name": nda.signed_name,
+                },
+            )
+        except Exception:
+            pass
+        log.info(
+            "[NDA_LAZY_PDF] PDF signé regénéré paresseusement et "
+            "stocké pour NDA %s (%d octets)",
+            nda.id,
+            len(signed_bytes),
         )
     filename = signed_nda_pdf_filename(nda)
     return Response(
