@@ -121,7 +121,17 @@ async def send_nda_to_investor(db: AsyncSession, nda_id: int) -> NDA:
         )
 
     deal = await _load_deal(db, nda.deal_id)
-    pdf_bytes = await render_nda_pdf(db, nda.id)
+    # Rendu PDF dans un try/except : si reportlab plante (image MGV
+    # corrompue, Paragraph mal formé, etc.), on convertit en
+    # NDASendError pour que le endpoint POST /ndas/{id}/send renvoie
+    # un 502 explicite au lieu d'un 500 générique.
+    try:
+        pdf_bytes = await render_nda_pdf(db, nda.id)
+    except Exception as exc:
+        log.exception("Rendu PDF échoué pour NDA %s", nda.id)
+        raise NDASendError(
+            f"Rendu du PDF de l'entente échoué : {exc}"
+        ) from exc
     attachment = EmailAttachment(
         name=nda_pdf_filename(nda),
         content_bytes=pdf_bytes,
