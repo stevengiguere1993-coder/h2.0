@@ -1,0 +1,225 @@
+{
+  "_doc": "Mapping de substitution pour le template horizon_v2.pptx (offre d'investissement Horizon Services Immobiliers — révision 2026-05-28). 16 slides. Différences vs v1 : (a) nouvelle slide 11 « TENDANCES » (Zipplex), (b) ~10 nouvelles variables (qualificatif_projet, levier_principal_phrase, gain_potentiel_callout, valeur_marchande_annotation, phase2_label, label/valeur_callout_refi, taxes_scolaires_incluses, tendances_*), (c) logique conditionnelle équité ± sur slide refi, (d) catalogue de rénovations explicite slide 8 (au lieu d'une checkbox value-add générique). Chaque entrée définit (a) la chaîne LITTÉRALE à chercher dans le pptx source, (b) la variable de contexte à substituer. La substitution s'opère via run.text.replace ou cell.text rewrite, en préservant les runs et leur formatting.",
+  "_template_origin": "1660 Saint-Clément (16 slides) — version updated 2026-05-28",
+  "_version": "2.0.0",
+  "substitutions": [
+    {"slide": 0, "find": "De l’achat au refinancement : un projet immobilier solide à Hochelaga-Maisonneuve", "var": "tagline_cover"},
+    {"slide": 0, "find": "1660 Rue Saint-Clément, Montréal", "var": "adresse_complete"},
+
+    {"slide": 1, "find": "Immeuble de 8 logements", "var": "phrase_immeuble"},
+    {"slide": 1, "find": "1660 Rue Saint-Clément, Montréal", "var": "adresse_complete"},
+    {"slide": 1, "find": "675 000$", "var": "investissement_requis", "_dupe_strategy": "all"},
+    {"slide": 1, "find": "~121 %", "var": "rci_pct"},
+    {"slide": 1, "find": "~1,68 M$", "var": "pvi_montant"},
+
+    {"slide": 2, "find": "1,2 M$", "var": "prix_acquisition_court"},
+    {"slide": 2, "find": "91 500 $/an", "var": "revenus_actuels_an"},
+    {"slide": 2, "find": "171 600 $/an", "var": "revenus_potentiels_an"},
+    {"slide": 2, "find": "8 logements\n 2 × 3½ | 4 × 4½ | 1 × 5½ | 1 × 7½\n2 vacants", "var": "phrase_typologie"},
+    {"slide": 2, "find": "8 logements", "var": "nb_logements_phrase"},
+
+    {"slide": 3, "find": "Offre d’achat acceptée 29% sous la valeur municipale", "var": "bullet_opp_1"},
+    {"slide": 3, "find": "Loyers moyens actuels 953$ | Marché 1800$", "var": "bullet_opp_2"},
+    {"slide": 3, "find": "+ 94% de manque à gagner en convertissant en chambres", "var": "levier_principal_phrase"},
+    {"slide": 3, "find": "Demande pour chambres en forte hausse | Secteur Hochelaga", "var": "bullet_opp_4"},
+    {"slide": 3, "find": "+ 497 100$", "var": "gain_potentiel_callout"},
+
+    {"slide": 4, "find": "1800$", "var": "nouveau_loyer_moyen", "_dupe_strategy": "first"},
+    {"slide": 4, "find": "171 600$", "var": "nouveaux_revenus_an"},
+    {"slide": 4, "find": "2 882 305$  (+1 685 305$)", "var": "nouvelle_valeur_marchande_delta"},
+    {"slide": 4, "find": "953$", "var": "ancien_loyer_moyen"},
+    {"slide": 4, "find": "91 500$", "var": "anciens_revenus_an"},
+    {"slide": 4, "find": "1 697 100$ (payé 1.2M)", "var": "ancienne_valeur_marchande"},
+
+    {"slide": 5, "find": "Création chambres", "var": "phase2_label"},
+
+    {"slide": 7, "find": "1 200 000$", "var": "prix_achat_long", "_dupe_strategy": "all"},
+    {"slide": 7, "find": "375 000$", "var": "frais_demarrage_total", "_dupe_strategy": "all"},
+    {"slide": 7, "find": "91 500$", "var": "revenus_annuels"},
+    {"slide": 7, "find": "953$", "var": "loyer_moyen_actuel"},
+    {"slide": 7, "find": "8,00%", "var": "taux_interet_achat_pct_str"},
+    {"slide": 7, "find": "2 745$", "var": "inoccupation_montant"},
+    {"slide": 7, "find": "Taxes municipales (inclus scolaire)", "var": "taxes_municipales_label"},
+    {"slide": 7, "find": "12 086$", "var": "taxes_municipales"},
+    {"slide": 7, "find": "7 000$", "var": "assurances"},
+    {"slide": 7, "find": "2000$", "var": "energie", "_dupe_strategy": "first"},
+    {"slide": 7, "find": "3 889$", "var": "gestion"},
+    {"slide": 7, "find": "4 880$", "var": "entretien"},
+    {"slide": 7, "find": "1 720$", "var": "concierge"},
+    {"slide": 7, "find": "58 800$", "var": "revenus_nets_achat"},
+    {"slide": 7, "find": "900 000$", "var": "pret_hyp_achat_max", "_dupe_strategy": "all"},
+    {"slide": 7, "find": "300 000$", "var": "mdf_achat"},
+    {"slide": 7, "find": "675 000$", "var": "fonds_necessaires_achat", "_dupe_strategy": "all"},
+
+    {"slide": 8, "find": "Fondation", "var": "reno_item_0"},
+    {"slide": 8, "find": "Brique", "var": "reno_item_1"},
+    {"slide": 8, "find": "Portes et fenêtres", "var": "reno_item_2"},
+    {"slide": 8, "find": "Balcons et escaliers", "var": "reno_item_3"},
+    {"slide": 8, "find": "Sous-sol", "var": "reno_item_4"},
+    {"slide": 8, "find": "Toit et sous-toit", "var": "reno_item_5"},
+    {"slide": 8, "find": "Drain entrée extérieur", "var": "reno_item_6"},
+    {"slide": 8, "find": "Chauffe-eau", "var": "reno_item_7"},
+    {"slide": 8, "find": "Panneau électrique à vérifier et corriger", "var": "reno_item_8"},
+    {"slide": 8, "find": "Finir appartement 5 1/2 ", "var": "reno_item_9"},
+    {"slide": 8, "find": "Finir appartement 7 1/2", "var": "reno_item_10"},
+    {"slide": 8, "find": "Rénovations intérieures générales", "var": "reno_item_11"},
+    {"slide": 8, "find": "Entretien extérieur général", "var": "reno_item_12"},
+    {"slide": 8, "find": "Détecteur de fumée et monoxydes", "var": "reno_item_13"},
+    {"slide": 8, "find": "Vermines", "var": "reno_item_14"},
+    {"slide": 8, "find": "Rajout d'un mur", "var": "reno_item_15"},
+
+    {"slide": 9, "find": "41 997$", "var": "depenses_operations_refi"},
+    {"slide": 9, "find": "1788$", "var": "nouvelle_moyenne_locative_refi"},
+    {"slide": 9, "find": "171 600$", "var": "nouveaux_revenus_refi"},
+    {"slide": 9, "find": "OUI – 1920$", "var": "ligne_wifi"},
+    {"slide": 9, "find": "OUI (2) – 380$", "var": "ligne_thermopompes"},
+    {"slide": 9, "find": "100%", "var": "reduction_energie_pct_str"},
+    {"slide": 9, "find": "3,75%", "var": "taux_interet_refi_pct_str"},
+    {"slide": 9, "find": "129 603$", "var": "revenus_nets_aph50"},
+    {"slide": 9, "find": "113 576$", "var": "revenus_nets_aph100"},
+    {"slide": 9, "find": "2 882 305$", "var": "valeur_eco_aph50", "_dupe_strategy": "all"},
+    {"slide": 9, "find": " 2 465 059$", "var": "valeur_eco_aph100"},
+    {"slide": 9, "find": "2 449 959 $", "var": "pret_max_aph50_avec_espace"},
+    {"slide": 9, "find": "2 449 959$", "var": "pret_max_aph50", "_dupe_strategy": "all"},
+    {"slide": 9, "find": "2 341 806$", "var": "pret_max_aph100"},
+    {"slide": 9, "find": "347 373$", "var": "equite_aph50_cell"},
+    {"slide": 9, "find": "239 220$", "var": "equite_aph100_cell"},
+    {"slide": 9, "find": "Équité dégagée", "var": "label_callout_refi", "_dupe_strategy": "all"},
+
+    {"slide": 10, "find": "675 000$", "var": "investissement_requis", "_dupe_strategy": "all"},
+    {"slide": 10, "find": "817 000$", "var": "valeur_annee_2"},
+    {"slide": 10, "find": "1 750 000$", "var": "valeur_annee_10"},
+    {"slide": 10, "find": "780 000$", "var": "equite_an2_court"},
+
+    {"slide": 11, "find": "Zipplex, données Q1 2026 — secteur Mercier-Hochelaga-Maisonneuve", "var": "tendances_source_label"},
+    {"slide": 11, "find": "+900$", "var": "tendances_callout"},
+
+    {"slide": 13, "find": "Fonds de roulement \n4 mois", "var": "fonds_roulement_phrase"},
+    {"slide": 13, "find": "Marge de contingence 10%", "var": "marge_contingence_phrase"}
+  ],
+  "photos": {
+    "_doc": "Mapping des photos par slide. Le service remplace l'image par celle fournie en gardant la position/taille.",
+    "slots": [
+      {"slot": "cover", "slide": 0, "shape_name": "Picture 2", "description": "Photo principale de l'immeuble (slide cover)"},
+      {"slot": "exterieur", "slide": 1, "shape_name": "Picture 13", "description": "Vue extérieure complémentaire (résumé exécutif)"},
+      {"slot": "carte", "slide": 1, "shape_name": "Picture 10", "description": "Carte ou photo de quartier (résumé exécutif)"},
+      {"slot": "tendances", "slide": 11, "shape_name": "Picture 1", "description": "Graphique Zipplex (slide TENDANCES) — image du graphique tendance locative quartier"}
+    ]
+  },
+  "conditional_logic": {
+    "_doc": "Logique conditionnelle appliquée par le service avant substitution.",
+    "refi_equite_negative": {
+      "trigger": "Si l'équité dégagée du meilleur scénario refi est < 0",
+      "actions": [
+        "label_callout_refi := 'Remboursement du partenaire'",
+        "valeur_callout_refi := pourcentage (ex. 'Jusqu’à 90%') au lieu d'un montant $",
+        "Le service substitue 'Jusqu’à \\n 347 373$' (TextBox 18) par 'Jusqu’à \\n {valeur_callout_refi}' et le libellé TextBox 29 par 'Remboursement du partenaire'"
+      ]
+    },
+    "taxes_scolaires_incluses": {
+      "trigger": "Si analysis.taxes_scolaires == 0 (ou None)",
+      "actions": [
+        "Le libellé reste 'Taxes municipales (inclus scolaire)' (défaut template)",
+        "Sinon, libellé devient 'Taxes municipales' (slide 7 cell 3,3)"
+      ]
+    }
+  },
+  "variables_definitions": {
+    "tagline_cover": {"type": "string", "source": "human", "max_chars": 110, "description": "Phrase d'accroche de la slide cover. Auto-générée depuis qualificatif_projet + quartier ; override possible."},
+    "qualificatif_projet": {"type": "string", "source": "human", "max_chars": 30, "description": "Adjectif libre du projet (ex: 'solide', 'durable', 'rentable', 'stratégique', 'prometteur'). Utilisé dans tagline_cover."},
+    "adresse_complete": {"type": "string", "source": "auto", "kratos_field": "address+city"},
+    "phrase_immeuble": {"type": "string", "source": "auto", "format": "Immeuble de {nb_logements} logements"},
+    "phrase_typologie": {"type": "string", "source": "auto"},
+    "nb_logements_phrase": {"type": "string", "source": "auto", "format": "{nb_logements} logements"},
+
+    "investissement_requis": {"type": "money", "source": "hybrid", "kratos_field": "mdf_preteur_b"},
+    "rci_pct": {"type": "percent_approx", "source": "hybrid"},
+    "pvi_montant": {"type": "money_approx_M", "source": "hybrid"},
+
+    "prix_acquisition_court": {"type": "money_short_M", "source": "auto", "kratos_field": "asking_price"},
+    "revenus_actuels_an": {"type": "money_an", "source": "auto", "kratos_field": "revenus_bruts"},
+    "revenus_potentiels_an": {"type": "money_an", "source": "hybrid"},
+
+    "bullet_opp_1": {"type": "string", "source": "human", "max_chars": 100},
+    "bullet_opp_2": {"type": "string", "source": "human", "max_chars": 100},
+    "levier_principal_phrase": {"type": "string", "source": "human", "max_chars": 100, "description": "Levier principal de l'opportunité (ex: '+ 94% de manque à gagner en convertissant en chambres'). Phrase 1 ligne."},
+    "bullet_opp_4": {"type": "string", "source": "human", "max_chars": 100},
+    "gain_potentiel_callout": {"type": "money_plus_or_text", "source": "hybrid", "description": "Gain en gros (ex: '+ 497 100$'). Auto-calculé OU saisie humaine."},
+
+    "nouveau_loyer_moyen": {"type": "money_short", "source": "hybrid"},
+    "nouveaux_revenus_an": {"type": "money_short", "source": "hybrid"},
+    "nouvelle_valeur_marchande_delta": {"type": "money_with_delta", "source": "hybrid"},
+    "ancien_loyer_moyen": {"type": "money_short", "source": "auto"},
+    "anciens_revenus_an": {"type": "money_short", "source": "auto", "kratos_field": "revenus_bruts"},
+    "ancienne_valeur_marchande": {"type": "money_payed_or_annotated", "source": "auto", "description": "Format : '{valeur_marchande}$ {valeur_marchande_annotation}'. Si valeur_marchande_annotation est vide → format defaultpayé '(payé X.XM)'."},
+    "valeur_marchande_annotation": {"type": "string", "source": "human", "max_chars": 80, "description": "Annotation optionnelle sur la valeur marchande (ex: '(payé 1.2M)', 'Payé 1 100 000$'). Si vide, fallback auto."},
+
+    "phase2_label": {"type": "string", "source": "hybrid", "max_chars": 40, "description": "Libellé de la phase 2 du Gantt (ex: 'Création chambres', 'Rencontres', 'Conversion chauffage'). Auto-suggéré selon les leviers value-add."},
+
+    "prix_achat_long": {"type": "money_long", "source": "auto", "kratos_field": "asking_price"},
+    "frais_demarrage_total": {"type": "money_long", "source": "auto"},
+    "revenus_annuels": {"type": "money_long", "source": "auto", "kratos_field": "revenus_bruts"},
+    "loyer_moyen_actuel": {"type": "money_short", "source": "auto"},
+    "taux_interet_achat_pct_str": {"type": "percent_2", "source": "auto", "kratos_field": "taux_interet_preteur_b_projet_pct"},
+
+    "taxes_municipales_label": {"type": "string", "source": "auto", "description": "Libellé conditionnel : 'Taxes municipales (inclus scolaire)' si taxes_scolaires=0, sinon 'Taxes municipales'."},
+    "inoccupation_montant": {"type": "money_long", "source": "auto"},
+    "taxes_municipales": {"type": "money_long", "source": "auto"},
+    "assurances": {"type": "money_long", "source": "auto"},
+    "energie": {"type": "money_long", "source": "auto"},
+    "gestion": {"type": "money_long", "source": "auto"},
+    "entretien": {"type": "money_long", "source": "auto"},
+    "concierge": {"type": "money_long", "source": "auto"},
+    "revenus_nets_achat": {"type": "money_long", "source": "auto"},
+    "pret_hyp_achat_max": {"type": "money_long", "source": "auto"},
+    "mdf_achat": {"type": "money_long", "source": "auto"},
+    "fonds_necessaires_achat": {"type": "money_long", "source": "auto"},
+
+    "reno_item_0": {"type": "string", "source": "hybrid", "description": "Item rénovation #0 du catalogue (substitué par la liste cochée OU laissé vide)"},
+    "reno_item_1": {"type": "string", "source": "hybrid"},
+    "reno_item_2": {"type": "string", "source": "hybrid"},
+    "reno_item_3": {"type": "string", "source": "hybrid"},
+    "reno_item_4": {"type": "string", "source": "hybrid"},
+    "reno_item_5": {"type": "string", "source": "hybrid"},
+    "reno_item_6": {"type": "string", "source": "hybrid"},
+    "reno_item_7": {"type": "string", "source": "hybrid"},
+    "reno_item_8": {"type": "string", "source": "hybrid"},
+    "reno_item_9": {"type": "string", "source": "hybrid"},
+    "reno_item_10": {"type": "string", "source": "hybrid"},
+    "reno_item_11": {"type": "string", "source": "hybrid"},
+    "reno_item_12": {"type": "string", "source": "hybrid"},
+    "reno_item_13": {"type": "string", "source": "hybrid"},
+    "reno_item_14": {"type": "string", "source": "hybrid"},
+    "reno_item_15": {"type": "string", "source": "hybrid"},
+
+    "depenses_operations_refi": {"type": "money_long", "source": "hybrid"},
+    "nouvelle_moyenne_locative_refi": {"type": "money_short", "source": "hybrid"},
+    "nouveaux_revenus_refi": {"type": "money_long", "source": "hybrid"},
+    "ligne_wifi": {"type": "string", "source": "hybrid"},
+    "ligne_thermopompes": {"type": "string", "source": "hybrid"},
+    "reduction_energie_pct_str": {"type": "percent_0", "source": "human"},
+    "taux_interet_refi_pct_str": {"type": "percent_2_fr", "source": "auto", "kratos_field": "taux_interet_refi_pct"},
+    "revenus_nets_aph50": {"type": "money_long", "source": "hybrid"},
+    "revenus_nets_aph100": {"type": "money_long", "source": "hybrid"},
+    "valeur_eco_aph50": {"type": "money_long", "source": "hybrid"},
+    "valeur_eco_aph100": {"type": "money_long_lead_space", "source": "hybrid"},
+    "pret_max_aph50_avec_espace": {"type": "money_long_with_space", "source": "hybrid"},
+    "pret_max_aph50": {"type": "money_long", "source": "hybrid"},
+    "pret_max_aph100": {"type": "money_long", "source": "hybrid"},
+    "equite_aph50_cell": {"type": "money_long_signed", "source": "hybrid", "description": "Cellule équité dégagée scénario 50 — peut être négative (ex: ' -65 000$')"},
+    "equite_aph100_cell": {"type": "money_long_signed", "source": "hybrid"},
+    "label_callout_refi": {"type": "string", "source": "hybrid", "description": "Libellé conditionnel : 'Équité dégagée' (positif) OU 'Remboursement du partenaire' (négatif)"},
+    "valeur_callout_refi": {"type": "string", "source": "hybrid", "description": "Affiché dans TextBox 18 — soit montant $ (équité positive), soit pourcentage 'Jusqu’à XX%' (équité négative)"},
+
+    "valeur_annee_2": {"type": "money_long", "source": "hybrid"},
+    "valeur_annee_10": {"type": "money_long", "source": "hybrid"},
+    "equite_an2_court": {"type": "money_short", "source": "hybrid"},
+
+    "tendances_secteur": {"type": "string", "source": "auto", "description": "Nom du secteur/quartier (ex: 'Mercier-Hochelaga-Maisonneuve'). Auto depuis analysis.city."},
+    "tendances_source_label": {"type": "string", "source": "auto", "description": "Libellé source 'Zipplex, données Q1 2026 — secteur {tendances_secteur}'"},
+    "tendances_callout": {"type": "string", "source": "human", "max_chars": 20, "description": "Callout (ex: '+900$', '+450$') affiché en gros sur la slide TENDANCES"},
+
+    "fonds_roulement_phrase": {"type": "string", "source": "constant", "value": "Fonds de roulement \n4 mois"},
+    "marge_contingence_phrase": {"type": "string", "source": "constant", "value": "Marge de contingence 10%"}
+  }
+}
