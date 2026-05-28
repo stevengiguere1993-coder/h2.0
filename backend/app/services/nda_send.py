@@ -39,26 +39,31 @@ class NDASendError(Exception):
 
 
 def _investor_body(nda: NDA, deal: Optional[ProspectionDeal]) -> str:
-    """Email court et direct à l'investisseur."""
+    """Email court et direct à l'investisseur.
+
+    ⚠️ Ne PAS mentionner l'adresse de la propriété dans le corps —
+    le NDA est signé AVANT que MGV identifie l'Opportunité. Si
+    l'email révélait déjà l'adresse, le NDA serait inutile.
+    """
+    del deal  # explicitement ignoré (cf. docstring)
     sign_url = f"{_public_base()}/sign-nda/{nda.signature_token}"
     salutation = (
         f"Bonjour {nda.investor_name},"
         if nda.investor_name and nda.investor_name.strip()
         else "Bonjour,"
     )
-    address = deal.address if deal else "une propriété"
     return f"""\
 <div style="font-family:Helvetica,Arial,sans-serif;color:#111;line-height:1.55;max-width:620px">
   <p style="margin:0 0 16px 0">{salutation}</p>
   <p style="margin:0 0 16px 0">
     <strong>{ISSUER_ENTITY_NAME}</strong> souhaite vous transmettre
-    des informations confidentielles concernant une opportunité
-    d'investissement immobilier située au <em>{address}</em>.
+    des informations confidentielles relatives à une opportunité
+    d'investissement immobilier au Québec.
   </p>
   <p style="margin:0 0 16px 0">
-    Avant de partager les détails financiers de l'opportunité, nous
-    avons besoin que vous signiez la présente entente de
-    confidentialité (NDA). Cela ne prend que quelques secondes.
+    Avant de partager les détails de l'opportunité, nous avons
+    besoin que vous signiez la présente entente de confidentialité
+    (NDA). Cela ne prend que quelques secondes.
   </p>
   <p style="margin:20px 0 6px 0">
     <a href="{sign_url}"
@@ -100,7 +105,7 @@ async def _load_deal(
 
 
 async def send_nda_to_investor(db: AsyncSession, nda_id: int) -> NDA:
-    """Envoie l'entente à l'investisseur �� utilise `nda.investor_email`.
+    """Envoie l'entente à l'investisseur — utilise `nda.investor_email`.
 
     - Génère un signature_token si absent
     - Génère le PDF
@@ -138,8 +143,11 @@ async def send_nda_to_investor(db: AsyncSession, nda_id: int) -> NDA:
         content_type="application/pdf",
     )
 
-    subject_addr = deal.address if deal else "une opportunité"
-    subject = f"Entente de confidentialité — {subject_addr}"
+    # ⚠️ Sujet volontairement générique — ne pas exposer l'adresse
+    # de la propriété (cf. docstring de `_investor_body`).
+    subject = (
+        f"Entente de confidentialité — {ISSUER_ENTITY_NAME}"
+    )
     body = _investor_body(nda, deal)
 
     try:

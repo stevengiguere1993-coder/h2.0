@@ -1,18 +1,25 @@
 """Constantes & template pour le flow NDA investisseurs.
 
-Contenu calqué sur le modèle "NDA - MGV Développement - Modèle
-générique v2" (11 articles + préambule + bloc signatures). On
-garde tout en dur ici : émetteur, durée, juridiction, plancher de
-dommages, et boilerplate légal complet. Pas de configuration
-exposée — si Phil veut ajuster, on d��placera dans Settings.
+Contenu calqué EXACTEMENT sur le modèle « NDA - MGV Développement -
+Modèle générique v2 » (11 articles + préambule + bloc signatures).
+On garde tout en dur ici : émetteur, durée, juridiction, plancher
+de dommages, et boilerplate légal complet. Pas de configuration
+exposée — si Phil veut ajuster, on déplacera dans Settings.
+
+⚠️ IMPORTANT — Pas d'adresse de propriété dans le rendu.
+Le NDA est signé AVANT que MGV identifie l'Opportunité à
+l'investisseur. Faire apparaître l'adresse de l'immeuble dans le
+NDA défait son propre objet (l'investisseur connaîtrait
+l'Opportunité avant de l'avoir protégée). Le paramètre
+`property_address` reste accepté pour rétrocompat des call sites,
+mais il est IGNORÉ dans le rendu.
 
 Variables substituables :
     - investor_name           (Récepteur)
     - investor_type_clause    (« particulier » | « société par actions… »)
-    - investor_address_clause (« résidant au ��� » | « ayant son siège au … »)
+    - investor_address_clause (« résidant au … » | « ayant son siège au … »)
     - investor_representative_clause (vide si particulier)
-    - property_address        (optionnel — encart « Opportunité visée »)
-    - emission_date           (« Date d'effet ��)
+    - emission_date           (« Date d'effet »)
     - signed_name             (bloc signature Récepteur)
     - signed_at               (date de signature Récepteur)
 """
@@ -55,36 +62,46 @@ LEGAL_NOTICE = (
     "La signature électronique a la même valeur juridique qu'une "
     "signature manuscrite en vertu de la Loi concernant le cadre "
     "juridique des technologies de l'information (RLRQ c. C-1.1). "
-    "Le destinataire reconna��t avoir lu, compris et accepté les "
+    "Le destinataire reconnaît avoir lu, compris et accepté les "
     "termes de la présente entente en apposant son nom dans le "
-    "formulaire de signature ��lectronique."
+    "formulaire de signature électronique."
 )
 
 
-# Engagements numérotés de l'article 3 du NDA v2 — version courte
-# pour l'affichage public de la carte (frontend Next.js). Le PDF
-# utilise sa propre numérotation complète (3.1 … 3.6).
+# Engagements numérotés de l'article 3 du NDA v2 — texte canonique
+# exact pour le rendu PDF et l'affichage public. Le PDF utilise sa
+# propre numérotation complète (3.1 … 3.6).
 ENGAGEMENT_ITEMS: tuple[str, ...] = (
     "Utiliser les Informations Confidentielles exclusivement dans "
     "le cadre de l'évaluation de l'Opportunité, et à aucune autre "
-    "fin ;",
+    "fin;",
     "Préserver la nature confidentielle des Informations "
-    "Confidentielles avec au moins le même degré de soin qu'aux "
-    "informations propres au Récepteur, et jamais sous le standard "
-    "raisonnable ;",
-    "Ne pas divulguer les Informations Confidentielles à des tiers "
-    "autres que ses Représentants strictement requis et liés par "
-    "des obligations de confidentialité au moins aussi strictes ;",
+    "Confidentielles avec au moins le même degré de soin qu'elle "
+    "applique à ses propres informations confidentielles, et en "
+    "aucun cas avec un degré inférieur au standard raisonnable;",
+    "Ne pas divulguer les Informations Confidentielles à "
+    "quiconque, sauf à ses Représentants qui (i) doivent en "
+    "prendre connaissance dans le cadre strict de l'évaluation de "
+    "l'Opportunité, (ii) ont été préalablement informés des "
+    "obligations contenues au présent Accord, et (iii) se sont "
+    "engagés par écrit à respecter des obligations de "
+    "confidentialité au moins aussi strictes que celles contenues "
+    "aux présentes;",
     "Ne pas copier, reproduire, télécharger, photographier ou "
     "conserver les Informations Confidentielles au-delà de ce qui "
-    "est strictement nécessaire à l'évaluation ;",
-    "Retourner ou détruire immédiatement, sur demande ou à la "
-    "terminaison, toutes les Informations Confidentielles (et "
-    "celles détenues par ses Représentants), et confirmer cette "
-    "destruction par écrit ;",
+    "est strictement nécessaire à l'évaluation de l'Opportunité;",
+    "Sur demande de la Partie Divulgatrice ou à la terminaison du "
+    "présent Accord, retourner ou détruire immédiatement toutes "
+    "les Informations Confidentielles en sa possession (incluant "
+    "celles détenues par ses Représentants), incluant toutes "
+    "copies, extraits ou notes, et confirmer par écrit cette "
+    "destruction;",
     "Être pleinement responsable des actes et omissions de ses "
-    "Représentants et prendre toutes les mesures nécessaires pour "
-    "les empêcher de violer le présent Accord.",
+    "Représentants relatifs aux Informations Confidentielles, "
+    "comme si ces actes et omissions étaient les siens, et "
+    "prendre toutes les mesures nécessaires (incluant, au besoin, "
+    "des procédures judiciaires à ses frais) pour empêcher ses "
+    "Représentants de violer le présent Accord.",
 )
 
 
@@ -94,7 +111,7 @@ ENGAGEMENT_ITEMS: tuple[str, ...] = (
 # Quand on ne dispose pas (encore) de l'information précise dans le
 # modèle NDA, on injecte des placeholders crochetés que Phil peut
 # remplir manuellement avant signature OU qui restent en clair dans
-# le PDF pour que l'investisseur les compl��te à la main.
+# le PDF pour que l'investisseur les complète à la main.
 _INVESTOR_TYPE_PLACEHOLDER = (
     "[particulier OU société par actions légalement constituée en "
     "vertu de [loi applicable]]"
@@ -140,7 +157,7 @@ def resolve_investor_clauses(
 def render_nda_text(
     investor_name: str,
     emission_date: str,
-    property_address: Optional[str] = None,
+    property_address: Optional[str] = None,  # noqa: ARG001 — rétrocompat, ignoré
     signed_name: Optional[str] = None,
     signed_at: Optional[str] = None,
     investor_type_clause: Optional[str] = None,
@@ -150,11 +167,12 @@ def render_nda_text(
     """Rend le texte complet de l'entente sous forme de chaîne
     plain-text (utile pour debug / preview rapide hors PDF).
 
-    Les sections sont séparées par des doubles sauts de ligne. Le
-    PDF (`nda_pdf.py`) reconstruit son propre rendu typographique —
-    cette fonction sert surtout de référence canonique du contenu
-    juridique et d'aperçu textuel utilisable dans les tests.
+    Le PDF (`nda_pdf.py`) reconstruit son propre rendu typographique.
+    Le paramètre `property_address` est accepté pour rétrocompat
+    des call sites mais ignoré (cf. docstring module).
     """
+    del property_address  # explicitement ignoré
+
     name = (investor_name or "").strip() or "____________"
     date = (emission_date or "").strip() or "____________"
     sname = (signed_name or "").strip() or "____________"
@@ -171,18 +189,11 @@ def render_nda_text(
         receiver_block += f", {repr_cl}"
     receiver_block += " (ci-après le « Récepteur »);"
 
-    opportunity_block = ""
-    if property_address and property_address.strip():
-        opportunity_block = (
-            "OPPORTUNITÉ VISÉE\n"
-            f"À titre informatif, l'Opportunité initialement visée "
-            f"par les Parties concerne l'immeuble situé au "
-            f"{property_address.strip()}. Les présentes obligations "
-            f"s'appliquent néanmoins à toute Opportunité partagée "
-            f"par MGV au Récepteur.\n\n"
-        )
-
     damages_amount = f"{NDA_DAMAGES_FLOOR_CAD:,}".replace(",", " ")
+
+    engagements_txt = "\n".join(
+        f"3.{i + 1} {item}" for i, item in enumerate(ENGAGEMENT_ITEMS)
+    )
 
     return (
         "ENTENTE DE CONFIDENTIALITÉ ET DE NON-CONTOURNEMENT\n\n"
@@ -196,76 +207,86 @@ def render_nda_text(
         f"le déclare en signant (ci-après la « Société » ou "
         f"« MGV »);\n\n"
         f"{receiver_block}\n\n"
-        "Collectivement désignés les �� Parties ».\n\n"
-        f"{opportunity_block}"
-        "PRÉAMBULE\n"
+        "Collectivement désignés les « Parties ».\n\n"
+        "PRÉAMBULE\n\n"
         "ATTENDU QUE la Société est active dans l'investissement "
-        "immobilier au Québec, incluant l'identification, l'analyse, "
-        "l'acquisition, le développement et la gestion d'immeubles, "
-        "ainsi que dans la cr��ation et la mise en œuvre de "
-        "stratégies value-add;\n\n"
+        "immobilier au Québec, incluant l'identification, "
+        "l'analyse, l'acquisition, le développement et la gestion "
+        "d'immeubles, ainsi que dans la création et la mise en "
+        "œuvre de stratégies value-add;\n\n"
         "ATTENDU QUE la Société souhaite partager au Récepteur "
-        "certaines Informations Confidentielles relatives à une ou "
-        "plusieurs opportunités d'investissement immobilier (chacune, "
-        "l'« Opportunité ») afin que le Récepteur puisse évaluer une "
-        "participation potentielle, sous toute forme;\n\n"
-        "ATTENDU QUE le Récepteur est susceptible, dans le cadre de "
-        "sa propre activité, de partager certaines informations "
-        "confidentielles à la Société;\n\n"
-        "ATTENDU QUE les Parties souhaitent encadrer les conditions "
-        "sous lesquelles ces informations seront divulguées, "
-        "utilisées et protégées;\n\n"
+        "certaines Informations Confidentielles (telles que "
+        "définies ci-après) relatives à une ou plusieurs "
+        "opportunités d'investissement immobilier (chacune, "
+        "l'« Opportunité » et collectivement les "
+        "« Opportunités ») afin que le Récepteur puisse évaluer "
+        "une participation potentielle, sous toute forme "
+        "(investisseur passif, partenaire actif, co-acquéreur, "
+        "courtier, intermédiaire, conseiller professionnel, ou "
+        "autre rôle);\n\n"
+        "ATTENDU QUE le Récepteur est susceptible, dans le cadre "
+        "de sa propre activité, de partager certaines "
+        "informations confidentielles à la Société;\n\n"
+        "ATTENDU QUE les Parties souhaitent encadrer les "
+        "conditions sous lesquelles ces informations seront "
+        "divulguées, utilisées et protégées;\n\n"
         "EN CONTREPARTIE des engagements mutuels contenus aux "
         "présentes, les Parties conviennent de ce qui suit :\n\n"
         "1. OBJET\n"
         "L'objet du présent Accord est de permettre aux Parties de "
         "divulguer, échanger et discuter des Informations "
-        "Confidentielles relatives à une ou plusieurs Opportunit��s "
+        "Confidentielles relatives à une ou plusieurs Opportunités "
         "d'investissement immobilier au Québec, afin que le "
         "Récepteur puisse évaluer une éventuelle participation, "
         "sous toute forme.\n\n"
         "2. DÉFINITION DES INFORMATIONS CONFIDENTIELLES\n"
-        "Voir le PDF officiel pour la définition complète, les "
-        "exclusions (2.2) et la définition de « Représentant » "
-        "(2.3).\n\n"
+        "2.1 Le terme « Informations Confidentielles » désigne "
+        "toute information, de quelque nature et sous quelque "
+        "forme que ce soit (écrite, orale, électronique, "
+        "visuelle, ou autre), divulguée par une Partie (la "
+        "« Partie Divulgatrice ») à l'autre Partie (la « Partie "
+        "Réceptrice ») dans le cadre du présent Accord, incluant "
+        "notamment et sans s'y limiter : voir le PDF officiel "
+        "pour la liste complète (a-j), les exclusions (2.2) et la "
+        "définition de « Représentant » (2.3).\n\n"
         "3. ENGAGEMENTS DE LA PARTIE RÉCEPTRICE\n"
-        + "\n".join(
-            f"3.{i + 1} {item}" for i, item in enumerate(ENGAGEMENT_ITEMS)
-        )
-        + "\n\n"
+        "La Partie Réceptrice s'engage à :\n"
+        f"{engagements_txt}\n\n"
         "4. NON-CONTOURNEMENT ET NON-SOLLICITATION\n"
-        f"Engagement vingt-quatre (24) mois post-terminaison de ne "
-        f"pas contourner la Sociét�� auprès du vendeur, des "
-        f"courtiers, intermédiaires, partenaires, prêteurs ou "
-        f"conseillers; ni présenter l'Opportunité à un tiers; ni "
-        f"solliciter les locataires ou intervenants. Voir PDF "
-        f"officiel pour le détail.\n\n"
+        "Engagement vingt-quatre (24) mois post-terminaison de ne "
+        "pas contourner la Société auprès du vendeur, des "
+        "courtiers, intermédiaires, partenaires, prêteurs ou "
+        "conseillers; ni présenter l'Opportunité à un tiers; ni "
+        "solliciter les locataires ou intervenants. Voir PDF "
+        "officiel pour le détail (4.1 a-d et 4.2).\n\n"
         "5. AUCUNE DÉCLARATION NI GARANTIE\n"
         "Les Informations Confidentielles sont fournies « telles "
-        "quelles » ��� aucune garantie d'exactitude.\n\n"
+        "quelles » — aucune garantie d'exactitude.\n\n"
         "6. PROPRIÉTÉ DES INFORMATIONS\n"
         "Tous les droits demeurent la propriété exclusive de la "
         "Partie Divulgatrice.\n\n"
         "7. AUCUNE OBLIGATION DE TRANSACTION\n"
-        "Le présent Accord ne crée aucune obligation de transaction.\n\n"
+        "Le présent Accord ne crée aucune obligation de "
+        "transaction.\n\n"
         "8. DURÉE ET RÉSILIATION\n"
-        f"Durée de {_years_in_words(NDA_DURATION_YEARS)} "
-        f"({NDA_DURATION_YEARS}) ans. Les obligations survivent à "
-        f"la terminaison.\n\n"
+        f"Durée de vingt-quatre ({NDA_DURATION_YEARS * 12}) mois. "
+        f"Les obligations survivent à la terminaison.\n\n"
         "9. RECOURS ET DOMMAGES\n"
         f"Dommages-intérêts forfaitaires d'un montant minimum de "
-        f"{damages_amount} $ CAD par violation, sans préjudice des "
-        f"autres recours (injonction, dommages additionnels, frais "
-        f"juridiques).\n\n"
+        f"DEUX CENT MILLE DOLLARS ({damages_amount} $ CAD) par "
+        f"violation, sans préjudice des autres recours "
+        f"(injonction, dommages additionnels, frais juridiques).\n\n"
         "10. DIVULGATION OBLIGATOIRE\n"
         "Si tenu de divulguer par la loi, aviser immédiatement la "
         "Partie Divulgatrice avant divulgation.\n\n"
         "11. DISPOSITIONS GÉNÉRALES\n"
         f"Régi par les lois du Québec. Juridiction exclusive : "
         f"{NDA_VENUE}. Modifications par écrit, signature "
-        f"électronique reconnue (RLRQ c. C-1.1), accord int��gral, "
+        f"électronique reconnue (RLRQ c. C-1.1), accord intégral, "
         f"rédigé en français.\n\n"
-        "EN FOI DE QUOI, les Parties ont signé à la Date d'effet.\n\n"
+        "EN FOI DE QUOI, les Parties, par l'entremise de leurs "
+        "représentants dûment autorisés, ont signé le présent "
+        "Accord à la Date d'effet.\n\n"
         f"{ISSUER_ENTITY_NAME}\n"
         f"Par : {ISSUER_REPRESENTATIVE_NAME}\n"
         f"Titre : {ISSUER_REPRESENTATIVE_TITLE}\n"
@@ -275,31 +296,17 @@ def render_nda_text(
         f"Téléphone : {ISSUER_PHONE}\n\n"
         "LE RÉCEPTEUR\n"
         f"Nom : {sname}\n"
-        f"Date : {sdate}"
+        "Adresse courriel : _______________________\n"
+        "Téléphone : _______________________\n"
+        f"Date : {sdate}\n"
+        "Signature : _______________________"
     )
-
-
-def _years_in_words(n: int) -> str:
-    """Retourne le nombre d'années en lettres pour le boilerplate.
-
-    Couvre les valeurs probables (1 à 5). Au-delà, on retombe sur
-    une représentation chiffrée — la fonction ne sert qu'au confort
-    visuel de la phrase « pour une période de deux (2) ans ».
-    """
-    mapping = {
-        1: "un",
-        2: "deux",
-        3: "trois",
-        4: "quatre",
-        5: "cinq",
-    }
-    return mapping.get(n, str(n))
 
 
 def render_nda_markdown(
     investor_name: str,
     emission_date: str,
-    property_address: Optional[str] = None,
+    property_address: Optional[str] = None,  # noqa: ARG001 — rétrocompat, ignoré
     signed_name: Optional[str] = None,
     signed_at: Optional[str] = None,
     investor_type_clause: Optional[str] = None,
@@ -315,7 +322,13 @@ def render_nda_markdown(
 
     Le PDF (`nda_pdf.py`) reste la version juridique de référence ;
     cette fonction est strictement isomorphe au contenu du PDF.
+
+    ⚠️ `property_address` est accepté pour rétrocompat des call
+    sites mais ignoré — l'adresse de la propriété n'apparaît
+    JAMAIS dans le rendu (cf. docstring module).
     """
+    del property_address  # explicitement ignoré
+
     name = (investor_name or "").strip() or "____________"
     date = (emission_date or "").strip() or "____________"
     sname = (signed_name or "").strip() or "____________"
@@ -331,17 +344,6 @@ def render_nda_markdown(
     if repr_cl:
         receiver_block += f", {repr_cl}"
     receiver_block += " (ci-après le « **Récepteur** »);"
-
-    opportunity_block = ""
-    if property_address and property_address.strip():
-        opportunity_block = (
-            f"\n> **Opportunité visée :** à titre informatif, "
-            f"l'Opportunité initialement considérée par les Parties "
-            f"concerne l'immeuble situé au "
-            f"**{property_address.strip()}**. Les obligations du "
-            f"présent Accord s'appliquent néanmoins à toute "
-            f"Opportunité partagée par MGV au Récepteur.\n"
-        )
 
     damages_amount = f"{NDA_DAMAGES_FLOOR_CAD:,}".replace(",", " ")
     duree_lettres = "vingt-quatre" if NDA_DURATION_YEARS == 2 else str(
@@ -362,7 +364,7 @@ CET ACCORD est conclu en date du **{date}** (la « **Date d'effet** »), entre :
 {receiver_block}
 
 Collectivement désignés les « **Parties** ».
-{opportunity_block}
+
 ## PRÉAMBULE
 
 ATTENDU QUE la Société est active dans l'investissement immobilier au Québec, incluant l'identification, l'analyse, l'acquisition, le développement et la gestion d'immeubles, ainsi que dans la création et la mise en œuvre de stratégies value-add;
@@ -462,7 +464,7 @@ Si la Partie Réceptrice est légalement tenue (par loi, ordonnance judiciaire, 
 
 ## 11. DISPOSITIONS GÉNÉRALES
 
-**11.1 Lois applicables et juridiction.** Le présent Accord est régi et interprété selon les lois en vigueur dans la province de Québec et les lois du Canada qui y sont applicables. Les Parties se soumettent à la juridiction exclusive des tribunaux compétents du **{NDA_VENUE}**, pour toute procédure judiciaire ou quasi judiciaire relative au présent Accord.
+**11.1 Lois applicables et juridiction.** Le présent Accord est régi et interprété selon les lois en vigueur dans la province de Québec et les lois du Canada qui y sont applicables. Les Parties se soumettent à la juridiction exclusive des tribunaux compétents du {NDA_VENUE}, pour toute procédure judiciaire ou quasi judiciaire relative au présent Accord.
 
 **11.2 Avis.** Tout avis aux termes du présent Accord sera transmis par écrit aux coordonnées indiquées sur la première page du présent Accord, ou par courriel à l'adresse fournie par la Partie destinataire. Tout avis sera réputé reçu à la date de la confirmation de livraison ou de lecture.
 
@@ -489,6 +491,7 @@ Si la Partie Réceptrice est légalement tenue (par loi, ordonnance judiciaire, 
 **EN FOI DE QUOI**, les Parties, par l'entremise de leurs représentants dûment autorisés, ont signé le présent Accord à la Date d'effet.
 
 **{ISSUER_ENTITY_NAME}**
+
 Par : {ISSUER_REPRESENTATIVE_NAME}
 Titre : {ISSUER_REPRESENTATIVE_TITLE}
 Date : {date}
@@ -497,8 +500,12 @@ Courriel : {ISSUER_EMAIL}
 Téléphone : {ISSUER_PHONE}
 
 **LE RÉCEPTEUR**
+
 Nom : {sname}
+Adresse courriel : _______________________
+Téléphone : _______________________
 Date : {sdate}
+Signature : _______________________
 """
 
 
@@ -507,6 +514,11 @@ def format_property_address(
     city: Optional[str] = None,
     postal_code: Optional[str] = None,
 ) -> str:
-    """Helper de concaténation : adresse, ville, code postal."""
+    """Helper de concaténation : adresse, ville, code postal.
+
+    ⚠️ Conservé pour rétrocompat de `nda_pdf._property_address` et
+    autres call sites, mais l'adresse résultante n'est PLUS injectée
+    dans le NDA rendu (cf. docstring module). Inoffensif désormais.
+    """
     parts = [p for p in (address, city, postal_code) if p]
     return ", ".join(parts) if parts else "____________"

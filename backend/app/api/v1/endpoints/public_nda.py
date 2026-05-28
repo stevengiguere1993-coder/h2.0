@@ -28,7 +28,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DBSession
 from app.models.nda import NDA, NDAStatus
-from app.models.prospection_deal import ProspectionDeal
 from app.services.nda_pdf import nda_pdf_filename, render_nda_pdf
 from app.services.nda_template import (
     ENGAGEMENT_ITEMS,
@@ -62,13 +61,18 @@ router = APIRouter(prefix="/public/ndas", tags=["public-ndas"])
 
 
 class PublicNDA(BaseModel):
-    """Vue publique épurée pour la page de signature."""
+    """Vue publique épurée pour la page de signature.
+
+    ⚠️ Ne JAMAIS exposer l'adresse de la propriété ici. Le NDA est
+    signé AVANT que MGV identifie l'Opportunité à l'investisseur —
+    si la page publique montrait l'adresse, le NDA n'aurait plus
+    rien à protéger.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     status: str
-    property_address: Optional[str]
     investor_name: str
     issuer_name: str
     duration_years: int
@@ -120,32 +124,10 @@ async def _load_by_token(db: AsyncSession, token: str) -> NDA:
     return nda
 
 
-async def _load_deal(
-    db: AsyncSession, deal_id: int
-) -> Optional[ProspectionDeal]:
-    return (
-        await db.execute(
-            select(ProspectionDeal).where(ProspectionDeal.id == deal_id)
-        )
-    ).scalar_one_or_none()
-
-
-def _property_address(deal: Optional[ProspectionDeal]) -> Optional[str]:
-    if deal is None:
-        return None
-    parts = [deal.address]
-    la = deal.lead_analysis
-    if la is not None:
-        if la.city:
-            parts.append(la.city)
-        if la.postal_code:
-            parts.append(la.postal_code)
-    return ", ".join(p for p in parts if p) or None
-
-
 async def _to_public(db: AsyncSession, nda: NDA) -> PublicNDA:
-    deal = await _load_deal(db, nda.deal_id)
-    property_address = _property_address(deal)
+    # NOTE: on n'a plus besoin de charger le deal pour le rendu — le
+    # NDA est désormais générique (pas d'adresse, pas de propriété).
+    del db  # silence linter, conservé pour signature stable
     emission_date_obj = nda.sent_at or nda.signed_at
     emission_date_fmt = _date_fr_ca_long(emission_date_obj) or _date_fr_ca_long(
         datetime.now(timezone.utc)
@@ -154,14 +136,12 @@ async def _to_public(db: AsyncSession, nda: NDA) -> PublicNDA:
     full_md = render_nda_markdown(
         investor_name=nda.investor_name,
         emission_date=emission_date_fmt,
-        property_address=property_address,
         signed_name=nda.signed_name,
         signed_at=signed_at_fmt,
     )
     return PublicNDA(
         id=nda.id,
         status=nda.status,
-        property_address=property_address,
         investor_name=nda.investor_name,
         issuer_name=ISSUER_ENTITY_NAME,
         duration_years=NDA_DURATION_YEARS,
