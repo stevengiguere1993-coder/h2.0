@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter as useNextRouter } from "next/navigation";
+import {
+  useParams,
+  useRouter as useNextRouter,
+  useSearchParams
+} from "next/navigation";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -83,6 +87,17 @@ export default function AchatDetailPage() {
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
   const router = useNextRouter();
+
+  // « Retour » : si on arrive depuis un autre écran (ex. l'onglet
+  // Achats / PO d'un projet), on y retourne via le paramètre `from`.
+  // Sinon, on retombe sur la liste globale Achats / dépenses.
+  const searchParams = useSearchParams();
+  const fromParam = searchParams.get("from");
+  const backHref =
+    fromParam && fromParam.startsWith("/app/") ? fromParam : "/app/achats";
+  const backLabel = fromParam?.startsWith("/app/projets/")
+    ? "Retour au projet"
+    : "Retour aux achats";
 
   const [a, setA] = useState<Achat | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -304,10 +319,10 @@ export default function AchatDetailPage() {
       <div className="p-4 lg:p-6">
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={"/app/achats" as any}
+          href={backHref as any}
           className="inline-flex items-center text-sm text-white/70 hover:text-accent-500"
         >
-          <ArrowLeft className="mr-1 h-4 w-4" /> Retour aux achats
+          <ArrowLeft className="mr-1 h-4 w-4" /> {backLabel}
         </Link>
 
         {loading ? (

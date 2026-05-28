@@ -5253,6 +5253,10 @@ const ACHAT_PAYMENT_LABEL: Record<string, string> = {
 };
 
 function ProjectAchatsTab({ projectId }: { projectId: number }) {
+  // URL de retour passée aux pages de détail PO / achat : un clic sur
+  // « Retour » y ramène l'utilisateur sur cet onglet plutôt que sur la
+  // liste globale Achats / dépenses du menu latéral.
+  const backToTab = encodeURIComponent(`/app/projets/${projectId}#achats`);
   const [pos, setPos] = useState<ProjectPo[]>([]);
   const [achats, setAchats] = useState<ProjectAchat[]>([]);
   const [fournisseurs, setFournisseurs] = useState<ProjectFournisseur[]>([]);
@@ -5392,7 +5396,7 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                           <td className="px-3 py-2">
                             <Link
                               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                              href={`/app/po/${p.id}` as any}
+                              href={`/app/po/${p.id}?from=${backToTab}` as any}
                               className="font-mono text-accent-400 hover:underline"
                             >
                               {p.reference}
@@ -5481,7 +5485,7 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                           <td className="px-3 py-2">
                             <Link
                               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                              href={`/app/achats/${a.id}` as any}
+                              href={`/app/achats/${a.id}?from=${backToTab}` as any}
                               className="font-mono text-accent-400 hover:underline"
                             >
                               {a.supplier_invoice_number ||
@@ -5493,7 +5497,7 @@ function ProjectAchatsTab({ projectId }: { projectId: number }) {
                             {linkedPo ? (
                               <Link
                                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                href={`/app/po/${linkedPo.id}` as any}
+                                href={`/app/po/${linkedPo.id}?from=${backToTab}` as any}
                                 className="text-accent-400 hover:underline"
                               >
                                 {linkedPo.reference}
