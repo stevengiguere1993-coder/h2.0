@@ -1256,6 +1256,44 @@ async def init_db() -> None:
             SET accepted_at = updated_at
             WHERE status = 'accepted' AND accepted_at IS NULL
             """,
+            # Table de marqueurs pour les backfills à exécuter UNE seule
+            # fois (par opposition aux UPDATE idempotents ci-dessus qui
+            # peuvent retourner à chaque boot). Permet d'appliquer une
+            # règle rétroactive sans réécraser les choix manuels faits
+            # ensuite par l'utilisateur.
+            """
+            CREATE TABLE IF NOT EXISTS applied_backfills (
+                key VARCHAR(120) PRIMARY KEY,
+                applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """,
+            # Rétroactif (one-shot) : défaut « refacturable » des achats
+            # selon le type de la soumission du projet. Forfaitaire =
+            # non refacturable (décoché) ; estimé / à contrat =
+            # refacturable (coché). Les projets sans soumission liée
+            # retombent sur forfaitaire (décoché). Garde NOT EXISTS : ne
+            # s'exécute qu'au premier boot après déploiement, puis le
+            # marqueur empêche d'écraser les ajustements manuels.
+            """
+            UPDATE achats a
+            SET is_billable = CASE
+                    WHEN s.kind = 'contract' OR s.pricing_kind = 'estime'
+                        THEN TRUE
+                    ELSE FALSE
+                END
+            FROM projects p
+            LEFT JOIN soumissions s ON s.id = p.soumission_id
+            WHERE a.project_id = p.id
+              AND NOT EXISTS (
+                  SELECT 1 FROM applied_backfills
+                  WHERE key = 'achat_is_billable_by_project_type_v1'
+              )
+            """,
+            """
+            INSERT INTO applied_backfills (key)
+            VALUES ('achat_is_billable_by_project_type_v1')
+            ON CONFLICT (key) DO NOTHING
+            """,
         ):
             try:
                 await conn.execute(text(sql))
