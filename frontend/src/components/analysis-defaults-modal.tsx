@@ -44,6 +44,10 @@ type AnalysisDefault = {
   max_value: number | null;
   step: number;
   group: string | null;
+  // Mai 2026 : statut "finançable par défaut". Pré-coche la case
+  // "Finançable" sur les nouvelles fiches d'analyse pour les items
+  // des groupes mdf_frais / mdf_pct. Null = non applicable.
+  financable_par_defaut: boolean | null;
 };
 
 export function AnalysisDefaultsModal({
@@ -141,6 +145,45 @@ export function AnalysisDefaultsModal({
     }
   }
 
+  // Mai 2026 : toggle du flag "finançable par défaut" sur un item MDF.
+  // PATCH dédié (champ unique) — pas besoin de bouton Enregistrer, le
+  // changement est immédiat.
+  async function toggleFinancable(def: AnalysisDefault, next: boolean) {
+    setError(null);
+    // Optimistic update — on remettra en sync via la réponse serveur.
+    setDefaults((prev) =>
+      prev.map((d) =>
+        d.key === def.key ? { ...d, financable_par_defaut: next } : d
+      )
+    );
+    try {
+      const r = await authedFetch(
+        `/api/v1/prospection/analysis-defaults/${encodeURIComponent(def.key)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ financable_par_defaut: next })
+        }
+      );
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      const updated = (await r.json()) as AnalysisDefault;
+      setDefaults((prev) =>
+        prev.map((d) => (d.key === updated.key ? updated : d))
+      );
+      onSaved?.();
+    } catch (e) {
+      // Rollback — on remet l'ancienne valeur.
+      setDefaults((prev) =>
+        prev.map((d) =>
+          d.key === def.key ? { ...d, financable_par_defaut: !next } : d
+        )
+      );
+      setError((e as Error).message);
+    }
+  }
+
   if (!open) return null;
 
   // Titre dynamique selon le groupe affiché.
@@ -221,6 +264,12 @@ export function AnalysisDefaultsModal({
                   !def.key.includes("pct"));
               const isPctCourtier = def.key.startsWith("pct_");
               const unit = isPct || isPctCourtier ? "%" : isMoney ? "$" : "";
+              // Mai 2026 : le toggle "finançable par défaut" est
+              // affiché uniquement pour le groupe `mdf_frais` (qui
+              // contient les frais MDF et % courtiers — tout ce qui
+              // peut être financé par le prêteur B). Pour les autres
+              // groupes (`inputs_manuels`), la notion n'a pas de sens.
+              const showFinancableToggle = def.group === "mdf_frais";
               return (
                 <div
                   key={def.key}
@@ -264,6 +313,24 @@ export function AnalysisDefaultsModal({
                       Enregistrer
                     </button>
                   </div>
+                  {showFinancableToggle ? (
+                    <label className="mt-2 flex cursor-pointer items-center gap-2 text-[10px] text-white/70">
+                      <input
+                        type="checkbox"
+                        checked={!!def.financable_par_defaut}
+                        onChange={(e) =>
+                          void toggleFinancable(def, e.target.checked)
+                        }
+                        className="h-3.5 w-3.5 cursor-pointer accent-amber-400"
+                      />
+                      <span>
+                        Finançable par défaut
+                        <span className="ml-1 text-white/40">
+                          (case pré-cochée sur les nouvelles fiches)
+                        </span>
+                      </span>
+                    </label>
+                  ) : null}
                   {saved ? (
                     <p className="mt-1 text-[10px] text-emerald-400">
                       ✓ Défaut mis à jour.
@@ -288,4 +355,5 @@ export function AnalysisDefaultsModal({
     </div>
   );
 }
+
 

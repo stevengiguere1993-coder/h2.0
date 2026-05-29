@@ -758,6 +758,8 @@ def _render_bytes(
             ("Frais de négociations",
              _money(fd.get("frais_negociations"))),
             ("Frais de travaux", _money(fd.get("frais_travaux"))),
+            ("Frais de dossier du prêteur",
+             _money(fd.get("frais_dossier_preteur"))),
             ("Intérêts pendant projet (portage)",
              _money(fd.get("interets"))),
             ("Revenus nets pendant projet",
@@ -1001,3 +1003,4 @@ async def generate_lead_analysis_pdf(
     if rec is None:
         raise ValueError(f"LeadAnalysis {analysis_id} introuvable")
     return _render_bytes(rec, atts)
+

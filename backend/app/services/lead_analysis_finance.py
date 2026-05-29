@@ -77,6 +77,17 @@ PCT_COURTIERS: Dict[str, float] = {
     "courtier_hypothecaire_2": 0.01,
 }
 
+# Pourcentage des frais de dossier du prêteur B (mai 2026). Appliqué
+# au prêt initial du prêteur B (= prix_achat × ltv_achat = 75 % du
+# prix d'achat). Stocké en fraction (0.02 = 2 %). Pré-rempli depuis
+# le défaut global ``frais_dossier_preteur_pct``.
+DEFAULT_FRAIS_DOSSIER_PRETEUR_PCT: float = 0.02
+
+# LTV du prêt à l'achat conventionnel (Prêteur B) — utilisé pour
+# calculer la base des frais de dossier du prêteur (= prix_achat ×
+# ltv_achat). Aligné sur ``SCENARIO_ACHAT.ltv`` (75 %).
+LTV_ACHAT_PRETEUR_B: float = 0.75
+
 
 # ─── Configurations par scénario (R50, R57, R59 dans Excel) ──────
 
@@ -493,6 +504,10 @@ class FraisDemarrage:
     frais_developpement: float
     frais_negociations: float
     frais_travaux: float
+    # Frais de dossier du prêteur B (mai 2026). 2 % × prêt initial
+    # (= prix_achat × ltv_achat) par défaut, modifiable via les
+    # défauts globaux (clé ``frais_dossier_preteur_pct``).
+    frais_dossier_preteur: float
     interets: float
     revenus_nets_pendant_projet: float
 
@@ -513,6 +528,7 @@ class FraisDemarrage:
                 self.frais_developpement,
                 self.frais_negociations,
                 self.frais_travaux,
+                self.frais_dossier_preteur,
                 self.interets,
                 self.revenus_nets_pendant_projet,
             ]
@@ -530,6 +546,8 @@ def compute_frais_demarrage(
     frais_developpement: float = 0.0,
     frais_negociations: float = 0.0,
     frais_travaux: float = 0.0,
+    frais_dossier_preteur_pct: float = DEFAULT_FRAIS_DOSSIER_PRETEUR_PCT,
+    ltv_achat_preteur_b: float = LTV_ACHAT_PRETEUR_B,
     frais_fixes_overrides: Optional[Dict[str, float]] = None,
     pct_courtiers_overrides: Optional[Dict[str, float]] = None,
 ) -> FraisDemarrage:
@@ -543,7 +561,11 @@ def compute_frais_demarrage(
     hardcoded de ``FRAIS_FIXES`` poste par poste. Provient des défauts
     globaux ``ProspectionAnalysisDefault`` (groupe ``mdf_frais``).
     ``pct_courtiers_overrides`` même chose pour les % courtiers
-    hypothécaires (clés ``courtier_hypothecaire_1`` / ``_2``)."""
+    hypothécaires (clés ``courtier_hypothecaire_1`` / ``_2``).
+
+    ``frais_dossier_preteur_pct`` : fraction (0.02 = 2 %) appliquée au
+    prêt initial du prêteur B (= prix_achat × ltv_achat_preteur_b).
+    Provient du défaut global ``frais_dossier_preteur_pct``."""
     ff = dict(FRAIS_FIXES)
     if frais_fixes_overrides:
         for k, v in frais_fixes_overrides.items():
@@ -557,6 +579,8 @@ def compute_frais_demarrage(
             if v is None:
                 continue
             pc[k] = float(v)
+
+    pret_initial_preteur_b = prix_achat * ltv_achat_preteur_b
 
     return FraisDemarrage(
         courtier_hypothecaire_1=pc["courtier_hypothecaire_1"] * prix_achat,
@@ -572,6 +596,10 @@ def compute_frais_demarrage(
         frais_developpement=frais_developpement,
         frais_negociations=frais_negociations,
         frais_travaux=frais_travaux,
+        # Frais de dossier du prêteur B : pct × prêt initial.
+        # Inséré entre les travaux estimés et les intérêts pour
+        # respecter l'ordre attendu dans la composition MDF.
+        frais_dossier_preteur=frais_dossier_preteur_pct * pret_initial_preteur_b,
         # L17 : (1 - mdf_preteur_b_pct) × prix × taux_interet_preteur_b_projet × durée
         interets=(1 - mdf_preteur_b_pct) * prix_achat * taux_interet_preteur_b_projet * duree_projet_annees,
         # L18 : -revenus_net_achat × durée (négatif = pas de revenu
@@ -616,6 +644,10 @@ class FinanceInputs:
     frais_developpement: float = 0.0
     frais_negociations: float = 0.0
     frais_travaux: float = 0.0
+    # Frais de dossier du prêteur B (fraction du prêt initial). Défaut
+    # 0.02 (2 %), modifiable globalement via le défaut
+    # ``frais_dossier_preteur_pct`` ou par override de fiche.
+    frais_dossier_preteur_pct: float = DEFAULT_FRAIS_DOSSIER_PRETEUR_PCT
 
     # APH SELECT only (manuel)
     nouveau_loyer_abordable: float = 0.0
@@ -701,6 +733,7 @@ class FinanceResults:
             "mdf_preteur_b_pct": mdf_pct,
             "taux_interet_preteur_b_projet": self.inputs.taux_interet_preteur_b_projet,
             "taux_inoccupation_pct": self.inputs.taux_inoccupation_pct,
+            "frais_dossier_preteur_pct": self.inputs.frais_dossier_preteur_pct,
             # Alias conservé pour rétrocompat UI front-end.
             "mdf_25pct_prix_achat": mdf_pct * self.inputs.prix_achat,
             "mdf_pct_prix_achat": mdf_pct * self.inputs.prix_achat,
@@ -936,6 +969,8 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         frais_developpement=inputs.frais_developpement,
         frais_negociations=inputs.frais_negociations,
         frais_travaux=inputs.frais_travaux,
+        frais_dossier_preteur_pct=inputs.frais_dossier_preteur_pct,
+        ltv_achat_preteur_b=SCENARIO_ACHAT.ltv,
         frais_fixes_overrides=inputs.frais_fixes_overrides,
         pct_courtiers_overrides=inputs.pct_courtiers_overrides,
     )
@@ -999,3 +1034,4 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         best_refi_amount=best_amount,
         best_refi_program=best_program,
     )
+

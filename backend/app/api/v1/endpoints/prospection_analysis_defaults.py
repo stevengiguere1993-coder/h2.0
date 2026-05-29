@@ -46,6 +46,10 @@ class AnalysisDefaultRead(BaseModel):
     max_value: Optional[float] = None
     step: float
     group: Optional[str] = None
+    # Mai 2026 : statut « finançable par défaut » pour les items des
+    # groupes ``mdf_frais`` / ``mdf_pct``. None pour les autres groupes
+    # (non applicable).
+    financable_par_defaut: Optional[bool] = None
     updated_at: datetime
     updated_by_user_id: Optional[int] = None
 
@@ -58,6 +62,14 @@ class AnalysisDefaultUpdate(BaseModel):
     value_json: Optional[Any] = Field(
         default=None,
         description="Nouvelle valeur structurée (rarement utilisé).",
+    )
+    financable_par_defaut: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Statut « finançable par défaut » pour les items MDF "
+            "(groupes mdf_frais / mdf_pct). Pré-coche la case "
+            "« Finançable » sur les nouvelles fiches d'analyse."
+        ),
     )
 
 
@@ -105,6 +117,7 @@ async def update_analysis_default(
 
     old_value_float = rec.value_float
     old_value_json = rec.value_json
+    old_financable = rec.financable_par_defaut
 
     if payload.value_float is not None:
         # Validation bornes (si définies).
@@ -129,23 +142,49 @@ async def update_analysis_default(
     if payload.value_json is not None:
         rec.value_json = payload.value_json
 
+    # Mai 2026 : mise à jour du flag « finançable par défaut » pour les
+    # items MDF. On accepte `False` explicitement (pas juste `None`) :
+    # `model_fields_set` permet de distinguer absence vs envoi de
+    # `false` dans le payload JSON.
+    financable_touched = "financable_par_defaut" in payload.model_fields_set
+    if financable_touched:
+        rec.financable_par_defaut = payload.financable_par_defaut
+
     rec.updated_by_user_id = getattr(user, "id", None)
     await db.flush()
     await db.refresh(rec)
 
+    audit_details: dict[str, Any] = {
+        "key": rec.key,
+        "old_value_float": old_value_float,
+        "new_value_float": rec.value_float,
+        "old_value_json": old_value_json,
+        "new_value_json": rec.value_json,
+    }
+    if financable_touched:
+        audit_details["old_financable_par_defaut"] = old_financable
+        audit_details["new_financable_par_defaut"] = rec.financable_par_defaut
+
+    # Action discriminée : si le toggle « finançable par défaut » est
+    # le seul changement, on log avec une action dédiée pour faciliter
+    # les recherches ultérieures.
+    action = (
+        "prospection_analysis_default.financable_default_updated"
+        if (
+            financable_touched
+            and payload.value_float is None
+            and payload.value_json is None
+        )
+        else "prospection_analysis_default.updated"
+    )
     await log_action(
         db,
         user=user,
-        action="prospection_analysis_default.updated",
+        action=action,
         entity_type="prospection_analysis_default",
         entity_id=rec.id,
-        details={
-            "key": rec.key,
-            "old_value_float": old_value_float,
-            "new_value_float": rec.value_float,
-            "old_value_json": old_value_json,
-            "new_value_json": rec.value_json,
-        },
+        details=audit_details,
     )
 
     return AnalysisDefaultRead.model_validate(rec)
+

@@ -437,6 +437,23 @@ _DB_KEY_TO_PCT_COURTIER: dict[str, str] = {
     "pct_courtier_hypothecaire_2": "courtier_hypothecaire_2",
 }
 
+# Mapping clé BD ↔ clé interne du poste FraisDemarrage côté
+# ``frais_demarrage_financables_json``. Utilisé pour bâtir la liste
+# par défaut des postes finançables à la création d'une fiche, à
+# partir des flags ``financable_par_defaut`` configurés en BD.
+_DB_KEY_TO_FINANCABLE_KEY: dict[str, str] = {
+    "frais_evaluateur": "evaluateur",
+    "frais_evaluateur_2": "evaluateur_2",
+    "frais_inspection": "inspection",
+    "frais_avocat": "avocat",
+    "frais_notaire": "notaire",
+    "frais_notaire_2": "notaire_2",
+    "frais_rapport_efficacite": "rapport_efficacite",
+    "pct_courtier_hypothecaire_1": "courtier_hypothecaire_1",
+    "pct_courtier_hypothecaire_2": "courtier_hypothecaire_2",
+    "frais_dossier_preteur_pct": "frais_dossier_preteur",
+}
+
 
 async def _load_defaults_for_new_analysis(db) -> dict:
     """Charge les défauts depuis la BD et fusionne avec les fallbacks.
@@ -450,41 +467,73 @@ async def _load_defaults_for_new_analysis(db) -> dict:
     ``LeadAnalysis(...)``. Couvre TOUS les inputs manuels pré-remplis
     (taux refi, MDF %, taux prêteur B, TGA, taux achat, réduction
     énergie, durée projet, nb logements/thermopompes ajoutés).
+
+    Mai 2026 : pré-remplit aussi ``frais_demarrage_financables_json``
+    selon les flags ``financable_par_defaut`` configurés en BD pour les
+    items MDF. Si aucun item n'a de flag (table vierge), retombe sur
+    la liste héritée hardcoded ([rapport_efficacite, frais_developpement,
+    frais_travaux]) pour préserver le comportement historique.
     """
     out = dict(_DEFAULTS_FALLBACK)
+    financables_from_db: list[str] = []
+    any_financable_flag_set = False
     try:
         rows = (
             await db.execute(select(ProspectionAnalysisDefault))
         ).scalars().all()
         for row in rows:
+            # Champs ``LeadAnalysis`` pré-remplis.
             field = _DB_KEY_TO_FIELD.get(row.key)
-            if field is None:
-                continue
-            if row.value_float is None:
-                continue
-            v = float(row.value_float)
-            out[field] = int(v) if field in _DB_KEY_INT_FIELDS else v
+            if field is not None and row.value_float is not None:
+                v = float(row.value_float)
+                out[field] = int(v) if field in _DB_KEY_INT_FIELDS else v
+
+            # Flag « finançable par défaut » sur les items MDF.
+            financable_key = _DB_KEY_TO_FINANCABLE_KEY.get(row.key)
+            if financable_key is not None:
+                flag = getattr(row, "financable_par_defaut", None)
+                if flag is not None:
+                    any_financable_flag_set = True
+                    if bool(flag):
+                        financables_from_db.append(financable_key)
     except Exception as exc:  # noqa: BLE001
         # Table peut ne pas exister au tout premier boot — silencieux.
         log.warning("Failed to load analysis defaults from DB: %s", exc)
+
+    # Si au moins un flag est configuré en BD, on respecte EXCLUSIVEMENT
+    # la BD. Sinon, on retombe sur le défaut hardcoded (compat héritée
+    # avec ``frais_developpement`` / ``frais_travaux`` qui n'ont pas de
+    # ligne dans ``prospection_analysis_defaults``).
+    if any_financable_flag_set:
+        # On garde frais_developpement et frais_travaux toujours
+        # finançables (Phil les a marqués finançables historiquement
+        # et il n'y a pas de défaut BD associé pour eux).
+        merged = list(dict.fromkeys(
+            financables_from_db + ["frais_developpement", "frais_travaux"]
+        ))
+        out["frais_demarrage_financables_json"] = json.dumps(merged)
     return out
 
 
-async def _load_frais_mdf_overrides(db) -> tuple[dict, dict]:
+async def _load_frais_mdf_overrides(db) -> tuple[dict, dict, Optional[float]]:
     """Charge les défauts globaux des frais MDF depuis la BD.
 
-    Retourne un tuple ``(frais_fixes_overrides, pct_courtiers_overrides)``
-    prêt à passer à ``FinanceInputs``. Les valeurs en BD sont :
+    Retourne un tuple ``(frais_fixes_overrides, pct_courtiers_overrides,
+    frais_dossier_preteur_pct)`` prêt à passer à ``FinanceInputs``. Les
+    valeurs en BD sont :
         - frais_* : montants $ directs (ex. 1500.0)
         - pct_courtier_* : pourcentage (1.0 = 1 %), converti en
           fraction (÷100) pour matcher ``PCT_COURTIERS``.
+        - frais_dossier_preteur_pct : pct (2.0 = 2 %) en BD → fraction
+          (0.02) pour le moteur.
 
-    Si la table est vide ou manque, retourne `({}, {})` — le moteur
-    retombera sur les constantes hardcoded ``FRAIS_FIXES`` /
-    ``PCT_COURTIERS``.
+    Si la table est vide ou manque, retourne `({}, {}, None)` — le
+    moteur retombera sur les constantes hardcoded ``FRAIS_FIXES`` /
+    ``PCT_COURTIERS`` / ``DEFAULT_FRAIS_DOSSIER_PRETEUR_PCT``.
     """
     frais_fixes: dict[str, float] = {}
     pct_courtiers: dict[str, float] = {}
+    frais_dossier_preteur_pct: Optional[float] = None
     try:
         rows = (
             await db.execute(select(ProspectionAnalysisDefault))
@@ -499,11 +548,14 @@ async def _load_frais_mdf_overrides(db) -> tuple[dict, dict]:
                 # BD stocke en pct (1.0 = 1 %), moteur attend une
                 # fraction (0.01 = 1 %).
                 pct_courtiers[_DB_KEY_TO_PCT_COURTIER[row.key]] = v / 100.0
+            elif row.key == "frais_dossier_preteur_pct":
+                # Idem : BD en pct (2.0 = 2 %), moteur en fraction.
+                frais_dossier_preteur_pct = v / 100.0
     except Exception as exc:  # noqa: BLE001
         log.warning(
             "Failed to load frais MDF overrides from DB: %s", exc
         )
-    return frais_fixes, pct_courtiers
+    return frais_fixes, pct_courtiers, frais_dossier_preteur_pct
 
 
 @router.post(
@@ -1300,7 +1352,7 @@ async def run_financial_analysis(
     # cette fiche-ci si elle n'a pas d'override par fiche pour
     # ``evaluateur``). Les overrides PAR FICHE (champ
     # ``frais_demarrage_overrides_json``) restent prioritaires.
-    frais_fixes_overrides, pct_courtiers_overrides = (
+    frais_fixes_overrides, pct_courtiers_overrides, frais_dossier_preteur_pct_global = (
         await _load_frais_mdf_overrides(db)
     )
 
@@ -1344,6 +1396,15 @@ async def run_financial_analysis(
         ),
         frais_fixes_overrides=frais_fixes_overrides,
         pct_courtiers_overrides=pct_courtiers_overrides,
+        # Mai 2026 : nouveau frais MDF, surchargé globalement via le
+        # défaut ``frais_dossier_preteur_pct``. Si la BD n'a pas (encore)
+        # de ligne pour cette clé, on laisse ``FinanceInputs`` retomber
+        # sur sa valeur par défaut (2 %).
+        **(
+            {"frais_dossier_preteur_pct": frais_dossier_preteur_pct_global}
+            if frais_dossier_preteur_pct_global is not None
+            else {}
+        ),
     )
 
     use_aph = loyer_abord > 0 and inputs.nombre_logements > 0
@@ -2485,6 +2546,7 @@ async def check_ocr_health(user: CurrentUser) -> dict:
     installé tesseract/poppler."""
     _require_prospection(user)
     return _ocr_health_payload()
+
 
 
 
