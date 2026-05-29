@@ -52,14 +52,18 @@ function contractEstimate(s: Soumission): number | null {
   }
 }
 
-type Column = { id: string; label: string; dot: string };
+type Column = { id: string; label: string; dot: string; edge: string };
 
+// Couleurs vives (teinte -500) lisibles autant en thème nuit que jour :
+// `dot` = pastille de statut, `edge` = liseré de l'en-tête de colonne
+// pour distinguer les colonnes d'un coup d'œil. On évite les teintes
+// pâles (-400) et `bg-white/40` (invisible sur fond clair en mode jour).
 const COLUMNS: Column[] = [
-  { id: "draft", label: "Brouillons", dot: "bg-white/40" },
-  { id: "sent", label: "Envoyées", dot: "bg-blue-400" },
-  { id: "accepted", label: "Acceptées", dot: "bg-emerald-400" },
-  { id: "rejected", label: "Refusées", dot: "bg-rose-500" },
-  { id: "expired", label: "Expirées", dot: "bg-amber-400" }
+  { id: "draft", label: "Brouillons", dot: "bg-slate-400", edge: "border-slate-400" },
+  { id: "sent", label: "Envoyées", dot: "bg-blue-500", edge: "border-blue-500" },
+  { id: "accepted", label: "Acceptées", dot: "bg-emerald-500", edge: "border-emerald-500" },
+  { id: "rejected", label: "Refusées", dot: "bg-rose-500", edge: "border-rose-500" },
+  { id: "expired", label: "Expirées", dot: "bg-amber-500", edge: "border-amber-500" }
 ];
 
 // Colonnes repliées par défaut : « Refusées » et « Expirées » (du bruit
@@ -393,7 +397,7 @@ export default function SoumissionsPage() {
                       className="flex h-full flex-col items-center gap-2 px-2 py-3"
                     >
                       <ChevronRight className="h-4 w-4 text-white/50" />
-                      <span className={`h-2 w-2 rounded-full ${col.dot}`} />
+                      <span className={`h-2.5 w-2.5 rounded-full ${col.dot}`} />
                       <span className="rounded-md bg-brand-950 px-1.5 py-0.5 text-[11px] font-semibold text-white/70">
                         {cards.length}
                       </span>
@@ -406,7 +410,7 @@ export default function SoumissionsPage() {
                     </button>
                   ) : (
                     <>
-                  <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
+                  <div className={`flex items-center justify-between border-b-2 ${col.edge} px-4 py-3`}>
                     <button
                       type="button"
                       onClick={() => toggleColumnCollapsed(col.id)}
@@ -414,7 +418,7 @@ export default function SoumissionsPage() {
                       className="flex flex-1 items-center gap-2 text-left"
                     >
                       <ChevronDown className="h-3.5 w-3.5 text-white/50" />
-                      <span className={`h-2 w-2 rounded-full ${col.dot}`} />
+                      <span className={`h-2.5 w-2.5 rounded-full ${col.dot}`} />
                       <h2 className="text-sm font-semibold text-white">
                         {col.label}
                       </h2>
