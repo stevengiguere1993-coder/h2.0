@@ -7,6 +7,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { Link, useRouter } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
+import { projectLabel } from "@/lib/project";
 import { useConfirm } from "@/components/confirm-dialog";
 
 type PurchaseOrder = {
@@ -23,7 +24,7 @@ type PurchaseOrder = {
   created_at: string;
 };
 
-type Project = { id: number; name: string };
+type Project = { id: number; name: string; address?: string | null };
 type Fournisseur = { id: number; name: string };
 type Employe = { id: number; full_name: string };
 
@@ -312,7 +313,9 @@ export default function PurchaseOrdersListPage() {
                         {fr?.name || "—"}
                       </td>
                       <td className="px-3 py-2 text-white/80">
-                        {proj?.name || (
+                        {proj ? (
+                          projectLabel(proj)
+                        ) : (
                           <span className="text-white/40">
                             (frais généraux)
                           </span>

@@ -64,45 +64,10 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 def _rotate_receipt_blob_cw90(blob: bytes, content_type: str) -> Optional[bytes]:
     """Fait pivoter de 90° HORAIRE (vers la droite) un reçu stocké.
-    PDF → rotation lossless de chaque page (pypdf). Image → Pillow.
-    Retourne None si le format est inconnu ou en cas d'échec (on laisse
-    alors le reçu inchangé plutôt que de le corrompre)."""
-    import io
+    Délègue au service partagé. Retourne None si format inconnu / échec."""
+    from app.services.receipt_rotate import rotate_receipt_blob
 
-    ct = (content_type or "").lower()
-    try:
-        if "pdf" in ct:
-            from pypdf import PdfReader, PdfWriter
-
-            reader = PdfReader(io.BytesIO(blob))
-            writer = PdfWriter()
-            for page in reader.pages:
-                page.rotate(90)  # pypdf : sens horaire
-                writer.add_page(page)
-            out = io.BytesIO()
-            writer.write(out)
-            return out.getvalue()
-
-        from PIL import Image
-
-        try:  # HEIC/HEIF iPhone — best effort
-            from pillow_heif import register_heif_opener
-
-            register_heif_opener()
-        except Exception:
-            pass
-
-        img = Image.open(io.BytesIO(blob))
-        # ROTATE_270 = 270° anti-horaire = 90° horaire.
-        img = img.transpose(Image.Transpose.ROTATE_270)
-        save_fmt = "PNG" if "png" in ct else "JPEG"
-        if save_fmt == "JPEG" and img.mode in ("RGBA", "P", "LA"):
-            img = img.convert("RGB")
-        out = io.BytesIO()
-        img.save(out, format=save_fmt)
-        return out.getvalue()
-    except Exception:
-        return None
+    return rotate_receipt_blob(blob, content_type, clockwise=True)
 
 
 async def _rotate_existing_receipts_cw90(conn) -> int:
