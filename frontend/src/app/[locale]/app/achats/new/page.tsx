@@ -14,8 +14,14 @@ import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 import { splitFromTotal } from "@/lib/tax";
+import { projectLabel } from "@/lib/project";
 
-type Project = { id: number; name: string; billing_kind?: string };
+type Project = {
+  id: number;
+  name: string;
+  address?: string | null;
+  billing_kind?: string;
+};
 type Fournisseur = { id: number; name: string };
 type POMini = {
   id: number;
@@ -325,7 +331,7 @@ export default function NewAchatPage() {
                 <option value="">— Aucun (frais généraux) —</option>
                 {projects.map((p) => (
                   <option key={p.id} value={String(p.id)}>
-                    {p.name}
+                    {projectLabel(p)}
                   </option>
                 ))}
               </select>

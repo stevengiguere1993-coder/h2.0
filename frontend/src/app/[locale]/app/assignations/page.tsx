@@ -17,6 +17,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
+import { projectLabel } from "@/lib/project";
 
 type Employe = {
   id: number;
@@ -29,6 +30,7 @@ type Employe = {
 type Project = {
   id: number;
   name: string;
+  address?: string | null;
   status: string;
   start_date: string | null;
   end_date: string | null;
@@ -324,7 +326,7 @@ export default function AssignationsPage() {
               href={`/app/projets/${ph.project_id}` as any}
               className="text-sm font-semibold text-white hover:text-accent-400"
             >
-              {proj?.name || `Projet #${ph.project_id}`}
+              {proj ? projectLabel(proj) : `Projet #${ph.project_id}`}
             </Link>
             <p className="mt-0.5 text-xs text-white/70">
               Phase : {ph.name}
@@ -579,7 +581,7 @@ export default function AssignationsPage() {
                               <div className="min-w-0">
                                 <p className="text-white">{t.title}</p>
                                 <p className="mt-0.5 text-[10px] text-white/50">
-                                  {proj?.name || `Projet #${t.project_id}`}
+                                  {proj ? projectLabel(proj) : `Projet #${t.project_id}`}
                                   {t.due_date
                                     ? ` · échéance ${fmtDate(t.due_date)}`
                                     : ""}

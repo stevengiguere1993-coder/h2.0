@@ -22,6 +22,7 @@ import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 import { splitFromTotal } from "@/lib/tax";
+import { projectLabel } from "@/lib/project";
 import { useConfirm } from "@/components/confirm-dialog";
 
 const PAYMENT_OPTIONS = [
@@ -70,7 +71,7 @@ type Achat = {
   facture_item_id: number | null;
 };
 
-type Project = { id: number; name: string };
+type Project = { id: number; name: string; address?: string | null };
 type Fournisseur = { id: number; name: string };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -486,7 +487,7 @@ export default function AchatDetailPage() {
                       <option value="">— Aucun —</option>
                       {projects.map((p) => (
                         <option key={p.id} value={String(p.id)}>
-                          {p.name}
+                          {projectLabel(p)}
                         </option>
                       ))}
                     </select>
