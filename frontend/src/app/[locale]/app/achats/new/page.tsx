@@ -15,7 +15,7 @@ import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 import { splitFromTotal } from "@/lib/tax";
 
-type Project = { id: number; name: string };
+type Project = { id: number; name: string; billing_kind?: string };
 type Fournisseur = { id: number; name: string };
 type POMini = {
   id: number;
@@ -104,6 +104,16 @@ export default function NewAchatPage() {
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Défaut « refacturable » selon le type de la soumission du projet :
+  // forfaitaire = décoché, estimé / à contrat = coché. Se réapplique
+  // quand on change de projet ; un ajustement manuel reste possible
+  // ensuite (l'effet ne dépend que du projet sélectionné).
+  useEffect(() => {
+    if (!projectId) return;
+    const p = projects.find((x) => String(x.id) === String(projectId));
+    if (p?.billing_kind) setIsBillable(p.billing_kind !== "forfaitaire");
+  }, [projectId, projects]);
 
   useEffect(() => {
     let cancelled = false;

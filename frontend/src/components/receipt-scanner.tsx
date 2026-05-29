@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Camera, FileText, Loader2, Trash2 } from "lucide-react";
+import { ReceiptCropper } from "./receipt-cropper";
 
 type Page = {
   id: string;
@@ -71,38 +72,50 @@ export function ReceiptScanner({
 }) {
   const [pages, setPages] = useState<Page[]>([]);
   const [busy, setBusy] = useState(false);
+  // Images awaiting the crop step. They are processed one at a time so a
+  // multi-shot scan opens the cropper for each page in turn.
+  const [cropQueue, setCropQueue] = useState<File[]>([]);
   const cameraRef = useRef<HTMLInputElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   // If the parent clears `value` (e.g. after a successful upload), drop
   // our cached thumbnails so the UI doesn't look stale.
   useEffect(() => {
-    if (value === null) setPages([]);
+    if (value === null) {
+      setPages([]);
+      setCropQueue([]);
+    }
   }, [value]);
 
-  async function addFromCamera(list: FileList | null) {
+  function queueImages(list: FileList | null) {
     if (!list || list.length === 0) return;
+    const images = Array.from(list).filter((f) => f.type.startsWith("image/"));
+    if (images.length > 0) setCropQueue((q) => [...q, ...images]);
+  }
+
+  // Called by the cropper once the employee has framed a page.
+  async function addCroppedPage(cropped: File) {
+    setCropQueue((q) => q.slice(1));
     setBusy(true);
     try {
-      const newPages: Page[] = [];
-      for (const f of Array.from(list)) {
-        if (!f.type.startsWith("image/")) continue;
-        newPages.push(await fileToImage(f));
-      }
-      if (newPages.length === 0) return;
-      const next = [...pages, ...newPages];
+      const p = await fileToImage(cropped);
+      const next = [...pages, p];
       setPages(next);
-      // Rebuild the PDF after each additional page so the parent form
-      // always has a ready-to-upload file.
+      // Rebuild the PDF after each page so the parent form always has a
+      // ready-to-upload file.
       const pdf = await pagesToPdfFile(next);
       onChange(pdf);
     } finally {
       setBusy(false);
-      if (cameraRef.current) cameraRef.current.value = "";
     }
   }
 
-  async function pickExisting(list: FileList | null) {
+  function addFromCamera(list: FileList | null) {
+    queueImages(list);
+    if (cameraRef.current) cameraRef.current.value = "";
+  }
+
+  function pickExisting(list: FileList | null) {
     if (!list || list.length === 0) return;
     const f = list[0];
     if (f.type === "application/pdf") {
@@ -111,16 +124,7 @@ export function ReceiptScanner({
       setPages([]);
       onChange(f);
     } else if (f.type.startsWith("image/")) {
-      setBusy(true);
-      try {
-        const p = await fileToImage(f);
-        const next = [...pages, p];
-        setPages(next);
-        const pdf = await pagesToPdfFile(next);
-        onChange(pdf);
-      } finally {
-        setBusy(false);
-      }
+      queueImages(list);
     }
     if (fileRef.current) fileRef.current.value = "";
   }
@@ -144,6 +148,15 @@ export function ReceiptScanner({
 
   return (
     <div className="space-y-3">
+      {cropQueue.length > 0 ? (
+        <ReceiptCropper
+          key={cropQueue.length}
+          file={cropQueue[0]}
+          pageLabel={`page ${pages.length + 1}`}
+          onConfirm={(f) => void addCroppedPage(f)}
+          onCancel={() => setCropQueue((q) => q.slice(1))}
+        />
+      ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"

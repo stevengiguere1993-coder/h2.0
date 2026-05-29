@@ -14,7 +14,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.notification import Notification
@@ -46,29 +46,48 @@ _VOLET_PREFIXES: dict[str, tuple[str, ...]] = {
     "devlog": ("/dev-logiciel",),
 }
 
+# Certaines notifications appartiennent à un volet de façon non ambiguë,
+# peu importe leur href (qui peut être nul sur d'anciennes notifs, ou
+# pointer vers un autre volet pour des raisons de routage historique).
+# On les rattache par `kind` pour cloisonner la cloche de façon fiable —
+# ex. « NDA signé » est de la prospection et ne doit jamais apparaître
+# dans la cloche du volet construction.
+_KIND_VOLET: dict[str, str] = {
+    "nda.signed": "prospection",
+}
+
 
 def _volet_filter(scope: Optional[str]):
     """Condition SQL ne gardant que les notifications du volet `scope`.
 
     Une notification est conservée si son href est nul, appartient au
     volet demandé, ou ne correspond à aucun volet connu. Elle est
-    écartée uniquement si son href vise explicitement un autre volet.
+    écartée si son href vise explicitement un autre volet, ou si son
+    `kind` est rattaché à un autre volet.
     Retourne ``None`` si `scope` est absent/inconnu (aucun filtre).
     """
     if not scope or scope not in _VOLET_PREFIXES:
         return None
+    conditions = []
     foreign = [
         pfx
         for volet, prefixes in _VOLET_PREFIXES.items()
         if volet != scope
         for pfx in prefixes
     ]
-    if not foreign:
+    if foreign:
+        conditions.append(
+            or_(
+                Notification.href.is_(None),
+                ~or_(*[Notification.href.like(f"{p}%") for p in foreign]),
+            )
+        )
+    foreign_kinds = [k for k, volet in _KIND_VOLET.items() if volet != scope]
+    if foreign_kinds:
+        conditions.append(Notification.kind.notin_(foreign_kinds))
+    if not conditions:
         return None
-    return or_(
-        Notification.href.is_(None),
-        ~or_(*[Notification.href.like(f"{p}%") for p in foreign]),
-    )
+    return and_(*conditions)
 
 
 @router.get("", response_model=List[NotificationRead])
