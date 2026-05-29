@@ -1,6 +1,7 @@
 """Endpoints pour le bouton « Aide ».
 
-- POST /api/v1/help/ask : poser une question, réponse via Claude API
+- POST /api/v1/help/ask : poser une question, réponse via la cascade
+  IA gratuite (Groq préféré, repli Gemini puis Anthropic)
 - POST /api/v1/help/reports : signaler un bug (toute personne logée)
 - GET  /api/v1/help/reports : liste des bugs (owner only)
 - PATCH /api/v1/help/reports/{id} : accepter/rejeter/résoudre (owner)
@@ -20,7 +21,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
 
 from app.api.deps import CurrentUser, DBSession, RequireOwner
-from app.core.config import settings
+from app.integrations.ai import Message, chat
+from app.integrations.ai._base import AIProviderError, AIProviderUnavailable
 from app.models.help_request import HelpRequest, HelpRequestKind, HelpRequestStatus
 from app.models.voice import Call
 
@@ -152,57 +154,78 @@ class BulkAction(BaseModel):
     action: str  # accept | reject | resolve
 
 
-# ------------------------------ Question (Claude API) ------------------------------
+# ------------------------------ Question (cascade IA gratuite) ------------------------------
 
-SYSTEM_PROMPT = """Tu es l'assistant d'aide intégré à h2.0, le logiciel de \
-gestion de chantiers de Horizon Services Immobiliers (Montréal, Québec, \
-construction et rénovation, RBQ 5868-5991-01).
+SYSTEM_PROMPT = """Tu es l'assistant du Centre d'aide de Kratos, le portail \
+interne de Horizon Services Immobiliers (Montréal, Québec — construction et \
+rénovation, RBQ 5868-5991-01). Le propriétaire est Steven ; les employés qui \
+te consultent sont notamment Jérôme et Gabriel.
 
-Tu aides les employés et le bureau à naviguer le logiciel. Réponds en \
-français québécois, ton concis et pragmatique. Si tu ne sais pas, dis-le \
-clairement et propose à la personne d'utiliser le bouton « Signaler un \
-bug » pour faire monter la question à Steven.
+RÔLE
+- Tu aides les employés et le bureau à utiliser le portail. Réponds en \
+français québécois, ton concis et pragmatique, et oriente toujours vers la \
+bonne page.
+- Si l'utilisateur décrit une vraie anomalie (bug, erreur, page cassée), \
+suggère le bouton « Signaler un bug » du Centre d'aide pour faire monter le \
+sujet à Steven.
+- N'invente jamais une page ou une fonctionnalité qui n'existe pas. Si tu ne \
+sais pas, dis-le clairement et propose de signaler un bug.
+- Tes réponses sont indicatives ; termine en le rappelant (« Réponse \
+indicative »).
 
-Sections principales du logiciel :
-- Construction : projets (chantiers), phases, tâches, agenda, punch
-- Ventes : prospects, soumissions (devis), contacts, factures
-- Achats : POs (bons de commande, autorisations internes) et Achats \
-(transactions réelles avec impact comptable QuickBooks)
-- Paramètres : numérotation QB, comptes QB, employés, sous-traitants
+LE PORTAIL KRATOS (découpé en volets)
 
-Workflow PO → Achat : un PO est une autorisation d'achat (planification, \
-sans impact comptable). Quand l'employé revient avec sa facture \
-fournisseur, on convertit le PO en Achat (qui pousse dans QuickBooks \
-comme Bill ou Purchase selon le mode de paiement).
-"""
+Punch / Temps
+- /app/punch : démarrer ou terminer un punch. On choisit un projet OU un \
+prospect, puis une tâche ; la géolocalisation est capturée au punch. Versions \
+mobiles sous /m/*.
+- Les heures travaillées s'affichent en heures/minutes (ex. « 7 h 53 »).
+- /app/punch/gestion (admin) : vue par semaine, mois ou période de paie ; \
+approbation des punchs ; saisie manuelle d'un temps.
+- /app/paie : rapport de paie, où les heures sont en décimal (pour la paie).
+
+Construction
+- Pipeline des contacts : new → contacted → rdv_prevu → qualified → quoted → \
+won / lost / spam.
+- Projets et planification par phases : on assigne des employés ou des \
+sous-traitants à une phase.
+- Sous-traitant payé à l'heure : cocher « payé à l'heure » + indiquer le \
+nombre de travailleurs ; son coût entre alors dans le « Coût projeté – main \
+d'œuvre ». Les sous-traitants au forfait sont exclus de ce calcul.
+- Bons de commande (PO) : /app/po. Plus : soumissions (devis), \
+achats/dépenses, facturation. Un PO est une autorisation d'achat \
+(planification, sans impact comptable) ; quand la facture fournisseur arrive, \
+on convertit le PO en Achat (qui pousse dans QuickBooks comme Bill ou Purchase \
+selon le mode de paiement).
+- Paramètres : numérotation QB, comptes QB, employés, sous-traitants.
+
+Autres volets (mentionne-les seulement si pertinents) : prospection, \
+immobilier, gestion locative, courtage, développement logiciel (devlog).
+
+CONTEXTE FOURNI
+On peut te transmettre quelques appels récents qui mentionnent les mots-clés \
+de la question (volet téléphonie). Utilise-les seulement s'ils sont \
+pertinents, et cite l'Appel #ID si tu t'appuies sur leur contenu."""
 
 
 @router.post(
     "/ask",
     response_model=AskOut,
-    summary="Poser une question à l'assistant Claude",
+    summary="Poser une question à l'assistant du Centre d'aide",
 )
 async def ask(
     body: AskIn,
     db: DBSession,
     user: CurrentUser,
 ) -> AskOut:
-    if not settings.anthropic_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "Assistant désactivé : ANTHROPIC_API_KEY n'est pas "
-                "configuré. Tu peux quand même signaler un bug."
-            ),
-        )
-
-    # Import paresseux pour ne pas planter au démarrage si la lib bouge.
-    import anthropic
+    # L'assistant passe par la cascade IA gratuite (Groq préféré, repli
+    # automatique Gemini puis Anthropic). Aucune clé Anthropic n'est
+    # requise : il suffit qu'un fournisseur soit configuré.
 
     # Pré-recherche les appels qui mentionnent les mots-clés de la
-    # question — permet à Claude de répondre à « est-ce qu'on a parlé
-    # de X avec Y ? » en se basant sur les verbatim et transcriptions
-    # réels stockés dans le volet téléphonie.
+    # question — permet de répondre à « est-ce qu'on a parlé de X avec
+    # Y ? » en se basant sur les verbatim et transcriptions réels
+    # stockés dans le volet téléphonie.
     try:
         call_matches = await _find_calls_for_question(db, body.question)
     except Exception as exc:  # noqa: BLE001
@@ -224,32 +247,35 @@ async def ask(
     else:
         user_content = body.question
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    # Cascade IA gratuite : Groq en priorité (gratuit/rapide), repli
+    # automatique Gemini puis Anthropic via app.integrations.ai.chat().
     try:
-        msg = client.messages.create(
-            # ID canonique (l'alias court fonctionne mais peut casser
-            # silencieusement si Anthropic met à jour le snapshot).
-            model="claude-haiku-4-5-20251001",
+        res = await chat(
+            messages=[Message(role="user", content=user_content)],
+            system=SYSTEM_PROMPT,
+            prefer="groq",
             max_tokens=1024,
-            system=[
-                {
-                    "type": "text",
-                    "text": SYSTEM_PROMPT,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            messages=[{"role": "user", "content": user_content}],
+            temperature=0.3,
         )
-        answer_parts = [b.text for b in msg.content if b.type == "text"]
-        answer = "\n".join(answer_parts).strip() or "(réponse vide)"
-    except anthropic.APIError as e:
-        # Log côté serveur pour qu'on puisse diagnostiquer (model ID
-        # invalide, quota épuisé, etc.). Le frontend reçoit le détail
-        # tronqué pour informer l'utilisateur.
-        log.exception("anthropic_api_error: %s", e)
+        answer = (res.text or "").strip() or "(réponse vide)"
+    except AIProviderUnavailable as e:
+        # Aucun fournisseur (Groq / Gemini / Anthropic) n'est configuré.
+        log.warning("help_ask: aucun provider IA configuré: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "L'assistant n'est pas configuré : aucune clé d'IA "
+                "(GROQ_API_KEY, GEMINI_API_KEY ou ANTHROPIC_API_KEY) "
+                "n'est définie. Tu peux quand même signaler un bug."
+            ),
+        )
+    except AIProviderError as e:
+        # Erreur d'un provider (HTTP, quota, parsing). Détail tronqué
+        # pour informer l'utilisateur, trace complète côté serveur.
+        log.exception("help_ask_provider_error: %s", e)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Claude API : {str(e)[:200]}",
+            detail=f"Assistant IA : {str(e)[:200]}",
         )
     except Exception as e:  # pragma: no cover
         log.exception("help_ask_failed")
