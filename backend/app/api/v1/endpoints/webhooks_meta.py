@@ -299,7 +299,6 @@ async def receive_facebook_lead(
                 # Pas de token ou fetch en échec : on logge et on
                 # passe. L'opérateur pourra relancer manuellement.
                 continue
-            field_data = detail.get("field_data") or []
 
             fields = _build_fields_from_lead_detail(
                 detail, leadgen_id, value=value
