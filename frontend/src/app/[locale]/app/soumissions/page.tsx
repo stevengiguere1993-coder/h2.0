@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { FileText, Loader2, Plus, Trash2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Loader2,
+  Plus,
+  Trash2
+} from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
@@ -55,6 +62,36 @@ const COLUMNS: Column[] = [
   { id: "expired", label: "Expirées", dot: "bg-amber-400" }
 ];
 
+// Colonnes repliées par défaut : « Refusées » et « Expirées » (du bruit
+// la plupart du temps). Toutes les colonnes restent repliables/dépliables
+// au clic ; le choix est mémorisé par navigateur.
+const COLLAPSED_COLS_KEY = "hsi_soumissions_collapsed_columns_v1";
+const DEFAULT_COLLAPSED = ["rejected", "expired"];
+
+function loadCollapsedColumns(): Set<string> {
+  if (typeof window === "undefined") return new Set(DEFAULT_COLLAPSED);
+  try {
+    const raw = window.localStorage.getItem(COLLAPSED_COLS_KEY);
+    if (raw === null) return new Set(DEFAULT_COLLAPSED);
+    const parsed = JSON.parse(raw) as string[];
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set(DEFAULT_COLLAPSED);
+  }
+}
+
+function saveCollapsedColumns(cols: Set<string>): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      COLLAPSED_COLS_KEY,
+      JSON.stringify([...cols])
+    );
+  } catch {
+    /* localStorage indisponible — non bloquant */
+  }
+}
+
 function fmtMoney(n: number | null): string {
   if (n == null) return "—";
   return new Intl.NumberFormat("fr-CA", {
@@ -74,6 +111,23 @@ export default function SoumissionsPage() {
   const [search, setSearch] = useState("");
   const [dragging, setDragging] = useState<number | null>(null);
   const [hoverCol, setHoverCol] = useState<string | null>(null);
+  const [collapsedCols, setCollapsedCols] = useState<Set<string>>(
+    () => new Set(DEFAULT_COLLAPSED)
+  );
+
+  useEffect(() => {
+    setCollapsedCols(loadCollapsedColumns());
+  }, []);
+
+  function toggleColumnCollapsed(colId: string) {
+    setCollapsedCols((prev) => {
+      const next = new Set(prev);
+      if (next.has(colId)) next.delete(colId);
+      else next.add(colId);
+      saveCollapsedColumns(next);
+      return next;
+    });
+  }
 
   // Fallback : somme des items par soumission. Utilisé quand le total
   // persisté en DB est null/0 (cas legacy ou items ajoutés sans
@@ -304,6 +358,7 @@ export default function SoumissionsPage() {
             {COLUMNS.map((col) => {
               const cards = byColumn[col.id] || [];
               const isHover = hoverCol === col.id;
+              const collapsed = collapsedCols.has(col.id);
               return (
                 <div
                   key={col.id}
@@ -322,14 +377,43 @@ export default function SoumissionsPage() {
                     setDragging(null);
                     setHoverCol(null);
                   }}
-                  className={`flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
+                  className={`flex flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
+                    collapsed ? "w-12 min-w-[48px]" : "w-80 min-w-[320px]"
+                  } ${
                     isHover
                       ? "border-accent-500 bg-brand-900"
                       : "border-brand-800"
                   }`}
                 >
+                  {collapsed ? (
+                    <button
+                      type="button"
+                      onClick={() => toggleColumnCollapsed(col.id)}
+                      title="Cliquer pour déplier"
+                      className="flex h-full flex-col items-center gap-2 px-2 py-3"
+                    >
+                      <ChevronRight className="h-4 w-4 text-white/50" />
+                      <span className={`h-2 w-2 rounded-full ${col.dot}`} />
+                      <span className="rounded-md bg-brand-950 px-1.5 py-0.5 text-[11px] font-semibold text-white/70">
+                        {cards.length}
+                      </span>
+                      <span
+                        className="mt-1 text-xs font-semibold text-white/80"
+                        style={{ writingMode: "vertical-rl" }}
+                      >
+                        {col.label}
+                      </span>
+                    </button>
+                  ) : (
+                    <>
                   <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
-                    <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleColumnCollapsed(col.id)}
+                      title="Cliquer pour replier"
+                      className="flex flex-1 items-center gap-2 text-left"
+                    >
+                      <ChevronDown className="h-3.5 w-3.5 text-white/50" />
                       <span className={`h-2 w-2 rounded-full ${col.dot}`} />
                       <h2 className="text-sm font-semibold text-white">
                         {col.label}
@@ -337,7 +421,7 @@ export default function SoumissionsPage() {
                       <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
                         {cards.length}
                       </span>
-                    </div>
+                    </button>
                     <span className="text-xs font-semibold text-emerald-300">
                       {fmtMoney(
                         cards.reduce(
@@ -387,6 +471,8 @@ export default function SoumissionsPage() {
                       })
                     )}
                   </div>
+                    </>
+                  )}
                 </div>
               );
             })}
