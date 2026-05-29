@@ -44,6 +44,16 @@ function fmtShift(started: string, ended: string | null): string {
   return `${dayFmt} · ${startHm} → ${endHm}`;
 }
 
+// Heures décimales → « h/min » (ex. 7.89 → « 7 h 53 »), plus lisible
+// qu'un décimal pour un relevé de temps.
+function fmtHm(h: number | null | undefined): string {
+  if (h == null) return "—";
+  const totalMin = Math.round(h * 60);
+  const hh = Math.floor(totalMin / 60);
+  const mm = totalMin % 60;
+  return `${hh} h ${String(mm).padStart(2, "0")}`;
+}
+
 export default function MobileApprobationsPage() {
   const { user } = useCurrentUser();
   const role = user?.role || "employee";
@@ -163,7 +173,7 @@ export default function MobileApprobationsPage() {
                     </p>
                     <p className="mt-1 flex items-center gap-1.5 text-xs text-emerald-300">
                       <Timer className="h-3 w-3" />
-                      {p.hours?.toFixed(2) ?? "—"} h
+                      {p.hours != null ? fmtHm(Number(p.hours)) : "—"}
                     </p>
                     {p.task ? (
                       <p className="mt-1 text-xs text-white/50">

@@ -135,6 +135,15 @@ function fmtFr(d: Date): string {
   });
 }
 
+// Affiche des heures décimales en « h/min » (ex. 7.89 → « 7 h 53 »),
+// plus lisible qu'un décimal pour un relevé de temps.
+function fmtHm(h: number): string {
+  const totalMin = Math.round((h || 0) * 60);
+  const hh = Math.floor(totalMin / 60);
+  const mm = totalMin % 60;
+  return `${hh} h ${String(mm).padStart(2, "0")}`;
+}
+
 export default function PunchGestionPage() {
   const confirm = useConfirm();
   const { onOpenSidebar } = useAppLayout();
@@ -630,7 +639,7 @@ export default function PunchGestionPage() {
           <div className="rounded-md bg-brand-900 px-3 py-2 text-sm">
             <span className="text-white/50">Total </span>
             <span className="font-bold text-white">
-              {totalHours.toFixed(2)} h
+              {fmtHm(totalHours)}
             </span>
           </div>
         </div>
@@ -710,7 +719,7 @@ export default function PunchGestionPage() {
                         )}
                       </td>
                       <td className="px-4 py-3 text-right font-semibold text-white">
-                        {p.hours != null ? `${Number(p.hours).toFixed(2)}` : "—"}
+                        {p.hours != null ? fmtHm(Number(p.hours)) : "—"}
                       </td>
                       <td className="px-4 py-3 text-xs text-white/60">
                         <span className="line-clamp-1">{p.task || "—"}</span>
@@ -969,7 +978,7 @@ function PunchModal({
           <div className="rounded-md bg-brand-900 px-3 py-2 text-sm">
             <span className="text-white/50">Heures calculées : </span>
             <span className="font-semibold text-white">
-              {computedHours != null ? `${computedHours.toFixed(2)} h` : "—"}
+              {computedHours != null ? fmtHm(computedHours) : "—"}
             </span>
           </div>
 
@@ -1268,7 +1277,7 @@ function MonthCalendar({
                 </span>
                 {dayTotal > 0 ? (
                   <span className="text-[10px] font-bold text-emerald-300">
-                    {dayTotal.toFixed(1)} h
+                    {fmtHm(dayTotal)}
                   </span>
                 ) : null}
               </button>
@@ -1301,7 +1310,7 @@ function MonthCalendar({
                           {e.name.split(" ")[0]}
                         </span>
                         <span className="flex-shrink-0 text-[10px] font-semibold text-emerald-300">
-                          {e.hours.toFixed(1)} h
+                          {fmtHm(e.hours)}
                         </span>
                       </button>
                     );
