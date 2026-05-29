@@ -130,6 +130,16 @@ class Achat(Base, TimestampUpdateMixin):
     amount_taxes: Mapped[Optional[float]] = mapped_column(
         Numeric(12, 2), nullable=True
     )
+    # Ventilation des taxes : TPS (fédéral 5 %) et TVQ (Québec 9,975 %).
+    # `amount_taxes` reste la somme faisant autorité (utilisée par les
+    # finances / refacturation). Permet de suivre TPS/TVQ séparément pour
+    # les CTI/RTI, comme sur les soumissions et factures.
+    amount_tps: Mapped[Optional[float]] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    amount_tvq: Mapped[Optional[float]] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
 
     # Numéro de facture du fournisseur (ex. « INV-2026-12345 » sur la
     # facture papier de Rona). C'est ce qu'on met comme DocNumber sur

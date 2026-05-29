@@ -228,6 +228,8 @@ async def init_db() -> None:
             ("clients", "language", "VARCHAR(8) NOT NULL DEFAULT 'fr'"),
             ("achats", "receipt_image", "BYTEA"),
             ("achats", "receipt_image_content_type", "VARCHAR(100)"),
+            ("achats", "amount_tps", "NUMERIC(12,2)"),
+            ("achats", "amount_tvq", "NUMERIC(12,2)"),
             ("factures", "last_reminder_at", "TIMESTAMP WITH TIME ZONE"),
             ("factures", "reminder_count", "INTEGER NOT NULL DEFAULT 0"),
             # FactureItem.kind — service|extra|rabais|frais. « extra » =
@@ -1342,6 +1344,18 @@ async def init_db() -> None:
             UPDATE soumissions
             SET accepted_at = updated_at
             WHERE status = 'accepted' AND accepted_at IS NULL
+            """,
+            # Ventilation TPS/TVQ des achats existants : on répartit
+            # `amount_taxes` (somme) selon les taux QC standard
+            # (TPS 5 % + TVQ 9,975 % = 14,975 %). Idempotent — ne touche
+            # que les lignes pas encore ventilées (amount_tps NULL). La
+            # somme tps+tvq reste exactement égale à amount_taxes.
+            """
+            UPDATE achats
+            SET amount_tps = ROUND(COALESCE(amount_taxes, 0) * 5.0 / 14.975, 2),
+                amount_tvq = COALESCE(amount_taxes, 0)
+                             - ROUND(COALESCE(amount_taxes, 0) * 5.0 / 14.975, 2)
+            WHERE amount_tps IS NULL
             """,
             # Table de marqueurs pour les backfills à exécuter UNE seule
             # fois (par opposition aux UPDATE idempotents ci-dessus qui

@@ -66,29 +66,36 @@ export default function NewAchatPage() {
   // sont décomposés automatiquement (TPS + TVQ) mais restent éditables.
   const [total, setTotal] = useState("");
   const [amount, setAmount] = useState("");
-  const [amountTaxes, setAmountTaxes] = useState("");
+  const [amountTps, setAmountTps] = useState("");
+  const [amountTvq, setAmountTvq] = useState("");
 
   function onTotalChange(v: string) {
     setTotal(v);
     const n = Number(v);
     if (v.trim() !== "" && !Number.isNaN(n) && n > 0) {
-      const { ht, taxes } = splitFromTotal(n);
+      const { ht, tps, tvq } = splitFromTotal(n);
       setAmount(ht.toFixed(2));
-      setAmountTaxes(taxes.toFixed(2));
+      setAmountTps(tps.toFixed(2));
+      setAmountTvq(tvq.toFixed(2));
     }
   }
 
-  function syncTotal(htStr: string, taxStr: string) {
-    const sum = (Number(htStr) || 0) + (Number(taxStr) || 0);
+  function syncTotal(htStr: string, tpsStr: string, tvqStr: string) {
+    const sum =
+      (Number(htStr) || 0) + (Number(tpsStr) || 0) + (Number(tvqStr) || 0);
     setTotal(sum ? sum.toFixed(2) : "");
   }
   function onAmountChange(v: string) {
     setAmount(v);
-    syncTotal(v, amountTaxes);
+    syncTotal(v, amountTps, amountTvq);
   }
-  function onTaxesChange(v: string) {
-    setAmountTaxes(v);
-    syncTotal(amount, v);
+  function onTpsChange(v: string) {
+    setAmountTps(v);
+    syncTotal(amount, v, amountTvq);
+  }
+  function onTvqChange(v: string) {
+    setAmountTvq(v);
+    syncTotal(amount, amountTps, v);
   }
   // Refacturation client.
   const [isBillable, setIsBillable] = useState(true);
@@ -175,7 +182,14 @@ export default function NewAchatPage() {
       if (hours.trim()) payload.hours = Number(hours);
       if (description.trim()) payload.description = description.trim();
       if (amount) payload.amount = Number(amount);
-      if (amountTaxes) payload.amount_taxes = Number(amountTaxes);
+      if (amountTps) payload.amount_tps = Number(amountTps);
+      if (amountTvq) payload.amount_tvq = Number(amountTvq);
+      if (amountTps || amountTvq) {
+        payload.amount_taxes =
+          Math.round(
+            ((Number(amountTps) || 0) + (Number(amountTvq) || 0)) * 100
+          ) / 100;
+      }
       payload.is_billable = isBillable;
       if (markupPercent.trim()) {
         payload.markup_percent = Number(markupPercent);
@@ -275,7 +289,7 @@ export default function NewAchatPage() {
                       setDescription(po.description);
                     if (po.amount_max != null && !amount) {
                       setAmount(String(po.amount_max));
-                      syncTotal(String(po.amount_max), amountTaxes);
+                      syncTotal(String(po.amount_max), amountTps, amountTvq);
                     }
                   }
                 }
@@ -430,7 +444,7 @@ export default function NewAchatPage() {
             </p>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <label htmlFor="amount" className="label">
                 Montant HT (avant taxes)
@@ -447,16 +461,31 @@ export default function NewAchatPage() {
               />
             </div>
             <div>
-              <label htmlFor="amounttaxes" className="label">
-                Taxes (CAD)
+              <label htmlFor="amounttps" className="label">
+                TPS (5 %)
               </label>
               <input
-                id="amounttaxes"
+                id="amounttps"
                 type="number"
                 step="0.01"
                 min="0"
-                value={amountTaxes}
-                onChange={(e) => onTaxesChange(e.target.value)}
+                value={amountTps}
+                onChange={(e) => onTpsChange(e.target.value)}
+                placeholder="0.00"
+                className="input"
+              />
+            </div>
+            <div>
+              <label htmlFor="amounttvq" className="label">
+                TVQ (9,975 %)
+              </label>
+              <input
+                id="amounttvq"
+                type="number"
+                step="0.01"
+                min="0"
+                value={amountTvq}
+                onChange={(e) => onTvqChange(e.target.value)}
                 placeholder="0.00"
                 className="input"
               />

@@ -49,6 +49,8 @@ type Achat = {
   description: string | null;
   amount: number | string | null;
   amount_taxes: number | string | null;
+  amount_tps: number | string | null;
+  amount_tvq: number | string | null;
   status: string;
   received_at: string | null;
   paid_at: string | null;
@@ -116,28 +118,35 @@ export default function AchatDetailPage() {
   // tout en laissant l'employé ajuster le HT/taxes au besoin.
   const [total, setTotal] = useState("");
   const [amount, setAmount] = useState("");
-  const [amountTaxes, setAmountTaxes] = useState("");
+  const [amountTps, setAmountTps] = useState("");
+  const [amountTvq, setAmountTvq] = useState("");
 
   function onTotalChange(v: string) {
     setTotal(v);
     const n = Number(v);
     if (v.trim() !== "" && !Number.isNaN(n) && n > 0) {
-      const { ht, taxes } = splitFromTotal(n);
+      const { ht, tps, tvq } = splitFromTotal(n);
       setAmount(ht.toFixed(2));
-      setAmountTaxes(taxes.toFixed(2));
+      setAmountTps(tps.toFixed(2));
+      setAmountTvq(tvq.toFixed(2));
     }
   }
-  function syncTotal(htStr: string, taxStr: string) {
-    const sum = (Number(htStr) || 0) + (Number(taxStr) || 0);
+  function syncTotal(htStr: string, tpsStr: string, tvqStr: string) {
+    const sum =
+      (Number(htStr) || 0) + (Number(tpsStr) || 0) + (Number(tvqStr) || 0);
     setTotal(sum ? sum.toFixed(2) : "");
   }
   function onAmountChange(v: string) {
     setAmount(v);
-    syncTotal(v, amountTaxes);
+    syncTotal(v, amountTps, amountTvq);
   }
-  function onTaxesChange(v: string) {
-    setAmountTaxes(v);
-    syncTotal(amount, v);
+  function onTpsChange(v: string) {
+    setAmountTps(v);
+    syncTotal(amount, v, amountTvq);
+  }
+  function onTvqChange(v: string) {
+    setAmountTvq(v);
+    syncTotal(amount, amountTps, v);
   }
   const [isBillable, setIsBillable] = useState(true);
   const [markupPercent, setMarkupPercent] = useState("");
@@ -182,14 +191,31 @@ export default function AchatDetailPage() {
             // montant stocké est le total de la facture. On applique la
             // décomposition QC standard pour que le HT et les taxes ne
             // restent pas à zéro. Ajustable ensuite si taxes non standard.
-            const { ht, taxes } = splitFromTotal(sum);
+            const { ht, tps, tvq } = splitFromTotal(sum);
             setAmount(ht.toFixed(2));
-            setAmountTaxes(taxes.toFixed(2));
+            setAmountTps(tps.toFixed(2));
+            setAmountTvq(tvq.toFixed(2));
             setTotal(sum.toFixed(2));
           } else {
             setAmount(data.amount != null ? String(data.amount) : "");
-            setAmountTaxes(
-              data.amount_taxes != null ? String(data.amount_taxes) : ""
+            // TPS/TVQ : valeurs stockées si présentes, sinon on répartit
+            // le montant de taxes stocké selon les taux QC standard
+            // (rétro-compat — préserve exactement la somme).
+            const tpsFb = Math.round((tax * 5) / 14.975 * 100) / 100;
+            const tvqFb = Math.round((tax - tpsFb) * 100) / 100;
+            setAmountTps(
+              data.amount_tps != null
+                ? String(data.amount_tps)
+                : tax > 0
+                  ? tpsFb.toFixed(2)
+                  : ""
+            );
+            setAmountTvq(
+              data.amount_tvq != null
+                ? String(data.amount_tvq)
+                : tax > 0
+                  ? tvqFb.toFixed(2)
+                  : ""
             );
             setTotal(sum ? sum.toFixed(2) : "");
           }
@@ -229,8 +255,8 @@ export default function AchatDetailPage() {
       fournisseurId !== (a.fournisseur_id ? String(a.fournisseur_id) : "") ||
       description !== (a.description || "") ||
       amount !== (a.amount != null ? String(a.amount) : "") ||
-      amountTaxes !==
-        (a.amount_taxes != null ? String(a.amount_taxes) : "") ||
+      amountTps !== (a.amount_tps != null ? String(a.amount_tps) : "") ||
+      amountTvq !== (a.amount_tvq != null ? String(a.amount_tvq) : "") ||
       statusStr !== a.status ||
       invoiceDate !==
         (a.invoice_date ? a.invoice_date.slice(0, 10) : "") ||
@@ -241,7 +267,7 @@ export default function AchatDetailPage() {
       paymentMethod !== (a.payment_method || "")
     );
   }, [
-    a, projectId, fournisseurId, description, amount, amountTaxes,
+    a, projectId, fournisseurId, description, amount, amountTps, amountTvq,
     statusStr, invoiceDate, supplierInvoiceNumber, receivedAt,
     receiptUrl, notes, paymentMethod
   ]);
@@ -254,7 +280,14 @@ export default function AchatDetailPage() {
       const payload: Record<string, unknown> = {
         description: description.trim() || null,
         amount: amount ? Number(amount) : null,
-        amount_taxes: amountTaxes ? Number(amountTaxes) : null,
+        amount_tps: amountTps ? Number(amountTps) : null,
+        amount_tvq: amountTvq ? Number(amountTvq) : null,
+        amount_taxes:
+          amountTps || amountTvq
+            ? Math.round(
+                ((Number(amountTps) || 0) + (Number(amountTvq) || 0)) * 100
+              ) / 100
+            : null,
         status: statusStr,
         invoice_date: invoiceDate || null,
         supplier_invoice_number: supplierInvoiceNumber.trim() || null,
@@ -539,7 +572,7 @@ export default function AchatDetailPage() {
                       non standard.
                     </p>
                   </div>
-                  <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <div>
                       <label htmlFor="aamount" className="label">
                         Montant HT (avant taxes)
@@ -555,16 +588,31 @@ export default function AchatDetailPage() {
                       />
                     </div>
                     <div>
-                      <label htmlFor="aamounttaxes" className="label">
-                        Taxes (CAD)
+                      <label htmlFor="aamounttps" className="label">
+                        TPS (5 %)
                       </label>
                       <input
-                        id="aamounttaxes"
+                        id="aamounttps"
                         type="number"
                         step="0.01"
                         min="0"
-                        value={amountTaxes}
-                        onChange={(e) => onTaxesChange(e.target.value)}
+                        value={amountTps}
+                        onChange={(e) => onTpsChange(e.target.value)}
+                        className="input"
+                        placeholder="0.00"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="aamounttvq" className="label">
+                        TVQ (9,975 %)
+                      </label>
+                      <input
+                        id="aamounttvq"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={amountTvq}
+                        onChange={(e) => onTvqChange(e.target.value)}
                         className="input"
                         placeholder="0.00"
                       />
@@ -583,7 +631,7 @@ export default function AchatDetailPage() {
                       </select>
                     </div>
                   </div>
-                  {(amount || amountTaxes) ? (
+                  {(amount || amountTps || amountTvq) ? (
                     <p className="-mt-1 text-[11px] text-white/50">
                       Le markup pour refacturation est appliqué sur le
                       HT seulement (les taxes payées au fournisseur ne sont
