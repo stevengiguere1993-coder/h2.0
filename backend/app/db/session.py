@@ -888,6 +888,16 @@ async def init_db() -> None:
                 "teams_notified_at",
                 "TIMESTAMP WITH TIME ZONE",
             ),
+            # Mai 2026 : colonne "finançable par défaut" sur la table
+            # de défauts d'analyse. Permet à Phil de configurer
+            # globalement, pour chaque item MDF (groupes ``mdf_frais``
+            # et ``mdf_pct``), si la case "Finançable" doit être
+            # pré-cochée à la création d'une nouvelle fiche.
+            (
+                "prospection_analysis_defaults",
+                "financable_par_defaut",
+                "BOOLEAN",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
@@ -1771,6 +1781,23 @@ async def init_db() -> None:
                     0.05,
                     "mdf_frais",
                 ),
+                # ── Mai 2026 : Frais de dossier du prêteur B ──────────
+                # Pourcentage appliqué au prêt initial du prêteur B
+                # (= prix_achat × ltv_achat, 75 % typique). Stocké en
+                # pct (2.0 = 2 %) comme les autres %. Non finançable par
+                # défaut (Phil paie cash en pratique).
+                (
+                    "frais_dossier_preteur_pct",
+                    2.0,
+                    "Frais de dossier du prêteur (% × prêt initial)",
+                    "Pourcentage facturé par le prêteur B sur le prêt "
+                    "initial (= prix d'achat × LTV à l'achat, 75 % "
+                    "typique). Défaut 2 %.",
+                    0.0,
+                    10.0,
+                    0.05,
+                    "mdf_frais",
+                ),
         ):
             try:
                 # UPSERT : on insère si la clé n'existe pas, sinon on
@@ -1811,6 +1838,48 @@ async def init_db() -> None:
                 # pas encore tourné) — retentera au prochain démarrage.
                 pass
 
+        # ── Backfill `financable_par_defaut` (mai 2026) ──────────────
+        # On ne TOUCHE PAS aux items pour lesquels Phil a déjà
+        # configuré explicitement la valeur (NULL → on backfill, NOT
+        # NULL → on respecte le choix admin). Idempotent au boot.
+        #
+        # Choix par défaut (cf. PR « mdf-frais-dossier-preteur-financable-defaut ») :
+        #   - frais_evaluateur / _2          : True  (intégré au prêt SCHL)
+        #   - frais_inspection               : False (payé hors prêt en pratique)
+        #   - frais_avocat                   : True
+        #   - frais_notaire / _2             : True
+        #   - frais_rapport_efficacite       : True
+        #   - pct_courtier_hypothecaire_1/_2 : True
+        #   - frais_dossier_preteur_pct      : False (Phil paie cash)
+        financable_par_defaut_seed: tuple[tuple[str, bool], ...] = (
+            ("frais_evaluateur", True),
+            ("frais_evaluateur_2", True),
+            ("frais_inspection", False),
+            ("frais_avocat", True),
+            ("frais_notaire", True),
+            ("frais_notaire_2", True),
+            ("frais_rapport_efficacite", True),
+            ("pct_courtier_hypothecaire_1", True),
+            ("pct_courtier_hypothecaire_2", True),
+            ("frais_dossier_preteur_pct", False),
+        )
+        for default_key, default_val in financable_par_defaut_seed:
+            try:
+                await conn.execute(
+                    text(
+                        """
+                        UPDATE prospection_analysis_defaults
+                           SET financable_par_defaut = :val
+                         WHERE key = :key
+                           AND financable_par_defaut IS NULL
+                        """
+                    ),
+                    {"key": default_key, "val": default_val},
+                )
+            except Exception:
+                # Table/colonne absente au premier boot — silencieux.
+                pass
+
 
 async def close_db() -> None:
     """
@@ -1819,6 +1888,7 @@ async def close_db() -> None:
     Should be called on application shutdown.
     """
     await engine.dispose()
+
 
 
 

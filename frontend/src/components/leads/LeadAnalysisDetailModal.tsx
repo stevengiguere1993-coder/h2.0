@@ -1707,6 +1707,10 @@ type FraisDemarrageBreakdown = {
   frais_developpement: number;
   frais_negociations: number;
   frais_travaux: number;
+  // Mai 2026 : frais de dossier du prêteur B (2 % × prêt initial par
+  // défaut, modifiable via le défaut global `frais_dossier_preteur_pct`).
+  // Inséré APRÈS « Travaux estimés » dans l'UI.
+  frais_dossier_preteur: number;
   interets: number;
   revenus_nets_pendant_projet: number;
 };
@@ -1903,6 +1907,9 @@ const FRAIS_KEYS: Array<keyof FraisDemarrageBreakdown> = [
   "frais_developpement",
   "frais_negociations",
   "frais_travaux",
+  // Mai 2026 : nouveau poste, juste après "Travaux estimés" comme
+  // demandé par Phil (ordre figé pour respecter sa lecture habituelle).
+  "frais_dossier_preteur",
   "interets",
   "revenus_nets_pendant_projet"
 ];
@@ -1939,6 +1946,7 @@ function buildFraisLabels(
     frais_developpement: "Frais de développement",
     frais_negociations: "Frais de négociations",
     frais_travaux: "Travaux estimés",
+    frais_dossier_preteur: "Frais de dossier du prêteur",
     interets: interetsLabel,
     revenus_nets_pendant_projet: "Revenus nets pendant projet (négatif)"
   };
@@ -3214,3 +3222,4 @@ function ReExtractButtons({
     </div>
   );
 }
+

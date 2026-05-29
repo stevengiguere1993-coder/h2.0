@@ -21,7 +21,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -87,6 +87,17 @@ class ProspectionAnalysisDefault(Base):
         "group_name", String(32), nullable=True
     )
 
+    # Statut "finançable par défaut" pour les items des groupes
+    # ``mdf_frais`` et ``mdf_pct`` (mai 2026). True → la case
+    # "Finançable" est pré-cochée à la création d'une nouvelle fiche
+    # d'analyse. Nullable (les items du groupe ``inputs_manuels`` n'ont
+    # pas de notion de "finançable" — colonne ignorée pour eux).
+    # L'override par fiche reste prioritaire (via
+    # ``LeadAnalysis.frais_demarrage_financables_json``).
+    financable_par_defaut: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True
+    )
+
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -98,3 +109,4 @@ class ProspectionAnalysisDefault(Base):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
+
