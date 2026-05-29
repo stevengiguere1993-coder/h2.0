@@ -8,6 +8,7 @@ Provides:
 """
 
 from collections.abc import AsyncGenerator
+from typing import Optional
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -59,6 +60,92 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await session.close()
+
+
+def _rotate_receipt_blob_cw90(blob: bytes, content_type: str) -> Optional[bytes]:
+    """Fait pivoter de 90° HORAIRE (vers la droite) un reçu stocké.
+    PDF → rotation lossless de chaque page (pypdf). Image → Pillow.
+    Retourne None si le format est inconnu ou en cas d'échec (on laisse
+    alors le reçu inchangé plutôt que de le corrompre)."""
+    import io
+
+    ct = (content_type or "").lower()
+    try:
+        if "pdf" in ct:
+            from pypdf import PdfReader, PdfWriter
+
+            reader = PdfReader(io.BytesIO(blob))
+            writer = PdfWriter()
+            for page in reader.pages:
+                page.rotate(90)  # pypdf : sens horaire
+                writer.add_page(page)
+            out = io.BytesIO()
+            writer.write(out)
+            return out.getvalue()
+
+        from PIL import Image
+
+        try:  # HEIC/HEIF iPhone — best effort
+            from pillow_heif import register_heif_opener
+
+            register_heif_opener()
+        except Exception:
+            pass
+
+        img = Image.open(io.BytesIO(blob))
+        # ROTATE_270 = 270° anti-horaire = 90° horaire.
+        img = img.transpose(Image.Transpose.ROTATE_270)
+        save_fmt = "PNG" if "png" in ct else "JPEG"
+        if save_fmt == "JPEG" and img.mode in ("RGBA", "P", "LA"):
+            img = img.convert("RGB")
+        out = io.BytesIO()
+        img.save(out, format=save_fmt)
+        return out.getvalue()
+    except Exception:
+        return None
+
+
+async def _rotate_existing_receipts_cw90(conn) -> int:
+    """Pivote (une seule fois) tous les reçus d'achat déjà stockés.
+    Traite un reçu à la fois pour limiter la mémoire. Retourne le
+    nombre de reçus effectivement pivotés."""
+    from sqlalchemy import text
+
+    ids = (
+        await conn.execute(
+            text(
+                "SELECT id FROM achats WHERE receipt_image IS NOT NULL"
+            )
+        )
+    ).all()
+    rotated = 0
+    for (rid,) in ids:
+        # Chaque reçu est indépendant : une erreur isolée ne doit pas
+        # interrompre le passage (sinon des reçus seraient pivotés sans
+        # que le marqueur soit posé → double rotation au boot suivant).
+        try:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT receipt_image, receipt_image_content_type "
+                        "FROM achats WHERE id = :id"
+                    ),
+                    {"id": rid},
+                )
+            ).first()
+            if row is None or row[0] is None:
+                continue
+            new_blob = _rotate_receipt_blob_cw90(bytes(row[0]), row[1] or "")
+            if new_blob is None:
+                continue
+            await conn.execute(
+                text("UPDATE achats SET receipt_image = :img WHERE id = :id"),
+                {"img": new_blob, "id": rid},
+            )
+            rotated += 1
+        except Exception:
+            continue
+    return rotated
 
 
 async def init_db() -> None:
@@ -1301,6 +1388,37 @@ async def init_db() -> None:
                 # Table absente / colonne pas encore migrée — on
                 # passe sans bloquer le boot.
                 pass
+
+        # Rétroactif (one-shot) : faire pivoter de 90° HORAIRE tous les
+        # reçus d'achat déjà stockés. Ils ont été numérisés avant la
+        # correction d'orientation et sont enregistrés de côté. Les
+        # nouveaux reçus passent par le recadrage (déjà à l'endroit) et
+        # ne sont PAS touchés car le marqueur empêche un second passage.
+        # Gardé + exception-safe pour ne jamais bloquer le boot.
+        try:
+            done = (
+                await conn.execute(
+                    text(
+                        "SELECT 1 FROM applied_backfills WHERE key = :k"
+                    ),
+                    {"k": "rotate_existing_receipts_cw90_v1"},
+                )
+            ).first()
+        except Exception:
+            done = True  # table pas prête — on retentera au prochain boot
+        if not done:
+            try:
+                n = await _rotate_existing_receipts_cw90(conn)
+                await conn.execute(
+                    text(
+                        "INSERT INTO applied_backfills (key) VALUES (:k) "
+                        "ON CONFLICT (key) DO NOTHING"
+                    ),
+                    {"k": "rotate_existing_receipts_cw90_v1"},
+                )
+                print(f"[init_db] reçus pivotés 90° horaire : {n}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[init_db] rotation reçus échouée : {exc}")
 
         # Seed des types de RV par défaut. Idempotent :
         # INSERT ... ON CONFLICT DO NOTHING. L'admin peut modifier
