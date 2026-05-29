@@ -11,8 +11,15 @@ export const TAX_FACTOR = 1 + TPS_RATE + TVQ_RATE; // 1.14975
  * majoration lors de la refacturation client ; les taxes sont
  * recalculées à la fin de la facture client.
  */
-export function splitFromTotal(ttc: number): { ht: number; taxes: number } {
+export function splitFromTotal(ttc: number): {
+  ht: number;
+  tps: number;
+  tvq: number;
+  taxes: number;
+} {
   const ht = Math.round((ttc / TAX_FACTOR) * 100) / 100;
-  const taxes = Math.round((ttc - ht) * 100) / 100;
-  return { ht, taxes };
+  const tps = Math.round(ht * TPS_RATE * 100) / 100;
+  // La TVQ absorbe l'arrondi pour que ht + tps + tvq === ttc au cent près.
+  const tvq = Math.round((ttc - ht - tps) * 100) / 100;
+  return { ht, tps, tvq, taxes: Math.round((tps + tvq) * 100) / 100 };
 }
