@@ -237,6 +237,9 @@ async def get_kpis(
         func.count(Soumission.id),
     ).where(
         Soumission.sent_at.is_not(None),
+        # Exclut les soumissions renvoyées en brouillon : envoyée puis
+        # remise en « draft » ⇒ plus comptée comme envoyée.
+        Soumission.status != "draft",
         Soumission.sent_at >= p_start_dt,
         Soumission.sent_at <= p_end_dt,
     )
@@ -366,6 +369,7 @@ async def get_kpis(
         )
         .where(
             Soumission.sent_at.is_not(None),
+            Soumission.status != "draft",
             Soumission.sent_at >= p_start_dt,
             Soumission.sent_at <= p_end_dt,
         )
