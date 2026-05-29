@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact_request import ContactRequest
+from app.models.client import Client
 from app.models.soumission import Soumission
 from app.models.soumission_item import SoumissionItem
 
@@ -140,7 +141,7 @@ async def _load(db: AsyncSession, soumission_id: int):
         )
     ).scalar_one_or_none()
     if sm is None:
-        return None, [], None
+        return None, [], None, None
     items = list(
         (
             await db.execute(
@@ -161,7 +162,17 @@ async def _load(db: AsyncSession, soumission_id: int):
                 )
             )
         ).scalar_one_or_none()
-    return sm, items, contact
+    # Soumission rattachée à un client existant (post-conversion) : on
+    # charge aussi le client pour que l'« Adressée à » affiche son nom
+    # (et son représentant) au lieu de « Client à confirmer ».
+    client: Optional[Client] = None
+    if sm.client_id:
+        client = (
+            await db.execute(
+                select(Client).where(Client.id == sm.client_id)
+            )
+        ).scalar_one_or_none()
+    return sm, items, contact, client
 
 
 def _styles(rl: dict[str, Any]):
@@ -221,6 +232,7 @@ def _render_bytes(
     sm: Soumission,
     items: list[SoumissionItem],
     contact: Optional[ContactRequest],
+    client: Optional[Client] = None,
     *,
     tax_gst: Optional[str] = None,
     tax_qst: Optional[str] = None,
@@ -310,6 +322,17 @@ def _render_bytes(
             client_lines.append(contact.phone)
         if contact.address:
             client_lines.append(contact.address)
+    elif client is not None:
+        client_lines = [f"<b>{client.name}</b>"]
+        rep = getattr(client, "representative", None)
+        if rep:
+            client_lines.append(f"À l'attention de {rep}")
+        if client.email:
+            client_lines.append(client.email)
+        if client.phone:
+            client_lines.append(client.phone)
+        if client.address:
+            client_lines.append(client.address)
     else:
         client_lines = ["<b>Client à confirmer</b>"]
     story.append(Paragraph("ADRESSÉE À", s["accent"]))
@@ -521,7 +544,7 @@ async def _fetch_tax_numbers() -> tuple[Optional[str], Optional[str]]:
 async def render_soumission_pdf(
     db: AsyncSession, soumission_id: int
 ) -> Optional[tuple[Soumission, bytes]]:
-    sm, items, contact = await _load(db, soumission_id)
+    sm, items, contact, client = await _load(db, soumission_id)
     if sm is None:
         return None
     # Les documents de type « contrat » utilisent le rendu du contrat
@@ -532,5 +555,5 @@ async def render_soumission_pdf(
 
         return await render_contract_pdf(db, soumission_id)
     gst, qst = await _fetch_tax_numbers()
-    pdf = _render_bytes(sm, items, contact, tax_gst=gst, tax_qst=qst)
+    pdf = _render_bytes(sm, items, contact, client, tax_gst=gst, tax_qst=qst)
     return sm, pdf

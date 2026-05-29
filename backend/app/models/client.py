@@ -25,6 +25,16 @@ class Client(Base, TimestampMixin):
     address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Client de type entreprise (vs particulier). Quand vrai, on peut
+    # saisir un représentant (personne-ressource) affiché sur les
+    # documents (« À l'attention de … »).
+    is_company: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="false"
+    )
+    representative: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+
     # Langue du client : « fr » (défaut) ou « en ». Détermine la langue
     # de l'état de compte qui lui est transmis.
     language: Mapped[str] = mapped_column(

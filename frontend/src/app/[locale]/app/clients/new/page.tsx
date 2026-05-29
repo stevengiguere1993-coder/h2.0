@@ -15,6 +15,8 @@ export default function NewClientPage() {
   const router = useNextRouter();
 
   const [name, setName] = useState("");
+  const [isCompany, setIsCompany] = useState(false);
+  const [representative, setRepresentative] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
@@ -32,6 +34,10 @@ export default function NewClientPage() {
     setSubmitting(true);
     try {
       const payload: Record<string, unknown> = { name: name.trim() };
+      payload.is_company = isCompany;
+      if (isCompany && representative.trim()) {
+        payload.representative = representative.trim();
+      }
       if (email.trim()) payload.email = email.trim();
       if (phone.trim()) payload.phone = phone.trim();
       if (address.trim()) payload.address = address.trim();
@@ -78,9 +84,20 @@ export default function NewClientPage() {
 
         <form onSubmit={onSubmit} className="mt-6 max-w-2xl space-y-5">
           <div>
-            <label htmlFor="name" className="label">
-              Nom <span className="text-rose-400">*</span>
-            </label>
+            <div className="flex items-center justify-between gap-3">
+              <label htmlFor="name" className="label">
+                Nom <span className="text-rose-400">*</span>
+              </label>
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-white/70">
+                <input
+                  type="checkbox"
+                  checked={isCompany}
+                  onChange={(e) => setIsCompany(e.target.checked)}
+                  className="h-3.5 w-3.5"
+                />
+                Entreprise
+              </label>
+            </div>
             <input
               id="name"
               type="text"
@@ -90,6 +107,26 @@ export default function NewClientPage() {
               className="input"
             />
           </div>
+
+          {isCompany ? (
+            <div>
+              <label htmlFor="representative" className="label">
+                Représentant
+              </label>
+              <input
+                id="representative"
+                type="text"
+                value={representative}
+                onChange={(e) => setRepresentative(e.target.value)}
+                placeholder="Personne-ressource de l'entreprise"
+                className="input"
+              />
+              <p className="mt-0.5 text-xs text-white/50">
+                Affiché sur les soumissions/factures : « À l&apos;attention
+                de … ».
+              </p>
+            </div>
+          ) : null}
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
