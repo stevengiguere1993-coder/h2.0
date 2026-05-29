@@ -1224,7 +1224,12 @@ async def export_offre_investissement(
                 # (présentation projet, charts dynamiques slides 4/12/13,
                 # dates échéancier auto, totaux rénos depuis fiche,
                 # titre/chart Tendances dynamiques, estimation ROI).
-                "service_version": "v3",
+                # v4 = perfectionnements slides 3-6 (PR #544).
+                # v5a = fixes slides 8/9/10 : nb logements dynamique,
+                # frais autres réels (overrides + total recalculé),
+                # condensation tableau rénos, format équité unifié et
+                # cohérence cellule/callout en équité négative.
+                "service_version": "v5a",
                 "value_add_keys": sorted(
                     body.value_add_strategy.keys()
                 )
