@@ -1,8 +1,8 @@
 {
   "_doc": "Mapping de substitution pour le template horizon_v2.pptx (offre d'investissement Horizon Services Immobiliers — révision 2026-05-28). 16 slides. Note : ce fichier documente les substitutions appliquées par le service Python `offre_investissement_pptx.py` — le service ajoute aussi des substitutions dynamiques (charts, dates, cellules par position). Le mapping JSON listé ci-dessous est la base ; les substitutions runtime sont au-delà (voir docstring du module). Chaque entrée définit (a) la chaîne LITTÉRALE à chercher dans le pptx source, (b) la variable de contexte à substituer.",
   "_template_origin": "1660 Saint-Clément (16 slides) — version updated 2026-05-28",
-  "_version": "3.0.0",
-  "_service_version": "v3",
+  "_version": "4.0.0",
+  "_service_version": "v4",
   "_changelog_v3": [
     "Slide 2 (Présentation projet) : nb_etages manuel, superficie_habitable/annee_construction/frais_energetiques/stationnements auto depuis fiche",
     "Slide 3 (Opportunité unique) : Chart 79 + Chart 85 substitués dynamiquement, lien Centris paramétrable",
@@ -12,6 +12,13 @@
     "Slide 10 (ROI) : estimation_long_terme_callout configurable",
     "Slide 11 (Tendances) : titre dynamique, chart substitué, callout via lookup Zipplex",
     "Slide 12 (Valeur ajoutée) : chart trajectoire substitué dynamiquement"
+  ],
+  "_changelog_v4": [
+    "Slide 3 (Présentation projet) : prix d'acquisition forcé sur asking_price via accès direct cellule Table 11[0][1]. Nb d'unités préserve format taille 14 pas-gras via _replace_cell_paragraphs sur Table 12[0][1] (multi-paragraphes).",
+    "Slide 4 (Opportunité unique) : bullet 3 (paragraphe 2 du TextBox 30) forcé bold=False, color=blanc (FFFFFF), size=14 ; pas de label 'Levier principal' en préfixe. Chart 79 (LINE Valeur marchande) : Avant=asking_price, Après refi=scenario_choisi.valeur_economique. Chart 85 (COLUMN STACKED Profit à l'achat) : catégorie 'Valeur réelle' (renommée), 2 séries empilées 'Prix payé' (jaune) + 'Écart comparable' (rouge), alimenté par valeur_comparable_centris. Échelle Y auto (template nettoyé du min hardcodé). TextBox 30 paragraphe 4 (Similaire en vente à 2M$) : 2M$ remplacé par comparable_val court.",
+    "Slide 5 (Plan création de valeur) : tous les chiffres des tableaux Avant/Après substitués par accès direct cellule. Sources documentées (asking_price=Avant, scenario refi=Après, energie fiche, conversion_chauffage elec_to_thermo→0$).",
+    "Slide 6 (Échéancier) : 'Création de chambre' conditionnel sur conversion_chambres. Table 1[4][1]='Création chambres' substitué via phase2_label suggéré. Table 12[1][1]='Fin de création des chambres' substitué par 'Rencontres avec locataires' si non coché.",
+    "Template horizon_v2.pptx : chart1.xml (Chart 79) et chart2.xml (Chart 85) modifiés — suppression min hardcodé 1M$ + restructuration Chart 85 en 2 séries (jaune + rouge), catégorie 'Valeur municipale' renommée 'Valeur réelle'. Embedded xlsx Microsoft_Excel_Worksheet1.xlsx mis à jour."
   ],
   "substitutions": [
     {"slide": 0, "find": "De l’achat au refinancement : un projet immobilier solide à Hochelaga-Maisonneuve", "var": "tagline_cover"},
@@ -239,6 +246,7 @@
     "frais_energetiques_label": {"type": "string", "source": "auto", "rule": "'Propriétaire' si energie > 2000$/an sinon 'Locataire'"},
     "stationnements_label": {"type": "string", "source": "auto", "kratos_field": "nb_stationnements", "rule": "0 → 'Aucun' sinon '{N} place(s)'"},
     "lien_centris_comparable": {"type": "url", "source": "human", "max_chars": 500, "description": "URL Centris d'un comparable inséré slide 4"},
+    "valeur_comparable_centris": {"type": "money", "source": "human", "description": "Montant ($) du comparable Centris — alimente la 2e barre du Chart 85 'Profit à l'achat' (catégorie 'Valeur réelle') et le delta rouge. Si vide, fallback evaluation_municipale."},
     "date_m1_1": {"type": "date_iso", "source": "hybrid", "description": "Date M1.1 (lettre financement) — auto-suggérée + override wizard"},
     "date_m1_2": {"type": "date_iso", "source": "hybrid"},
     "date_m2_1": {"type": "date_iso", "source": "hybrid"},

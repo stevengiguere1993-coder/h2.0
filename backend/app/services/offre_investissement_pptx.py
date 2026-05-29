@@ -30,20 +30,48 @@ Approche :
 Versioning :
     * v1 (horizon_v1.pptx) : conservé pour rétrocompatibilité MVP PR #532
     * v2 (horizon_v2.pptx) : 16 slides + TENDANCES + 10 vars (PR #533)
-    * v3 (logique service, même template `horizon_v2.pptx`) : nouveau
-      défaut — corrige slides 3/4/5/6/9/10/11/12 (voir PR ce travail) :
-        - slide 3 : champs auto présentation projet (`nb_etages`,
-          `superficie_habitable`, `annee_construction`, frais
-          énergétiques auto, stationnements auto)
-        - slide 4 : substitution des charts embedded + `lien_centris`
-        - slide 5 : source documentée de la valeur marchande
-        - slide 6 : dates échéancier auto-suggérées + override wizard
-        - slide 9 : totaux rénovations alignés sur `travaux_estimes` +
-          chiffres frais détaillés (développement, négociation, frais
-          autres) depuis la fiche
-        - slide 11 : titre dynamique + chart Zipplex substitué + callout
-          auto/manuel
-        - slide 12 : chart valeur ajoutée investisseur substitué
+    * v3 (logique service, même template `horizon_v2.pptx`) : corrige
+      slides 3/4/5/6/9/10/11/12 (PR #534)
+    * v4 (logique service + template `horizon_v2.pptx` modifié) :
+      perfectionne slides 3-6 (PR de ce travail) :
+        - slide 3 (idx 2) :
+            * prix d'acquisition forcé sur asking_price via accès direct
+              à la cellule Table 11[0][1] (source documentée et garantie)
+            * nb d'unités préserve le formatage taille 14 pas-gras via
+              accès direct à la cellule Table 12[0][1] (multi-paragraphes)
+        - slide 4 (idx 3) :
+            * bullet 3 (paragraphe 2 du TextBox 30) :
+                - remplace SEULEMENT le contenu via accès direct au
+                  paragraphe, sans préfixe "Levier principal:"
+                - format forcé : bold=False, color=blanc (FFFFFF),
+                  size=14pt pour matcher les bullets 1/2/4
+            * Chart 79 (VALEUR MARCHANDE LINE) :
+                - "Avant" = asking_price (= prix payé)
+                - "Après refi" = scenario_choisi.valeur_economique
+                  (APH 50 ou APH 100 selon programme_schl coché)
+                - échelle Y auto (template nettoyé du min hardcodé)
+            * Chart 85 (PROFIT À L'ACHAT COLUMN STACKED) :
+                - Catégorie 2 renommée "Valeur réelle" (au lieu de
+                  "Valeur municipale")
+                - Valeur 2 = valeur_comparable_centris (nouveau champ
+                  wizard) ou fallback evaluation_municipale
+                - 2 séries empilées : "Prix payé" (jaune F8D956) +
+                  "Écart comparable" (rouge EF3E45)
+                - échelle Y auto
+        - slide 5 (idx 4) :
+            * sources documentées par commentaires inline pour chaque
+              cellule des tableaux Avant/Après (cohérence avec slides
+              3 et 4)
+            * coût énergétique "Avant" = energie de la fiche
+            * coût énergétique "Après" = 0 si conversion_chauffage
+              elec_to_thermo, sinon energie
+        - slide 6 (idx 5) :
+            * "Création de chambre" affichée conditionnellement
+              UNIQUEMENT si conversion_chambres=True :
+                - Table 1 cell[4][1] "Création chambres" → label
+                  selon stratégie ou vide
+                - Table 12 cell[1][1] "Fin de création des chambres" →
+                  libellé alternatif ou vide selon stratégie
     * Env var `OFFRE_INVEST_TEMPLATE` (défaut: 'horizon_v2') permet de
       switcher.
 
@@ -336,6 +364,11 @@ class ValueAddStrategy:
     # Lien Centris comparable (slide 4 — texte « Similaire en vente »)
     lien_centris_comparable: str = ""
 
+    # Valeur du comparable Centris (slide 4 — alimente Chart 85
+    # « Profit à l'achat » : catégorie « Valeur réelle » + différence
+    # rouge avec le prix payé). Si vide, fallback evaluation_municipale.
+    valeur_comparable_centris: float = 0.0
+
     # Annotation valeur marchande (slide 5)
     valeur_marchande_annotation: str = ""
 
@@ -428,6 +461,9 @@ class ValueAddStrategy:
             lien_centris_comparable=str(
                 d.get("lien_centris_comparable", "") or ""
             )[:500],
+            valeur_comparable_centris=float(
+                d.get("valeur_comparable_centris", 0) or 0
+            ),
             valeur_marchande_annotation=str(
                 d.get("valeur_marchande_annotation", "") or ""
             )[:80],
@@ -1189,42 +1225,31 @@ def _build_substitutions(
         (1, "675 000$", _money_long(investissement_requis_val), "first"),
         (1, "~121 %", _percent_approx(va["rci_pct"]), "first"),
         (1, "~1,68 M$", _money_approx_M(va["pvi_montant"]), "first"),
-        # Slide 2 — Présentation du projet
-        # Note : le bug « gras » sur nb_unites venait du remplacement de
-        # "8 logements" qui matchait le run 0 du cell Nb unités (Table 12
-        # cell[0][1]). On garde la sub ciblée mais on remplace en
-        # PRIORITÉ la phrase complète (3 paragraphes) pour ne pas
-        # toucher la cellule "Nombre d'étages" voisine.
-        (2, "1,2 M$", _money_short_M(asking), "first"),
+        # Slide 2 — Présentation du projet (Phil slide 3)
+        # ⚠️ Substitutions ambiguës retirées (prix d'acquisition,
+        # phrase typologie, nb_logements_phrase) — elles écrasaient
+        # le format des runs (taille 14 pas gras) car la sub se faisait
+        # au niveau text_frame.text fallback. Ces cellules sont
+        # désormais substituées par accès direct (voir la section
+        # « Substitutions directes cellules slides 3-6 » à la fin
+        # de generate_offre_investissement_pptx).
         (2, "91 500 $/an", _money_an(revenus), "first"),
         (2, "171 600 $/an", _money_an(va["nouveaux_revenus_an"]), "first"),
-        (2, "8 logements\n 2 × 3½ | 4 × 4½ | 1 × 5½ | 1 × 7½\n2 vacants", phrase_typologie, "first"),
-        (2, "8 logements", nb_logements_phrase, "first"),
-        # Slide 2 (suite) — champs auto présentation projet (v3)
-        # Le cell[1][1] contient "3" (nb_etages literal) — on substitue
-        # avec PRÉCISION pour ne pas matcher d'autres "3" ailleurs.
-        # Stratégie : on remplace "Nombre d'étages " puis on remplace
-        # le run "3" qui suit dans la cellule adjacente. Comme c'est
-        # une cellule séparée, la sub `"3"` first-match peut être
-        # imprévisible — on remplace plutôt le pattern "Nombre d'étages
-        # " + valeur via la sub "À confirmer" approach :
-        # On utilise les placeholders littéraux uniques :
-        #   "3"                  → nb_etages (mais ambigu)
-        #   "À confirmer"        → superficie_habitable / annee_construction
-        # → On choisit d'écraser "À confirmer" 2 fois (first + first)
-        #   et de NE PAS modifier "3" directement (laissé à la donnée
-        #   manuelle Phil), sauf si nb_etages override fourni :
-        (2, "À confirmer", superficie_habitable, "first"),
-        (2, "À confirmer", annee_construction, "first"),
+        # Champs auto présentation projet (v3) — substitution sûre
+        # via accès cellule pour superficie/annee_construction.
         # Frais énergétiques : substitution du libellé "Locataires (sauf 1)"
         (2, "Locataires (sauf 1)", frais_energetiques_label, "first"),
         # Stationnements : substitution du libellé "Aucun"
         # (premier match — vu que le cell stationnements est le dernier)
         (2, "Aucun", stationnements_label, "first"),
-        # Slide 3 — Opportunité unique
+        # Slide 3 — Opportunité unique (Phil slide 4)
+        # ⚠️ Bullet 3 (paragraphe 2 du TextBox 30) retiré ici car
+        # la sub par texte écrasait le format (bold/jaune) ; à la
+        # place, on remplace directement le paragraphe 2 en
+        # préservant les autres bullets (voir section « Substitutions
+        # directes » à la fin).
         (3, "Offre d’achat acceptée 29% sous la valeur municipale", bullets[0], "first"),
         (3, "Loyers moyens actuels 953$ | Marché 1800$", bullets[1], "first"),
-        (3, "+ 94% de manque à gagner en convertissant en chambres", bullets[2], "first"),
         (3, "Demande pour chambres en forte hausse | Secteur Hochelaga", bullets[3], "first"),
         (3, "+ 497 100$", gain_callout, "first"),
         # Slide 3 — Lien Centris comparable (slide 4 user, idx 3)
@@ -1234,15 +1259,48 @@ def _build_substitutions(
             strat.lien_centris_comparable or "https://www.centris.ca/",
             "first",
         ),
-        # Slide 4 (Plan création de valeur — avant/après)
-        (4, "1800$", _money_short(va["nouveau_loyer_moyen"]), "first"),
-        (4, "171 600$", _money_long(va["nouveaux_revenus_an"]), "first"),
-        (4, "2 882 305$  (+1 685 305$)", _money_with_delta(va["nouvelle_valeur_marchande"], va["delta_valeur"]), "first"),
-        (4, "953$", _money_short(va["loyer_moyen_actuel"]), "first"),
-        (4, "91 500$", _money_long(revenus), "first"),
-        (4, "1 697 100$ (payé 1.2M)", _money_payed_or_annotated(va["ancienne_valeur_marchande"], paid_M, strat.valeur_marchande_annotation), "first"),
-        # Slide 5 (Échéancier Gantt — phase 2 label + dates)
+        # Slide 4 (Plan création de valeur — Phil slide 5)
+        # ⚠️ TOUS les chiffres des tableaux Avant/Après sont substitués
+        # par accès direct aux cellules (Table 8 = Avant, Table 12 =
+        # Après) dans la section « Substitutions directes » à la fin.
+        # Cela permet de :
+        #   1) Préserver le format multi-runs de cell[3][1] (valeur
+        #      marchande Après : "2 882 305$  " pas gras + "(+1 685 305$)"
+        #      gras jaune)
+        #   2) Garantir la cohérence des sources de chiffres avec
+        #      slides 3 et 4 (asking_price pour "avant", scenario
+        #      choisi pour "après")
+        #   3) Gérer le coût énergétique conditionnel (0$ si
+        #      conversion_chauffage = elec_to_thermo)
+        # Slide 5 (Échéancier Gantt — Phil slide 6)
+        # Phase 2 label (Table 1 cell[4][1]) : conditionnel sur les
+        # leviers value-add cochés. Si conversion_chambres=True →
+        # "Création chambres" (préservé). Sinon → label suggéré
+        # ("Rencontres", "Conversion chauffage", etc.).
         (5, "Création chambres", phase2_label, "first"),
+        # Table 12 cell[1][1] "Fin de création des chambres" :
+        # conditionnel — si conversion_chambres=False, on remplace par
+        # un label neutre (ou vide). Sinon, on garde le texte.
+        # (Substitution faite ici uniquement si le label suggéré est
+        # DIFFÉRENT de "Création chambres" — sinon noop.)
+        # Slide 6 — Conditionnel « Création de chambre » : si la
+        # stratégie conversion_chambres n'est PAS cochée, on remplace
+        # les textes du jalon M2.1 par un libellé neutre (rencontre
+        # locataires) pour ne pas afficher « Création » à tort.
+        # NOTE : la sub `phase2_label` plus haut couvre déjà Table 1
+        # cell[4][1] ("Création chambres" → label suggéré). Ici on
+        # complète avec Table 12 cell[1][1] ("Fin de création des
+        # chambres" → libellé alternatif si non coché).
+        (
+            5,
+            "Fin de création des chambres",
+            (
+                "Fin de création des chambres"
+                if strat.conversion_chambres
+                else "Rencontres avec locataires"
+            ),
+            "first",
+        ),
         # Dates des jalons (M1.1, M1.2, M2.1, M2.4, M3.1) — substitue
         # les placeholders littéraux des Tables 6/12/21. Les cellules
         # sont au format "M1.1 – Juillet 2026" (espace + en-dash + espace).
@@ -1475,6 +1533,217 @@ def _replace_table_cell_text(
     return False
 
 
+def _replace_cell_paragraphs(
+    slide,
+    table_name: str,
+    row_idx: int,
+    col_idx: int,
+    paragraphs_text: List[str],
+) -> bool:
+    """Remplace le contenu d'une cellule avec une LISTE de paragraphes.
+
+    Préserve le format du premier run de CHAQUE paragraphe existant
+    (police, couleur, taille, gras) et vide les runs supplémentaires.
+    Si la liste contient PLUS de paragraphes que la cellule en a, on
+    duplique le format du dernier paragraphe existant.
+    Si elle en contient MOINS, on vide les paragraphes restants.
+
+    Utile pour Table 12 cell[0][1] slide 3 ("8 logements\\n 2x3½...\\n2
+    vacants") où l'on veut respecter le format taille 14 pas-gras des
+    3 paragraphes du template sans recourir à un remplacement texte qui
+    écrase tout le formatting.
+    """
+    try:
+        for shape in slide.shapes:
+            if not getattr(shape, "has_table", False):
+                continue
+            if shape.name != table_name:
+                continue
+            tbl = shape.table
+            if row_idx >= len(tbl.rows):
+                return False
+            row = tbl.rows[row_idx]
+            cells = list(row.cells)
+            if col_idx >= len(cells):
+                return False
+            cell = cells[col_idx]
+            tf = cell.text_frame
+            paras = list(tf.paragraphs)
+            n_target = len(paragraphs_text)
+            n_existing = len(paras)
+            for i in range(max(n_target, n_existing)):
+                if i < n_existing:
+                    para = paras[i]
+                    if i < n_target:
+                        # Remplace le texte dans le premier run, vide
+                        # les runs suivants
+                        if para.runs:
+                            para.runs[0].text = paragraphs_text[i]
+                            for r in para.runs[1:]:
+                                r.text = ""
+                        else:
+                            para.text = paragraphs_text[i]
+                    else:
+                        # Vide le paragraphe surplus
+                        for r in para.runs:
+                            r.text = ""
+                else:
+                    # Pas assez de paragraphes existants — on ajoute
+                    new_para = tf.add_paragraph()
+                    new_para.text = paragraphs_text[i]
+            return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "cell paragraphs replacement failed for %s[%s][%s]: %s",
+            table_name, row_idx, col_idx, exc,
+        )
+    return False
+
+
+def _replace_textbox_paragraph(
+    slide,
+    shape_name: str,
+    para_idx: int,
+    new_text: str,
+    *,
+    force_bold: Optional[bool] = None,
+    force_color_rgb: Optional[str] = None,
+    force_size_pt: Optional[float] = None,
+) -> bool:
+    """Remplace un paragraphe précis d'un TextBox en préservant le format.
+
+    Le 1er run du paragraphe est utilisé pour le nouveau texte ; les
+    runs suivants sont vidés. Si `force_*` est fourni, ces attributs
+    écrasent le format du run.
+
+    Utilisé pour le bullet 3 (paragraphe idx=2) du TextBox 30 slide 4
+    où l'on doit forcer bold=False, color=blanc, size=14 pour matcher
+    les bullets 1/2/4.
+    """
+    try:
+        from pptx.dml.color import RGBColor  # type: ignore
+        from pptx.util import Pt  # type: ignore
+    except Exception:  # noqa: BLE001
+        return False
+    try:
+        for shape in slide.shapes:
+            if shape.name != shape_name:
+                continue
+            if not shape.has_text_frame:
+                return False
+            tf = shape.text_frame
+            paras = list(tf.paragraphs)
+            if para_idx >= len(paras):
+                return False
+            para = paras[para_idx]
+            if not para.runs:
+                para.text = new_text
+                run = para.runs[0] if para.runs else None
+            else:
+                para.runs[0].text = new_text
+                for r in para.runs[1:]:
+                    r.text = ""
+                run = para.runs[0]
+            if run is None:
+                return True
+            if force_bold is not None:
+                run.font.bold = force_bold
+            if force_color_rgb:
+                try:
+                    run.font.color.rgb = RGBColor.from_string(force_color_rgb)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "color set failed for %s p[%s]: %s",
+                        shape_name, para_idx, exc,
+                    )
+            if force_size_pt is not None:
+                run.font.size = Pt(force_size_pt)
+            return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "textbox paragraph replacement failed for %s p[%s]: %s",
+            shape_name, para_idx, exc,
+        )
+    return False
+
+
+def _replace_cell_keep_first_run(
+    slide,
+    table_name: str,
+    row_idx: int,
+    col_idx: int,
+    new_text: str,
+) -> bool:
+    """Variante de `_replace_table_cell_text` qui ne touche pas au
+    formatting du 1er run (gras/couleur/taille). Utile pour les
+    cellules dont on veut juste changer le texte sans toucher au style.
+
+    Différence avec `_replace_table_cell_text` : aucune modification
+    du formatting du run, juste `.text = new_text`.
+    """
+    return _replace_table_cell_text(
+        slide, table_name, row_idx, col_idx, new_text
+    )
+
+
+def _replace_cell_two_runs(
+    slide,
+    table_name: str,
+    row_idx: int,
+    col_idx: int,
+    text_run_0: str,
+    text_run_1: str,
+) -> bool:
+    """Remplace les 2 premiers runs du 1er paragraphe d'une cellule.
+
+    Utilisé pour Table 12 cell[3][1] slide 5 (valeur marchande Après
+    refi) : run0 = "2 882 305$  " (size 12 pas gras) + run1 =
+    "(+1 685 305$)" (size 10 gras jaune). Les formats des 2 runs sont
+    préservés ; on ne change que le texte.
+    """
+    try:
+        for shape in slide.shapes:
+            if not getattr(shape, "has_table", False):
+                continue
+            if shape.name != table_name:
+                continue
+            tbl = shape.table
+            if row_idx >= len(tbl.rows):
+                return False
+            row = tbl.rows[row_idx]
+            cells = list(row.cells)
+            if col_idx >= len(cells):
+                return False
+            cell = cells[col_idx]
+            tf = cell.text_frame
+            if not tf.paragraphs:
+                return False
+            first_para = tf.paragraphs[0]
+            runs = list(first_para.runs)
+            if len(runs) >= 2:
+                runs[0].text = text_run_0
+                runs[1].text = text_run_1
+                # Vider les runs suivants
+                for r in runs[2:]:
+                    r.text = ""
+            elif len(runs) == 1:
+                # Une seule run — on met les 2 textes concaténés dans le run 0
+                runs[0].text = text_run_0 + text_run_1
+            else:
+                first_para.text = text_run_0 + text_run_1
+            # Vider les paragraphes suivants
+            for p in tf.paragraphs[1:]:
+                for r in p.runs:
+                    r.text = ""
+            return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "two-runs cell replacement failed for %s[%s][%s]: %s",
+            table_name, row_idx, col_idx, exc,
+        )
+    return False
+
+
 def _replace_photo(slide, shape_name: str, new_blob: bytes) -> bool:
     """Replace a Picture shape's underlying image while keeping geometry."""
     try:
@@ -1609,8 +1878,259 @@ async def generate_offre_investissement_pptx(
         analysis_id,
     )
 
-    # ─── Substitutions directes de cellules (bypass text search) ──
-    # Slide 2 — nb_etages (cell ambigu "3" dans Table 12)
+    # ─── Substitutions directes cellules slides 3-6 (v4) ──────────
+    # Ces substitutions remplacent le texte de cellules précises tout
+    # en PRÉSERVANT le formatage (police, taille, couleur, gras).
+    # Elles complètent la phase de substitution texte ci-dessus :
+    # certaines cellules ont un formatting multi-runs ou multi-
+    # paragraphes que la sub texte écrase. On les traite ici.
+    rec_asking = float(rec.asking_price or 0)
+    rec_revenus = float(rec.revenus_bruts or 0)
+    rec_eval_muni = float(rec.evaluation_municipale or 0)
+    rec_energie = float(rec.energie or 0)
+    rec_nb_log = int(rec.nb_logements or 0)
+    _results_local = None
+    if rec.analysis_results_json:
+        try:
+            _results_local = json.loads(rec.analysis_results_json)
+        except Exception:  # noqa: BLE001
+            _results_local = None
+    va_local = _calc_value_add(rec, strat)
+    # Force re-resolve nouvelle valeur marchande pour charts/slide 5
+    new_vm_local, _vm_src = _resolve_valeur_marchande(
+        rec, _results_local, va_local
+    )
+    if new_vm_local > 0:
+        va_local["nouvelle_valeur_marchande"] = new_vm_local
+        va_local["delta_valeur"] = new_vm_local - va_local.get(
+            "ancienne_valeur_marchande", 0
+        )
+    # Coût énergétique avant/après slide 5 :
+    #   - Avant = energie de la fiche (rec.energie)
+    #   - Après = 0 si conversion_chauffage = elec_to_thermo, sinon energie
+    cost_energie_after = (
+        0.0
+        if strat.conversion_chauffage == "elec_to_thermo"
+        else rec_energie
+    )
+
+    # ─── Slide 3 (idx 2) — Présentation du projet ─────────────────
+    if len(prs.slides) > 2:
+        s2 = prs.slides[2]
+        # Table 11 cell[0][1] — Prix d'acquisition (= asking_price)
+        # Source garantie : rec.asking_price (= "prix demandé" fiche)
+        if rec_asking > 0:
+            _replace_table_cell_text(
+                s2, "Table 11", 0, 1, _money_short_M(rec_asking)
+            )
+        # Table 11 cell[1][1] — Revenus actuels (= revenus_bruts)
+        if rec_revenus > 0:
+            _replace_table_cell_text(
+                s2, "Table 11", 1, 1, _money_an(rec_revenus)
+            )
+        # Table 11 cell[2][1] — Revenus potentiels après rénos
+        nouv_rev = float(va_local.get("nouveaux_revenus_an", 0) or 0)
+        if nouv_rev > 0:
+            _replace_table_cell_text(
+                s2, "Table 11", 2, 1, _money_an(nouv_rev)
+            )
+        # Table 12 cell[0][1] — Nombre d'unités (multi-paragraphes,
+        # format taille 14 pas gras à préserver) :
+        #   p[0] = "{n} logements"
+        #   p[1] = " {typology compact}"  (ex: " 2 × 3½ | 4 × 4½ ...")
+        #   p[2] = "{vacants} vacants"  (si applicable)
+        compact_local = _typology_compact(rec.typology_json)
+        nb_vacants_local = _typology_nb_vacants(rec.typology_json)
+        nb_log_phrase_local = (
+            f"{rec_nb_log} logements" if rec_nb_log else "—"
+        )
+        paragraphs_nb_unites: List[str] = [nb_log_phrase_local]
+        if compact_local:
+            paragraphs_nb_unites.append(f" {compact_local}")
+        if nb_vacants_local > 0:
+            paragraphs_nb_unites.append(f"{nb_vacants_local} vacants")
+        _replace_cell_paragraphs(
+            s2, "Table 12", 0, 1, paragraphs_nb_unites
+        )
+        # Table 12 cell[1][1] — Nb d'étages (saisie manuelle)
+        nb_et_local = (
+            strat.nb_etages
+            if strat.nb_etages and strat.nb_etages > 0
+            else None
+        )
+        if nb_et_local is not None:
+            _replace_table_cell_text(
+                s2, "Table 12", 1, 1, str(nb_et_local)
+            )
+
+    # ─── Slide 4 (idx 3) — Opportunité unique ─────────────────────
+    if len(prs.slides) > 3:
+        s3 = prs.slides[3]
+        # TextBox 30 paragraphe 2 = bullet 3 (« levier principal »).
+        # Format forcé : bold=False, color=blanc (FFFFFF), size=14.
+        # Pas de label "Levier principal:" en préfixe : c'était un
+        # label du wizard, jamais inclus dans la valeur envoyée.
+        levier_text = (
+            strat.levier_principal_phrase
+            or strat.bullet_opp_3
+            or "Marge significative de création de valeur via optimisation"
+        )
+        _replace_textbox_paragraph(
+            s3,
+            "TextBox 30",
+            2,
+            levier_text,
+            force_bold=False,
+            force_color_rgb="FFFFFF",
+            force_size_pt=14,
+        )
+
+        # ─── Chart 79 (LINE — VALEUR MARCHANDE) ───────────────────
+        # Bug fixé : Avant = prix payé (asking_price), Après refi =
+        # valeur économique du scénario choisi (programme_schl).
+        scenarios_local = (_results_local or {}).get("scenarios", {}) or {}
+        if strat.programme_schl == "aph_100":
+            chosen_scenario = scenarios_local.get("refi_aph_100", {}) or {}
+        elif strat.programme_schl == "aph_50":
+            chosen_scenario = scenarios_local.get("refi_aph_50", {}) or {}
+        else:
+            chosen_scenario = _best_refi_scenario(_results_local) or {}
+        valeur_eco_refi = float(
+            chosen_scenario.get("valeur_retenue", 0)
+            or chosen_scenario.get("valeur_economique", 0)
+            or 0
+        )
+        if not valeur_eco_refi:
+            valeur_eco_refi = new_vm_local
+        if rec_asking > 0 and valeur_eco_refi > 0:
+            _replace_chart_data(
+                s3,
+                "Chart 79",
+                ["Avant", "Après refi"],
+                [("PDM", [float(rec_asking), float(valeur_eco_refi)])],
+            )
+
+        # ─── Chart 85 (COLUMN_STACKED — PROFIT À L'ACHAT) ─────────
+        # Bug fixé :
+        #   - Catégories : ["Valeur d'achat", "Valeur réelle"]
+        #     (au lieu de "Valeur municipale")
+        #   - Valeur "Valeur réelle" = valeur_comparable_centris
+        #     (nouveau champ wizard) ou fallback evaluation_municipale
+        #   - 2 séries empilées :
+        #       Series 0 "Prix payé" (jaune) : [prix, prix]
+        #       Series 1 "Écart comparable" (rouge) : [0, delta]
+        comparable_val = (
+            strat.valeur_comparable_centris
+            if strat.valeur_comparable_centris > 0
+            else rec_eval_muni
+        )
+        if rec_asking > 0 and comparable_val > 0:
+            delta_comparable = max(0.0, comparable_val - rec_asking)
+            _replace_chart_data(
+                s3,
+                "Chart 85",
+                ["Valeur d'achat", "Valeur réelle"],
+                [
+                    ("Prix payé", [rec_asking, rec_asking]),
+                    ("Écart comparable", [0.0, delta_comparable]),
+                ],
+            )
+
+        # TextBox 30 paragraphe 4 = "Similaire en vente à 2M$ <lien>"
+        # On remplace "à 2M$" par la valeur du comparable Centris si
+        # fournie (en M$ court). Évite que le deck affiche un montant
+        # hardcodé du template 1660.
+        if comparable_val > 0:
+            # Sub texte ciblé : "à 2M$" → "à {comparable_val court}"
+            comparable_str = _money_short_M(comparable_val)
+            _replace_in_slide(
+                s3, "à 2M$", f"à {comparable_str}", "first"
+            )
+
+    # ─── Slide 5 (idx 4) — Plan création de valeur ────────────────
+    # Sources documentées (cohérence avec slides 3 et 4) :
+    #   Table 8 (Avant)   : Moyenne locative, Revenus locatifs, Valeur
+    #                       marchande, Coût énergétique = depuis la fiche
+    #   Table 12 (Après)  : Loyer pondéré projeté, Revenus refi, Valeur
+    #                       économique refi, Coût énergétique projeté
+    if len(prs.slides) > 4:
+        s4 = prs.slides[4]
+        # ── Table 8 (AVANT) ──
+        # cell[1][1] — Moyenne locative actuelle = revenus_bruts / 12 / nb_log
+        loyer_av = float(va_local.get("loyer_moyen_actuel", 0) or 0)
+        if loyer_av > 0:
+            _replace_table_cell_text(
+                s4, "Table 8", 1, 1, _money_short(loyer_av)
+            )
+        # cell[2][1] — Revenus locatifs annuels (avant) = revenus_bruts
+        if rec_revenus > 0:
+            _replace_table_cell_text(
+                s4, "Table 8", 2, 1, _money_long(rec_revenus)
+            )
+        # cell[3][1] — Valeur marchande AVANT :
+        #   Si annotation humaine (valeur_marchande_annotation) fournie,
+        #     on l'utilise telle quelle (ex: "Payé 1 100 000$").
+        #   Sinon, format "{valeur_calculee} (payé X.XM)".
+        ancienne_vm_local = float(
+            va_local.get("ancienne_valeur_marchande", 0) or 0
+        )
+        if strat.valeur_marchande_annotation:
+            # Annotation custom — affichage tel quel
+            # (ex: "Payé 1 100 000$", "(payé 1.2M)")
+            vm_avant_text = strat.valeur_marchande_annotation.strip()
+        elif ancienne_vm_local > 0 and rec_asking > 0:
+            # Format défaut : "{valeur} (payé {prix M$})"
+            paid_M_str = f"{rec_asking / 1_000_000.0:.1f}".rstrip("0").rstrip(".")
+            if not paid_M_str:
+                paid_M_str = "0"
+            vm_avant_text = f"{_money_long(ancienne_vm_local)} (payé {paid_M_str}M)"
+        elif rec_asking > 0:
+            # Sans valeur municipale fiable, on affiche juste le prix payé
+            vm_avant_text = f"Payé {_money_long(rec_asking)}"
+        else:
+            vm_avant_text = "—"
+        _replace_table_cell_text(
+            s4, "Table 8", 3, 1, vm_avant_text
+        )
+        # cell[4][1] — Coût énergétique avant = rec.energie (annuel)
+        _replace_table_cell_text(
+            s4, "Table 8", 4, 1, _money_long(rec_energie)
+            if rec_energie > 0 else "0$"
+        )
+        # ── Table 12 (APRÈS) ──
+        # cell[1][1] — Moyenne locative projetée
+        loyer_ap = float(va_local.get("nouveau_loyer_moyen", 0) or 0)
+        if loyer_ap > 0:
+            _replace_table_cell_text(
+                s4, "Table 12", 1, 1, _money_short(loyer_ap)
+            )
+        # cell[2][1] — Revenus locatifs annuels projetés
+        nouv_rev_ap = float(va_local.get("nouveaux_revenus_an", 0) or 0)
+        if nouv_rev_ap > 0:
+            _replace_table_cell_text(
+                s4, "Table 12", 2, 1, _money_long(nouv_rev_ap)
+            )
+        # cell[3][1] — Valeur marchande APRÈS (2 runs : montant pas
+        # gras + (+delta) gras jaune)
+        nouv_vm_ap = float(
+            va_local.get("nouvelle_valeur_marchande", 0) or 0
+        )
+        delta_vm = float(va_local.get("delta_valeur", 0) or 0)
+        if nouv_vm_ap > 0:
+            _replace_cell_two_runs(
+                s4, "Table 12", 3, 1,
+                f"{_money_long(nouv_vm_ap)}  ",
+                f"(+{_money_long(delta_vm)})",
+            )
+        # cell[4][1] — Coût énergétique projeté
+        _replace_table_cell_text(
+            s4, "Table 12", 4, 1,
+            _money_long(cost_energie_after)
+            if cost_energie_after > 0 else "0$"
+        )
+
+    # Slide 2 — nb_etages (legacy : déjà fait dans la section slide 3
+    # ci-dessus — on garde l'appel pour rétrocompat)
     nb_etages_input = (
         strat.nb_etages if strat.nb_etages and strat.nb_etages > 0 else None
     )
@@ -1618,44 +2138,6 @@ async def generate_offre_investissement_pptx(
         _replace_table_cell_text(
             prs.slides[2], "Table 12", 1, 1, str(nb_etages_input)
         )
-
-    # ─── Substitutions des charts embedded ────────────────────────
-    # Slide 3 — Opportunité unique (idx 3) : 2 charts dynamiques.
-    # Chart 79 (LINE) : valeur marchande avant/après (« PDM »).
-    # Chart 85 (COLUMN_STACKED) : valeur d'achat vs valeur municipale.
-    if len(prs.slides) > 3:
-        s3 = prs.slides[3]
-        # Chart 79 — utilise va_results pour ancienne/nouvelle valeur
-        ancienne_vm = float((
-            ((json.loads(rec.analysis_results_json) if rec.analysis_results_json else {}) or {})
-            .get("scenarios", {}).get("achat", {}).get("valeur_retenue", 0)
-            or 0
-        ))
-        if not ancienne_vm:
-            ancienne_vm = float(rec.evaluation_municipale or rec.asking_price or 0)
-        # Recharge best_refi pour nouvelle valeur
-        nouvelle_vm_chart, _ = _resolve_valeur_marchande(
-            rec,
-            json.loads(rec.analysis_results_json) if rec.analysis_results_json else None,
-            {"nouvelle_valeur_marchande": 0, "ancienne_valeur_marchande": ancienne_vm},
-        )
-        if nouvelle_vm_chart > 0 and ancienne_vm > 0:
-            _replace_chart_data(
-                s3,
-                "Chart 79",
-                ["Avant", "Après refi"],
-                [("PDM", [float(ancienne_vm), float(nouvelle_vm_chart)])],
-            )
-        # Chart 85 — valeur d'achat (asking_price) vs valeur municipale
-        asking_chart = float(rec.asking_price or 0)
-        eval_muni_chart = float(rec.evaluation_municipale or 0)
-        if asking_chart > 0 and eval_muni_chart > 0:
-            _replace_chart_data(
-                s3,
-                "Chart 85",
-                ["Valeur d'achat", "Valeur municipale"],
-                [("Series 1", [asking_chart, eval_muni_chart])],
-            )
 
     # Slide 11 — Tendances : chart loyer moyen avant/après (Zipplex)
     if len(prs.slides) > 11:

@@ -123,6 +123,7 @@ export function OffreInvestissementWizard({
   const [gainPotentielCallout, setGainPotentielCallout] = useState("");
   const [gainPotentielAuto, setGainPotentielAuto] = useState(true);
   const [lienCentrisComparable, setLienCentrisComparable] = useState("");
+  const [valeurComparableCentris, setValeurComparableCentris] = useState<number>(0);
   const [valeurMarchandeAnnotation, setValeurMarchandeAnnotation] = useState("");
   const [phase2Label, setPhase2Label] = useState("");
 
@@ -380,6 +381,7 @@ export function OffreInvestissementWizard({
           gain_potentiel_callout: gainPotentielCallout,
           gain_potentiel_auto: gainPotentielAuto,
           lien_centris_comparable: lienCentrisComparable,
+          valeur_comparable_centris: valeurComparableCentris,
           valeur_marchande_annotation: valeurMarchandeAnnotation,
           phase2_label: phase2Label,
           nb_etages: nbEtages,
@@ -648,22 +650,43 @@ export function OffreInvestissementWizard({
                 <span>Auto-calculer</span>
               </label>
             </div>
-            <label className="mt-2 block">
-              <span className="mb-1 block text-[11px] font-medium text-white/80">
-                Lien Centris d&apos;un comparable (URL)
-              </span>
-              <input
-                type="url"
-                value={lienCentrisComparable}
-                onChange={(e) => setLienCentrisComparable(e.target.value)}
-                maxLength={500}
-                placeholder="https://www.centris.ca/fr/..."
-                className="w-full rounded-md border border-brand-800 bg-brand-900/50 px-3 py-2 text-xs text-white placeholder-white/30 focus:border-emerald-500/50 focus:outline-none"
-              />
-              <span className="mt-1 block text-[10px] text-white/40">
-                Inséré dans la phrase « Similaire en vente à 2M$ ... ».
-              </span>
-            </label>
+            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <label className="block">
+                <span className="mb-1 block text-[11px] font-medium text-white/80">
+                  Lien Centris d&apos;un comparable (URL)
+                </span>
+                <input
+                  type="url"
+                  value={lienCentrisComparable}
+                  onChange={(e) => setLienCentrisComparable(e.target.value)}
+                  maxLength={500}
+                  placeholder="https://www.centris.ca/fr/..."
+                  className="w-full rounded-md border border-brand-800 bg-brand-900/50 px-3 py-2 text-xs text-white placeholder-white/30 focus:border-emerald-500/50 focus:outline-none"
+                />
+                <span className="mt-1 block text-[10px] text-white/40">
+                  Inséré dans la phrase « Similaire en vente à X M$ ... ».
+                </span>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[11px] font-medium text-white/80">
+                  Valeur du comparable Centris ($)
+                </span>
+                <input
+                  type="number"
+                  value={valeurComparableCentris || ""}
+                  onChange={(e) =>
+                    setValeurComparableCentris(Number(e.target.value) || 0)
+                  }
+                  min={0}
+                  step={10000}
+                  placeholder="ex: 2000000"
+                  className="w-full rounded-md border border-brand-800 bg-brand-900/50 px-3 py-2 text-xs text-white placeholder-white/30 focus:border-emerald-500/50 focus:outline-none"
+                />
+                <span className="mt-1 block text-[10px] text-white/40">
+                  Alimente le graphique « Profit à l&apos;achat » (barre rouge = écart vs prix payé). Si vide, fallback évaluation municipale.
+                </span>
+              </label>
+            </div>
           </section>
 
           {/* Section 4 — Plan création de valeur */}
