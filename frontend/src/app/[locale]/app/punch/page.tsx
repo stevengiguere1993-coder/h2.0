@@ -67,6 +67,14 @@ function fmtElapsed(ms: number): string {
   ).padStart(2, "0")}`;
 }
 
+// Heures en h/min (ex. 7.89 h → « 7 h 53 ») au lieu du décimal.
+function fmtHm(h: number): string {
+  const totalMin = Math.round((h || 0) * 60);
+  const hh = Math.floor(totalMin / 60);
+  const mm = totalMin % 60;
+  return `${hh} h ${String(mm).padStart(2, "0")}`;
+}
+
 function dayLabel(iso: string): string {
   return new Date(iso + "T00:00:00").toLocaleDateString("fr-CA", {
     weekday: "short",
@@ -672,7 +680,7 @@ function WeeklyCard({ weekly }: { weekly: Weekly }) {
           Mes heures — semaine courante
         </h2>
         <span className="text-base font-bold text-white">
-          {weekly.total_hours.toFixed(2)} h
+          {fmtHm(weekly.total_hours)}
         </span>
       </div>
       <p className="mt-1 text-xs text-white/50">
@@ -686,7 +694,7 @@ function WeeklyCard({ weekly }: { weekly: Weekly }) {
           >
             <span>{dayLabel(d.day)}</span>
             <span className="font-semibold text-white">
-              {d.hours > 0 ? `${d.hours.toFixed(2)} h` : "—"}
+              {d.hours > 0 ? fmtHm(d.hours) : "—"}
             </span>
           </li>
         ))}

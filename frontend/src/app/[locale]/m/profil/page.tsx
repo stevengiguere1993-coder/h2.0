@@ -27,6 +27,16 @@ type Me = {
   };
 };
 
+// Heures décimales → « h/min » (ex. 7.89 → « 7 h 53 »), plus lisible
+// qu'un décimal pour un relevé de temps.
+function fmtHm(h: number | null | undefined): string {
+  if (h == null) return "—";
+  const totalMin = Math.round(h * 60);
+  const hh = Math.floor(totalMin / 60);
+  const mm = totalMin % 60;
+  return `${hh} h ${String(mm).padStart(2, "0")}`;
+}
+
 export default function MobileProfil() {
   const confirm = useConfirm();
   const [data, setData] = useState<Me | null>(null);
@@ -159,7 +169,7 @@ export default function MobileProfil() {
                 <div className="flex justify-between">
                   <dt className="text-white/60">Heures travaillées</dt>
                   <dd className="font-semibold text-white">
-                    {data?.week.hours_worked.toFixed(1)} h
+                    {fmtHm(data?.week.hours_worked)}
                   </dd>
                 </div>
                 <div className="flex justify-between">
