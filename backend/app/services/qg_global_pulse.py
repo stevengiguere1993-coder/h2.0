@@ -174,6 +174,33 @@ def _parse_ai_json(raw: str) -> dict:
     return json.loads(s.strip())
 
 
+def _salvage_partial_json(raw: str) -> Optional[dict]:
+    """Quand le JSON est tronqué (parse échoué), tente de récupérer au
+    moins `headline` et `summary` par regex sur le texte partiel — pour
+    afficher quelque chose de lisible plutôt que du JSON brut. Retourne
+    None si rien d'exploitable."""
+    import re
+
+    def _grab(field: str) -> Optional[str]:
+        m = re.search(rf'"{field}"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
+        if not m:
+            return None
+        try:
+            return json.loads(f'"{m.group(1)}"')  # dé-échappe \" \n etc.
+        except Exception:  # noqa: BLE001
+            return m.group(1)
+
+    headline = _grab("headline")
+    summary = _grab("summary")
+    if not headline and not summary:
+        return None
+    return {
+        "headline": (headline or "Briefing global")[:500],
+        "summary": summary or "(résumé partiel)",
+        "highlights": [],
+    }
+
+
 async def get_or_generate_global_pulse(
     db: AsyncSession,
     *,
@@ -357,8 +384,13 @@ async def get_or_generate_global_pulse(
         res = await complete(
             prompt=prompt,
             system=SYSTEM_PROMPT,
-            max_tokens=700,
+            # Marge confortable : la sortie JSON ne doit jamais être
+            # tronquée (sinon le parse échoue et on affichait du JSON
+            # brut). thinking_budget=0 empêche gemini-2.5-flash de
+            # dépenser ce budget en raisonnement interne.
+            max_tokens=2048,
             temperature=0.4,
+            thinking_budget=0,
         )
     except (AIProviderUnavailable, AIProviderError) as exc:
         log.warning("Global pulse AI failed: %s", exc)
@@ -369,15 +401,19 @@ async def get_or_generate_global_pulse(
     try:
         parsed = _parse_ai_json(res.text)
     except Exception as exc:  # noqa: BLE001
+        # Garde-fou : on n'injecte JAMAIS le JSON brut dans summary
+        # (sinon l'utilisateur voit du `{"headline": …` à l'écran). On
+        # tente d'extraire headline/summary du JSON partiel, sinon
+        # message neutre.
         log.warning(
             "Global pulse JSON parse failed: %s — raw: %s",
             exc,
             res.text[:200],
         )
-        first_line = res.text.strip().split("\n", 1)[0][:120]
-        parsed = {
-            "headline": first_line or "Briefing global",
-            "summary": res.text.strip(),
+        parsed = _salvage_partial_json(res.text) or {
+            "headline": "Briefing global",
+            "summary": "(briefing temporairement indisponible — réessaie "
+            "avec « Regénérer »)",
             "highlights": [],
         }
 

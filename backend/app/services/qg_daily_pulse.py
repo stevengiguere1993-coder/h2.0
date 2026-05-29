@@ -238,6 +238,31 @@ def _parse_ai_json(raw: str) -> dict:
     return json.loads(s)
 
 
+def _salvage_partial_json(raw: str) -> Optional[dict]:
+    """JSON tronqué : récupère headline/summary par regex pour ne
+    jamais afficher de JSON brut. None si rien d'exploitable."""
+    import re
+
+    def _grab(field: str) -> Optional[str]:
+        m = re.search(rf'"{field}"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
+        if not m:
+            return None
+        try:
+            return json.loads(f'"{m.group(1)}"')
+        except Exception:  # noqa: BLE001
+            return m.group(1)
+
+    headline = _grab("headline")
+    summary = _grab("summary")
+    if not headline and not summary:
+        return None
+    return {
+        "headline": (headline or "Briefing")[:500],
+        "summary": summary or "(résumé partiel)",
+        "highlights": [],
+    }
+
+
 async def generate_for_entreprise(
     db: AsyncSession,
     entreprise_id: int,
@@ -395,8 +420,12 @@ async def generate_for_entreprise(
         res = await complete(
             prompt=prompt,
             system=SYSTEM_PROMPT,
-            max_tokens=800 if is_parent else 600,
+            # Marge confortable + thinking désactivé : évite que la
+            # sortie JSON de gemini-2.5-flash soit tronquée (parse
+            # échoué → JSON brut affiché).
+            max_tokens=2048,
             temperature=0.4,
+            thinking_budget=0,
         )
     except (AIProviderUnavailable, AIProviderError) as exc:
         log.warning(
@@ -417,11 +446,11 @@ async def generate_for_entreprise(
             exc,
             res.text[:200],
         )
-        # Fallback : utilise le texte brut, headline = 1ère ligne
-        first_line = res.text.strip().split("\n", 1)[0][:120]
-        parsed = {
-            "headline": first_line or f"Briefing — {ent.name}",
-            "summary": res.text.strip(),
+        # Garde-fou : ne jamais injecter le JSON brut dans summary.
+        parsed = _salvage_partial_json(res.text) or {
+            "headline": f"Briefing — {ent.name}",
+            "summary": "(briefing temporairement indisponible — réessaie "
+            "avec « Regénérer »)",
             "highlights": [],
         }
 
