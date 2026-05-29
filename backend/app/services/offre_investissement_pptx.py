@@ -72,6 +72,34 @@ Versioning :
                   selon stratégie ou vide
                 - Table 12 cell[1][1] "Fin de création des chambres" →
                   libellé alternatif ou vide selon stratégie
+    * v5a (logique service uniquement, template inchangé) : corrige
+      slides 8, 9, 10 (visibles = idx 7, 8, 9 dans prs.slides) :
+        - slide 8 (idx 7) FINANCES ACHAT :
+            * Table 2 cell[4][1] "Nombre de logements" : substitué
+              par `rec.nb_logements` (avant hardcodé à "8")
+        - slide 9 (idx 8) FINANCES OPTIMISATION :
+            * Frais autres (col 7 rows 5-11) substitués cellule par
+              cellule : évaluateur / évaluateur 2 / inspection /
+              avocat / notaire / notaire 2 / rapport efficacité.
+              Source : `rec.frais_demarrage_overrides_json` (par fiche)
+              avec fallback sur les défauts industrie (2000$/2000$/
+              3000$/5000$/2000$/2000$/5000$).
+            * Total frais autres cell[13][7] recalculé avec les
+              valeurs effectivement utilisées (au lieu du « 108 000$ »
+              du template 1660).
+            * Tableau rénovations condensé : les 16 slots rénos
+              (rows 2..17) dont le libellé est vide sont retirés
+              physiquement APRÈS substitution des placeholders →
+              le Total reste collé aux items utilisés.
+        - slide 10 (idx 9) FINANCES REFINANCEMENT :
+            * Table 2 cell[5][1] "Nombre de logements" : substitué
+              par `rec.nb_logements` (avant hardcodé à "8")
+            * Format `_money_long_signed` unifié sans espace de tête
+              (-65 000$ au lieu de ` -65 000$`)
+            * Cellules équité [9][4] et [9][7] : si l'équité du
+              scénario est NÉGATIVE, on affiche un pourcentage
+              cohérent avec le callout TextBox 18 (« Jusqu'à XX% »)
+              au lieu d'un montant négatif. Si positive, montant en $.
     * Env var `OFFRE_INVEST_TEMPLATE` (défaut: 'horizon_v2') permet de
       switcher.
 
@@ -213,15 +241,18 @@ def _money_long(n: Optional[float]) -> str:
 
 
 def _money_long_signed(n: Optional[float]) -> str:
-    """Ex: ` -65 000$` ou `347 373$` (avec espace devant si négatif —
-    correspond au format du template pour la cellule équité)."""
+    """Ex: `-65 000$` ou `347 373$` (format unifié sans espace de tête).
+
+    Bug fix v5a : avant on produisait ` -65 000$` avec un espace devant —
+    incohérent avec les autres cellules positives (`347 373$`). On aligne
+    maintenant tous les montants signés sur le même format compact."""
     if n is None:
         return "—"
     rounded = int(round(n))
     if rounded < 0:
         abs_str = str(abs(rounded))
         with_sep = re.sub(r"\B(?=(\d{3})+(?!\d))", " ", abs_str)
-        return f" -{with_sep}$"
+        return f"-{with_sep}$"
     return _money_long(n)
 
 
@@ -1343,23 +1374,15 @@ def _build_substitutions(
         (9, "2 449 959 $", _money_long_with_space(pret_max_aph50), "first"),
         (9, "2 449 959$", _money_long(pret_max_aph50), "all"),
         (9, "2 341 806$", _money_long(pret_max_aph100), "first"),
-        # Équité cellules : SIGNÉES (peuvent être négatives). Note :
-        # le TextBox 18 contient aussi « 347 373$ » sur un paragraphe
-        # séparé (préfixe « Jusqu'à » sur le paragraphe précédent).
-        # Cas positif : on remplace partout (cellule + TextBox 18) par
-        #   le montant signé.
-        # Cas négatif : la cellule reçoit le montant signé négatif,
-        #   mais le TextBox 18 doit afficher un pourcentage. On utilise
-        #   donc une stratégie en 2 temps :
-        #     1) la cellule (premier match) reçoit le montant signé
-        #     2) le TextBox 18 (deuxième match) reçoit le pourcentage
-        #   via une 2e substitution dédiée. Pour ça, en cas négatif on
-        #   substitue d'abord la cellule (« first ») puis on cible le
-        #   TextBox 18 (qui contiendra encore « 347 373$ » non remplacé)
-        #   avec une 2e règle.
-        (9, "347 373$", _money_long_signed(equite_aph50_signed), "first"),
-        (9, "347 373$", valeur_callout_refi_tb18, "first"),  # TB18 — reste après cell hit
-        (9, "239 220$", _money_long_signed(equite_aph100_signed), "first"),
+        # Équité cellules + TextBox 18 callout :
+        # ⚠️ Retiré v5a : les substitutions string « 347 373$ » et
+        # « 239 220$ » sont faites par accès direct cellule à la fin
+        # de generate_offre_investissement_pptx (logique cohérente :
+        # si équité < 0 → cellule + callout TB18 affichent un %, sinon
+        # le montant). Le TextBox 18 reste géré ici via « 347 373$ »
+        # car il est le SEUL textbox à contenir cette valeur après
+        # substitution directe des cellules.
+        (9, "347 373$", valeur_callout_refi_tb18, "first"),  # TextBox 18 callout
         # Libellé du callout (TextBox 29 + en-tête de cellule "Équité dégagée")
         (9, "Équité dégagée", label_callout_refi, "all"),
         # Slide 10 (RCI/PVI — Bourse vs Horizon)
@@ -1411,12 +1434,11 @@ def _build_substitutions(
         (8, "25 000$", _money_long(frais_courtier_2), "first"),
         (8, "19 869$", _money_long(taxes_bienvenue), "first"),
         (8, "30 000$", _money_long(interet_revenus), "first"),
-        # Évaluateur / Inspection / Avocat / Notaire / Rapport efficacité
-        # — placeholders 2000$/3000$/5000$ sont AMBIGUS (plusieurs
-        # cellules ont la même valeur). On ne substitue PAS ces
-        # valeurs génériques : elles restent les défauts du template
-        # (ce qui est fonctionnel pour la majorité des deals — les
-        # valeurs sont des défauts industrie, pas spécifiques au 1660).
+        # Évaluateur / Inspection / Avocat / Notaire / Rapport efficacité :
+        # ces valeurs SONT substituées (v5a) via accès direct cellule
+        # à la fin de generate_offre_investissement_pptx — la sub par
+        # texte est trop ambiguë (plusieurs cellules ont 2000$ / 5000$),
+        # donc on cible chaque cellule explicitement par (row, col).
     ])
 
     # Slide 8 : catalogue rénovations — substitue les 16 placeholders
@@ -1742,6 +1764,72 @@ def _replace_cell_two_runs(
             table_name, row_idx, col_idx, exc,
         )
     return False
+
+
+def _condense_empty_table_rows(
+    slide,
+    table_name: str,
+    body_start: int,
+    body_end_exclusive: int,
+    col_to_check: int = 0,
+) -> int:
+    """Supprime les lignes vides du body d'un tableau (entre header et total).
+
+    Utilisé pour le tableau rénos slide 9 (idx 8) : après substitution des
+    16 placeholders par les items cochés, on retire les lignes dont la
+    cellule libellé est vide pour que le Total reste collé aux items.
+
+    Args:
+        slide: slide python-pptx contenant la table.
+        table_name: nom du shape (ex: "Table 2").
+        body_start: index 0-based de la 1ère ligne body (inclusive).
+        body_end_exclusive: index de la 1ère ligne après le body
+            (= ligne du Total).
+        col_to_check: colonne à inspecter pour considérer la ligne vide
+            (par défaut 0 — libellé rénos).
+
+    Returns:
+        Nombre de lignes retirées (0 si rien — ex: shape absente).
+    """
+    try:
+        from pptx.oxml.ns import qn  # type: ignore
+    except Exception:  # noqa: BLE001
+        return 0
+    try:
+        for shape in slide.shapes:
+            if not getattr(shape, "has_table", False):
+                continue
+            if shape.name != table_name:
+                continue
+            tbl = shape.table
+            tbl_xml = tbl._tbl
+            rows_xml = tbl_xml.findall(qn("a:tr"))
+            n_rows = len(rows_xml)
+            if body_start >= n_rows or body_end_exclusive > n_rows:
+                return 0
+            removed = 0
+            # Parcourir le body et identifier les lignes vides
+            for i in range(body_start, body_end_exclusive):
+                row_xml = rows_xml[i]
+                # Extraire le texte de la cellule col_to_check
+                # tc = a:tc enfants de a:tr
+                tcs = row_xml.findall(qn("a:tc"))
+                if col_to_check >= len(tcs):
+                    continue
+                tc = tcs[col_to_check]
+                # Concat tous les a:t
+                cell_text = "".join(
+                    (t.text or "") for t in tc.iter(qn("a:t"))
+                )
+                if not cell_text.strip():
+                    tbl_xml.remove(row_xml)
+                    removed += 1
+            return removed
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "table condensation failed for %s: %s", table_name, exc
+        )
+    return 0
 
 
 def _replace_photo(slide, shape_name: str, new_blob: bytes) -> bool:
@@ -2128,6 +2216,155 @@ async def generate_offre_investissement_pptx(
             _money_long(cost_energie_after)
             if cost_energie_after > 0 else "0$"
         )
+
+    # ─── Substitutions directes cellules slides 8-10 (v5a) ────────
+    # PR v5a : corrige slides 8, 9, 10 (visibles = idx 7, 8, 9) avec
+    # accès direct par cellule pour éviter les substitutions string
+    # ambiguës (plusieurs cellules ont 2000$, 5000$, "8", etc.).
+    # Les variables nécessaires (frais autres, équité) sont recalculées
+    # ici à partir de rec/_results_local pour cohérence avec
+    # `_build_substitutions` (DRY évitable : section additive v5a).
+    _achat_local = (_results_local or {}).get("scenarios", {}).get("achat", {}) or {}
+    _aph50_local = (_results_local or {}).get("scenarios", {}).get("refi_aph_50", {}) or {}
+    _aph100_local = (_results_local or {}).get("scenarios", {}).get("refi_aph_100", {}) or {}
+    _frais_breakdown = (_results_local or {}).get("frais_demarrage_breakdown") or {}
+    _frais_overrides: Dict[str, float] = {}
+    if rec.frais_demarrage_overrides_json:
+        try:
+            _frais_overrides = {
+                k: float(v or 0)
+                for k, v in (json.loads(rec.frais_demarrage_overrides_json) or {}).items()
+            }
+        except Exception:  # noqa: BLE001
+            _frais_overrides = {}
+    _taxes_bienvenue_local = float(_frais_breakdown.get("taxes_mutation", 0) or 0)
+    if not _taxes_bienvenue_local:
+        _taxes_bienvenue_local = float(_frais_overrides.get("taxes_mutation", 0) or 0)
+    _duree_proj_local = int(rec.duree_projet_annees or 1)
+    _taux_b_local = float(rec.taux_interet_preteur_b_projet_pct or 8.0) / 100.0
+    _mdf_b_local = float(rec.mdf_preteur_b or 0)
+    _interet_revenus_local = _mdf_b_local * _taux_b_local * _duree_proj_local if _mdf_b_local else 0.0
+    if not _interet_revenus_local:
+        _interet_revenus_local = float(
+            (_results_local or {}).get("interet_revenus_projet", 0) or 0
+        )
+    # Frais autres détaillés : depuis overrides fiche ou défauts industrie
+    frais_evaluateur = float(_frais_overrides.get("evaluateur", 2000) or 2000)
+    frais_evaluateur_2 = float(_frais_overrides.get("evaluateur_2", 2000) or 2000)
+    frais_inspection = float(_frais_overrides.get("inspection", 3000) or 3000)
+    frais_avocat = float(_frais_overrides.get("avocat", 5000) or 5000)
+    frais_notaire = float(_frais_overrides.get("notaire", 2000) or 2000)
+    frais_notaire_2 = float(_frais_overrides.get("notaire_2", 2000) or 2000)
+    frais_rapport_eff = float(_frais_overrides.get("rapport_efficacite", 5000) or 5000)
+    frais_courtier_1 = float(_frais_overrides.get("courtier_hypothecaire_1", 12000) or 12000)
+    frais_courtier_2 = float(_frais_overrides.get("courtier_hypothecaire_2", 25000) or 25000)
+    # Total frais autres (re-calculé avec les valeurs effectivement utilisées)
+    frais_autres_total = (
+        frais_courtier_1 + frais_courtier_2 + _taxes_bienvenue_local
+        + frais_evaluateur + frais_evaluateur_2 + frais_inspection
+        + frais_avocat + frais_notaire + frais_notaire_2
+        + frais_rapport_eff + _interet_revenus_local
+    )
+    # Équité scénarios refi pour slide 10
+    _pret_max_achat_local = float(
+        _achat_local.get("financement", 0) or rec_asking * 0.75
+    )
+    _pret_max_aph50_local = float(_aph50_local.get("financement", 0) or 0)
+    _pret_max_aph100_local = float(_aph100_local.get("financement", 0) or 0)
+    equite_aph50_signed = _pret_max_aph50_local - _pret_max_achat_local
+    equite_aph100_signed = _pret_max_aph100_local - _pret_max_achat_local
+    investissement_requis_val = float(
+        rec.mdf_preteur_b
+        or (_results_local or {}).get("mdf_preteur_b", 0)
+        or 0
+    )
+
+    # ─── Slide 8 visible (idx 7) — Finances Achat ────────────────
+    # CELL[4][1] = Nombre de logements. Le template a "8" hardcodé.
+    if len(prs.slides) > 7 and rec_nb_log > 0:
+        _replace_table_cell_text(
+            prs.slides[7], "Table 2", 4, 1, str(rec_nb_log)
+        )
+
+    # ─── Slide 9 visible (idx 8) — Optimisation ──────────────────
+    # Colonne "Frais autres" (col 7) : 7 cellules génériques (rows
+    # 5-11) qui avaient le même placeholder text (2000$/3000$/5000$)
+    # — impossible à différencier par sub texte. On les remplace ici
+    # par cellule. Total en CELL[13][7].
+    if len(prs.slides) > 8:
+        s8 = prs.slides[8]
+        _replace_table_cell_text(
+            s8, "Table 2", 5, 7, _money_long(frais_evaluateur)
+        )
+        _replace_table_cell_text(
+            s8, "Table 2", 6, 7, _money_long(frais_evaluateur_2)
+        )
+        _replace_table_cell_text(
+            s8, "Table 2", 7, 7, _money_long(frais_inspection)
+        )
+        _replace_table_cell_text(
+            s8, "Table 2", 8, 7, _money_long(frais_avocat)
+        )
+        _replace_table_cell_text(
+            s8, "Table 2", 9, 7, _money_long(frais_notaire)
+        )
+        _replace_table_cell_text(
+            s8, "Table 2", 10, 7, _money_long(frais_notaire_2)
+        )
+        _replace_table_cell_text(
+            s8, "Table 2", 11, 7, _money_long(frais_rapport_eff)
+        )
+        # Total frais autres CELL[13][7] : re-sub directe (le total
+        # est recalculé proprement avec les valeurs effectives utilisées,
+        # alors que la sub texte « 108 000$ » du bloc principal risque
+        # de rater si le total réel diffère du template)
+        _replace_table_cell_text(
+            s8, "Table 2", 13, 7, _money_long(frais_autres_total)
+        )
+
+        # Condensation lignes vides du tableau rénos.
+        # Layout template : 21 rows. body rénos = rows 2..17 (16 slots),
+        # row 18 = Total, row 19 = "***Certains frais financés".
+        # On condense uniquement le body (rows 2..17). Les cellules
+        # dont le libellé col 0 a été substitué par "" sont retirées
+        # physiquement (le Total et la mention restent en bas).
+        # ⚠️ DOIT être après les substitutions de placeholders (faites
+        # via _replace_in_slide dans la boucle substitutions).
+        _condense_empty_table_rows(
+            s8, "Table 2", body_start=2, body_end_exclusive=18,
+            col_to_check=0,
+        )
+
+    # ─── Slide 10 visible (idx 9) — Refinancement ────────────────
+    # CELL[5][1] = Nombre de logements ("8" hardcodé dans template).
+    # CELL[9][4] = Équité scénario 1 (AHP50), CELL[9][7] = scénario 2
+    # (AHP100). Logique cohérente cellule + callout TextBox 18 :
+    #   - équité du scénario >= 0 → afficher montant en $ (format
+    #     unifié sans espace de tête grâce à _money_long_signed v5a)
+    #   - équité < 0 → afficher "Jusqu'à XX%" (cohérent avec callout
+    #     qui devient lui aussi un %)
+    if len(prs.slides) > 9:
+        s9 = prs.slides[9]
+        if rec_nb_log > 0:
+            _replace_table_cell_text(
+                s9, "Table 2", 5, 1, str(rec_nb_log)
+            )
+        # Équité scénario 1 (AHP 50 pts)
+        if equite_aph50_signed < 0:
+            txt_eq1 = _equity_refi_pct(
+                equite_aph50_signed, investissement_requis_val
+            )
+        else:
+            txt_eq1 = _money_long_signed(equite_aph50_signed)
+        _replace_table_cell_text(s9, "Table 2", 9, 4, txt_eq1)
+        # Équité scénario 2 (AHP 100 pts)
+        if equite_aph100_signed < 0:
+            txt_eq2 = _equity_refi_pct(
+                equite_aph100_signed, investissement_requis_val
+            )
+        else:
+            txt_eq2 = _money_long_signed(equite_aph100_signed)
+        _replace_table_cell_text(s9, "Table 2", 9, 7, txt_eq2)
 
     # Slide 2 — nb_etages (legacy : déjà fait dans la section slide 3
     # ci-dessus — on garde l'appel pour rétrocompat)
