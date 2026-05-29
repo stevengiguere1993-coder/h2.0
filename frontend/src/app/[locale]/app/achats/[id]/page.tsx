@@ -369,6 +369,25 @@ export default function AchatDetailPage() {
     }
   }
 
+  const [rotating, setRotating] = useState(false);
+  async function rotateReceipt(direction: "left" | "right") {
+    setRotating(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/achats/${id}/receipt/rotate?direction=${direction}`,
+        { method: "POST" }
+      );
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      // Réouvre le reçu pivoté dans un nouvel onglet.
+      await openReceipt();
+    } catch (err) {
+      setError(`Rotation échouée : ${(err as Error).message}`);
+    } finally {
+      setRotating(false);
+    }
+  }
+
   async function onDelete() {
     if (!a) return;
     if (!(await confirm(`Supprimer l'achat ${a.reference} ?`))) return;
@@ -740,6 +759,24 @@ export default function AchatDetailPage() {
                       className="btn-secondary text-xs"
                     >
                       Ouvrir
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => rotateReceipt("left")}
+                      disabled={rotating}
+                      title="Pivoter de 90° vers la gauche"
+                      className="inline-flex items-center gap-1 rounded-lg border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs text-white/80 hover:border-accent-500 hover:text-white disabled:opacity-60"
+                    >
+                      ↺ Pivoter gauche
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => rotateReceipt("right")}
+                      disabled={rotating}
+                      title="Pivoter de 90° vers la droite"
+                      className="inline-flex items-center gap-1 rounded-lg border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs text-white/80 hover:border-accent-500 hover:text-white disabled:opacity-60"
+                    >
+                      ↻ Pivoter droite
                     </button>
                     <button
                       type="button"

@@ -1,7 +1,7 @@
 """Upload / download / delete the scanned receipt image attached to
 an Achat (purchase order)."""
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import select
 
@@ -94,6 +94,50 @@ async def download_receipt(
         media_type=ct,
         headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
+
+
+@router.post(
+    "/{achat_id}/receipt/rotate",
+    summary="Pivoter la facture/reçu attaché de 90° (gauche ou droite)",
+)
+async def rotate_receipt(
+    achat_id: int,
+    db: DBSession,
+    _: CurrentUser,
+    direction: str = Query(
+        default="left",
+        pattern="^(left|right)$",
+        description="Sens de rotation : 'left' (anti-horaire) ou 'right'.",
+    ),
+) -> dict:
+    """Fait pivoter de 90° le PDF/image stocké, et le réenregistre.
+    Permet de corriger un reçu mal orienté directement depuis la fiche."""
+    ac = (
+        await db.execute(select(Achat).where(Achat.id == achat_id))
+    ).scalar_one_or_none()
+    if ac is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Achat not found")
+    await db.refresh(ac, attribute_names=["receipt_image"])
+    if not ac.receipt_image:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Aucune facture attachée à cet achat."
+        )
+
+    from app.services.receipt_rotate import rotate_receipt_blob
+
+    rotated = rotate_receipt_blob(
+        bytes(ac.receipt_image),
+        ac.receipt_image_content_type or "",
+        clockwise=(direction == "right"),
+    )
+    if rotated is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Rotation impossible pour ce format de fichier.",
+        )
+    ac.receipt_image = rotated
+    await db.flush()
+    return {"rotated": True, "direction": direction}
 
 
 @router.delete(
