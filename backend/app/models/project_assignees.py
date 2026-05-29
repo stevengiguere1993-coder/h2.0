@@ -57,6 +57,17 @@ class ProjectPhaseAssignee(Base):
         nullable=True,
         index=True,
     )
+    # Sous-traitant payé à l'heure (vs forfait). Quand vrai, son coût
+    # planifié = heures de la phase × worker_count × taux horaire entre
+    # dans le « Coût projeté » (main-d'œuvre). Les forfaits restent
+    # exclus (leur coût est dans leur propre contrat).
+    hourly_billed: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="false"
+    )
+    # Nombre de travailleurs prévus pour cet assigné sur la phase.
+    worker_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
