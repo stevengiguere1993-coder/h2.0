@@ -71,8 +71,16 @@ class FinancesResponse(BaseModel):
     actual_labour_cost: float
     actual_labour_hours: float
     actual_total_cost: float
+    # Coût réel HORS TAXES — sert au calcul du profit et à l'avancement
+    # du contrat (comparé au revenu HT). La carte « Coût actuel » affiche
+    # `actual_total_cost` (TTC).
+    actual_total_cost_ht: float = 0.0
     actual_profit: float
     actual_margin_pct: float
+    # Type de facturation de la soumission liée : "forfaitaire",
+    # "estime" ou "contrat". Détermine la base du profit réel et le
+    # défaut « refacturable » des achats.
+    billing_kind: str = "forfaitaire"
 
     service_lines: List[CostLine]   # from soumission items
     material_lines: List[CostLine]  # from achats
@@ -132,49 +140,83 @@ async def _compute_finances(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
 
     # --- Projected from the linked soumission's items ---
+    # Coût projeté des services = NOS coûts (cost_per_unit interne), PAS
+    # le prix de vente au client. Affichés taxes incluses (TTC) — c'est
+    # ce qu'on débourse réellement chez le fournisseur. Le profit, lui,
+    # se calcule hors taxes (voir plus bas).
     service_lines: List[CostLine] = []
     projected_revenue = 0.0
+    service_cost_ht = 0.0
+    service_cost_ttc = 0.0
+    billing_kind = "forfaitaire"
+    sm: Optional[Soumission] = None
+    items: list = []
+
     if proj.soumission_id:
-        items = (
-            await db.execute(
-                select(SoumissionItem).where(
-                    SoumissionItem.soumission_id == proj.soumission_id
+        items = list(
+            (
+                await db.execute(
+                    select(SoumissionItem).where(
+                        SoumissionItem.soumission_id == proj.soumission_id
+                    )
                 )
-            )
-        ).scalars().all()
+            ).scalars().all()
+        )
         for it in items:
+            qty = float(it.quantity)
+            cpu = float(it.cost_per_unit or 0)  # coût interne unitaire HT
+            factor = 1.0
+            if bool(it.tps_applicable):
+                factor += 0.05
+            if bool(it.tvq_applicable):
+                factor += 0.09975
+            line_ht = qty * cpu
+            line_ttc = round(line_ht * factor, 2)
+            service_cost_ht += line_ht
+            service_cost_ttc += line_ttc
             service_lines.append(
                 CostLine(
                     label=(it.description or f"Item #{it.id}"),
-                    quantity=float(it.quantity),
-                    unit_cost=float(it.unit_price),
-                    total=float(it.total),
+                    quantity=qty,
+                    unit_cost=round(cpu * factor, 2),
+                    total=line_ttc,
                 )
             )
-        # projected revenue = facture client (soumission total if set else sum items)
         sm = (
             await db.execute(
                 select(Soumission).where(Soumission.id == proj.soumission_id)
             )
         ).scalar_one_or_none()
-        if sm and sm.total is not None:
-            projected_revenue = float(sm.total)
-        else:
-            projected_revenue = sum(it.total for it in service_lines)
+        if sm is not None:
+            billing_kind = (
+                "contrat"
+                if (sm.kind or "") == "contract"
+                else (sm.pricing_kind or "forfaitaire")
+            )
 
-        # Revenu HORS TAXES : prend le subtotal de la soumission si
-        # disponible (c'est exactement somme(quantité × prix unitaire)
-        # avant TPS/TVQ). Fallback : on dérive du TTC via 1.14975.
-        if sm and sm.subtotal is not None:
-            projected_revenue_ex_tax = float(sm.subtotal)
-        elif projected_revenue > 0:
-            projected_revenue_ex_tax = round(projected_revenue / 1.14975, 2)
-        else:
-            projected_revenue_ex_tax = sum(float(it.total) for it in service_lines)
+    # Revenu contractuel = total de la soumission (TTC) si liée, sinon
+    # le budget du projet (synchronisé sur la soumission, ou saisi
+    # manuellement). C'est le « montant de la soumission » du calcul de
+    # profit. Sans cette retombée sur le budget, un projet sans
+    # soumission liée affichait un revenu nul → profit = −coûts.
+    if sm is not None and sm.total is not None:
+        projected_revenue = float(sm.total)
+    elif proj.budget is not None:
+        projected_revenue = float(proj.budget)
+    elif items:
+        projected_revenue = sum(float(it.total) for it in items)
+
+    # Revenu HORS TAXES (assiette du profit) : subtotal de la soumission
+    # si dispo, sinon on dérive du TTC via 1.14975.
+    if sm is not None and sm.subtotal is not None:
+        projected_revenue_ex_tax = float(sm.subtotal)
+    elif projected_revenue > 0:
+        projected_revenue_ex_tax = round(projected_revenue / 1.14975, 2)
     else:
         projected_revenue_ex_tax = 0.0
 
-    projected_service_cost = sum(it.total for it in service_lines)
+    # Affiché dans la carte « Coût projeté » : services TTC.
+    projected_service_cost = round(service_cost_ttc, 2)
 
     # --- Projected labour ---
     # Heuristique :
@@ -359,15 +401,20 @@ async def _compute_finances(
     projected_labour_hours = round(projected_labour_hours, 2)
     projected_labour_cost = round(projected_labour_cost, 2)
 
+    # Carte « Coût projeté » : services TTC + main-d'œuvre (sans taxe de
+    # vente — la paie/CNESST/CCQ ne portent pas de TPS/TVQ).
     projected_total_cost = round(
-        projected_service_cost + projected_labour_cost, 2
+        service_cost_ttc + projected_labour_cost, 2
     )
-    # Profit = revenu HORS TAXES − coûts. Les TPS/TVQ ne sont pas du
-    # revenu (elles sont perçues pour le gouvernement), donc on les
-    # exclut du calcul. Les coûts (achats, main-d'œuvre) sont déjà HT
-    # côté achats — les CTI/RTI ne sont pas considérés ici.
+    # Coût projeté HORS TAXES — sert UNIQUEMENT au calcul du profit.
+    projected_total_cost_ht = round(
+        service_cost_ht + projected_labour_cost, 2
+    )
+    # Profit = revenu HORS TAXES − coût HORS TAXES. Les TPS/TVQ ne sont
+    # ni un revenu (perçues pour le gouvernement) ni un coût net (CTI/RTI
+    # récupérables), donc on calcule le profit hors taxes des deux côtés.
     projected_profit = round(
-        projected_revenue_ex_tax - projected_total_cost, 2
+        projected_revenue_ex_tax - projected_total_cost_ht, 2
     )
     projected_margin_pct = (
         round(projected_profit / projected_revenue_ex_tax * 100, 1)
@@ -390,7 +437,9 @@ async def _compute_finances(
         )
         for a in achats
     ]
-    actual_material_cost = sum(m.total for m in material_lines)
+    actual_material_cost = sum(m.total for m in material_lines)  # TTC affiché
+    # Matériel HORS TAXES — pour le calcul du profit (hors taxes).
+    actual_material_cost_ht = sum(float(a.amount or 0) for a in achats)
 
     # Labour — sum of approved punches on this project
     punches = (
@@ -440,7 +489,12 @@ async def _compute_finances(
         actual_labour_cost += float(p.hours or 0) * cost_per_hour
     actual_labour_cost = round(actual_labour_cost, 2)
 
+    # TTC pour l'affichage de la carte « Coût actuel ».
     actual_total_cost = round(actual_material_cost + actual_labour_cost, 2)
+    # HORS TAXES pour le calcul du profit + l'avancement du contrat.
+    actual_total_cost_ht = round(
+        actual_material_cost_ht + actual_labour_cost, 2
+    )
 
     # Invoicing — liste des factures du projet avec leur statut, total
     # et montant payé. Sert à la fois aux totaux agrégés et au listing
@@ -562,13 +616,21 @@ async def _compute_finances(
 
     balance = max(0.0, invoiced - paid_sum)
 
-    # Profit réel = (revenu contractuel HT + extras facturés HT) -
-    # coûts engagés réels. Les taxes (TPS/TVQ) ne sont jamais incluses
-    # — elles sont à remettre au gouvernement et exposées séparément
-    # via `taxes_collected`. Les extras bonifient le profit puisqu'ils
-    # sont de nouveaux revenus hors-contrat (ex. travaux ajoutés).
-    revenue_base = projected_revenue_ex_tax + extras_billed_amount
-    actual_profit = round(revenue_base - actual_total_cost, 2)
+    # Profit réel — assiette de revenu selon le type de soumission :
+    #   • FORFAITAIRE : prix fixe garanti. Revenu = soumission HT +
+    #     extras facturés HT (travaux ajoutés hors-contrat). Le profit
+    #     vient de la maîtrise des coûts sous le prix fixe.
+    #   • ESTIMÉ / À CONTRAT (refacturable) : on facture en fonction du
+    #     réel. Revenu = montant RÉELLEMENT facturé HT (contrat + extras,
+    #     déjà inclus dans invoiced_ex_tax). Profit = facturé − coût réel.
+    # Les taxes (TPS/TVQ) ne sont jamais incluses : remises au
+    # gouvernement, exposées séparément via `taxes_collected`. Coût pris
+    # hors taxes (CTI/RTI récupérables).
+    if billing_kind == "forfaitaire":
+        revenue_base = projected_revenue_ex_tax + extras_billed_amount
+    else:
+        revenue_base = invoiced_ex_tax
+    actual_profit = round(revenue_base - actual_total_cost_ht, 2)
     actual_margin_pct = (
         round(actual_profit / revenue_base * 100, 1)
         if revenue_base > 0 else 0.0
@@ -587,8 +649,10 @@ async def _compute_finances(
         actual_labour_cost=actual_labour_cost,
         actual_labour_hours=round(actual_labour_hours, 2),
         actual_total_cost=actual_total_cost,
+        actual_total_cost_ht=actual_total_cost_ht,
         actual_profit=actual_profit,
         actual_margin_pct=actual_margin_pct,
+        billing_kind=billing_kind,
         service_lines=service_lines,
         material_lines=material_lines,
         invoiced_amount=round(invoiced, 2),

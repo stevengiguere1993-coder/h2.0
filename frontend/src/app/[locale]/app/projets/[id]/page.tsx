@@ -1593,8 +1593,10 @@ type Finances = {
   actual_labour_cost: number;
   actual_labour_hours: number;
   actual_total_cost: number;
+  actual_total_cost_ht: number;
   actual_profit: number;
   actual_margin_pct: number;
+  billing_kind: string;
   service_lines: { label: string; quantity: number; unit_cost: number; total: number }[];
   material_lines: { label: string; quantity: number; unit_cost: number; total: number }[];
   invoiced_amount: number;
@@ -2007,7 +2009,7 @@ function FinancesTab({
           pour comparer ce qui était prévu et ce qui se matérialise. */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <FinanceKpi
-          label="Coût projeté"
+          label="Coût projeté (TTC)"
           value={fmtMoney(data.projected_total_cost)}
           sub={`Services ${fmtMoney(
             data.projected_service_cost
@@ -2021,7 +2023,7 @@ function FinancesTab({
           tone={data.projected_profit >= 0 ? "emerald" : "rose"}
         />
         <FinanceKpi
-          label="Coût actuel"
+          label="Coût actuel (TTC)"
           value={fmtMoney(data.actual_total_cost)}
           sub={`Matériaux ${fmtMoney(
             data.actual_material_cost
@@ -2033,7 +2035,11 @@ function FinancesTab({
           value={fmtMoney(data.actual_profit)}
           sub={`${data.actual_margin_pct.toFixed(1)} % marge · ${
             profitDiff >= 0 ? "+" : ""
-          }${fmtMoney(profitDiff)} vs prévu · hors taxes`}
+          }${fmtMoney(profitDiff)} vs prévu · hors taxes${
+            data.billing_kind === "forfaitaire"
+              ? ""
+              : " · basé sur le facturé"
+          }`}
           tone={data.actual_profit >= 0 ? "emerald" : "rose"}
         />
       </div>
@@ -2041,7 +2047,7 @@ function FinancesTab({
       {/* Avancement du contrat — coût réel vs soumission acceptée
           (synthèse importée du Récap). */}
       <RecapContractProgressCard
-        actualCost={data.actual_total_cost}
+        actualCost={data.actual_total_cost_ht}
         contractRevenueExTax={data.projected_revenue_ex_tax}
         invoicedExTax={data.invoiced_amount_ex_tax}
         paidAmount={data.paid_amount}
