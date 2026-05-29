@@ -1322,6 +1322,43 @@ async def init_db() -> None:
                              - ROUND(COALESCE(amount_taxes, 0) * 5.0 / 14.975, 2)
             WHERE amount_tps IS NULL
             """,
+            # Rétro-lien projet ↔ soumission : un projet créé manuellement
+            # (ou par une ancienne version) peut avoir budget = total de la
+            # soumission mais soumission_id NULL → impossible d'importer
+            # les items de la soumission dans une facture, et la carte
+            # kanban tombe sur le titre au lieu de l'adresse. On relie au
+            # devis ACCEPTÉ correspondant (même prospect ou même client ET
+            # même montant total). Idempotent : ne touche que soumission_id
+            # NULL.
+            """
+            UPDATE projects p
+            SET soumission_id = (
+                SELECT s.id FROM soumissions s
+                WHERE s.status = 'accepted'
+                  AND s.total = p.budget
+                  AND (
+                    (p.contact_request_id IS NOT NULL
+                       AND s.contact_request_id = p.contact_request_id)
+                    OR (p.client_id IS NOT NULL
+                       AND s.client_id = p.client_id)
+                  )
+                ORDER BY s.accepted_at DESC NULLS LAST, s.id DESC
+                LIMIT 1
+            )
+            WHERE p.soumission_id IS NULL
+              AND p.budget IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM soumissions s
+                WHERE s.status = 'accepted'
+                  AND s.total = p.budget
+                  AND (
+                    (p.contact_request_id IS NOT NULL
+                       AND s.contact_request_id = p.contact_request_id)
+                    OR (p.client_id IS NOT NULL
+                       AND s.client_id = p.client_id)
+                  )
+              )
+            """,
             # Table de marqueurs pour les backfills à exécuter UNE seule
             # fois (par opposition aux UPDATE idempotents ci-dessus qui
             # peuvent retourner à chaque boot). Permet d'appliquer une
