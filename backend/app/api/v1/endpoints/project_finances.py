@@ -327,6 +327,46 @@ async def _compute_finances(
                     pa.employe_id
                 )
 
+        # Sous-traitants payés À L'HEURE assignés aux phases : leur coût
+        # planifié entre dans la main-d'œuvre projetée (heures × nb
+        # travailleurs × taux horaire de leur fiche). Les sous-traitants
+        # au forfait (hourly_billed=False) restent exclus — leur coût est
+        # porté par leur propre contrat.
+        phase_hourly_subs: dict[int, list[tuple[float, int]]] = {}
+        if phases:
+            from app.models.sous_traitant import SousTraitant as _ST
+
+            st_rows = (
+                await db.execute(
+                    select(
+                        _PPA.phase_id,
+                        _PPA.sous_traitant_id,
+                        _PPA.worker_count,
+                    ).where(
+                        _PPA.phase_id.in_([p.id for p in phases]),
+                        _PPA.sous_traitant_id.is_not(None),
+                        _PPA.hourly_billed.is_(True),
+                    )
+                )
+            ).all()
+            st_ids = {int(r[1]) for r in st_rows}
+            st_rates: dict[int, float] = {}
+            if st_ids:
+                rate_rows = (
+                    await db.execute(
+                        select(_ST.id, _ST.hourly_rate).where(
+                            _ST.id.in_(st_ids)
+                        )
+                    )
+                ).all()
+                st_rates = {int(i): float(r or 0) for i, r in rate_rows}
+            for phase_id, st_id, wc in st_rows:
+                rate = st_rates.get(int(st_id), 0.0)
+                if rate > 0:
+                    phase_hourly_subs.setdefault(int(phase_id), []).append(
+                        (rate, int(wc or 1))
+                    )
+
         for ph in phases:
             # duration_days est décimal (Numeric 6,2) : la planification
             # autorise les demi-journées et fractions — 0.5 j = 4 h,
@@ -338,6 +378,14 @@ async def _compute_finances(
             if days <= 0:
                 continue
             hours = days * 8
+
+            # Sous-traitants à l'heure de cette phase — comptés même si
+            # AUCUN employé n'est assigné (phase confiée 100 % en
+            # sous-traitance). Doit rester avant le `continue` ci-dessous.
+            for st_rate, st_wc in phase_hourly_subs.get(ph.id, []):
+                sub_h = hours * max(1, st_wc)
+                projected_labour_hours += sub_h
+                projected_labour_cost += sub_h * st_rate
 
             # Main-d'œuvre planifiée = EMPLOYÉS Horizon assignés à la
             # phase (legacy single + N-M moderne). Aucun employé sur la

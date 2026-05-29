@@ -67,6 +67,20 @@ class PhaseUpdate(BaseModel):
     assignee_sous_traitant_ids: Optional[List[int]] = None
 
 
+class SousTraitantSetting(BaseModel):
+    """Paramètres par assignation sous-traitant↔phase : payé à l'heure
+    (compte dans le coût projeté) et nombre de travailleurs prévus."""
+
+    sous_traitant_id: int
+    hourly_billed: bool = False
+    worker_count: int = 1
+
+
+class SousTraitantSettingUpdate(BaseModel):
+    hourly_billed: Optional[bool] = None
+    worker_count: Optional[int] = Field(default=None, ge=1, le=999)
+
+
 class PhaseRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -85,6 +99,10 @@ class PhaseRead(BaseModel):
     # Nouveaux champs — vérités de référence.
     assignee_employe_ids: List[int] = Field(default_factory=list)
     assignee_sous_traitant_ids: List[int] = Field(default_factory=list)
+    # Paramètres horaires par sous-traitant assigné.
+    sous_traitant_settings: List[SousTraitantSetting] = Field(
+        default_factory=list
+    )
     created_at: datetime
     updated_at: datetime
 
@@ -138,10 +156,43 @@ async def _load_assignee_ids(
     return out
 
 
+async def _load_st_settings(
+    db, phase_ids: List[int]
+) -> dict[int, List[SousTraitantSetting]]:
+    """Return {phase_id: [SousTraitantSetting,...]} pour les assignés
+    sous-traitants des phases données."""
+    if not phase_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(
+                ProjectPhaseAssignee.phase_id,
+                ProjectPhaseAssignee.sous_traitant_id,
+                ProjectPhaseAssignee.hourly_billed,
+                ProjectPhaseAssignee.worker_count,
+            ).where(
+                ProjectPhaseAssignee.phase_id.in_(phase_ids),
+                ProjectPhaseAssignee.sous_traitant_id.is_not(None),
+            )
+        )
+    ).all()
+    out: dict[int, List[SousTraitantSetting]] = {pid: [] for pid in phase_ids}
+    for phase_id, st_id, hourly, wc in rows:
+        out[int(phase_id)].append(
+            SousTraitantSetting(
+                sous_traitant_id=int(st_id),
+                hourly_billed=bool(hourly),
+                worker_count=int(wc or 1),
+            )
+        )
+    return out
+
+
 def _phase_read(
     ph: ProjectPhase,
     assignee_employe_ids: List[int],
     assignee_sous_traitant_ids: List[int],
+    st_settings: Optional[List[SousTraitantSetting]] = None,
 ) -> PhaseRead:
     # Legacy scalars = « primary » assignee, c.-à-d. première entrée
     # de la liste. Permet à tous les lecteurs existants de continuer
@@ -167,6 +218,7 @@ def _phase_read(
         assignee_sous_traitant_id=primary_st,
         assignee_employe_ids=assignee_employe_ids,
         assignee_sous_traitant_ids=assignee_sous_traitant_ids,
+        sous_traitant_settings=st_settings or [],
         created_at=ph.created_at,
         updated_at=ph.updated_at,
     )
@@ -200,6 +252,25 @@ async def _replace_assignees(
             int(employe_ids[0]) if employe_ids else None
         )
     if sous_traitant_ids is not None:
+        # On préserve les paramètres horaires (payé à l'heure / nb
+        # travailleurs) des sous-traitants qui restent, car le remplace
+        # supprime puis recrée les lignes à chaque changement de la liste.
+        prev = (
+            await db.execute(
+                select(
+                    ProjectPhaseAssignee.sous_traitant_id,
+                    ProjectPhaseAssignee.hourly_billed,
+                    ProjectPhaseAssignee.worker_count,
+                ).where(
+                    ProjectPhaseAssignee.phase_id == phase.id,
+                    ProjectPhaseAssignee.sous_traitant_id.is_not(None),
+                )
+            )
+        ).all()
+        prev_meta = {
+            int(st_id): (bool(hourly), int(wc or 1))
+            for st_id, hourly, wc in prev
+        }
         await db.execute(
             delete(ProjectPhaseAssignee).where(
                 ProjectPhaseAssignee.phase_id == phase.id,
@@ -207,9 +278,13 @@ async def _replace_assignees(
             )
         )
         for st_id in dict.fromkeys(sous_traitant_ids):
+            hourly, wc = prev_meta.get(int(st_id), (False, 1))
             db.add(
                 ProjectPhaseAssignee(
-                    phase_id=phase.id, sous_traitant_id=int(st_id)
+                    phase_id=phase.id,
+                    sous_traitant_id=int(st_id),
+                    hourly_billed=hourly,
+                    worker_count=wc,
                 )
             )
         phase.assignee_sous_traitant_id = (
@@ -260,9 +335,13 @@ async def list_phases(
             .order_by(ProjectPhase.position.asc(), ProjectPhase.id.asc())
         )
     ).scalars().all()
-    assignees = await _load_assignee_ids(db, [r.id for r in rows])
+    phase_ids = [r.id for r in rows]
+    assignees = await _load_assignee_ids(db, phase_ids)
+    st_meta = await _load_st_settings(db, phase_ids)
     return [
-        _phase_read(r, *assignees.get(r.id, ([], [])))
+        _phase_read(
+            r, *assignees.get(r.id, ([], [])), st_meta.get(r.id, [])
+        )
         for r in rows
     ]
 
@@ -314,7 +393,10 @@ async def create_phase(
     await _replace_assignees(db, ph, emp_list, st_list)
     await db.refresh(ph)
     assignees = await _load_assignee_ids(db, [ph.id])
-    return _phase_read(ph, *assignees.get(ph.id, ([], [])))
+    st_meta = await _load_st_settings(db, [ph.id])
+    return _phase_read(
+        ph, *assignees.get(ph.id, ([], [])), st_meta.get(ph.id, [])
+    )
 
 
 @router.patch(
@@ -372,7 +454,61 @@ async def update_phase(
 
     await db.refresh(ph)
     assignees = await _load_assignee_ids(db, [ph.id])
-    return _phase_read(ph, *assignees.get(ph.id, ([], [])))
+    st_meta = await _load_st_settings(db, [ph.id])
+    return _phase_read(
+        ph, *assignees.get(ph.id, ([], [])), st_meta.get(ph.id, [])
+    )
+
+
+@router.patch(
+    "/{project_id}/phases/{phase_id}/sous-traitants/{st_id}",
+    response_model=PhaseRead,
+)
+async def update_phase_sous_traitant(
+    project_id: int,
+    phase_id: int,
+    st_id: int,
+    data: SousTraitantSettingUpdate,
+    db: DBSession,
+    user: CurrentUser,
+) -> PhaseRead:
+    """Met à jour les paramètres horaires d'un sous-traitant assigné à
+    une phase (payé à l'heure + nombre de travailleurs)."""
+    await _ensure_project_visible(db, project_id, user)
+    ph = (
+        await db.execute(
+            select(ProjectPhase).where(
+                ProjectPhase.id == phase_id,
+                ProjectPhase.project_id == project_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if ph is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Phase not found")
+    row = (
+        await db.execute(
+            select(ProjectPhaseAssignee).where(
+                ProjectPhaseAssignee.phase_id == phase_id,
+                ProjectPhaseAssignee.sous_traitant_id == st_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "Sous-traitant non assigné à cette phase.",
+        )
+    if data.hourly_billed is not None:
+        row.hourly_billed = data.hourly_billed
+    if data.worker_count is not None:
+        row.worker_count = data.worker_count
+    await db.flush()
+    await db.refresh(ph)
+    assignees = await _load_assignee_ids(db, [ph.id])
+    st_meta = await _load_st_settings(db, [ph.id])
+    return _phase_read(
+        ph, *assignees.get(ph.id, ([], [])), st_meta.get(ph.id, [])
+    )
 
 
 @router.delete(
@@ -469,8 +605,12 @@ async def list_all_phases(
             return []
         stmt = stmt.where(ProjectPhase.project_id.in_(visible))
     rows = (await db.execute(stmt)).scalars().all()
-    assignees = await _load_assignee_ids(db, [r.id for r in rows])
+    phase_ids = [r.id for r in rows]
+    assignees = await _load_assignee_ids(db, phase_ids)
+    st_meta = await _load_st_settings(db, phase_ids)
     return [
-        _phase_read(r, *assignees.get(r.id, ([], [])))
+        _phase_read(
+            r, *assignees.get(r.id, ([], [])), st_meta.get(r.id, [])
+        )
         for r in rows
     ]

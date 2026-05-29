@@ -193,6 +193,8 @@ async def init_db() -> None:
             ("clients", "language", "VARCHAR(8) NOT NULL DEFAULT 'fr'"),
             ("clients", "is_company", "BOOLEAN NOT NULL DEFAULT FALSE"),
             ("clients", "representative", "VARCHAR(255)"),
+            ("project_phase_assignees", "hourly_billed", "BOOLEAN NOT NULL DEFAULT FALSE"),
+            ("project_phase_assignees", "worker_count", "INTEGER NOT NULL DEFAULT 1"),
             ("achats", "receipt_image", "BYTEA"),
             ("achats", "receipt_image_content_type", "VARCHAR(100)"),
             ("achats", "amount_tps", "NUMERIC(12,2)"),

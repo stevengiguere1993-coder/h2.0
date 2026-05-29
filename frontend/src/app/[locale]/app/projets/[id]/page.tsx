@@ -2483,6 +2483,11 @@ type Phase = {
   assignee_sous_traitant_id: number | null;
   assignee_employe_ids: number[];
   assignee_sous_traitant_ids: number[];
+  sous_traitant_settings?: Array<{
+    sous_traitant_id: number;
+    hourly_billed: boolean;
+    worker_count: number;
+  }>;
   created_at: string;
   updated_at: string;
 };
@@ -2530,7 +2535,12 @@ function PlanificationTab({ projectId }: { projectId: number }) {
     Array<{ id: number; full_name: string }>
   >([]);
   const [sousTraitants, setSousTraitants] = useState<
-    Array<{ id: number; full_name: string; trade?: string | null }>
+    Array<{
+      id: number;
+      full_name: string;
+      trade?: string | null;
+      hourly_rate?: number | null;
+    }>
   >([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -2571,6 +2581,7 @@ function PlanificationTab({ projectId }: { projectId: number }) {
             id: number;
             full_name: string;
             trade?: string | null;
+            hourly_rate?: number | null;
           }>
         );
     } catch {
@@ -2759,6 +2770,27 @@ function PlanificationTab({ projectId }: { projectId: number }) {
     }
   }
 
+  async function patchPhaseSousTraitant(
+    phaseId: number,
+    stId: number,
+    patch: { hourly_billed?: boolean; worker_count?: number }
+  ) {
+    setBusyPhase(phaseId);
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/phases/${phaseId}/sous-traitants/${stId}`,
+        { method: "PATCH", body: JSON.stringify(patch) }
+      );
+      if (!res.ok) throw new Error();
+      const updated = (await res.json()) as Phase;
+      setPhases((xs) => xs.map((x) => (x.id === phaseId ? updated : x)));
+    } catch {
+      setErr("Mise à jour échouée.");
+    } finally {
+      setBusyPhase(null);
+    }
+  }
+
   async function removePhase(id: number) {
     if (!(await confirm("Supprimer cette phase ? Les tâches qui y sont seront détachées."))) return;
     setBusyPhase(id);
@@ -2926,6 +2958,9 @@ function PlanificationTab({ projectId }: { projectId: number }) {
               busyPhase={busyPhase === ph.id}
               busyTask={busyTask}
               onPatch={(patch) => patchPhase(ph.id, patch)}
+              onPatchSousTraitant={(stId, patch) =>
+                patchPhaseSousTraitant(ph.id, stId, patch)
+              }
               onRemove={() => removePhase(ph.id)}
               onMoveUp={() => movePhase(ph.id, -1)}
               onMoveDown={() => movePhase(ph.id, 1)}
@@ -3001,6 +3036,7 @@ function PhaseCard({
   busyPhase,
   busyTask,
   onPatch,
+  onPatchSousTraitant,
   onRemove,
   onMoveUp,
   onMoveDown,
@@ -3012,13 +3048,22 @@ function PhaseCard({
   index: number;
   projectId: number;
   employes: Array<{ id: number; full_name: string }>;
-  sousTraitants: Array<{ id: number; full_name: string; trade?: string | null }>;
+  sousTraitants: Array<{
+    id: number;
+    full_name: string;
+    trade?: string | null;
+    hourly_rate?: number | null;
+  }>;
   count: number;
   tasks: PhaseTask[];
   linkedEvents: LinkedEvent[];
   busyPhase: boolean;
   busyTask: number | "new" | null;
   onPatch: (patch: Partial<Phase>) => void;
+  onPatchSousTraitant: (
+    stId: number,
+    patch: { hourly_billed?: boolean; worker_count?: number }
+  ) => void;
   onRemove: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
@@ -3291,6 +3336,76 @@ function PhaseCard({
                 />
               </div>
             </div>
+            {phase.assignee_sous_traitant_ids.length > 0 ? (
+              <div className="mt-2 space-y-1.5 rounded-lg border border-brand-800 bg-brand-950/40 p-2">
+                <p className="text-[10px] uppercase tracking-wider text-white/40">
+                  Sous-traitants payés à l&apos;heure (comptés dans le coût
+                  projeté)
+                </p>
+                {phase.assignee_sous_traitant_ids.map((stId) => {
+                  const st = sousTraitants.find((s) => s.id === stId);
+                  const setting = (phase.sous_traitant_settings || []).find(
+                    (x) => x.sous_traitant_id === stId
+                  );
+                  const hourly = setting?.hourly_billed ?? false;
+                  const workers = setting?.worker_count ?? 1;
+                  return (
+                    <div
+                      key={stId}
+                      className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs"
+                    >
+                      <span className="min-w-[120px] flex-1 truncate text-white/80">
+                        {st?.full_name || `#${stId}`}
+                        {st?.hourly_rate != null ? (
+                          <span className="ml-1 text-white/40">
+                            ({fmtMoney(st.hourly_rate)}/h)
+                          </span>
+                        ) : null}
+                      </span>
+                      <label className="flex cursor-pointer items-center gap-1.5 text-white/70">
+                        <input
+                          type="checkbox"
+                          checked={hourly}
+                          disabled={busyPhase}
+                          onChange={(e) =>
+                            onPatchSousTraitant(stId, {
+                              hourly_billed: e.target.checked,
+                            })
+                          }
+                          className="h-3.5 w-3.5"
+                        />
+                        Payé à l&apos;heure
+                      </label>
+                      {hourly ? (
+                        <label className="flex items-center gap-1.5 text-white/70">
+                          Nb travailleurs
+                          <input
+                            key={`wc-${workers}`}
+                            type="number"
+                            min={1}
+                            max={999}
+                            defaultValue={workers}
+                            disabled={busyPhase}
+                            onBlur={(e) => {
+                              const v = Math.max(
+                                1,
+                                Math.round(Number(e.target.value) || 1)
+                              );
+                              if (v !== workers) {
+                                onPatchSousTraitant(stId, {
+                                  worker_count: v,
+                                });
+                              }
+                            }}
+                            className="input w-16 px-2 py-1 text-xs"
+                          />
+                        </label>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
         </div>
         <div className="flex flex-shrink-0 flex-col items-end gap-1">
