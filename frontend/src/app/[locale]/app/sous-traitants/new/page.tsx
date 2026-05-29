@@ -29,7 +29,17 @@ export default function NewSousTraitantPage() {
   const [phone, setPhone] = useState("");
   const [trades, setTrades] = useState("");
   const [regions, setRegions] = useState<string[]>([]);
+  const [customCity, setCustomCity] = useState("");
   const [rbqLicense, setRbqLicense] = useState("");
+
+  function addCustomCity() {
+    const v = customCity.trim();
+    if (!v) return;
+    setRegions((rs) =>
+      rs.some((r) => r.toLowerCase() === v.toLowerCase()) ? rs : [...rs, v]
+    );
+    setCustomCity("");
+  }
   const [hourlyRate, setHourlyRate] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -201,6 +211,49 @@ export default function NewSousTraitantPage() {
                   </label>
                 );
               })}
+            </div>
+            {/* Villes personnalisées (hors liste) + chips supprimables. */}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {regions
+                .filter((r) => !REGIONS.includes(r))
+                .map((r) => (
+                  <span
+                    key={r}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-accent-500 bg-accent-500/10 px-2.5 py-1.5 text-xs text-white"
+                  >
+                    {r}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setRegions((rs) => rs.filter((x) => x !== r))
+                      }
+                      className="text-white/60 hover:text-rose-300"
+                      aria-label={`Retirer ${r}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              <input
+                type="text"
+                value={customCity}
+                onChange={(e) => setCustomCity(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addCustomCity();
+                  }
+                }}
+                placeholder="Autre ville…"
+                className="input w-44 text-xs"
+              />
+              <button
+                type="button"
+                onClick={addCustomCity}
+                className="rounded-md border border-brand-700 bg-brand-900 px-2.5 py-1.5 text-xs text-white/80 hover:border-accent-500 hover:text-white"
+              >
+                Ajouter
+              </button>
             </div>
           </div>
 

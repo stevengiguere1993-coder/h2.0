@@ -52,14 +52,18 @@ function contractEstimate(s: Soumission): number | null {
   }
 }
 
-type Column = { id: string; label: string; dot: string };
+type Column = { id: string; label: string; dot: string; edge: string };
 
+// Couleurs vives (teinte -500) lisibles autant en thème nuit que jour :
+// `dot` = pastille de statut, `edge` = liseré de l'en-tête de colonne
+// pour distinguer les colonnes d'un coup d'œil. On évite les teintes
+// pâles (-400) et `bg-white/40` (invisible sur fond clair en mode jour).
 const COLUMNS: Column[] = [
-  { id: "draft", label: "Brouillons", dot: "bg-white/40" },
-  { id: "sent", label: "Envoyées", dot: "bg-blue-400" },
-  { id: "accepted", label: "Acceptées", dot: "bg-emerald-400" },
-  { id: "rejected", label: "Refusées", dot: "bg-rose-500" },
-  { id: "expired", label: "Expirées", dot: "bg-amber-400" }
+  { id: "draft", label: "Brouillons", dot: "bg-slate-400", edge: "border-slate-400" },
+  { id: "sent", label: "Envoyées", dot: "bg-blue-500", edge: "border-blue-500" },
+  { id: "accepted", label: "Acceptées", dot: "bg-emerald-500", edge: "border-emerald-500" },
+  { id: "rejected", label: "Refusées", dot: "bg-rose-500", edge: "border-rose-500" },
+  { id: "expired", label: "Expirées", dot: "bg-amber-500", edge: "border-amber-500" }
 ];
 
 // Colonnes repliées par défaut : « Refusées » et « Expirées » (du bruit
@@ -378,43 +382,30 @@ export default function SoumissionsPage() {
                     setHoverCol(null);
                   }}
                   className={`flex flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
-                    collapsed ? "w-12 min-w-[48px]" : "w-80 min-w-[320px]"
+                    collapsed ? "w-56 min-w-[224px]" : "w-80 min-w-[320px]"
                   } ${
                     isHover
                       ? "border-accent-500 bg-brand-900"
                       : "border-brand-800"
                   }`}
                 >
-                  {collapsed ? (
+                  {/* En-tête horizontal dans les deux états : replié =
+                      chevron droit + corps masqué ; déplié = chevron bas. */}
+                  <div
+                    className={`flex items-center justify-between border-b-2 ${col.edge} px-4 py-3`}
+                  >
                     <button
                       type="button"
                       onClick={() => toggleColumnCollapsed(col.id)}
-                      title="Cliquer pour déplier"
-                      className="flex h-full flex-col items-center gap-2 px-2 py-3"
-                    >
-                      <ChevronRight className="h-4 w-4 text-white/50" />
-                      <span className={`h-2 w-2 rounded-full ${col.dot}`} />
-                      <span className="rounded-md bg-brand-950 px-1.5 py-0.5 text-[11px] font-semibold text-white/70">
-                        {cards.length}
-                      </span>
-                      <span
-                        className="mt-1 text-xs font-semibold text-white/80"
-                        style={{ writingMode: "vertical-rl" }}
-                      >
-                        {col.label}
-                      </span>
-                    </button>
-                  ) : (
-                    <>
-                  <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
-                    <button
-                      type="button"
-                      onClick={() => toggleColumnCollapsed(col.id)}
-                      title="Cliquer pour replier"
+                      title={collapsed ? "Cliquer pour déplier" : "Cliquer pour replier"}
                       className="flex flex-1 items-center gap-2 text-left"
                     >
-                      <ChevronDown className="h-3.5 w-3.5 text-white/50" />
-                      <span className={`h-2 w-2 rounded-full ${col.dot}`} />
+                      {collapsed ? (
+                        <ChevronRight className="h-3.5 w-3.5 text-white/50" />
+                      ) : (
+                        <ChevronDown className="h-3.5 w-3.5 text-white/50" />
+                      )}
+                      <span className={`h-2.5 w-2.5 rounded-full ${col.dot}`} />
                       <h2 className="text-sm font-semibold text-white">
                         {col.label}
                       </h2>
@@ -432,6 +423,7 @@ export default function SoumissionsPage() {
                     </span>
                   </div>
 
+                  {collapsed ? null : (
                   <div className="flex-1 space-y-3 p-3">
                     {cards.length === 0 ? (
                       <p className="py-8 text-center text-xs text-white/40">
@@ -471,7 +463,6 @@ export default function SoumissionsPage() {
                       })
                     )}
                   </div>
-                    </>
                   )}
                 </div>
               );
