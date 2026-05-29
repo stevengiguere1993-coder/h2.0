@@ -18,6 +18,7 @@ from app.api.deps import DBSession, RequireManager
 from app.models.agenda_event import AgendaEvent
 from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.models.employe import Employe
+from app.models.follow_up import FollowUp
 from app.services.appointment_mail import (
     send_appointment_assignee_invite,
     send_appointment_confirmation,
@@ -101,6 +102,38 @@ async def schedule_appointment(
         ContactRequestStatus.CONTACTED.value,
     ):
         prospect.status = ContactRequestStatus.RDV_PREVU.value
+
+    # Un RDV planifié remplace les relances automatiques : on suspend la
+    # cadence de suivi en attente pour que le prospect ne s'affiche plus
+    # « en retard ». Le responsable recevra plutôt une notification de
+    # confirmation 48 h avant le RDV (cron follow_up_reminders).
+    from app.services.follow_up import suspend_pending_followups
+
+    rdv_label = data.start_at.strftime("%Y-%m-%d %H:%M")
+    await suspend_pending_followups(
+        db,
+        subject_type="prospect",
+        subject_id=prospect.id,
+        note=f"RDV planifié le {rdv_label} — relances auto suspendues.",
+    )
+    # Trace dans le journal de suivi pour expliquer l'absence de relance.
+    db.add(
+        FollowUp(
+            subject_type="prospect",
+            subject_id=prospect.id,
+            kind="auto",
+            direction="outbound",
+            outcome="scheduled",
+            notes=(
+                f"RDV planifié le {rdv_label}. "
+                "Confirmation envoyée au responsable 48 h avant."
+            ),
+            performed_by_user_id=user.id,
+            next_action_at=None,
+            overdue_notified=True,
+        )
+    )
+    await db.flush()
 
     # Fire the confirmation email in the background. Worst case the
     # send fails — the agenda event is still created and the cron will

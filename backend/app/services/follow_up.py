@@ -19,9 +19,41 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta, timezone
 from typing import Optional
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.follow_up import FollowUp
+
+
+async def suspend_pending_followups(
+    db: AsyncSession,
+    *,
+    subject_type: str,
+    subject_id: int,
+    note: Optional[str] = None,
+) -> int:
+    """Stoppe la cadence de suivi auto encore en attente d'un sujet :
+    vide ``next_action_at`` et marque ``overdue_notified`` sur les suivis
+    non terminés, afin qu'ils ne tombent pas « en retard ». Utilisé quand
+    un RDV est planifié (le RDV remplace les relances auto). Retourne le
+    nombre de suivis suspendus."""
+    rows = (
+        await db.execute(
+            select(FollowUp).where(
+                FollowUp.subject_type == subject_type,
+                FollowUp.subject_id == subject_id,
+                FollowUp.next_action_at.is_not(None),
+                FollowUp.outcome.notin_(tuple(STOP_OUTCOMES)),
+            )
+        )
+    ).scalars().all()
+    for f in rows:
+        f.next_action_at = None
+        f.overdue_notified = True
+        if note:
+            f.notes = (f"{f.notes} · " if f.notes else "") + note
+    await db.flush()
+    return len(rows)
 
 
 def add_business_hours(start: datetime, hours: float) -> datetime:
