@@ -515,7 +515,7 @@ export function LoginForm() {
           </button>
         </div>
       </div>
-      <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-brand-900">
+      <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-white">
         <input
           type="checkbox"
           name="remember_me"
