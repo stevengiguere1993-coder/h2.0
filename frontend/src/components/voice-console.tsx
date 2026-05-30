@@ -25,6 +25,7 @@ type DeviceAny = {
   register(): Promise<void>;
   unregister(): Promise<void>;
   on(event: string, handler: (...args: unknown[]) => void): void;
+  updateToken(token: string): void;
   destroy(): void;
 };
 
@@ -107,19 +108,70 @@ export function VoiceConsole() {
         };
         const device = new Device(token, {
           codecPreferences: ["opus", "pcmu"],
+          // Déclenche `tokenWillExpire` 30 s avant l'expiration du
+          // token (au lieu des 10 s par défaut) pour avoir le temps
+          // de re-fetch sans coupure.
+          tokenRefreshMs: 30_000,
           // logLevel: "warn",
         });
 
+        // Renouvellement du token. Le token Twilio expire (1h côté
+        // backend), et Twilio peut aussi le rejeter plus tôt (ex.
+        // horloge serveur décalée → 20101 « AccessTokenInvalid »
+        // au bout de quelques minutes). Dans les deux cas on va
+        // chercher un token frais et on le pousse au Device — le
+        // softphone se répare tout seul, sans recharger la page.
+        const refreshToken = async (): Promise<boolean> => {
+          try {
+            const r = await authedFetch("/api/v1/voice/sdk/token");
+            if (!r.ok) return false;
+            const { token: fresh } = (await r.json()) as { token: string };
+            device.updateToken(fresh);
+            return true;
+          } catch {
+            return false;
+          }
+        };
+
+        // Garde-fou anti-boucle : si le token reste rejeté malgré le
+        // refresh (vrai mauvais secret), on s'arrête après quelques
+        // tentatives et on affiche la bannière. Le compteur est remis
+        // à zéro dès qu'un enregistrement réussit.
+        let tokenRetries = 0;
+        const MAX_TOKEN_RETRIES = 3;
+
         device.on("registered", () => {
+          tokenRetries = 0;
           if (mounted) setStatus("ready");
         });
+        device.on("tokenWillExpire", () => {
+          void refreshToken();
+        });
         device.on("error", (err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          const code = (err as { code?: number } | null)?.code;
+          const tokenInvalid =
+            code === 20101 || /20101|AccessToken/i.test(msg);
+          if (tokenInvalid && tokenRetries < MAX_TOKEN_RETRIES) {
+            tokenRetries += 1;
+            console.warn(
+              `[Voice] token rejeté (20101) — refresh ${tokenRetries}/${MAX_TOKEN_RETRIES}`
+            );
+            void (async () => {
+              if (await refreshToken()) {
+                try {
+                  await device.register();
+                } catch {
+                  /* l'event error suivant relancera la récup */
+                }
+              }
+            })();
+            return; // pas de bannière pendant la récupération
+          }
           console.warn("[Voice] device error", err);
           if (mounted) {
             setStatus("error");
-            setErrorMsg(
-              err instanceof Error ? err.message : String(err) || "device error"
-            );
+            setErrorMsg(msg || "device error");
           }
         });
         device.on("incoming", (call: CallAny) => {
