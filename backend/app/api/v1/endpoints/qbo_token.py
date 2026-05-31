@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.deps import CurrentAdmin, DBSession
+from app.core.config import settings
 from app.models.qbo_token import QboToken
 
 
@@ -58,3 +59,67 @@ async def set_qbo_refresh_token(
         qbo_mod._qbo._db_loaded = True
 
     return QboTokenResponse(ok=True, saved_length=len(token))
+
+
+class QboDiagResponse(BaseModel):
+    # Ce que la config cible aujourd'hui
+    active_environment: str
+    client_id_tail: str | None = None  # 4 derniers car. (pas le secret)
+    # Token en DB (rempli par la reconnexion OAuth)
+    db_has_token: bool
+    db_environment: str | None = None
+    db_realm_id: str | None = None
+    # Token seedé via la variable d'env Render QBO_REFRESH_TOKEN
+    env_has_token: bool
+    env_realm_id: str | None = None
+    # Désaccord d'environnement (cause du 403 ApplicationAuthorizationFailed)
+    env_mismatch: bool
+    # Test réel : un refresh du token courant réussit-il auprès d'Intuit ?
+    refresh_ok: bool | None = None
+    refresh_error: str | None = None
+
+
+@router.get(
+    "/diag",
+    response_model=QboDiagResponse,
+    summary="Diagnostic QBO : d'où vient le token, env, test refresh (admin)",
+)
+async def qbo_diag(db: DBSession, _: CurrentAdmin) -> QboDiagResponse:
+    """Aide à élucider les 403 ApplicationAuthorizationFailed. N'expose
+    jamais le token ni le secret — seulement leur présence/origine, et
+    le résultat d'un vrai refresh auprès d'Intuit."""
+    active_env = (settings.quickbooks_env or "sandbox").lower()
+    cid = settings.quickbooks_client_id or ""
+    row = (
+        await db.execute(select(QboToken).where(QboToken.id == 1))
+    ).scalar_one_or_none()
+    db_env = (row.environment or "").lower() if row else None
+
+    out = QboDiagResponse(
+        active_environment=active_env,
+        client_id_tail=cid[-4:] if cid else None,
+        db_has_token=bool(row and row.refresh_token),
+        db_environment=db_env or None,
+        db_realm_id=(row.realm_id if row else None),
+        env_has_token=bool(settings.qbo_refresh_token),
+        env_realm_id=settings.qbo_realm_id,
+        env_mismatch=bool(db_env and db_env != active_env),
+    )
+
+    # Test réel : tente un refresh du token actuellement utilisé.
+    try:
+        from app.integrations.quickbooks import QuickBooksClient
+
+        client = QuickBooksClient()
+        await client._load_refresh_from_db()
+        if client.tokens.refresh_token:
+            await client._refresh()
+            out.refresh_ok = True
+        else:
+            out.refresh_ok = False
+            out.refresh_error = "Aucun refresh token disponible."
+    except Exception as exc:  # noqa: BLE001
+        out.refresh_ok = False
+        out.refresh_error = str(exc)[:300]
+
+    return out
