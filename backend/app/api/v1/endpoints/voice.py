@@ -1449,6 +1449,20 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
         )
         call.intent = "intake_construction"
         call.contact_request_id = cr_id
+        # Tâche de suivi pour l'équipe (l'IA route vers la bonne
+        # entreprise). Fire-and-forget : ne bloque/casse jamais l'appel.
+        try:
+            from app.integrations.voice.lea_task import create_task_from_call
+
+            await create_task_from_call(
+                db,
+                reason=decision.lead_reason or decision.say,
+                caller_name=decision.lead_name,
+                caller_phone=decision.lead_callback_phone,
+                intent="intake construction",
+            )
+        except Exception:  # noqa: BLE001
+            pass
         twiml = provider.build_say_and_hangup(
             say=decision.say, lang=decision.lang
         )
