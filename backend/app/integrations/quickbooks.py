@@ -228,8 +228,25 @@ class QuickBooksClient:
                     intuit_tid or "<missing>",
                     payload,
                 )
+                # Extrait le motif lisible de QBO (Fault.Error[].Detail/
+                # Message) et le met EN TÊTE du message — sinon il est
+                # coupé à l'affichage (bannière tronquée) derrière le
+                # tid + le payload technique.
+                reason = ""
+                try:
+                    errs = (payload.get("Fault") or {}).get("Error") or []
+                    if errs:
+                        e0 = errs[0]
+                        reason = (
+                            e0.get("Detail")
+                            or e0.get("Message")
+                            or ""
+                        ).strip()
+                except Exception:  # noqa: BLE001
+                    reason = ""
+                prefix = f"QBO refus : {reason} — " if reason else ""
                 raise QuickBooksError(
-                    f"QBO {method} {path} failed: {r.status_code} "
+                    f"{prefix}QBO {method} {path} failed: {r.status_code} "
                     f"(intuit_tid={intuit_tid or 'n/a'}) {payload}"
                 )
             if intuit_tid:
