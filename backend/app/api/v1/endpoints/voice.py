@@ -2053,7 +2053,11 @@ async def twilio_sdk_outbound(request: Request) -> Response:
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
         f'<Dial callerId="{os.getenv("TWILIO_PHONE_NUMBER", "")}" '
-        'timeout="20" record="record-from-answer-dual">'
+        # timeout=40s : laisse le temps à la messagerie vocale du
+        # destinataire de décrocher (souvent ~25-30 s) avant que Twilio
+        # n'abandonne. À 20 s, notre ligne raccrochait avant la boîte
+        # vocale de la cliente.
+        'timeout="40" record="record-from-answer-dual">'
         f"{to}"
         "</Dial>"
         "</Response>"
