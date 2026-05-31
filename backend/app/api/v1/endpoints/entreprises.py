@@ -765,6 +765,36 @@ class InsightOut(BaseModel):
 
 
 @router.get(
+    "/insights",
+    response_model=List[InsightOut],
+    summary="Vue d'ensemble : insights IA de toutes les entreprises",
+)
+async def list_insights_global(
+    db: DBSession,
+    user: CurrentUser,
+    open_only: bool = True,
+) -> List[InsightOut]:
+    """Agrège les insights de toutes les entreprises (vue cross-
+    entreprises pour le tableau de bord copilote)."""
+    _require_volet(user)
+    from app.models.qg_strategic import Insight, InsightStatus
+
+    stmt = select(Insight)
+    if open_only:
+        stmt = stmt.where(
+            Insight.status.in_([
+                InsightStatus.NEW.value,
+                InsightStatus.ACKNOWLEDGED.value,
+                InsightStatus.IN_ACTION.value,
+            ])
+        )
+    rows = (
+        await db.execute(stmt.order_by(Insight.created_at.desc()).limit(100))
+    ).scalars().all()
+    return [InsightOut.from_model(i) for i in rows]
+
+
+@router.get(
     "/{entreprise_id}/insights",
     response_model=List[InsightOut],
     summary="Liste les insights IA d'une entreprise",
