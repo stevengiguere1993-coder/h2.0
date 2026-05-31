@@ -549,6 +549,32 @@ function QuickBooksSection() {
     }
   }
 
+  async function listAccounts() {
+    setDiagBusy(true);
+    setDiag(null);
+    try {
+      const res = await authedFetch("/api/v1/qbo/accounts");
+      const data = (await res.json()) as {
+        ok: boolean;
+        accounts?: { name: string; account_type?: string | null }[];
+        error?: string | null;
+      };
+      if (data.ok && data.accounts) {
+        setDiag({
+          comptes_QBO: data.accounts.map((a) =>
+            a.account_type ? `${a.name}  (${a.account_type})` : a.name
+          )
+        });
+      } else {
+        setDiag({ error: data.error || "Échec du listage des comptes." });
+      }
+    } catch (e) {
+      setDiag({ error: (e as Error).message });
+    } finally {
+      setDiagBusy(false);
+    }
+  }
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -718,6 +744,18 @@ function QuickBooksSection() {
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
               ) : null}
               Diagnostic
+            </button>
+            <button
+              type="button"
+              onClick={listAccounts}
+              disabled={diagBusy}
+              className="btn-secondary text-xs"
+              title="Liste les comptes QBO réels — copie les noms exacts dans le mapping des modes de paiement."
+            >
+              {diagBusy ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Lister comptes QBO
             </button>
           </div>
           {diag ? (
