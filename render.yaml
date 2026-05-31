@@ -65,6 +65,12 @@ services:
         sync: false
       - key: QUICKBOOKS_CLIENT_SECRET
         sync: false
+      # App Intuit approuvée → on cible l'API QuickBooks de production
+      # (défaut code = "sandbox"). Les clés CLIENT_ID/SECRET ci-dessus
+      # doivent être celles de PRODUCTION (onglet « Production » du
+      # portail Intuit), pas celles du sandbox.
+      - key: QUICKBOOKS_ENV
+        value: production
       - key: QBO_REFRESH_TOKEN
         sync: false
       - key: QBO_REALM_ID
