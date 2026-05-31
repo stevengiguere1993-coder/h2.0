@@ -21,7 +21,7 @@ import os
 import re
 import sys
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 
@@ -256,8 +256,14 @@ async def call_ai(prompt: str) -> dict[str, Any]:
     """Appelle la cascade IA (Gemini → Anthropic → Groq)."""
     result = await complete(
         prompt=prompt,
-        max_tokens=4096,
+        # Article 800-1200 mots en JSON → sortie longue. thinking_budget=0
+        # empêche gemini-2.5-flash de dépenser le budget en raisonnement
+        # interne (sinon le JSON est tronqué → parse_json plante → le cron
+        # sort en code 1 → Render « Failed »). max_tokens élargi pour la
+        # marge. Ignoré par les providers sans thinking (Anthropic, Groq).
+        max_tokens=8192,
         temperature=0.6,
+        thinking_budget=0,
     )
     return parse_json(result.text)
 
