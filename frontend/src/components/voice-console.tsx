@@ -108,6 +108,10 @@ export function VoiceConsole() {
         };
         const device = new Device(token, {
           codecPreferences: ["opus", "pcmu"],
+          // Edge Twilio le plus proche du Québec → réduit la latence et
+          // les pertes média (aide sur réseau mobile/cellulaire, cause
+          // fréquente des ConnectionError/TransportError 31005/31009).
+          edge: "toronto",
           // Déclenche `tokenWillExpire` 30 s avant l'expiration du
           // token (au lieu des 10 s par défaut) pour avoir le temps
           // de re-fetch sans coupure.
@@ -167,6 +171,37 @@ export function VoiceConsole() {
               }
             })();
             return; // pas de bannière pendant la récupération
+          }
+          // Erreurs de connexion média WebRTC (ex. 31005
+          // « ConnectionError », 31000/31003/53xxx) : transitoires,
+          // fréquentes sur réseau instable / cellulaire. L'appel
+          // bascule sur le repli mobile — on n'affiche pas de bandeau
+          // rouge persistant, juste un log discret.
+          const transientConn =
+            code === 31005 ||
+            code === 31000 ||
+            code === 31003 ||
+            code === 31009 ||
+            (typeof code === "number" && code >= 53000 && code < 54000) ||
+            /ConnectionError|connection error|media|ICE|transport/i.test(msg);
+          if (transientConn) {
+            console.warn("[Voice] erreur connexion transitoire (ignorée)", err);
+            return;
+          }
+          // Erreurs de transport / connexion média WebRTC, fréquentes
+          // et transitoires sur réseau mobile/cellulaire (le SDK tente
+          // de reconnecter tout seul, et les appels basculent sur le
+          // repli mobile). On les log sans afficher de bannière rouge
+          // persistante qui n'apporte aucune action utile à l'usager.
+          // 31005 ConnectionError · 31009 TransportError · 53xxx média.
+          const transient =
+            code === 31005 ||
+            code === 31009 ||
+            (typeof code === "number" && code >= 53000 && code < 54000) ||
+            /31005|31009|Transport|Connection ?error/i.test(msg);
+          if (transient) {
+            console.warn("[Voice] erreur transport transitoire", err);
+            return;
           }
           console.warn("[Voice] device error", err);
           if (mounted) {
