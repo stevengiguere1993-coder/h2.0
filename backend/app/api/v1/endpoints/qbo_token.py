@@ -149,3 +149,46 @@ async def qbo_diag(db: DBSession, _: CurrentAdmin) -> QboDiagResponse:
         out.api_query_error = str(exc)[:300]
 
     return out
+
+
+class QboAccount(BaseModel):
+    name: str
+    account_type: str | None = None
+    account_sub_type: str | None = None
+
+
+class QboAccountsResponse(BaseModel):
+    ok: bool
+    accounts: list[QboAccount] = []
+    error: str | None = None
+
+
+@router.get(
+    "/accounts",
+    response_model=QboAccountsResponse,
+    summary="Liste les comptes QBO (pour mapper les modes de paiement)",
+)
+async def qbo_accounts(_: CurrentAdmin) -> QboAccountsResponse:
+    """Liste les comptes réels de la compagnie QBO connectée, pour
+    que l'admin recopie les NOMS EXACTS dans le mapping
+    /settings/qbo-accounts."""
+    try:
+        from app.integrations.quickbooks import get_qbo
+
+        client = get_qbo()
+        await client._load_refresh_from_db()
+        rows = await client.query(
+            "select * from Account where Active = true maxresults 1000"
+        )
+        accounts = [
+            QboAccount(
+                name=r.get("Name", ""),
+                account_type=r.get("AccountType"),
+                account_sub_type=r.get("AccountSubType"),
+            )
+            for r in rows
+            if r.get("Name")
+        ]
+        return QboAccountsResponse(ok=True, accounts=accounts)
+    except Exception as exc:  # noqa: BLE001
+        return QboAccountsResponse(ok=False, error=str(exc)[:300])
