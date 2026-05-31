@@ -93,7 +93,16 @@ class ConnectResponse(BaseModel):
 
 class StatusResponse(BaseModel):
     connected: bool
+    # Environnement avec lequel la connexion a été établie (stocké en DB
+    # au moment du callback OAuth).
     environment: Optional[str] = None
+    # Environnement actuellement ciblé par la config (QUICKBOOKS_ENV).
+    active_environment: Optional[str] = None
+    # True si la connexion a été faite dans un autre environnement que
+    # celui ciblé aujourd'hui (ex. token sandbox alors qu'on tape la prod)
+    # → cause classique du 403 ApplicationAuthorizationFailed. Il faut
+    # alors se déconnecter puis se reconnecter.
+    env_mismatch: bool = False
     realm_id: Optional[str] = None
     company_name: Optional[str] = None
     connected_at: Optional[datetime] = None
@@ -265,11 +274,17 @@ async def qbo_status(db: DBSession, _: CurrentUser) -> StatusResponse:
     row = (
         await db.execute(select(QboToken).where(QboToken.id == 1))
     ).scalar_one_or_none()
+    active_env = (settings.quickbooks_env or "sandbox").lower()
     if row is None or not row.refresh_token:
-        return StatusResponse(connected=False)
+        return StatusResponse(
+            connected=False, active_environment=active_env
+        )
+    conn_env = (row.environment or settings.quickbooks_env or "").lower()
     return StatusResponse(
         connected=True,
-        environment=row.environment or settings.quickbooks_env,
+        environment=conn_env,
+        active_environment=active_env,
+        env_mismatch=bool(conn_env and conn_env != active_env),
         realm_id=row.realm_id,
         company_name=row.company_name,
         connected_at=row.connected_at,
