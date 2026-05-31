@@ -77,6 +77,13 @@ class QboDiagResponse(BaseModel):
     # Test réel : un refresh du token courant réussit-il auprès d'Intuit ?
     refresh_ok: bool | None = None
     refresh_error: str | None = None
+    # Test décisif : une VRAIE requête API (CompanyInfo) via le client
+    # réel — reproduit exactement le chemin du push. C'est ce qui révèle
+    # le 403 ApplicationAuthorizationFailed (token OK mais compagnie/env
+    # inaccessible).
+    api_query_ok: bool | None = None
+    api_query_error: str | None = None
+    api_company_name: str | None = None
 
 
 @router.get(
@@ -121,5 +128,24 @@ async def qbo_diag(db: DBSession, _: CurrentAdmin) -> QboDiagResponse:
     except Exception as exc:  # noqa: BLE001
         out.refresh_ok = False
         out.refresh_error = str(exc)[:300]
+
+    # Test décisif : vraie requête API via le client singleton (même
+    # chemin que le push). Reproduit le 403 ApplicationAuthorizationFailed.
+    try:
+        from app.integrations.quickbooks import get_qbo
+
+        client = get_qbo()
+        await client._load_refresh_from_db()
+        # query() retourne directement la liste d'entités (bucket).
+        rows = await client.query("select * from CompanyInfo")
+        out.api_query_ok = True
+        try:
+            if rows:
+                out.api_company_name = rows[0].get("CompanyName")
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as exc:  # noqa: BLE001
+        out.api_query_ok = False
+        out.api_query_error = str(exc)[:300]
 
     return out
