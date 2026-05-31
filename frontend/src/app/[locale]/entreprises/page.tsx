@@ -17,6 +17,7 @@ import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { QGTopbar, useEntreprisesLayout } from "./layout";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { InsightsOverviewCard } from "./InsightsOverviewCard";
 
 // ───────────────────────────────────────────────────────────────────────
 // Types
@@ -500,6 +501,9 @@ export default function EntreprisesDashboard() {
             regenerating={regenerating}
           />
         </section>
+
+        {/* Vue d'ensemble des Insights IA — toutes entreprises */}
+        <InsightsOverviewCard />
       </div>
     </>
   );
