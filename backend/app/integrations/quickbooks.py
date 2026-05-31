@@ -18,6 +18,7 @@ import base64
 import json
 import logging
 import os
+import re
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -545,11 +546,22 @@ class QuickBooksClient:
     async def find_account_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         if not name:
             return None
-        safe = name.replace("'", "''")
-        rows = await self.query(
-            f"SELECT * FROM Account WHERE Name = '{safe}' MAXRESULTS 1"
-        )
-        return rows[0] if rows else None
+        # Tolérance : si le nom contient un suffixe de type recopié par
+        # erreur depuis l'aide « Lister comptes QBO » (ex.
+        # "CC Horizon Olivier Therrien  (Credit Card)"), on le retire —
+        # le vrai Name côté QBO n'inclut pas le type.
+        cleaned = re.sub(r"\s*\((?:[^()]*)\)\s*$", "", name).strip()
+        candidates = [cleaned]
+        if name.strip() != cleaned:
+            candidates.append(name.strip())
+        for cand in candidates:
+            safe = cand.replace("'", "''")
+            rows = await self.query(
+                f"SELECT * FROM Account WHERE Name = '{safe}' MAXRESULTS 1"
+            )
+            if rows:
+                return rows[0]
+        return None
 
     # ------------------------------------------------------------------
     # Attachable upload — joint un fichier (image, PDF) à une entité QBO
