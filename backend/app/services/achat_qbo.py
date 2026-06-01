@@ -25,6 +25,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.integrations.quickbooks import QuickBooksError, get_qbo
 from app.models.achat import Achat
 from app.models.fournisseur import Fournisseur
