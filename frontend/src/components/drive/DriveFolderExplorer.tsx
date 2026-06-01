@@ -287,25 +287,28 @@ function FileTypeIcon({
   return <FileIcon className={`${className} text-white/60`} />;
 }
 
+/**
+ * Liste blanche des types MIME prévisualisables via l'iframe Drive viewer
+ * (`https://drive.google.com/file/d/{id}/preview`). Drive sait rendre nativement
+ * tous ces formats — y compris les PDF, les fichiers Office (docx/xlsx/pptx) et
+ * les fichiers texte. Pour les types vraiment opaques (zip, exe, octet-stream,
+ * archives), on tombe dans le fallback "Télécharger".
+ */
 function canPreviewInline(mime: string): boolean {
   if (!mime) return false;
   if (mime === FOLDER_MIME) return false;
   if (mime.startsWith("image/")) return true;
   if (mime.startsWith("video/")) return true;
+  if (mime.startsWith("audio/")) return true;
+  if (mime.startsWith("text/")) return true;
   if (mime === "application/pdf") return true;
   if (mime.startsWith("application/vnd.google-apps.")) return true;
+  // Office moderne (docx, xlsx, pptx, etc.) — Drive convertit à la volée.
+  if (mime.startsWith("application/vnd.openxmlformats-officedocument"))
+    return true;
+  // Vieux Office (doc, xls, ppt) et variantes macro (xlsm, xlsb…).
+  if (mime.startsWith("application/vnd.ms-")) return true;
   return false;
-}
-
-function isOfficeMime(mime: string): boolean {
-  return (
-    mime ===
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-    mime ===
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
-    mime ===
-      "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-  );
 }
 
 /**
@@ -2130,7 +2133,6 @@ function PreviewModal({
   onClose: () => void;
 }) {
   const inline = canPreviewInline(file.mime_type);
-  const office = isOfficeMime(file.mime_type);
   return (
     <div
       className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/80 p-2"
@@ -2184,22 +2186,7 @@ function PreviewModal({
           </div>
         </div>
         <div className="flex flex-1 items-center justify-center overflow-hidden bg-black/40">
-          {office ? (
-            <div className="flex flex-col items-center gap-3 p-8 text-center text-sm text-white/70">
-              <FileTypeIcon file={file} className="h-12 w-12" />
-              <p className="max-w-md">
-                Ce type de fichier ne peut pas être prévisualisé en ligne.
-                Télécharge-le pour l&apos;ouvrir.
-              </p>
-              <button
-                type="button"
-                onClick={onDownload}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600"
-              >
-                <Download className="h-3.5 w-3.5" /> Télécharger
-              </button>
-            </div>
-          ) : !inline ? (
+          {!inline ? (
             <div className="flex flex-col items-center gap-3 p-8 text-center text-sm text-white/70">
               <FileTypeIcon file={file} className="h-12 w-12" />
               <p>Aperçu non disponible pour ce type de fichier.</p>
