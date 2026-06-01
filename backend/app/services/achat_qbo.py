@@ -252,6 +252,7 @@ def _build_purchase_payload(
     project_name: Optional[str],
     customer_id: Optional[str] = None,
     class_id: Optional[str] = None,
+    payment_method_id: Optional[str] = None,
     existing_purchase_id: Optional[str] = None,
     existing_sync_token: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -273,6 +274,8 @@ def _build_purchase_payload(
         "PrivateNote": _private_note(achat, po_reference, project_name),
         "Line": lines,
     }
+    if payment_method_id:
+        payload["PaymentMethodRef"] = {"value": str(payment_method_id)}
     if customer_id:
         _add_quebec_taxes(payload, lines)
     elif settings.qbo_purchase_tax_code:
@@ -294,6 +297,19 @@ def _payment_type_for(method: Optional[str]) -> str:
     if method == "cheque_horizon":
         return "Check"
     return "Cash"
+
+
+def _payment_method_name_for(method: Optional[str]) -> Optional[str]:
+    """Nom du « mode de paiement » QBO (PaymentMethod) à afficher sur la
+    dépense — champ distinct du PaymentType. Demandé :
+      - carte de crédit Horizon (cc_*) → « Carte de crédit »
+      - compte chèque Horizon          → « Virement »
+    Retourne None pour les autres modes (pas de PaymentMethodRef)."""
+    if method and method.startswith("cc_"):
+        return "Carte de crédit"
+    if method == "cheque_horizon":
+        return "Virement"
+    return None
 
 
 async def _resolve_payment_account(
@@ -489,12 +505,22 @@ async def sync_achat_to_qbo(
                     f"→ Comptes QuickBooks et entre le nom exact du "
                     f"compte (ex. « Carte Visa Steven »)."
                 )
+            # Mode de paiement QBO (PaymentMethod) : CC → « Carte de
+            # crédit », chèque Horizon → « Virement ». Créé si absent.
+            pm_name = _payment_method_name_for(method)
+            payment_method_id: Optional[str] = None
+            if pm_name:
+                pm = await qbo.ensure_payment_method(name=pm_name)
+                payment_method_id = (
+                    str(pm.get("Id")) if pm and pm.get("Id") else None
+                )
             payload = _build_purchase_payload(
                 achat=achat,
                 vendor_id=vendor_id,
                 expense_account_id=expense_account_id,
                 payment_account_id=payment_account_id,
                 payment_type=_payment_type_for(method),
+                payment_method_id=payment_method_id,
                 po_reference=po_reference,
                 project_name=project.name if project else None,
                 customer_id=customer_id,

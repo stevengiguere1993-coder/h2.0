@@ -439,6 +439,33 @@ class QuickBooksClient:
             # on n'empêche pas la dépense de se créer (sans ClassRef).
             return None
 
+    async def ensure_payment_method(
+        self, *, name: str
+    ) -> Optional[Dict[str, Any]]:
+        """Find-or-create un « mode de paiement » QBO (PaymentMethod,
+        ex. « Carte de crédit », « Virement »). Retourne None en cas
+        d'échec (on n'empêche pas la dépense de se créer)."""
+        clean = (name or "").strip()
+        if not clean:
+            return None
+        safe = clean.replace("'", "''")
+        try:
+            rows = await self.query(
+                f"SELECT * FROM PaymentMethod WHERE Name = '{safe}' "
+                "MAXRESULTS 1"
+            )
+            if rows:
+                return rows[0]
+            data = await self._request(
+                "POST",
+                "/paymentmethod",
+                json_body={"Name": clean[:31]},
+                params={"minorversion": "70"},
+            )
+            return data.get("PaymentMethod") or data
+        except QuickBooksError:
+            return None
+
     # ------------------------------------------------------------------
     # Items (Service catalog)
     # ------------------------------------------------------------------
