@@ -131,6 +131,7 @@ async def run() -> None:
                             f"{'s' if len(tasks) > 1 else ''} aujourd'hui"
                         ),
                         html_body=_body(enriched),
+                        internal=True,
                     )
                     sent += 1
                 except Exception as exc:

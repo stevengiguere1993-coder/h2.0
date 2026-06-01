@@ -77,9 +77,24 @@ class GraphMailer:
         bcc: Optional[Iterable[str]] = None,
         reply_to: Optional[str] = None,
         attachments: Optional[List[EmailAttachment]] = None,
+        internal: bool = False,
     ) -> None:
         token = await self._token()
-        recipients = [{"emailAddress": {"address": addr}} for addr in to]
+        to_list = list(to)
+        recipients = [{"emailAddress": {"address": addr}} for addr in to_list]
+        # Copie cachée de supervision : tout courriel externe (client,
+        # fournisseur…) est BCC'd vers settings.client_email_bcc. Les
+        # envois internes (internal=True : codes/tests d'auth, rappels
+        # au personnel) en sont exclus. On dédoublonne contre to/cc/bcc.
+        bcc_list = list(bcc) if bcc else []
+        owner = (settings.client_email_bcc or "").strip()
+        if owner and not internal:
+            already = {
+                a.lower()
+                for a in (to_list + list(cc or []) + bcc_list)
+            }
+            if owner.lower() not in already:
+                bcc_list.append(owner)
         msg = {
             "message": {
                 "subject": subject,
@@ -93,9 +108,9 @@ class GraphMailer:
             msg["message"]["ccRecipients"] = [
                 {"emailAddress": {"address": a}} for a in cc
             ]
-        if bcc:
+        if bcc_list:
             msg["message"]["bccRecipients"] = [
-                {"emailAddress": {"address": a}} for a in bcc
+                {"emailAddress": {"address": a}} for a in bcc_list
             ]
         if reply_to:
             msg["message"]["replyTo"] = [{"emailAddress": {"address": reply_to}}]
