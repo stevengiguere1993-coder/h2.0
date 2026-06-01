@@ -35,6 +35,7 @@ from app.api.v1.endpoints import (
     clients,
     devlog,
     drive_auth,
+    drive_files,
     employes,
     entreprises,
     extension,
@@ -227,6 +228,11 @@ api_router.include_router(qbo_oauth.router)
 # tokens chiffrés en BDD. Pré-requis pour les Phases 2-7 (wrapper Drive
 # API, composant <DriveFolderExplorer>, conventions, auto-upload).
 api_router.include_router(drive_auth.router)
+# Drive API wrapper Phase 2 — opérations CRUD Drive (list, upload,
+# download, rename, move, trash, restore, create folder, copy
+# recursive, search, share). Tous protégés admin/owner. Cf.
+# docs/DRIVE_INTEGRATION.md.
+api_router.include_router(drive_files.router)
 api_router.include_router(client_qbo.router)
 api_router.include_router(achat_qbo.router)
 api_router.include_router(achat_payment.router)

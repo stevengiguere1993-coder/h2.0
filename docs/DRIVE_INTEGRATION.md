@@ -33,7 +33,7 @@ partager).
 | Phase | Périmètre                                                   | Statut |
 | ----- | ----------------------------------------------------------- | ------ |
 | **1** | Foundation OAuth + 5 tables + page Settings minimaliste     | livré (juin 2026) |
-| 2     | Wrapper Drive API (list / upload / move / share / etc.)     | à venir |
+| **2** | Wrapper Drive API (list / upload / move / share / etc.)     | livré (juin 2026) |
 | 3     | Composant `<DriveFolderExplorer>` réutilisable              | à venir |
 | 4     | UI Conventions + Auto-upload + Mappings + Audit log         | à venir |
 | 5     | Event listeners SQLAlchemy → exécution des Conventions      | à venir |
@@ -214,3 +214,237 @@ et reportés aux Phases suivantes :
 
 Phil peut connecter son compte Google et voir son email associé. C'est
 exactement le périmètre Phase 1.
+
+## Phase 2 — Wrapper Drive API
+
+La Phase 2 ajoute un wrapper complet de l'API Google Drive v3 sous
+forme de service Python (`app.services.drive_api`) plus un router
+REST (`/api/v1/drive/...`). Tous les endpoints sont protégés
+`RequireAdminOrOwner` ; le `user_id` Kratos extrait du JWT est utilisé
+pour récupérer le bon refresh_token et agir au nom de l'utilisateur.
+
+### Endpoints
+
+**Listing & métadonnées**
+
+- `GET  /api/v1/drive/folders/{folder_id}/files` — liste paginée
+  (`page_size`, `page_token`, `order_by`).
+- `GET  /api/v1/drive/files/{file_id}/metadata` — métadonnées
+  complètes.
+- `GET  /api/v1/drive/folders/{folder_id}/path` — breadcrumbs
+  racine → dossier courant.
+
+**Upload**
+
+- `POST /api/v1/drive/folders/{folder_id}/upload` — multipart/form-data,
+  champ `file`. Retourne `DriveFile`.
+
+**Download / Export / Preview**
+
+- `GET  /api/v1/drive/files/{file_id}/download` — stream binaire.
+  Header `Content-Disposition` RFC 5987 (accents OK).
+- `GET  /api/v1/drive/files/{file_id}/export?format=pdf` — pour
+  Google Docs / Sheets / Slides. Formats : `pdf`, `docx`, `xlsx`,
+  `pptx`, `odt`, `csv`, `html`.
+- `GET  /api/v1/drive/files/{file_id}/preview-url` — retourne
+  `{preview_url: "https://drive.google.com/file/d/{id}/preview"}`
+  prêt à embed en iframe.
+
+**Mutations**
+
+- `PATCH  /api/v1/drive/files/{file_id}` — body
+  `{name?, parent_folder_id?, old_parent_folder_id?}`. Renomme et/ou
+  déplace selon les champs présents.
+- `DELETE /api/v1/drive/files/{file_id}` — trash par défaut.
+  `?permanent=true` pour suppression définitive.
+- `POST   /api/v1/drive/files/{file_id}/restore` — restaure depuis la
+  corbeille.
+
+**Dossiers**
+
+- `POST /api/v1/drive/folders/{folder_id}/subfolders` — body
+  `{name}`. Crée un sous-dossier.
+- `POST /api/v1/drive/folders/{source_folder_id}/copy` — body
+  `{parent_folder_id, new_name?}`. Copie récursive (profondeur max 5).
+
+**Recherche**
+
+- `GET /api/v1/drive/search?q={query}&parent_folder_id={id}` —
+  cherche par nom OU contenu (Drive `fullText`).
+
+**Partage**
+
+- `GET    /api/v1/drive/files/{file_id}/permissions` — liste.
+- `POST   /api/v1/drive/files/{file_id}/share` — body
+  `{email, role, send_notification, message}`. Rôles : `reader`,
+  `commenter`, `writer`.
+- `DELETE /api/v1/drive/files/{file_id}/permissions/{permission_id}` —
+  révoque.
+
+### Exceptions custom
+
+Définies dans `app.services.drive_exceptions` :
+
+| Exception                | HTTP | Sémantique                                                |
+| ------------------------ | ---- | --------------------------------------------------------- |
+| `DriveAuthError`         | 401  | User non connecté ou token invalide / expiré              |
+| `DriveNotFoundError`     | 404  | Fichier ou dossier introuvable (ou hors scope `drive.file`) |
+| `DrivePermissionError`   | 403  | Google a refusé (permissions insuffisantes)               |
+| `DriveExportRequired`    | 409  | Fichier Google natif — passer par `/export`               |
+| `DriveQuotaExceeded`     | 429  | Quota ou rate limit dépassé                               |
+| `DriveAPIError`          | 502  | Autre erreur Drive non catégorisée                        |
+
+Toutes wrappent l'exception Google originale sur `.original` et
+exposent un message lisible en français côté `.message`.
+
+### Audit log
+
+Toutes les opérations posent une ligne dans `drive_audit_logs` :
+`action` (verbe précis : `list_folder`, `get_metadata`, `upload`,
+`download`, `export`, `rename`, `move`, `trash`, `delete_permanent`,
+`restore`, `create_folder`, `copy_folder_recursive`, `search`,
+`share`, `list_permissions`, `revoke_permission`, `get_folder_path`),
+`drive_file_id`, `drive_file_name`, `details` (JSON), `success`,
+`error_message`.
+
+### Copie récursive
+
+Drive API v3 ne supporte PAS la copie de dossier nativement. Le
+wrapper `copy_folder_recursive` :
+
+1. Crée un dossier vide dans le parent cible ;
+2. Liste les enfants directs du dossier source ;
+3. Pour chaque enfant : si dossier → récursion (profondeur + 1) ;
+   sinon → `files.copy()` avec le nouveau parent.
+
+Garde-fou : profondeur max **5** niveaux pour éviter une boucle
+infinie sur un cycle pathologique. Cette fonction est utilisée
+Phase 4 par le mécanisme « copier le template » des Drive Conventions.
+
+### Limites Drive API à connaître
+
+- **Scope `drive.file`** : on ne voit que les fichiers créés ou ouverts
+  via Kratos. Un fichier déposé manuellement sur le Drive sera invisible
+  tant que l'utilisateur ne l'a pas explicitement ouvert via Kratos
+  (Drive Picker — Phase 3 ou 4).
+- **Recherche non récursive** : Google ne permet pas de chercher dans
+  les descendants d'un dossier en un seul appel ; `?parent_folder_id`
+  filtre uniquement les ENFANTS DIRECTS.
+- **Quota** : 1 000 requêtes / 100 secondes / user (par défaut). Au-delà,
+  on retourne `DriveQuotaExceeded` (HTTP 429).
+
+### Tests curl
+
+Préparer un token Kratos admin/owner connecté à Drive, et l'ID d'un
+dossier de test sur ton Drive. Variables :
+
+```bash
+TOKEN="<JWT_KRATOS>"
+BASE="https://h2-0.onrender.com/api/v1/drive"
+FOLDER="<DRIVE_FOLDER_ID>"
+```
+
+**Lister le contenu d'un dossier**
+
+```bash
+curl -s "$BASE/folders/$FOLDER/files" \
+  -H "Authorization: Bearer $TOKEN" | jq
+```
+
+**Créer un sous-dossier**
+
+```bash
+curl -s -X POST "$BASE/folders/$FOLDER/subfolders" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Test Phase 2"}' | jq
+```
+
+**Upload un petit fichier**
+
+```bash
+echo "hello kratos" > /tmp/hello.txt
+curl -s -X POST "$BASE/folders/$FOLDER/upload" \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@/tmp/hello.txt" | jq
+# → noter l'id retourné, ex. FILE_ID=...
+FILE_ID="<ID_RETOURNÉ>"
+```
+
+**Renommer**
+
+```bash
+curl -s -X PATCH "$BASE/files/$FILE_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"hello-renamed.txt"}' | jq
+```
+
+**Déplacer**
+
+```bash
+NEW_PARENT="<AUTRE_FOLDER_ID>"
+curl -s -X PATCH "$BASE/files/$FILE_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"parent_folder_id\":\"$NEW_PARENT\"}" | jq
+```
+
+**Download**
+
+```bash
+curl -s -L "$BASE/files/$FILE_ID/download" \
+  -H "Authorization: Bearer $TOKEN" -o /tmp/dl.txt
+cat /tmp/dl.txt  # → hello kratos
+```
+
+**URL de preview (iframe)**
+
+```bash
+curl -s "$BASE/files/$FILE_ID/preview-url" \
+  -H "Authorization: Bearer $TOKEN" | jq
+```
+
+**Recherche**
+
+```bash
+curl -s "$BASE/search?q=hello" \
+  -H "Authorization: Bearer $TOKEN" | jq
+```
+
+**Partage**
+
+```bash
+curl -s -X POST "$BASE/files/$FILE_ID/share" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"sgiguere@immohorizon.com","role":"reader","send_notification":false}' | jq
+curl -s "$BASE/files/$FILE_ID/permissions" \
+  -H "Authorization: Bearer $TOKEN" | jq
+```
+
+**Trash + Restore**
+
+```bash
+curl -s -X DELETE "$BASE/files/$FILE_ID" \
+  -H "Authorization: Bearer $TOKEN" -w "%{http_code}\n"
+curl -s -X POST "$BASE/files/$FILE_ID/restore" \
+  -H "Authorization: Bearer $TOKEN" | jq
+```
+
+**Delete permanent (à n'utiliser qu'en test)**
+
+```bash
+curl -s -X DELETE "$BASE/files/$FILE_ID?permanent=true" \
+  -H "Authorization: Bearer $TOKEN" -w "%{http_code}\n"
+```
+
+## Limites Phase 2
+
+- Aucune UI frontend (Phase 3 — composant `<DriveFolderExplorer>`).
+- Aucune Drive Convention exécutée automatiquement (Phase 4-5).
+- Aucun auto-upload de PDF Kratos (Phase 6).
+- Aucune intégration sur les pages entités, deals ou projets (Phase 7).
+
+Phase 2 = backend wrapper + endpoints REST. Phil valide via curl
+ci-dessus, et la Phase 3 brancherait l'UI dessus.
