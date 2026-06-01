@@ -289,27 +289,51 @@ function FileTypeIcon({
 }
 
 /**
- * Liste blanche des types MIME prévisualisables via l'iframe Drive viewer
- * (`https://drive.google.com/file/d/{id}/preview`). Drive sait rendre nativement
- * tous ces formats — y compris les PDF, les fichiers Office (docx/xlsx/pptx) et
- * les fichiers texte. Pour les types vraiment opaques (zip, exe, octet-stream,
- * archives), on tombe dans le fallback "Télécharger".
+ * Logique inversée : tout type est previewable par défaut via l'iframe Drive
+ * viewer (`https://drive.google.com/file/d/{id}/preview`). Drive supporte
+ * nativement énormément de formats (images, vidéo, audio, PDF, Office, texte,
+ * CSV, etc.) et affiche son propre placeholder élégant pour les types qu'il ne
+ * sait pas rendre. C'est mieux que de tomber dans notre fallback
+ * "Télécharger" trop tôt sur des types courants. On garde une blacklist courte
+ * pour les rares types vraiment opaques (archives, exécutables, binaires)
+ * où l'iframe ne montrera rien d'utile.
  */
 function canPreviewInline(mime: string): boolean {
-  if (!mime) return false;
+  if (!mime) return true; // type inconnu → essayer quand même
   if (mime === FOLDER_MIME) return false;
-  if (mime.startsWith("image/")) return true;
-  if (mime.startsWith("video/")) return true;
-  if (mime.startsWith("audio/")) return true;
-  if (mime.startsWith("text/")) return true;
-  if (mime === "application/pdf") return true;
-  if (mime.startsWith("application/vnd.google-apps.")) return true;
-  // Office moderne (docx, xlsx, pptx, etc.) — Drive convertit à la volée.
-  if (mime.startsWith("application/vnd.openxmlformats-officedocument"))
-    return true;
-  // Vieux Office (doc, xls, ppt) et variantes macro (xlsm, xlsb…).
-  if (mime.startsWith("application/vnd.ms-")) return true;
-  return false;
+
+  // Blacklist des types VRAIMENT opaques (archives, exécutables, binaires).
+  const OPAQUE_PREFIXES = [
+    "application/zip",
+    "application/x-rar",
+    "application/x-rar-compressed",
+    "application/x-7z-compressed",
+    "application/x-tar",
+    "application/gzip",
+    "application/x-gzip",
+    "application/x-bzip2",
+    "application/x-iso9660-image",
+    "application/x-msdownload", // .exe, .msi
+    "application/x-msi",
+    "application/x-sh",
+    "application/x-shellscript",
+    "application/x-executable",
+    "application/x-mach-binary", // macOS executables
+    "application/x-apple-diskimage", // .dmg
+    "application/x-rpm",
+    "application/x-deb",
+    "application/vnd.android.package-archive", // .apk
+    "application/octet-stream", // données binaires génériques
+    "application/x-sharedlib",
+    "application/x-object"
+  ];
+
+  if (OPAQUE_PREFIXES.some((prefix) => mime.startsWith(prefix))) {
+    return false;
+  }
+
+  // Sinon → previewable (Drive viewer gérera ou affichera son propre placeholder).
+  return true;
 }
 
 /**
