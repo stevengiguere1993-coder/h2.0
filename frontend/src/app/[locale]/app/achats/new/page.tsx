@@ -13,8 +13,15 @@ import { ReceiptScanner } from "@/components/receipt-scanner";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { splitFromTotal } from "@/lib/tax";
+import { projectLabel } from "@/lib/project";
 
-type Project = { id: number; name: string };
+type Project = {
+  id: number;
+  name: string;
+  address?: string | null;
+  billing_kind?: string;
+};
 type Fournisseur = { id: number; name: string };
 type POMini = {
   id: number;
@@ -61,8 +68,41 @@ export default function NewAchatPage() {
     { id: number; full_name: string }[]
   >([]);
   const [description, setDescription] = useState("");
+  // L'employé saisit le total (TTC) de la facture ; le HT et les taxes
+  // sont décomposés automatiquement (TPS + TVQ) mais restent éditables.
+  const [total, setTotal] = useState("");
   const [amount, setAmount] = useState("");
-  const [amountTaxes, setAmountTaxes] = useState("");
+  const [amountTps, setAmountTps] = useState("");
+  const [amountTvq, setAmountTvq] = useState("");
+
+  function onTotalChange(v: string) {
+    setTotal(v);
+    const n = Number(v);
+    if (v.trim() !== "" && !Number.isNaN(n) && n > 0) {
+      const { ht, tps, tvq } = splitFromTotal(n);
+      setAmount(ht.toFixed(2));
+      setAmountTps(tps.toFixed(2));
+      setAmountTvq(tvq.toFixed(2));
+    }
+  }
+
+  function syncTotal(htStr: string, tpsStr: string, tvqStr: string) {
+    const sum =
+      (Number(htStr) || 0) + (Number(tpsStr) || 0) + (Number(tvqStr) || 0);
+    setTotal(sum ? sum.toFixed(2) : "");
+  }
+  function onAmountChange(v: string) {
+    setAmount(v);
+    syncTotal(v, amountTps, amountTvq);
+  }
+  function onTpsChange(v: string) {
+    setAmountTps(v);
+    syncTotal(amount, v, amountTvq);
+  }
+  function onTvqChange(v: string) {
+    setAmountTvq(v);
+    syncTotal(amount, amountTps, v);
+  }
   // Refacturation client.
   const [isBillable, setIsBillable] = useState(true);
   const [markupPercent, setMarkupPercent] = useState("");
@@ -77,6 +117,16 @@ export default function NewAchatPage() {
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Défaut « refacturable » selon le type de la soumission du projet :
+  // forfaitaire = décoché, estimé / à contrat = coché. Se réapplique
+  // quand on change de projet ; un ajustement manuel reste possible
+  // ensuite (l'effet ne dépend que du projet sélectionné).
+  useEffect(() => {
+    if (!projectId) return;
+    const p = projects.find((x) => String(x.id) === String(projectId));
+    if (p?.billing_kind) setIsBillable(p.billing_kind !== "forfaitaire");
+  }, [projectId, projects]);
 
   useEffect(() => {
     let cancelled = false;
@@ -138,7 +188,14 @@ export default function NewAchatPage() {
       if (hours.trim()) payload.hours = Number(hours);
       if (description.trim()) payload.description = description.trim();
       if (amount) payload.amount = Number(amount);
-      if (amountTaxes) payload.amount_taxes = Number(amountTaxes);
+      if (amountTps) payload.amount_tps = Number(amountTps);
+      if (amountTvq) payload.amount_tvq = Number(amountTvq);
+      if (amountTps || amountTvq) {
+        payload.amount_taxes =
+          Math.round(
+            ((Number(amountTps) || 0) + (Number(amountTvq) || 0)) * 100
+          ) / 100;
+      }
       payload.is_billable = isBillable;
       if (markupPercent.trim()) {
         payload.markup_percent = Number(markupPercent);
@@ -236,8 +293,10 @@ export default function NewAchatPage() {
                       setPaymentMethod(po.payment_method);
                     if (po.description && !description)
                       setDescription(po.description);
-                    if (po.amount_max != null && !amount)
+                    if (po.amount_max != null && !amount) {
                       setAmount(String(po.amount_max));
+                      syncTotal(String(po.amount_max), amountTps, amountTvq);
+                    }
                   }
                 }
               }}
@@ -272,7 +331,7 @@ export default function NewAchatPage() {
                 <option value="">— Aucun (frais généraux) —</option>
                 {projects.map((p) => (
                   <option key={p.id} value={String(p.id)}>
-                    {p.name}
+                    {projectLabel(p)}
                   </option>
                 ))}
               </select>
@@ -370,7 +429,28 @@ export default function NewAchatPage() {
             </div>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div>
+            <label htmlFor="atotal" className="label">
+              Montant total (TTC) — total de la facture
+            </label>
+            <input
+              id="atotal"
+              type="number"
+              step="0.01"
+              min="0"
+              value={total}
+              onChange={(e) => onTotalChange(e.target.value)}
+              placeholder="0.00"
+              className="input"
+            />
+            <p className="mt-1 text-xs text-white/40">
+              Le HT et les taxes (TPS 5 % + TVQ 9,975 %) sont calculés
+              automatiquement à partir du total. Ajustables si la facture a
+              des taxes non standard.
+            </p>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <label htmlFor="amount" className="label">
                 Montant HT (avant taxes)
@@ -381,22 +461,37 @@ export default function NewAchatPage() {
                 step="0.01"
                 min="0"
                 value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+                onChange={(e) => onAmountChange(e.target.value)}
                 placeholder="0.00"
                 className="input"
               />
             </div>
             <div>
-              <label htmlFor="amounttaxes" className="label">
-                Taxes (CAD)
+              <label htmlFor="amounttps" className="label">
+                TPS (5 %)
               </label>
               <input
-                id="amounttaxes"
+                id="amounttps"
                 type="number"
                 step="0.01"
                 min="0"
-                value={amountTaxes}
-                onChange={(e) => setAmountTaxes(e.target.value)}
+                value={amountTps}
+                onChange={(e) => onTpsChange(e.target.value)}
+                placeholder="0.00"
+                className="input"
+              />
+            </div>
+            <div>
+              <label htmlFor="amounttvq" className="label">
+                TVQ (9,975 %)
+              </label>
+              <input
+                id="amounttvq"
+                type="number"
+                step="0.01"
+                min="0"
+                value={amountTvq}
+                onChange={(e) => onTvqChange(e.target.value)}
                 placeholder="0.00"
                 className="input"
               />

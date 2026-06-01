@@ -299,7 +299,6 @@ async def receive_facebook_lead(
                 # Pas de token ou fetch en échec : on logge et on
                 # passe. L'opérateur pourra relancer manuellement.
                 continue
-            field_data = detail.get("field_data") or []
 
             fields = _build_fields_from_lead_detail(
                 detail, leadgen_id, value=value
@@ -458,9 +457,51 @@ def _build_fields_from_lead_detail(
             "(Lead test Meta — aucune donnée réelle. Un vrai lead "
             "affichera ici les réponses du formulaire.)"
         )
-    lines.append("")
-    lines.append(f"[leadgen_id={leadgen_id}]")
-    message = "\n".join(lines)
+
+    # Recopie INTÉGRALE de toutes les réponses du formulaire, telles
+    # que Meta les renvoie (libellé brut + valeur). Garantit qu'aucune
+    # question — même un nouveau champ custom non mappé ci-dessus —
+    # n'est perdue, peu importe le formulaire utilisé. Le mapping
+    # structuré (name/email/phone/project_type/qualifiers) reste la
+    # source des colonnes ; cette section est le filet de sécurité.
+    all_lines: List[str] = []
+    for entry in field_data:
+        label = (entry.get("name") or "").strip()
+        if not label:
+            continue
+        raw_values = entry.get("values") or entry.get("value") or []
+        if isinstance(raw_values, list):
+            val = ", ".join(str(v) for v in raw_values if v)
+        else:
+            val = str(raw_values)
+        val = _clean_fb_value(val)
+        if not val:
+            continue
+        all_lines.append(f"- {label} : {val}")
+    if all_lines:
+        lines.append("")
+        lines.append("Toutes les réponses du formulaire :")
+        lines.extend(all_lines)
+
+    # Traçabilité de la provenance (quelle pub / quel formulaire) +
+    # leadgen_id. Ce trailer DOIT survivre à la troncature : le
+    # leadgen_id sert d'idempotence et au bouton « Rafraîchir depuis
+    # Meta ». On tronque donc le corps, jamais le trailer.
+    form_id = detail.get("form_id")
+    ad_id = detail.get("ad_id")
+    trailer_lines = [""]
+    if form_id:
+        trailer_lines.append(f"[form_id={form_id}]")
+    if ad_id:
+        trailer_lines.append(f"[ad_id={ad_id}]")
+    trailer_lines.append(f"[leadgen_id={leadgen_id}]")
+    trailer = "\n".join(trailer_lines)
+
+    body = "\n".join(lines)
+    max_len = 5000
+    if len(body) + len(trailer) + 1 > max_len:
+        body = body[: max(0, max_len - len(trailer) - 2)].rstrip() + "…"
+    message = f"{body}\n{trailer}"
 
     # Courriel synthetique si Facebook n'en fournit pas (rare).
     # Respecte la contrainte NOT NULL de la colonne et reste
@@ -481,7 +522,9 @@ def _build_fields_from_lead_detail(
         "address": address,
         "project_type": project_type,
         "budget_range": budget,
-        "message": message[:5000],
+        # Déjà borné à 5000 plus haut en préservant le trailer
+        # [leadgen_id=…] — ne pas re-tronquer ici (couperait le trailer).
+        "message": message,
     }
 
 

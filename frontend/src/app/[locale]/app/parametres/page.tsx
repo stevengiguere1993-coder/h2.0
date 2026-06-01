@@ -532,6 +532,74 @@ function QuickBooksSection() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [diag, setDiag] = useState<Record<string, unknown> | null>(null);
+  const [diagBusy, setDiagBusy] = useState(false);
+
+  async function runDiag() {
+    setDiagBusy(true);
+    setDiag(null);
+    try {
+      const res = await authedFetch("/api/v1/qbo/diag");
+      const data = (await res.json()) as Record<string, unknown>;
+      setDiag(data);
+    } catch (e) {
+      setDiag({ error: (e as Error).message });
+    } finally {
+      setDiagBusy(false);
+    }
+  }
+
+  async function listAccounts() {
+    setDiagBusy(true);
+    setDiag(null);
+    try {
+      const res = await authedFetch("/api/v1/qbo/accounts");
+      const data = (await res.json()) as {
+        ok: boolean;
+        accounts?: { name: string; account_type?: string | null }[];
+        error?: string | null;
+      };
+      if (data.ok && data.accounts) {
+        setDiag({
+          comptes_QBO: data.accounts.map((a) =>
+            a.account_type ? `${a.name}  (${a.account_type})` : a.name
+          )
+        });
+      } else {
+        setDiag({ error: data.error || "Échec du listage des comptes." });
+      }
+    } catch (e) {
+      setDiag({ error: (e as Error).message });
+    } finally {
+      setDiagBusy(false);
+    }
+  }
+
+  async function listTaxCodes() {
+    setDiagBusy(true);
+    setDiag(null);
+    try {
+      const res = await authedFetch("/api/v1/qbo/tax-codes");
+      const data = (await res.json()) as {
+        ok: boolean;
+        tax_codes?: { id: string; name: string }[];
+        error?: string | null;
+      };
+      if (data.ok && data.tax_codes) {
+        setDiag({
+          codes_taxe_QBO: data.tax_codes.map(
+            (t) => `Id ${t.id} — ${t.name}`
+          )
+        });
+      } else {
+        setDiag({ error: data.error || "Échec du listage des codes." });
+      }
+    } catch (e) {
+      setDiag({ error: (e as Error).message });
+    } finally {
+      setDiagBusy(false);
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -691,7 +759,48 @@ function QuickBooksSection() {
               <Trash2 className="mr-1.5 h-3.5 w-3.5" />
               Déconnecter
             </button>
+            <button
+              type="button"
+              onClick={runDiag}
+              disabled={diagBusy}
+              className="btn-secondary text-xs"
+              title="Vérifie d'où vient le token, l'environnement, et teste un refresh réel auprès d'Intuit."
+            >
+              {diagBusy ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Diagnostic
+            </button>
+            <button
+              type="button"
+              onClick={listAccounts}
+              disabled={diagBusy}
+              className="btn-secondary text-xs"
+              title="Liste les comptes QBO réels — copie les noms exacts dans le mapping des modes de paiement."
+            >
+              {diagBusy ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Lister comptes QBO
+            </button>
+            <button
+              type="button"
+              onClick={listTaxCodes}
+              disabled={diagBusy}
+              className="btn-secondary text-xs"
+              title="Liste les codes de taxe QBO (Id + nom) — l'Id sert pour la variable QBO_PURCHASE_TAX_CODE."
+            >
+              {diagBusy ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Lister codes de taxe
+            </button>
           </div>
+          {diag ? (
+            <pre className="overflow-x-auto rounded-xl border border-brand-800 bg-brand-950 px-4 py-3 text-[11px] leading-relaxed text-white/80">
+              {JSON.stringify(diag, null, 2)}
+            </pre>
+          ) : null}
         </div>
       ) : (
         <div className="mt-4 space-y-3">

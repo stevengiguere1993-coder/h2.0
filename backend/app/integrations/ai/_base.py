@@ -76,6 +76,7 @@ class AIProvider(Protocol):
         max_tokens: int = 1024,
         temperature: float = 0.7,
         model: Optional[str] = None,
+        thinking_budget: Optional[int] = None,
     ) -> CompletionResult: ...
 
     async def chat(
@@ -86,6 +87,7 @@ class AIProvider(Protocol):
         max_tokens: int = 1024,
         temperature: float = 0.7,
         model: Optional[str] = None,
+        thinking_budget: Optional[int] = None,
     ) -> CompletionResult: ...
 
     async def embed(

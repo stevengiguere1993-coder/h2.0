@@ -765,6 +765,36 @@ class InsightOut(BaseModel):
 
 
 @router.get(
+    "/insights",
+    response_model=List[InsightOut],
+    summary="Vue d'ensemble : insights IA de toutes les entreprises",
+)
+async def list_insights_global(
+    db: DBSession,
+    user: CurrentUser,
+    open_only: bool = True,
+) -> List[InsightOut]:
+    """Agrège les insights de toutes les entreprises (vue cross-
+    entreprises pour le tableau de bord copilote)."""
+    _require_volet(user)
+    from app.models.qg_strategic import Insight, InsightStatus
+
+    stmt = select(Insight)
+    if open_only:
+        stmt = stmt.where(
+            Insight.status.in_([
+                InsightStatus.NEW.value,
+                InsightStatus.ACKNOWLEDGED.value,
+                InsightStatus.IN_ACTION.value,
+            ])
+        )
+    rows = (
+        await db.execute(stmt.order_by(Insight.created_at.desc()).limit(100))
+    ).scalars().all()
+    return [InsightOut.from_model(i) for i in rows]
+
+
+@router.get(
     "/{entreprise_id}/insights",
     response_model=List[InsightOut],
     summary="Liste les insights IA d'une entreprise",
@@ -846,6 +876,72 @@ async def update_insight_status(
     await db.flush()
     await db.refresh(i)
     return InsightOut.from_model(i)
+
+
+class InsightCreateTaskBody(BaseModel):
+    """Action suggérée d'un insight à transformer en tâche. Si `title`
+    est omis, on prend le titre de l'insight."""
+
+    title: Optional[str] = Field(default=None, max_length=255)
+    assignee_user_id: Optional[int] = None
+    priority: str = Field(default="non_assigne", max_length=16)
+
+
+@router.post(
+    "/insights/{insight_id}/create-task",
+    response_model=EntrepriseTacheRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crée une tâche à partir d'un insight IA (et le marque in_action)",
+)
+async def create_task_from_insight(
+    insight_id: int,
+    body: InsightCreateTaskBody,
+    db: DBSession,
+    user: CurrentUser,
+) -> EntrepriseTacheRead:
+    """Copilote « qui agit » : transforme une action suggérée d'un
+    insight en vraie tâche d'entreprise, puis marque l'insight
+    `in_action`. Réutilise la création de tâche existante (scoring IA
+    asynchrone inclus)."""
+    _require_volet(user)
+    from app.models.qg_strategic import Insight, InsightStatus
+
+    i = (
+        await db.execute(select(Insight).where(Insight.id == insight_id))
+    ).scalar_one_or_none()
+    if i is None:
+        raise HTTPException(404, "Insight introuvable")
+
+    title = (body.title or i.title or "Tâche").strip()[:255]
+    t = EntrepriseTache(
+        entreprise_id=i.entreprise_id,
+        title=title,
+        description=(i.body or None),
+        status=TacheStatus.A_FAIRE.value,
+        priority=body.priority,
+        assignee_user_id=body.assignee_user_id,
+    )
+    db.add(t)
+    await db.flush()
+
+    # L'insight passe en « en action ».
+    i.status = InsightStatus.IN_ACTION.value
+    if i.acknowledged_at is None:
+        i.acknowledged_at = datetime.now(timezone.utc)
+        i.acknowledged_by_user_id = user.id
+    await db.flush()
+    await db.refresh(t)
+
+    # Fire-and-forget : scoring IA asynchrone (comme create_tache).
+    import asyncio
+
+    from app.services.task_auto_score import autoscore_entreprise_tache
+
+    asyncio.create_task(autoscore_entreprise_tache(int(t.id)))
+
+    final_a = await _load_tache_assignees(db, [t.id])
+    final_i = await _load_tache_immeubles(db, [t.id])
+    return _to_tache_read(t, final_a.get(t.id, []), final_i.get(t.id, []))
 
 
 # ── Visions (horizons stratégiques) ─────────────────────────────────────

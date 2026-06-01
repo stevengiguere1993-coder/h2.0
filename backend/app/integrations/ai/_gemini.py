@@ -34,7 +34,7 @@ GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 class GeminiProvider:
     name = "gemini"
-    default_completion_model = "gemini-2.0-flash"
+    default_completion_model = "gemini-2.5-flash"
     default_embedding_model = "text-embedding-004"
 
     def __init__(self, api_key: Optional[str] = None) -> None:
@@ -58,6 +58,7 @@ class GeminiProvider:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         model: Optional[str] = None,
+        thinking_budget: Optional[int] = None,
     ) -> CompletionResult:
         return await self.chat(
             messages=[Message(role="user", content=prompt)],
@@ -65,6 +66,7 @@ class GeminiProvider:
             max_tokens=max_tokens,
             temperature=temperature,
             model=model,
+            thinking_budget=thinking_budget,
         )
 
     # ---------- chat (multi-turn) ----------
@@ -77,6 +79,7 @@ class GeminiProvider:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         model: Optional[str] = None,
+        thinking_budget: Optional[int] = None,
     ) -> CompletionResult:
         self._check_key()
         model = model or os.getenv("AI_MODEL") or self.default_completion_model
@@ -89,12 +92,23 @@ class GeminiProvider:
                 {"role": role, "parts": [{"text": m.content}]}
             )
 
+        generation_config: dict = {
+            "maxOutputTokens": max_tokens,
+            "temperature": temperature,
+        }
+        # Modèles « thinking » (gemini-2.5-*) : sans plafond, le
+        # raisonnement interne mange le budget maxOutputTokens et la
+        # réponse visible est tronquée. thinking_budget=0 le désactive
+        # pour que tout le budget serve à la sortie. None = défaut du
+        # modèle (inchangé). Champ ignoré par les modèles sans thinking.
+        if thinking_budget is not None:
+            generation_config["thinkingConfig"] = {
+                "thinkingBudget": thinking_budget
+            }
+
         payload = {
             "contents": contents,
-            "generationConfig": {
-                "maxOutputTokens": max_tokens,
-                "temperature": temperature,
-            },
+            "generationConfig": generation_config,
         }
         if system:
             payload["systemInstruction"] = {

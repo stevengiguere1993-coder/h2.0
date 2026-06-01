@@ -20,6 +20,13 @@ services:
     plan: free
     rootDir: backend
     branch: main
+    # OCR (Tesseract + poppler) : Render Native Runtime Python lit
+    # automatiquement `backend/Aptfile` (rootDir = backend) et exécute
+    # `apt-get install` avant le buildCommand. Aucun champ explicite à
+    # déclarer ici. Si l'install ne se déclenche pas après un push,
+    # vide le cache de build dans Render UI (Manual Deploy → Clear
+    # build cache & deploy). Endpoint de validation post-deploy :
+    # GET /api/v1/lead-analyses/check-ocr-health
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
@@ -58,6 +65,12 @@ services:
         sync: false
       - key: QUICKBOOKS_CLIENT_SECRET
         sync: false
+      # App Intuit approuvée → on cible l'API QuickBooks de production
+      # (défaut code = "sandbox"). Les clés CLIENT_ID/SECRET ci-dessus
+      # doivent être celles de PRODUCTION (onglet « Production » du
+      # portail Intuit), pas celles du sandbox.
+      - key: QUICKBOOKS_ENV
+        value: production
       - key: QBO_REFRESH_TOKEN
         sync: false
       - key: QBO_REALM_ID

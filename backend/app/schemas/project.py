@@ -62,6 +62,11 @@ class ProjectRead(BaseModel):
     # rattachés à une soumission acceptée). Null si pas de soumission
     # liée ou si la soumission n'a pas de total.
     soumission_total: Optional[Decimal] = None
+    # Type de facturation dérivé de la soumission liée : "forfaitaire",
+    # "estime" ou "contrat". Sert de défaut pour la case « refacturable »
+    # des achats (forfaitaire = décoché, sinon coché). "forfaitaire" par
+    # défaut quand aucune soumission n'est liée.
+    billing_kind: str = "forfaitaire"
     estimated_hours_override: Optional[Decimal] = None
     created_at: datetime
     updated_at: datetime

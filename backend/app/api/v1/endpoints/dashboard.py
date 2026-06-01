@@ -7,6 +7,13 @@ business in a single response. Accepts optional `start_date` / `end_date`
 
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
+from zoneinfo import ZoneInfo
+
+# Fuseau d'affaires (Québec). Les bornes de période du dashboard sont
+# calculées dans ce fuseau puis converties en UTC, sinon une soumission
+# envoyée en soirée (heure du Québec) tombe le lendemain en UTC et n'est
+# pas comptée dans la journée/période sélectionnée.
+_BIZ_TZ = ZoneInfo("America/Toronto")
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
@@ -97,15 +104,23 @@ async def get_kpis(
     start_date: Optional[str] = Query(default=None),
     end_date: Optional[str] = Query(default=None),
 ) -> KpiResponse:
-    today = date.today()
+    today = datetime.now(_BIZ_TZ).date()
     month_start = date(today.year, today.month, 1)
     p_start = _parse_date(start_date, month_start)
     p_end = _parse_date(end_date, today)
     if p_end < p_start:
         p_start, p_end = p_end, p_start
 
-    p_start_dt = datetime.combine(p_start, datetime.min.time(), tzinfo=timezone.utc)
-    p_end_dt = datetime.combine(p_end, datetime.max.time(), tzinfo=timezone.utc)
+    # Bornes interprétées dans le fuseau d'affaires puis converties en UTC
+    # (les timestamps en DB sont en UTC). Ainsi la fin de journée locale
+    # = ~04:00 UTC le lendemain, et une soumission envoyée en soirée est
+    # bien comptée dans sa journée.
+    p_start_dt = datetime.combine(
+        p_start, datetime.min.time(), tzinfo=_BIZ_TZ
+    ).astimezone(timezone.utc)
+    p_end_dt = datetime.combine(
+        p_end, datetime.max.time(), tzinfo=_BIZ_TZ
+    ).astimezone(timezone.utc)
 
     now = datetime.now(timezone.utc)
     month_start_dt = _month_start_utc()
@@ -222,6 +237,9 @@ async def get_kpis(
         func.count(Soumission.id),
     ).where(
         Soumission.sent_at.is_not(None),
+        # Exclut les soumissions renvoyées en brouillon : envoyée puis
+        # remise en « draft » ⇒ plus comptée comme envoyée.
+        Soumission.status != "draft",
         Soumission.sent_at >= p_start_dt,
         Soumission.sent_at <= p_end_dt,
     )
@@ -351,6 +369,7 @@ async def get_kpis(
         )
         .where(
             Soumission.sent_at.is_not(None),
+            Soumission.status != "draft",
             Soumission.sent_at >= p_start_dt,
             Soumission.sent_at <= p_end_dt,
         )

@@ -18,6 +18,9 @@ class ClientBase(BaseModel):
     address: Optional[str] = Field(default=None, max_length=500)
     notes: Optional[str] = None
     contact_request_id: Optional[int] = Field(default=None, gt=0)
+    # Entreprise (vs particulier) + représentant facultatif.
+    is_company: bool = False
+    representative: Optional[str] = Field(default=None, max_length=255)
     # Langue du client — « fr » (défaut) ou « en ».
     language: str = Field(default="fr", pattern="^(fr|en)$")
 
@@ -32,6 +35,8 @@ class ClientUpdate(BaseModel):
     phone: Optional[str] = Field(default=None, max_length=50)
     address: Optional[str] = Field(default=None, max_length=500)
     notes: Optional[str] = None
+    is_company: Optional[bool] = None
+    representative: Optional[str] = Field(default=None, max_length=255)
     language: Optional[str] = Field(default=None, pattern="^(fr|en)$")
 
 

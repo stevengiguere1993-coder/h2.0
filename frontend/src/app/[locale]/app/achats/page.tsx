@@ -7,6 +7,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { Link } from "@/i18n/navigation";
+import { projectLabel } from "@/lib/project";
 
 type Achat = {
   id: number;
@@ -54,7 +55,7 @@ function daysBetween(a: Date, b: Date): number {
   return Math.floor(ms / 86_400_000);
 }
 
-type Project = { id: number; name: string };
+type Project = { id: number; name: string; address?: string | null };
 type Fournisseur = { id: number; name: string };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -75,6 +76,7 @@ function fmtMoney(n: number | string | null): string {
   return new Intl.NumberFormat("fr-CA", {
     style: "currency",
     currency: "CAD",
+    minimumFractionDigits: 2,
     maximumFractionDigits: 2
   }).format(num);
 }
@@ -272,7 +274,7 @@ export default function AchatsPage() {
             <option value="">Tous les projets</option>
             {projects.map((p) => (
               <option key={p.id} value={String(p.id)}>
-                {p.name}
+                {projectLabel(p)}
               </option>
             ))}
           </select>
@@ -334,7 +336,7 @@ export default function AchatsPage() {
                         {fr?.name || "—"}
                       </td>
                       <td className="px-4 py-3 text-white/70">
-                        {pr?.name || "—"}
+                        {projectLabel(pr)}
                       </td>
                       <td className="px-4 py-3 text-xs text-white/60">
                         <span className="line-clamp-1">{a.description || "—"}</span>

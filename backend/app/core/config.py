@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     quickbooks_env: str = "sandbox"
     qbo_refresh_token: Optional[str] = None
     qbo_realm_id: Optional[str] = None
+    # Id du code de taxe QBO à appliquer sur chaque ligne d'achat
+    # (reçu de dépense). Requis si la compagnie utilise la taxe de vente
+    # automatisée (« Tous les articles ont besoin d'un taux de taxe »).
+    # Récupère l'Id via le bouton « Lister codes de taxe » / endpoint
+    # /qbo/tax-codes (ex. TPS/TVQ QC).
+    qbo_purchase_tax_code: Optional[str] = None
     # OAuth redirect URI — doit être enregistrée à l'identique dans
     # l'app Intuit (onglet Keys & credentials → Redirect URIs).
     # Pointe sur le backend (h2-0), pas sur le frontend (h2-0-web).
@@ -87,11 +93,29 @@ class Settings(BaseSettings):
     # Anthropic (SEO content + validation — usage hors extraction lead)
     anthropic_api_key: Optional[str] = None
     claude_model: str = "claude-sonnet-4-5"
+    # Feature flag pour la ré-extraction Claude (Couche 3, payante).
+    # OFF par défaut depuis le passage à Groq (gratuit) en mai 2026.
+    # Mettre à True pour réactiver l'endpoint /re-extract-with-claude
+    # et afficher un bouton secondaire dans le frontend.
+    claude_reextract_enabled: bool = False
 
     # Gemini (Google AI Studio) — extraction des leads immobiliers
     # (URLs, texte libre, images, PDFs). Tier gratuit : 1500 req/jour.
     # Générer une clé : https://aistudio.google.com/app/apikey
     gemini_api_key: Optional[str] = None
+    # Cascade de modèles Gemini à essayer en chaîne quand l'un d'eux
+    # tombe en quota (chaque modèle a son propre RPM). Format : liste
+    # de noms séparés par virgule. Défaut couvre les 4 modèles texte
+    # actuellement gratuits sur Google AI Studio.
+    gemini_model_cascade: str = (
+        "gemini-2.5-flash,gemini-2.5-pro,gemini-2.0-flash"
+    )
+
+    # Groq (Llama 3.3 70B) — remplaçant gratuit de Claude pour la
+    # ré-extraction manuelle. Tier gratuit : 14 400 req/jour, sans CB.
+    # Générer une clé : https://console.groq.com → API Keys.
+    groq_api_key: Optional[str] = None
+    groq_model: str = "llama-3.3-70b-versatile"
 
     # SLA : un nouveau prospect doit être contacté dans les X heures
     # qui suivent sa création, sinon une notif rouge fan-out aux

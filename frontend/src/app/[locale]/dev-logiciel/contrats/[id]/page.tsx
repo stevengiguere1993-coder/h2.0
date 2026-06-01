@@ -82,6 +82,7 @@ function fmtMoney(cents: number | null): string {
   return (cents / 100).toLocaleString("fr-CA", {
     style: "currency",
     currency: "CAD",
+    minimumFractionDigits: 2,
     maximumFractionDigits: 2
   });
 }

@@ -25,6 +25,7 @@ type DeviceAny = {
   register(): Promise<void>;
   unregister(): Promise<void>;
   on(event: string, handler: (...args: unknown[]) => void): void;
+  updateToken(token: string): void;
   destroy(): void;
 };
 
@@ -107,19 +108,105 @@ export function VoiceConsole() {
         };
         const device = new Device(token, {
           codecPreferences: ["opus", "pcmu"],
+          // Edge Twilio le plus proche du Québec → réduit la latence et
+          // les pertes média (aide sur réseau mobile/cellulaire, cause
+          // fréquente des ConnectionError/TransportError 31005/31009).
+          edge: "toronto",
+          // Déclenche `tokenWillExpire` 30 s avant l'expiration du
+          // token (au lieu des 10 s par défaut) pour avoir le temps
+          // de re-fetch sans coupure.
+          tokenRefreshMs: 30_000,
           // logLevel: "warn",
         });
 
+        // Renouvellement du token. Le token Twilio expire (1h côté
+        // backend), et Twilio peut aussi le rejeter plus tôt (ex.
+        // horloge serveur décalée → 20101 « AccessTokenInvalid »
+        // au bout de quelques minutes). Dans les deux cas on va
+        // chercher un token frais et on le pousse au Device — le
+        // softphone se répare tout seul, sans recharger la page.
+        const refreshToken = async (): Promise<boolean> => {
+          try {
+            const r = await authedFetch("/api/v1/voice/sdk/token");
+            if (!r.ok) return false;
+            const { token: fresh } = (await r.json()) as { token: string };
+            device.updateToken(fresh);
+            return true;
+          } catch {
+            return false;
+          }
+        };
+
+        // Garde-fou anti-boucle : si le token reste rejeté malgré le
+        // refresh (vrai mauvais secret), on s'arrête après quelques
+        // tentatives et on affiche la bannière. Le compteur est remis
+        // à zéro dès qu'un enregistrement réussit.
+        let tokenRetries = 0;
+        const MAX_TOKEN_RETRIES = 3;
+
         device.on("registered", () => {
+          tokenRetries = 0;
           if (mounted) setStatus("ready");
         });
+        device.on("tokenWillExpire", () => {
+          void refreshToken();
+        });
         device.on("error", (err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          const code = (err as { code?: number } | null)?.code;
+          const tokenInvalid =
+            code === 20101 || /20101|AccessToken/i.test(msg);
+          if (tokenInvalid && tokenRetries < MAX_TOKEN_RETRIES) {
+            tokenRetries += 1;
+            console.warn(
+              `[Voice] token rejeté (20101) — refresh ${tokenRetries}/${MAX_TOKEN_RETRIES}`
+            );
+            void (async () => {
+              if (await refreshToken()) {
+                try {
+                  await device.register();
+                } catch {
+                  /* l'event error suivant relancera la récup */
+                }
+              }
+            })();
+            return; // pas de bannière pendant la récupération
+          }
+          // Erreurs de connexion média WebRTC (ex. 31005
+          // « ConnectionError », 31000/31003/53xxx) : transitoires,
+          // fréquentes sur réseau instable / cellulaire. L'appel
+          // bascule sur le repli mobile — on n'affiche pas de bandeau
+          // rouge persistant, juste un log discret.
+          const transientConn =
+            code === 31005 ||
+            code === 31000 ||
+            code === 31003 ||
+            code === 31009 ||
+            (typeof code === "number" && code >= 53000 && code < 54000) ||
+            /ConnectionError|connection error|media|ICE|transport/i.test(msg);
+          if (transientConn) {
+            console.warn("[Voice] erreur connexion transitoire (ignorée)", err);
+            return;
+          }
+          // Erreurs de transport / connexion média WebRTC, fréquentes
+          // et transitoires sur réseau mobile/cellulaire (le SDK tente
+          // de reconnecter tout seul, et les appels basculent sur le
+          // repli mobile). On les log sans afficher de bannière rouge
+          // persistante qui n'apporte aucune action utile à l'usager.
+          // 31005 ConnectionError · 31009 TransportError · 53xxx média.
+          const transient =
+            code === 31005 ||
+            code === 31009 ||
+            (typeof code === "number" && code >= 53000 && code < 54000) ||
+            /31005|31009|Transport|Connection ?error/i.test(msg);
+          if (transient) {
+            console.warn("[Voice] erreur transport transitoire", err);
+            return;
+          }
           console.warn("[Voice] device error", err);
           if (mounted) {
             setStatus("error");
-            setErrorMsg(
-              err instanceof Error ? err.message : String(err) || "device error"
-            );
+            setErrorMsg(msg || "device error");
           }
         });
         device.on("incoming", (call: CallAny) => {

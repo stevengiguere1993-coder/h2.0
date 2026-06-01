@@ -46,6 +46,7 @@ class GroqProvider:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         model: Optional[str] = None,
+        **_kwargs: object,  # ex. thinking_budget — sans objet ici
     ) -> CompletionResult:
         return await self.chat(
             messages=[Message(role="user", content=prompt)],
@@ -63,6 +64,7 @@ class GroqProvider:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         model: Optional[str] = None,
+        **_kwargs: object,  # ex. thinking_budget — sans objet ici
     ) -> CompletionResult:
         self._check_key()
         model = model or os.getenv("AI_MODEL") or self.default_completion_model

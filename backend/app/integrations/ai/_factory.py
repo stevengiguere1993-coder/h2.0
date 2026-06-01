@@ -139,9 +139,15 @@ async def complete(
     max_tokens: int = 1024,
     temperature: float = 0.7,
     model: Optional[str] = None,
+    thinking_budget: Optional[int] = None,
 ) -> CompletionResult:
     """Single-turn completion. Bascule automatiquement sur le provider
-    suivant en cas d'erreur réseau / rate-limit."""
+    suivant en cas d'erreur réseau / rate-limit.
+
+    ``thinking_budget`` : budget de raisonnement interne (tokens) pour
+    les modèles « thinking » comme gemini-2.5-flash. ``0`` le désactive
+    pour que tout ``max_tokens`` serve à la réponse visible. Ignoré par
+    les providers sans thinking (Groq, Anthropic)."""
     chain = _build_chain()
     last_err: Optional[Exception] = None
     for p in chain:
@@ -152,6 +158,7 @@ async def complete(
                 max_tokens=max_tokens,
                 temperature=temperature,
                 model=model,
+                thinking_budget=thinking_budget,
             )
         except AIProviderUnavailable:
             continue
@@ -174,6 +181,7 @@ async def chat(
     temperature: float = 0.7,
     model: Optional[str] = None,
     prefer: Optional[str] = None,
+    thinking_budget: Optional[int] = None,
 ) -> CompletionResult:
     """Multi-turn chat. Mêmes garanties de fallback que ``complete()``.
 
@@ -182,6 +190,8 @@ async def chat(
     disponibles en fallback. Utile pour les usages sensibles à la
     latence et au quota — ex. la secrétaire téléphonique vise Groq
     (gratuit, ultra-rapide) plutôt que Gemini (quota gratuit serré).
+
+    ``thinking_budget`` : voir ``complete()``. Ignoré hors Gemini.
     """
     chain = _build_chain()
     if prefer:
@@ -195,6 +205,7 @@ async def chat(
                 max_tokens=max_tokens,
                 temperature=temperature,
                 model=model,
+                thinking_budget=thinking_budget,
             )
         except AIProviderUnavailable:
             continue

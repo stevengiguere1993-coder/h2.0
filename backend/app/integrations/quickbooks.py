@@ -18,6 +18,7 @@ import base64
 import json
 import logging
 import os
+import re
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -227,8 +228,25 @@ class QuickBooksClient:
                     intuit_tid or "<missing>",
                     payload,
                 )
+                # Extrait le motif lisible de QBO (Fault.Error[].Detail/
+                # Message) et le met EN TÊTE du message — sinon il est
+                # coupé à l'affichage (bannière tronquée) derrière le
+                # tid + le payload technique.
+                reason = ""
+                try:
+                    errs = (payload.get("Fault") or {}).get("Error") or []
+                    if errs:
+                        e0 = errs[0]
+                        reason = (
+                            e0.get("Detail")
+                            or e0.get("Message")
+                            or ""
+                        ).strip()
+                except Exception:  # noqa: BLE001
+                    reason = ""
+                prefix = f"QBO refus : {reason} — " if reason else ""
                 raise QuickBooksError(
-                    f"QBO {method} {path} failed: {r.status_code} "
+                    f"{prefix}QBO {method} {path} failed: {r.status_code} "
                     f"(intuit_tid={intuit_tid or 'n/a'}) {payload}"
                 )
             if intuit_tid:
@@ -354,6 +372,99 @@ class QuickBooksClient:
             phone=phone,
             billing_address=billing_address,
         )
+
+    async def ensure_project(
+        self,
+        *,
+        parent_customer_id: str,
+        project_name: str,
+    ) -> Dict[str, Any]:
+        """Find-or-create un « projet » QBO = sous-client (Job) rattaché
+        au client parent. Sert à rattacher des dépenses/coûts à un
+        chantier précis, sans le refacturer.
+
+        QBO impose que le DisplayName d'un sous-client soit unique et
+        souvent préfixé du parent (« Parent:Projet »). On résout d'abord
+        par Job=true + ParentRef ; sinon on crée avec ParentRef +
+        Job=true.
+        """
+        rows = await self.query(
+            "SELECT * FROM Customer WHERE Job = true AND "
+            f"ParentRef = '{parent_customer_id}' MAXRESULTS 1000"
+        )
+        for row in rows:
+            # Le sous-client peut s'appeler « Projet » ou « Parent:Projet ».
+            disp = (row.get("DisplayName") or "")
+            fqn = (row.get("FullyQualifiedName") or "")
+            if (
+                disp == project_name
+                or disp.endswith(f":{project_name}")
+                or fqn.endswith(f":{project_name}")
+            ):
+                return row
+        body: Dict[str, Any] = {
+            "DisplayName": project_name,
+            "Job": True,
+            "ParentRef": {"value": str(parent_customer_id)},
+        }
+        data = await self._request(
+            "POST", "/customer", json_body=body, params={"minorversion": "70"}
+        )
+        return data.get("Customer") or data
+
+    async def ensure_class(self, *, name: str) -> Optional[Dict[str, Any]]:
+        """Find-or-create une « Classe » QBO (suivi par classe, ex. par
+        projet/chantier). Retourne None si le suivi des classes n'est pas
+        activé dans la compagnie (l'appelant ignore alors le ClassRef).
+        """
+        clean = (name or "").strip()
+        if not clean:
+            return None
+        safe = clean.replace("'", "''")
+        try:
+            rows = await self.query(
+                f"SELECT * FROM Class WHERE Name = '{safe}' MAXRESULTS 1"
+            )
+            if rows:
+                return rows[0]
+            data = await self._request(
+                "POST",
+                "/class",
+                json_body={"Name": clean[:100]},
+                params={"minorversion": "70"},
+            )
+            return data.get("Class") or data
+        except QuickBooksError:
+            # Classes désactivées dans la compagnie ou nom invalide :
+            # on n'empêche pas la dépense de se créer (sans ClassRef).
+            return None
+
+    async def ensure_payment_method(
+        self, *, name: str
+    ) -> Optional[Dict[str, Any]]:
+        """Find-or-create un « mode de paiement » QBO (PaymentMethod,
+        ex. « Carte de crédit », « Virement »). Retourne None en cas
+        d'échec (on n'empêche pas la dépense de se créer)."""
+        clean = (name or "").strip()
+        if not clean:
+            return None
+        safe = clean.replace("'", "''")
+        try:
+            rows = await self.query(
+                f"SELECT * FROM PaymentMethod WHERE Name = '{safe}' "
+                "MAXRESULTS 1"
+            )
+            if rows:
+                return rows[0]
+            data = await self._request(
+                "POST",
+                "/paymentmethod",
+                json_body={"Name": clean[:31]},
+                params={"minorversion": "70"},
+            )
+            return data.get("PaymentMethod") or data
+        except QuickBooksError:
+            return None
 
     # ------------------------------------------------------------------
     # Items (Service catalog)
@@ -545,11 +656,22 @@ class QuickBooksClient:
     async def find_account_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         if not name:
             return None
-        safe = name.replace("'", "''")
-        rows = await self.query(
-            f"SELECT * FROM Account WHERE Name = '{safe}' MAXRESULTS 1"
-        )
-        return rows[0] if rows else None
+        # Tolérance : si le nom contient un suffixe de type recopié par
+        # erreur depuis l'aide « Lister comptes QBO » (ex.
+        # "CC Horizon Olivier Therrien  (Credit Card)"), on le retire —
+        # le vrai Name côté QBO n'inclut pas le type.
+        cleaned = re.sub(r"\s*\((?:[^()]*)\)\s*$", "", name).strip()
+        candidates = [cleaned]
+        if name.strip() != cleaned:
+            candidates.append(name.strip())
+        for cand in candidates:
+            safe = cand.replace("'", "''")
+            rows = await self.query(
+                f"SELECT * FROM Account WHERE Name = '{safe}' MAXRESULTS 1"
+            )
+            if rows:
+                return rows[0]
+        return None
 
     # ------------------------------------------------------------------
     # Attachable upload — joint un fichier (image, PDF) à une entité QBO

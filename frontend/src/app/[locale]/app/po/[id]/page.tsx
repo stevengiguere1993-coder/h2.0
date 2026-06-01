@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter as useNextRouter } from "next/navigation";
+import {
+  useParams,
+  useRouter as useNextRouter,
+  useSearchParams
+} from "next/navigation";
 import {
   ArrowLeft,
   ArrowRightCircle,
@@ -21,6 +25,7 @@ import { FournisseurModal } from "@/components/fournisseur-modal";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { projectLabel } from "@/lib/project";
 import { useConfirm } from "@/components/confirm-dialog";
 
 type PurchaseOrder = {
@@ -38,7 +43,7 @@ type PurchaseOrder = {
   created_at: string;
 };
 
-type Project = { id: number; name: string };
+type Project = { id: number; name: string; address?: string | null };
 type Fournisseur = { id: number; name: string };
 type Employe = {
   id: number;
@@ -76,6 +81,16 @@ export default function PurchaseOrderDetailPage() {
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
   const router = useNextRouter();
+
+  // « Retour » : on honore le paramètre `from` (ex. retour vers l'onglet
+  // Achats / PO d'un projet) sinon on retombe sur la liste globale des PO.
+  const searchParams = useSearchParams();
+  const fromParam = searchParams.get("from");
+  const backHref =
+    fromParam && fromParam.startsWith("/app/") ? fromParam : "/app/po";
+  const backLabel = fromParam?.startsWith("/app/projets/")
+    ? "Retour au projet"
+    : "Retour aux PO";
 
   const [po, setPo] = useState<PurchaseOrder | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -252,10 +267,10 @@ export default function PurchaseOrderDetailPage() {
       <div className="p-4 lg:p-6">
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={"/app/po" as any}
+          href={backHref as any}
           className="inline-flex items-center text-sm text-white/70 hover:text-accent-500"
         >
-          <ArrowLeft className="mr-1 h-4 w-4" /> Retour aux PO
+          <ArrowLeft className="mr-1 h-4 w-4" /> {backLabel}
         </Link>
 
         {loading ? (
@@ -386,7 +401,7 @@ export default function PurchaseOrderDetailPage() {
                     <option value="">— Aucun (frais généraux) —</option>
                     {projects.map((p) => (
                       <option key={p.id} value={String(p.id)}>
-                        {p.name}
+                        {projectLabel(p)}
                       </option>
                     ))}
                   </select>

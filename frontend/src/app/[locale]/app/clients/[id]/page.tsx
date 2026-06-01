@@ -30,6 +30,8 @@ import { useConfirm } from "@/components/confirm-dialog";
 type Client = {
   id: number;
   name: string;
+  is_company?: boolean;
+  representative?: string | null;
   email: string | null;
   phone: string | null;
   address: string | null;
@@ -55,6 +57,8 @@ export default function ClientDetailPage() {
   const [deleting, setDeleting] = useState(false);
 
   const [name, setName] = useState("");
+  const [isCompany, setIsCompany] = useState(false);
+  const [representative, setRepresentative] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
@@ -73,6 +77,8 @@ export default function ClientDetailPage() {
         if (cancelled) return;
         setC(data);
         setName(data.name);
+        setIsCompany(!!data.is_company);
+        setRepresentative(data.representative || "");
         setEmail(data.email || "");
         setPhone(data.phone || "");
         setAddress(data.address || "");
@@ -94,13 +100,15 @@ export default function ClientDetailPage() {
     if (!c) return false;
     return (
       name !== c.name ||
+      isCompany !== !!c.is_company ||
+      representative !== (c.representative || "") ||
       email !== (c.email || "") ||
       phone !== (c.phone || "") ||
       address !== (c.address || "") ||
       notes !== (c.notes || "") ||
       language !== (c.language || "fr")
     );
-  }, [c, name, email, phone, address, notes, language]);
+  }, [c, name, isCompany, representative, email, phone, address, notes, language]);
 
   async function saveAll() {
     if (!c) return;
@@ -109,6 +117,9 @@ export default function ClientDetailPage() {
     try {
       const payload = {
         name: name.trim(),
+        is_company: isCompany,
+        representative:
+          isCompany && representative.trim() ? representative.trim() : null,
         email: email.trim() || null,
         phone: phone.trim() || null,
         address: address.trim() || null,
@@ -236,6 +247,10 @@ export default function ClientDetailPage() {
                 client={c}
                 name={name}
                 setName={setName}
+                isCompany={isCompany}
+                setIsCompany={setIsCompany}
+                representative={representative}
+                setRepresentative={setRepresentative}
                 email={email}
                 setEmail={setEmail}
                 phone={phone}
@@ -274,6 +289,10 @@ function ClientTabs({
   client,
   name,
   setName,
+  isCompany,
+  setIsCompany,
+  representative,
+  setRepresentative,
   email,
   setEmail,
   phone,
@@ -291,6 +310,10 @@ function ClientTabs({
   client: Client;
   name: string;
   setName: (v: string) => void;
+  isCompany: boolean;
+  setIsCompany: (v: boolean) => void;
+  representative: string;
+  setRepresentative: (v: string) => void;
   email: string;
   setEmail: (v: string) => void;
   phone: string;
@@ -383,7 +406,18 @@ function ClientTabs({
             </h2>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
               <div className="sm:col-span-2">
-                <label htmlFor="c_name" className="label">Nom</label>
+                <div className="flex items-center justify-between gap-3">
+                  <label htmlFor="c_name" className="label">Nom</label>
+                  <label className="flex cursor-pointer items-center gap-1.5 text-xs text-white/70">
+                    <input
+                      type="checkbox"
+                      checked={isCompany}
+                      onChange={(e) => setIsCompany(e.target.checked)}
+                      className="h-3.5 w-3.5"
+                    />
+                    Entreprise
+                  </label>
+                </div>
                 <input
                   id="c_name"
                   type="text"
@@ -392,6 +426,25 @@ function ClientTabs({
                   className="input"
                 />
               </div>
+              {isCompany ? (
+                <div className="sm:col-span-2">
+                  <label htmlFor="c_representative" className="label">
+                    Représentant
+                  </label>
+                  <input
+                    id="c_representative"
+                    type="text"
+                    value={representative}
+                    onChange={(e) => setRepresentative(e.target.value)}
+                    placeholder="Personne-ressource de l'entreprise"
+                    className="input"
+                  />
+                  <p className="mt-0.5 text-xs text-white/50">
+                    Affiché sur les soumissions/factures : « À
+                    l&apos;attention de … ».
+                  </p>
+                </div>
+              ) : null}
               <div>
                 <label htmlFor="c_email" className="label">Courriel</label>
                 <input
@@ -837,6 +890,7 @@ function ClientDocuments({
     return new Intl.NumberFormat("fr-CA", {
       style: "currency",
       currency: "CAD",
+      minimumFractionDigits: 2,
       maximumFractionDigits: 2
     }).format(v);
   }

@@ -12,8 +12,9 @@ import { FournisseurModal } from "@/components/fournisseur-modal";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { projectLabel } from "@/lib/project";
 
-type Project = { id: number; name: string };
+type Project = { id: number; name: string; address?: string | null };
 type Fournisseur = { id: number; name: string };
 type Employe = {
   id: number;
@@ -152,7 +153,7 @@ export default function NewPurchaseOrderPage() {
                 <option value="">— Aucun (frais généraux) —</option>
                 {projects.map((p) => (
                   <option key={p.id} value={String(p.id)}>
-                    {p.name}
+                    {projectLabel(p)}
                   </option>
                 ))}
               </select>

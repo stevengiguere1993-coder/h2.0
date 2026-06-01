@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { FileText, Loader2, Plus, Trash2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Loader2,
+  Plus,
+  Trash2
+} from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
@@ -45,21 +52,56 @@ function contractEstimate(s: Soumission): number | null {
   }
 }
 
-type Column = { id: string; label: string; dot: string };
+type Column = { id: string; label: string; dot: string; edge: string };
 
+// Couleurs vives (teinte -500) lisibles autant en thème nuit que jour :
+// `dot` = pastille de statut, `edge` = liseré de l'en-tête de colonne
+// pour distinguer les colonnes d'un coup d'œil. On évite les teintes
+// pâles (-400) et `bg-white/40` (invisible sur fond clair en mode jour).
 const COLUMNS: Column[] = [
-  { id: "draft", label: "Brouillons", dot: "bg-white/40" },
-  { id: "sent", label: "Envoyées", dot: "bg-blue-400" },
-  { id: "accepted", label: "Acceptées", dot: "bg-emerald-400" },
-  { id: "rejected", label: "Refusées", dot: "bg-rose-500" },
-  { id: "expired", label: "Expirées", dot: "bg-amber-400" }
+  { id: "draft", label: "Brouillons", dot: "bg-slate-400", edge: "border-slate-400" },
+  { id: "sent", label: "Envoyées", dot: "bg-blue-500", edge: "border-blue-500" },
+  { id: "accepted", label: "Acceptées", dot: "bg-emerald-500", edge: "border-emerald-500" },
+  { id: "rejected", label: "Refusées", dot: "bg-rose-500", edge: "border-rose-500" },
+  { id: "expired", label: "Expirées", dot: "bg-amber-500", edge: "border-amber-500" }
 ];
+
+// Colonnes repliées par défaut : « Refusées » et « Expirées » (du bruit
+// la plupart du temps). Toutes les colonnes restent repliables/dépliables
+// au clic ; le choix est mémorisé par navigateur.
+const COLLAPSED_COLS_KEY = "hsi_soumissions_collapsed_columns_v1";
+const DEFAULT_COLLAPSED = ["rejected", "expired"];
+
+function loadCollapsedColumns(): Set<string> {
+  if (typeof window === "undefined") return new Set(DEFAULT_COLLAPSED);
+  try {
+    const raw = window.localStorage.getItem(COLLAPSED_COLS_KEY);
+    if (raw === null) return new Set(DEFAULT_COLLAPSED);
+    const parsed = JSON.parse(raw) as string[];
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set(DEFAULT_COLLAPSED);
+  }
+}
+
+function saveCollapsedColumns(cols: Set<string>): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      COLLAPSED_COLS_KEY,
+      JSON.stringify([...cols])
+    );
+  } catch {
+    /* localStorage indisponible — non bloquant */
+  }
+}
 
 function fmtMoney(n: number | null): string {
   if (n == null) return "—";
   return new Intl.NumberFormat("fr-CA", {
     style: "currency",
     currency: "CAD",
+    minimumFractionDigits: 2,
     maximumFractionDigits: 2
   }).format(n);
 }
@@ -73,6 +115,23 @@ export default function SoumissionsPage() {
   const [search, setSearch] = useState("");
   const [dragging, setDragging] = useState<number | null>(null);
   const [hoverCol, setHoverCol] = useState<string | null>(null);
+  const [collapsedCols, setCollapsedCols] = useState<Set<string>>(
+    () => new Set(DEFAULT_COLLAPSED)
+  );
+
+  useEffect(() => {
+    setCollapsedCols(loadCollapsedColumns());
+  }, []);
+
+  function toggleColumnCollapsed(colId: string) {
+    setCollapsedCols((prev) => {
+      const next = new Set(prev);
+      if (next.has(colId)) next.delete(colId);
+      else next.add(colId);
+      saveCollapsedColumns(next);
+      return next;
+    });
+  }
 
   // Fallback : somme des items par soumission. Utilisé quand le total
   // persisté en DB est null/0 (cas legacy ou items ajoutés sans
@@ -303,6 +362,7 @@ export default function SoumissionsPage() {
             {COLUMNS.map((col) => {
               const cards = byColumn[col.id] || [];
               const isHover = hoverCol === col.id;
+              const collapsed = collapsedCols.has(col.id);
               return (
                 <div
                   key={col.id}
@@ -321,22 +381,38 @@ export default function SoumissionsPage() {
                     setDragging(null);
                     setHoverCol(null);
                   }}
-                  className={`flex w-80 min-w-[320px] flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
+                  className={`flex flex-shrink-0 flex-col rounded-xl border bg-brand-900/60 ${
+                    collapsed ? "w-56 min-w-[224px]" : "w-80 min-w-[320px]"
+                  } ${
                     isHover
                       ? "border-accent-500 bg-brand-900"
                       : "border-brand-800"
                   }`}
                 >
-                  <div className="flex items-center justify-between border-b border-brand-800 px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <span className={`h-2 w-2 rounded-full ${col.dot}`} />
+                  {/* En-tête horizontal dans les deux états : replié =
+                      chevron droit + corps masqué ; déplié = chevron bas. */}
+                  <div
+                    className={`flex items-center justify-between border-b-2 ${col.edge} px-4 py-3`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleColumnCollapsed(col.id)}
+                      title={collapsed ? "Cliquer pour déplier" : "Cliquer pour replier"}
+                      className="flex flex-1 items-center gap-2 text-left"
+                    >
+                      {collapsed ? (
+                        <ChevronRight className="h-3.5 w-3.5 text-white/50" />
+                      ) : (
+                        <ChevronDown className="h-3.5 w-3.5 text-white/50" />
+                      )}
+                      <span className={`h-2.5 w-2.5 rounded-full ${col.dot}`} />
                       <h2 className="text-sm font-semibold text-white">
                         {col.label}
                       </h2>
                       <span className="rounded-md bg-brand-950 px-2 py-0.5 text-xs font-semibold text-white/70">
                         {cards.length}
                       </span>
-                    </div>
+                    </button>
                     <span className="text-xs font-semibold text-emerald-300">
                       {fmtMoney(
                         cards.reduce(
@@ -347,6 +423,7 @@ export default function SoumissionsPage() {
                     </span>
                   </div>
 
+                  {collapsed ? null : (
                   <div className="flex-1 space-y-3 p-3">
                     {cards.length === 0 ? (
                       <p className="py-8 text-center text-xs text-white/40">
@@ -386,6 +463,7 @@ export default function SoumissionsPage() {
                       })
                     )}
                   </div>
+                  )}
                 </div>
               );
             })}

@@ -1373,6 +1373,21 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
             return Response(content=twiml, media_type="application/xml")
         call.forwarded_to_e164 = ",".join(targets)
         call.intent = "urgence_locataire"
+        # Tâche d'entreprise pour tracer/suivre l'urgence locataire
+        # (l'IA route vers la bonne entreprise). Fire-and-forget : ne
+        # casse jamais l'appel en cours.
+        try:
+            from app.integrations.voice.lea_task import create_task_from_call
+
+            await create_task_from_call(
+                db,
+                reason=decision.lead_reason or "Urgence locataire signalée",
+                caller_name=decision.lead_name,
+                caller_phone=decision.lead_callback_phone,
+                intent="urgence locataire",
+            )
+        except Exception:  # noqa: BLE001
+            pass
         # Multi-cible : premier qui décroche prend l'appel, les autres
         # cessent. Enregistrement audio activé (consentement annoncé
         # par Léa juste avant). Fallback callback si personne décroche.
@@ -1449,6 +1464,20 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
         )
         call.intent = "intake_construction"
         call.contact_request_id = cr_id
+        # Tâche de suivi pour l'équipe (l'IA route vers la bonne
+        # entreprise). Fire-and-forget : ne bloque/casse jamais l'appel.
+        try:
+            from app.integrations.voice.lea_task import create_task_from_call
+
+            await create_task_from_call(
+                db,
+                reason=decision.lead_reason or decision.say,
+                caller_name=decision.lead_name,
+                caller_phone=decision.lead_callback_phone,
+                intent="intake construction",
+            )
+        except Exception:  # noqa: BLE001
+            pass
         twiml = provider.build_say_and_hangup(
             say=decision.say, lang=decision.lang
         )
@@ -2024,7 +2053,11 @@ async def twilio_sdk_outbound(request: Request) -> Response:
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
         f'<Dial callerId="{os.getenv("TWILIO_PHONE_NUMBER", "")}" '
-        'timeout="20" record="record-from-answer-dual">'
+        # timeout=40s : laisse le temps à la messagerie vocale du
+        # destinataire de décrocher (souvent ~25-30 s) avant que Twilio
+        # n'abandonne. À 20 s, notre ligne raccrochait avant la boîte
+        # vocale de la cliente.
+        'timeout="40" record="record-from-answer-dual">'
         f"{to}"
         "</Dial>"
         "</Response>"

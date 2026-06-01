@@ -28,6 +28,8 @@ type QboStatus = {
   realm_id?: string | null;
   company_name?: string | null;
   environment?: string | null;
+  active_environment?: string | null;
+  env_mismatch?: boolean;
   connected_at?: string | null;
 };
 
@@ -301,6 +303,14 @@ export function ConnexionsSection({
                           {qbo.environment
                             ? ` · ${qbo.environment}`
                             : ""}
+                        </p>
+                      ) : null}
+                      {c.id === "qbo" && qbo?.connected && qbo?.env_mismatch ? (
+                        <p className="mt-0.5 text-[11px] text-amber-300">
+                          ⚠ Connexion en « {qbo.environment} » mais la config
+                          cible « {qbo.active_environment} ». Déconnecte puis
+                          reconnecte QuickBooks pour corriger (cause du
+                          403 ApplicationAuthorizationFailed).
                         </p>
                       ) : null}
                     </div>

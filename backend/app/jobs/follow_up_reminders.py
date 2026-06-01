@@ -216,12 +216,88 @@ async def _run() -> None:
             except Exception as exc:
                 log.warning("notif leave %s failed: %s", lr.id, exc)
 
+        # 4) Confirmation au responsable ~48 h avant un RDV prospect.
+        # Remplace l'ancienne relance « en retard » : on prévient le
+        # responsable du client pour qu'il confirme le rendez-vous.
+        from zoneinfo import ZoneInfo
+
+        from app.models.agenda_event import AgendaEvent
+
+        confirm_window = now + timedelta(hours=48)
+        upcoming = (
+            await db.execute(
+                select(AgendaEvent)
+                .where(
+                    AgendaEvent.contact_request_id.is_not(None),
+                    AgendaEvent.start_at >= now,
+                    AgendaEvent.start_at <= confirm_window,
+                )
+                .limit(200)
+            )
+        ).scalars().all()
+        rdv_notified = 0
+        for ev in upcoming:
+            href = f"/app/crm/{ev.contact_request_id}?rdv={ev.id}"
+            # Dédup : une seule notif de confirmation par RDV.
+            already = (
+                await db.execute(
+                    select(Notification.id).where(
+                        Notification.kind == "rdv.confirm",
+                        Notification.href == href,
+                    ).limit(1)
+                )
+            ).first() is not None
+            if already:
+                continue
+            pr = (
+                await db.execute(
+                    select(ContactRequest).where(
+                        ContactRequest.id == ev.contact_request_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if pr is None:
+                continue
+            try:
+                local = ev.start_at.astimezone(ZoneInfo("America/Toronto"))
+            except Exception:
+                local = ev.start_at
+            title = f"📅 Confirmer le RDV : {pr.name}"
+            body = (
+                f"Rendez-vous le {local.strftime('%d/%m/%Y à %Hh%M')}. "
+                "Confirme avec le client."
+            )
+            try:
+                if pr.assigned_to_user_id:
+                    await notify(
+                        db,
+                        user_id=pr.assigned_to_user_id,
+                        kind="rdv.confirm",
+                        title=title,
+                        body=body,
+                        href=href,
+                    )
+                else:
+                    await notify_role(
+                        db,
+                        min_role="manager",
+                        kind="rdv.confirm",
+                        title=title,
+                        body=body,
+                        href=href,
+                    )
+                rdv_notified += 1
+            except Exception as exc:
+                log.warning("notif rdv confirm %s failed: %s", ev.id, exc)
+
         await db.commit()
         log.info(
-            "follow-up reminders: %d overdue, %d prospects, %d leaves notified",
+            "follow-up reminders: %d overdue, %d prospects, %d leaves, "
+            "%d RDV confirmations notified",
             len(rows),
             len(prospects),
             leave_notified,
+            rdv_notified,
         )
 
         # Touch the soumissions table so the linter doesn't complain

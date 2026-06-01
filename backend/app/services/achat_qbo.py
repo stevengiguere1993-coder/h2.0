@@ -25,6 +25,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.integrations.quickbooks import QuickBooksError, get_qbo
 from app.models.achat import Achat
 from app.models.fournisseur import Fournisseur
@@ -50,6 +51,38 @@ class AchatSyncError(Exception):
     pass
 
 
+def _is_stale_ref(exc: Exception) -> bool:
+    """Vrai si l'erreur QBO indique que l'objet référencé (par son Id)
+    a été supprimé/inactivé côté QuickBooks — auquel cas on doit recréer
+    plutôt que mettre à jour. Couvre « Object Not Found » et « made
+    inactive » (errorCode 610 / 3200)."""
+    msg = str(exc).lower()
+    return (
+        "made inactive" in msg
+        or "object not found" in msg
+        or "introuvable" in msg
+        or "inactive" in msg
+        or "errorcode=610" in msg
+        or "code': '610'" in msg
+    )
+
+
+def _is_stale_token(exc: Exception) -> bool:
+    """Vrai si l'erreur QBO indique un SyncToken périmé (« Stale Object »,
+    errorCode 5010) — l'objet a changé côté QBO depuis notre dernier
+    token. Il faut relire le SyncToken courant et réessayer."""
+    msg = str(exc).lower()
+    return (
+        "stale object" in msg
+        or "périmé" in msg
+        or "perime" in msg
+        or "errorcode=5010" in msg
+        or "code': '5010'" in msg
+        or "en même temps" in msg
+        or "en meme temps" in msg
+    )
+
+
 async def _load_achat(db: AsyncSession, achat_id: int) -> Optional[Achat]:
     return (
         await db.execute(select(Achat).where(Achat.id == achat_id))
@@ -61,8 +94,21 @@ def _build_line(
     expense_account_id: str,
     project_name: Optional[str],
     customer_id: Optional[str] = None,
+    class_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    amount = float(achat.amount or 0)
+    # Montant HT de la ligne. Avec un TaxCodeRef + TaxExcluded, QBO
+    # calcule la taxe par-dessus, donc on doit envoyer le HT.
+    #   - Achat « normal » : amount = HT déjà (amount_taxes porte la taxe).
+    #   - Achat « legacy » : amount = TTC et amount_taxes = 0/None →
+    #     on décompose le TTC pour retrouver le HT (TPS 5 % + TVQ 9,975 %
+    #     = facteur 1,14975), sinon QBO ajouterait la taxe sur un TTC
+    #     (double taxation → total gonflé).
+    raw_amount = float(achat.amount or 0)
+    taxes = float(achat.amount_taxes or 0)
+    if settings.qbo_purchase_tax_code and taxes <= 0 and raw_amount > 0:
+        amount = round(raw_amount / 1.14975, 2)
+    else:
+        amount = raw_amount
     description = (
         achat.description
         or f"Achat #{achat.id}"
@@ -72,13 +118,22 @@ def _build_line(
     detail: Dict[str, Any] = {
         "AccountRef": {"value": str(expense_account_id)},
     }
-    # Si le projet est rattaché à un Client QB, l'achat devient
-    # « Billable » (refacturable au client) avec CustomerRef pointant
-    # sur ce client. C'est le mécanisme QB pour repasser une dépense
-    # dans la prochaine facture.
+    # CustomerRef = le client réel. BillableStatus = « Billable »
+    # seulement si on veut le repasser au client dans une facture,
+    # sinon « NotBillable » (coût suivi, non refacturé).
     if customer_id:
         detail["CustomerRef"] = {"value": str(customer_id)}
-        detail["BillableStatus"] = "Billable"
+        detail["BillableStatus"] = (
+            "Billable" if achat.is_billable else "NotBillable"
+        )
+    # ClassRef = le projet (chantier), pour le suivi par classe.
+    if class_id:
+        detail["ClassRef"] = {"value": str(class_id)}
+    # Code de taxe sur la ligne — exigé par la taxe de vente automatisée
+    # QBO (« Tous les articles ont besoin d'un taux de taxe »). On
+    # applique le code configuré (TPS/TVQ QC) à chaque ligne d'achat.
+    if settings.qbo_purchase_tax_code:
+        detail["TaxCodeRef"] = {"value": str(settings.qbo_purchase_tax_code)}
     return {
         "DetailType": "AccountBasedExpenseLineDetail",
         "Amount": round(amount, 2),
@@ -151,12 +206,17 @@ def _build_bill_payload(
     po_reference: Optional[str],
     project_name: Optional[str],
     customer_id: Optional[str] = None,
+    class_id: Optional[str] = None,
     existing_bill_id: Optional[str] = None,
     existing_sync_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     lines = [
         _build_line(
-            achat, expense_account_id, project_name, customer_id=customer_id
+            achat,
+            expense_account_id,
+            project_name,
+            customer_id=customer_id,
+            class_id=class_id,
         )
     ]
     payload: Dict[str, Any] = {
@@ -168,6 +228,12 @@ def _build_bill_payload(
     }
     if customer_id:
         _add_quebec_taxes(payload, lines)
+    elif settings.qbo_purchase_tax_code:
+        # Sans client (achat non refacturable) : le montant de ligne est
+        # le HT, et QBO calcule la taxe par-dessus via le TaxCodeRef.
+        # TaxExcluded évite que QBO traite le HT comme un TTC (sinon la
+        # taxe est ajoutée en double → total gonflé).
+        payload["GlobalTaxCalculation"] = "TaxExcluded"
     if existing_bill_id and existing_sync_token is not None:
         payload["Id"] = existing_bill_id
         payload["SyncToken"] = existing_sync_token
@@ -185,12 +251,18 @@ def _build_purchase_payload(
     po_reference: Optional[str],
     project_name: Optional[str],
     customer_id: Optional[str] = None,
+    class_id: Optional[str] = None,
+    payment_method_id: Optional[str] = None,
     existing_purchase_id: Optional[str] = None,
     existing_sync_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     lines = [
         _build_line(
-            achat, expense_account_id, project_name, customer_id=customer_id
+            achat,
+            expense_account_id,
+            project_name,
+            customer_id=customer_id,
+            class_id=class_id,
         )
     ]
     payload: Dict[str, Any] = {
@@ -202,8 +274,15 @@ def _build_purchase_payload(
         "PrivateNote": _private_note(achat, po_reference, project_name),
         "Line": lines,
     }
+    if payment_method_id:
+        payload["PaymentMethodRef"] = {"value": str(payment_method_id)}
     if customer_id:
         _add_quebec_taxes(payload, lines)
+    elif settings.qbo_purchase_tax_code:
+        # Sans client (achat non refacturable) : montant de ligne = HT,
+        # QBO calcule la taxe via le TaxCodeRef. TaxExcluded évite la
+        # double taxation (sinon le HT serait traité comme un TTC).
+        payload["GlobalTaxCalculation"] = "TaxExcluded"
     if existing_purchase_id and existing_sync_token is not None:
         payload["Id"] = existing_purchase_id
         payload["SyncToken"] = existing_sync_token
@@ -218,6 +297,19 @@ def _payment_type_for(method: Optional[str]) -> str:
     if method == "cheque_horizon":
         return "Check"
     return "Cash"
+
+
+def _payment_method_name_for(method: Optional[str]) -> Optional[str]:
+    """Nom du « mode de paiement » QBO (PaymentMethod) à afficher sur la
+    dépense — champ distinct du PaymentType. Demandé :
+      - carte de crédit Horizon (cc_*) → « Carte de crédit »
+      - compte chèque Horizon          → « Virement »
+    Retourne None pour les autres modes (pas de PaymentMethodRef)."""
+    if method and method.startswith("cc_"):
+        return "Carte de crédit"
+    if method == "cheque_horizon":
+        return "Virement"
+    return None
 
 
 async def _resolve_payment_account(
@@ -308,25 +400,53 @@ async def sync_achat_to_qbo(
         ).scalar_one_or_none()
     project: Optional[Project] = None
     customer_id: Optional[str] = None
+    class_id: Optional[str] = None
     if achat.project_id:
         project = (
             await db.execute(
                 select(Project).where(Project.id == achat.project_id)
             )
         ).scalar_one_or_none()
-        # Si le projet a un client lié et que ce client a un Customer
-        # QB attaché, l'achat devient « Billable » côté QB et on calcule
-        # les taxes québécoises (TPS + TVQ) sur la ligne.
-        if project and project.client_id:
-            from app.models.client import Client
+        # Organisation QBO demandée :
+        #   - Client (CustomerRef) = le client réel, créé s'il n'existe pas.
+        #   - Classe (ClassRef)    = le projet (nom/adresse du chantier),
+        #     créée si absente (si le suivi des classes est activé).
+        if project:
+            if project.client_id:
+                from app.models.client import Client
 
-            client = (
-                await db.execute(
-                    select(Client).where(Client.id == project.client_id)
+                client = (
+                    await db.execute(
+                        select(Client).where(Client.id == project.client_id)
+                    )
+                ).scalar_one_or_none()
+                if client:
+                    try:
+                        cust = await qbo.ensure_customer(
+                            display_name=client.name,
+                            email=client.email,
+                            phone=client.phone,
+                            billing_address=client.address,
+                        )
+                        customer_id = str(cust.get("Id") or "") or None
+                    except QuickBooksError as exc:
+                        log.warning(
+                            "QBO: client introuvable/échec (achat %s): %s",
+                            achat.id,
+                            exc,
+                        )
+                        customer_id = None
+            # Classe = adresse du chantier (repli sur le nom du projet
+            # si l'adresse est vide).
+            class_name = (
+                (getattr(project, "address", None) or "").strip()
+                or (project.name or "").strip()
+            )
+            if class_name:
+                klass = await qbo.ensure_class(name=class_name)
+                class_id = (
+                    str(klass.get("Id")) if klass and klass.get("Id") else None
                 )
-            ).scalar_one_or_none()
-            if client and client.qbo_customer_id:
-                customer_id = str(client.qbo_customer_id)
     # PO source (optionnel) — sa référence sert de DocNumber fallback
     # quand le # de facture fournisseur n'est pas fourni.
     po_reference: Optional[str] = None
@@ -349,6 +469,11 @@ async def sync_achat_to_qbo(
             "le Bill QuickBooks."
         )
 
+    # True seulement si on CRÉE un nouvel objet QBO (1ʳᵉ sync ou
+    # recréation après suppression). On ne (ré)attache la pièce jointe
+    # que dans ce cas, pour éviter de dupliquer la facture à chaque
+    # re-synchro (update).
+    did_create = False
     try:
         vendor = await qbo.ensure_vendor(
             display_name=fournisseur.name,
@@ -387,22 +512,60 @@ async def sync_achat_to_qbo(
                     f"→ Comptes QuickBooks et entre le nom exact du "
                     f"compte (ex. « Carte Visa Steven »)."
                 )
+            # Mode de paiement QBO (PaymentMethod) : CC → « Carte de
+            # crédit », chèque Horizon → « Virement ». Créé si absent.
+            pm_name = _payment_method_name_for(method)
+            payment_method_id: Optional[str] = None
+            if pm_name:
+                pm = await qbo.ensure_payment_method(name=pm_name)
+                payment_method_id = (
+                    str(pm.get("Id")) if pm and pm.get("Id") else None
+                )
             payload = _build_purchase_payload(
                 achat=achat,
                 vendor_id=vendor_id,
                 expense_account_id=expense_account_id,
                 payment_account_id=payment_account_id,
                 payment_type=_payment_type_for(method),
+                payment_method_id=payment_method_id,
                 po_reference=po_reference,
                 project_name=project.name if project else None,
                 customer_id=customer_id,
+                class_id=class_id,
                 existing_purchase_id=achat.qbo_bill_id,
                 existing_sync_token=achat.qbo_sync_token,
             )
             if payload.get("Id"):
-                qbo_obj = await qbo.update_purchase(payload)
+                try:
+                    qbo_obj = await qbo.update_purchase(payload)
+                except QuickBooksError as exc:
+                    if _is_stale_token(exc):
+                        # SyncToken périmé : on relit le token courant
+                        # depuis QBO et on réessaie la mise à jour.
+                        fresh = await qbo.get_purchase(str(payload["Id"]))
+                        payload["SyncToken"] = str(
+                            fresh.get("SyncToken") or "0"
+                        )
+                        qbo_obj = await qbo.update_purchase(payload)
+                    elif _is_stale_ref(exc):
+                        # L'objet QBO référencé a été supprimé/inactivé
+                        # côté QuickBooks : on recrée un nouveau Purchase.
+                        log.warning(
+                            "QBO purchase %s introuvable → recréation "
+                            "(achat %s)",
+                            payload.get("Id"),
+                            achat.id,
+                        )
+                        payload.pop("Id", None)
+                        payload.pop("SyncToken", None)
+                        payload.pop("sparse", None)
+                        qbo_obj = await qbo.create_purchase(payload)
+                        did_create = True
+                    else:
+                        raise
             else:
                 qbo_obj = await qbo.create_purchase(payload)
+                did_create = True
         else:
             # Sur compte fournisseur (chèque / net-30) → Bill
             payload = _build_bill_payload(
@@ -412,13 +575,36 @@ async def sync_achat_to_qbo(
                 po_reference=po_reference,
                 project_name=project.name if project else None,
                 customer_id=customer_id,
+                class_id=class_id,
                 existing_bill_id=achat.qbo_bill_id,
                 existing_sync_token=achat.qbo_sync_token,
             )
             if payload.get("Id"):
-                qbo_obj = await qbo.update_bill(payload)
+                try:
+                    qbo_obj = await qbo.update_bill(payload)
+                except QuickBooksError as exc:
+                    if _is_stale_token(exc):
+                        fresh = await qbo.get_bill(str(payload["Id"]))
+                        payload["SyncToken"] = str(
+                            fresh.get("SyncToken") or "0"
+                        )
+                        qbo_obj = await qbo.update_bill(payload)
+                    elif _is_stale_ref(exc):
+                        log.warning(
+                            "QBO bill %s introuvable → recréation (achat %s)",
+                            payload.get("Id"),
+                            achat.id,
+                        )
+                        payload.pop("Id", None)
+                        payload.pop("SyncToken", None)
+                        payload.pop("sparse", None)
+                        qbo_obj = await qbo.create_bill(payload)
+                        did_create = True
+                    else:
+                        raise
             else:
                 qbo_obj = await qbo.create_bill(payload)
+                did_create = True
     except QuickBooksError as exc:
         raise AchatSyncError(str(exc)) from exc
 
@@ -443,15 +629,18 @@ async def sync_achat_to_qbo(
     # d'échec on log mais on ne bloque pas le push principal.
     # NB: receipt_image est une colonne `deferred` — non chargée par
     # défaut. Il faut explicitement rafraîchir pour la lire.
+    # On n'attache la pièce QUE lors d'une création (did_create), pas à
+    # chaque re-synchro (update), pour éviter de dupliquer la facture
+    # dans QBO.
     receipt_attached = False
     receipt_error: Optional[str] = None
-    if qbo_id and achat.receipt_image_content_type:
+    if did_create and qbo_id and achat.receipt_image_content_type:
         try:
             await db.refresh(achat, attribute_names=["receipt_image"])
         except Exception as exc:  # noqa: BLE001
             receipt_error = f"refresh: {exc}"
             log.warning("Refresh receipt_image failed: %s", exc)
-    if qbo_id and achat.receipt_image:
+    if did_create and qbo_id and achat.receipt_image:
         try:
             ctype = (
                 achat.receipt_image_content_type

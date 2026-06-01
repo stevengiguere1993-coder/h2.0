@@ -20,7 +20,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, LargeBinary, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -77,6 +77,13 @@ class NDA(Base, TimestampUpdateMixin):
     signed_name: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
+    # Téléphone capturé sur le formulaire public de signature. Le NDA
+    # demande Nom + Email + Téléphone + Date + Signature côté Récepteur,
+    # et l'email est déjà connu (lien envoyé à cette adresse) → on ne
+    # collecte « en plus » que le téléphone côté formulaire public.
+    signed_phone: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
     signed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -85,4 +92,14 @@ class NDA(Base, TimestampUpdateMixin):
     )
     sent_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # ----- PDF signé (généré à la signature publique) -----
+    # Stocké en BYTEA pour rester self-contained (pas de bucket
+    # externe). Contient le PDF avec le bloc Récepteur rempli + le
+    # bandeau emerald « SIGNEE ELECTRONIQUEMENT » + hash SHA-256.
+    # Récupérable via GET /api/v1/ndas/{id}/signed-pdf (auth admin/
+    # owner — audit immuable, pas re-rendu à chaque requête).
+    signed_pdf_blob: Mapped[Optional[bytes]] = mapped_column(
+        LargeBinary, nullable=True
     )

@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter as useNextRouter } from "next/navigation";
+import {
+  useParams,
+  useRouter as useNextRouter,
+  useSearchParams
+} from "next/navigation";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -17,6 +21,8 @@ import { ReceiptScanner } from "@/components/receipt-scanner";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
+import { splitFromTotal } from "@/lib/tax";
+import { projectLabel } from "@/lib/project";
 import { useConfirm } from "@/components/confirm-dialog";
 
 const PAYMENT_OPTIONS = [
@@ -44,6 +50,8 @@ type Achat = {
   description: string | null;
   amount: number | string | null;
   amount_taxes: number | string | null;
+  amount_tps: number | string | null;
+  amount_tvq: number | string | null;
   status: string;
   received_at: string | null;
   paid_at: string | null;
@@ -63,7 +71,7 @@ type Achat = {
   facture_item_id: number | null;
 };
 
-type Project = { id: number; name: string };
+type Project = { id: number; name: string; address?: string | null };
 type Fournisseur = { id: number; name: string };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -84,6 +92,17 @@ export default function AchatDetailPage() {
   const id = Number(params.id);
   const router = useNextRouter();
 
+  // « Retour » : si on arrive depuis un autre écran (ex. l'onglet
+  // Achats / PO d'un projet), on y retourne via le paramètre `from`.
+  // Sinon, on retombe sur la liste globale Achats / dépenses.
+  const searchParams = useSearchParams();
+  const fromParam = searchParams.get("from");
+  const backHref =
+    fromParam && fromParam.startsWith("/app/") ? fromParam : "/app/achats";
+  const backLabel = fromParam?.startsWith("/app/projets/")
+    ? "Retour au projet"
+    : "Retour aux achats";
+
   const [a, setA] = useState<Achat | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
@@ -96,8 +115,40 @@ export default function AchatDetailPage() {
   const [projectId, setProjectId] = useState("");
   const [fournisseurId, setFournisseurId] = useState("");
   const [description, setDescription] = useState("");
+  // Total (TTC) éditable : décompose le HT + taxes automatiquement,
+  // tout en laissant l'employé ajuster le HT/taxes au besoin.
+  const [total, setTotal] = useState("");
   const [amount, setAmount] = useState("");
-  const [amountTaxes, setAmountTaxes] = useState("");
+  const [amountTps, setAmountTps] = useState("");
+  const [amountTvq, setAmountTvq] = useState("");
+
+  function onTotalChange(v: string) {
+    setTotal(v);
+    const n = Number(v);
+    if (v.trim() !== "" && !Number.isNaN(n) && n > 0) {
+      const { ht, tps, tvq } = splitFromTotal(n);
+      setAmount(ht.toFixed(2));
+      setAmountTps(tps.toFixed(2));
+      setAmountTvq(tvq.toFixed(2));
+    }
+  }
+  function syncTotal(htStr: string, tpsStr: string, tvqStr: string) {
+    const sum =
+      (Number(htStr) || 0) + (Number(tpsStr) || 0) + (Number(tvqStr) || 0);
+    setTotal(sum ? sum.toFixed(2) : "");
+  }
+  function onAmountChange(v: string) {
+    setAmount(v);
+    syncTotal(v, amountTps, amountTvq);
+  }
+  function onTpsChange(v: string) {
+    setAmountTps(v);
+    syncTotal(amount, v, amountTvq);
+  }
+  function onTvqChange(v: string) {
+    setAmountTvq(v);
+    syncTotal(amount, amountTps, v);
+  }
   const [isBillable, setIsBillable] = useState(true);
   const [markupPercent, setMarkupPercent] = useState("");
   const [statusStr, setStatusStr] = useState("received");
@@ -132,10 +183,44 @@ export default function AchatDetailPage() {
           data.fournisseur_id ? String(data.fournisseur_id) : ""
         );
         setDescription(data.description || "");
-        setAmount(data.amount != null ? String(data.amount) : "");
-        setAmountTaxes(
-          data.amount_taxes != null ? String(data.amount_taxes) : ""
-        );
+        {
+          const amt = Number(data.amount) || 0;
+          const tax = Number(data.amount_taxes) || 0;
+          const sum = amt + tax;
+          if (sum > 0 && tax === 0) {
+            // Reçu legacy (ou saisi avant la décomposition TTC) : le
+            // montant stocké est le total de la facture. On applique la
+            // décomposition QC standard pour que le HT et les taxes ne
+            // restent pas à zéro. Ajustable ensuite si taxes non standard.
+            const { ht, tps, tvq } = splitFromTotal(sum);
+            setAmount(ht.toFixed(2));
+            setAmountTps(tps.toFixed(2));
+            setAmountTvq(tvq.toFixed(2));
+            setTotal(sum.toFixed(2));
+          } else {
+            setAmount(data.amount != null ? String(data.amount) : "");
+            // TPS/TVQ : valeurs stockées si présentes, sinon on répartit
+            // le montant de taxes stocké selon les taux QC standard
+            // (rétro-compat — préserve exactement la somme).
+            const tpsFb = Math.round((tax * 5) / 14.975 * 100) / 100;
+            const tvqFb = Math.round((tax - tpsFb) * 100) / 100;
+            setAmountTps(
+              data.amount_tps != null
+                ? String(data.amount_tps)
+                : tax > 0
+                  ? tpsFb.toFixed(2)
+                  : ""
+            );
+            setAmountTvq(
+              data.amount_tvq != null
+                ? String(data.amount_tvq)
+                : tax > 0
+                  ? tvqFb.toFixed(2)
+                  : ""
+            );
+            setTotal(sum ? sum.toFixed(2) : "");
+          }
+        }
         setIsBillable(data.is_billable !== false);
         setMarkupPercent(
           data.markup_percent != null ? String(data.markup_percent) : ""
@@ -171,8 +256,8 @@ export default function AchatDetailPage() {
       fournisseurId !== (a.fournisseur_id ? String(a.fournisseur_id) : "") ||
       description !== (a.description || "") ||
       amount !== (a.amount != null ? String(a.amount) : "") ||
-      amountTaxes !==
-        (a.amount_taxes != null ? String(a.amount_taxes) : "") ||
+      amountTps !== (a.amount_tps != null ? String(a.amount_tps) : "") ||
+      amountTvq !== (a.amount_tvq != null ? String(a.amount_tvq) : "") ||
       statusStr !== a.status ||
       invoiceDate !==
         (a.invoice_date ? a.invoice_date.slice(0, 10) : "") ||
@@ -183,7 +268,7 @@ export default function AchatDetailPage() {
       paymentMethod !== (a.payment_method || "")
     );
   }, [
-    a, projectId, fournisseurId, description, amount, amountTaxes,
+    a, projectId, fournisseurId, description, amount, amountTps, amountTvq,
     statusStr, invoiceDate, supplierInvoiceNumber, receivedAt,
     receiptUrl, notes, paymentMethod
   ]);
@@ -196,7 +281,14 @@ export default function AchatDetailPage() {
       const payload: Record<string, unknown> = {
         description: description.trim() || null,
         amount: amount ? Number(amount) : null,
-        amount_taxes: amountTaxes ? Number(amountTaxes) : null,
+        amount_tps: amountTps ? Number(amountTps) : null,
+        amount_tvq: amountTvq ? Number(amountTvq) : null,
+        amount_taxes:
+          amountTps || amountTvq
+            ? Math.round(
+                ((Number(amountTps) || 0) + (Number(amountTvq) || 0)) * 100
+              ) / 100
+            : null,
         status: statusStr,
         invoice_date: invoiceDate || null,
         supplier_invoice_number: supplierInvoiceNumber.trim() || null,
@@ -278,6 +370,25 @@ export default function AchatDetailPage() {
     }
   }
 
+  const [rotating, setRotating] = useState(false);
+  async function rotateReceipt(direction: "left" | "right") {
+    setRotating(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/achats/${id}/receipt/rotate?direction=${direction}`,
+        { method: "POST" }
+      );
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      // Réouvre le reçu pivoté dans un nouvel onglet.
+      await openReceipt();
+    } catch (err) {
+      setError(`Rotation échouée : ${(err as Error).message}`);
+    } finally {
+      setRotating(false);
+    }
+  }
+
   async function onDelete() {
     if (!a) return;
     if (!(await confirm(`Supprimer l'achat ${a.reference} ?`))) return;
@@ -304,10 +415,10 @@ export default function AchatDetailPage() {
       <div className="p-4 lg:p-6">
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={"/app/achats" as any}
+          href={backHref as any}
           className="inline-flex items-center text-sm text-white/70 hover:text-accent-500"
         >
-          <ArrowLeft className="mr-1 h-4 w-4" /> Retour aux achats
+          <ArrowLeft className="mr-1 h-4 w-4" /> {backLabel}
         </Link>
 
         {loading ? (
@@ -376,7 +487,7 @@ export default function AchatDetailPage() {
                       <option value="">— Aucun —</option>
                       {projects.map((p) => (
                         <option key={p.id} value={String(p.id)}>
-                          {p.name}
+                          {projectLabel(p)}
                         </option>
                       ))}
                     </select>
@@ -461,7 +572,27 @@ export default function AchatDetailPage() {
                       className="input"
                     />
                   </div>
-                  <div className="grid gap-4 sm:grid-cols-3">
+                  <div>
+                    <label htmlFor="atotal" className="label">
+                      Montant total (TTC) — total de la facture
+                    </label>
+                    <input
+                      id="atotal"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={total}
+                      onChange={(e) => onTotalChange(e.target.value)}
+                      className="input"
+                      placeholder="0.00"
+                    />
+                    <p className="mt-1 text-xs text-white/40">
+                      Le HT et les taxes (TPS 5 % + TVQ 9,975 %) sont calculés
+                      automatiquement. Ajustables si la facture a des taxes
+                      non standard.
+                    </p>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <div>
                       <label htmlFor="aamount" className="label">
                         Montant HT (avant taxes)
@@ -472,21 +603,36 @@ export default function AchatDetailPage() {
                         step="0.01"
                         min="0"
                         value={amount}
-                        onChange={(e) => setAmount(e.target.value)}
+                        onChange={(e) => onAmountChange(e.target.value)}
                         className="input"
                       />
                     </div>
                     <div>
-                      <label htmlFor="aamounttaxes" className="label">
-                        Taxes (CAD)
+                      <label htmlFor="aamounttps" className="label">
+                        TPS (5 %)
                       </label>
                       <input
-                        id="aamounttaxes"
+                        id="aamounttps"
                         type="number"
                         step="0.01"
                         min="0"
-                        value={amountTaxes}
-                        onChange={(e) => setAmountTaxes(e.target.value)}
+                        value={amountTps}
+                        onChange={(e) => onTpsChange(e.target.value)}
+                        className="input"
+                        placeholder="0.00"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="aamounttvq" className="label">
+                        TVQ (9,975 %)
+                      </label>
+                      <input
+                        id="aamounttvq"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={amountTvq}
+                        onChange={(e) => onTvqChange(e.target.value)}
                         className="input"
                         placeholder="0.00"
                       />
@@ -505,19 +651,11 @@ export default function AchatDetailPage() {
                       </select>
                     </div>
                   </div>
-                  {(amount || amountTaxes) ? (
+                  {(amount || amountTps || amountTvq) ? (
                     <p className="-mt-1 text-[11px] text-white/50">
-                      Total TTC payé au fournisseur :{" "}
-                      <strong className="text-white/80">
-                        {new Intl.NumberFormat("fr-CA", {
-                          style: "currency",
-                          currency: "CAD"
-                        }).format(
-                          (Number(amount) || 0) + (Number(amountTaxes) || 0)
-                        )}
-                      </strong>
-                      . Le markup pour refacturation est appliqué sur le
-                      HT seulement.
+                      Le markup pour refacturation est appliqué sur le
+                      HT seulement (les taxes payées au fournisseur ne sont
+                      pas majorées).
                     </p>
                   ) : null}
 
@@ -622,6 +760,24 @@ export default function AchatDetailPage() {
                       className="btn-secondary text-xs"
                     >
                       Ouvrir
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => rotateReceipt("left")}
+                      disabled={rotating}
+                      title="Pivoter de 90° vers la gauche"
+                      className="inline-flex items-center gap-1 rounded-lg border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs text-white/80 hover:border-accent-500 hover:text-white disabled:opacity-60"
+                    >
+                      ↺ Pivoter gauche
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => rotateReceipt("right")}
+                      disabled={rotating}
+                      title="Pivoter de 90° vers la droite"
+                      className="inline-flex items-center gap-1 rounded-lg border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs text-white/80 hover:border-accent-500 hover:text-white disabled:opacity-60"
+                    >
+                      ↻ Pivoter droite
                     </button>
                     <button
                       type="button"

@@ -8,6 +8,7 @@ Provides:
 """
 
 from collections.abc import AsyncGenerator
+from typing import Optional
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -59,6 +60,57 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await session.close()
+
+
+def _rotate_receipt_blob_cw90(blob: bytes, content_type: str) -> Optional[bytes]:
+    """Fait pivoter de 90° HORAIRE (vers la droite) un reçu stocké.
+    Délègue au service partagé. Retourne None si format inconnu / échec."""
+    from app.services.receipt_rotate import rotate_receipt_blob
+
+    return rotate_receipt_blob(blob, content_type, clockwise=True)
+
+
+async def _rotate_existing_receipts_cw90(conn) -> int:
+    """Pivote (une seule fois) tous les reçus d'achat déjà stockés.
+    Traite un reçu à la fois pour limiter la mémoire. Retourne le
+    nombre de reçus effectivement pivotés."""
+    from sqlalchemy import text
+
+    ids = (
+        await conn.execute(
+            text(
+                "SELECT id FROM achats WHERE receipt_image IS NOT NULL"
+            )
+        )
+    ).all()
+    rotated = 0
+    for (rid,) in ids:
+        # Chaque reçu est indépendant : une erreur isolée ne doit pas
+        # interrompre le passage (sinon des reçus seraient pivotés sans
+        # que le marqueur soit posé → double rotation au boot suivant).
+        try:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT receipt_image, receipt_image_content_type "
+                        "FROM achats WHERE id = :id"
+                    ),
+                    {"id": rid},
+                )
+            ).first()
+            if row is None or row[0] is None:
+                continue
+            new_blob = _rotate_receipt_blob_cw90(bytes(row[0]), row[1] or "")
+            if new_blob is None:
+                continue
+            await conn.execute(
+                text("UPDATE achats SET receipt_image = :img WHERE id = :id"),
+                {"img": new_blob, "id": rid},
+            )
+            rotated += 1
+        except Exception:
+            continue
+    return rotated
 
 
 async def init_db() -> None:
@@ -141,8 +193,14 @@ async def init_db() -> None:
             ("clients", "notes", "TEXT"),
             ("clients", "contact_request_id", "INTEGER"),
             ("clients", "language", "VARCHAR(8) NOT NULL DEFAULT 'fr'"),
+            ("clients", "is_company", "BOOLEAN NOT NULL DEFAULT FALSE"),
+            ("clients", "representative", "VARCHAR(255)"),
+            ("project_phase_assignees", "hourly_billed", "BOOLEAN NOT NULL DEFAULT FALSE"),
+            ("project_phase_assignees", "worker_count", "INTEGER NOT NULL DEFAULT 1"),
             ("achats", "receipt_image", "BYTEA"),
             ("achats", "receipt_image_content_type", "VARCHAR(100)"),
+            ("achats", "amount_tps", "NUMERIC(12,2)"),
+            ("achats", "amount_tvq", "NUMERIC(12,2)"),
             ("factures", "last_reminder_at", "TIMESTAMP WITH TIME ZONE"),
             ("factures", "reminder_count", "INTEGER NOT NULL DEFAULT 0"),
             # FactureItem.kind — service|extra|rabais|frais. « extra » =
@@ -473,6 +531,15 @@ async def init_db() -> None:
                 "frais_demarrage_overrides_json",
                 "TEXT",
             ),
+            # Nouveau champ paramétrable (mai 2026) : taux d'intérêt
+            # prêteur B pendant la phase chantier. Avant on utilisait
+            # le défaut hardcodé 0.08 (dataclass FinanceInputs) ;
+            # maintenant l'utilisateur peut surcharger par fiche.
+            (
+                "lead_analyses",
+                "taux_interet_preteur_b_projet_pct",
+                "NUMERIC(5,3) DEFAULT 8.0",
+            ),
             # Kratos : pivot vers le modèle user-driven (problème
             # écrit/dicté par l'utilisateur, solution générée par l'IA).
             ("kratos_problems", "problem_text", "TEXT"),
@@ -590,6 +657,20 @@ async def init_db() -> None:
             # (pas de bucket externe). Récupérable via
             # GET /devlog/soumissions/{id}/signed-pdf (auth admin/owner).
             ("devlog_soumissions", "signed_pdf_blob", "BYTEA"),
+            # NDA — PDF signé généré au moment de la signature publique
+            # (POST /public/ndas/{token}/sign). Contient le bloc Récepteur
+            # rempli (nom, courriel, date, mention « Signée électrique-
+            # ment ») + un bandeau emerald-600 « SIGNEE ELECTRONIQUEMENT »
+            # en haut de la première page avec horodatage, IP, et hash
+            # SHA-256 du document pour intégrité. Récupérable via
+            # GET /api/v1/ndas/{id}/signed-pdf (auth admin/owner).
+            ("ndas", "signed_pdf_blob", "BYTEA"),
+            # Téléphone collecté sur le formulaire public de signature
+            # NDA. Le bloc Récepteur du NDA exige Nom + Email +
+            # Téléphone + Date + Signature ; l'email est déjà connu
+            # (lien envoyé à cette adresse), reste à collecter le
+            # téléphone côté formulaire public.
+            ("ndas", "signed_phone", "VARCHAR(32)"),
             # Envoi PDF + consultation publique des factures devlog
             # (pièce #5 vague 1). `due_date` existe déjà dans le modèle,
             # on ajoute le token public, l'horodatage d'envoi et celui
@@ -810,6 +891,16 @@ async def init_db() -> None:
                 "devlog_contracts",
                 "teams_notified_at",
                 "TIMESTAMP WITH TIME ZONE",
+            ),
+            # Mai 2026 : colonne "finançable par défaut" sur la table
+            # de défauts d'analyse. Permet à Phil de configurer
+            # globalement, pour chaque item MDF (groupes ``mdf_frais``
+            # et ``mdf_pct``), si la case "Finançable" doit être
+            # pré-cochée à la création d'une nouvelle fiche.
+            (
+                "prospection_analysis_defaults",
+                "financable_par_defaut",
+                "BOOLEAN",
             ),
         )
         for table, column, col_type in additive_columns:
@@ -1274,6 +1365,93 @@ async def init_db() -> None:
             SET accepted_at = updated_at
             WHERE status = 'accepted' AND accepted_at IS NULL
             """,
+            # Ventilation TPS/TVQ des achats existants : on répartit
+            # `amount_taxes` (somme) selon les taux QC standard
+            # (TPS 5 % + TVQ 9,975 % = 14,975 %). Idempotent — ne touche
+            # que les lignes pas encore ventilées (amount_tps NULL). La
+            # somme tps+tvq reste exactement égale à amount_taxes.
+            """
+            UPDATE achats
+            SET amount_tps = ROUND(COALESCE(amount_taxes, 0) * 5.0 / 14.975, 2),
+                amount_tvq = COALESCE(amount_taxes, 0)
+                             - ROUND(COALESCE(amount_taxes, 0) * 5.0 / 14.975, 2)
+            WHERE amount_tps IS NULL
+            """,
+            # Rétro-lien projet ↔ soumission : un projet créé manuellement
+            # (ou par une ancienne version) peut avoir budget = total de la
+            # soumission mais soumission_id NULL → impossible d'importer
+            # les items de la soumission dans une facture, et la carte
+            # kanban tombe sur le titre au lieu de l'adresse. On relie au
+            # devis ACCEPTÉ correspondant (même prospect ou même client ET
+            # même montant total). Idempotent : ne touche que soumission_id
+            # NULL.
+            """
+            UPDATE projects p
+            SET soumission_id = (
+                SELECT s.id FROM soumissions s
+                WHERE s.status = 'accepted'
+                  AND s.total = p.budget
+                  AND (
+                    (p.contact_request_id IS NOT NULL
+                       AND s.contact_request_id = p.contact_request_id)
+                    OR (p.client_id IS NOT NULL
+                       AND s.client_id = p.client_id)
+                  )
+                ORDER BY s.accepted_at DESC NULLS LAST, s.id DESC
+                LIMIT 1
+            )
+            WHERE p.soumission_id IS NULL
+              AND p.budget IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM soumissions s
+                WHERE s.status = 'accepted'
+                  AND s.total = p.budget
+                  AND (
+                    (p.contact_request_id IS NOT NULL
+                       AND s.contact_request_id = p.contact_request_id)
+                    OR (p.client_id IS NOT NULL
+                       AND s.client_id = p.client_id)
+                  )
+              )
+            """,
+            # Table de marqueurs pour les backfills à exécuter UNE seule
+            # fois (par opposition aux UPDATE idempotents ci-dessus qui
+            # peuvent retourner à chaque boot). Permet d'appliquer une
+            # règle rétroactive sans réécraser les choix manuels faits
+            # ensuite par l'utilisateur.
+            """
+            CREATE TABLE IF NOT EXISTS applied_backfills (
+                key VARCHAR(120) PRIMARY KEY,
+                applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """,
+            # Rétroactif (one-shot) : défaut « refacturable » des achats
+            # selon le type de la soumission du projet. Forfaitaire =
+            # non refacturable (décoché) ; estimé / à contrat =
+            # refacturable (coché). Les projets sans soumission liée
+            # retombent sur forfaitaire (décoché). Garde NOT EXISTS : ne
+            # s'exécute qu'au premier boot après déploiement, puis le
+            # marqueur empêche d'écraser les ajustements manuels.
+            """
+            UPDATE achats a
+            SET is_billable = CASE
+                    WHEN s.kind = 'contract' OR s.pricing_kind = 'estime'
+                        THEN TRUE
+                    ELSE FALSE
+                END
+            FROM projects p
+            LEFT JOIN soumissions s ON s.id = p.soumission_id
+            WHERE a.project_id = p.id
+              AND NOT EXISTS (
+                  SELECT 1 FROM applied_backfills
+                  WHERE key = 'achat_is_billable_by_project_type_v1'
+              )
+            """,
+            """
+            INSERT INTO applied_backfills (key)
+            VALUES ('achat_is_billable_by_project_type_v1')
+            ON CONFLICT (key) DO NOTHING
+            """,
         ):
             try:
                 await conn.execute(text(sql))
@@ -1281,6 +1459,37 @@ async def init_db() -> None:
                 # Table absente / colonne pas encore migrée — on
                 # passe sans bloquer le boot.
                 pass
+
+        # Rétroactif (one-shot) : faire pivoter de 90° HORAIRE tous les
+        # reçus d'achat déjà stockés. Ils ont été numérisés avant la
+        # correction d'orientation et sont enregistrés de côté. Les
+        # nouveaux reçus passent par le recadrage (déjà à l'endroit) et
+        # ne sont PAS touchés car le marqueur empêche un second passage.
+        # Gardé + exception-safe pour ne jamais bloquer le boot.
+        try:
+            done = (
+                await conn.execute(
+                    text(
+                        "SELECT 1 FROM applied_backfills WHERE key = :k"
+                    ),
+                    {"k": "rotate_existing_receipts_cw90_v1"},
+                )
+            ).first()
+        except Exception:
+            done = True  # table pas prête — on retentera au prochain boot
+        if not done:
+            try:
+                n = await _rotate_existing_receipts_cw90(conn)
+                await conn.execute(
+                    text(
+                        "INSERT INTO applied_backfills (key) VALUES (:k) "
+                        "ON CONFLICT (key) DO NOTHING"
+                    ),
+                    {"k": "rotate_existing_receipts_cw90_v1"},
+                )
+                print(f"[init_db] reçus pivotés 90° horaire : {n}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[init_db] rotation reçus échouée : {exc}")
 
         # Seed des types de RV par défaut. Idempotent :
         # INSERT ... ON CONFLICT DO NOTHING. L'admin peut modifier
@@ -1358,6 +1567,362 @@ async def init_db() -> None:
             except Exception:
                 pass
 
+        # Seed des défauts globaux d'analyse financière (mai 2026,
+        # étendu mai 2026 pour couvrir TOUS les inputs manuels +
+        # frais MDF — PR « extend-analysis-defaults-tous-champs »).
+        #
+        # Permet à Phil de modifier les valeurs pré-remplies pour les
+        # nouvelles fiches d'analyse depuis l'UI (bouton ⚙️ « Modifier
+        # les défauts »). Stockés en pourcentage (3.75 = 3.75 %, 25.0
+        # = 25 %, 8.0 = 8 %) ou en $ selon le champ. Le `step` permet
+        # à l'UI de deviner le format (< 1 → %, >= 1 → $).
+        # Idempotent :
+        #   - ON CONFLICT (key) DO UPDATE SET group_name pour garder
+        #     les renommages de groupes en sync sans toucher aux
+        #     valeurs déjà modifiées par Phil.
+        #   - INSERT des nouvelles clés via DO NOTHING équivalent.
+        # Modifier un défaut ne change que les FUTURES analyses, pas
+        # les existantes.
+        #
+        # Migration douce des anciens noms de groupes :
+        #   - 'refi' → 'inputs_manuels' (libellé plus clair)
+        #   - 'mdf'  → 'inputs_manuels' (mdf_preteur_b_pct est un
+        #              input manuel, pas un frais)
+        #   - nouveaux frais MDF → groupe 'mdf_frais'
+        try:
+            await conn.execute(
+                text(
+                    """
+                    UPDATE prospection_analysis_defaults
+                       SET group_name = 'inputs_manuels'
+                     WHERE group_name IN ('refi', 'mdf')
+                    """
+                )
+            )
+        except Exception:
+            # Table absente — sera créée par create_all + retentée
+            # au prochain boot.
+            pass
+
+        # Liste exhaustive des défauts.
+        # Champs des inputs manuels (groupe 'inputs_manuels') :
+        #   - stockés en pct (step < 1) ou unités entières (step >= 1).
+        # Frais MDF (groupe 'mdf_frais') :
+        #   - frais_* : montants $ one-shot (step = 50).
+        #   - pct_courtier_hypothecaire_* : %, appliqué au prix d'achat
+        #     ou financement APH (step = 0.05).
+        for key, value_float, label_fr, description_fr, mn, mx, step, group in (
+                # ── Groupe : Inputs manuels ──────────────────────────
+                (
+                    "taux_interet_refi",
+                    3.75,
+                    "Taux d'intérêt refi (%)",
+                    "Taux d'intérêt utilisé pour calculer le refinancement "
+                    "(SCHL, APH 50, APH 100).",
+                    0.0,
+                    25.0,
+                    0.05,
+                    "inputs_manuels",
+                ),
+                (
+                    "taux_interet_preteur_b_projet",
+                    8.0,
+                    "Taux d'intérêt prêteur B (pendant projet) (%)",
+                    "Taux d'intérêt appliqué par le prêteur B pendant la "
+                    "phase chantier (typique 8 % en 2024-2025). Utilisé "
+                    "pour calculer les intérêts de portage (L17).",
+                    0.0,
+                    30.0,
+                    0.05,
+                    "inputs_manuels",
+                ),
+                (
+                    "mdf_preteur_b_pct",
+                    25.0,
+                    "% MDF prêteur B (%)",
+                    "Pourcentage de mise de fonds requis par le prêteur B "
+                    "(privé, hypothèque conventionnelle 75 % LTV). Varie "
+                    "selon le prêteur (25 % typique, parfois 35 %).",
+                    0.0,
+                    100.0,
+                    0.5,
+                    "inputs_manuels",
+                ),
+                (
+                    "tga_pct",
+                    4.0,
+                    "TGA — Taux global d'actualisation (%)",
+                    "Taux d'actualisation utilisé pour calculer la valeur "
+                    "économique TGA (R54 dans l'Excel). Défaut marché : 4 %.",
+                    0.0,
+                    20.0,
+                    0.05,
+                    "inputs_manuels",
+                ),
+                (
+                    "taux_interet_achat_pct",
+                    4.0,
+                    "Taux d'intérêt prêt à l'achat (%)",
+                    "Taux d'intérêt appliqué au scénario d'achat "
+                    "conventionnel (75 % LTV, 25 ans, RCD 1.20).",
+                    0.0,
+                    25.0,
+                    0.05,
+                    "inputs_manuels",
+                ),
+                (
+                    "reduction_energie_pct",
+                    0.0,
+                    "Réduction énergie post-refi (%)",
+                    "Réduction estimée de la facture d'énergie après "
+                    "travaux d'efficacité (appliquée seulement aux "
+                    "scénarios refi).",
+                    0.0,
+                    100.0,
+                    1.0,
+                    "inputs_manuels",
+                ),
+                (
+                    "duree_projet_annees",
+                    2.0,
+                    "Durée du projet (années)",
+                    "Durée typique chantier + lease-up avant refi. Utilisée "
+                    "pour calculer L17 (intérêts pendant projet) et L18 "
+                    "(revenus nets pendant projet).",
+                    1.0,
+                    10.0,
+                    1.0,
+                    "inputs_manuels",
+                ),
+                (
+                    "nb_logements_ajoutes",
+                    0.0,
+                    "Logements ajoutés par défaut",
+                    "Nombre de logements créés en moyenne par projet. "
+                    "Pré-rempli sur les nouvelles fiches (modifiable).",
+                    0.0,
+                    50.0,
+                    1.0,
+                    "inputs_manuels",
+                ),
+                (
+                    "nb_thermopompes_ajoutees",
+                    0.0,
+                    "Thermopompes ajoutées par défaut",
+                    "Nombre de thermopompes installées en moyenne (impacte "
+                    "uniquement les scénarios APH — efficacité énergétique).",
+                    0.0,
+                    50.0,
+                    1.0,
+                    "inputs_manuels",
+                ),
+                (
+                    "taux_inoccupation_pct",
+                    3.0,
+                    "Taux d'inoccupation (%)",
+                    "Pourcentage de perte de loyer hypothèse SCHL. Varie "
+                    "par marché (3 % Montréal, plus en région).",
+                    0.0,
+                    30.0,
+                    0.1,
+                    "inputs_manuels",
+                ),
+                # ── Groupe : Frais MDF (one-shot) ────────────────────
+                (
+                    "frais_evaluateur",
+                    1500.0,
+                    "Évaluateur agréé ($)",
+                    "Frais d'évaluation principal (un seul rapport).",
+                    0.0,
+                    20000.0,
+                    50.0,
+                    "mdf_frais",
+                ),
+                (
+                    "frais_evaluateur_2",
+                    1500.0,
+                    "Évaluateur agréé 2 ($)",
+                    "Deuxième évaluation (ex. refi SCHL exige souvent un "
+                    "second évaluateur indépendant).",
+                    0.0,
+                    20000.0,
+                    50.0,
+                    "mdf_frais",
+                ),
+                (
+                    "frais_inspection",
+                    1700.0,
+                    "Inspection ($)",
+                    "Inspection préachat (bâtiment + mécanique).",
+                    0.0,
+                    20000.0,
+                    50.0,
+                    "mdf_frais",
+                ),
+                (
+                    "frais_avocat",
+                    4000.0,
+                    "Avocat ($)",
+                    "Honoraires juridiques (vérification diligente, "
+                    "négociations, contrats).",
+                    0.0,
+                    50000.0,
+                    50.0,
+                    "mdf_frais",
+                ),
+                (
+                    "frais_notaire",
+                    1600.0,
+                    "Notaire ($)",
+                    "Frais de notaire pour l'acte d'achat (vente).",
+                    0.0,
+                    20000.0,
+                    50.0,
+                    "mdf_frais",
+                ),
+                (
+                    "frais_notaire_2",
+                    1600.0,
+                    "Notaire 2 ($)",
+                    "Frais de notaire pour l'acte de refinancement "
+                    "(hypothèque SCHL/APH après projet).",
+                    0.0,
+                    20000.0,
+                    50.0,
+                    "mdf_frais",
+                ),
+                (
+                    "frais_rapport_efficacite",
+                    4500.0,
+                    "Rapport d'efficacité énergétique ($)",
+                    "Rapport requis pour les programmes SCHL APH 50/100 "
+                    "(efficacité énergétique + abordabilité).",
+                    0.0,
+                    20000.0,
+                    50.0,
+                    "mdf_frais",
+                ),
+                (
+                    "pct_courtier_hypothecaire_1",
+                    1.0,
+                    "Courtier hypothécaire 1 (% × prix d'achat)",
+                    "Pourcentage facturé par le courtier hypothécaire sur "
+                    "le prêt à l'achat. Défaut 1 %.",
+                    0.0,
+                    5.0,
+                    0.05,
+                    "mdf_frais",
+                ),
+                (
+                    "pct_courtier_hypothecaire_2",
+                    1.0,
+                    "Courtier hypothécaire 2 (% × financement APH)",
+                    "Pourcentage facturé par le courtier hypothécaire sur "
+                    "le financement refi APH (post-projet). Défaut 1 %.",
+                    0.0,
+                    5.0,
+                    0.05,
+                    "mdf_frais",
+                ),
+                # ── Mai 2026 : Frais de dossier du prêteur B ──────────
+                # Pourcentage appliqué au prêt initial du prêteur B
+                # (= prix_achat × ltv_achat, 75 % typique). Stocké en
+                # pct (2.0 = 2 %) comme les autres %. Non finançable par
+                # défaut (Phil paie cash en pratique).
+                (
+                    "frais_dossier_preteur_pct",
+                    2.0,
+                    "Frais de dossier du prêteur (% × prêt initial)",
+                    "Pourcentage facturé par le prêteur B sur le prêt "
+                    "initial (= prix d'achat × LTV à l'achat, 75 % "
+                    "typique). Défaut 2 %.",
+                    0.0,
+                    10.0,
+                    0.05,
+                    "mdf_frais",
+                ),
+        ):
+            try:
+                # UPSERT : on insère si la clé n'existe pas, sinon on
+                # met UNIQUEMENT à jour les métadonnées (label, group,
+                # bornes) — pas la `value_float` modifiée par Phil.
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO prospection_analysis_defaults
+                          (key, value_float, label_fr, description_fr,
+                           min_value, max_value, step, group_name,
+                           updated_at)
+                        VALUES (:key, :value_float, :label_fr,
+                                :description_fr, :mn, :mx, :step, :group,
+                                NOW())
+                        ON CONFLICT (key) DO UPDATE SET
+                            label_fr       = EXCLUDED.label_fr,
+                            description_fr = EXCLUDED.description_fr,
+                            min_value      = EXCLUDED.min_value,
+                            max_value      = EXCLUDED.max_value,
+                            step           = EXCLUDED.step,
+                            group_name     = EXCLUDED.group_name
+                        """
+                    ),
+                    {
+                        "key": key,
+                        "value_float": value_float,
+                        "label_fr": label_fr,
+                        "description_fr": description_fr,
+                        "mn": mn,
+                        "mx": mx,
+                        "step": step,
+                        "group": group,
+                    },
+                )
+            except Exception:
+                # Table absente au tout premier boot (create_all n'a
+                # pas encore tourné) — retentera au prochain démarrage.
+                pass
+
+        # ── Backfill `financable_par_defaut` (mai 2026) ──────────────
+        # On ne TOUCHE PAS aux items pour lesquels Phil a déjà
+        # configuré explicitement la valeur (NULL → on backfill, NOT
+        # NULL → on respecte le choix admin). Idempotent au boot.
+        #
+        # Choix par défaut (cf. PR « mdf-frais-dossier-preteur-financable-defaut ») :
+        #   - frais_evaluateur / _2          : True  (intégré au prêt SCHL)
+        #   - frais_inspection               : False (payé hors prêt en pratique)
+        #   - frais_avocat                   : True
+        #   - frais_notaire / _2             : True
+        #   - frais_rapport_efficacite       : True
+        #   - pct_courtier_hypothecaire_1/_2 : True
+        #   - frais_dossier_preteur_pct      : False (Phil paie cash)
+        financable_par_defaut_seed: tuple[tuple[str, bool], ...] = (
+            ("frais_evaluateur", True),
+            ("frais_evaluateur_2", True),
+            ("frais_inspection", False),
+            ("frais_avocat", True),
+            ("frais_notaire", True),
+            ("frais_notaire_2", True),
+            ("frais_rapport_efficacite", True),
+            ("pct_courtier_hypothecaire_1", True),
+            ("pct_courtier_hypothecaire_2", True),
+            ("frais_dossier_preteur_pct", False),
+        )
+        for default_key, default_val in financable_par_defaut_seed:
+            try:
+                await conn.execute(
+                    text(
+                        """
+                        UPDATE prospection_analysis_defaults
+                           SET financable_par_defaut = :val
+                         WHERE key = :key
+                           AND financable_par_defaut IS NULL
+                        """
+                    ),
+                    {"key": default_key, "val": default_val},
+                )
+            except Exception:
+                # Table/colonne absente au premier boot — silencieux.
+                pass
+
 
 async def close_db() -> None:
     """
@@ -1366,5 +1931,7 @@ async def close_db() -> None:
     Should be called on application shutdown.
     """
     await engine.dispose()
+
+
 
 

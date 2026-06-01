@@ -5,6 +5,13 @@
 # et installe les paquets listés via apt-get avant le buildCommand.
 # Référence : https://render.com/docs/native-runtimes#apt-packages
 #
+# ⚠️ Si après un push tu vois encore « tesseract is not installed »,
+# va dans le Render Dashboard → service h2-0 → Manual Deploy →
+# « Clear build cache & deploy ». Render cache le résultat d'apt-get
+# entre les builds et ne re-lit l'Aptfile que si le cache est vidé
+# OU si le fichier a changé. (Voir aussi /api/v1/lead-analyses/
+# check-ocr-health pour confirmer l'install post-deploy.)
+#
 # Stack OCR pour l'extraction de leads :
 #   - tesseract-ocr      : moteur OCR open source (Google), utilisé
 #                          par pytesseract pour reconnaître le texte
@@ -16,6 +23,12 @@
 #                          en français (taxes municipales, revenus
 #                          bruts, logements). Sans ce pack, Tesseract
 #                          force l'anglais et confond les accents.
+#   - tesseract-ocr-eng  : pack anglais explicite. Même si Tesseract
+#                          installe « eng » par défaut sur la plupart
+#                          des distros, on l'épingle ici pour être
+#                          100 % sûr (Phil reçoit aussi des fiches
+#                          MLS bilingues, et lead_extraction.py
+#                          appelle `lang="fra+eng"`).
 #   - poppler-utils      : binaires `pdftoppm` / `pdftocairo` requis
 #                          par pdf2image pour convertir un PDF en
 #                          images PIL page par page. Sans ça, le
@@ -23,4 +36,5 @@
 #                          pas.
 tesseract-ocr
 tesseract-ocr-fra
+tesseract-ocr-eng
 poppler-utils

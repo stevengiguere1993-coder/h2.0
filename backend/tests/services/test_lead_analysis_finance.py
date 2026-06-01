@@ -114,8 +114,10 @@ def test_saint_joseph():
 
     print(f"\n  Frais démarrage total = {res.frais_demarrage.total:,.2f}")
     print(f"  Prix acquisition       = {res.prix_acquisition:,.2f}")
-    expect("Frais démarrage total", res.frais_demarrage.total, 462_503)
-    expect("Prix acquisition", res.prix_acquisition, 2_161_503)
+    # Ajout (mai 2026) frais_dossier_preteur = 2 % × 75 % × 1 699 000 = 25 485
+    # → total = 462 503 + 25 485 = 487 988
+    expect("Frais démarrage total", res.frais_demarrage.total, 487_988)
+    expect("Prix acquisition", res.prix_acquisition, 2_186_988)
 
     print("\n  --- COLONNE ACHAT ---")
     expect("Valeur éco RCD achat", res.achat.valeur_eco_rcd, 1_299_460)
@@ -123,21 +125,26 @@ def test_saint_joseph():
     expect("Valeur marchande achat", res.achat.valeur_marchande, 1_699_000)
     expect("Valeur retenue achat", res.achat.valeur_retenue, 1_299_460)
     expect("Financement achat", res.achat.financement, 974_595)
-    expect("MDF nécessaire", res.achat.mdf_necessaire, 1_186_910)
+    # MDF nécessaire = prix_acquisition - financement_achat
+    # = 2 186 988 - 974 595 = 1 212 393 (incl. nouveau frais dossier)
+    expect("MDF nécessaire", res.achat.mdf_necessaire, 1_212_393)
 
     print("\n  --- COLONNE REFI SCHL standard ---")
     expect("Valeur éco RCD SCHL", res.refi_schl.valeur_eco_rcd, 1_928_900)
     expect("Valeur éco TGA SCHL", res.refi_schl.valeur_eco_tga, 2_725_250)
     expect("Valeur retenue SCHL", res.refi_schl.valeur_retenue, 1_928_900)
     expect("Financement SCHL", res.refi_schl.financement, 1_639_570)
-    expect("Équité SCHL", res.refi_schl.equite_a_la_fin, -521_934)
+    # Équité = financement - prix_acquisition (mis à jour avec nouveau
+    # frais dossier prêteur) : 1 639 570 - 2 186 988 = -547 418.
+    expect("Équité SCHL", res.refi_schl.equite_a_la_fin, -547_418)
 
     print("\n  --- COLONNE REFI APH 50 pts (Efficacité) ---")
     expect("Valeur éco RCD APH 50", res.refi_aph_50.valeur_eco_rcd, 2_415_880)
     expect("Valeur éco TGA APH 50", res.refi_aph_50.valeur_eco_tga, 2_715_750)
     expect("Valeur retenue APH 50", res.refi_aph_50.valeur_retenue, 2_415_880)
     expect("Financement APH 50", res.refi_aph_50.financement, 2_053_490)
-    expect("Équité APH 50", res.refi_aph_50.equite_a_la_fin, -108_009)
+    # Équité APH 50 : 2 053 490 - 2 186 988 = -133 498.
+    expect("Équité APH 50", res.refi_aph_50.equite_a_la_fin, -133_498)
 
     print("\n  --- BEST REFI ---")
     print(f"  Best amount : {res.best_refi_amount:,.2f}")

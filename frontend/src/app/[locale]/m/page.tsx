@@ -69,7 +69,8 @@ function money(n: number): string {
   return new Intl.NumberFormat("fr-CA", {
     style: "currency",
     currency: "CAD",
-    maximumFractionDigits: 0
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
   }).format(n);
 }
 
@@ -103,6 +104,16 @@ function formatEventWhen(start: string, end: string | null): string {
   return sameDay
     ? `${dateFmt} · ${startHm} → ${endHm}`
     : `${dateFmt} · ${startHm} …`;
+}
+
+// Heures décimales → « h/min » (ex. 7.89 → « 7 h 53 »), plus lisible
+// qu'un décimal pour un relevé de temps.
+function fmtHm(h: number | null | undefined): string {
+  if (h == null) return "—";
+  const totalMin = Math.round(h * 60);
+  const hh = Math.floor(totalMin / 60);
+  const mm = totalMin % 60;
+  return `${hh} h ${String(mm).padStart(2, "0")}`;
 }
 
 export default function MobileHome() {
@@ -321,7 +332,7 @@ export default function MobileHome() {
                 <StatBar
                   icon={Clock}
                   label="Heures travaillées"
-                  value={`${data?.week.hours_worked.toFixed(1)}h`}
+                  value={fmtHm(data?.week.hours_worked)}
                   sub={`de ${data?.week.hours_target.toFixed(0)}h`}
                   pct={percent(
                     data?.week.hours_worked || 0,

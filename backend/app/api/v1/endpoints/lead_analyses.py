@@ -44,6 +44,9 @@ from app.models.lead_analysis import (
     LeadAnalysisAttachment,
     LeadAnalysisStatus,
 )
+from app.models.prospection_analysis_default import (
+    ProspectionAnalysisDefault,
+)
 from app.models.prospection_lead import (
     ProspectionLead,
     ProspectionLeadKind,
@@ -142,6 +145,11 @@ class LeadAnalysisRead(BaseModel):
     best_refi_program: Optional[str] = None
     mdf_preteur_b: Optional[float] = None
     mdf_preteur_b_pct: Optional[float] = None
+    # Taux d'intérêt prêteur B pendant la phase chantier (défaut 8 %).
+    # Stocké en pourcentage (8.0 = 8 %), comme les autres `*_pct`.
+    # Utilisé pour calculer les intérêts du projet dans le moteur
+    # `lead_analysis_finance` (L17 = (1 - MDF%) × prix × taux × durée).
+    taux_interet_preteur_b_projet_pct: Optional[float] = None
     frais_demarrage_overrides_json: Optional[str] = None
     frais_demarrage_financables_json: Optional[str] = None
     notes: Optional[str] = None
@@ -242,6 +250,7 @@ class LeadAnalysisUpdate(BaseModel):
     frais_negociations: Optional[float] = None
 
     mdf_preteur_b_pct: Optional[float] = None
+    taux_interet_preteur_b_projet_pct: Optional[float] = None
     frais_demarrage_overrides_json: Optional[str] = None
     frais_demarrage_financables_json: Optional[str] = None
 
@@ -351,7 +360,11 @@ def _parse_financables(raw: Optional[str]) -> list[str]:
     return DEFAULT
 
 
-DEFAULTS_NEW_ANALYSIS: dict = {
+# Défauts "en dur" — valeurs initiales si la table
+# ``prospection_analysis_defaults`` n'a pas (encore) été seedée ou si
+# une clé manque (ex. nouveau défaut ajouté en code sans seed). Le
+# pourcentage est stocké en pct (8.0 = 8 %), comme dans ``LeadAnalysis``.
+_DEFAULTS_FALLBACK: dict = {
     "nb_logements_ajoutes": 0,
     "nb_thermopompes_ajoutees": 0,
     "reduction_energie_pct": 0,
@@ -359,6 +372,7 @@ DEFAULTS_NEW_ANALYSIS: dict = {
     "duree_projet_annees": 2,
     "tga_pct": 4.0,
     "taux_interet_achat_pct": 4.0,
+    "taux_interet_preteur_b_projet_pct": 8.0,
     "ajout_wifi": True,
     "loyers_max_abordabilite_json": json.dumps({"abordable": 1090}),
     "mdf_preteur_b_pct": 25.0,
@@ -372,6 +386,176 @@ DEFAULTS_NEW_ANALYSIS: dict = {
         "frais_travaux",
     ]),
 }
+
+
+# Mapping clé en BD ↔ champ stocké sur LeadAnalysis.
+# Tous les défauts ``inputs_manuels`` qui ont une colonne sur
+# ``LeadAnalysis`` sont mappés ici pour pré-remplir une nouvelle
+# fiche. Stockés en pourcentage (3.75, 25.0, 8.0) ou unités entières.
+# Les autres champs (booléens, JSON figés, ou défauts utilisés
+# uniquement au runtime comme ``taux_inoccupation_pct`` /
+# ``frais_*`` MDF) ne sont PAS dans ce mapping.
+_DB_KEY_TO_FIELD: dict[str, str] = {
+    "taux_interet_refi": "taux_interet_refi_pct",
+    "mdf_preteur_b_pct": "mdf_preteur_b_pct",
+    "taux_interet_preteur_b_projet": "taux_interet_preteur_b_projet_pct",
+    "tga_pct": "tga_pct",
+    "taux_interet_achat_pct": "taux_interet_achat_pct",
+    "reduction_energie_pct": "reduction_energie_pct",
+    "duree_projet_annees": "duree_projet_annees",
+    "nb_logements_ajoutes": "nb_logements_ajoutes",
+    "nb_thermopompes_ajoutees": "nb_thermopompes_ajoutees",
+}
+
+# Champs entiers parmi ceux ci-dessus (les autres sont des floats).
+# Utilisé pour caster correctement la valeur lue en BD (Float) avant
+# de la passer au constructeur ``LeadAnalysis(...)``.
+_DB_KEY_INT_FIELDS: set[str] = {
+    "duree_projet_annees",
+    "nb_logements_ajoutes",
+    "nb_thermopompes_ajoutees",
+}
+
+
+# Mapping clé BD → poste FRAIS_FIXES (groupe ``mdf_frais``). Utilisé
+# au runtime ``run-financial-analysis`` pour overrider les frais
+# hardcoded dans ``lead_analysis_finance.FRAIS_FIXES``.
+_DB_KEY_TO_FRAIS_FIXE: dict[str, str] = {
+    "frais_evaluateur": "evaluateur",
+    "frais_evaluateur_2": "evaluateur_2",
+    "frais_inspection": "inspection",
+    "frais_avocat": "avocat",
+    "frais_notaire": "notaire",
+    "frais_notaire_2": "notaire_2",
+    "frais_rapport_efficacite": "rapport_efficacite",
+}
+
+# Mapping clé BD → % courtier hypothécaire (en fraction). Valeurs en
+# BD stockées en pct (1.0 = 1 %), converties en fraction (÷100) ici.
+_DB_KEY_TO_PCT_COURTIER: dict[str, str] = {
+    "pct_courtier_hypothecaire_1": "courtier_hypothecaire_1",
+    "pct_courtier_hypothecaire_2": "courtier_hypothecaire_2",
+}
+
+# Mapping clé BD ↔ clé interne du poste FraisDemarrage côté
+# ``frais_demarrage_financables_json``. Utilisé pour bâtir la liste
+# par défaut des postes finançables à la création d'une fiche, à
+# partir des flags ``financable_par_defaut`` configurés en BD.
+_DB_KEY_TO_FINANCABLE_KEY: dict[str, str] = {
+    "frais_evaluateur": "evaluateur",
+    "frais_evaluateur_2": "evaluateur_2",
+    "frais_inspection": "inspection",
+    "frais_avocat": "avocat",
+    "frais_notaire": "notaire",
+    "frais_notaire_2": "notaire_2",
+    "frais_rapport_efficacite": "rapport_efficacite",
+    "pct_courtier_hypothecaire_1": "courtier_hypothecaire_1",
+    "pct_courtier_hypothecaire_2": "courtier_hypothecaire_2",
+    "frais_dossier_preteur_pct": "frais_dossier_preteur",
+}
+
+
+async def _load_defaults_for_new_analysis(db) -> dict:
+    """Charge les défauts depuis la BD et fusionne avec les fallbacks.
+
+    Les valeurs ``ProspectionAnalysisDefault.value_float`` sont stockées
+    en pourcentage (3.75, 25.0, 8.0) pour s'aligner sur la convention
+    ``LeadAnalysis.*_pct``. Si la table est vide ou manque une clé, on
+    retombe sur les défauts en dur (``_DEFAULTS_FALLBACK``).
+
+    Retourne un dict prêt à passer en ``**kwargs`` au constructeur
+    ``LeadAnalysis(...)``. Couvre TOUS les inputs manuels pré-remplis
+    (taux refi, MDF %, taux prêteur B, TGA, taux achat, réduction
+    énergie, durée projet, nb logements/thermopompes ajoutés).
+
+    Mai 2026 : pré-remplit aussi ``frais_demarrage_financables_json``
+    selon les flags ``financable_par_defaut`` configurés en BD pour les
+    items MDF. Si aucun item n'a de flag (table vierge), retombe sur
+    la liste héritée hardcoded ([rapport_efficacite, frais_developpement,
+    frais_travaux]) pour préserver le comportement historique.
+    """
+    out = dict(_DEFAULTS_FALLBACK)
+    financables_from_db: list[str] = []
+    any_financable_flag_set = False
+    try:
+        rows = (
+            await db.execute(select(ProspectionAnalysisDefault))
+        ).scalars().all()
+        for row in rows:
+            # Champs ``LeadAnalysis`` pré-remplis.
+            field = _DB_KEY_TO_FIELD.get(row.key)
+            if field is not None and row.value_float is not None:
+                v = float(row.value_float)
+                out[field] = int(v) if field in _DB_KEY_INT_FIELDS else v
+
+            # Flag « finançable par défaut » sur les items MDF.
+            financable_key = _DB_KEY_TO_FINANCABLE_KEY.get(row.key)
+            if financable_key is not None:
+                flag = getattr(row, "financable_par_defaut", None)
+                if flag is not None:
+                    any_financable_flag_set = True
+                    if bool(flag):
+                        financables_from_db.append(financable_key)
+    except Exception as exc:  # noqa: BLE001
+        # Table peut ne pas exister au tout premier boot — silencieux.
+        log.warning("Failed to load analysis defaults from DB: %s", exc)
+
+    # Si au moins un flag est configuré en BD, on respecte EXCLUSIVEMENT
+    # la BD. Sinon, on retombe sur le défaut hardcoded (compat héritée
+    # avec ``frais_developpement`` / ``frais_travaux`` qui n'ont pas de
+    # ligne dans ``prospection_analysis_defaults``).
+    if any_financable_flag_set:
+        # On garde frais_developpement et frais_travaux toujours
+        # finançables (Phil les a marqués finançables historiquement
+        # et il n'y a pas de défaut BD associé pour eux).
+        merged = list(dict.fromkeys(
+            financables_from_db + ["frais_developpement", "frais_travaux"]
+        ))
+        out["frais_demarrage_financables_json"] = json.dumps(merged)
+    return out
+
+
+async def _load_frais_mdf_overrides(db) -> tuple[dict, dict, Optional[float]]:
+    """Charge les défauts globaux des frais MDF depuis la BD.
+
+    Retourne un tuple ``(frais_fixes_overrides, pct_courtiers_overrides,
+    frais_dossier_preteur_pct)`` prêt à passer à ``FinanceInputs``. Les
+    valeurs en BD sont :
+        - frais_* : montants $ directs (ex. 1500.0)
+        - pct_courtier_* : pourcentage (1.0 = 1 %), converti en
+          fraction (÷100) pour matcher ``PCT_COURTIERS``.
+        - frais_dossier_preteur_pct : pct (2.0 = 2 %) en BD → fraction
+          (0.02) pour le moteur.
+
+    Si la table est vide ou manque, retourne `({}, {}, None)` — le
+    moteur retombera sur les constantes hardcoded ``FRAIS_FIXES`` /
+    ``PCT_COURTIERS`` / ``DEFAULT_FRAIS_DOSSIER_PRETEUR_PCT``.
+    """
+    frais_fixes: dict[str, float] = {}
+    pct_courtiers: dict[str, float] = {}
+    frais_dossier_preteur_pct: Optional[float] = None
+    try:
+        rows = (
+            await db.execute(select(ProspectionAnalysisDefault))
+        ).scalars().all()
+        for row in rows:
+            if row.value_float is None:
+                continue
+            v = float(row.value_float)
+            if row.key in _DB_KEY_TO_FRAIS_FIXE:
+                frais_fixes[_DB_KEY_TO_FRAIS_FIXE[row.key]] = v
+            elif row.key in _DB_KEY_TO_PCT_COURTIER:
+                # BD stocke en pct (1.0 = 1 %), moteur attend une
+                # fraction (0.01 = 1 %).
+                pct_courtiers[_DB_KEY_TO_PCT_COURTIER[row.key]] = v / 100.0
+            elif row.key == "frais_dossier_preteur_pct":
+                # Idem : BD en pct (2.0 = 2 %), moteur en fraction.
+                frais_dossier_preteur_pct = v / 100.0
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "Failed to load frais MDF overrides from DB: %s", exc
+        )
+    return frais_fixes, pct_courtiers, frais_dossier_preteur_pct
 
 
 @router.post(
@@ -441,12 +625,16 @@ async def extract_and_create(
         wlines = ["Diagnostic de l'extraction :"]
         wlines.extend(f"• {w}" for w in res.warnings)
         warnings_notes = "\n".join(wlines)
+    # Charge les défauts globaux depuis la BD (modifiables admin/owner
+    # via /api/v1/prospection/analysis-defaults). Une seule lecture
+    # pour tous les leads créés dans ce batch d'extraction.
+    defaults = await _load_defaults_for_new_analysis(db)
     for idx, item in enumerate(res.data or []):
         kwargs = _map_extracted_to_lead(item)
         # Applique les défauts pour les champs manuels d'analyse
         # avant les valeurs extraites (les extraites ne touchent
         # jamais ces champs de toute façon).
-        kwargs = {**DEFAULTS_NEW_ANALYSIS, **kwargs}
+        kwargs = {**defaults, **kwargs}
         # Si warnings et qu'on n'a pas déjà de notes (ie. l'extraction
         # n'a pas mis quelque chose dans `notes` via _map_extracted_to_lead),
         # on stocke les warnings comme notes pour visibilité.
@@ -540,7 +728,7 @@ async def extract_and_create(
             extracted_json=None,
             model_used=res.model_used,
             created_by_user_id=getattr(user, "id", None),
-            **DEFAULTS_NEW_ANALYSIS,
+            **defaults,
             notes=notes_text,
         )
         rec.created_at = now
@@ -834,6 +1022,262 @@ async def get_attachment(
     )
 
 
+@router.get(
+    "/{analysis_id}/pdf",
+    summary="Génère le PDF complet d'une fiche d'analyse (export).",
+)
+async def export_pdf(
+    analysis_id: int, db: DBSession, user: CurrentUser
+):
+    """Génère à la volée le PDF complet de la fiche d'analyse —
+    identité, financier, typologie, inputs manuels, frais de démarrage,
+    4 scénarios, meilleur refi (RCI/PVI), validation, sources/attachments.
+
+    L'export reflète toujours l'état courant — aucune persistance.
+    Audit log `lead_analysis.pdf_exported`.
+    """
+    _require_prospection(user)
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+
+    from app.services.lead_analysis_pdf import (
+        generate_lead_analysis_pdf,
+        lead_analysis_pdf_filename,
+    )
+
+    try:
+        pdf_bytes = await generate_lead_analysis_pdf(db, analysis_id)
+    except ValueError as exc:
+        log.exception("Génération PDF fiche %s échouée", analysis_id)
+        raise HTTPException(502, f"Génération PDF échouée : {exc}") from exc
+
+    filename = lead_analysis_pdf_filename(rec)
+
+    try:
+        await log_action(
+            db,
+            user=user,
+            action="lead_analysis.pdf_exported",
+            entity_type="lead_analysis",
+            entity_id=rec.id,
+            details={
+                "filename": filename,
+                "size_bytes": len(pdf_bytes),
+                "has_results": bool(rec.analysis_results_json),
+            },
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        log.exception("Audit log lead_analysis.pdf_exported échoué")
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{filename}"'
+            ),
+            "Content-Length": str(len(pdf_bytes)),
+        },
+    )
+
+
+# ── Offre d'investissement PPTX (Phase Offre 2026) ─────────────────
+
+
+class OffreInvestissementPhotoIn(BaseModel):
+    """Photo brute pour l'offre (base64 ou ID d'attachment existant)."""
+    model_config = ConfigDict(extra="forbid")
+
+    base64_data: Optional[str] = Field(
+        default=None,
+        description=(
+            "Photo encodée base64 (sans préfixe data:image/...). "
+            "Alternative : `attachment_id`."
+        ),
+    )
+    attachment_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "Si fourni, on utilise le blob d'un `LeadAnalysisAttachment` "
+            "déjà uploadé sur cette fiche."
+        ),
+    )
+
+
+class OffreInvestissementRequest(BaseModel):
+    """Inputs du wizard frontend."""
+    model_config = ConfigDict(extra="forbid")
+
+    value_add_strategy: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Inputs humains : tagline, bullets, flags value-add, programme "
+            "SCHL, etc. Schéma libre — interprété par "
+            "`offre_investissement_pptx.ValueAddStrategy.from_dict`."
+        ),
+    )
+    photos: Optional[List[OffreInvestissementPhotoIn]] = Field(
+        default=None,
+        description=(
+            "Liste ordonnée des photos (cover, exterieur, carte). MVP : "
+            "3 photos max. Si vide, les photos par défaut du template sont "
+            "conservées."
+        ),
+    )
+
+
+@router.post(
+    "/{analysis_id}/offre-investissement",
+    summary=(
+        "Génère un .pptx d'offre d'investissement Horizon "
+        "(template horizon_v1)."
+    ),
+)
+async def export_offre_investissement(
+    analysis_id: int,
+    body: OffreInvestissementRequest,
+    db: DBSession,
+    user: CurrentUser,
+):
+    """Génère à la volée le `.pptx` d'offre d'investissement pour la fiche.
+
+    Combine :
+      * Variables auto (~30 champs depuis la `LeadAnalysis`)
+      * Variables hybrides (résultats du moteur d'analyse financière le
+        plus récent)
+      * Inputs humains du wizard (tagline, bullets, flags value-add)
+      * Jusqu'à 3 photos (uploadées ou choisies parmi les attachments)
+
+    Aucune persistance. Audit log : `lead_analysis.offre_investissement_generated`.
+    """
+    import base64 as _b64
+
+    _require_prospection(user)
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+
+    from app.services.offre_investissement_pptx import (
+        generate_offre_investissement_pptx,
+        offre_investissement_pptx_filename,
+    )
+
+    # Resolve photos
+    photo_bytes: list[bytes] = []
+    photo_attachment_ids: list[int] = []
+    if body.photos:
+        for p in body.photos[:3]:  # MVP : max 3 photos
+            if p.base64_data:
+                try:
+                    photo_bytes.append(_b64.b64decode(p.base64_data))
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Photo base64 invalide : {exc}",
+                    ) from exc
+            elif p.attachment_id is not None:
+                photo_attachment_ids.append(p.attachment_id)
+
+    try:
+        pptx_bytes, template_version = await generate_offre_investissement_pptx(
+            db=db,
+            analysis_id=analysis_id,
+            value_add_strategy=body.value_add_strategy,
+            photos=photo_bytes if photo_bytes else None,
+            photo_attachment_ids=(
+                photo_attachment_ids if photo_attachment_ids else None
+            ),
+        )
+    except ValueError as exc:
+        log.exception(
+            "Génération offre PPTX fiche %s échouée", analysis_id
+        )
+        raise HTTPException(502, f"Génération PPTX échouée : {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        log.exception(
+            "Erreur inattendue lors de la génération de l'offre PPTX %s",
+            analysis_id,
+        )
+        raise HTTPException(
+            500, f"Erreur inattendue : {exc}"
+        ) from exc
+
+    filename = offre_investissement_pptx_filename(rec)
+
+    try:
+        await log_action(
+            db,
+            user=user,
+            action="lead_analysis.offre_investissement_generated",
+            entity_type="lead_analysis",
+            entity_id=rec.id,
+            details={
+                "filename": filename,
+                "size_bytes": len(pptx_bytes),
+                "template_version": template_version,
+                # Version logique du service de génération. Bump à
+                # chaque PR qui change la sémantique de substitution
+                # (charts, dates auto-calculées, nouveaux champs
+                # wizard, etc.). v3 = corrections slide-par-slide
+                # (présentation projet, charts dynamiques slides 4/12/13,
+                # dates échéancier auto, totaux rénos depuis fiche,
+                # titre/chart Tendances dynamiques, estimation ROI).
+                # v4 = perfectionnements slides 3-6 (PR #544).
+                # v5a = fixes slides 8/9/10 : nb logements dynamique,
+                # frais autres réels (overrides + total recalculé),
+                # condensation tableau rénos, format équité unifié et
+                # cohérence cellule/callout en équité négative.
+                "service_version": "v5a",
+                "value_add_keys": sorted(
+                    body.value_add_strategy.keys()
+                )
+                if body.value_add_strategy
+                else [],
+                "n_photos": len(photo_bytes) + len(photo_attachment_ids),
+            },
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "Audit log lead_analysis.offre_investissement_generated échoué"
+        )
+
+    return Response(
+        content=pptx_bytes,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument."
+            "presentationml.presentation"
+        ),
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{filename}"'
+            ),
+            "Content-Length": str(len(pptx_bytes)),
+            "X-Template-Version": template_version,
+        },
+    )
+
+
+@router.get(
+    "/offre-investissement/catalogue-renovations",
+    summary=(
+        "Retourne le catalogue de rénovations cochables pour la slide 9 "
+        "du template v2 (utilisé par le wizard frontend)."
+    ),
+)
+async def get_offre_renovations_catalogue(user: CurrentUser) -> dict:
+    """Endpoint statique : expose la liste ``RENOVATIONS_CATALOGUE`` du
+    service ``offre_investissement_pptx``. Le wizard l'appelle au mount
+    pour afficher les checkboxes de la section value-add."""
+    _require_prospection(user)
+    from app.services.offre_investissement_pptx import (
+        get_renovations_catalogue,
+    )
+    return {"items": get_renovations_catalogue()}
+
+
 # ── Analyse financière (Phase 3b) ──────────────────────────────────
 
 
@@ -907,6 +1351,16 @@ async def run_financial_analysis(
         except Exception:  # noqa: BLE001
             frais_overrides = {}
 
+    # Charge les overrides GLOBAUX des frais MDF (groupe ``mdf_frais``).
+    # Si Phil a modifié « Évaluateur 1 » de 1500 → 1800 dans la table
+    # de défauts, c'est appliqué ici à TOUTES les analyses (y compris
+    # cette fiche-ci si elle n'a pas d'override par fiche pour
+    # ``evaluateur``). Les overrides PAR FICHE (champ
+    # ``frais_demarrage_overrides_json``) restent prioritaires.
+    frais_fixes_overrides, pct_courtiers_overrides, frais_dossier_preteur_pct_global = (
+        await _load_frais_mdf_overrides(db)
+    )
+
     inputs = FinanceInputs(
         adresse=rec.address or "",
         prix_achat=float(rec.asking_price or 0),
@@ -936,9 +1390,25 @@ async def run_financial_analysis(
             if rec.mdf_preteur_b_pct is not None
             else 0.25
         ),
+        taux_interet_preteur_b_projet=(
+            float(rec.taux_interet_preteur_b_projet_pct) / 100.0
+            if rec.taux_interet_preteur_b_projet_pct is not None
+            else 0.08
+        ),
         frais_demarrage_overrides=frais_overrides,
         frais_demarrage_financables=_parse_financables(
             rec.frais_demarrage_financables_json
+        ),
+        frais_fixes_overrides=frais_fixes_overrides,
+        pct_courtiers_overrides=pct_courtiers_overrides,
+        # Mai 2026 : nouveau frais MDF, surchargé globalement via le
+        # défaut ``frais_dossier_preteur_pct``. Si la BD n'a pas (encore)
+        # de ligne pour cette clé, on laisse ``FinanceInputs`` retomber
+        # sur sa valeur par défaut (2 %).
+        **(
+            {"frais_dossier_preteur_pct": frais_dossier_preteur_pct_global}
+            if frais_dossier_preteur_pct_global is not None
+            else {}
         ),
     )
 
@@ -1334,6 +1804,19 @@ async def re_extract_with_claude(
     """
     _require_prospection(user)
 
+    if not getattr(settings, "claude_reextract_enabled", False):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Ré-extraction Claude désactivée par feature flag "
+                "(CLAUDE_REEXTRACT_ENABLED=false). Le bouton « Ré-"
+                "extraire avec Groq » est gratuit et remplace Claude. "
+                "Si tu veux vraiment Claude (~3 ¢/appel), mets "
+                "CLAUDE_REEXTRACT_ENABLED=true dans les env vars "
+                "Render."
+            ),
+        )
+
     if not settings.anthropic_api_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1466,12 +1949,46 @@ async def re_extract_with_claude(
             messages=[{"role": "user", "content": content_blocks}],
         )
     except anthropic.APIError as e:
+        msg_detail = f"Claude API : {getattr(e, 'message', str(e))[:200]}"
+        try:
+            await log_action(
+                db,
+                user=user,
+                action="lead_analysis.re_extract_failed",
+                entity_type="lead_analysis",
+                entity_id=rec.id,
+                details={
+                    "reason": "anthropic_api_error",
+                    "type": type(e).__name__,
+                    "message": str(e)[:500],
+                    "status_code": getattr(e, "status_code", None),
+                },
+            )
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("Audit log re_extract_failed (api_error) failed")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Claude API : {getattr(e, 'message', str(e))[:200]}",
+            detail=msg_detail,
         )
     except Exception as e:  # noqa: BLE001
         log.exception("Re-extract Claude failed")
+        try:
+            await log_action(
+                db,
+                user=user,
+                action="lead_analysis.re_extract_failed",
+                entity_type="lead_analysis",
+                entity_id=rec.id,
+                details={
+                    "reason": "unexpected",
+                    "type": type(e).__name__,
+                    "message": str(e)[:500],
+                },
+            )
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("Audit log re_extract_failed (unexpected) failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erreur ré-extraction : {str(e)[:200]}",
@@ -1479,13 +1996,49 @@ async def re_extract_with_claude(
 
     # Extrait le tool_use block.
     extracted: dict = {}
+    found_tool_use = False
     for block in msg.content:
         if (
             getattr(block, "type", None) == "tool_use"
             and getattr(block, "name", None) == "save_lead_fields"
         ):
             extracted = getattr(block, "input", None) or {}
+            found_tool_use = True
             break
+
+    # Cas dégénéré : Claude n'a pas appelé l'outil (rare avec
+    # `tool_choice` forcé, mais possible si la réponse a été tronquée
+    # par max_tokens ou refusée pour cause de safety).
+    if not found_tool_use:
+        stop_reason = getattr(msg, "stop_reason", None)
+        text_preview = ""
+        for block in msg.content:
+            if getattr(block, "type", None) == "text":
+                text_preview = (getattr(block, "text", "") or "")[:200]
+                break
+        try:
+            await log_action(
+                db,
+                user=user,
+                action="lead_analysis.re_extract_failed",
+                entity_type="lead_analysis",
+                entity_id=rec.id,
+                details={
+                    "reason": "no_tool_use",
+                    "stop_reason": str(stop_reason),
+                    "text_preview": text_preview,
+                },
+            )
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("Audit log re_extract_failed (no_tool_use) failed")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Claude n'a pas pu extraire de champs (stop_reason="
+                f"{stop_reason!s}). Réessaie ou ajoute plus de sources."
+            ),
+        )
 
     # Patch « doux » : on remplit les champs vides + on remplace
     # l'adresse/ville (champs identifiants où Claude est souvent plus
@@ -1565,19 +2118,403 @@ async def re_extract_with_claude(
     )
 
 
-@router.get(
-    "/ocr-health",
-    summary="Diagnostic Tesseract serveur (utile si extraction d'image vide).",
+# ─── Ré-extraction manuelle avec Groq Llama 3.3 70B (Couche 3 v2) ───
+#
+# Remplaçant gratuit de l'endpoint Claude. Tier free Groq : 14 400
+# req/jour sur llama-3.3-70b-versatile. Comme Llama n'est pas
+# multi-modal natif, on OCR-ise les PDFs/images avant l'appel (les
+# fonctions OCR de la Couche 1 sont réutilisées : Tesseract + pypdf).
+
+
+class ReExtractGroqResponse(BaseModel):
+    """Réponse de /re-extract-with-groq. Le frontend reload la fiche
+    via GET /lead-analyses/{id} pour voir tous les nouveaux champs ;
+    on retourne quand même la liste des champs modifiés pour le toast
+    et pour les tests."""
+
+    fields_patched: List[str]
+    model_used: str
+    cost_usd_estimate: float = 0.0
+
+
+@router.post(
+    "/{analysis_id}/re-extract-with-groq",
+    response_model=ReExtractGroqResponse,
+    summary=(
+        "Couche 3 (gratuit) : ré-extraction manuelle d'une fiche via "
+        "Groq Llama 3.3 70B. PDF/images OCR-isés (Llama non "
+        "multi-modal). Tier free 14 400 req/jour."
+    ),
 )
-async def ocr_health(user: CurrentUser) -> dict:
-    """Renvoie le statut du binaire Tesseract installé sur le serveur.
-    Réponse type :
-      { "tesseract": "OK (Tesseract v5.3.0)", "pytesseract_installed": true,
-        "pdf2image_installed": true, "pillow_heif_installed": true }
-    Si l'extraction d'images retourne vide, hit cet endpoint dans le
-    navigateur ou via Postman pour confirmer si Tesseract est bien là."""
+async def re_extract_with_groq(
+    analysis_id: int,
+    db: DBSession,
+    user: CurrentUser,
+) -> ReExtractGroqResponse:
+    """Relance l'extraction sur une `LeadAnalysis` existante en
+    utilisant Groq Llama 3.3 70B. Reprend les sources déjà attachées
+    à la fiche (URLs, texte, attachments OCR-isés).
+
+    Patch « doux » identique à Claude : adresse/ville/code postal/
+    province TOUJOURS remplacés si Groq propose une valeur (champs
+    identifiants — Groq voit en général la version la plus propre),
+    les autres champs uniquement si vides en base.
+    """
     _require_prospection(user)
-    result: dict = {"tesseract": _check_tesseract_status()}
+
+    if not getattr(settings, "groq_api_key", None):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Ré-extraction Groq désactivée : GROQ_API_KEY n'est "
+                "pas configurée sur le serveur. Crée une clé gratuite "
+                "sur https://console.groq.com et ajoute-la dans les "
+                "env vars Render (Dashboard → h2-0 → Environment)."
+            ),
+        )
+
+    rec = await db.get(LeadAnalysis, analysis_id)
+    if rec is None:
+        raise HTTPException(404, "Analyse introuvable.")
+
+    atts = (
+        await db.execute(
+            select(LeadAnalysisAttachment)
+            .where(LeadAnalysisAttachment.lead_analysis_id == analysis_id)
+            .order_by(LeadAnalysisAttachment.id.asc())
+        )
+    ).scalars().all()
+
+    url_lines = [
+        u.strip()
+        for u in (rec.source_urls or "").splitlines()
+        if u.strip()
+    ]
+    src_text = (rec.source_text or "").strip() or None
+
+    if not url_lines and not src_text and not atts:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Aucune source originale sur cette fiche — rien à "
+                "ré-extraire. Recolle des URLs/texte ou ajoute des "
+                "fichiers d'abord."
+            ),
+        )
+
+    from app.services.lead_extraction_groq import reextract_with_groq
+
+    try:
+        result = await reextract_with_groq(rec, list(atts), force_ocr=True)
+    except Exception as exc:
+        log.exception("Re-extract Groq failed")
+        try:
+            await log_action(
+                db,
+                user=user,
+                action="lead_analysis.re_extract_failed",
+                entity_type="lead_analysis",
+                entity_id=rec.id,
+                details={
+                    "reason": "unexpected",
+                    "provider": "groq",
+                    "type": type(exc).__name__,
+                    "message": str(exc)[:500],
+                },
+            )
+            await db.commit()
+        except Exception:
+            log.exception("Audit log re_extract_failed (groq) failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erreur ré-extraction Groq : {str(exc)[:200]}",
+        )
+
+    if result.error:
+        try:
+            await log_action(
+                db,
+                user=user,
+                action="lead_analysis.re_extract_failed",
+                entity_type="lead_analysis",
+                entity_id=rec.id,
+                details={
+                    "reason": result.error_reason or "groq_api_error",
+                    "message": result.error[:500],
+                },
+            )
+            await db.commit()
+        except Exception:
+            log.exception("Audit log re_extract_failed (groq api) failed")
+        # Mapping status code par error_reason :
+        #   - no_source / no_extract / ocr_empty : 422 (input client à corriger)
+        #   - ocr_unavailable : 503 (problème serveur, admin à contacter)
+        #   - no_api_key : 503 (problème serveur)
+        #   - groq_api / autre : 502 (bad gateway upstream Groq)
+        client_422_reasons = {"no_source", "no_extract", "ocr_empty"}
+        server_503_reasons = {"ocr_unavailable", "no_api_key"}
+        reason = result.error_reason or ""
+        if reason in client_422_reasons:
+            sc = status.HTTP_422_UNPROCESSABLE_ENTITY
+        elif reason in server_503_reasons:
+            sc = status.HTTP_503_SERVICE_UNAVAILABLE
+        elif "n'a pas pu extraire" in result.error:
+            # Compat : ancien chemin sans error_reason.
+            sc = status.HTTP_422_UNPROCESSABLE_ENTITY
+        else:
+            sc = status.HTTP_502_BAD_GATEWAY
+        raise HTTPException(status_code=sc, detail=result.error)
+
+    rec.model_used = result.model_used
+    rec.updated_at = datetime.now(timezone.utc)
+
+    # Re-valide la fiche après le patch Groq. On réinjecte les
+    # valeurs Groq pour les champs patchés (utile pour le tooltip
+    # côté UI). On réutilise la clé "claude" du validator pour
+    # conserver la compatibilité avec le validator existant.
+    groq_src: Dict[str, Dict[str, Any]] = {}
+    for k in result.fields_patched:
+        v = result.extracted.get(k) if result.extracted else None
+        if v not in (None, "", "null"):
+            groq_src[k] = {"claude": v}
+    new_vw = validate_extraction(rec, per_source_values=groq_src)
+    rec.validation_warnings = new_vw or None
+    if new_vw:
+        try:
+            await log_action(
+                db,
+                user=user,
+                action="lead_analysis.validation_warnings_updated",
+                entity_type="lead_analysis",
+                entity_id=rec.id,
+                details={
+                    "source": "re_extract_groq",
+                    "count": len(new_vw),
+                    "max_severity": summarize_severity(new_vw),
+                    "fields": sorted(
+                        {w.get("field") for w in new_vw if w.get("field")}
+                    ),
+                },
+            )
+        except Exception:
+            log.exception("Audit log validation_warnings (groq) failed")
+
+    await log_action(
+        db,
+        user=user,
+        action="lead_analysis.re_extracted_with_groq",
+        entity_type="lead_analysis",
+        entity_id=rec.id,
+        details={
+            "fields_patched": result.fields_patched,
+            "model": result.model_used,
+            "n_attachments": len(atts),
+            "n_urls": len(url_lines),
+            "has_text": bool(src_text),
+        },
+    )
+
+    await db.commit()
+
+    return ReExtractGroqResponse(
+        fields_patched=result.fields_patched,
+        model_used=result.model_used,
+    )
+
+
+@router.get(
+    "/check-groq-health",
+    summary=(
+        "Diagnostic : vérifie GROQ_API_KEY + ping Groq (utile "
+        "quand le bouton « Ré-extraire avec Groq » ne fonctionne pas)."
+    ),
+)
+async def check_groq_health(user: CurrentUser) -> dict:
+    """Endpoint diagnostic pour la stack Groq. Réponse :
+      {
+        "configured": bool,    # GROQ_API_KEY est-elle définie ?
+        "sdk_works": bool,     # un mini appel Groq réussit-il ?
+        "model": str,
+        "error": str|null
+      }
+    """
+    _require_prospection(user)
+    model = (
+        getattr(settings, "groq_model", None) or "llama-3.3-70b-versatile"
+    )
+    out: dict = {
+        "configured": bool(getattr(settings, "groq_api_key", None)),
+        "sdk_works": False,
+        "model": model,
+        "error": None,
+    }
+    if not out["configured"]:
+        out["error"] = (
+            "GROQ_API_KEY n'est pas configurée sur le serveur. "
+            "Crée une clé gratuite sur https://console.groq.com et "
+            "ajoute-la dans les env vars Render (Dashboard → h2-0 → "
+            "Environment)."
+        )
+        return out
+    try:
+        import httpx as _httpx
+        api_key = settings.groq_api_key.strip()
+        async with _httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "user", "content": "Réponds juste 'ok'."}
+                    ],
+                    "max_tokens": 10,
+                    "temperature": 0,
+                },
+            )
+        if resp.status_code >= 400:
+            out["error"] = (
+                f"Groq HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+            return out
+        body = resp.json()
+        choices = body.get("choices") or []
+        out["sdk_works"] = bool(
+            choices and (choices[0].get("message") or {}).get("content")
+        )
+        if not out["sdk_works"]:
+            out["error"] = "Groq a répondu sans contenu utilisable."
+    except Exception as exc:
+        out["sdk_works"] = False
+        out["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        log.exception("check_groq_health failed")
+    return out
+
+
+@router.get(
+    "/check-claude-health",
+    summary=(
+        "Diagnostic : vérifie ANTHROPIC_API_KEY + ping Claude (utile "
+        "quand le bouton « Re-extraire avec Claude » ne fonctionne pas)."
+    ),
+)
+async def check_claude_health(user: CurrentUser) -> dict:
+    """Endpoint diagnostic indépendant du frontend, pour valider que
+    la ré-extraction Claude est opérationnelle côté serveur.
+
+    Réponse :
+      {
+        "configured": bool,    # ANTHROPIC_API_KEY est-elle définie ?
+        "sdk_works": bool,     # un mini appel Claude réussit-il ?
+        "model": str,          # modèle testé
+        "error": str|null      # détail si sdk_works=false
+      }
+
+    Si `configured=false` : Phil doit ajouter ANTHROPIC_API_KEY dans
+    les env vars Render (Dashboard → h2-0 → Environment).
+    Si `configured=true` et `sdk_works=false` : la clé est présente
+    mais invalide / expirée / quota dépassé.
+    """
+    _require_prospection(user)
+    model = "claude-sonnet-4-6"
+    enabled = bool(getattr(settings, "claude_reextract_enabled", False))
+    out: dict = {
+        "configured": bool(settings.anthropic_api_key),
+        "enabled": enabled,
+        "sdk_works": False,
+        "model": model,
+        "error": None,
+    }
+    if not enabled:
+        # Feature flag OFF : Claude est désactivé indépendamment de
+        # la clé. Le frontend cache le bouton Claude dans ce cas et
+        # ne montre que Groq.
+        out["error"] = (
+            "Ré-extraction Claude désactivée par feature flag "
+            "(CLAUDE_REEXTRACT_ENABLED=false). Utilise Groq (gratuit) "
+            "à la place, ou mets le flag à true pour réactiver Claude."
+        )
+        return out
+    if not out["configured"]:
+        out["error"] = (
+            "ANTHROPIC_API_KEY n'est pas configurée sur le serveur. "
+            "Ajoute-la dans les env vars Render (Dashboard → h2-0 → "
+            "Environment)."
+        )
+        return out
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        msg = client.messages.create(
+            model=model,
+            max_tokens=20,
+            messages=[{"role": "user", "content": "Réponds juste 'ok'."}],
+        )
+        # On considère que ça marche si on a au moins un block text.
+        has_text = any(
+            getattr(b, "type", None) == "text" for b in (msg.content or [])
+        )
+        out["sdk_works"] = has_text
+        if not has_text:
+            out["error"] = (
+                "Claude a répondu mais sans bloc texte (stop_reason="
+                f"{getattr(msg, 'stop_reason', None)!s})."
+            )
+    except Exception as exc:  # noqa: BLE001
+        out["sdk_works"] = False
+        out["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        log.exception("check_claude_health failed")
+    return out
+
+
+def _ocr_health_payload() -> dict:
+    """Payload réutilisé par /ocr-health et /check-ocr-health.
+
+    Lance `subprocess.run(["tesseract", "--version"])` pour récupérer
+    la version exacte + le chemin du binaire (`shutil.which`). Retourne
+    aussi le statut des deps Python OCR (pytesseract, pdf2image,
+    pillow_heif). Utile après auto-deploy pour valider que le buildpack
+    apt a bien installé Tesseract/poppler côté Render."""
+    import shutil
+    import subprocess
+
+    result: dict = {
+        "installed": False,
+        "version": None,
+        "error": None,
+        "path": None,
+        # Backward-compat avec l'ancien payload (clé "tesseract" lisible).
+        "tesseract": _check_tesseract_status(),
+    }
+    tess_path = shutil.which("tesseract")
+    result["path"] = tess_path
+    if tess_path:
+        try:
+            proc = subprocess.run(
+                ["tesseract", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            # Tesseract écrit la version sur stderr (convention legacy).
+            raw = (proc.stderr or proc.stdout or "").strip()
+            first_line = raw.splitlines()[0] if raw else ""
+            result["installed"] = True
+            result["version"] = first_line or None
+        except Exception as exc:  # noqa: BLE001
+            result["error"] = (
+                f"{type(exc).__name__}: {str(exc)[:200]}"
+            )
+    else:
+        result["error"] = (
+            "tesseract binary not found on PATH — buildpack apt "
+            "non activé sur Render ou Aptfile non pris en compte. "
+            "Va dans Render Dashboard → service h2-0 → Manual Deploy "
+            "→ « Clear build cache & deploy »."
+        )
     for pkg in ("pytesseract", "pdf2image", "pillow_heif", "PIL"):
         try:
             __import__(pkg)
@@ -1585,4 +2522,36 @@ async def ocr_health(user: CurrentUser) -> dict:
         except ImportError as exc:
             result[f"{pkg}_installed"] = f"NON installe : {exc}"
     return result
+
+
+@router.get(
+    "/ocr-health",
+    summary="Diagnostic Tesseract serveur (utile si extraction d'image vide).",
+)
+async def ocr_health(user: CurrentUser) -> dict:
+    """Renvoie le statut du binaire Tesseract installé sur le serveur.
+    Format de réponse :
+      { "installed": bool, "version": str|null, "error": str|null,
+        "path": str|null, "tesseract": "OK (vX.Y.Z)" (legacy),
+        "pytesseract_installed": bool, "pdf2image_installed": bool, ... }
+    Si l'extraction d'images retourne vide, hit cet endpoint dans le
+    navigateur ou via Postman pour confirmer si Tesseract est bien là."""
+    _require_prospection(user)
+    return _ocr_health_payload()
+
+
+@router.get(
+    "/check-ocr-health",
+    summary="Alias diagnostic Tesseract (post-deploy Render).",
+)
+async def check_ocr_health(user: CurrentUser) -> dict:
+    """Alias de /ocr-health. Format documenté : {installed: bool,
+    version?: str, error?: str, path?: str}. À hit après un
+    auto-deploy Render pour confirmer que le buildpack apt a bien
+    installé tesseract/poppler."""
+    _require_prospection(user)
+    return _ocr_health_payload()
+
+
+
 

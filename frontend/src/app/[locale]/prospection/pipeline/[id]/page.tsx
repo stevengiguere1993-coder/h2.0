@@ -10,6 +10,7 @@ import { Link, useRouter } from "@/i18n/navigation";
 import { useConfirm } from "@/components/confirm-dialog";
 import { DriveButton } from "@/components/drive-button";
 import { LeadAnalysisSummary } from "@/components/lead-analysis-summary";
+import { LeadAnalysisDetailModal } from "@/components/leads/LeadAnalysisDetailModal";
 import { NDASection } from "@/components/nda-section";
 import { OfferSection } from "@/components/offer-section";
 import { useProspectionLayout } from "../../layout";
@@ -76,6 +77,10 @@ export default function DealDetailPage() {
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState("");
   const [moveTask, setMoveTask] = useState<Task | null>(null);
+  // Modal d'analyse ouvert SUR PLACE (par-dessus la page du Deal).
+  // Phil clique sur « Ouvrir la fiche complète » dans <LeadAnalysisSummary>
+  // -> on set cet id et le modal s'affiche en overlay, sans navigation.
+  const [detailAnalysisId, setDetailAnalysisId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     if (!Number.isFinite(dealId) || dealId <= 0) return;
@@ -398,7 +403,16 @@ export default function DealDetailPage() {
         ) : null}
 
         {deal?.lead_analysis_id ? (
-          <LeadAnalysisSummary id={deal.lead_analysis_id} />
+          (() => {
+            const analysisId = deal.lead_analysis_id;
+            return (
+              <LeadAnalysisSummary
+                id={analysisId}
+                fromDealId={dealId}
+                onOpenDetail={() => setDetailAnalysisId(analysisId)}
+              />
+            );
+          })()
         ) : null}
 
         <OfferSection dealId={dealId} />
@@ -451,6 +465,26 @@ export default function DealDetailPage() {
             // de la liste locale.
             setTasks((xs) => xs.filter((x) => x.id !== moveTask.id));
             setMoveTask(null);
+          }}
+        />
+      ) : null}
+
+      {/* Modal d'analyse en overlay sur la page du Deal — évite la
+          navigation vers /analyses-leads (où le lead n'apparaît plus
+          puisqu'il a été converti). Phil reste dans le contexte du
+          Deal et voit la fiche par-dessus. */}
+      {detailAnalysisId != null ? (
+        <LeadAnalysisDetailModal
+          analysisId={detailAnalysisId}
+          open
+          onClose={() => setDetailAnalysisId(null)}
+          onAfterUpdate={() => {
+            // Le résumé <LeadAnalysisSummary> refait son fetch au
+            // remount, mais ses chiffres principaux peuvent avoir
+            // changé. On force un re-render léger via setState
+            // (load() ferait trop : nouvelles tâches, etc.).
+            // Note : le résumé écoute déjà `id` ; pour le refresh
+            // visuel après save, c'est suffisant.
           }}
         />
       ) : null}

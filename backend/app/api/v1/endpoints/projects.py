@@ -23,6 +23,15 @@ from app.services.project import ProjectService
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
+def _billing_kind(kind: Optional[str], pricing_kind: Optional[str]) -> str:
+    """Type de facturation d'un projet d'après sa soumission liée :
+    "contrat" (contrat APCHQ), sinon le pricing_kind ("forfaitaire" /
+    "estime"). Détermine le défaut « refacturable » des achats."""
+    if (kind or "") == "contract":
+        return "contrat"
+    return pricing_kind or "forfaitaire"
+
+
 @router.post(
     "",
     response_model=ProjectRead,
@@ -79,24 +88,33 @@ async def list_projects(
     # `budget` est null mais qu'une soumission acceptée a un total.
     sm_ids = [p.soumission_id for p in projects if p.soumission_id]
     sm_totals: dict[int, Decimal] = {}
+    sm_billing: dict[int, str] = {}
     if sm_ids:
         from sqlalchemy import select
         from app.models.soumission import Soumission
 
         rows = (
             await db.execute(
-                select(Soumission.id, Soumission.total).where(
-                    Soumission.id.in_(set(sm_ids))
-                )
+                select(
+                    Soumission.id,
+                    Soumission.total,
+                    Soumission.kind,
+                    Soumission.pricing_kind,
+                ).where(Soumission.id.in_(set(sm_ids)))
             )
         ).all()
-        sm_totals = {sid: total for sid, total in rows if total is not None}
+        for sid, total, kind, pricing_kind in rows:
+            if total is not None:
+                sm_totals[sid] = total
+            sm_billing[sid] = _billing_kind(kind, pricing_kind)
 
     out: List[ProjectRead] = []
     for p in projects:
         d = ProjectRead.model_validate(p)
         if p.soumission_id and p.soumission_id in sm_totals:
             d.soumission_total = sm_totals[p.soumission_id]
+        if p.soumission_id and p.soumission_id in sm_billing:
+            d.billing_kind = sm_billing[p.soumission_id]
         out.append(d)
     return out
 
@@ -126,7 +144,21 @@ async def get_project(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found",
         )
-    return ProjectReadWithClient.model_validate(project)
+    out = ProjectReadWithClient.model_validate(project)
+    if project.soumission_id:
+        from sqlalchemy import select
+        from app.models.soumission import Soumission
+
+        sm = (
+            await db.execute(
+                select(Soumission.kind, Soumission.pricing_kind).where(
+                    Soumission.id == project.soumission_id
+                )
+            )
+        ).first()
+        if sm is not None:
+            out.billing_kind = _billing_kind(sm[0], sm[1])
+    return out
 
 
 @router.put(
