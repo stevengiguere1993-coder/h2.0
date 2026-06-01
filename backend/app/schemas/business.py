@@ -82,6 +82,7 @@ class FournisseurCreate(BaseModel):
     phone: Optional[str] = None
     category: Optional[str] = None
     website: Optional[str] = None
+    address: Optional[str] = Field(default=None, max_length=500)
     notes: Optional[str] = None
     payment_terms_days: Optional[int] = Field(default=None, ge=0, le=365)
     qbo_expense_account: Optional[str] = Field(default=None, max_length=255)
@@ -94,6 +95,7 @@ class FournisseurUpdate(BaseModel):
     phone: Optional[str] = None
     category: Optional[str] = None
     website: Optional[str] = None
+    address: Optional[str] = Field(default=None, max_length=500)
     active: Optional[bool] = None
     notes: Optional[str] = None
     payment_terms_days: Optional[int] = Field(default=None, ge=0, le=365)
@@ -108,10 +110,12 @@ class FournisseurRead(_Base):
     phone: Optional[str]
     category: Optional[str]
     website: Optional[str]
+    address: Optional[str] = None
     active: bool
     notes: Optional[str]
     payment_terms_days: Optional[int] = None
     qbo_expense_account: Optional[str] = None
+    qbo_vendor_id: Optional[str] = None
     created_at: datetime
 
 

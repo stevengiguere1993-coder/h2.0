@@ -178,6 +178,22 @@ def _private_note(
     return " | ".join(parts)
 
 
+def _format_qbo_addr(addr: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Aplati un BillAddr QBO (Line1/City/Province/Code postal) en une
+    seule ligne lisible pour la stocker sur le Fournisseur Kratos."""
+    if not addr:
+        return None
+    parts = [
+        addr.get("Line1"),
+        addr.get("Line2"),
+        addr.get("City"),
+        addr.get("CountrySubDivisionCode"),
+        addr.get("PostalCode"),
+    ]
+    flat = " ".join(str(p).strip() for p in parts if p and str(p).strip())
+    return flat[:500] or None
+
+
 def _add_quebec_taxes(payload: Dict[str, Any], lines: list) -> None:
     """Quand l'achat est rattaché à un projet (donc refacturable),
     on ajoute TPS 5 % + TVQ 9.975 % calculés sur la somme des lignes,
@@ -479,10 +495,21 @@ async def sync_achat_to_qbo(
             display_name=fournisseur.name,
             email=fournisseur.email,
             phone=fournisseur.phone,
+            billing_address=(fournisseur.address or None),
         )
         vendor_id = str(vendor.get("Id") or "")
         if not vendor_id:
             raise AchatSyncError("QBO n'a pas retourné d'id vendor.")
+
+        # Backfill dans Kratos : on memorise l'id du vendor QB et, si le
+        # fournisseur n'a pas encore d'adresse, on importe celle de QB
+        # (« importer son adresse dans Kratos »).
+        if not fournisseur.qbo_vendor_id:
+            fournisseur.qbo_vendor_id = vendor_id
+        if not (fournisseur.address or "").strip():
+            qbo_addr = _format_qbo_addr(vendor.get("BillAddr"))
+            if qbo_addr:
+                fournisseur.address = qbo_addr
 
         expense_account_id = await _resolve_expense_account(
             db, qbo, fournisseur=fournisseur
@@ -497,6 +524,58 @@ async def sync_achat_to_qbo(
 
         method = (achat.payment_method or "bill_to_pay").lower()
         as_purchase = method in PAID_METHODS
+
+        # Anti-doublon : si cet Achat n'est pas encore lie a un objet QB,
+        # on verifie qu'un Bill/Purchase equivalent (meme fournisseur,
+        # meme total TTC, ~meme date) n'existe pas deja cote QuickBooks.
+        # Si oui, on s'y rattache (sans rien recreer ni ecraser) pour ne
+        # pas pousser de doublon. Critere choisi : fournisseur + montant
+        # + date.
+        if not achat.qbo_bill_id:
+            total_ttc = float(achat.amount or 0) + float(achat.amount_taxes or 0)
+            try:
+                if as_purchase:
+                    dup = await qbo.find_existing_purchase(
+                        vendor_id=vendor_id,
+                        total=total_ttc,
+                        txn_date=_txn_date(achat),
+                    )
+                else:
+                    dup = await qbo.find_existing_bill(
+                        vendor_id=vendor_id,
+                        total=total_ttc,
+                        txn_date=_txn_date(achat),
+                    )
+            except QuickBooksError as exc:
+                # Recherche best-effort : si la query echoue, on continue
+                # le push normal plutot que de bloquer.
+                log.warning(
+                    "Anti-doublon lookup failed for Achat %s: %s",
+                    achat.id, exc,
+                )
+                dup = None
+            if dup and dup.get("Id"):
+                achat.qbo_bill_id = str(dup["Id"])
+                achat.qbo_sync_token = str(dup.get("SyncToken") or "0")
+                if dup.get("DocNumber"):
+                    achat.qbo_doc_number = str(dup["DocNumber"])
+                await db.flush()
+                log.info(
+                    "Achat %s rattache a un %s QB existant %s "
+                    "(anti-doublon fournisseur+montant+date)",
+                    achat.id,
+                    "Purchase" if as_purchase else "Bill",
+                    achat.qbo_bill_id,
+                )
+                return {
+                    "ok": True,
+                    "qbo_bill_id": achat.qbo_bill_id,
+                    "qbo_doc_number": achat.qbo_doc_number or "",
+                    "qbo_vendor_id": vendor_id,
+                    "receipt_attached": False,
+                    "receipt_error": None,
+                    "linked_existing": True,
+                }
 
         if as_purchase:
             # Achat déjà payé (carte de crédit, comptant, interac) →

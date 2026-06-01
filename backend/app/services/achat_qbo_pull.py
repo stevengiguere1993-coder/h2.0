@@ -73,6 +73,10 @@ async def _find_or_create_fournisseur(
         raise QboPullError(
             f"Vendor QB sans nom (Id={vendor.get('Id')})"
         )
+    from app.services.achat_qbo import _format_qbo_addr
+
+    vendor_id = str(vendor.get("Id") or "") or None
+    qbo_addr = _format_qbo_addr(vendor.get("BillAddr"))
     rows = (
         await db.execute(
             select(Fournisseur).where(
@@ -83,14 +87,22 @@ async def _find_or_create_fournisseur(
     if rows:
         # Priorise un fournisseur actif si plusieurs matches.
         active = [r for r in rows if r.active]
-        return active[0] if active else rows[0]
-    # Cree le fournisseur a la volee, sans details supplementaires.
+        match = active[0] if active else rows[0]
+        # Backfill l'id vendor QB et l'adresse si on ne les avait pas.
+        if vendor_id and not match.qbo_vendor_id:
+            match.qbo_vendor_id = vendor_id
+        if qbo_addr and not (match.address or "").strip():
+            match.address = qbo_addr
+        return match
+    # Cree le fournisseur a la volee avec ce qu'on connait du Vendor QB.
     email = vendor.get("PrimaryEmailAddr", {}).get("Address")
     phone = vendor.get("PrimaryPhone", {}).get("FreeFormNumber")
     new_f = Fournisseur(
         name=name[:255],
         email=(email or None),
         phone=(phone or None),
+        address=qbo_addr,
+        qbo_vendor_id=vendor_id,
         active=True,
     )
     db.add(new_f)
