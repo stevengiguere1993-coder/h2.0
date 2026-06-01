@@ -79,7 +79,19 @@ def _build_line(
     project_name: Optional[str],
     customer_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    amount = float(achat.amount or 0)
+    # Montant HT de la ligne. Avec un TaxCodeRef + TaxExcluded, QBO
+    # calcule la taxe par-dessus, donc on doit envoyer le HT.
+    #   - Achat « normal » : amount = HT déjà (amount_taxes porte la taxe).
+    #   - Achat « legacy » : amount = TTC et amount_taxes = 0/None →
+    #     on décompose le TTC pour retrouver le HT (TPS 5 % + TVQ 9,975 %
+    #     = facteur 1,14975), sinon QBO ajouterait la taxe sur un TTC
+    #     (double taxation → total gonflé).
+    raw_amount = float(achat.amount or 0)
+    taxes = float(achat.amount_taxes or 0)
+    if settings.qbo_purchase_tax_code and taxes <= 0 and raw_amount > 0:
+        amount = round(raw_amount / 1.14975, 2)
+    else:
+        amount = raw_amount
     description = (
         achat.description
         or f"Achat #{achat.id}"
