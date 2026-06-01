@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Loader2, Plus, ShoppingCart } from "lucide-react";
+import {
+  CheckCircle2,
+  CloudDownload,
+  Loader2,
+  Plus,
+  ShoppingCart
+} from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
@@ -101,6 +107,54 @@ export default function AchatsPage() {
   const [fProject, setFProject] = useState("");
   const [fFournisseur, setFFournisseur] = useState("");
   const [payTarget, setPayTarget] = useState<Achat | null>(null);
+  const [pulling, setPulling] = useState(false);
+  const [pullResult, setPullResult] = useState<string | null>(null);
+
+  async function pullFromQbo() {
+    if (pulling) return;
+    setPulling(true);
+    setPullResult(null);
+    try {
+      const res = await authedFetch("/api/v1/achats/sync-from-qbo", {
+        method: "POST"
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        let detail = txt;
+        try {
+          const j = JSON.parse(txt) as { detail?: string };
+          if (j.detail) detail = j.detail;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail.slice(0, 240));
+      }
+      const r = (await res.json()) as {
+        imported: number;
+        unmatched_project: number;
+        imported_paid: number;
+        skipped_existing: number;
+        total_qbo_bills: number;
+      };
+      const parts: string[] = [];
+      parts.push(`${r.imported} nouveau(x) achat(s) importé(s)`);
+      if (r.imported_paid > 0)
+        parts.push(`dont ${r.imported_paid} déjà payé(s)`);
+      if (r.unmatched_project > 0)
+        parts.push(`${r.unmatched_project} sans projet (à assigner)`);
+      parts.push(`${r.skipped_existing} déjà présent(s)`);
+      setPullResult(parts.join(" · "));
+      // Recharge la liste
+      const aRes = await authedFetch("/api/v1/achats?limit=500");
+      if (aRes.ok) {
+        setItems((await aRes.json()) as Achat[]);
+      }
+    } catch (e) {
+      setPullResult(`Échec : ${(e as Error).message}`);
+    } finally {
+      setPulling(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -191,13 +245,29 @@ export default function AchatsPage() {
         onSearch={setSearch}
         searchPlaceholder="Référence, description…"
         rightSlot={
-          <Link
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/app/achats/new" as any}
-            className="btn-accent text-sm"
-          >
-            <Plus className="mr-1.5 h-4 w-4" /> Nouvel achat
-          </Link>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={pullFromQbo}
+              disabled={pulling}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm font-medium text-sky-300 hover:bg-sky-500/20 disabled:opacity-50"
+              title="Importer dans Kratos les factures fournisseur saisies directement dans QuickBooks"
+            >
+              {pulling ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <CloudDownload className="h-4 w-4" />
+              )}
+              Importer de QB
+            </button>
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/app/achats/new" as any}
+              className="btn-accent text-sm"
+            >
+              <Plus className="mr-1.5 h-4 w-4" /> Nouvel achat
+            </Link>
+          </div>
         }
       />
 
@@ -205,6 +275,17 @@ export default function AchatsPage() {
         {error ? (
           <p className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
             {error}
+          </p>
+        ) : null}
+        {pullResult ? (
+          <p
+            className={`mb-4 rounded-lg border px-4 py-2 text-sm ${
+              pullResult.startsWith("Échec")
+                ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+                : "border-sky-500/40 bg-sky-500/10 text-sky-200"
+            }`}
+          >
+            {pullResult}
           </p>
         ) : null}
 
