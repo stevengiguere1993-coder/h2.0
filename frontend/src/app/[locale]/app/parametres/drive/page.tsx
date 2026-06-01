@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
@@ -9,9 +9,15 @@ import {
   ExternalLink,
   FolderCog,
   History,
+  Link2,
   Loader2,
+  Pencil,
+  Play,
+  Plus,
+  Power,
   Trash2,
-  UploadCloud
+  UploadCloud,
+  X
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
@@ -23,13 +29,13 @@ import { authedFetch } from "@/lib/auth";
 /**
  * Page « Gestion documentaire Drive » — admin+ uniquement.
  *
- * Phase 1 (foundation OAuth) : seule la section « Connexion Google Drive »
- * est interactive. Les 4 autres sections (Conventions, Auto-upload,
- * Mappings, Audit log) sont affichées en placeholder « Bientôt disponible »
- * pour donner à Phil une vision du roadmap.
+ * Phase 1 (foundation OAuth)  : section « Connexion Google Drive ».
+ * Phase 3 (explorer)          : section démo Drive Explorer.
+ * Phase 4 (conventions)       : sections « Conventions » et
+ *                               « Liens existants » deviennent ACTIVES,
+ *                               avec CRUD + action Apply + modale de test.
  *
- * Voir docs/DRIVE_INTEGRATION.md pour la procédure de configuration
- * Google Cloud Console + variables d'env Render.
+ * Voir docs/DRIVE_INTEGRATION.md pour la procédure de configuration.
  */
 
 type DriveStatus = {
@@ -39,6 +45,63 @@ type DriveStatus = {
   updated_at?: string | null;
   server_configured: boolean;
 };
+
+// ---------------------------------------------------------------------------
+// Types Phase 4 — miroirs des schémas backend
+// ---------------------------------------------------------------------------
+
+type DriveConvention = {
+  id: number;
+  name: string;
+  entity_type: string;
+  trigger_event: string;
+  parent_folder_drive_id?: string | null;
+  folder_name_template?: string | null;
+  template_folder_to_copy_drive_id?: string | null;
+  subfolders_to_create?: string[] | null;
+  auto_link_to_entity: boolean;
+  status_to_parent_map?: Record<string, unknown> | null;
+  active: boolean;
+  priority: number;
+  description?: string | null;
+  created_by_user_id?: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type SupportedEntityVariable = {
+  key: string;
+  label: string;
+  description?: string | null;
+};
+
+type SupportedEntityType = {
+  key: string;
+  label: string;
+  variables: SupportedEntityVariable[];
+};
+
+type DriveEntityLink = {
+  id: number;
+  entity_type: string;
+  entity_id: number;
+  drive_folder_id: string;
+  drive_folder_name?: string | null;
+  drive_folder_path?: string | null;
+  convention_id?: number | null;
+  created_by_user_id?: number | null;
+  created_at: string;
+};
+
+type ApplyResult = {
+  link: DriveEntityLink;
+  subfolders_created: string[];
+  drive_folder_url?: string | null;
+};
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
 
 export default function DriveSettingsPage() {
   const { onOpenSidebar } = useAppLayout();
@@ -63,7 +126,6 @@ export default function DriveSettingsPage() {
 
   useEffect(() => {
     void load();
-    // Callback redirige avec ?drive=connected ou ?drive=error:xxx
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
       const drive = url.searchParams.get("drive");
@@ -89,9 +151,6 @@ export default function DriveSettingsPage() {
         throw new Error(txt || `http_${res.status}`);
       }
       const data = (await res.json()) as { authorization_url: string };
-      // Ouvre dans la même fenêtre — le callback Google nous ramènera
-      // ensuite sur /app/parametres/drive?drive=connected via la
-      // redirection backend.
       window.location.href = data.authorization_url;
     } catch (e) {
       setErr(`Impossible de lancer la connexion : ${(e as Error).message}`);
@@ -169,9 +228,6 @@ export default function DriveSettingsPage() {
           </p>
         ) : null}
 
-        {/* ------------------------------------------------------------- */}
-        {/* Section 1 — Connexion Google Drive (Phase 1, active)          */}
-        {/* ------------------------------------------------------------- */}
         <ConnectionSection
           loading={loading}
           status={status}
@@ -180,42 +236,26 @@ export default function DriveSettingsPage() {
           onDisconnect={disconnect}
         />
 
-        {/* ------------------------------------------------------------- */}
-        {/* Section démo — Test Drive Explorer (Phase 3, retirée en P7)   */}
-        {/* ------------------------------------------------------------- */}
         {status?.connected ? <DriveExplorerDemoSection /> : null}
 
-        {/* ------------------------------------------------------------- */}
-        {/* Sections 2-5 — Roadmap, grisées (Phases 4+)                   */}
-        {/* ------------------------------------------------------------- */}
-        <PlaceholderSection
-          icon={FolderCog}
-          title="Conventions de dossiers"
-          description="Règles configurables qui créent et lient automatiquement des dossiers Drive à tes entités Kratos (deal, projet, client) selon des événements (création, changement de statut)."
-          phase="Phase 4"
-        />
+        {/* Phase 4 — section active : Conventions + Liens existants */}
+        {status?.connected ? <ConventionsSection /> : null}
+        {status?.connected ? <EntityLinksSection /> : null}
+
+        {/* Sections restées placeholder pour Phases 4+ */}
         <PlaceholderSection
           icon={UploadCloud}
           title="Auto-upload des PDFs Kratos"
           description="Dépôt automatique dans Drive de chaque document généré par Kratos : fiches d'analyse, NDA signés, soumissions, offres PPTX, factures Dev logiciel."
-          phase="Phase 4"
-        />
-        <PlaceholderSection
-          icon={Cloud}
-          title="Mappings existants"
-          description="Vue d'ensemble de tous les liens entité ↔ dossier Drive enregistrés, avec recherche et action de re-lier."
-          phase="Phase 4"
+          phase="Phase 6"
         />
         <PlaceholderSection
           icon={History}
           title="Journal d'activité Drive"
           description="Historique de toutes les actions Drive faites depuis Kratos : qui a uploadé / renommé / déplacé / supprimé quoi et quand, avec succès ou erreur."
-          phase="Phase 4"
+          phase="Phase 4+"
         />
 
-        {/* ------------------------------------------------------------- */}
-        {/* Hint configuration Render                                     */}
-        {/* ------------------------------------------------------------- */}
         {status && !status.server_configured ? (
           <section className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-5 text-sm text-amber-200">
             <p className="flex items-center gap-2 font-semibold">
@@ -358,10 +398,7 @@ function ConnectionSection({
 }
 
 // -----------------------------------------------------------------------------
-// Section démo « Test Drive Explorer » — Phase 3 uniquement.
-// Permet à Phil de coller un folder ID Drive et tester toutes les fonctionnalités
-// du composant <DriveFolderExplorer> avant qu'il soit branché dans les pages
-// deal / projet / client à la Phase 7. Sera retirée à ce moment-là.
+// Section démo « Test Drive Explorer » — Phase 3.
 // -----------------------------------------------------------------------------
 
 function DriveExplorerDemoSection() {
@@ -444,7 +481,933 @@ function DriveExplorerDemoSection() {
 }
 
 // -----------------------------------------------------------------------------
-// Section « Bientôt disponible » (placeholders Phase 4+)
+// Section « Conventions » — Phase 4
+// -----------------------------------------------------------------------------
+
+const TRIGGER_LABELS: Record<string, string> = {
+  manuel: "Manuel",
+  created: "À la création",
+  status_changed: "Au changement de statut"
+};
+
+function isPhase5Trigger(t: string) {
+  return t === "created" || t === "status_changed";
+}
+
+function ConventionsSection() {
+  const [conventions, setConventions] = useState<DriveConvention[] | null>(
+    null
+  );
+  const [types, setTypes] = useState<SupportedEntityType[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [filterType, setFilterType] = useState<string>("");
+  const [filterActive, setFilterActive] = useState<string>(""); // "", "true", "false"
+  const [editing, setEditing] = useState<DriveConvention | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [testing, setTesting] = useState<DriveConvention | null>(null);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (filterType) params.set("entity_type", filterType);
+      if (filterActive) params.set("active", filterActive);
+      const [convRes, typesRes] = await Promise.all([
+        authedFetch(`/api/v1/drive/conventions?${params.toString()}`),
+        authedFetch("/api/v1/drive/conventions/supported-entity-types")
+      ]);
+      if (!convRes.ok) throw new Error(`http_${convRes.status}`);
+      if (!typesRes.ok) throw new Error(`http_${typesRes.status}`);
+      setConventions((await convRes.json()) as DriveConvention[]);
+      setTypes((await typesRes.json()) as SupportedEntityType[]);
+    } catch (e) {
+      setError(`Chargement échoué : ${(e as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [filterType, filterActive]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  async function toggleActive(c: DriveConvention) {
+    try {
+      const res = await authedFetch(`/api/v1/drive/conventions/${c.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: !c.active })
+      });
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      await reload();
+    } catch (e) {
+      setError(`Toggle échoué : ${(e as Error).message}`);
+    }
+  }
+
+  async function remove(c: DriveConvention) {
+    if (
+      !window.confirm(
+        `Supprimer la convention « ${c.name} » ? Elle sera désactivée (soft-delete).`
+      )
+    )
+      return;
+    try {
+      const res = await authedFetch(`/api/v1/drive/conventions/${c.id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) throw new Error(`http_${res.status}`);
+      await reload();
+    } catch (e) {
+      setError(`Suppression échouée : ${(e as Error).message}`);
+    }
+  }
+
+  return (
+    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <header className="flex flex-wrap items-start gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
+          <FolderCog className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-base font-bold text-white">
+              Conventions de dossiers
+            </h2>
+            <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
+              Phase 4 · actif
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs text-white/60">
+            Règles qui créent et lient automatiquement des dossiers Drive à
+            tes entités Kratos. Pour cette phase, l&apos;application est
+            manuelle (bouton « Tester ») ; les hooks automatiques arrivent en
+            Phase 5.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setCreating(true)}
+          className="inline-flex items-center gap-1 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600"
+        >
+          <Plus className="h-3.5 w-3.5" /> Nouvelle convention
+        </button>
+      </header>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
+        <label className="text-white/40">Filtrer :</label>
+        <select
+          value={filterType}
+          onChange={(e) => setFilterType(e.target.value)}
+          className="rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-white"
+        >
+          <option value="">Tous types</option>
+          {types.map((t) => (
+            <option key={t.key} value={t.key}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={filterActive}
+          onChange={(e) => setFilterActive(e.target.value)}
+          className="rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-white"
+        >
+          <option value="">Tous statuts</option>
+          <option value="true">Actifs</option>
+          <option value="false">Inactifs</option>
+        </select>
+      </div>
+
+      {error ? (
+        <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {error}
+        </p>
+      ) : null}
+
+      {loading ? (
+        <div className="mt-5 flex items-center gap-2 text-xs text-white/50">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+        </div>
+      ) : conventions && conventions.length > 0 ? (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[760px] text-xs">
+            <thead className="text-left text-white/40">
+              <tr>
+                <th className="px-2 py-2">Nom</th>
+                <th className="px-2 py-2">Type entité</th>
+                <th className="px-2 py-2">Trigger</th>
+                <th className="px-2 py-2">Dossier parent</th>
+                <th className="px-2 py-2">Template nom</th>
+                <th className="px-2 py-2">Actif</th>
+                <th className="px-2 py-2 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="text-white/80">
+              {conventions.map((c) => (
+                <tr key={c.id} className="border-t border-brand-800">
+                  <td className="px-2 py-2 font-medium text-white">{c.name}</td>
+                  <td className="px-2 py-2">
+                    <span className="rounded bg-brand-950 px-1.5 py-0.5 font-mono text-[10px]">
+                      {c.entity_type}
+                    </span>
+                  </td>
+                  <td className="px-2 py-2">
+                    {TRIGGER_LABELS[c.trigger_event] || c.trigger_event}
+                    {isPhase5Trigger(c.trigger_event) ? (
+                      <span className="ml-1 rounded bg-amber-500/20 px-1 py-0.5 text-[9px] uppercase text-amber-300">
+                        Phase 5
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="px-2 py-2 font-mono text-[10px] text-white/60">
+                    {c.parent_folder_drive_id || (
+                      <span className="text-amber-300">à configurer</span>
+                    )}
+                  </td>
+                  <td className="px-2 py-2 font-mono text-[10px]">
+                    {c.folder_name_template || "—"}
+                  </td>
+                  <td className="px-2 py-2">
+                    {c.active ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-300">
+                        <CheckCircle2 className="h-3 w-3" /> Actif
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-white/40">
+                        Inactif
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-2 py-2 text-right">
+                    <div className="inline-flex gap-1">
+                      <button
+                        type="button"
+                        title="Tester (apply à une entité)"
+                        onClick={() => setTesting(c)}
+                        className="rounded p-1 text-emerald-300 hover:bg-emerald-500/10"
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        title="Modifier"
+                        onClick={() => setEditing(c)}
+                        className="rounded p-1 text-white/60 hover:bg-white/10 hover:text-white"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        title={c.active ? "Désactiver" : "Activer"}
+                        onClick={() => toggleActive(c)}
+                        className="rounded p-1 text-white/60 hover:bg-white/10 hover:text-white"
+                      >
+                        <Power className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        title="Supprimer"
+                        onClick={() => remove(c)}
+                        className="rounded p-1 text-rose-300 hover:bg-rose-500/10"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="mt-4 rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/50">
+          Aucune convention. Crée-en une avec le bouton ci-dessus.
+        </p>
+      )}
+
+      {creating ? (
+        <ConventionEditorModal
+          types={types}
+          onClose={() => setCreating(false)}
+          onSaved={() => {
+            setCreating(false);
+            void reload();
+          }}
+        />
+      ) : null}
+      {editing ? (
+        <ConventionEditorModal
+          types={types}
+          convention={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            void reload();
+          }}
+        />
+      ) : null}
+      {testing ? (
+        <ConventionTestModal
+          convention={testing}
+          onClose={() => setTesting(null)}
+          onApplied={() => {
+            setTesting(null);
+            void reload();
+          }}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Modal édition / création
+// -----------------------------------------------------------------------------
+
+type ConventionEditorState = {
+  name: string;
+  entity_type: string;
+  trigger_event: string;
+  parent_folder_drive_id: string;
+  folder_name_template: string;
+  template_folder_to_copy_drive_id: string;
+  subfolders_raw: string; // textarea — 1 ligne par sous-dossier
+  description: string;
+  active: boolean;
+};
+
+function ConventionEditorModal({
+  types,
+  convention,
+  onClose,
+  onSaved
+}: {
+  types: SupportedEntityType[];
+  convention?: DriveConvention;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const initialType = convention?.entity_type || types[0]?.key || "";
+  const [state, setState] = useState<ConventionEditorState>({
+    name: convention?.name || "",
+    entity_type: initialType,
+    trigger_event: convention?.trigger_event || "manuel",
+    parent_folder_drive_id: convention?.parent_folder_drive_id || "",
+    folder_name_template: convention?.folder_name_template || "",
+    template_folder_to_copy_drive_id:
+      convention?.template_folder_to_copy_drive_id || "",
+    subfolders_raw: (convention?.subfolders_to_create || []).join("\n"),
+    description: convention?.description || "",
+    active: convention?.active ?? false
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedType = useMemo(
+    () => types.find((t) => t.key === state.entity_type) || null,
+    [types, state.entity_type]
+  );
+
+  const previewName = useMemo(() => {
+    if (!selectedType || !state.folder_name_template) return null;
+    const sample: Record<string, string> = {
+      address: "1660 Saint-Clément",
+      city: "Montréal",
+      postal_code: "H1V 1A1",
+      nom_projet: "Refonte CRM Acme",
+      nom_client: "Acme Inc.",
+      date_creation: new Date().toISOString().slice(0, 10)
+    };
+    return state.folder_name_template.replace(
+      /\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g,
+      (_m, k) => sample[k] ?? `{${k}}`
+    );
+  }, [selectedType, state.folder_name_template]);
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      const subfolders = state.subfolders_raw
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      const body = {
+        name: state.name,
+        entity_type: state.entity_type,
+        trigger_event: state.trigger_event,
+        parent_folder_drive_id: state.parent_folder_drive_id || null,
+        folder_name_template: state.folder_name_template || null,
+        template_folder_to_copy_drive_id:
+          state.template_folder_to_copy_drive_id || null,
+        subfolders_to_create: subfolders,
+        description: state.description || null,
+        active: state.active
+      };
+      const url = convention
+        ? `/api/v1/drive/conventions/${convention.id}`
+        : "/api/v1/drive/conventions";
+      const method = convention ? "PATCH" : "POST";
+      const res = await authedFetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt || `http_${res.status}`);
+      }
+      onSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={convention ? "Modifier la convention" : "Nouvelle convention"}
+      onClose={onClose}
+    >
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_320px]">
+        <div className="space-y-4">
+          <Field label="Nom">
+            <input
+              type="text"
+              value={state.name}
+              onChange={(e) => setState({ ...state, name: e.target.value })}
+              className={INPUT_DARK}
+              placeholder="Ex. Deal Pipeline → 0 - En cours"
+            />
+          </Field>
+
+          <Field label="Type d'entité">
+            <select
+              value={state.entity_type}
+              onChange={(e) =>
+                setState({ ...state, entity_type: e.target.value })
+              }
+              className={INPUT_DARK}
+            >
+              {types.map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Événement déclencheur">
+            <select
+              value={state.trigger_event}
+              onChange={(e) =>
+                setState({ ...state, trigger_event: e.target.value })
+              }
+              className={INPUT_DARK}
+            >
+              <option value="manuel">Manuel (seul actif Phase 4)</option>
+              <option value="created">À la création (Phase 5)</option>
+              <option value="status_changed">
+                Au changement de statut (Phase 5)
+              </option>
+            </select>
+            {isPhase5Trigger(state.trigger_event) ? (
+              <p className="mt-1 text-[11px] text-amber-300">
+                Sera ignoré tant que les hooks automatiques (Phase 5) ne sont
+                pas livrés. Pour l&apos;instant tu peux toujours appliquer la
+                convention manuellement via « Tester ».
+              </p>
+            ) : null}
+          </Field>
+
+          <Field label="Dossier parent Drive (ID)">
+            <input
+              type="text"
+              value={state.parent_folder_drive_id}
+              onChange={(e) =>
+                setState({
+                  ...state,
+                  parent_folder_drive_id: e.target.value
+                })
+              }
+              className={`${INPUT_DARK} font-mono`}
+              placeholder="ex. 1tj3wzyxLC2yK0laiQNCs3es2-3s0_mee"
+            />
+            <p className="mt-1 text-[11px] text-white/40">
+              ID du dossier Drive où créer les sous-dossiers de chaque entité.
+              Copie-le depuis l&apos;URL Drive
+              (drive.google.com/drive/folders/<strong>ID</strong>) ou{" "}
+              <a
+                href="https://drive.google.com/drive/my-drive"
+                target="_blank"
+                rel="noreferrer"
+                className="text-accent-300 hover:underline"
+              >
+                ouvre Drive
+              </a>
+              .
+            </p>
+          </Field>
+
+          <Field label="Pattern de nommage">
+            <input
+              type="text"
+              value={state.folder_name_template}
+              onChange={(e) =>
+                setState({ ...state, folder_name_template: e.target.value })
+              }
+              className={`${INPUT_DARK} font-mono`}
+              placeholder="ex. {address}, {city}"
+            />
+            {selectedType ? (
+              <p className="mt-1 text-[11px] text-white/40">
+                Variables dispo :{" "}
+                {selectedType.variables.map((v) => (
+                  <code
+                    key={v.key}
+                    className="mr-1 rounded bg-brand-950 px-1 py-0.5 font-mono"
+                    title={v.description || ""}
+                  >
+                    {`{${v.key}}`}
+                  </code>
+                ))}
+              </p>
+            ) : null}
+          </Field>
+
+          <Field label="Template à copier (ID, optionnel)">
+            <input
+              type="text"
+              value={state.template_folder_to_copy_drive_id}
+              onChange={(e) =>
+                setState({
+                  ...state,
+                  template_folder_to_copy_drive_id: e.target.value
+                })
+              }
+              className={`${INPUT_DARK} font-mono`}
+              placeholder="ID d'un dossier Drive modèle à cloner (laisser vide pour créer un dossier vide)"
+            />
+          </Field>
+
+          <Field label="Sous-dossiers à créer (un par ligne)">
+            <textarea
+              rows={5}
+              value={state.subfolders_raw}
+              onChange={(e) =>
+                setState({ ...state, subfolders_raw: e.target.value })
+              }
+              className={`${INPUT_DARK} font-mono`}
+              placeholder="Photos&#10;Documents&#10;Soumissions"
+            />
+          </Field>
+
+          <Field label="Description (optionnel)">
+            <textarea
+              rows={2}
+              value={state.description}
+              onChange={(e) =>
+                setState({ ...state, description: e.target.value })
+              }
+              className={INPUT_DARK}
+              placeholder="Pourquoi cette convention existe…"
+            />
+          </Field>
+
+          <label className="flex items-center gap-2 text-xs text-white/70">
+            <input
+              type="checkbox"
+              checked={state.active}
+              onChange={(e) =>
+                setState({ ...state, active: e.target.checked })
+              }
+              className="rounded border-brand-800 bg-brand-950"
+            />
+            Active
+          </label>
+        </div>
+
+        <aside className="rounded-xl border border-brand-800 bg-brand-950/50 p-4 text-xs">
+          <h3 className="text-sm font-semibold text-white">Aperçu</h3>
+          <p className="mt-2 text-white/60">
+            Pour un{" "}
+            <strong>{selectedType?.label || state.entity_type}</strong>, le
+            dossier sera créé dans :
+          </p>
+          <code className="mt-1 block break-all rounded bg-brand-950 px-2 py-1 font-mono text-[11px] text-white/80">
+            {state.parent_folder_drive_id || "<dossier parent à configurer>"}
+          </code>
+          <p className="mt-2 text-white/60">avec le nom :</p>
+          <code className="mt-1 block break-all rounded bg-brand-950 px-2 py-1 font-mono text-[11px] text-white/80">
+            {previewName || state.folder_name_template || "<pattern vide>"}
+          </code>
+          {state.subfolders_raw.trim() ? (
+            <>
+              <p className="mt-2 text-white/60">Sous-dossiers :</p>
+              <ul className="mt-1 list-inside list-disc text-white/70">
+                {state.subfolders_raw
+                  .split(/\r?\n/)
+                  .map((s) => s.trim())
+                  .filter(Boolean)
+                  .map((s, i) => (
+                    <li key={i}>{s}</li>
+                  ))}
+              </ul>
+            </>
+          ) : null}
+        </aside>
+      </div>
+
+      <details className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
+        <summary className="cursor-pointer font-semibold text-amber-200">
+          Actions sur changement de statut (Phase 5)
+        </summary>
+        <p className="mt-2 text-amber-200/70">
+          Le mapping <code>statut → dossier parent</code> permettra de
+          déplacer le dossier Drive quand l&apos;entité change de statut.
+          Désactivé pour le MVP — sera exposé en Phase 5.
+        </p>
+      </details>
+
+      {error ? (
+        <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {error}
+        </p>
+      ) : null}
+
+      <div className="mt-4 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/70 hover:bg-white/5"
+        >
+          Annuler
+        </button>
+        <button
+          type="button"
+          onClick={save}
+          disabled={busy || !state.name || !state.entity_type}
+          className="inline-flex items-center gap-1 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600 disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+          {convention ? "Enregistrer" : "Créer"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Modal Test
+// -----------------------------------------------------------------------------
+
+function ConventionTestModal({
+  convention,
+  onClose,
+  onApplied
+}: {
+  convention: DriveConvention;
+  onClose: () => void;
+  onApplied: () => void;
+}) {
+  const [entityId, setEntityId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ApplyResult | null>(null);
+
+  async function apply() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/drive/conventions/${convention.id}/apply`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            entity_type: convention.entity_type,
+            entity_id: Number(entityId)
+          })
+        }
+      );
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt || `http_${res.status}`);
+      }
+      setResult((await res.json()) as ApplyResult);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={`Tester « ${convention.name} »`} onClose={onClose}>
+      {!result ? (
+        <>
+          <p className="text-xs text-white/60">
+            Applique cette convention à une entité existante :{" "}
+            <strong>{convention.entity_type}</strong>. Le dossier Drive sera
+            créé et un lien sera enregistré.
+          </p>
+          <Field label={`ID de l'entité ${convention.entity_type}`}>
+            <input
+              type="number"
+              min={1}
+              value={entityId}
+              onChange={(e) => setEntityId(e.target.value)}
+              className={`${INPUT_DARK} font-mono`}
+              placeholder="Ex. 42"
+            />
+          </Field>
+          {error ? (
+            <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              {error}
+            </p>
+          ) : null}
+          <div className="mt-4 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/70 hover:bg-white/5"
+            >
+              Annuler
+            </button>
+            <button
+              type="button"
+              onClick={apply}
+              disabled={busy || !entityId}
+              className="inline-flex items-center gap-1 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600 disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Appliquer
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="space-y-3 text-xs text-white/80">
+          <p className="flex items-center gap-2 text-emerald-300">
+            <CheckCircle2 className="h-4 w-4" />
+            Dossier{" "}
+            <code className="rounded bg-brand-950 px-1.5 py-0.5 font-mono">
+              {result.link.drive_folder_name || "(sans nom)"}
+            </code>{" "}
+            créé avec succès.
+          </p>
+          <p>
+            ID Drive :{" "}
+            <code className="rounded bg-brand-950 px-1.5 py-0.5 font-mono">
+              {result.link.drive_folder_id}
+            </code>
+          </p>
+          {result.subfolders_created.length > 0 ? (
+            <p>
+              Sous-dossiers créés : {result.subfolders_created.join(", ")}
+            </p>
+          ) : null}
+          {result.drive_folder_url ? (
+            <a
+              href={result.drive_folder_url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-accent-300 hover:underline"
+            >
+              <ExternalLink className="h-3.5 w-3.5" /> Ouvrir dans Drive
+            </a>
+          ) : null}
+          <div className="flex justify-end pt-2">
+            <button
+              type="button"
+              onClick={onApplied}
+              className="rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600"
+            >
+              Fermer
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Section « Liens existants »
+// -----------------------------------------------------------------------------
+
+function EntityLinksSection() {
+  const [links, setLinks] = useState<DriveEntityLink[] | null>(null);
+  const [types, setTypes] = useState<SupportedEntityType[]>([]);
+  const [filter, setFilter] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (filter) params.set("entity_type", filter);
+      const [linksRes, typesRes] = await Promise.all([
+        authedFetch(`/api/v1/drive/entity-links?${params.toString()}`),
+        authedFetch("/api/v1/drive/conventions/supported-entity-types")
+      ]);
+      if (!linksRes.ok) throw new Error(`http_${linksRes.status}`);
+      if (!typesRes.ok) throw new Error(`http_${typesRes.status}`);
+      setLinks((await linksRes.json()) as DriveEntityLink[]);
+      setTypes((await typesRes.json()) as SupportedEntityType[]);
+    } catch (e) {
+      setError(`Chargement échoué : ${(e as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [filter]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  async function remove(l: DriveEntityLink) {
+    if (
+      !window.confirm(
+        `Supprimer le lien vers le dossier « ${l.drive_folder_name || l.drive_folder_id} » ?\n\nLe dossier Drive lui-même reste intact, seul le lien Kratos est supprimé.`
+      )
+    )
+      return;
+    try {
+      const res = await authedFetch(`/api/v1/drive/entity-links/${l.id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) throw new Error(`http_${res.status}`);
+      await reload();
+    } catch (e) {
+      setError(`Suppression échouée : ${(e as Error).message}`);
+    }
+  }
+
+  return (
+    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <header className="flex flex-wrap items-start gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
+          <Link2 className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-base font-bold text-white">Liens existants</h2>
+            <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
+              Phase 4 · actif
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs text-white/60">
+            Vue d&apos;ensemble de toutes les liaisons entité Kratos ↔ dossier
+            Drive enregistrées. Tu peux supprimer un lien — le dossier Drive
+            reste intact.
+          </p>
+        </div>
+      </header>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
+        <label className="text-white/40">Filtrer :</label>
+        <select
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          className="rounded-lg border border-brand-800 bg-brand-950 px-2 py-1 text-white"
+        >
+          <option value="">Tous types</option>
+          {types.map((t) => (
+            <option key={t.key} value={t.key}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {error ? (
+        <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {error}
+        </p>
+      ) : null}
+
+      {loading ? (
+        <div className="mt-5 flex items-center gap-2 text-xs text-white/50">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+        </div>
+      ) : links && links.length > 0 ? (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[640px] text-xs">
+            <thead className="text-left text-white/40">
+              <tr>
+                <th className="px-2 py-2">Entité</th>
+                <th className="px-2 py-2">Dossier Drive</th>
+                <th className="px-2 py-2">Convention</th>
+                <th className="px-2 py-2">Créé</th>
+                <th className="px-2 py-2 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="text-white/80">
+              {links.map((l) => (
+                <tr key={l.id} className="border-t border-brand-800">
+                  <td className="px-2 py-2">
+                    <span className="rounded bg-brand-950 px-1.5 py-0.5 font-mono text-[10px]">
+                      {l.entity_type}#{l.entity_id}
+                    </span>
+                  </td>
+                  <td className="px-2 py-2">
+                    {l.drive_folder_name || (
+                      <span className="text-white/40">(sans nom)</span>
+                    )}
+                    <div className="font-mono text-[10px] text-white/40">
+                      {l.drive_folder_id}
+                    </div>
+                  </td>
+                  <td className="px-2 py-2 text-white/60">
+                    {l.convention_id != null ? `#${l.convention_id}` : "—"}
+                  </td>
+                  <td className="px-2 py-2 text-white/60">
+                    {new Date(l.created_at).toLocaleDateString("fr-CA")}
+                  </td>
+                  <td className="px-2 py-2 text-right">
+                    <div className="inline-flex gap-1">
+                      <a
+                        href={`https://drive.google.com/drive/folders/${l.drive_folder_id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Ouvrir dans Drive"
+                        className="rounded p-1 text-accent-300 hover:bg-accent-500/10"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                      <button
+                        type="button"
+                        title="Supprimer le lien"
+                        onClick={() => remove(l)}
+                        className="rounded p-1 text-rose-300 hover:bg-rose-500/10"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="mt-4 rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/50">
+          Aucun lien encore. Crée-en un en appliquant une convention sur une
+          entité (bouton « Tester »).
+        </p>
+      )}
+    </section>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Composants utilitaires
 // -----------------------------------------------------------------------------
 
 function PlaceholderSection({
@@ -477,3 +1440,54 @@ function PlaceholderSection({
     </section>
   );
 }
+
+function Modal({
+  title,
+  onClose,
+  children
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="fixed inset-0 z-[1200] flex items-start justify-center overflow-y-auto bg-black/60 p-4">
+      <div className="my-6 w-full max-w-3xl rounded-2xl border border-brand-800 bg-brand-900 p-5 shadow-2xl">
+        <header className="mb-4 flex items-start justify-between gap-2">
+          <h3 className="text-lg font-bold text-white">{title}</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 text-white/60 hover:bg-white/10 hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  children
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-white/40">
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+// Style commun pour input/select/textarea — équivalent à `input` global mais
+// dimensionné pour les modales (padding plus serré que la classe `.input`
+// utilisée sur les pages publiques).
+const INPUT_DARK =
+  "w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white placeholder-white/30 focus:border-accent-500 focus:outline-none";

@@ -35,6 +35,7 @@ from app.api.v1.endpoints import (
     clients,
     devlog,
     drive_auth,
+    drive_conventions,
     drive_files,
     employes,
     entreprises,
@@ -233,6 +234,10 @@ api_router.include_router(drive_auth.router)
 # recursive, search, share). Tous protégés admin/owner. Cf.
 # docs/DRIVE_INTEGRATION.md.
 api_router.include_router(drive_files.router)
+# Drive Conventions Phase 4 — CRUD des règles "entité Kratos → dossier
+# Drive" + action manuelle d'application + CRUD des DriveEntityLink.
+# Admin/owner only. Pas de hook automatique côté SQLAlchemy ici (Phase 5).
+api_router.include_router(drive_conventions.router)
 api_router.include_router(client_qbo.router)
 api_router.include_router(achat_qbo.router)
 api_router.include_router(achat_payment.router)
