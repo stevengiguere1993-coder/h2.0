@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { DriveFolderExplorer } from "@/components/drive/DriveFolderExplorer";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -178,6 +179,11 @@ export default function DriveSettingsPage() {
           onConnect={connect}
           onDisconnect={disconnect}
         />
+
+        {/* ------------------------------------------------------------- */}
+        {/* Section démo — Test Drive Explorer (Phase 3, retirée en P7)   */}
+        {/* ------------------------------------------------------------- */}
+        {status?.connected ? <DriveExplorerDemoSection /> : null}
 
         {/* ------------------------------------------------------------- */}
         {/* Sections 2-5 — Roadmap, grisées (Phases 4+)                   */}
@@ -347,6 +353,92 @@ function ConnectionSection({
           </button>
         </div>
       )}
+    </section>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Section démo « Test Drive Explorer » — Phase 3 uniquement.
+// Permet à Phil de coller un folder ID Drive et tester toutes les fonctionnalités
+// du composant <DriveFolderExplorer> avant qu'il soit branché dans les pages
+// deal / projet / client à la Phase 7. Sera retirée à ce moment-là.
+// -----------------------------------------------------------------------------
+
+function DriveExplorerDemoSection() {
+  const [draft, setDraft] = useState("");
+  const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
+
+  return (
+    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <header className="flex items-start gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
+          <Cloud className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-base font-bold text-white">
+              Test Drive Explorer
+            </h2>
+            <span className="shrink-0 rounded-full border border-accent-500/40 bg-accent-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-accent-300">
+              Phase 3 · démo
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs text-white/60">
+            Colle l&apos;ID d&apos;un dossier Drive et clique « Charger » pour
+            naviguer dedans, téléverser, renommer, partager, etc. Cette
+            section sera retirée quand le composant sera intégré sur la page
+            deal (Phase 7).
+          </p>
+        </div>
+      </header>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          const v = draft.trim();
+          if (v) setActiveFolderId(v);
+        }}
+        className="mt-4 flex flex-wrap items-center gap-2"
+      >
+        <input
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="Folder ID à explorer (ex: 1tj3wzyxLC2yK0laiQNCs3es2-3s0_mee)"
+          className="min-w-0 flex-1 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 font-mono text-xs text-white placeholder-white/30 focus:border-accent-500 focus:outline-none"
+        />
+        <button
+          type="submit"
+          disabled={!draft.trim()}
+          className="rounded-lg bg-accent-500 px-3 py-2 text-xs font-semibold text-white hover:bg-accent-600 disabled:opacity-50"
+        >
+          Charger
+        </button>
+        {activeFolderId ? (
+          <button
+            type="button"
+            onClick={() => {
+              setActiveFolderId(null);
+              setDraft("");
+            }}
+            className="rounded-lg border border-white/15 px-3 py-2 text-xs text-white/70 hover:bg-white/5"
+          >
+            Fermer
+          </button>
+        ) : null}
+      </form>
+
+      {activeFolderId ? (
+        <div className="mt-4">
+          <DriveFolderExplorer
+            folderId={activeFolderId}
+            onFileSelected={(f) => {
+              // eslint-disable-next-line no-console
+              console.log("[DriveExplorer] file selected", f);
+            }}
+          />
+        </div>
+      ) : null}
     </section>
   );
 }
