@@ -83,6 +83,7 @@ class FournisseurCreate(BaseModel):
     category: Optional[str] = None
     website: Optional[str] = None
     notes: Optional[str] = None
+    payment_terms_days: Optional[int] = Field(default=None, ge=0, le=365)
     qbo_expense_account: Optional[str] = Field(default=None, max_length=255)
 
 
@@ -95,6 +96,7 @@ class FournisseurUpdate(BaseModel):
     website: Optional[str] = None
     active: Optional[bool] = None
     notes: Optional[str] = None
+    payment_terms_days: Optional[int] = Field(default=None, ge=0, le=365)
     qbo_expense_account: Optional[str] = Field(default=None, max_length=255)
 
 
@@ -108,6 +110,7 @@ class FournisseurRead(_Base):
     website: Optional[str]
     active: bool
     notes: Optional[str]
+    payment_terms_days: Optional[int] = None
     qbo_expense_account: Optional[str] = None
     created_at: datetime
 
@@ -509,6 +512,7 @@ class AchatRead(_Base):
     status: str
     received_at: Optional[datetime]
     paid_at: Optional[datetime]
+    due_at: Optional[datetime] = None
     receipt_url: Optional[str]
     has_receipt_image: bool = False
     receipt_image_content_type: Optional[str] = None

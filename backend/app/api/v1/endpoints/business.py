@@ -103,6 +103,16 @@ def make_crud_router(
                 data.reference = await next_po_number(db)
         crud = GenericCrud(db, model)
         obj = await crud.create(data)
+        # Achat : applique la logique payment_method + due_at apres
+        # creation (avant l'autopush QBO pour que QB recoive le bon
+        # statut Bill/Purchase).
+        if model is Achat:
+            from app.services.achat_payment import (
+                apply_payment_defaults,
+            )
+
+            await apply_payment_defaults(db, obj)
+            await db.flush()
         # Auto-push QBO pour tout Achat créé en statut « received »
         # (cas usuel : facture fournisseur saisie en différé).
         if model is Achat and getattr(obj, "status", None) == "received":

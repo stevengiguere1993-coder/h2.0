@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Plus, ShoppingCart } from "lucide-react";
+import { CheckCircle2, Loader2, Plus, ShoppingCart } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useAppLayout } from "../layout";
@@ -20,6 +20,9 @@ type Achat = {
   status: string;
   ordered_at: string | null;
   received_at: string | null;
+  paid_at: string | null;
+  due_at: string | null;
+  payment_method: string | null;
   receipt_url: string | null;
   notes: string | null;
   is_billable?: boolean;
@@ -27,6 +30,30 @@ type Achat = {
   invoiced_at?: string | null;
   created_at: string;
 };
+
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  bill_to_pay: "Facture à payer (net-30)",
+  cheque_horizon: "Chèque Horizon",
+  cc_steven: "CC Steven Giguère",
+  cc_michael: "CC Michael Villiard",
+  cc_olivier: "CC Olivier Therrien",
+  cc_christian: "CC Christian Villiard"
+};
+
+// Options reelles de paiement (exclut bill_to_pay qui signifie
+// « pas encore paye »).
+const REAL_PAYMENT_METHODS: { value: string; label: string }[] = [
+  { value: "cheque_horizon", label: "Chèque Horizon" },
+  { value: "cc_steven", label: "CC Steven Giguère" },
+  { value: "cc_michael", label: "CC Michael Villiard" },
+  { value: "cc_olivier", label: "CC Olivier Therrien" },
+  { value: "cc_christian", label: "CC Christian Villiard" }
+];
+
+function daysBetween(a: Date, b: Date): number {
+  const ms = a.getTime() - b.getTime();
+  return Math.floor(ms / 86_400_000);
+}
 
 type Project = { id: number; name: string; address?: string | null };
 type Fournisseur = { id: number; name: string };
@@ -73,6 +100,7 @@ export default function AchatsPage() {
   const [fStatus, setFStatus] = useState("");
   const [fProject, setFProject] = useState("");
   const [fFournisseur, setFFournisseur] = useState("");
+  const [payTarget, setPayTarget] = useState<Achat | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,7 +146,7 @@ export default function AchatsPage() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return items.filter((a) => {
+    const list = items.filter((a) => {
       if (fStatus && a.status !== fStatus) return false;
       if (fProject && String(a.project_id || "") !== fProject) return false;
       if (fFournisseur && String(a.fournisseur_id || "") !== fFournisseur)
@@ -131,6 +159,16 @@ export default function AchatsPage() {
         return false;
       return true;
     });
+    // Sur l'onglet "A payer" on trie par echeance ascendante : les
+    // en retard remontent en premier, ensuite les plus proches.
+    if (fStatus === "received") {
+      list.sort((a, b) => {
+        const ax = a.due_at ? new Date(a.due_at).getTime() : Infinity;
+        const bx = b.due_at ? new Date(b.due_at).getTime() : Infinity;
+        return ax - bx;
+      });
+    }
+    return list;
   }, [items, search, fStatus, fProject, fFournisseur]);
 
   const total = useMemo(
@@ -275,9 +313,10 @@ export default function AchatsPage() {
                   <th className="px-4 py-3">Projet</th>
                   <th className="px-4 py-3">Description</th>
                   <th className="px-4 py-3 text-right">Montant</th>
-                  <th className="px-4 py-3">Commandé</th>
+                  <th className="px-4 py-3">Échéance</th>
                   <th className="px-4 py-3 text-center">Refact.</th>
                   <th className="px-4 py-3 text-center">Statut</th>
+                  <th className="px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-brand-800">
@@ -311,7 +350,34 @@ export default function AchatsPage() {
                         )}
                       </td>
                       <td className="px-4 py-3 text-white/70">
-                        {fmtDate(a.ordered_at)}
+                        {a.status === "paid" ? (
+                          <span className="text-[10px] uppercase tracking-wider text-emerald-300/70">
+                            Payé · {fmtDate(a.paid_at)}
+                          </span>
+                        ) : a.due_at ? (
+                          (() => {
+                            const due = new Date(a.due_at);
+                            const overdue = daysBetween(new Date(), due);
+                            return overdue > 0 ? (
+                              <span className="rounded-md bg-rose-500/15 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+                                En retard {overdue} j
+                              </span>
+                            ) : (
+                              <span className="text-xs">
+                                {fmtDate(a.due_at)}
+                                {overdue === 0 ? (
+                                  <span className="ml-1 text-amber-300/80">
+                                    (aujourd&apos;hui)
+                                  </span>
+                                ) : null}
+                              </span>
+                            );
+                          })()
+                        ) : (
+                          <span className="text-[10px] uppercase tracking-wider text-white/30">
+                            —
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-center">
                         {a.is_billable === false ? (
@@ -340,6 +406,22 @@ export default function AchatsPage() {
                           {STATUS_LABELS[a.status] || a.status}
                         </span>
                       </td>
+                      <td className="px-4 py-3 text-right">
+                        {a.status === "received" ? (
+                          <button
+                            type="button"
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              setPayTarget(a);
+                            }}
+                            className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-500/20"
+                            title="Marquer cet achat comme payé"
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            Payé
+                          </button>
+                        ) : null}
+                      </td>
                     </tr>
                   );
                 })}
@@ -348,7 +430,166 @@ export default function AchatsPage() {
           </div>
         )}
       </div>
+      {payTarget ? (
+        <MarkPaidModal
+          achat={payTarget}
+          onClose={() => setPayTarget(null)}
+          onSaved={(updated) => {
+            setItems((xs) =>
+              xs.map((x) =>
+                x.id === updated.id ? { ...x, ...updated } : x
+              )
+            );
+            setPayTarget(null);
+          }}
+        />
+      ) : null}
     </>
+  );
+}
+
+function MarkPaidModal({
+  achat,
+  onClose,
+  onSaved
+}: {
+  achat: Achat;
+  onClose: () => void;
+  onSaved: (a: Partial<Achat> & { id: number }) => void;
+}) {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  // Pre-selectionne la methode actuelle de l'achat si elle est deja
+  // une vraie methode (cheque/CC) ; sinon laisse vide pour forcer
+  // l'utilisateur a choisir.
+  const initialMethod =
+    achat.payment_method && achat.payment_method !== "bill_to_pay"
+      ? achat.payment_method
+      : "";
+  const [method, setMethod] = useState(initialMethod);
+  const [paidDate, setPaidDate] = useState(todayIso);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    if (!method) {
+      setError("Choisis un mode de paiement.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const paidIso = new Date(`${paidDate}T12:00:00`).toISOString();
+      const res = await authedFetch(
+        `/api/v1/achats/${achat.id}/mark-paid`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            payment_method: method,
+            paid_at: paidIso
+          })
+        }
+      );
+      if (!res.ok) {
+        const txt = await res.text();
+        let detail = txt;
+        try {
+          const j = JSON.parse(txt) as { detail?: string };
+          if (j.detail) detail = j.detail;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail.slice(0, 240));
+      }
+      const updated = (await res.json()) as Partial<Achat> & { id: number };
+      onSaved(updated);
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md rounded-2xl border border-brand-800 bg-brand-950 p-6 shadow-2xl"
+      >
+        <h2 className="text-lg font-bold text-white">
+          Marquer l&apos;achat comme payé
+        </h2>
+        <p className="mt-1 text-xs text-white/60">
+          {achat.reference || `Achat #${achat.id}`}
+          {achat.description ? ` — ${achat.description}` : ""}
+        </p>
+
+        <div className="mt-5 space-y-4">
+          <div>
+            <label className="label">Mode de paiement</label>
+            <select
+              value={method}
+              onChange={(e) => setMethod(e.target.value)}
+              className="input"
+              autoFocus
+            >
+              <option value="">— Choisir —</option>
+              {REAL_PAYMENT_METHODS.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+            {achat.payment_method === "bill_to_pay" ? (
+              <p className="mt-1 text-[11px] text-white/40">
+                L&apos;achat était saisi en « facture à payer ». Choisis
+                ici la méthode réellement utilisée pour le payer.
+              </p>
+            ) : null}
+          </div>
+          <div>
+            <label className="label">Date de paiement</label>
+            <input
+              type="date"
+              value={paidDate}
+              onChange={(e) => setPaidDate(e.target.value)}
+              className="input"
+            />
+          </div>
+
+          {error ? (
+            <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              {error}
+            </p>
+          ) : null}
+        </div>
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/70 hover:bg-white/5"
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={busy || !method}
+            className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-brand-950 hover:bg-emerald-400 disabled:opacity-60"
+          >
+            {busy ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <CheckCircle2 className="h-4 w-4" />
+            )}
+            Marquer payé
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

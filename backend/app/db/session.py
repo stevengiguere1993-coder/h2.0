@@ -136,6 +136,8 @@ async def init_db() -> None:
             ("sous_traitants", "punctuality_rating", "INTEGER"),
             ("sous_traitants", "quality_rating", "INTEGER"),
             ("sous_traitants", "region", "VARCHAR(255)"),
+            ("fournisseurs", "payment_terms_days", "INTEGER"),
+            ("achats", "due_at", "TIMESTAMP WITH TIME ZONE"),
             ("factures", "next_reminder_at", "TIMESTAMP WITH TIME ZONE"),
             ("voice_calls", "verbatim_transcript", "TEXT"),
             ("soumissions", "qbo_estimate_id", "VARCHAR(64)"),
@@ -908,6 +910,45 @@ async def init_db() -> None:
                     f'ADD COLUMN IF NOT EXISTS {column} {col_type}'
                 )
             )
+
+        # Achats : tout achat NON paye par facture fournisseur
+        # (cheque, CC) est considere paye au moment de l'achat.
+        # Backfill idempotent : marque paid les achats existants avec
+        # payment_method != bill_to_pay encore en status received.
+        try:
+            await conn.execute(
+                text(
+                    "UPDATE achats SET status = 'paid', "
+                    "paid_at = COALESCE(paid_at, received_at, "
+                    "created_at) "
+                    "WHERE status = 'received' "
+                    "AND payment_method IS NOT NULL "
+                    "AND payment_method <> 'bill_to_pay'"
+                )
+            )
+        except Exception:
+            # Table peut ne pas exister au tout premier demarrage,
+            # ou colonne pas encore la sur ancien schema.
+            pass
+
+        # Achats : pour les bill_to_pay existants sans due_at, calcule
+        # received_at + 30j (defaut) ou + payment_terms_days du
+        # fournisseur si defini. Idempotent.
+        try:
+            await conn.execute(
+                text(
+                    "UPDATE achats a SET due_at = "
+                    "COALESCE(a.received_at, a.created_at) + "
+                    "make_interval(days := COALESCE("
+                    "(SELECT f.payment_terms_days FROM fournisseurs f "
+                    "WHERE f.id = a.fournisseur_id), 30)) "
+                    "WHERE a.status = 'received' "
+                    "AND a.payment_method = 'bill_to_pay' "
+                    "AND a.due_at IS NULL"
+                )
+            )
+        except Exception:
+            pass
 
         # DevlogLead : migration des statuts français vers les valeurs
         # ContactRequest (new/contacted/qualified/quoted/won/lost/spam)
