@@ -316,7 +316,6 @@ export default function AchatsPage() {
                   <th className="px-4 py-3">Échéance</th>
                   <th className="px-4 py-3 text-center">Refact.</th>
                   <th className="px-4 py-3 text-center">Statut</th>
-                  <th className="px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-brand-800">
@@ -398,15 +397,6 @@ export default function AchatsPage() {
                         )}
                       </td>
                       <td className="px-4 py-3 text-center">
-                        <span
-                          className={`rounded-md px-2 py-0.5 text-[10px] font-semibold ${
-                            STATUS_CLASS[a.status] || "bg-white/10 text-white"
-                          }`}
-                        >
-                          {STATUS_LABELS[a.status] || a.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right">
                         {a.status === "received" ? (
                           <button
                             type="button"
@@ -414,13 +404,24 @@ export default function AchatsPage() {
                               ev.stopPropagation();
                               setPayTarget(a);
                             }}
-                            className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-500/20"
-                            title="Marquer cet achat comme payé"
+                            title="Cliquer pour marquer payé"
+                            className={`rounded-md px-2 py-0.5 text-[10px] font-semibold transition hover:ring-2 hover:ring-emerald-400/60 ${
+                              STATUS_CLASS[a.status] ||
+                              "bg-white/10 text-white"
+                            }`}
                           >
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                            Payé
+                            {STATUS_LABELS[a.status] || a.status}
                           </button>
-                        ) : null}
+                        ) : (
+                          <span
+                            className={`rounded-md px-2 py-0.5 text-[10px] font-semibold ${
+                              STATUS_CLASS[a.status] ||
+                              "bg-white/10 text-white"
+                            }`}
+                          >
+                            {STATUS_LABELS[a.status] || a.status}
+                          </span>
+                        )}
                       </td>
                     </tr>
                   );
