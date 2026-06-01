@@ -575,6 +575,32 @@ function QuickBooksSection() {
     }
   }
 
+  async function listTaxCodes() {
+    setDiagBusy(true);
+    setDiag(null);
+    try {
+      const res = await authedFetch("/api/v1/qbo/tax-codes");
+      const data = (await res.json()) as {
+        ok: boolean;
+        tax_codes?: { id: string; name: string }[];
+        error?: string | null;
+      };
+      if (data.ok && data.tax_codes) {
+        setDiag({
+          codes_taxe_QBO: data.tax_codes.map(
+            (t) => `Id ${t.id} — ${t.name}`
+          )
+        });
+      } else {
+        setDiag({ error: data.error || "Échec du listage des codes." });
+      }
+    } catch (e) {
+      setDiag({ error: (e as Error).message });
+    } finally {
+      setDiagBusy(false);
+    }
+  }
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -756,6 +782,18 @@ function QuickBooksSection() {
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
               ) : null}
               Lister comptes QBO
+            </button>
+            <button
+              type="button"
+              onClick={listTaxCodes}
+              disabled={diagBusy}
+              className="btn-secondary text-xs"
+              title="Liste les codes de taxe QBO (Id + nom) — l'Id sert pour la variable QBO_PURCHASE_TAX_CODE."
+            >
+              {diagBusy ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Lister codes de taxe
             </button>
           </div>
           {diag ? (
