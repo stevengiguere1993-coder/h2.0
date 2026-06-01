@@ -51,13 +51,18 @@ def _norm(s: Optional[str]) -> str:
     return (s or "").strip().lower()
 
 
-async def _existing_qbo_bill_ids(db: AsyncSession) -> set[str]:
+async def _existing_achats_by_qbo_bill_id(
+    db: AsyncSession,
+) -> Dict[str, Achat]:
+    """Charge tous les Achats Kratos avec un qbo_bill_id, indexes par
+    cet Id. Permet a la fois de detecter les doublons et de mettre a
+    jour le statut paye lors d'un re-pull."""
     rows = (
         await db.execute(
-            select(Achat.qbo_bill_id).where(Achat.qbo_bill_id.isnot(None))
+            select(Achat).where(Achat.qbo_bill_id.isnot(None))
         )
-    ).all()
-    return {str(r[0]) for r in rows if r[0]}
+    ).scalars().all()
+    return {str(a.qbo_bill_id): a for a in rows if a.qbo_bill_id}
 
 
 async def _find_or_create_fournisseur(
@@ -178,19 +183,20 @@ def _bill_class_name(bill: Dict[str, Any]) -> Optional[str]:
 
 async def _bill_payments_index(
     qbo: Any,
-) -> Dict[str, Tuple[Optional[datetime], Optional[str]]]:
-    """Index bill_id -> (paid_at, payment_method_hint). On fait UNE
-    query BillPayment pour ne pas hammer l'API. Heuristique de
-    methode : on regarde le nom du compte de paiement (CheckPayment
-    vs CreditCardPayment) ou le nom du compte source.
+) -> Dict[str, Tuple[str, Optional[datetime], Optional[str]]]:
+    """Index bill_id -> (billpayment_id, paid_at, payment_method_hint).
+    On fait UNE query BillPayment pour ne pas hammer l'API.
+    Heuristique de methode : on regarde le PayType (CheckPayment vs
+    CreditCardPayment).
     """
     rows = await qbo.query(
         "SELECT * FROM BillPayment MAXRESULTS 1000"
     )
     idx: Dict[
-        str, Tuple[Optional[datetime], Optional[str]]
+        str, Tuple[str, Optional[datetime], Optional[str]]
     ] = {}
     for p in rows:
+        bp_id = str(p.get("Id") or "")
         txn_date = _parse_qbo_date(p.get("TxnDate"))
         pay_type = (p.get("PayType") or "").lower()
         # Heuristique de mapping vers nos PaymentMethod
@@ -205,7 +211,7 @@ async def _bill_payments_index(
                 if ltxn.get("TxnType") == "Bill":
                     bill_id = str(ltxn.get("TxnId") or "")
                     if bill_id and bill_id not in idx:
-                        idx[bill_id] = (txn_date, method_hint)
+                        idx[bill_id] = (bp_id, txn_date, method_hint)
     return idx
 
 
@@ -267,7 +273,7 @@ async def pull_new_bills_from_qbo(
     except QuickBooksError as exc:
         raise QboPullError(f"QB query Bills failed: {exc}")
 
-    existing = await _existing_qbo_bill_ids(db)
+    existing_by_id = await _existing_achats_by_qbo_bill_id(db)
 
     try:
         payments_idx = await _bill_payments_index(qbo)
@@ -280,13 +286,35 @@ async def pull_new_bills_from_qbo(
         "unmatched_project": 0,
         "imported_paid": 0,
         "skipped_existing": 0,
+        "paid_synced": 0,  # Achats existants bascules en paye via QB
         "total_qbo_bills": len(bills),
     }
 
     for bill in bills:
         bill_id = str(bill.get("Id") or "")
-        if not bill_id or bill_id in existing:
-            stats["skipped_existing"] += 1
+        if not bill_id:
+            continue
+        if bill_id in existing_by_id:
+            existing_achat = existing_by_id[bill_id]
+            # Si QB a une BillPayment non encore enregistree cote
+            # Kratos ET l'Achat n'est pas deja paye → on bascule.
+            paid_info = payments_idx.get(bill_id)
+            if (
+                paid_info is not None
+                and not existing_achat.qbo_bill_payment_id
+                and existing_achat.status != AchatStatus.PAID.value
+            ):
+                bp_id, paid_at, method_hint = paid_info
+                existing_achat.status = AchatStatus.PAID.value
+                existing_achat.paid_at = paid_at
+                existing_achat.payment_method = (
+                    method_hint or PaymentMethod.CHEQUE_HORIZON.value
+                )
+                existing_achat.due_at = None
+                existing_achat.qbo_bill_payment_id = bp_id or bill_id
+                stats["paid_synced"] += 1
+            else:
+                stats["skipped_existing"] += 1
             continue
 
         vendor_ref = bill.get("VendorRef") or {}
@@ -324,11 +352,12 @@ async def pull_new_bills_from_qbo(
         is_paid = paid_info is not None
 
         if is_paid:
-            paid_at, method_hint = paid_info
+            bp_id, paid_at, method_hint = paid_info
             method = method_hint or PaymentMethod.CHEQUE_HORIZON.value
             status_value = AchatStatus.PAID.value
             due_at = None
         else:
+            bp_id = None
             paid_at = None
             method = PaymentMethod.BILL_TO_PAY.value
             status_value = AchatStatus.RECEIVED.value
@@ -357,6 +386,7 @@ async def pull_new_bills_from_qbo(
             received_at=invoice_date,
             paid_at=paid_at,
             due_at=due_at,
+            qbo_bill_payment_id=bp_id,
             # Refacturation client pilotee depuis Kratos, pas
             # depuis la coche "Billable" de QB — defaut False a
             # l'import. L'utilisateur toggle dans Kratos s'il veut

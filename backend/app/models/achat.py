@@ -197,6 +197,14 @@ class Achat(Base, TimestampUpdateMixin):
     qbo_sync_token: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True
     )
+    # Id de la BillPayment QB qui paye ce Bill. Set quand Kratos
+    # marque payé et pousse la BillPayment vers QB (Kratos -> QB),
+    # OU quand le pull QB -> Kratos detecte qu'un BillPayment QB
+    # paye un Bill deja importe. Sert de garde anti-doublon dans
+    # les 2 directions.
+    qbo_bill_payment_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
 
     # ---- Refacturation client ----
     # `is_billable` = cet achat sera-t-il refacturé au client final ? Par

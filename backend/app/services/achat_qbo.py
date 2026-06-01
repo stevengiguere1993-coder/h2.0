@@ -677,3 +677,115 @@ async def sync_achat_to_qbo(
         "receipt_attached": receipt_attached,
         "receipt_error": receipt_error,
     }
+
+
+async def push_bill_payment_to_qbo(
+    db: AsyncSession, achat_id: int
+) -> Dict[str, Any]:
+    """Cree une BillPayment dans QB qui paye le Bill lie a cet Achat.
+
+    Pre-conditions : l'Achat doit avoir status=paid, qbo_bill_id,
+    payment_method != bill_to_pay, et pas encore de
+    qbo_bill_payment_id (idempotence).
+
+    Retourne {'ok': True, 'qbo_bill_payment_id': '...'} ou skip si
+    deja sync ou pas applicable.
+    """
+    achat = await _load_achat(db, achat_id)
+    if achat is None:
+        return {"ok": False, "reason": "achat_not_found"}
+    if not achat.qbo_bill_id:
+        # Pas un Bill QB (probablement un Purchase paye direct) :
+        # rien a payer dans QB.
+        return {"ok": False, "reason": "no_qbo_bill"}
+    if achat.qbo_bill_payment_id:
+        # Deja sync, on ne re-cree pas.
+        return {"ok": True, "qbo_bill_payment_id": achat.qbo_bill_payment_id}
+    if (achat.payment_method or "") == "bill_to_pay":
+        return {"ok": False, "reason": "method_is_bill_to_pay"}
+    if achat.status != "paid":
+        return {"ok": False, "reason": "not_paid"}
+
+    qbo = get_qbo()
+    if not qbo.ready:
+        return {"ok": False, "reason": "qbo_not_configured"}
+
+    method = (achat.payment_method or "").lower()
+    payment_account_id = await _resolve_payment_account(db, qbo, method)
+    if not payment_account_id:
+        return {
+            "ok": False,
+            "reason": (
+                f"no_payment_account_mapped_for_{method}"
+            ),
+        }
+
+    fournisseur = (
+        await db.execute(
+            select(Fournisseur).where(
+                Fournisseur.id == achat.fournisseur_id
+            )
+        )
+    ).scalar_one_or_none() if achat.fournisseur_id else None
+    if fournisseur is None:
+        return {"ok": False, "reason": "no_fournisseur"}
+
+    vendor = await qbo.ensure_vendor(
+        display_name=fournisseur.name,
+        email=fournisseur.email,
+        phone=fournisseur.phone,
+    )
+    vendor_id = str(vendor.get("Id") or "")
+    if not vendor_id:
+        return {"ok": False, "reason": "vendor_resolve_failed"}
+
+    # Montant total a payer (HT + taxes) — un BillPayment paie le
+    # TOTAL TTC du Bill, pas juste le HT.
+    total = float(achat.amount or 0) + float(achat.amount_taxes or 0)
+    if total <= 0:
+        return {"ok": False, "reason": "zero_amount"}
+
+    pay_type_check = method == "cheque_horizon"
+    payload: Dict[str, Any] = {
+        "VendorRef": {"value": vendor_id},
+        "TotalAmt": round(total, 2),
+        "PayType": "Check" if pay_type_check else "CreditCard",
+        "Line": [
+            {
+                "Amount": round(total, 2),
+                "LinkedTxn": [
+                    {
+                        "TxnId": str(achat.qbo_bill_id),
+                        "TxnType": "Bill",
+                    }
+                ],
+            }
+        ],
+    }
+    if achat.paid_at:
+        payload["TxnDate"] = achat.paid_at.strftime("%Y-%m-%d")
+    account_block = {
+        "BankAccountRef": {"value": payment_account_id}
+    } if pay_type_check else {
+        "CCAccountRef": {"value": payment_account_id}
+    }
+    if pay_type_check:
+        payload["CheckPayment"] = account_block
+    else:
+        payload["CreditCardPayment"] = account_block
+
+    try:
+        created = await qbo.create_bill_payment(payload)
+    except QuickBooksError as exc:
+        log.warning(
+            "BillPayment push failed for Achat %s: %s",
+            achat.id,
+            exc,
+        )
+        return {"ok": False, "reason": f"qbo_error: {exc}"}
+
+    bp_id = str(created.get("Id") or "")
+    if bp_id:
+        achat.qbo_bill_payment_id = bp_id
+        await db.flush()
+    return {"ok": True, "qbo_bill_payment_id": bp_id}
