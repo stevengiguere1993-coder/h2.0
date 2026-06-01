@@ -224,7 +224,8 @@ function formatDate(iso: string | null | undefined): string {
  * Étiquette courte du type de fichier pour l'affichage dans la colonne « Type ».
  * On normalise les MIME Google + Office vers une étiquette compréhensible.
  */
-function shortMimeLabel(mime: string): string {
+function shortMimeLabel(mime: string | undefined | null): string {
+  if (!mime) return "Fichier";
   if (mime === FOLDER_MIME) return "Dossier";
   if (mime.startsWith("application/vnd.google-apps.document")) return "Google Doc";
   if (mime.startsWith("application/vnd.google-apps.spreadsheet"))
