@@ -15,6 +15,7 @@ import {
   ArrowUpAZ,
   ChevronRight,
   Download,
+  ExternalLink,
   Eye,
   File as FileIcon,
   FileImage,
@@ -1149,6 +1150,15 @@ export function DriveFolderExplorer({
           fullscreen={previewFullscreen}
           onToggleFullscreen={() => setPreviewFullscreen((v) => !v)}
           onDownload={() => doDownload(previewing)}
+          onOpenInDrive={() => {
+            if (previewing.web_view_link) {
+              window.open(
+                previewing.web_view_link,
+                "_blank",
+                "noopener,noreferrer"
+              );
+            }
+          }}
           onClose={closePreview}
         />
       ) : null}
@@ -1208,6 +1218,11 @@ export function DriveFolderExplorer({
         return;
       case "preview":
         if (!isFolder(file)) void openPreview(file);
+        return;
+      case "openInDrive":
+        if (file.web_view_link) {
+          window.open(file.web_view_link, "_blank", "noopener,noreferrer");
+        }
         return;
       case "download":
         void doDownload(file);
@@ -1405,6 +1420,7 @@ function ErrorState({
 type ActionKind =
   | "open"
   | "preview"
+  | "openInDrive"
   | "download"
   | "rename"
   | "move"
@@ -1701,6 +1717,16 @@ function ItemActionsMenu({
                 onClick={() => {
                   setOpen(false);
                   onAction(file, "preview");
+                }}
+              />
+            ) : null}
+            {!folder && file.web_view_link ? (
+              <MenuItem
+                icon={ExternalLink}
+                label="Ouvrir dans Drive"
+                onClick={() => {
+                  setOpen(false);
+                  onAction(file, "openInDrive");
                 }}
               />
             ) : null}
@@ -2123,6 +2149,7 @@ function PreviewModal({
   fullscreen,
   onToggleFullscreen,
   onDownload,
+  onOpenInDrive,
   onClose
 }: {
   file: DriveFile;
@@ -2130,6 +2157,7 @@ function PreviewModal({
   fullscreen: boolean;
   onToggleFullscreen: () => void;
   onDownload: () => void;
+  onOpenInDrive: () => void;
   onClose: () => void;
 }) {
   const inline = canPreviewInline(file.mime_type);
@@ -2161,6 +2189,17 @@ function PreviewModal({
             >
               <Download className="h-4 w-4" />
             </button>
+            {file.web_view_link ? (
+              <button
+                type="button"
+                onClick={onOpenInDrive}
+                className="rounded-md p-1.5 text-white/60 hover:bg-white/5 hover:text-white"
+                title="Ouvrir dans Drive (nouvel onglet)"
+                aria-label="Ouvrir dans Drive (nouvel onglet)"
+              >
+                <ExternalLink className="h-4 w-4" />
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={onToggleFullscreen}
