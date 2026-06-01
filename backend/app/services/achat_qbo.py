@@ -331,10 +331,12 @@ async def sync_achat_to_qbo(
                 select(Project).where(Project.id == achat.project_id)
             )
         ).scalar_one_or_none()
-        # Si le projet a un client lié et que ce client a un Customer
-        # QB attaché, l'achat devient « Billable » côté QB et on calcule
-        # les taxes québécoises (TPS + TVQ) sur la ligne.
-        if project and project.client_id:
+        # On n'attache le client (CustomerRef + Billable) QUE si l'achat
+        # est réellement refacturable. Un reçu de dépense non
+        # refacturable ne doit pas pointer un Customer (qui peut être
+        # inactif → « Something you're trying to use has been made
+        # inactive »), et ne doit pas apparaître comme facturable.
+        if project and project.client_id and achat.is_billable:
             from app.models.client import Client
 
             client = (
