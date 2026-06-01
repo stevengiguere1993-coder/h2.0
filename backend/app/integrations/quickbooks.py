@@ -412,6 +412,33 @@ class QuickBooksClient:
         )
         return data.get("Customer") or data
 
+    async def ensure_class(self, *, name: str) -> Optional[Dict[str, Any]]:
+        """Find-or-create une « Classe » QBO (suivi par classe, ex. par
+        projet/chantier). Retourne None si le suivi des classes n'est pas
+        activé dans la compagnie (l'appelant ignore alors le ClassRef).
+        """
+        clean = (name or "").strip()
+        if not clean:
+            return None
+        safe = clean.replace("'", "''")
+        try:
+            rows = await self.query(
+                f"SELECT * FROM Class WHERE Name = '{safe}' MAXRESULTS 1"
+            )
+            if rows:
+                return rows[0]
+            data = await self._request(
+                "POST",
+                "/class",
+                json_body={"Name": clean[:100]},
+                params={"minorversion": "70"},
+            )
+            return data.get("Class") or data
+        except QuickBooksError:
+            # Classes désactivées dans la compagnie ou nom invalide :
+            # on n'empêche pas la dépense de se créer (sans ClassRef).
+            return None
+
     # ------------------------------------------------------------------
     # Items (Service catalog)
     # ------------------------------------------------------------------
