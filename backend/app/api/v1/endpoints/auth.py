@@ -188,6 +188,7 @@ async def mailer_status(
                     "<p>Ce courriel confirme que l'intégration Microsoft "
                     "Graph est fonctionnelle pour Horizon.</p>"
                 ),
+                internal=True,
             )
             out.last_test_sent = True
         except Exception as exc:
