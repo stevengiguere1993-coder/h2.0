@@ -651,6 +651,18 @@ class QuickBooksClient:
         return data.get("Purchase") or data
 
     # ------------------------------------------------------------------
+    # BillPayment (paiement d'un Bill A/P depuis un compte bancaire ou CC)
+    # ------------------------------------------------------------------
+    async def create_bill_payment(
+        self, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        data = await self._request(
+            "POST", "/billpayment", json_body=payload,
+            params={"minorversion": "70"},
+        )
+        return data.get("BillPayment") or data
+
+    # ------------------------------------------------------------------
     # Account lookup by Name (utilisé pour le mapping mode paiement)
     # ------------------------------------------------------------------
     async def find_account_by_name(self, name: str) -> Optional[Dict[str, Any]]:

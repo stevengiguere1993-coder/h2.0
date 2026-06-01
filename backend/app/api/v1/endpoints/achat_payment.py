@@ -81,6 +81,27 @@ async def mark_paid(
         paid_at=payload.paid_at,
     )
     await db.flush()
+
+    # Sync vers QB en background : si l'Achat a un qbo_bill_id, on
+    # cree la BillPayment correspondante pour que le Bill QB passe
+    # aussi en paye cote comptable. Fire-and-forget : on n'attend pas
+    # la reponse QB pour repondre au frontend (la modal reste rapide).
+    if achat.qbo_bill_id:
+        import asyncio
+
+        from app.db.session import AsyncSessionLocal
+        from app.services.achat_qbo import push_bill_payment_to_qbo
+
+        async def _push_async(achat_id: int) -> None:
+            async with AsyncSessionLocal() as fresh_db:
+                try:
+                    await push_bill_payment_to_qbo(fresh_db, achat_id)
+                    await fresh_db.commit()
+                except Exception:
+                    await fresh_db.rollback()
+
+        asyncio.create_task(_push_async(int(achat.id)))
+
     return AchatPaymentRead.model_validate(achat)
 
 
@@ -89,6 +110,7 @@ class QboPullResult(BaseModel):
     unmatched_project: int
     imported_paid: int
     skipped_existing: int
+    paid_synced: int = 0
     total_qbo_bills: int
 
 

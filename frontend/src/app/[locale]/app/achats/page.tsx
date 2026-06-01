@@ -17,7 +17,10 @@ import { projectLabel } from "@/lib/project";
 
 type Achat = {
   id: number;
-  reference: string;
+  reference: string | null;
+  supplier_invoice_number: string | null;
+  qbo_doc_number?: string | null;
+  qbo_bill_id?: string | null;
   fournisseur_id: number | null;
   project_id: number | null;
   description: string | null;
@@ -36,6 +39,15 @@ type Achat = {
   invoiced_at?: string | null;
   created_at: string;
 };
+
+function refLabel(a: Achat): string {
+  return (
+    (a.reference || "").trim() ||
+    (a.supplier_invoice_number || "").trim() ||
+    (a.qbo_doc_number || "").trim() ||
+    "—"
+  );
+}
 
 const PAYMENT_METHOD_LABELS: Record<string, string> = {
   bill_to_pay: "Facture à payer (net-30)",
@@ -134,6 +146,7 @@ export default function AchatsPage() {
         unmatched_project: number;
         imported_paid: number;
         skipped_existing: number;
+        paid_synced: number;
         total_qbo_bills: number;
       };
       const parts: string[] = [];
@@ -142,6 +155,8 @@ export default function AchatsPage() {
         parts.push(`dont ${r.imported_paid} déjà payé(s)`);
       if (r.unmatched_project > 0)
         parts.push(`${r.unmatched_project} sans projet (à assigner)`);
+      if (r.paid_synced > 0)
+        parts.push(`${r.paid_synced} basculé(s) en payé via QB`);
       parts.push(`${r.skipped_existing} déjà présent(s)`);
       setPullResult(parts.join(" · "));
       // Recharge la liste
@@ -207,8 +222,9 @@ export default function AchatsPage() {
         return false;
       if (
         q &&
-        !a.reference.toLowerCase().includes(q) &&
-        !(a.description || "").toLowerCase().includes(q)
+        !refLabel(a).toLowerCase().includes(q) &&
+        !(a.description || "").toLowerCase().includes(q) &&
+        !(a.supplier_invoice_number || "").toLowerCase().includes(q)
       )
         return false;
       return true;
@@ -410,7 +426,15 @@ export default function AchatsPage() {
                       className="cursor-pointer hover:bg-brand-800/50"
                     >
                       <td className="px-4 py-3 font-semibold text-white">
-                        {a.reference}
+                        {refLabel(a)}
+                        {a.qbo_bill_id && !a.reference ? (
+                          <span
+                            className="ml-1 text-[10px] font-normal text-sky-300"
+                            title="Importé depuis QuickBooks"
+                          >
+                            QB
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3 text-white/70">
                         {fr?.name || "—"}
