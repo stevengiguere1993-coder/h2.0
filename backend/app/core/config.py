@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     quickbooks_env: str = "sandbox"
     qbo_refresh_token: Optional[str] = None
     qbo_realm_id: Optional[str] = None
+    # Id du code de taxe QBO à appliquer sur chaque ligne d'achat
+    # (reçu de dépense). Requis si la compagnie utilise la taxe de vente
+    # automatisée (« Tous les articles ont besoin d'un taux de taxe »).
+    # Récupère l'Id via le bouton « Lister codes de taxe » / endpoint
+    # /qbo/tax-codes (ex. TPS/TVQ QC).
+    qbo_purchase_tax_code: Optional[str] = None
     # OAuth redirect URI — doit être enregistrée à l'identique dans
     # l'app Intuit (onglet Keys & credentials → Redirect URIs).
     # Pointe sur le backend (h2-0), pas sur le frontend (h2-0-web).

@@ -79,6 +79,11 @@ def _build_line(
     if customer_id:
         detail["CustomerRef"] = {"value": str(customer_id)}
         detail["BillableStatus"] = "Billable"
+    # Code de taxe sur la ligne — exigé par la taxe de vente automatisée
+    # QBO (« Tous les articles ont besoin d'un taux de taxe »). On
+    # applique le code configuré (TPS/TVQ QC) à chaque ligne d'achat.
+    if settings.qbo_purchase_tax_code:
+        detail["TaxCodeRef"] = {"value": str(settings.qbo_purchase_tax_code)}
     return {
         "DetailType": "AccountBasedExpenseLineDetail",
         "Amount": round(amount, 2),
