@@ -94,6 +94,7 @@ def _build_line(
     expense_account_id: str,
     project_name: Optional[str],
     customer_id: Optional[str] = None,
+    class_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     # Montant HT de la ligne. Avec un TaxCodeRef + TaxExcluded, QBO
     # calcule la taxe par-dessus, donc on doit envoyer le HT.
@@ -117,20 +118,17 @@ def _build_line(
     detail: Dict[str, Any] = {
         "AccountRef": {"value": str(expense_account_id)},
     }
-    # Si le projet est rattaché à un Client QB, l'achat devient
-    # « Billable » (refacturable au client) avec CustomerRef pointant
-    # sur ce client. C'est le mécanisme QB pour repasser une dépense
-    # dans la prochaine facture.
-    # CustomerRef = le PROJET QBO (sous-client). On rattache la dépense
-    # au projet pour le suivi des coûts. BillableStatus dépend de
-    # `is_billable` : « Billable » seulement si on veut la repasser au
-    # client dans une facture, sinon « NotBillable » (coût de projet
-    # simple, non refacturé).
+    # CustomerRef = le client réel. BillableStatus = « Billable »
+    # seulement si on veut le repasser au client dans une facture,
+    # sinon « NotBillable » (coût suivi, non refacturé).
     if customer_id:
         detail["CustomerRef"] = {"value": str(customer_id)}
         detail["BillableStatus"] = (
             "Billable" if achat.is_billable else "NotBillable"
         )
+    # ClassRef = le projet (chantier), pour le suivi par classe.
+    if class_id:
+        detail["ClassRef"] = {"value": str(class_id)}
     # Code de taxe sur la ligne — exigé par la taxe de vente automatisée
     # QBO (« Tous les articles ont besoin d'un taux de taxe »). On
     # applique le code configuré (TPS/TVQ QC) à chaque ligne d'achat.
@@ -208,12 +206,17 @@ def _build_bill_payload(
     po_reference: Optional[str],
     project_name: Optional[str],
     customer_id: Optional[str] = None,
+    class_id: Optional[str] = None,
     existing_bill_id: Optional[str] = None,
     existing_sync_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     lines = [
         _build_line(
-            achat, expense_account_id, project_name, customer_id=customer_id
+            achat,
+            expense_account_id,
+            project_name,
+            customer_id=customer_id,
+            class_id=class_id,
         )
     ]
     payload: Dict[str, Any] = {
@@ -248,12 +251,17 @@ def _build_purchase_payload(
     po_reference: Optional[str],
     project_name: Optional[str],
     customer_id: Optional[str] = None,
+    class_id: Optional[str] = None,
     existing_purchase_id: Optional[str] = None,
     existing_sync_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     lines = [
         _build_line(
-            achat, expense_account_id, project_name, customer_id=customer_id
+            achat,
+            expense_account_id,
+            project_name,
+            customer_id=customer_id,
+            class_id=class_id,
         )
     ]
     payload: Dict[str, Any] = {
@@ -376,50 +384,51 @@ async def sync_achat_to_qbo(
         ).scalar_one_or_none()
     project: Optional[Project] = None
     customer_id: Optional[str] = None
+    class_id: Optional[str] = None
     if achat.project_id:
         project = (
             await db.execute(
                 select(Project).where(Project.id == achat.project_id)
             )
         ).scalar_one_or_none()
-        # On rattache la dépense au PROJET QBO (sous-client/Job du client),
-        # pour le suivi des coûts par chantier — même si elle n'est PAS
-        # refacturable. Le projet QBO est créé s'il n'existe pas.
-        if project and project.client_id:
-            from app.models.client import Client
+        # Organisation QBO demandée :
+        #   - Client (CustomerRef) = le client réel, créé s'il n'existe pas.
+        #   - Classe (ClassRef)    = le projet (nom/adresse du chantier),
+        #     créée si absente (si le suivi des classes est activé).
+        if project:
+            if project.client_id:
+                from app.models.client import Client
 
-            client = (
-                await db.execute(
-                    select(Client).where(Client.id == project.client_id)
-                )
-            ).scalar_one_or_none()
-            if client:
-                try:
-                    # 1) Client parent QBO (créé/réutilisé).
-                    parent = await qbo.ensure_customer(
-                        display_name=client.name,
-                        email=client.email,
-                        phone=client.phone,
-                        billing_address=client.address,
+                client = (
+                    await db.execute(
+                        select(Client).where(Client.id == project.client_id)
                     )
-                    parent_id = str(parent.get("Id") or "")
-                    # 2) Projet QBO = sous-client (Job) sous ce parent.
-                    if parent_id and project.name:
-                        proj = await qbo.ensure_project(
-                            parent_customer_id=parent_id,
-                            project_name=project.name,
+                ).scalar_one_or_none()
+                if client:
+                    try:
+                        cust = await qbo.ensure_customer(
+                            display_name=client.name,
+                            email=client.email,
+                            phone=client.phone,
+                            billing_address=client.address,
                         )
-                        customer_id = str(proj.get("Id") or "") or None
-                except QuickBooksError as exc:
-                    # Le rattachement projet ne doit pas bloquer la
-                    # création de la dépense : on logge et on continue
-                    # sans CustomerRef.
-                    log.warning(
-                        "QBO: rattachement projet échoué (achat %s): %s",
-                        achat.id,
-                        exc,
-                    )
-                    customer_id = None
+                        customer_id = str(cust.get("Id") or "") or None
+                    except QuickBooksError as exc:
+                        log.warning(
+                            "QBO: client introuvable/échec (achat %s): %s",
+                            achat.id,
+                            exc,
+                        )
+                        customer_id = None
+            # Classe = projet (nom + adresse si dispo).
+            if project.name:
+                class_name = project.name
+                if getattr(project, "address", None):
+                    class_name = f"{project.name} — {project.address}"
+                klass = await qbo.ensure_class(name=class_name)
+                class_id = (
+                    str(klass.get("Id")) if klass and klass.get("Id") else None
+                )
     # PO source (optionnel) — sa référence sert de DocNumber fallback
     # quand le # de facture fournisseur n'est pas fourni.
     po_reference: Optional[str] = None
@@ -489,6 +498,7 @@ async def sync_achat_to_qbo(
                 po_reference=po_reference,
                 project_name=project.name if project else None,
                 customer_id=customer_id,
+                class_id=class_id,
                 existing_purchase_id=achat.qbo_bill_id,
                 existing_sync_token=achat.qbo_sync_token,
             )
@@ -530,6 +540,7 @@ async def sync_achat_to_qbo(
                 po_reference=po_reference,
                 project_name=project.name if project else None,
                 customer_id=customer_id,
+                class_id=class_id,
                 existing_bill_id=achat.qbo_bill_id,
                 existing_sync_token=achat.qbo_sync_token,
             )
