@@ -77,9 +77,16 @@ def _build_line(
     # « Billable » (refacturable au client) avec CustomerRef pointant
     # sur ce client. C'est le mécanisme QB pour repasser une dépense
     # dans la prochaine facture.
+    # CustomerRef = le PROJET QBO (sous-client). On rattache la dépense
+    # au projet pour le suivi des coûts. BillableStatus dépend de
+    # `is_billable` : « Billable » seulement si on veut la repasser au
+    # client dans une facture, sinon « NotBillable » (coût de projet
+    # simple, non refacturé).
     if customer_id:
         detail["CustomerRef"] = {"value": str(customer_id)}
-        detail["BillableStatus"] = "Billable"
+        detail["BillableStatus"] = (
+            "Billable" if achat.is_billable else "NotBillable"
+        )
     # Code de taxe sur la ligne — exigé par la taxe de vente automatisée
     # QBO (« Tous les articles ont besoin d'un taux de taxe »). On
     # applique le code configuré (TPS/TVQ QC) à chaque ligne d'achat.
@@ -331,12 +338,10 @@ async def sync_achat_to_qbo(
                 select(Project).where(Project.id == achat.project_id)
             )
         ).scalar_one_or_none()
-        # On n'attache le client (CustomerRef + Billable) QUE si l'achat
-        # est réellement refacturable. Un reçu de dépense non
-        # refacturable ne doit pas pointer un Customer (qui peut être
-        # inactif → « Something you're trying to use has been made
-        # inactive »), et ne doit pas apparaître comme facturable.
-        if project and project.client_id and achat.is_billable:
+        # On rattache la dépense au PROJET QBO (sous-client/Job du client),
+        # pour le suivi des coûts par chantier — même si elle n'est PAS
+        # refacturable. Le projet QBO est créé s'il n'existe pas.
+        if project and project.client_id:
             from app.models.client import Client
 
             client = (
@@ -344,8 +349,33 @@ async def sync_achat_to_qbo(
                     select(Client).where(Client.id == project.client_id)
                 )
             ).scalar_one_or_none()
-            if client and client.qbo_customer_id:
-                customer_id = str(client.qbo_customer_id)
+            if client:
+                try:
+                    # 1) Client parent QBO (créé/réutilisé).
+                    parent = await qbo.ensure_customer(
+                        display_name=client.name,
+                        email=client.email,
+                        phone=client.phone,
+                        billing_address=client.address,
+                    )
+                    parent_id = str(parent.get("Id") or "")
+                    # 2) Projet QBO = sous-client (Job) sous ce parent.
+                    if parent_id and project.name:
+                        proj = await qbo.ensure_project(
+                            parent_customer_id=parent_id,
+                            project_name=project.name,
+                        )
+                        customer_id = str(proj.get("Id") or "") or None
+                except QuickBooksError as exc:
+                    # Le rattachement projet ne doit pas bloquer la
+                    # création de la dépense : on logge et on continue
+                    # sans CustomerRef.
+                    log.warning(
+                        "QBO: rattachement projet échoué (achat %s): %s",
+                        achat.id,
+                        exc,
+                    )
+                    customer_id = None
     # PO source (optionnel) — sa référence sert de DocNumber fallback
     # quand le # de facture fournisseur n'est pas fourni.
     po_reference: Optional[str] = None

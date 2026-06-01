@@ -373,6 +373,45 @@ class QuickBooksClient:
             billing_address=billing_address,
         )
 
+    async def ensure_project(
+        self,
+        *,
+        parent_customer_id: str,
+        project_name: str,
+    ) -> Dict[str, Any]:
+        """Find-or-create un « projet » QBO = sous-client (Job) rattaché
+        au client parent. Sert à rattacher des dépenses/coûts à un
+        chantier précis, sans le refacturer.
+
+        QBO impose que le DisplayName d'un sous-client soit unique et
+        souvent préfixé du parent (« Parent:Projet »). On résout d'abord
+        par Job=true + ParentRef ; sinon on crée avec ParentRef +
+        Job=true.
+        """
+        rows = await self.query(
+            "SELECT * FROM Customer WHERE Job = true AND "
+            f"ParentRef = '{parent_customer_id}' MAXRESULTS 1000"
+        )
+        for row in rows:
+            # Le sous-client peut s'appeler « Projet » ou « Parent:Projet ».
+            disp = (row.get("DisplayName") or "")
+            fqn = (row.get("FullyQualifiedName") or "")
+            if (
+                disp == project_name
+                or disp.endswith(f":{project_name}")
+                or fqn.endswith(f":{project_name}")
+            ):
+                return row
+        body: Dict[str, Any] = {
+            "DisplayName": project_name,
+            "Job": True,
+            "ParentRef": {"value": str(parent_customer_id)},
+        }
+        data = await self._request(
+            "POST", "/customer", json_body=body, params={"minorversion": "70"}
+        )
+        return data.get("Customer") or data
+
     # ------------------------------------------------------------------
     # Items (Service catalog)
     # ------------------------------------------------------------------
