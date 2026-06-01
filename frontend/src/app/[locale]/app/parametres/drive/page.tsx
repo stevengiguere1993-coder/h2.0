@@ -520,10 +520,14 @@ function ConventionsSection() {
       ]);
       if (!convRes.ok) throw new Error(`http_${convRes.status}`);
       if (!typesRes.ok) throw new Error(`http_${typesRes.status}`);
-      setConventions((await convRes.json()) as DriveConvention[]);
-      setTypes((await typesRes.json()) as SupportedEntityType[]);
+      const convJson = await convRes.json();
+      const typesJson = await typesRes.json();
+      setConventions(Array.isArray(convJson) ? (convJson as DriveConvention[]) : []);
+      setTypes(Array.isArray(typesJson) ? (typesJson as SupportedEntityType[]) : []);
     } catch (e) {
       setError(`Chargement échoué : ${(e as Error).message}`);
+      setConventions([]);
+      setTypes([]);
     } finally {
       setLoading(false);
     }
@@ -799,7 +803,10 @@ function ConventionEditorModal({
     folder_name_template: convention?.folder_name_template || "",
     template_folder_to_copy_drive_id:
       convention?.template_folder_to_copy_drive_id || "",
-    subfolders_raw: (convention?.subfolders_to_create || []).join("\n"),
+    subfolders_raw: (Array.isArray(convention?.subfolders_to_create)
+      ? convention!.subfolders_to_create!
+      : []
+    ).join("\n"),
     description: convention?.description || "",
     active: convention?.active ?? false
   });
@@ -963,7 +970,7 @@ function ConventionEditorModal({
               className={`${INPUT_DARK} font-mono`}
               placeholder="ex. {address}, {city}"
             />
-            {selectedType ? (
+            {selectedType && Array.isArray(selectedType.variables) && selectedType.variables.length > 0 ? (
               <p className="mt-1 text-[11px] text-white/40">
                 Variables dispo :{" "}
                 {selectedType.variables.map((v) => (
@@ -1205,7 +1212,7 @@ function ConventionTestModal({
               {result.link.drive_folder_id}
             </code>
           </p>
-          {result.subfolders_created.length > 0 ? (
+          {Array.isArray(result.subfolders_created) && result.subfolders_created.length > 0 ? (
             <p>
               Sous-dossiers créés : {result.subfolders_created.join(", ")}
             </p>
@@ -1258,10 +1265,14 @@ function EntityLinksSection() {
       ]);
       if (!linksRes.ok) throw new Error(`http_${linksRes.status}`);
       if (!typesRes.ok) throw new Error(`http_${typesRes.status}`);
-      setLinks((await linksRes.json()) as DriveEntityLink[]);
-      setTypes((await typesRes.json()) as SupportedEntityType[]);
+      const linksJson = await linksRes.json();
+      const typesJson = await typesRes.json();
+      setLinks(Array.isArray(linksJson) ? (linksJson as DriveEntityLink[]) : []);
+      setTypes(Array.isArray(typesJson) ? (typesJson as SupportedEntityType[]) : []);
     } catch (e) {
       setError(`Chargement échoué : ${(e as Error).message}`);
+      setLinks([]);
+      setTypes([]);
     } finally {
       setLoading(false);
     }
