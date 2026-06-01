@@ -8,7 +8,7 @@ l'audit log et la traduction des erreurs Google.
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Optional
+from typing import Optional
 from urllib.parse import quote
 
 from fastapi import (
@@ -113,7 +113,7 @@ async def list_folder_files(
     folder_id: str,
     db: DBSession,
     user: RequireAdminOrOwner,
-    page_size: Annotated[int, Query(ge=1, le=1000)] = 100,
+    page_size: int = Query(100, ge=1, le=1000),
     page_token: Optional[str] = None,
     order_by: str = "folder,name",
 ) -> DriveFolderContents:
@@ -245,7 +245,7 @@ async def export_file(
     file_id: str,
     db: DBSession,
     user: RequireAdminOrOwner,
-    format: Annotated[str, Query(min_length=2, max_length=8)] = "pdf",
+    format: str = Query("pdf", min_length=2, max_length=8),
 ) -> Response:
     """Exporte un Google Doc / Sheet / Slide vers PDF / DOCX / XLSX / PPTX."""
     export_mime = _EXPORT_FORMATS.get(format.lower())
@@ -426,9 +426,9 @@ async def copy_folder(
 async def search(
     db: DBSession,
     user: RequireAdminOrOwner,
-    q: Annotated[str, Query(min_length=1, max_length=200)] = ...,
+    q: str = Query(..., min_length=1, max_length=200),
     parent_folder_id: Optional[str] = None,
-    page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+    page_size: int = Query(50, ge=1, le=200),
 ) -> DriveSearchResult:
     """Cherche par nom ou contenu (optionnellement restreint à un dossier)."""
     try:

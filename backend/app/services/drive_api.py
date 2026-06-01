@@ -696,14 +696,16 @@ async def move_file(
         else:
             remove_parents = old_parent_folder_id
 
+        update_kwargs: dict[str, Any] = {
+            "fileId": file_id,
+            "addParents": new_parent_folder_id,
+            "fields": _FILE_FIELDS,
+            "supportsAllDrives": True,
+        }
+        if remove_parents:
+            update_kwargs["removeParents"] = remove_parents
         updated = await asyncio.to_thread(
-            lambda: service.files().update(
-                fileId=file_id,
-                addParents=new_parent_folder_id,
-                removeParents=remove_parents or None,
-                fields=_FILE_FIELDS,
-                supportsAllDrives=True,
-            ).execute()
+            lambda: service.files().update(**update_kwargs).execute()
         )
     except HttpError as exc:
         translated = _translate_http_error(exc, file_id=file_id)
