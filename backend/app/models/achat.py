@@ -158,6 +158,14 @@ class Achat(Base, TimestampUpdateMixin):
     paid_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Date d'echeance de paiement, calculee a la creation quand
+    # payment_method=bill_to_pay : received_at + fournisseur.
+    # payment_terms_days (30 par defaut). NULL pour les achats payes
+    # immediatement (cheque, CC). Sert a afficher "En retard X j"
+    # dans l'onglet "A payer".
+    due_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     receipt_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     receipt_image: Mapped[Optional[bytes]] = deferred(

@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from sqlalchemy import Boolean, String
+from sqlalchemy import Boolean, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampUpdateMixin
@@ -20,6 +20,12 @@ class Fournisseur(Base, TimestampUpdateMixin):
     website: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     notes: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
+    # Delai de paiement par defaut (net-N jours) sur les achats payes
+    # par facture fournisseur (payment_method = bill_to_pay). NULL =
+    # utilise 30 par defaut. Sert a calculer due_at sur chaque Achat.
+    payment_terms_days: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
     # Compte de dépense QuickBooks utilisé par défaut quand on pousse
     # un Achat de ce fournisseur. Doit être le NOM exact d'un compte
     # du Plan comptable QB (ex. « Matériaux et fournitures »,

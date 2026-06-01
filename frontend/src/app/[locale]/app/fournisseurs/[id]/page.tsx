@@ -20,6 +20,7 @@ type Fournisseur = {
   website: string | null;
   active: boolean;
   notes: string | null;
+  payment_terms_days: number | null;
   qbo_expense_account: string | null;
   created_at: string;
 };
@@ -45,6 +46,7 @@ export default function FournisseurDetailPage() {
   const [website, setWebsite] = useState("");
   const [active, setActive] = useState(true);
   const [notes, setNotes] = useState("");
+  const [paymentTermsDays, setPaymentTermsDays] = useState("");
   const [qboExpenseAccount, setQboExpenseAccount] = useState("");
 
   useEffect(() => {
@@ -66,6 +68,11 @@ export default function FournisseurDetailPage() {
         setWebsite(data.website || "");
         setActive(data.active);
         setNotes(data.notes || "");
+        setPaymentTermsDays(
+          data.payment_terms_days != null
+            ? String(data.payment_terms_days)
+            : ""
+        );
         setQboExpenseAccount(data.qbo_expense_account || "");
       } catch {
         if (!cancelled) setError("Fournisseur introuvable.");
@@ -90,6 +97,10 @@ export default function FournisseurDetailPage() {
       website !== (f.website || "") ||
       active !== f.active ||
       notes !== (f.notes || "") ||
+      paymentTermsDays !==
+        (f.payment_terms_days != null
+          ? String(f.payment_terms_days)
+          : "") ||
       qboExpenseAccount !== (f.qbo_expense_account || "")
     );
   }, [
@@ -102,6 +113,7 @@ export default function FournisseurDetailPage() {
     website,
     active,
     notes,
+    paymentTermsDays,
     qboExpenseAccount
   ]);
 
@@ -110,6 +122,7 @@ export default function FournisseurDetailPage() {
     setSaving(true);
     setError(null);
     try {
+      const ptd = paymentTermsDays.trim();
       const payload = {
         name: name.trim(),
         contact_name: contactName.trim() || null,
@@ -119,6 +132,7 @@ export default function FournisseurDetailPage() {
         website: website.trim() || null,
         active,
         notes: notes.trim() || null,
+        payment_terms_days: ptd === "" ? null : Number(ptd),
         qbo_expense_account: qboExpenseAccount.trim() || null
       };
       const res = await authedFetch(`/api/v1/fournisseurs/${id}`, {
@@ -276,6 +290,30 @@ export default function FournisseurDetailPage() {
                     />
                   </div>
                 </div>
+              </section>
+
+              <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-accent-500">
+                  Conditions de paiement
+                </h2>
+                <label htmlFor="ptd" className="label mt-3">
+                  Délai de paiement (jours)
+                </label>
+                <input
+                  id="ptd"
+                  type="number"
+                  min={0}
+                  max={365}
+                  value={paymentTermsDays}
+                  onChange={(e) => setPaymentTermsDays(e.target.value)}
+                  placeholder="30"
+                  className="input w-32"
+                />
+                <p className="mt-1 text-[11px] text-white/50">
+                  Délai net après réception (ex. 30 pour net-30). Sert à
+                  calculer l&apos;échéance de paiement des achats facturés
+                  par ce fournisseur. Vide = 30 jours par défaut.
+                </p>
               </section>
 
               <section className="rounded-xl border border-brand-800 bg-brand-900 p-5">
