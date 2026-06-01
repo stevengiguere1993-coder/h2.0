@@ -137,6 +137,8 @@ async def init_db() -> None:
             ("sous_traitants", "quality_rating", "INTEGER"),
             ("sous_traitants", "region", "VARCHAR(255)"),
             ("fournisseurs", "payment_terms_days", "INTEGER"),
+            ("fournisseurs", "address", "VARCHAR(500)"),
+            ("fournisseurs", "qbo_vendor_id", "VARCHAR(64)"),
             ("achats", "due_at", "TIMESTAMP WITH TIME ZONE"),
             ("achats", "qbo_bill_payment_id", "VARCHAR(64)"),
             ("factures", "next_reminder_at", "TIMESTAMP WITH TIME ZONE"),

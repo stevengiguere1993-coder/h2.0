@@ -22,6 +22,7 @@ import re
 import time
 import urllib.parse
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -565,12 +566,15 @@ class QuickBooksClient:
         display_name: str,
         email: Optional[str] = None,
         phone: Optional[str] = None,
+        billing_address: Optional[str] = None,
     ) -> Dict[str, Any]:
         body: Dict[str, Any] = {"DisplayName": display_name[:100]}
         if email:
             body["PrimaryEmailAddr"] = {"Address": email}
         if phone:
             body["PrimaryPhone"] = {"FreeFormNumber": phone}
+        if billing_address:
+            body["BillAddr"] = {"Line1": billing_address[:500]}
         data = await self._request(
             "POST", "/vendor", json_body=body, params={"minorversion": "70"}
         )
@@ -582,6 +586,7 @@ class QuickBooksClient:
         display_name: str,
         email: Optional[str] = None,
         phone: Optional[str] = None,
+        billing_address: Optional[str] = None,
     ) -> Dict[str, Any]:
         if email:
             existing = await self.find_vendor_by_email(email)
@@ -591,8 +596,79 @@ class QuickBooksClient:
         if existing:
             return existing
         return await self.create_vendor(
-            display_name=display_name, email=email, phone=phone
+            display_name=display_name,
+            email=email,
+            phone=phone,
+            billing_address=billing_address,
         )
+
+    async def find_existing_bill(
+        self,
+        *,
+        vendor_id: str,
+        total: float,
+        txn_date: str,
+        day_window: int = 3,
+    ) -> Optional[Dict[str, Any]]:
+        """Cherche un Bill QB du meme fournisseur, meme total TTC,
+        a ~la meme date (anti-doublon avant push)."""
+        return await self._find_existing_txn(
+            "Bill",
+            vendor_id=vendor_id,
+            total=total,
+            txn_date=txn_date,
+            day_window=day_window,
+        )
+
+    async def find_existing_purchase(
+        self,
+        *,
+        vendor_id: str,
+        total: float,
+        txn_date: str,
+        day_window: int = 3,
+    ) -> Optional[Dict[str, Any]]:
+        """Equivalent de find_existing_bill pour les Purchase (achats
+        payes directement par carte / cheque)."""
+        return await self._find_existing_txn(
+            "Purchase",
+            vendor_id=vendor_id,
+            total=total,
+            txn_date=txn_date,
+            day_window=day_window,
+        )
+
+    async def _find_existing_txn(
+        self,
+        entity: str,
+        *,
+        vendor_id: str,
+        total: float,
+        txn_date: str,
+        day_window: int,
+    ) -> Optional[Dict[str, Any]]:
+        try:
+            d = date.fromisoformat(txn_date[:10])
+        except (ValueError, TypeError):
+            return None
+        lo = (d - timedelta(days=day_window)).isoformat()
+        hi = (d + timedelta(days=day_window)).isoformat()
+        # On filtre par fenetre de date en SQL (supporte sur Bill et
+        # Purchase), puis on confirme fournisseur + montant en Python
+        # — VendorRef/EntityRef ne sont pas toujours filtrables en SQL
+        # selon l'entite.
+        rows = await self.query(
+            f"SELECT * FROM {entity} WHERE TxnDate >= '{lo}' "
+            f"AND TxnDate <= '{hi}' MAXRESULTS 200"
+        )
+        vid = str(vendor_id)
+        for r in rows:
+            ref = r.get("VendorRef") or r.get("EntityRef") or {}
+            if str(ref.get("value") or "") != vid:
+                continue
+            if abs(float(r.get("TotalAmt") or 0) - float(total)) <= 0.01:
+                return r
+        return None
 
     # ------------------------------------------------------------------
     # Accounts (Expense / Income lookup for Bill lines)

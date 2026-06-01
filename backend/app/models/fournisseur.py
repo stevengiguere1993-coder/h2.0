@@ -34,3 +34,12 @@ class Fournisseur(Base, TimestampUpdateMixin):
     qbo_expense_account: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
+    # Adresse du fournisseur (une ligne libre). Importee depuis le
+    # BillAddr du Vendor QuickBooks quand il existe deja, et renvoyee
+    # sur le Vendor QB quand on en cree un nouveau.
+    address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Id du Vendor QuickBooks correspondant. Memorise au 1er match
+    # (par email/nom) pour eviter de re-resoudre a chaque push.
+    qbo_vendor_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )

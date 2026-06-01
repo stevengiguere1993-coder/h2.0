@@ -18,10 +18,12 @@ type Fournisseur = {
   phone: string | null;
   category: string | null;
   website: string | null;
+  address: string | null;
   active: boolean;
   notes: string | null;
   payment_terms_days: number | null;
   qbo_expense_account: string | null;
+  qbo_vendor_id: string | null;
   created_at: string;
 };
 
@@ -44,6 +46,7 @@ export default function FournisseurDetailPage() {
   const [phone, setPhone] = useState("");
   const [category, setCategory] = useState("");
   const [website, setWebsite] = useState("");
+  const [address, setAddress] = useState("");
   const [active, setActive] = useState(true);
   const [notes, setNotes] = useState("");
   const [paymentTermsDays, setPaymentTermsDays] = useState("");
@@ -66,6 +69,7 @@ export default function FournisseurDetailPage() {
         setPhone(data.phone || "");
         setCategory(data.category || "");
         setWebsite(data.website || "");
+        setAddress(data.address || "");
         setActive(data.active);
         setNotes(data.notes || "");
         setPaymentTermsDays(
@@ -95,6 +99,7 @@ export default function FournisseurDetailPage() {
       phone !== (f.phone || "") ||
       category !== (f.category || "") ||
       website !== (f.website || "") ||
+      address !== (f.address || "") ||
       active !== f.active ||
       notes !== (f.notes || "") ||
       paymentTermsDays !==
@@ -111,6 +116,7 @@ export default function FournisseurDetailPage() {
     phone,
     category,
     website,
+    address,
     active,
     notes,
     paymentTermsDays,
@@ -130,6 +136,7 @@ export default function FournisseurDetailPage() {
         phone: phone.trim() || null,
         category: category.trim() || null,
         website: website.trim() || null,
+        address: address.trim() || null,
         active,
         notes: notes.trim() || null,
         payment_terms_days: ptd === "" ? null : Number(ptd),
@@ -287,6 +294,19 @@ export default function FournisseurDetailPage() {
                       value={website}
                       onChange={(e) => setWebsite(e.target.value)}
                       className="input"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label htmlFor="fadr" className="label">
+                      Adresse
+                    </label>
+                    <input
+                      id="fadr"
+                      type="text"
+                      value={address}
+                      onChange={(e) => setAddress(e.target.value)}
+                      className="input"
+                      placeholder="Importée de QuickBooks si disponible"
                     />
                   </div>
                 </div>
