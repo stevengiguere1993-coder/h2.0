@@ -1,0 +1,60 @@
+# deploy — déclenche un déploiement Render à chaque merge sur main.
+#
+# Render peut auto-déployer nativement, mais si ce réglage est à "No"
+# (ou si le webhook GitHub→Render se désynchronise), un merge ne part
+# jamais en prod. Ce workflow rend le déploiement déterministe : à
+# chaque push sur main, on POST le(s) Render Deploy Hook(s).
+#
+# Configuration (une seule fois) :
+#   1. Render → service h2-0 → Settings → Deploy Hook → copier l'URL.
+#   2. GitHub → repo → Settings → Secrets and variables → Actions →
+#      New repository secret :
+#        - RENDER_DEPLOY_HOOK_URL       (API h2-0)        — requis
+#        - RENDER_DEPLOY_HOOK_URL_WEB   (front h2-0-web)  — optionnel
+#   3. Pour déployer le main actuel sans attendre un nouveau merge :
+#      onglet Actions → "deploy" → Run workflow.
+#
+# Tant que le secret n'est pas défini, le job log un warning et
+# n'échoue pas (les pushes restent verts).
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Un seul déploiement à la fois : si plusieurs merges s'enchaînent, on
+# garde le dernier et on annule les déclenchements en attente.
+concurrency:
+  group: render-deploy
+  cancel-in-progress: true
+
+jobs:
+  trigger-render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Deploy API (h2-0)
+        env:
+          HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$HOOK_URL" ]; then
+            echo "::warning::RENDER_DEPLOY_HOOK_URL non défini — déploiement API non déclenché. Ajoute le secret (voir en-tête du workflow)."
+            exit 0
+          fi
+          echo "Déclenchement du déploiement Render (API h2-0)…"
+          curl -fsS -X POST "$HOOK_URL" -o /dev/null \
+               -w "render api deploy hook http=%{http_code}\n"
+
+      - name: Deploy web (h2-0-web) — optionnel
+        env:
+          HOOK_URL_WEB: ${{ secrets.RENDER_DEPLOY_HOOK_URL_WEB }}
+        run: |
+          if [ -z "$HOOK_URL_WEB" ]; then
+            echo "RENDER_DEPLOY_HOOK_URL_WEB non défini — on ne déploie que l'API. (Normal si le front n'a pas changé.)"
+            exit 0
+          fi
+          echo "Déclenchement du déploiement Render (front h2-0-web)…"
+          curl -fsS -X POST "$HOOK_URL_WEB" -o /dev/null \
+               -w "render web deploy hook http=%{http_code}\n"
