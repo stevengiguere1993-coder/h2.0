@@ -174,6 +174,12 @@ def _build_bill_payload(
     }
     if customer_id:
         _add_quebec_taxes(payload, lines)
+    elif settings.qbo_purchase_tax_code:
+        # Sans client (achat non refacturable) : le montant de ligne est
+        # le HT, et QBO calcule la taxe par-dessus via le TaxCodeRef.
+        # TaxExcluded évite que QBO traite le HT comme un TTC (sinon la
+        # taxe est ajoutée en double → total gonflé).
+        payload["GlobalTaxCalculation"] = "TaxExcluded"
     if existing_bill_id and existing_sync_token is not None:
         payload["Id"] = existing_bill_id
         payload["SyncToken"] = existing_sync_token
@@ -210,6 +216,11 @@ def _build_purchase_payload(
     }
     if customer_id:
         _add_quebec_taxes(payload, lines)
+    elif settings.qbo_purchase_tax_code:
+        # Sans client (achat non refacturable) : montant de ligne = HT,
+        # QBO calcule la taxe via le TaxCodeRef. TaxExcluded évite la
+        # double taxation (sinon le HT serait traité comme un TTC).
+        payload["GlobalTaxCalculation"] = "TaxExcluded"
     if existing_purchase_id and existing_sync_token is not None:
         payload["Id"] = existing_purchase_id
         payload["SyncToken"] = existing_sync_token
