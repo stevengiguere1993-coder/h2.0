@@ -65,9 +65,9 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_CLASS: Record<string, string> = {
-  received: "bg-amber-500/20 text-amber-300",
-  paid: "bg-emerald-500/20 text-emerald-300",
-  cancelled: "bg-white/5 text-white/50"
+  received: "bg-amber-500 text-amber-950",
+  paid: "bg-emerald-600 text-white",
+  cancelled: "bg-slate-400 text-white"
 };
 
 function fmtMoney(n: number | string | null): string {
@@ -350,7 +350,7 @@ export default function AchatsPage() {
                       </td>
                       <td className="px-4 py-3 text-white/70">
                         {a.status === "paid" ? (
-                          <span className="text-[10px] uppercase tracking-wider text-emerald-300/70">
+                          <span className="text-[10px] uppercase tracking-wider text-emerald-300">
                             Payé · {fmtDate(a.paid_at)}
                           </span>
                         ) : a.due_at ? (
@@ -358,14 +358,14 @@ export default function AchatsPage() {
                             const due = new Date(a.due_at);
                             const overdue = daysBetween(new Date(), due);
                             return overdue > 0 ? (
-                              <span className="rounded-md bg-rose-500/15 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+                              <span className="rounded-md bg-rose-600 px-2 py-0.5 text-[10px] font-semibold text-white">
                                 En retard {overdue} j
                               </span>
                             ) : (
                               <span className="text-xs">
                                 {fmtDate(a.due_at)}
                                 {overdue === 0 ? (
-                                  <span className="ml-1 text-amber-300/80">
+                                  <span className="ml-1 font-semibold text-amber-300">
                                     (aujourd&apos;hui)
                                   </span>
                                 ) : null}
@@ -384,11 +384,11 @@ export default function AchatsPage() {
                             —
                           </span>
                         ) : a.invoiced_at ? (
-                          <span className="rounded-md bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                          <span className="rounded-md bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">
                             ✓ Refacturé
                           </span>
                         ) : (
-                          <span className="rounded-md bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
+                          <span className="rounded-md bg-amber-500 px-2 py-0.5 text-[10px] font-semibold text-amber-950">
                             À refacturer
                             {a.markup_percent
                               ? ` (+${Number(a.markup_percent)}%)`
