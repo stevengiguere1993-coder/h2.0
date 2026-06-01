@@ -741,3 +741,99 @@ async def get_project_statement_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
+
+
+class StatementSendResult(BaseModel):
+    sent: bool
+    to: str
+
+
+@router.post(
+    "/{project_id}/statement/send",
+    response_model=StatementSendResult,
+    summary="Envoyer l'état de compte du projet au client (PDF par courriel)",
+)
+async def send_project_statement(
+    project_id: int,
+    db: DBSession,
+    _: CurrentUser,
+) -> StatementSendResult:
+    """Rend l'état de compte du projet et l'envoie au client par courriel
+    (avec la copie de supervision en BCC, gérée par le mailer). Rendu
+    synchrone : on confirme l'envoi dans la réponse."""
+    from app.integrations.email_graph import EmailAttachment, get_mailer
+    from app.models.client import Client
+    from app.services.facture_pdf import render_statement_pdf
+
+    project = (
+        await db.execute(select(Project).where(Project.id == project_id))
+    ).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Projet introuvable")
+    if project.client_id is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Ce projet n'a pas de client associé.",
+        )
+    client = (
+        await db.execute(select(Client).where(Client.id == project.client_id))
+    ).scalar_one_or_none()
+    if client is None or not client.email:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Le client n'a pas d'adresse courriel.",
+        )
+
+    mailer = get_mailer()
+    if not mailer.ready:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Le service courriel n'est pas configuré.",
+        )
+
+    rendered = await render_statement_pdf(db, project_id)
+    if rendered is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "Impossible de générer l'état de compte.",
+        )
+    _project, pdf_bytes = rendered
+
+    is_en = (getattr(client, "language", "fr") or "fr") == "en"
+    subject = (
+        "Account statement — Horizon Services Immobiliers"
+        if is_en
+        else "État de compte — Horizon Services Immobiliers"
+    )
+    body = (
+        "<p>Hello,</p><p>Please find attached the current "
+        "account statement for your project.</p>"
+        if is_en
+        else "<p>Bonjour,</p><p>Vous trouverez ci-joint "
+        "l'état de compte à jour de votre projet.</p>"
+    )
+    try:
+        await mailer.send(
+            to=[client.email],
+            subject=subject,
+            html_body=body,
+            reply_to=mailer.sender,
+            attachments=[
+                EmailAttachment(
+                    name="etat-de-compte.pdf",
+                    content_bytes=pdf_bytes,
+                    content_type="application/pdf",
+                )
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "Envoi état de compte (projet %s) échoué : %s",
+            project_id,
+            exc,
+        )
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Échec de l'envoi du courriel : {exc}",
+        )
+    return StatementSendResult(sent=True, to=client.email)
