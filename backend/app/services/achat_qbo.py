@@ -51,6 +51,22 @@ class AchatSyncError(Exception):
     pass
 
 
+def _is_stale_ref(exc: Exception) -> bool:
+    """Vrai si l'erreur QBO indique que l'objet référencé (par son Id)
+    a été supprimé/inactivé côté QuickBooks — auquel cas on doit recréer
+    plutôt que mettre à jour. Couvre « Object Not Found » et « made
+    inactive » (errorCode 610 / 3200)."""
+    msg = str(exc).lower()
+    return (
+        "made inactive" in msg
+        or "object not found" in msg
+        or "introuvable" in msg
+        or "inactive" in msg
+        or "errorcode=610" in msg
+        or "code': '610'" in msg
+    )
+
+
 async def _load_achat(db: AsyncSession, achat_id: int) -> Optional[Achat]:
     return (
         await db.execute(select(Achat).where(Achat.id == achat_id))
@@ -449,7 +465,22 @@ async def sync_achat_to_qbo(
                 existing_sync_token=achat.qbo_sync_token,
             )
             if payload.get("Id"):
-                qbo_obj = await qbo.update_purchase(payload)
+                try:
+                    qbo_obj = await qbo.update_purchase(payload)
+                except QuickBooksError as exc:
+                    if not _is_stale_ref(exc):
+                        raise
+                    # L'objet QBO référencé a été supprimé/inactivé côté
+                    # QuickBooks : on recrée un nouveau Purchase.
+                    log.warning(
+                        "QBO purchase %s introuvable → recréation (achat %s)",
+                        payload.get("Id"),
+                        achat.id,
+                    )
+                    payload.pop("Id", None)
+                    payload.pop("SyncToken", None)
+                    payload.pop("sparse", None)
+                    qbo_obj = await qbo.create_purchase(payload)
             else:
                 qbo_obj = await qbo.create_purchase(payload)
         else:
@@ -465,7 +496,20 @@ async def sync_achat_to_qbo(
                 existing_sync_token=achat.qbo_sync_token,
             )
             if payload.get("Id"):
-                qbo_obj = await qbo.update_bill(payload)
+                try:
+                    qbo_obj = await qbo.update_bill(payload)
+                except QuickBooksError as exc:
+                    if not _is_stale_ref(exc):
+                        raise
+                    log.warning(
+                        "QBO bill %s introuvable → recréation (achat %s)",
+                        payload.get("Id"),
+                        achat.id,
+                    )
+                    payload.pop("Id", None)
+                    payload.pop("SyncToken", None)
+                    payload.pop("sparse", None)
+                    qbo_obj = await qbo.create_bill(payload)
             else:
                 qbo_obj = await qbo.create_bill(payload)
     except QuickBooksError as exc:
