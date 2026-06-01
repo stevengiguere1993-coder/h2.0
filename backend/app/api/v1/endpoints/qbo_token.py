@@ -192,3 +192,45 @@ async def qbo_accounts(_: CurrentAdmin) -> QboAccountsResponse:
         return QboAccountsResponse(ok=True, accounts=accounts)
     except Exception as exc:  # noqa: BLE001
         return QboAccountsResponse(ok=False, error=str(exc)[:300])
+
+
+class QboTaxCode(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+
+
+class QboTaxCodesResponse(BaseModel):
+    ok: bool
+    tax_codes: list[QboTaxCode] = []
+    error: str | None = None
+
+
+@router.get(
+    "/tax-codes",
+    response_model=QboTaxCodesResponse,
+    summary="Liste les codes de taxe QBO (Id + nom)",
+)
+async def qbo_tax_codes(_: CurrentAdmin) -> QboTaxCodesResponse:
+    """Liste les codes de taxe de la compagnie QBO connectée. Sert à
+    savoir quel TaxCode appliquer sur les lignes d'achat (la compagnie
+    utilise la taxe de vente automatisée → un code de taxe est exigé
+    sur chaque ligne)."""
+    try:
+        from app.integrations.quickbooks import get_qbo
+
+        client = get_qbo()
+        await client._load_refresh_from_db()
+        rows = await client.query("select * from TaxCode maxresults 1000")
+        codes = [
+            QboTaxCode(
+                id=str(r.get("Id")),
+                name=r.get("Name", ""),
+                description=r.get("Description"),
+            )
+            for r in rows
+            if r.get("Id")
+        ]
+        return QboTaxCodesResponse(ok=True, tax_codes=codes)
+    except Exception as exc:  # noqa: BLE001
+        return QboTaxCodesResponse(ok=False, error=str(exc)[:300])
