@@ -34,8 +34,8 @@ partager).
 | ----- | ----------------------------------------------------------- | ------ |
 | **1** | Foundation OAuth + 5 tables + page Settings minimaliste     | livré (juin 2026) |
 | **2** | Wrapper Drive API (list / upload / move / share / etc.)     | livré (juin 2026) |
-| 3     | Composant `<DriveFolderExplorer>` réutilisable              | à venir |
-| 4     | UI Conventions + Auto-upload + Mappings + Audit log         | à venir |
+| **3** | Composant `<DriveFolderExplorer>` réutilisable              | livré (juin 2026) |
+| **4** | UI Conventions + moteur d'application manuelle              | livré (juin 2026) |
 | 5     | Event listeners SQLAlchemy → exécution des Conventions      | à venir |
 | 6     | Hooks d'auto-upload sur les services de génération PDF      | à venir |
 | 7     | Intégration de `<DriveFolderExplorer>` sur les pages entité | à venir |
@@ -448,3 +448,154 @@ curl -s -X DELETE "$BASE/files/$FILE_ID?permanent=true" \
 
 Phase 2 = backend wrapper + endpoints REST. Phil valide via curl
 ci-dessus, et la Phase 3 brancherait l'UI dessus.
+
+## Phase 4 — UI Conventions + Moteur d'application manuelle
+
+La Phase 4 livre :
+
+- Un **moteur d'exécution** côté backend
+  (`app.services.drive_conventions_engine`) capable d'appliquer une
+  convention à une entité existante (création de dossier Drive,
+  copie d'un template, création des sous-dossiers, persistance d'un
+  `DriveEntityLink`).
+- 8 endpoints REST (`/api/v1/drive/conventions/*` et
+  `/api/v1/drive/entity-links/*`) — admin/owner only.
+- Une **UI complète** sur `/parametres/drive` qui transforme les
+  sections "Conventions" et "Liens existants" en sections actives
+  (tableau, modale CRUD avec aperçu, modale "Tester").
+- Un **seeder idempotent** au boot qui ajoute 4 conventions par
+  défaut inactives, que Phil active une à une après avoir configuré
+  le `parent_folder_drive_id` correspondant.
+
+> Phase 4 ≠ Phase 5. Les **hooks automatiques** ("à la création d'un
+> deal, applique la convention X") sont volontairement reportés à
+> la Phase 5. Pour l'instant, l'application se fait **uniquement via
+> le bouton "Tester"** sur la page Conventions, qui appelle
+> `POST /api/v1/drive/conventions/{id}/apply`.
+
+### Service moteur — surface
+
+```python
+from app.services import drive_conventions_engine as engine
+
+# 1. Lister les types d'entités supportées (alimente le wizard UI).
+types = await engine.get_supported_entity_types()
+# → [{"key": "ProspectionDeal", "label": "Deal Pipeline (Prospection)",
+#     "variables": [{"key": "address", "label": "Adresse", ...}]}, ...]
+
+# 2. Résoudre un template (sans créer de dossier — utile pour preview).
+name = await engine.resolve_folder_name(
+    "{address}, {city}", "ProspectionDeal", 42, db
+)
+# → "1660 Saint-Clément, Montréal"
+
+# 3. Appliquer une convention à une entité existante.
+link = await engine.apply_convention_to_entity(
+    convention_id=3,
+    entity_type="ProspectionDeal",
+    entity_id=42,
+    user_id=current_user.id,
+    db=db,
+)
+# Crée le dossier Drive (+ template copié si défini + sous-dossiers)
+# et persiste un DriveEntityLink dans la table drive_entity_links.
+```
+
+Le moteur lève des exceptions custom (`ConventionNotFound`,
+`EntityAlreadyLinked`, `UnsupportedEntityType`,
+`ConventionMisconfigured`, ...) que l'endpoint REST mappe vers les
+codes HTTP appropriés (404, 409, 400, ...).
+
+### Endpoints REST
+
+**Conventions CRUD** (admin/owner only)
+
+- `GET    /api/v1/drive/conventions` — filtres `entity_type`, `active`.
+- `GET    /api/v1/drive/conventions/{id}`
+- `POST   /api/v1/drive/conventions` — création (toujours inactive
+  par défaut via `active=False` côté schéma).
+- `PATCH  /api/v1/drive/conventions/{id}` — modifie les champs
+  fournis.
+- `DELETE /api/v1/drive/conventions/{id}` — **soft delete** :
+  positionne `active=False` pour préserver les `DriveEntityLink` qui
+  référencent cette convention.
+
+**Action d'application**
+
+- `POST /api/v1/drive/conventions/{id}/apply` — body
+  `{entity_type, entity_id}`. Crée le dossier Drive + sous-dossiers
+  et retourne le `DriveEntityLink` créé + l'URL Drive prête à ouvrir.
+
+**Métadonnées**
+
+- `GET /api/v1/drive/conventions/supported-entity-types` — liste des
+  types d'entités supportées avec leurs variables disponibles.
+
+**Entity links** (admin/owner only)
+
+- `GET    /api/v1/drive/entity-links` — filtres `entity_type`,
+  `entity_id`.
+- `POST   /api/v1/drive/entity-links` — lien manuel sans convention
+  (rattache un dossier Drive existant à une entité Kratos).
+- `DELETE /api/v1/drive/entity-links/{id}` — supprime le lien Kratos.
+  Le dossier Drive reste intact côté Google.
+
+Toutes les mutations posent un audit log dans la table générique
+`audit_logs` (action `drive_convention.create`, `.update`,
+`.soft_delete`, `.apply`, `drive_entity_link.create`, `.delete`).
+
+### Conventions seedées par défaut
+
+Au boot, 4 conventions sont créées (idempotent — vérifie l'existence
+par `(name, entity_type)` avant insert) :
+
+1. **Deal Pipeline → 0 - En cours** (`ProspectionDeal`)
+2. **Nouveau client Dev Log → Clients Dev** (`DevlogClient`)
+3. **Nouveau projet Dev Log** (`DevlogProject`)
+4. **Nouveau projet Construction** (`ConstructionProject`)
+
+Toutes ont `active=False` et `parent_folder_drive_id=None` — Phil les
+configure une à une dans l'UI avant de les activer.
+
+### Comment Phil teste
+
+1. Sur `/parametres/drive`, scroller jusqu'à **"Conventions de dossiers"**.
+2. Cliquer sur le crayon d'une convention seedée (ex. *Deal Pipeline*).
+3. Remplir le **dossier parent Drive (ID)** — copié depuis l'URL
+   Drive — puis cocher *Active* et enregistrer.
+4. Cliquer sur l'icône *Play* (▶) de la convention dans le tableau.
+5. Saisir l'ID d'un `ProspectionDeal` existant (ex. 42).
+6. **Appliquer** — un dossier `{address}, {city}` est créé dans le
+   parent, avec les sous-dossiers `Photos / Soumissions / ...`.
+7. Vérifier dans la section **"Liens existants"** que la ligne
+   apparaît, puis cliquer sur le lien externe pour ouvrir le dossier
+   directement dans Drive.
+
+### Variables supportées par type d'entité
+
+| Type d'entité          | Variables                                                       |
+| ---------------------- | --------------------------------------------------------------- |
+| `ProspectionDeal`      | `{address}`, `{city}`, `{postal_code}`, `{date_creation}`       |
+| `DevlogProject`        | `{nom_projet}`, `{nom_client}`, `{date_creation}`               |
+| `DevlogClient`         | `{nom_client}`, `{date_creation}`                               |
+| `ProspectionLead`      | `{address}`, `{city}`, `{date_creation}`                        |
+| `ConstructionProject`  | `{address}`, `{nom_projet}`, `{date_creation}`                  |
+
+Les placeholders non résolus (variable absente OU valeur vide) sont
+**laissés tels quels** dans le nom final avec un warning loggé. Pas
+de crash — Phil peut corriger le template a posteriori.
+
+## Limites Phase 4
+
+- Aucun hook automatique sur création/changement de statut d'entité
+  (Phase 5 — event listeners SQLAlchemy).
+- Aucun mapping `status → folder_parent` exécuté (champ
+  `status_to_parent_map` exposé en lecture/écriture API mais ignoré
+  par le moteur Phase 4).
+- Aucun auto-upload de PDF Kratos (Phase 6).
+- Aucune intégration `<DriveFolderExplorer>` sur les pages entité
+  (Phase 7).
+
+Phase 4 = UI Conventions + moteur d'application manuelle. Phil
+configure ses règles, les teste sur des entités existantes, et voit
+les liens persistés s'accumuler dans la section "Liens existants".

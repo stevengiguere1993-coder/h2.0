@@ -55,6 +55,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:
         logger.warning("backfill_accepted_soumissions failed: %s", exc)
 
+    # Drive Conventions — seeder idempotent. Crée les 4 conventions
+    # par défaut (Deal Pipeline, DevlogClient, DevlogProject,
+    # ConstructionProject) si elles n'existent pas encore en BDD.
+    # Toutes inactives par défaut, Phil les active une à une après
+    # configuration du parent_folder_drive_id. Best-effort silencieux.
+    try:
+        from app.db.session import AsyncSessionLocal as _DriveSeedSession
+        from app.services.drive_conventions_seed import (
+            seed_default_drive_conventions,
+        )
+
+        async with _DriveSeedSession() as session:
+            n = await seed_default_drive_conventions(session)
+            if n:
+                logger.info(
+                    "Drive conventions seed: %d convention(s) creee(s)",
+                    n,
+                )
+    except Exception as exc:
+        logger.warning("drive_conventions seed failed: %s", exc)
+
     # Téléphonie — auto-bootstrap Twilio : si les credentials et le
     # numéro sont configurés en env, on s'assure que la ligne existe en
     # DB et que le webhook URL pointe sur ce backend. Idempotent ;
