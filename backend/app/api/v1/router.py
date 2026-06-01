@@ -34,6 +34,7 @@ from app.api.v1.endpoints import (
     calendar,
     clients,
     devlog,
+    drive_auth,
     employes,
     entreprises,
     extension,
@@ -222,6 +223,10 @@ api_router.include_router(ndas.router)
 api_router.include_router(public_nda.router)
 api_router.include_router(qbo_token.router)
 api_router.include_router(qbo_oauth.router)
+# Drive OAuth Phase 1 (juin 2026) — connexion Google par utilisateur,
+# tokens chiffrés en BDD. Pré-requis pour les Phases 2-7 (wrapper Drive
+# API, composant <DriveFolderExplorer>, conventions, auto-upload).
+api_router.include_router(drive_auth.router)
 api_router.include_router(client_qbo.router)
 api_router.include_router(achat_qbo.router)
 api_router.include_router(achat_payment.router)

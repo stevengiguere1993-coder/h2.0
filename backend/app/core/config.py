@@ -178,6 +178,31 @@ class Settings(BaseSettings):
     # publique de paiement de facture devlog.
     devlog_interac_email: str = "philippe.meuser@immohorizon.com"
 
+    # Google Drive Integration (Phase 1 — Foundation OAuth, juin 2026).
+    # Permet à chaque utilisateur de connecter son compte Google et
+    # d'accéder à son Drive depuis Kratos. Cf. docs/DRIVE_INTEGRATION.md
+    # pour la procédure de configuration côté Google Cloud Console.
+    #
+    # Whitelist d'emails (mode OAuth "Testing") : 3 partners
+    # philippe.meuser@, sgiguere@, mvilliard@immohorizon.com.
+    google_client_id: Optional[str] = None
+    google_client_secret: Optional[str] = None
+    # OAuth redirect URI — doit être enregistrée à l'identique dans la
+    # Google Cloud Console (APIs & Services → Credentials → OAuth 2.0
+    # Client ID → Authorized redirect URIs).
+    # Pointe sur le backend (h2-0), pas sur le frontend.
+    google_redirect_uri: str = (
+        "https://h2-0.onrender.com/api/v1/drive/auth/callback"
+    )
+    # Clé Fernet (base64 32 bytes) utilisée pour chiffrer les
+    # access_token / refresh_token Drive avant de les écrire dans la BDD.
+    # Générer une clé :
+    #   python -c "from cryptography.fernet import Fernet; \
+    #              print(Fernet.generate_key().decode())"
+    # Si absente, fallback base64 NON CHIFFRÉ (dev only) avec WARNING.
+    # À configurer OBLIGATOIREMENT sur Render avant le premier connect.
+    drive_token_encryption_key: Optional[str] = None
+
     @property
     def is_production(self) -> bool:
         return self.env.lower() == "production"

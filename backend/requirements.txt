@@ -39,6 +39,16 @@ groq>=0.11.0,<1.0.0
 # volumes du pôle Prospection (1500 req/jour, 1M req/mois).
 google-generativeai>=0.8.0,<1.0.0
 
+# Google Drive integration (Phase 1 — Foundation OAuth, juin 2026).
+# google-auth + google-auth-oauthlib : flow OAuth 2.0 user-driven (chaque
+# user connecte son compte Google depuis /parametres/drive).
+# google-api-python-client : wrapper Drive API utilisé à partir de la
+# Phase 2 (list/upload/move/share). On l'inclut dès Phase 1 pour ne pas
+# avoir à modifier requirements.txt à chaque chantier Drive.
+google-auth>=2.0,<3.0
+google-auth-oauthlib>=1.0,<2.0
+google-api-python-client>=2.0,<3.0
+
 # HTTP (Monday migration, QBO, Microsoft Graph)
 httpx>=0.27.0,<1.0.0
 

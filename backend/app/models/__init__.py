@@ -43,6 +43,11 @@ from app.models.devlog_soumission_item import DevlogSoumissionItem  # noqa: F401
 from app.models.devlog_soumission_section import DevlogSoumissionSection  # noqa: F401
 from app.models.devlog_sous_traitant import DevlogSousTraitant  # noqa: F401
 from app.models.devlog_time_entry import DevlogTimeEntry  # noqa: F401
+from app.models.drive_audit_log import DriveAuditLog  # noqa: F401
+from app.models.drive_auto_upload import DriveAutoUpload  # noqa: F401
+from app.models.drive_convention import DriveConvention  # noqa: F401
+from app.models.drive_entity_link import DriveEntityLink  # noqa: F401
+from app.models.drive_user_token import DriveUserToken  # noqa: F401
 from app.models.email_template import EmailTemplate
 from app.models.employe import Employe
 from app.models.employe_rate_history import EmployeRateHistory  # noqa: F401
@@ -253,6 +258,11 @@ __all__ = [
     "DevlogSoumissionSection",
     "DevlogSousTraitant",
     "DevlogTimeEntry",
+    "DriveAuditLog",
+    "DriveAutoUpload",
+    "DriveConvention",
+    "DriveEntityLink",
+    "DriveUserToken",
     "EmailTemplate",
     "Employe",
     "Facture",
