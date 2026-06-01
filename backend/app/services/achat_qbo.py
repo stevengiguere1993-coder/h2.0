@@ -436,11 +436,13 @@ async def sync_achat_to_qbo(
                             exc,
                         )
                         customer_id = None
-            # Classe = projet (nom + adresse si dispo).
-            if project.name:
-                class_name = project.name
-                if getattr(project, "address", None):
-                    class_name = f"{project.name} — {project.address}"
+            # Classe = adresse du chantier (repli sur le nom du projet
+            # si l'adresse est vide).
+            class_name = (
+                (getattr(project, "address", None) or "").strip()
+                or (project.name or "").strip()
+            )
+            if class_name:
                 klass = await qbo.ensure_class(name=class_name)
                 class_id = (
                     str(klass.get("Id")) if klass and klass.get("Id") else None
@@ -467,6 +469,11 @@ async def sync_achat_to_qbo(
             "le Bill QuickBooks."
         )
 
+    # True seulement si on CRÉE un nouvel objet QBO (1ʳᵉ sync ou
+    # recréation après suppression). On ne (ré)attache la pièce jointe
+    # que dans ce cas, pour éviter de dupliquer la facture à chaque
+    # re-synchro (update).
+    did_create = False
     try:
         vendor = await qbo.ensure_vendor(
             display_name=fournisseur.name,
@@ -553,10 +560,12 @@ async def sync_achat_to_qbo(
                         payload.pop("SyncToken", None)
                         payload.pop("sparse", None)
                         qbo_obj = await qbo.create_purchase(payload)
+                        did_create = True
                     else:
                         raise
             else:
                 qbo_obj = await qbo.create_purchase(payload)
+                did_create = True
         else:
             # Sur compte fournisseur (chèque / net-30) → Bill
             payload = _build_bill_payload(
@@ -590,10 +599,12 @@ async def sync_achat_to_qbo(
                         payload.pop("SyncToken", None)
                         payload.pop("sparse", None)
                         qbo_obj = await qbo.create_bill(payload)
+                        did_create = True
                     else:
                         raise
             else:
                 qbo_obj = await qbo.create_bill(payload)
+                did_create = True
     except QuickBooksError as exc:
         raise AchatSyncError(str(exc)) from exc
 
@@ -618,15 +629,18 @@ async def sync_achat_to_qbo(
     # d'échec on log mais on ne bloque pas le push principal.
     # NB: receipt_image est une colonne `deferred` — non chargée par
     # défaut. Il faut explicitement rafraîchir pour la lire.
+    # On n'attache la pièce QUE lors d'une création (did_create), pas à
+    # chaque re-synchro (update), pour éviter de dupliquer la facture
+    # dans QBO.
     receipt_attached = False
     receipt_error: Optional[str] = None
-    if qbo_id and achat.receipt_image_content_type:
+    if did_create and qbo_id and achat.receipt_image_content_type:
         try:
             await db.refresh(achat, attribute_names=["receipt_image"])
         except Exception as exc:  # noqa: BLE001
             receipt_error = f"refresh: {exc}"
             log.warning("Refresh receipt_image failed: %s", exc)
-    if qbo_id and achat.receipt_image:
+    if did_create and qbo_id and achat.receipt_image:
         try:
             ctype = (
                 achat.receipt_image_content_type
