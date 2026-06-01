@@ -27,70 +27,79 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/factures", tags=["payments"])
 
 
-async def _send_statement_email(facture_id: int) -> None:
-    """Envoie l'état de compte du projet au client, en arrière-plan.
-    Best-effort : silencieux s'il n'y a pas de projet, pas de courriel
-    client, ou si le mailer n'est pas configuré."""
-    from app.db.session import AsyncSessionLocal
-    from app.integrations.email_graph import EmailAttachment, get_mailer
+async def _prepare_statement_email(
+    db, facture_id: int
+) -> Optional[tuple[str, str, str, bytes]]:
+    """Rend l'état de compte MAINTENANT, dans la session de la requête
+    (donc après le flush du paiement qu'on vient d'enregistrer), pour
+    garantir que le PDF envoyé au client inclut bien ce paiement.
+
+    Retourne (destinataire, sujet, corps_html, pdf_bytes) ou None si
+    pas de projet / pas de client / pas de courriel. L'envoi SMTP lui
+    -même reste fait en arrière-plan (cf. _send_statement_email)."""
     from app.models.client import Client
     from app.services.facture_pdf import render_statement_pdf
 
+    fa = (
+        await db.execute(select(Facture).where(Facture.id == facture_id))
+    ).scalar_one_or_none()
+    if fa is None or fa.project_id is None or fa.client_id is None:
+        return None
+    client = (
+        await db.execute(select(Client).where(Client.id == fa.client_id))
+    ).scalar_one_or_none()
+    if client is None or not client.email:
+        return None
+    rendered = await render_statement_pdf(db, fa.project_id)
+    if rendered is None:
+        return None
+    _project, pdf_bytes = rendered
+    is_en = (getattr(client, "language", "fr") or "fr") == "en"
+    subject = (
+        "Account statement — Horizon Services Immobiliers"
+        if is_en
+        else "État de compte — Horizon Services Immobiliers"
+    )
+    body = (
+        "<p>Hello,</p><p>Please find attached the current "
+        "account statement for your project.</p>"
+        if is_en
+        else "<p>Bonjour,</p><p>Vous trouverez ci-joint "
+        "l'état de compte à jour de votre projet.</p>"
+    )
+    return client.email, subject, body, pdf_bytes
+
+
+async def _send_statement_email(
+    to: str, subject: str, body: str, pdf_bytes: bytes
+) -> None:
+    """Tâche d'arrière-plan : envoie le PDF de l'état de compte déjà
+    rendu. Best-effort : silencieux si le mailer n'est pas configuré."""
+    from app.integrations.email_graph import EmailAttachment, get_mailer
+
     try:
-        async with AsyncSessionLocal() as db:
-            fa = (
-                await db.execute(
-                    select(Facture).where(Facture.id == facture_id)
-                )
-            ).scalar_one_or_none()
-            if fa is None or fa.project_id is None or fa.client_id is None:
-                return
-            client = (
-                await db.execute(
-                    select(Client).where(Client.id == fa.client_id)
-                )
-            ).scalar_one_or_none()
-            if client is None or not client.email:
-                return
-            rendered = await render_statement_pdf(db, fa.project_id)
-            if rendered is None:
-                return
-            _project, pdf_bytes = rendered
-            mailer = get_mailer()
-            if not mailer.ready:
-                log.warning(
-                    "Envoi état de compte ignoré : mailer non configuré"
-                )
-                return
-            is_en = (getattr(client, "language", "fr") or "fr") == "en"
-            subject = (
-                "Account statement — Horizon Services Immobiliers"
-                if is_en
-                else "État de compte — Horizon Services Immobiliers"
+        mailer = get_mailer()
+        if not mailer.ready:
+            log.warning(
+                "Envoi état de compte ignoré : mailer non configuré"
             )
-            body = (
-                "<p>Hello,</p><p>Please find attached the current "
-                "account statement for your project.</p>"
-                if is_en
-                else "<p>Bonjour,</p><p>Vous trouverez ci-joint "
-                "l'état de compte à jour de votre projet.</p>"
-            )
-            await mailer.send(
-                to=[client.email],
-                subject=subject,
-                html_body=body,
-                attachments=[
-                    EmailAttachment(
-                        name="etat-de-compte.pdf",
-                        content_bytes=pdf_bytes,
-                        content_type="application/pdf",
-                    )
-                ],
-            )
+            return
+        await mailer.send(
+            to=[to],
+            subject=subject,
+            html_body=body,
+            attachments=[
+                EmailAttachment(
+                    name="etat-de-compte.pdf",
+                    content_bytes=pdf_bytes,
+                    content_type="application/pdf",
+                )
+            ],
+        )
     except Exception as exc:  # noqa: BLE001
         log.warning(
-            "Envoi état de compte échoué (facture %s) : %s",
-            facture_id,
+            "Envoi état de compte échoué (%s) : %s",
+            to,
             exc,
         )
 
@@ -221,10 +230,16 @@ async def create_payment(
     await db.refresh(p)
     await _recompute_facture_status(db, fa)
     await db.flush()
-    # Envoi optionnel de l'état de compte au client (en arrière-plan
-    # pour ne pas ralentir la réponse).
+    # Envoi optionnel de l'état de compte au client. On REND le PDF ici,
+    # dans la session de la requête (le paiement est déjà flush → il
+    # apparaît), puis on délègue seulement l'envoi SMTP à l'arrière-plan.
+    # Évite la course « le PDF envoyé ne contient pas le paiement qu'on
+    # vient d'enregistrer » qui survenait quand le rendu se faisait dans
+    # une session séparée avant le commit de la requête.
     if data.send_statement:
-        background.add_task(_send_statement_email, facture_id)
+        prepared = await _prepare_statement_email(db, facture_id)
+        if prepared is not None:
+            background.add_task(_send_statement_email, *prepared)
     return PaymentRead.model_validate(p)
 
 

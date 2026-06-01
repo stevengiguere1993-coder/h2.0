@@ -713,7 +713,7 @@ def _render_bytes(
         )
         story.append(Spacer(1, 12))
 
-        st_data = [["Date", "Description", "Détail", "Débit", "Crédit"]]
+        st_data = [["Date", "Description", "Détail", "Facturé", "Payé"]]
         running = 0.0
         for ln in statement.lines:
             if ln.kind == "facture":
@@ -901,8 +901,8 @@ def _render_statement_bytes(statement: Statement) -> bytes:
             "h_date": "Date",
             "h_desc": "Description",
             "h_detail": "Détail",
-            "h_debit": "Débit",
-            "h_credit": "Crédit",
+            "h_debit": "Facturé",
+            "h_credit": "Payé",
             "empty": "Aucune facture envoyée au client pour ce projet.",
             "total_invoiced": "Total des factures",
             "amount_paid": "Montant payé",
@@ -918,8 +918,8 @@ def _render_statement_bytes(statement: Statement) -> bytes:
             "h_date": "Date",
             "h_desc": "Description",
             "h_detail": "Detail",
-            "h_debit": "Debit",
-            "h_credit": "Credit",
+            "h_debit": "Invoiced",
+            "h_credit": "Paid",
             "empty": "No invoice sent to the client for this project.",
             "total_invoiced": "Total invoiced",
             "amount_paid": "Amount paid",
