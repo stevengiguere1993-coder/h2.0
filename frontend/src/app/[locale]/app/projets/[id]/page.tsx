@@ -8,6 +8,7 @@ import {
   DollarSign,
   FileText,
   Loader2,
+  Mail,
   MapPin,
   Plus,
   Save,
@@ -1836,6 +1837,8 @@ function FinancesTab({
   const [overrideOriginal, setOverrideOriginal] = useState<string>("");
   const [editingHours, setEditingHours] = useState(false);
   const [savingHours, setSavingHours] = useState(false);
+  const [sendingStatement, setSendingStatement] = useState(false);
+  const [statementMsg, setStatementMsg] = useState<string | null>(null);
 
   async function loadAll() {
     setLoading(true);
@@ -1883,6 +1886,39 @@ function FinancesTab({
       setErr(
         `Ouverture de l'état de compte échouée : ${(e as Error).message}`
       );
+    }
+  }
+
+  async function sendStatement() {
+    if (sendingStatement) return;
+    setSendingStatement(true);
+    setStatementMsg(null);
+    setErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/projects/${projectId}/statement/send`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        let detail = `http_${res.status}`;
+        try {
+          const j = (await res.json()) as { detail?: string };
+          if (j.detail) detail = j.detail;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail);
+      }
+      const j = (await res.json()) as { to?: string };
+      setStatementMsg(
+        j.to
+          ? `État de compte envoyé à ${j.to}.`
+          : "État de compte envoyé au client."
+      );
+    } catch (e) {
+      setErr(`Envoi de l'état de compte échoué : ${(e as Error).message}`);
+    } finally {
+      setSendingStatement(false);
     }
   }
 
@@ -2423,14 +2459,34 @@ function FinancesTab({
         )}
 
         {data.invoices && data.invoices.length > 0 ? (
-          <button
-            type="button"
-            onClick={openStatement}
-            className="mt-5 inline-flex items-center gap-2 rounded-lg border border-brand-800 bg-brand-950/40 px-3 py-2 text-xs font-medium text-white/80 transition hover:border-accent-500 hover:text-white"
-          >
-            <FileText className="h-4 w-4 text-accent-500" />
-            Consulter l&apos;état de compte (PDF)
-          </button>
+          <div className="mt-5 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={openStatement}
+              className="inline-flex items-center gap-2 rounded-lg border border-brand-800 bg-brand-950/40 px-3 py-2 text-xs font-medium text-white/80 transition hover:border-accent-500 hover:text-white"
+            >
+              <FileText className="h-4 w-4 text-accent-500" />
+              Consulter l&apos;état de compte (PDF)
+            </button>
+            <button
+              type="button"
+              onClick={sendStatement}
+              disabled={sendingStatement}
+              className="inline-flex items-center gap-2 rounded-lg border border-brand-800 bg-brand-950/40 px-3 py-2 text-xs font-medium text-white/80 transition hover:border-accent-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {sendingStatement ? (
+                <Loader2 className="h-4 w-4 animate-spin text-accent-500" />
+              ) : (
+                <Mail className="h-4 w-4 text-accent-500" />
+              )}
+              {sendingStatement
+                ? "Envoi…"
+                : "Envoyer l'état de compte au client"}
+            </button>
+          </div>
+        ) : null}
+        {statementMsg ? (
+          <p className="mt-2 text-[11px] text-emerald-400">{statementMsg}</p>
         ) : null}
       </section>
     </div>
