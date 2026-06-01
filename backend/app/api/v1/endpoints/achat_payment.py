@@ -1,6 +1,7 @@
 """Achat — actions de paiement.
 
     POST /api/v1/achats/{id}/mark-paid    — bouton « Marquer paye »
+    POST /api/v1/achats/sync-from-qbo     — pull QB Bills -> Kratos
 
 Quand un achat etait facture fournisseur (bill_to_pay) et qu'on le
 paye finalement, on enregistre le mode reel + la date. Le statut
@@ -18,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.api.deps import DBSession, RequireManager
 from app.models.achat import Achat, AchatStatus, PaymentMethod
 from app.services.achat_payment import mark_achat_paid
+from app.services.achat_qbo_pull import QboPullError, pull_new_bills_from_qbo
 
 
 router = APIRouter(prefix="/achats", tags=["achats-payment"])
@@ -80,3 +82,39 @@ async def mark_paid(
     )
     await db.flush()
     return AchatPaymentRead.model_validate(achat)
+
+
+class QboPullResult(BaseModel):
+    imported: int
+    unmatched_project: int
+    imported_paid: int
+    skipped_existing: int
+    total_qbo_bills: int
+
+
+@router.post(
+    "/sync-from-qbo",
+    response_model=QboPullResult,
+    summary="Importe les Bills QuickBooks absents de Kratos",
+)
+async def sync_from_qbo(
+    db: DBSession,
+    _: RequireManager,
+    since_days: int = 180,
+) -> QboPullResult:
+    """Pull les Bills QB recents qui n'ont pas encore d'Achat
+    Kratos correspondant. Garde anti-doublon via qbo_bill_id.
+
+    - Cree un Fournisseur Kratos si le vendor QB est inconnu.
+    - Tente de matcher le projet via la Class QB (= adresse).
+    - Marque l'Achat paye s'il existe une BillPayment QB liee.
+    - is_billable forcement False (refacturation reste pilotee
+      depuis Kratos).
+    """
+    try:
+        stats = await pull_new_bills_from_qbo(db, since_days=since_days)
+    except QboPullError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        )
+    return QboPullResult(**stats)
