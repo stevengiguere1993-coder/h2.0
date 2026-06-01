@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   CheckSquare,
   ChevronRight,
+  Cloud,
   ExternalLink,
   Loader2,
   RefreshCw,
@@ -208,6 +209,33 @@ export default function ParametresPage() {
                 Trace de toutes les créations / suppressions
                 (soumissions, factures, PO, achats, punches, employés,
                 fournisseurs…) avec qui, quand et quoi.
+              </p>
+            </div>
+            <ChevronRight className="h-4 w-4 text-white/40" />
+          </Link>
+        ) : null}
+
+        {/* Drive (Phase 1 — Foundation OAuth, juin 2026) :
+            chaque user connecte son compte Google et accède à ses
+            documents Drive depuis Kratos. La page contient également
+            la roadmap (Conventions, Auto-upload, etc.) en placeholder. */}
+        {hasMinRole(me, "admin") ? (
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={"/app/parametres/drive" as any}
+            className="mt-3 flex items-center gap-3 rounded-2xl border border-brand-800 bg-brand-900 p-5 transition hover:border-accent-500"
+          >
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
+              <Cloud className="h-5 w-5" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-base font-bold text-white">
+                Gestion documentaire Drive
+              </h2>
+              <p className="mt-0.5 text-xs text-white/60">
+                Connecte ton compte Google pour accéder aux documents Drive
+                de l&apos;entreprise directement depuis Kratos (deals,
+                projets, clients, soumissions).
               </p>
             </div>
             <ChevronRight className="h-4 w-4 text-white/40" />
