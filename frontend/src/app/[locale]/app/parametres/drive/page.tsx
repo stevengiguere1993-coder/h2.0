@@ -135,6 +135,10 @@ type DrivePageModule = {
   active: boolean;
   display_title?: string | null;
   display_order: number;
+  // Portée : "entity" (un dossier par fiche) ou "page" (dossier unique
+  // singleton). Détermine le sous-groupe d'affichage (Fiches / Pages
+  // générales). Toléré absent (modules legacy) → traité comme "entity".
+  scope?: string | null;
   pole?: string | null;
   label?: string | null;
   route?: string | null;
@@ -1462,6 +1466,28 @@ function modulePole(m: DrivePageModule): string {
   return m?.pole || POLE_FALLBACK;
 }
 
+// Portée d'un module, avec repli "entity" pour les modules legacy (scope
+// NULL/absent en BDD). Sert à scinder l'affichage en deux sous-groupes :
+// "Fiches" (un dossier par instance) et "Pages générales" (dossier unique).
+function moduleScope(m: DrivePageModule): "entity" | "page" {
+  return m?.scope === "page" ? "page" : "entity";
+}
+
+// Liste de référence stable des 7 pôles de Kratos, dans l'ordre voulu.
+// Sert à afficher TOUS les pôles comme onglets, même ceux qui n'ont
+// encore aucune page documentaire (ex: Investisseurs, Téléphonie).
+// ⚠️ Les PAGES sous chaque pôle restent 100 % dynamiques (issues des
+// modules backend) — seule cette liste de pôles est codée en dur.
+const POLES_KRATOS = [
+  "Prospection",
+  "Développement logiciel",
+  "Construction",
+  "Gestion d'entreprises",
+  "Gestion immobilière",
+  "Investisseurs",
+  "Téléphonie"
+] as const;
+
 function PageModulesSection() {
   const [modules, setModules] = useState<DrivePageModule[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1490,21 +1516,31 @@ function PageModulesSection() {
     void reload();
   }, [reload]);
 
-  // Liste des pôles (ordre stable = ordre de display_order) + stats.
+  // Liste des pôles affichés en onglets = UNION de la liste de référence
+  // stable (POLES_KRATOS, les 7 pôles de Kratos) + tout pôle distinct
+  // présent dans les modules backend (au cas où un nouveau pôle
+  // apparaîtrait via auto-enregistrement). Les stats « X pages, Y actives »
+  // sont calculées dynamiquement depuis les modules de chaque pôle.
   const poles = useMemo(() => {
-    const order: string[] = [];
     const stats = new Map<string, { total: number; active: number }>();
     for (const m of modules || []) {
       const p = modulePole(m);
-      if (!stats.has(p)) {
-        stats.set(p, { total: 0, active: 0 });
-        order.push(p);
-      }
+      if (!stats.has(p)) stats.set(p, { total: 0, active: 0 });
       const s = stats.get(p)!;
       s.total += 1;
       if (m?.active) s.active += 1;
     }
-    return order.map((p) => ({ pole: p, ...stats.get(p)! }));
+    // Ordre stable : d'abord les 7 pôles de référence, puis tout pôle
+    // supplémentaire découvert dans les modules (non déjà listé).
+    const order: string[] = [...POLES_KRATOS];
+    for (const p of stats.keys()) {
+      if (!order.includes(p)) order.push(p);
+    }
+    return order.map((p) => ({
+      pole: p,
+      total: stats.get(p)?.total ?? 0,
+      active: stats.get(p)?.active ?? 0
+    }));
   }, [modules]);
 
   // Sélectionne le 1er pôle par défaut une fois les données chargées.
@@ -1518,6 +1554,18 @@ function PageModulesSection() {
     () =>
       (modules || []).filter((m) => modulePole(m) === activePole),
     [modules, activePole]
+  );
+
+  // Scinde les modules du pôle courant en deux sous-groupes par portée :
+  //  - "Fiches"          (scope=entity) → un dossier Drive par fiche.
+  //  - "Pages générales" (scope=page)   → un dossier Drive unique / page.
+  const entityModules = useMemo(
+    () => visibleModules.filter((m) => moduleScope(m) === "entity"),
+    [visibleModules]
+  );
+  const pageModules = useMemo(
+    () => visibleModules.filter((m) => moduleScope(m) === "page"),
+    [visibleModules]
   );
 
   async function patchModule(
@@ -1565,6 +1613,14 @@ function PageModulesSection() {
             apparaît. Organisé par pôle : sélectionne un pôle, puis active
             Drive sur ses pages une à une.
           </p>
+          <p className="mt-1.5 text-xs text-white/60">
+            Seules les{" "}
+            <span className="font-semibold text-white/80">pages de fiche</span>{" "}
+            (un élément précis : un deal, un client, un immeuble) et les{" "}
+            <span className="font-semibold text-white/80">pages générales</span>{" "}
+            peuvent avoir un dossier Drive. Les pages de liste (kanban,
+            tableau, dashboard) en sont exclues.
+          </p>
         </div>
         <button
           type="button"
@@ -1611,8 +1667,8 @@ function PageModulesSection() {
                     {p.pole}
                   </span>
                   <span
-                    className={`mt-0.5 text-[10px] ${
-                      selected ? "text-white/75" : "text-white/55"
+                    className={`mt-0.5 text-[10px] font-medium ${
+                      selected ? "text-white" : "text-white/70"
                     }`}
                   >
                     {p.total} page{p.total > 1 ? "s" : ""}, {p.active} active
@@ -1623,87 +1679,46 @@ function PageModulesSection() {
             })}
           </div>
 
-          {/* Pages du pôle sélectionné */}
-          <div className="mt-4 space-y-2">
-            {visibleModules.length > 0 ? (
-              visibleModules.map((m) => (
-                <div
-                  key={m.entity_type}
-                  className="flex flex-wrap items-center gap-3 rounded-xl border border-brand-800 bg-brand-950/40 px-4 py-3"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium text-white">
-                        {moduleLabel(m)}
-                      </span>
-                      {m.display_title ? (
-                        <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/50">
-                          Titre : {m.display_title}
-                        </span>
-                      ) : null}
-                      <button
-                        type="button"
-                        onClick={() => setEditing(m)}
-                        title="Éditer le titre affiché sur la page"
-                        className="rounded p-0.5 text-white/35 hover:bg-white/10 hover:text-white"
-                      >
-                        <Pencil className="h-3 w-3" />
-                      </button>
-                    </div>
-                    <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-white/55">
-                      {m.route ? (
-                        <code className="font-mono">{m.route}</code>
-                      ) : (
-                        <code className="font-mono">{m.entity_type}</code>
-                      )}
-                      <span className="text-white/35">·</span>
-                      <span>
-                        {m.linked_count} dossier
-                        {m.linked_count > 1 ? "s" : ""} lié
-                        {m.linked_count > 1 ? "s" : ""}
-                      </span>
-                    </div>
-                  </div>
+          {/* Pages du pôle sélectionné, scindées par portée */}
+          {visibleModules.length > 0 ? (
+            <div className="mt-4 space-y-5">
+              {/* Sous-groupe "Fiches" (scope=entity) — un dossier par fiche.
+                  Affiché seulement si le pôle a au moins une fiche. */}
+              {entityModules.length > 0 ? (
+                <ModuleSubGroup
+                  title="Fiches"
+                  subtitle="Un dossier Drive par fiche."
+                  modules={entityModules}
+                  savingType={savingType}
+                  onEdit={setEditing}
+                  onToggle={(et, active) =>
+                    void patchModule(et, { active })
+                  }
+                />
+              ) : null}
 
-                  <div className="flex items-center gap-2">
-                    {savingType === m.entity_type ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-white/40" />
-                    ) : null}
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
-                        m.active
-                          ? "border border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-                          : "border border-white/15 bg-white/5 text-white/40"
-                      }`}
-                    >
-                      {m.active ? "Activé" : "Inactif"}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void patchModule(m.entity_type, {
-                          active: !m.active
-                        })
-                      }
-                      disabled={savingType === m.entity_type}
-                      className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50 ${
-                        m.active
-                          ? "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
-                          : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20"
-                      }`}
-                    >
-                      <Power className="h-3 w-3" />
-                      {m.active ? "Désactiver" : "Activer"}
-                    </button>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <p className="rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/50">
-                Aucune page pour ce pôle.
-              </p>
-            )}
-          </div>
+              {/* Sous-groupe "Pages générales" (scope=page) — dossier unique.
+                  Affiché seulement si le pôle a au moins une page singleton. */}
+              {pageModules.length > 0 ? (
+                <ModuleSubGroup
+                  title="Pages générales"
+                  subtitle="Un dossier Drive unique pour la page."
+                  modules={pageModules}
+                  savingType={savingType}
+                  onEdit={setEditing}
+                  onToggle={(et, active) =>
+                    void patchModule(et, { active })
+                  }
+                />
+              ) : null}
+            </div>
+          ) : (
+            <p className="mt-4 rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/60">
+              Aucune page de fiche dans ce pôle pour l'instant. Les pages
+              apparaissent ici automatiquement quand elles sont créées dans
+              Kratos.
+            </p>
+          )}
         </>
       ) : (
         <p className="mt-4 rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/50">
@@ -1723,6 +1738,123 @@ function PageModulesSection() {
         />
       ) : null}
     </section>
+  );
+}
+
+// Sous-groupe de modules (Fiches / Pages générales) — en-tête + lignes.
+// Mutualise le rendu pour les deux portées sans dupliquer le markup.
+function ModuleSubGroup({
+  title,
+  subtitle,
+  modules,
+  savingType,
+  onEdit,
+  onToggle
+}: {
+  title: string;
+  subtitle: string;
+  modules: DrivePageModule[];
+  savingType: string | null;
+  onEdit: (m: DrivePageModule) => void;
+  onToggle: (entityType: string, active: boolean) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-white/80">
+          {title}
+        </h3>
+        <p className="text-[11px] text-white/50">{subtitle}</p>
+      </div>
+      <div className="space-y-2">
+        {modules.map((m) => (
+          <ModuleRow
+            key={m.entity_type}
+            m={m}
+            saving={savingType === m.entity_type}
+            onEdit={() => onEdit(m)}
+            onToggle={() => onToggle(m.entity_type, !m.active)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Ligne d'un module : libellé + route + nb dossiers liés + toggle actif.
+// Markup identique à l'ancien rendu (contraste lisible conservé).
+function ModuleRow({
+  m,
+  saving,
+  onEdit,
+  onToggle
+}: {
+  m: DrivePageModule;
+  saving: boolean;
+  onEdit: () => void;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-brand-800 bg-brand-950/40 px-4 py-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium text-white">{moduleLabel(m)}</span>
+          {m.display_title ? (
+            <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/50">
+              Titre : {m.display_title}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            onClick={onEdit}
+            title="Éditer le titre affiché sur la page"
+            className="rounded p-0.5 text-white/35 hover:bg-white/10 hover:text-white"
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+        </div>
+        <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-white/60">
+          {m.route ? (
+            <code className="font-mono">{m.route}</code>
+          ) : (
+            <code className="font-mono">{m.entity_type}</code>
+          )}
+          <span className="text-white/40">·</span>
+          <span>
+            {m.linked_count} dossier{m.linked_count > 1 ? "s" : ""} lié
+            {m.linked_count > 1 ? "s" : ""}
+          </span>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        {saving ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-white/40" />
+        ) : null}
+        <span
+          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
+            m.active
+              ? "border border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+              : "border border-white/15 bg-white/5 text-white/40"
+          }`}
+        >
+          {m.active ? "Activé" : "Inactif"}
+        </span>
+        <button
+          type="button"
+          onClick={onToggle}
+          disabled={saving}
+          className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50 ${
+            m.active
+              ? "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
+              : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20"
+          }`}
+        >
+          <Power className="h-3 w-3" />
+          {m.active ? "Désactiver" : "Activer"}
+        </button>
+      </div>
+    </div>
   );
 }
 
