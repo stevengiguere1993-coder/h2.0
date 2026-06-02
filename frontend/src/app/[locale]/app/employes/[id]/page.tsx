@@ -7,6 +7,7 @@ import { ArrowLeft, Loader2, Save, Trash2 } from "lucide-react";
 import { AddressInput } from "@/components/address-input";
 import { AppTopbar } from "@/components/app-topbar";
 import { CallHistoryDropdown } from "@/components/call-history-dropdown";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -444,6 +445,14 @@ export default function EmployeDetailPage() {
                 </button>
               </div>
             </header>
+
+            <EntityDriveSection
+              entityType="Employe"
+              entityId={emp.id}
+              pole="Construction"
+              label="Employé"
+              route="/app/employes/[id]"
+            />
 
             <div className="mt-4">
               <CallHistoryDropdown

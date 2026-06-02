@@ -18,6 +18,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { CallHistoryDropdown } from "@/components/call-history-dropdown";
 import { AddressInput } from "@/components/address-input";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { CallButton } from "@/components/call-button";
 import { CommunicationsTimeline } from "@/components/communications-timeline";
 import { MeasurementsPanel } from "@/components/measurements-panel";
@@ -228,6 +229,14 @@ export default function ClientDetailPage() {
                 </button>
               </div>
             </header>
+
+            <EntityDriveSection
+              entityType="ConstructionClient"
+              entityId={c.id}
+              pole="Construction"
+              label="Client"
+              route="/app/clients/[id]"
+            />
 
             <div className="mt-4">
               <CallHistoryDropdown

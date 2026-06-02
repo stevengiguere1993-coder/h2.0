@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -346,6 +347,14 @@ export default function BonDetailPage() {
                 </button>
               </div>
             </header>
+
+            <EntityDriveSection
+              entityType="BonTravail"
+              entityId={b.id}
+              pole="Construction"
+              label="Bon de travail"
+              route="/app/bons/[id]"
+            />
 
             {b.signed_at && b.signed_by_name ? (
               <div className="mt-4 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-200">

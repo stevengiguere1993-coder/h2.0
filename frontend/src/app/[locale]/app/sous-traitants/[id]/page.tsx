@@ -13,6 +13,7 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { CallHistoryDropdown } from "@/components/call-history-dropdown";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -332,6 +333,14 @@ export default function SousTraitantDetailPage() {
                 </button>
               </div>
             </header>
+
+            <EntityDriveSection
+              entityType="SousTraitant"
+              entityId={st.id}
+              pole="Construction"
+              label="Sous-traitant"
+              route="/app/sous-traitants/[id]"
+            />
 
             <div className="mt-4">
               <CallHistoryDropdown
