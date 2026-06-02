@@ -599,3 +599,139 @@ de crash — Phil peut corriger le template a posteriori.
 Phase 4 = UI Conventions + moteur d'application manuelle. Phil
 configure ses règles, les teste sur des entités existantes, et voit
 les liens persistés s'accumuler dans la section "Liens existants".
+
+## Phase 5 — Hooks automatiques (`created` + `status_changed`)
+
+La Phase 5 branche les conventions Phase 4 sur les événements métier
+de Kratos. Aucun event listener SQLAlchemy magique : on appelle
+explicitement le hook depuis chaque endpoint qui crée une entité
+supportée, juste après le `db.flush()` / `db.commit()`. Ce design
+garde la chaîne de causalité lisible (un coup d'œil au endpoint
+suffit pour savoir si l'auto-création Drive est en place) et permet
+le pattern « best-effort » sans surprise.
+
+### Service `drive_conventions_hooks`
+
+Nouveau module : `backend/app/services/drive_conventions_hooks.py`
+exposant deux fonctions async :
+
+- `on_entity_created(entity_type, entity_id, user_id, db)` —
+  cherche la convention active `trigger_event='created'` de plus
+  haute priorité pour `entity_type`, et délègue à
+  `drive_conventions_engine.apply_convention_to_entity`. Retourne
+  le `DriveEntityLink` créé ou `None`. JAMAIS d'exception.
+
+- `on_entity_status_changed(entity_type, entity_id, old_status,
+  new_status, user_id, db)` — cherche la convention active
+  `trigger_event='status_changed'`, lit
+  `status_to_parent_map[new_status]`, et déplace le dossier lié
+  via `drive_api.move_file`. Retourne `True/False`. JAMAIS
+  d'exception.
+
+### Contrat best-effort
+
+Aucune erreur Drive (réseau, quota, auth, convention mal
+configurée) ne doit jamais bloquer la création d'une entité
+Kratos. Le hook :
+
+1. Capture toute exception via un `try/except` global ;
+2. Logge un warning (`log.exception`) ;
+3. Pose un audit log :
+   - `drive_convention.auto_applied` — succès
+   - `drive_convention.auto_skipped` — pré-conditions manquantes
+     (pas de connexion Drive, parent_folder_drive_id vide, etc.)
+   - `drive_convention.auto_failed` — exception au moment de
+     l'appel API Drive
+   - `drive_convention.auto_moved` / `.auto_move_skipped` /
+     `.auto_move_failed` pour le hook `status_changed`
+4. Retourne `None` / `False`.
+
+Le pattern d'intégration côté endpoint est uniforme :
+
+```python
+db.add(deal)
+await db.flush()
+await db.refresh(deal)
+
+try:
+    from app.services.drive_conventions_hooks import on_entity_created
+    await on_entity_created(
+        entity_type="ProspectionDeal",
+        entity_id=deal.id,
+        user_id=user.id,
+        db=db,
+    )
+except Exception:
+    log.exception("drive hook 'created' a echoue (non bloquant)")
+
+return deal
+```
+
+### Endpoints instrumentés
+
+| Entité Kratos        | Endpoint                                       |
+| -------------------- | ---------------------------------------------- |
+| `ProspectionDeal`    | `POST /api/v1/prospection/deals`               |
+| `ProspectionDeal`    | `POST /api/v1/lead-analyses/{id}/convert-to-deal` |
+| `DevlogProject`      | `POST /api/v1/devlog/projects`                 |
+| `DevlogProject`      | Provisionning auto sur soumission acceptée (`_provision_project_for_soumission`) |
+| `DevlogClient`       | `POST /api/v1/devlog/clients`                  |
+| `ConstructionProject`| `POST /api/v1/projects`                        |
+| `ProspectionLead`    | `POST /api/v1/prospection/leads`               |
+
+### Idempotence
+
+Le hook `on_entity_created` vérifie d'abord qu'aucun
+`DriveEntityLink` n'existe pour `(entity_type, entity_id)`. Si un
+lien existe (par exemple parce que Phil a déjà appliqué une
+convention manuellement, ou parce que le frontend a fait un double
+POST), le hook return `None` silencieusement — pas de dossier
+dupliqué.
+
+Le hook `on_entity_status_changed` ne crée jamais de dossier
+rétroactivement : si l'entité n'a pas encore de lien Drive, le
+hook return `False` immédiatement.
+
+### Comment Phil active l'auto
+
+Sur `/parametres/drive` → section Conventions :
+
+1. Éditer la convention (par exemple « Deal Pipeline → 0 - En
+   cours »).
+2. Changer le champ « Événement déclencheur » de **Manuel** à
+   **À la création**.
+3. Vérifier que `parent_folder_drive_id` et `folder_name_template`
+   sont remplis.
+4. Cocher **Active**, sauvegarder.
+5. Au prochain deal créé, Kratos crée le dossier Drive
+   automatiquement (3-8 secondes de latence côté requête à cause
+   de l'appel Drive API).
+
+L'auto reste désactivable à tout moment via le toggle « Actif »
+dans le tableau de la page Conventions.
+
+### Performance
+
+L'appel Drive API bloque la requête HTTP de création d'entité
+(latence Drive + nombre de sous-dossiers à créer). Mesure observée
+en Phase 4 : ~2-3 secondes pour un dossier vide, ~5-8 secondes
+pour un dossier avec 5 sous-dossiers (chaque sous-dossier =
+1 round-trip Drive). Pas optimisé Phase 5 — un déport vers une
+task queue est laissé pour une phase ultérieure si la latence
+devient bloquante.
+
+### Limites Phase 5
+
+- Pas d'auto-upload des PDFs Kratos vers le dossier créé (Phase 6).
+- Pas d'intégration `<DriveFolderExplorer>` directement sur les
+  fiches deal/projet (Phase 7).
+- Pas de hook sur la suppression / archive d'entités.
+- Pas d'UI dédiée pour éditer le mapping `status_to_parent_map`
+  d'une convention `status_changed` (l'édition passe par
+  `PATCH /api/v1/drive/conventions/{id}` direct via curl ou
+  Postman pour l'instant).
+- Pas de retry en cas d'échec réseau ponctuel (Phil peut relancer
+  manuellement via le bouton « Tester » Phase 4).
+
+Phase 5 = hooks `created` + `status_changed` branchés sur les
+endpoints principaux, best-effort, audit log complet.

@@ -994,6 +994,25 @@ async def convert_to_deal(
     rec.converted_to_deal_id = deal.id
     rec.updated_at = datetime.now(timezone.utc)
     await db.commit()
+
+    # Phase 5 — hook Drive Conventions. Best-effort : si Drive est down
+    # ou si le user n'a pas connecté Drive, le deal reste créé.
+    try:
+        from app.services.drive_conventions_hooks import on_entity_created
+
+        await on_entity_created(
+            entity_type="ProspectionDeal",
+            entity_id=deal.id,
+            user_id=user.id,
+            db=db,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "drive hook 'created' a echoue pour ProspectionDeal #%s "
+            "(non bloquant)",
+            deal.id,
+        )
+
     return ConvertDealResult(deal_id=deal.id)
 
 
