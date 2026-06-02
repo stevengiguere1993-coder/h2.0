@@ -1442,6 +1442,21 @@ function modulePole(m: DrivePageModule): string {
   return m?.pole || POLE_FALLBACK;
 }
 
+// Liste de référence stable des 7 pôles de Kratos, dans l'ordre voulu.
+// Sert à afficher TOUS les pôles comme onglets, même ceux qui n'ont
+// encore aucune page de fiche documentaire (ex: Investisseurs, Téléphonie).
+// ⚠️ Les PAGES sous chaque pôle restent 100 % dynamiques (issues des
+// modules backend) — seule cette liste de pôles est codée en dur.
+const POLES_KRATOS = [
+  "Prospection",
+  "Développement logiciel",
+  "Construction",
+  "Gestion d'entreprises",
+  "Gestion immobilière",
+  "Investisseurs",
+  "Téléphonie"
+] as const;
+
 function PageModulesSection() {
   const [modules, setModules] = useState<DrivePageModule[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1470,21 +1485,31 @@ function PageModulesSection() {
     void reload();
   }, [reload]);
 
-  // Liste des pôles (ordre stable = ordre de display_order) + stats.
+  // Liste des pôles affichés en onglets = UNION de la liste de référence
+  // stable (POLES_KRATOS, les 7 pôles de Kratos) + tout pôle distinct
+  // présent dans les modules backend (au cas où un nouveau pôle
+  // apparaîtrait via auto-enregistrement). Les stats « X pages, Y actives »
+  // sont calculées dynamiquement depuis les modules de chaque pôle.
   const poles = useMemo(() => {
-    const order: string[] = [];
     const stats = new Map<string, { total: number; active: number }>();
     for (const m of modules || []) {
       const p = modulePole(m);
-      if (!stats.has(p)) {
-        stats.set(p, { total: 0, active: 0 });
-        order.push(p);
-      }
+      if (!stats.has(p)) stats.set(p, { total: 0, active: 0 });
       const s = stats.get(p)!;
       s.total += 1;
       if (m?.active) s.active += 1;
     }
-    return order.map((p) => ({ pole: p, ...stats.get(p)! }));
+    // Ordre stable : d'abord les 7 pôles de référence, puis tout pôle
+    // supplémentaire découvert dans les modules (non déjà listé).
+    const order: string[] = [...POLES_KRATOS];
+    for (const p of stats.keys()) {
+      if (!order.includes(p)) order.push(p);
+    }
+    return order.map((p) => ({
+      pole: p,
+      total: stats.get(p)?.total ?? 0,
+      active: stats.get(p)?.active ?? 0
+    }));
   }, [modules]);
 
   // Sélectionne le 1er pôle par défaut une fois les données chargées.
@@ -1545,6 +1570,14 @@ function PageModulesSection() {
             apparaît. Organisé par pôle : sélectionne un pôle, puis active
             Drive sur ses pages une à une.
           </p>
+          <p className="mt-1.5 text-xs text-white/60">
+            Seules les{" "}
+            <span className="font-semibold text-white/80">pages de fiche</span>{" "}
+            (qui représentent un élément précis : un deal, un client, un
+            immeuble…) peuvent avoir leur propre dossier Drive. Les pages de
+            liste (kanban, tableau, dashboard) n'apparaissent pas ici — elles
+            ne contiennent pas un objet unique.
+          </p>
         </div>
         <button
           type="button"
@@ -1591,8 +1624,8 @@ function PageModulesSection() {
                     {p.pole}
                   </span>
                   <span
-                    className={`mt-0.5 text-[10px] ${
-                      selected ? "text-white/75" : "text-white/55"
+                    className={`mt-0.5 text-[10px] font-medium ${
+                      selected ? "text-white" : "text-white/70"
                     }`}
                   >
                     {p.total} page{p.total > 1 ? "s" : ""}, {p.active} active
@@ -1630,13 +1663,13 @@ function PageModulesSection() {
                         <Pencil className="h-3 w-3" />
                       </button>
                     </div>
-                    <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-white/55">
+                    <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-white/60">
                       {m.route ? (
                         <code className="font-mono">{m.route}</code>
                       ) : (
                         <code className="font-mono">{m.entity_type}</code>
                       )}
-                      <span className="text-white/35">·</span>
+                      <span className="text-white/40">·</span>
                       <span>
                         {m.linked_count} dossier
                         {m.linked_count > 1 ? "s" : ""} lié
@@ -1679,8 +1712,10 @@ function PageModulesSection() {
                 </div>
               ))
             ) : (
-              <p className="rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/50">
-                Aucune page pour ce pôle.
+              <p className="rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/60">
+                Aucune page de fiche dans ce pôle pour l'instant. Les pages de
+                fiche apparaissent ici automatiquement quand elles sont créées
+                dans Kratos.
               </p>
             )}
           </div>
