@@ -101,13 +101,18 @@ type ApplyResult = {
   drive_folder_url?: string | null;
 };
 
-// Phase 7 — module Drive par type de page entité.
+// Phase 7 — module Drive par type de page entité. Les champs pole /
+// label / route viennent du registry backend (seed) et alimentent la
+// navigation par pôle de la section Settings.
 type DrivePageModule = {
   id: number;
   entity_type: string;
   active: boolean;
   display_title?: string | null;
   display_order: number;
+  pole?: string | null;
+  label?: string | null;
+  route?: string | null;
   linked_count: number;
   created_at: string;
   updated_at: string;
@@ -261,15 +266,15 @@ export default function DriveSettingsPage() {
         {/* Sections restées placeholder pour Phases 4+ */}
         <PlaceholderSection
           icon={UploadCloud}
-          title="Auto-upload des PDFs Kratos"
-          description="Dépôt automatique dans Drive de chaque document généré par Kratos : fiches d'analyse, NDA signés, soumissions, offres PPTX, factures Dev logiciel."
-          phase="Phase 6"
+          title="Classement automatique des documents"
+          description="Quand Kratos génère un document (fiche d'analyse, soumission, contrat signé, NDA, facture…), il le dépose tout seul dans le bon dossier Drive. Plus besoin de classer à la main."
+          phase="Bientôt"
         />
         <PlaceholderSection
           icon={History}
-          title="Journal d'activité Drive"
-          description="Historique de toutes les actions Drive faites depuis Kratos : qui a uploadé / renommé / déplacé / supprimé quoi et quand, avec succès ou erreur."
-          phase="Phase 4+"
+          title="Historique des actions Drive"
+          description="Qui a uploadé, renommé, déplacé ou supprimé quoi, et quand — toutes les actions Drive faites depuis Kratos, avec leur résultat (succès ou erreur)."
+          phase="Bientôt"
         />
 
         {status && !status.server_configured ? (
@@ -618,18 +623,19 @@ function ConventionsSection() {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-base font-bold text-white">
-              Conventions de dossiers
+              Création automatique de dossiers
             </h2>
             <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
-              Phase 5 · auto actif
+              Actif
             </span>
           </div>
           <p className="mt-0.5 text-xs text-white/60">
-            Règles qui créent et lient automatiquement des dossiers Drive à
-            tes entités Kratos. Les conventions actives avec trigger
+            Crée automatiquement un dossier Drive bien rangé (avec ses
+            sous-dossiers) chaque fois que tu ajoutes un deal, un client, un
+            projet, etc. Une règle marquée
             <strong> Auto (création) </strong>
-            s&apos;appliquent dès la création d&apos;une entité ; les
-            conventions <strong>Manuel</strong> nécessitent le bouton « Tester ».
+            s&apos;applique dès qu&apos;une entité est ajoutée ; une règle
+            <strong> Manuel </strong> se déclenche avec le bouton « Tester ».
           </p>
         </div>
         <button
@@ -1375,24 +1381,21 @@ function ConventionTestModal({
 }
 
 // -----------------------------------------------------------------------------
-// Section « Sections Drive par page » (Phase 7)
+// Section « Afficher Drive sur les pages » (Phase 7) — navigation par pôle
 // -----------------------------------------------------------------------------
 
-// Libellés FR par type de page. Couvre aussi les types non gérés par
-// les conventions (DevlogSoumission, DevlogContract, Entreprise).
-const PAGE_MODULE_LABELS: Record<string, string> = {
-  ProspectionDeal: "Deal Pipeline (Prospection)",
-  DevlogClient: "Client Dev Logiciel",
-  DevlogProject: "Projet Dev Logiciel",
-  DevlogSoumission: "Soumission Dev Logiciel",
-  DevlogContract: "Contrat Dev Logiciel",
-  ConstructionProject: "Projet Construction",
-  ProspectionLead: "Lead Prospection",
-  Entreprise: "Entreprise"
-};
+// Libellé d'affichage d'un module : on privilégie le `label` du registry
+// backend, avec repli sur l'entity_type brut pour les modules legacy non
+// encore re-seedés.
+function moduleLabel(m: DrivePageModule): string {
+  return m?.label || m?.entity_type || "";
+}
 
-function moduleLabel(entityType: string): string {
-  return PAGE_MODULE_LABELS[entityType] || entityType;
+// Pôle d'un module, avec repli pour les modules sans métadonnées.
+const POLE_FALLBACK = "Autres";
+
+function modulePole(m: DrivePageModule): string {
+  return m?.pole || POLE_FALLBACK;
 }
 
 function PageModulesSection() {
@@ -1401,6 +1404,7 @@ function PageModulesSection() {
   const [error, setError] = useState<string | null>(null);
   const [savingType, setSavingType] = useState<string | null>(null);
   const [editing, setEditing] = useState<DrivePageModule | null>(null);
+  const [activePole, setActivePole] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -1421,6 +1425,36 @@ function PageModulesSection() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // Liste des pôles (ordre stable = ordre de display_order) + stats.
+  const poles = useMemo(() => {
+    const order: string[] = [];
+    const stats = new Map<string, { total: number; active: number }>();
+    for (const m of modules || []) {
+      const p = modulePole(m);
+      if (!stats.has(p)) {
+        stats.set(p, { total: 0, active: 0 });
+        order.push(p);
+      }
+      const s = stats.get(p)!;
+      s.total += 1;
+      if (m?.active) s.active += 1;
+    }
+    return order.map((p) => ({ pole: p, ...stats.get(p)! }));
+  }, [modules]);
+
+  // Sélectionne le 1er pôle par défaut une fois les données chargées.
+  useEffect(() => {
+    if (activePole === null && poles.length > 0) {
+      setActivePole(poles[0].pole);
+    }
+  }, [poles, activePole]);
+
+  const visibleModules = useMemo(
+    () =>
+      (modules || []).filter((m) => modulePole(m) === activePole),
+    [modules, activePole]
+  );
 
   async function patchModule(
     entityType: string,
@@ -1456,16 +1490,16 @@ function PageModulesSection() {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-base font-bold text-white">
-              Sections Drive par page
+              Afficher Drive sur les pages
             </h2>
             <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
-              Phase 7 · actif
+              Actif
             </span>
           </div>
           <p className="mt-0.5 text-xs text-white/60">
-            Active la section « Documents Drive » sur les fiches d&apos;un type
-            d&apos;entité. Une fois activée, chaque page de ce type affiche son
-            dossier Drive lié (ou un encart pour en lier un).
+            Choisis sur quelles pages de Kratos la section « Documents Drive »
+            apparaît. Organisé par pôle : sélectionne un pôle, puis active
+            Drive sur ses pages une à une.
           </p>
         </div>
         <button
@@ -1488,87 +1522,124 @@ function PageModulesSection() {
         <div className="mt-5 flex items-center gap-2 text-xs text-white/50">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
         </div>
-      ) : modules && modules.length > 0 ? (
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[680px] text-xs">
-            <thead className="text-left text-white/40">
-              <tr>
-                <th className="px-2 py-2">Type d&apos;entité</th>
-                <th className="px-2 py-2">Titre affiché</th>
-                <th className="px-2 py-2">Dossiers liés</th>
-                <th className="px-2 py-2 text-right">Statut · Actions</th>
-              </tr>
-            </thead>
-            <tbody className="text-white/80">
-              {modules.map((m) => (
-                <tr key={m.entity_type} className="border-t border-brand-800">
-                  <td className="px-2 py-2.5">
-                    <div className="font-medium text-white">
-                      {moduleLabel(m.entity_type)}
+      ) : poles.length > 0 ? (
+        <>
+          {/* Onglets par pôle */}
+          <div className="mt-4 flex flex-wrap gap-2">
+            {poles.map((p) => {
+              const selected = p.pole === activePole;
+              return (
+                <button
+                  key={p.pole}
+                  type="button"
+                  onClick={() => setActivePole(p.pole)}
+                  className={`flex flex-col items-start rounded-xl border px-3 py-2 text-left transition ${
+                    selected
+                      ? "border-accent-500/60 bg-accent-500/10"
+                      : "border-brand-800 bg-brand-950/40 hover:border-brand-700 hover:bg-white/5"
+                  }`}
+                >
+                  <span
+                    className={`text-xs font-semibold ${
+                      selected ? "text-white" : "text-white/70"
+                    }`}
+                  >
+                    {p.pole}
+                  </span>
+                  <span className="mt-0.5 text-[10px] text-white/45">
+                    {p.total} page{p.total > 1 ? "s" : ""}, {p.active} active
+                    {p.active > 1 ? "s" : ""}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Pages du pôle sélectionné */}
+          <div className="mt-4 space-y-2">
+            {visibleModules.length > 0 ? (
+              visibleModules.map((m) => (
+                <div
+                  key={m.entity_type}
+                  className="flex flex-wrap items-center gap-3 rounded-xl border border-brand-800 bg-brand-950/40 px-4 py-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium text-white">
+                        {moduleLabel(m)}
+                      </span>
+                      {m.display_title ? (
+                        <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/50">
+                          Titre : {m.display_title}
+                        </span>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => setEditing(m)}
+                        title="Éditer le titre affiché sur la page"
+                        className="rounded p-0.5 text-white/35 hover:bg-white/10 hover:text-white"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
                     </div>
-                    <span className="rounded bg-brand-950 px-1.5 py-0.5 font-mono text-[10px] text-white/50">
-                      {m.entity_type}
-                    </span>
-                  </td>
-                  <td className="px-2 py-2.5">
-                    <span className="text-white/70">
-                      {m.display_title || (
-                        <span className="text-white/35">Documents Drive</span>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-white/40">
+                      {m.route ? (
+                        <code className="font-mono">{m.route}</code>
+                      ) : (
+                        <code className="font-mono">{m.entity_type}</code>
                       )}
+                      <span className="text-white/25">·</span>
+                      <span>
+                        {m.linked_count} dossier
+                        {m.linked_count > 1 ? "s" : ""} lié
+                        {m.linked_count > 1 ? "s" : ""}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {savingType === m.entity_type ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-white/40" />
+                    ) : null}
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
+                        m.active
+                          ? "border border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                          : "border border-white/15 bg-white/5 text-white/40"
+                      }`}
+                    >
+                      {m.active ? "Activé" : "Inactif"}
                     </span>
                     <button
                       type="button"
-                      onClick={() => setEditing(m)}
-                      title="Éditer le titre"
-                      className="ml-1.5 rounded p-0.5 text-white/40 hover:bg-white/10 hover:text-white"
+                      onClick={() =>
+                        void patchModule(m.entity_type, {
+                          active: !m.active
+                        })
+                      }
+                      disabled={savingType === m.entity_type}
+                      className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50 ${
+                        m.active
+                          ? "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
+                          : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20"
+                      }`}
                     >
-                      <Pencil className="h-3 w-3" />
+                      <Power className="h-3 w-3" />
+                      {m.active ? "Désactiver" : "Activer"}
                     </button>
-                  </td>
-                  <td className="px-2 py-2.5 text-white/60">
-                    {m.linked_count}
-                  </td>
-                  <td className="px-2 py-2.5">
-                    <div className="flex items-center justify-end gap-2">
-                      {savingType === m.entity_type ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-white/40" />
-                      ) : null}
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
-                          m.active
-                            ? "border border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-                            : "border border-white/15 bg-white/5 text-white/40"
-                        }`}
-                      >
-                        {m.active ? "Activé" : "Inactif"}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void patchModule(m.entity_type, {
-                            active: !m.active
-                          })
-                        }
-                        disabled={savingType === m.entity_type}
-                        className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50 ${
-                          m.active
-                            ? "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
-                            : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20"
-                        }`}
-                      >
-                        <Power className="h-3 w-3" />
-                        {m.active ? "Désactiver" : "Activer"}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/50">
+                Aucune page pour ce pôle.
+              </p>
+            )}
+          </div>
+        </>
       ) : (
         <p className="mt-4 rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/50">
-          Aucun type de page configuré. Les modules sont créés au démarrage du
+          Aucune page configurée. Les modules sont créés au démarrage du
           serveur.
         </p>
       )}
@@ -1600,7 +1671,7 @@ function EditModuleTitleModal({
   const [busy, setBusy] = useState(false);
 
   return (
-    <Modal title={`Titre — ${moduleLabel(module.entity_type)}`} onClose={onClose}>
+    <Modal title={`Titre — ${moduleLabel(module)}`} onClose={onClose}>
       <p className="text-xs text-white/50">
         Titre affiché au-dessus du dossier Drive sur les fiches de ce type.
         Laisse vide pour utiliser « Documents Drive » par défaut.
@@ -1705,15 +1776,17 @@ function EntityLinksSection() {
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-base font-bold text-white">Liens enregistrés</h2>
+            <h2 className="text-base font-bold text-white">
+              Dossiers Drive liés
+            </h2>
             <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
-              Phase 4 · actif
+              Actif
             </span>
           </div>
           <p className="mt-0.5 text-xs text-white/60">
-            Vue d&apos;ensemble de toutes les liaisons entité Kratos ↔ dossier
-            Drive enregistrées. Tu peux supprimer un lien — le dossier Drive
-            reste intact.
+            La liste de toutes les entités Kratos (deals, clients, projets…)
+            reliées à un dossier Drive. Tu peux retirer un lien — le dossier
+            Drive lui-même reste intact.
           </p>
         </div>
       </header>

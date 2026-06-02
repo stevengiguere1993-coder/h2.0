@@ -905,6 +905,12 @@ async def init_db() -> None:
                 "financable_par_defaut",
                 "BOOLEAN",
             ),
+            # Drive page modules : registry par pôle (navigation Settings).
+            # Métadonnées seedées (cf. drive_page_modules_seed), nullables
+            # pour les modules auto-créés via PATCH.
+            ("drive_page_modules", "pole", "VARCHAR(64)"),
+            ("drive_page_modules", "label", "VARCHAR(128)"),
+            ("drive_page_modules", "route", "VARCHAR(256)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
