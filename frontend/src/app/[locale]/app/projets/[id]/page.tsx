@@ -17,6 +17,7 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -559,6 +560,10 @@ export default function ProjectDetailPage() {
               )}
             </div>
           </>
+        ) : null}
+
+        {p ? (
+          <EntityDriveSection entityType="ConstructionProject" entityId={id} />
         ) : null}
       </div>
 

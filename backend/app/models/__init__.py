@@ -47,6 +47,7 @@ from app.models.drive_audit_log import DriveAuditLog  # noqa: F401
 from app.models.drive_auto_upload import DriveAutoUpload  # noqa: F401
 from app.models.drive_convention import DriveConvention  # noqa: F401
 from app.models.drive_entity_link import DriveEntityLink  # noqa: F401
+from app.models.drive_page_module import DrivePageModule  # noqa: F401
 from app.models.drive_user_token import DriveUserToken  # noqa: F401
 from app.models.email_template import EmailTemplate
 from app.models.employe import Employe
@@ -262,6 +263,7 @@ __all__ = [
     "DriveAutoUpload",
     "DriveConvention",
     "DriveEntityLink",
+    "DrivePageModule",
     "DriveUserToken",
     "EmailTemplate",
     "Employe",

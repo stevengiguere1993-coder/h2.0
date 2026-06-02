@@ -35,6 +35,7 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useConfirm } from "@/components/confirm-dialog";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { authedFetch } from "@/lib/auth";
 import { useDevlogLayout } from "../../layout";
 import { Link } from "@/i18n/navigation";
@@ -591,6 +592,10 @@ export default function ContractDetailPage() {
             ) : null}
           </>
         )}
+
+        {contract ? (
+          <EntityDriveSection entityType="DevlogContract" entityId={id} />
+        ) : null}
       </div>
 
       {/* Modal "marquer dépôt payé" */}

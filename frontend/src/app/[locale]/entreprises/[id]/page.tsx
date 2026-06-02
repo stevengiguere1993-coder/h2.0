@@ -23,6 +23,7 @@ import { authedFetch } from "@/lib/auth";
 import { EntreprisesTopbar } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
 import { DriveButton } from "@/components/drive-button";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import {
   AssigneePicker,
   type TaskUserMini
@@ -557,6 +558,10 @@ export default function EntrepriseDetailPage() {
           }}
           onCreate={(status, name) => createTacheInline(status, name)}
         />
+
+        {ent ? (
+          <EntityDriveSection entityType="Entreprise" entityId={id} />
+        ) : null}
       </div>
 
       {moveTask ? (

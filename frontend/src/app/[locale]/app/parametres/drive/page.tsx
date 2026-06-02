@@ -9,12 +9,14 @@ import {
   ExternalLink,
   FolderCog,
   History,
+  LayoutGrid,
   Link2,
   Loader2,
   Pencil,
   Play,
   Plus,
   Power,
+  RefreshCw,
   Trash2,
   UploadCloud,
   X
@@ -97,6 +99,18 @@ type ApplyResult = {
   link: DriveEntityLink;
   subfolders_created: string[];
   drive_folder_url?: string | null;
+};
+
+// Phase 7 — module Drive par type de page entité.
+type DrivePageModule = {
+  id: number;
+  entity_type: string;
+  active: boolean;
+  display_title?: string | null;
+  display_order: number;
+  linked_count: number;
+  created_at: string;
+  updated_at: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -238,8 +252,10 @@ export default function DriveSettingsPage() {
 
         {status?.connected ? <DriveExplorerDemoSection /> : null}
 
-        {/* Phase 4 — section active : Conventions + Liens existants */}
+        {/* Phase 4 — section active : Conventions + Liens enregistrés */}
         {status?.connected ? <ConventionsSection /> : null}
+        {/* Phase 7 — activation de la section Drive par type de page */}
+        {status?.connected ? <PageModulesSection /> : null}
         {status?.connected ? <EntityLinksSection /> : null}
 
         {/* Sections restées placeholder pour Phases 4+ */}
@@ -1359,7 +1375,272 @@ function ConventionTestModal({
 }
 
 // -----------------------------------------------------------------------------
-// Section « Liens existants »
+// Section « Sections Drive par page » (Phase 7)
+// -----------------------------------------------------------------------------
+
+// Libellés FR par type de page. Couvre aussi les types non gérés par
+// les conventions (DevlogSoumission, DevlogContract, Entreprise).
+const PAGE_MODULE_LABELS: Record<string, string> = {
+  ProspectionDeal: "Deal Pipeline (Prospection)",
+  DevlogClient: "Client Dev Logiciel",
+  DevlogProject: "Projet Dev Logiciel",
+  DevlogSoumission: "Soumission Dev Logiciel",
+  DevlogContract: "Contrat Dev Logiciel",
+  ConstructionProject: "Projet Construction",
+  ProspectionLead: "Lead Prospection",
+  Entreprise: "Entreprise"
+};
+
+function moduleLabel(entityType: string): string {
+  return PAGE_MODULE_LABELS[entityType] || entityType;
+}
+
+function PageModulesSection() {
+  const [modules, setModules] = useState<DrivePageModule[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [savingType, setSavingType] = useState<string | null>(null);
+  const [editing, setEditing] = useState<DrivePageModule | null>(null);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await authedFetch("/api/v1/drive/page-modules");
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      const json = await res.json();
+      setModules(Array.isArray(json) ? (json as DrivePageModule[]) : []);
+    } catch (e) {
+      setError(`Chargement échoué : ${(e as Error)?.message}`);
+      setModules([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  async function patchModule(
+    entityType: string,
+    body: { active?: boolean; display_title?: string }
+  ) {
+    setSavingType(entityType);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/drive/page-modules/${encodeURIComponent(entityType)}`,
+        { method: "PATCH", body: JSON.stringify(body) }
+      );
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      const updated = (await res.json()) as DrivePageModule;
+      setModules((prev) =>
+        (prev || []).map((m) =>
+          m.entity_type === entityType ? { ...m, ...updated } : m
+        )
+      );
+    } catch (e) {
+      setError(`Mise à jour échouée : ${(e as Error)?.message}`);
+    } finally {
+      setSavingType(null);
+    }
+  }
+
+  return (
+    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <header className="flex flex-wrap items-start gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
+          <LayoutGrid className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-base font-bold text-white">
+              Sections Drive par page
+            </h2>
+            <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
+              Phase 7 · actif
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs text-white/60">
+            Active la section « Documents Drive » sur les fiches d&apos;un type
+            d&apos;entité. Une fois activée, chaque page de ce type affiche son
+            dossier Drive lié (ou un encart pour en lier un).
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void reload()}
+          title="Rafraîchir"
+          className="rounded-lg border border-brand-800 p-1.5 text-white/50 hover:bg-white/5 hover:text-white"
+        >
+          <RefreshCw className="h-4 w-4" />
+        </button>
+      </header>
+
+      {error ? (
+        <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {error}
+        </p>
+      ) : null}
+
+      {loading ? (
+        <div className="mt-5 flex items-center gap-2 text-xs text-white/50">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+        </div>
+      ) : modules && modules.length > 0 ? (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[680px] text-xs">
+            <thead className="text-left text-white/40">
+              <tr>
+                <th className="px-2 py-2">Type d&apos;entité</th>
+                <th className="px-2 py-2">Titre affiché</th>
+                <th className="px-2 py-2">Dossiers liés</th>
+                <th className="px-2 py-2 text-right">Statut · Actions</th>
+              </tr>
+            </thead>
+            <tbody className="text-white/80">
+              {modules.map((m) => (
+                <tr key={m.entity_type} className="border-t border-brand-800">
+                  <td className="px-2 py-2.5">
+                    <div className="font-medium text-white">
+                      {moduleLabel(m.entity_type)}
+                    </div>
+                    <span className="rounded bg-brand-950 px-1.5 py-0.5 font-mono text-[10px] text-white/50">
+                      {m.entity_type}
+                    </span>
+                  </td>
+                  <td className="px-2 py-2.5">
+                    <span className="text-white/70">
+                      {m.display_title || (
+                        <span className="text-white/35">Documents Drive</span>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setEditing(m)}
+                      title="Éditer le titre"
+                      className="ml-1.5 rounded p-0.5 text-white/40 hover:bg-white/10 hover:text-white"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  </td>
+                  <td className="px-2 py-2.5 text-white/60">
+                    {m.linked_count}
+                  </td>
+                  <td className="px-2 py-2.5">
+                    <div className="flex items-center justify-end gap-2">
+                      {savingType === m.entity_type ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-white/40" />
+                      ) : null}
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
+                          m.active
+                            ? "border border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                            : "border border-white/15 bg-white/5 text-white/40"
+                        }`}
+                      >
+                        {m.active ? "Activé" : "Inactif"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void patchModule(m.entity_type, {
+                            active: !m.active
+                          })
+                        }
+                        disabled={savingType === m.entity_type}
+                        className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50 ${
+                          m.active
+                            ? "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
+                            : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20"
+                        }`}
+                      >
+                        <Power className="h-3 w-3" />
+                        {m.active ? "Désactiver" : "Activer"}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="mt-4 rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/50">
+          Aucun type de page configuré. Les modules sont créés au démarrage du
+          serveur.
+        </p>
+      )}
+
+      {editing ? (
+        <EditModuleTitleModal
+          module={editing}
+          onClose={() => setEditing(null)}
+          onSave={async (title) => {
+            await patchModule(editing.entity_type, { display_title: title });
+            setEditing(null);
+          }}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function EditModuleTitleModal({
+  module,
+  onClose,
+  onSave
+}: {
+  module: DrivePageModule;
+  onClose: () => void;
+  onSave: (title: string) => void;
+}) {
+  const [title, setTitle] = useState(module.display_title || "");
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <Modal title={`Titre — ${moduleLabel(module.entity_type)}`} onClose={onClose}>
+      <p className="text-xs text-white/50">
+        Titre affiché au-dessus du dossier Drive sur les fiches de ce type.
+        Laisse vide pour utiliser « Documents Drive » par défaut.
+      </p>
+      <input
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        placeholder="Documents Drive"
+        maxLength={128}
+        className="mt-3 w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white placeholder-white/30"
+        autoFocus
+      />
+      <div className="mt-5 flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={busy}
+          className="rounded-lg border border-brand-700 px-3 py-1.5 text-sm text-white/70 hover:bg-white/5 disabled:opacity-50"
+        >
+          Annuler
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setBusy(true);
+            onSave(title.trim());
+          }}
+          disabled={busy}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-400 disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+          Enregistrer
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Section « Liens enregistrés »
 // -----------------------------------------------------------------------------
 
 function EntityLinksSection() {
@@ -1424,7 +1705,7 @@ function EntityLinksSection() {
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-base font-bold text-white">Liens existants</h2>
+            <h2 className="text-base font-bold text-white">Liens enregistrés</h2>
             <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
               Phase 4 · actif
             </span>

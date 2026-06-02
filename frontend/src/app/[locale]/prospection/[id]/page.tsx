@@ -29,6 +29,7 @@ import { authedFetch } from "@/lib/auth";
 import { useProspectionLayout } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
 import { DriveButton } from "@/components/drive-button";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { CallButton } from "@/components/call-button";
 import { CommunicationsTimeline } from "@/components/communications-timeline";
 import { ActivityTimeline } from "./_activity-timeline";
@@ -1541,6 +1542,10 @@ export default function ProspectionDetailPage() {
             </div>
           </div>
         )}
+
+        {lead ? (
+          <EntityDriveSection entityType="ProspectionLead" entityId={id} />
+        ) : null}
       </div>
     </>
   );
