@@ -63,6 +63,14 @@ class DrivePageModulePatch(BaseModel):
     active: Optional[bool] = None
     display_title: Optional[str] = Field(default=None, max_length=128)
     display_order: Optional[int] = Field(default=None, ge=0)
+    # Métadonnées du registry (auto-enregistrement depuis
+    # <EntityDriveSection>). Permettent à toute nouvelle page câblée
+    # d'apparaître dans Settings sans éditer le seed. PATCH partiel : on
+    # ne les écrit que si fournies, sans jamais toucher active /
+    # display_title.
+    pole: Optional[str] = Field(default=None, max_length=64)
+    label: Optional[str] = Field(default=None, max_length=128)
+    route: Optional[str] = Field(default=None, max_length=256)
 
 
 class DrivePageModuleCreate(BaseModel):

@@ -463,7 +463,13 @@ export default function EntrepriseDetailPage() {
 
         {/* Documents Drive de l'entreprise (juste après le briefing IA) */}
         {ent ? (
-          <EntityDriveSection entityType="Entreprise" entityId={id} />
+          <EntityDriveSection
+            entityType="Entreprise"
+            entityId={id}
+            pole="Gestion d'entreprises"
+            label="Entreprise"
+            route="/entreprises/[id]"
+          />
         ) : null}
 
         {/* Lien rapide vers les rencontres tagguées sur cette entreprise */}

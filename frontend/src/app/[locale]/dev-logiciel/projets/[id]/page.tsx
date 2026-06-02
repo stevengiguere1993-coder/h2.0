@@ -472,7 +472,13 @@ export default function ProjectDetailPage() {
 
             {/* Documents Drive (en haut, sous le header, avant les onglets) */}
             {p ? (
-              <EntityDriveSection entityType="DevlogProject" entityId={id} />
+              <EntityDriveSection
+                entityType="DevlogProject"
+                entityId={id}
+                pole="Développement logiciel"
+                label="Projet"
+                route="/dev-logiciel/projets/[id]"
+              />
             ) : null}
 
             {error ? (

@@ -453,7 +453,13 @@ export default function ContractDetailPage() {
             </header>
 
             {/* Documents Drive (en haut, sous le header) */}
-            <EntityDriveSection entityType="DevlogContract" entityId={id} />
+            <EntityDriveSection
+              entityType="DevlogContract"
+              entityId={id}
+              pole="Développement logiciel"
+              label="Contrat"
+              route="/dev-logiciel/contrats/[id]"
+            />
 
             {/* Métadonnées éditables */}
             <section className="mb-5 grid grid-cols-1 gap-4 rounded-xl border border-brand-800 bg-brand-900/60 p-4 sm:grid-cols-2 lg:grid-cols-3">

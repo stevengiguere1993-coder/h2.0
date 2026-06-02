@@ -141,7 +141,15 @@ async def patch_page_module(
     user: RequireAdminOrOwner,
     payload: DrivePageModulePatch = Body(...),
 ) -> DrivePageModuleRead:
-    """Upsert : met à jour les champs présents, crée la ligne si absente."""
+    """Upsert : met à jour les champs présents, crée la ligne si absente.
+
+    Accepte aussi les métadonnées du registry (``pole`` / ``label`` /
+    ``route``) pour l'auto-enregistrement déclenché par
+    ``<EntityDriveSection>``. PATCH partiel strict : seuls les champs
+    fournis sont écrits, et uniquement s'ils diffèrent de la valeur
+    courante. Si la ligne existait déjà et que rien ne change, l'endpoint
+    n'écrit ni ne logge rien (idempotent, pas de spam d'audit log).
+    """
     stmt = select(DrivePageModule).where(
         DrivePageModule.entity_type == entity_type
     )
@@ -168,6 +176,37 @@ async def patch_page_module(
     if payload.display_order is not None:
         module.display_order = payload.display_order
         changes["display_order"] = payload.display_order
+
+    # Métadonnées du registry (auto-enregistrement depuis le composant).
+    # PATCH partiel STRICT : on n'écrit que si fourni ET différent, pour
+    # ne jamais polluer l'audit log à chaque visite de page. On ne touche
+    # ni `active` ni `display_title` ici (ils ont leur propre branche).
+    if payload.pole is not None:
+        new_pole = payload.pole.strip() or None
+        if module.pole != new_pole:
+            module.pole = new_pole
+            changes["pole"] = new_pole
+    if payload.label is not None:
+        new_label = payload.label.strip() or None
+        if module.label != new_label:
+            module.label = new_label
+            changes["label"] = new_label
+    if payload.route is not None:
+        new_route = payload.route.strip() or None
+        if module.route != new_route:
+            module.route = new_route
+            changes["route"] = new_route
+
+    # Anti-spam : si la ligne existait déjà et qu'aucune valeur n'a changé,
+    # on n'écrit rien et on ne logge rien (PATCH idempotent silencieux).
+    # Les visites répétées d'une page câblée ne polluent pas l'audit log.
+    if not created and not changes:
+        read = DrivePageModuleRead.model_validate(module)
+        count_stmt = select(func.count(DriveEntityLink.id)).where(
+            DriveEntityLink.entity_type == entity_type
+        )
+        read.linked_count = int((await db.execute(count_stmt)).scalar() or 0)
+        return read
 
     await db.flush()
     await log_action(
