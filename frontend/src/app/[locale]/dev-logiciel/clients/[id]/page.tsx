@@ -47,6 +47,7 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { Link } from "@/i18n/navigation";
 import { useDevlogLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -639,6 +640,10 @@ function ClientAccount({
             <SourceLeadPanel lead={source_lead} clientLeadId={client.converted_from_lead_id} />
           </CollapsibleSection>
         </section>
+      ) : null}
+
+      {client?.id ? (
+        <EntityDriveSection entityType="DevlogClient" entityId={client.id} />
       ) : null}
     </>
   );

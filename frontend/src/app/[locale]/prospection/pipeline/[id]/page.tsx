@@ -9,6 +9,7 @@ import { authedFetch } from "@/lib/auth";
 import { Link, useRouter } from "@/i18n/navigation";
 import { useConfirm } from "@/components/confirm-dialog";
 import { DriveButton } from "@/components/drive-button";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { LeadAnalysisSummary } from "@/components/lead-analysis-summary";
 import { LeadAnalysisDetailModal } from "@/components/leads/LeadAnalysisDetailModal";
 import { NDASection } from "@/components/nda-section";
@@ -453,6 +454,10 @@ export default function DealDetailPage() {
           }}
           onCreate={(status, name) => createTask(status, name)}
         />
+
+        {deal ? (
+          <EntityDriveSection entityType="ProspectionDeal" entityId={dealId} />
+        ) : null}
       </div>
 
       {moveTask ? (

@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { useDevlogLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -1021,6 +1022,10 @@ export default function SoumissionDetailPage() {
             )}
           </>
         )}
+
+        {s ? (
+          <EntityDriveSection entityType="DevlogSoumission" entityId={id} />
+        ) : null}
       </div>
     </>
   );

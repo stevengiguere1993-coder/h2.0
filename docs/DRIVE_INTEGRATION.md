@@ -735,3 +735,124 @@ devient bloquante.
 
 Phase 5 = hooks `created` + `status_changed` branchés sur les
 endpoints principaux, best-effort, audit log complet.
+
+---
+
+## Phase 7 — Sections Drive sur les pages d'entités
+
+Objectif : afficher le dossier Drive d'une entité **directement sur sa
+fiche** (page deal, client, projet, soumission, contrat, etc.) au lieu
+de devoir passer par `/parametres/drive`. Phil active chaque type de
+page via un toggle dans les paramètres ; tant qu'un type n'est pas
+activé, sa section reste totalement invisible.
+
+### Architecture
+
+**Composant générique `<EntityDriveSection>`**
+(`frontend/src/components/drive/EntityDriveSection.tsx`)
+
+Props : `{ entityType: string; entityId: number; title?: string;
+className?: string }`. Déposé en bas de chaque page d'entité. 100 %
+autonome et défensif — ne crash jamais la page hôte.
+
+Flux :
+
+1. `GET /api/v1/drive/page-modules/{entityType}/status`
+   → `{active, display_title, has_convention}`.
+2. Si `active === false` → le composant **ne rend rien** (même pas un
+   titre). Le pré-câblage est donc invisible tant que Phil n'a pas
+   activé le type.
+3. Si actif → `GET /api/v1/drive/entity-links?entity_type=X&entity_id=Y`.
+   - Lien existant → titre + `<DriveFolderExplorer folderId=...>`
+     (réutilise le composant Phase 3).
+   - Aucun lien → encart "Cette entité n'a pas encore de dossier Drive
+     lié" + 2 boutons :
+     - **Lier un dossier existant** → modale (saisie de l'ID Drive) →
+       `POST /api/v1/drive/entity-links`.
+     - **Créer auto via convention** → visible seulement si une
+       convention active existe pour le type → `POST
+       /api/v1/drive/conventions/{id}/apply`.
+
+États gérés : loading (skeleton), 401 (encart "Drive non connecté" +
+lien vers Paramètres), erreur réseau (bouton Réessayer).
+
+**Table `drive_page_modules`**
+(`backend/app/models/drive_page_module.py`)
+
+Une ligne par `entity_type` : `active` (défaut False), `display_title`
+(nullable → "Documents Drive" par défaut), `display_order`,
+`created_at`, `updated_at`, `created_by_user_id`. Créée au boot via
+`Base.metadata.create_all` (import dans `models/__init__.py`).
+
+**Endpoints**
+(`backend/app/api/v1/endpoints/drive_page_modules.py`, admin/owner)
+
+- `GET   /api/v1/drive/page-modules` — liste + stat `linked_count`
+  (nb `DriveEntityLink` par type).
+- `GET   /api/v1/drive/page-modules/{entity_type}/status` — statut
+  minimal consommé par le composant. Si la ligne n'existe pas →
+  `{active: false}` (jamais un 404).
+- `PATCH /api/v1/drive/page-modules/{entity_type}` — upsert du toggle
+  et/ou du titre (auto-crée la ligne si absente). Audit log.
+- `POST  /api/v1/drive/page-modules` — création explicite. Audit log.
+
+**Seed au boot** (`backend/app/services/drive_page_modules_seed.py`,
+idempotent) : 1 ligne `active=False` par type :
+`ProspectionDeal`, `DevlogClient`, `DevlogProject`, `DevlogSoumission`,
+`DevlogContract`, `ConstructionProject`, `ProspectionLead`,
+`Entreprise`.
+
+### UI Settings
+
+Sur `/parametres/drive`, deux sections distinctes :
+
+1. **Sections Drive par page** (Phase 7) : tableau
+   (Type entité | Titre affiché | Dossiers liés | Statut + Actions)
+   avec un toggle Activer/Désactiver par ligne (PATCH) et un bouton
+   crayon pour éditer le titre affiché. Bouton refresh pour
+   recharger les stats.
+2. **Liens enregistrés** (ex « Liens existants » Phase 4) : la liste
+   brute des `DriveEntityLink`, juste re-titrée.
+
+### Pages câblées
+
+| Page | entity_type |
+|---|---|
+| `prospection/pipeline/[id]/page.tsx` | `ProspectionDeal` |
+| `dev-logiciel/clients/[id]/page.tsx` | `DevlogClient` |
+| `dev-logiciel/projets/[id]/page.tsx` | `DevlogProject` |
+| `dev-logiciel/soumissions/[id]/page.tsx` | `DevlogSoumission` |
+| `dev-logiciel/contrats/[id]/page.tsx` | `DevlogContract` |
+| `app/projets/[id]/page.tsx` (Construction) | `ConstructionProject` |
+| `prospection/[id]/page.tsx` (lead drive-by) | `ProspectionLead` |
+| `entreprises/[id]/page.tsx` | `Entreprise` |
+
+> Note : `DevlogSoumission`, `DevlogContract` et `Entreprise` n'ont pas
+> (encore) de convention dans le registry du moteur Phase 4 — sur ces
+> pages, seul le bouton « Lier un dossier existant » s'affiche tant
+> qu'aucune convention n'est créée pour ces types.
+
+### Câbler une nouvelle page (procédure, 5-10 min)
+
+1. **Backend** : ajouter l'`entity_type` à la liste `_DEFAULT_MODULES`
+   dans `backend/app/services/drive_page_modules_seed.py` (le seed le
+   créera inactif au prochain boot). Optionnel : ajouter un libellé FR
+   dans `PAGE_MODULE_LABELS` (page Settings) pour un tableau lisible.
+2. **Frontend** : sur la page cible, importer le composant
+   (`import { EntityDriveSection } from
+   "@/components/drive/EntityDriveSection";`) et déposer
+   `<EntityDriveSection entityType="MonType" entityId={obj.id} />`
+   vers la fin du contenu (avant les modales/footer), gardé par
+   l'objet chargé (`{obj ? <EntityDriveSection .../> : null}`).
+3. **Activer** : aller dans `/parametres/drive` > « Sections Drive par
+   page » > toggle « Activer » sur la ligne du type.
+
+Aucune migration ni redéploiement spécial : le composant reste
+invisible tant que le toggle n'est pas activé, donc le pré-câblage est
+sans risque.
+
+### Limites Phase 7
+
+- Une seule section Drive par page (pas de multi-dossiers).
+- Pas de personnalisation au-delà du titre affiché.
+- Pas d'auto-upload des PDFs Kratos (Phase 6).

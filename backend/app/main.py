@@ -76,6 +76,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:
         logger.warning("drive_conventions seed failed: %s", exc)
 
+    # Drive Page Modules — seeder idempotent Phase 7. Crée une ligne
+    # inactive par type de page (ProspectionDeal, DevlogClient, ...) si
+    # absente. Phil active chaque section Drive via /parametres/drive.
+    # Best-effort silencieux.
+    try:
+        from app.db.session import AsyncSessionLocal as _DrivePageSeedSession
+        from app.services.drive_page_modules_seed import (
+            seed_default_drive_page_modules,
+        )
+
+        async with _DrivePageSeedSession() as session:
+            n = await seed_default_drive_page_modules(session)
+            if n:
+                logger.info(
+                    "Drive page modules seed: %d module(s) cree(s)",
+                    n,
+                )
+    except Exception as exc:
+        logger.warning("drive_page_modules seed failed: %s", exc)
+
     # Téléphonie — auto-bootstrap Twilio : si les credentials et le
     # numéro sont configurés en env, on s'assure que la ligne existe en
     # DB et que le webhook URL pointe sur ce backend. Idempotent ;
