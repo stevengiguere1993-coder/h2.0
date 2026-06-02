@@ -983,7 +983,13 @@ export default function SoumissionDetailPage() {
             </header>
 
             {/* Documents Drive (en haut, sous le header) */}
-            <EntityDriveSection entityType="DevlogSoumission" entityId={id} />
+            <EntityDriveSection
+              entityType="DevlogSoumission"
+              entityId={id}
+              pole="Développement logiciel"
+              label="Soumission"
+              route="/dev-logiciel/soumissions/[id]"
+            />
 
             {/* Encadré client (fix #6) — toujours visible en haut sous le
                 header, qu'on soit en vue propriétaire ou client. */}

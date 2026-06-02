@@ -507,7 +507,13 @@ function ClientAccount({
 
       {/* ------------------------- Documents Drive (en haut, sous le header) ------------------------- */}
       {client?.id ? (
-        <EntityDriveSection entityType="DevlogClient" entityId={client.id} />
+        <EntityDriveSection
+          entityType="DevlogClient"
+          entityId={client.id}
+          pole="Développement logiciel"
+          label="Client"
+          route="/dev-logiciel/clients/[id]"
+        />
       ) : null}
 
       {/* ------------------------- KPI cards ------------------------- */}

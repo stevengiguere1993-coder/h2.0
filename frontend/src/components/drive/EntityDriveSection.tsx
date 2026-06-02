@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 
 import { DriveFolderExplorer } from "@/components/drive/DriveFolderExplorer";
+import { DriveFolderPicker } from "@/components/drive/DriveFolderPicker";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 
@@ -74,6 +75,17 @@ export type EntityDriveSectionProps = {
   title?: string;
   /** Classes additionnelles pour le wrapper <section>. */
   className?: string;
+  /**
+   * Métadonnées d'auto-enregistrement (optionnelles). Quand `pole` ET
+   * `label` sont fournis, le composant enregistre automatiquement son
+   * type dans le registry des Page Modules (upsert best-effort), de sorte
+   * que toute nouvelle page câblée apparaisse dans Paramètres > Drive sans
+   * édition manuelle d'un seed. L'upsert ne touche JAMAIS `active` ni
+   * `display_title` (config utilisateur préservée).
+   */
+  pole?: string;
+  label?: string;
+  route?: string;
 };
 
 type LoadState = "loading" | "disabled" | "ready" | "oauth" | "error";
@@ -82,14 +94,19 @@ export function EntityDriveSection({
   entityType,
   entityId,
   title,
-  className
+  className,
+  pole,
+  label,
+  route
 }: EntityDriveSectionProps) {
   const [state, setState] = useState<LoadState>("loading");
   const [status, setStatus] = useState<PageModuleStatus | null>(null);
   const [link, setLink] = useState<DriveEntityLink | null>(null);
   const [convention, setConvention] = useState<DriveConvention | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
-  const [showLinkModal, setShowLinkModal] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
+  const [showManualModal, setShowManualModal] = useState(false);
+  const [linking, setLinking] = useState(false);
   const [creatingAuto, setCreatingAuto] = useState(false);
 
   const validEntity =
@@ -179,6 +196,102 @@ export function EntityDriveSection({
   useEffect(() => {
     void load();
   }, [load]);
+
+  // -------------------------------------------------------------------------
+  // Auto-enregistrement (best-effort) — Phase 7.5.
+  //
+  // Quand `pole` ET `label` sont fournis, on inscrit ce type d'entité dans le
+  // registry des Page Modules via un PATCH partiel (upsert) : crée la ligne
+  // *inactive* si absente, ou met à jour SEULEMENT les métadonnées
+  // (pole/label/route) si elle existe. On ne touche jamais `active` ni
+  // `display_title`. Résultat : toute nouvelle page câblée apparaît
+  // automatiquement dans Paramètres > Drive, sans éditer un seed.
+  //
+  // Anti-spam : on ne déclenche l'upsert qu'une fois par type et par session
+  // navigateur (sessionStorage). Couplé au PATCH backend qui ne logge que sur
+  // changement réel, l'audit log n'est jamais pollué par les visites de page.
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    if (!entityType || !pole || !label) return;
+    if (typeof window === "undefined") return;
+
+    const guardKey = `kratos.drivePageModule.registered.${entityType}`;
+    try {
+      if (window.sessionStorage.getItem(guardKey) === "1") return;
+    } catch {
+      // sessionStorage indisponible → on tente quand même (idempotent côté
+      // backend), mais sans guard.
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await authedFetch(
+          `/api/v1/drive/page-modules/${encodeURIComponent(entityType)}`,
+          {
+            method: "PATCH",
+            body: JSON.stringify({
+              pole,
+              label,
+              route: route ?? null
+            })
+          }
+        );
+        // 401 (OAuth) ou autres erreurs : silencieux, on n'altère rien.
+        if (!cancelled && res.ok) {
+          try {
+            window.sessionStorage.setItem(guardKey, "1");
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch {
+        // Best-effort : un échec ne casse jamais la page hôte.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [entityType, pole, label, route]);
+
+  // -------------------------------------------------------------------------
+  // Liaison d'un dossier (commune au picker visuel et à la saisie manuelle).
+  // -------------------------------------------------------------------------
+  const linkFolder = useCallback(
+    async (driveFolderId: string, driveFolderName?: string | null) => {
+      const cleaned = (driveFolderId || "").trim();
+      if (!cleaned) {
+        setErrMsg("Aucun dossier sélectionné.");
+        return false;
+      }
+      setLinking(true);
+      setErrMsg(null);
+      try {
+        const res = await authedFetch("/api/v1/drive/entity-links", {
+          method: "POST",
+          body: JSON.stringify({
+            entity_type: entityType,
+            entity_id: entityId,
+            drive_folder_id: cleaned,
+            drive_folder_name: (driveFolderName || "").trim() || null
+          })
+        });
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(txt || `http_${res.status}`);
+        }
+        await load();
+        return true;
+      } catch (e) {
+        setErrMsg((e as Error)?.message || "Liaison échouée.");
+        return false;
+      } finally {
+        setLinking(false);
+      }
+    },
+    [entityType, entityId, load]
+  );
 
   // --- États qui ne rendent rien (section invisible) -----------------
   if (state === "disabled") return null;
@@ -276,7 +389,9 @@ export function EntityDriveSection({
           entityType={entityType}
           convention={convention}
           creatingAuto={creatingAuto}
-          onLinkExisting={() => setShowLinkModal(true)}
+          linking={linking}
+          onLinkExisting={() => setShowPicker(true)}
+          onLinkManual={() => setShowManualModal(true)}
           onCreateAuto={async () => {
             if (!convention) return;
             setCreatingAuto(true);
@@ -312,14 +427,24 @@ export function EntityDriveSection({
         </p>
       ) : null}
 
-      {showLinkModal ? (
-        <LinkFolderModal
-          entityType={entityType}
-          entityId={entityId}
-          onClose={() => setShowLinkModal(false)}
-          onLinked={async () => {
-            setShowLinkModal(false);
-            await load();
+      {/* Sélecteur visuel de dossier Drive (picker plein écran). */}
+      <DriveFolderPicker
+        open={showPicker}
+        onClose={() => setShowPicker(false)}
+        onSelect={async (folderId, folderName) => {
+          setShowPicker(false);
+          await linkFolder(folderId, folderName);
+        }}
+      />
+
+      {/* Repli : saisie manuelle d'un ID de dossier. */}
+      {showManualModal ? (
+        <ManualLinkModal
+          busy={linking}
+          onClose={() => setShowManualModal(false)}
+          onSubmit={async (folderId, folderName) => {
+            const ok = await linkFolder(folderId, folderName);
+            if (ok) setShowManualModal(false);
           }}
         />
       ) : null}
@@ -355,13 +480,17 @@ function NoLinkCard({
   entityType,
   convention,
   creatingAuto,
+  linking,
   onLinkExisting,
+  onLinkManual,
   onCreateAuto
 }: {
   entityType: string;
   convention: DriveConvention | null;
   creatingAuto: boolean;
+  linking: boolean;
   onLinkExisting: () => void;
+  onLinkManual: () => void;
   onCreateAuto: () => void;
 }) {
   return (
@@ -373,9 +502,15 @@ function NoLinkCard({
         <button
           type="button"
           onClick={onLinkExisting}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs font-semibold text-white hover:border-accent-500/50 hover:bg-accent-500/10"
+          disabled={linking}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3 py-1.5 text-xs font-semibold text-white hover:border-accent-500/50 hover:bg-accent-500/10 disabled:opacity-50"
         >
-          <Link2 className="h-3.5 w-3.5" /> Lier un dossier existant
+          {linking ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Link2 className="h-3.5 w-3.5" />
+          )}
+          Lier un dossier existant
         </button>
         {convention ? (
           <button
@@ -394,8 +529,16 @@ function NoLinkCard({
           </button>
         ) : null}
       </div>
+      <button
+        type="button"
+        onClick={onLinkManual}
+        disabled={linking}
+        className="mt-3 text-[11px] text-white/45 underline-offset-2 hover:text-white/70 hover:underline disabled:opacity-50"
+      >
+        Ou saisir un ID de dossier manuellement
+      </button>
       {!convention ? (
-        <p className="mt-3 text-[11px] text-white/35">
+        <p className="mt-3 text-[11px] text-white/40">
           Astuce : configure une convention pour « {entityType} » dans
           Paramètres &gt; Drive pour activer la création automatique.
         </p>
@@ -404,50 +547,33 @@ function NoLinkCard({
   );
 }
 
-function LinkFolderModal({
-  entityType,
-  entityId,
+/**
+ * Modale de repli : saisie manuelle d'un ID de dossier Drive. Le chemin
+ * principal est désormais le <DriveFolderPicker> visuel ; cette modale reste
+ * disponible pour coller un ID directement (cas avancés / dossiers partagés
+ * non visibles dans l'arbo).
+ */
+function ManualLinkModal({
+  busy,
   onClose,
-  onLinked
+  onSubmit
 }: {
-  entityType: string;
-  entityId: number;
+  busy: boolean;
   onClose: () => void;
-  onLinked: () => void;
+  onSubmit: (folderId: string, folderName: string) => void;
 }) {
   const [folderId, setFolderId] = useState("");
   const [folderName, setFolderName] = useState("");
-  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  async function submit() {
+  function submit() {
     const cleaned = folderId.trim();
     if (!cleaned) {
       setErr("Indique l'ID du dossier Drive.");
       return;
     }
-    setBusy(true);
     setErr(null);
-    try {
-      const res = await authedFetch("/api/v1/drive/entity-links", {
-        method: "POST",
-        body: JSON.stringify({
-          entity_type: entityType,
-          entity_id: entityId,
-          drive_folder_id: cleaned,
-          drive_folder_name: folderName.trim() || null
-        })
-      });
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt || `http_${res.status}`);
-      }
-      onLinked();
-    } catch (e) {
-      setErr((e as Error)?.message || "Liaison échouée.");
-    } finally {
-      setBusy(false);
-    }
+    onSubmit(cleaned, folderName.trim());
   }
 
   return (
@@ -465,7 +591,7 @@ function LinkFolderModal({
               <FolderPlus className="h-4.5 w-4.5" />
             </span>
             <h3 className="text-base font-bold text-white">
-              Lier un dossier Drive
+              Lier un dossier par ID
             </h3>
           </div>
           <button
@@ -478,10 +604,10 @@ function LinkFolderModal({
           </button>
         </div>
 
-        <p className="mt-2 text-xs text-white/50">
+        <p className="mt-2 text-xs text-white/55">
           Colle l&apos;ID du dossier Google Drive à rattacher à cette fiche.
           On le trouve dans l&apos;URL Drive :{" "}
-          <code className="font-mono text-white/70">
+          <code className="font-mono text-white/75">
             drive.google.com/drive/folders/<b>ID</b>
           </code>
           .
@@ -525,7 +651,7 @@ function LinkFolderModal({
           </button>
           <button
             type="button"
-            onClick={() => void submit()}
+            onClick={submit}
             disabled={busy}
             className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-400 disabled:opacity-50"
           >

@@ -633,7 +633,13 @@ export default function ProspectionDetailPage() {
 
         {/* Documents Drive du lead (tout en haut, sous le header) */}
         {lead ? (
-          <EntityDriveSection entityType="ProspectionLead" entityId={id} />
+          <EntityDriveSection
+            entityType="ProspectionLead"
+            entityId={id}
+            pole="Prospection"
+            label="Lead"
+            route="/prospection/[id]"
+          />
         ) : null}
 
         {lead ? (

@@ -402,7 +402,13 @@ export default function DealDetailPage() {
         {/* Documents Drive du deal (après le résumé d'analyse s'il existe,
             sinon en haut sous le header) */}
         {deal ? (
-          <EntityDriveSection entityType="ProspectionDeal" entityId={dealId} />
+          <EntityDriveSection
+            entityType="ProspectionDeal"
+            entityId={dealId}
+            pole="Prospection"
+            label="Deal Pipeline"
+            route="/prospection/pipeline/[id]"
+          />
         ) : null}
 
         <OfferSection dealId={dealId} />

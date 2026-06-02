@@ -8,6 +8,7 @@ import {
   Cloud,
   ExternalLink,
   FolderCog,
+  FolderSearch,
   History,
   LayoutGrid,
   Link2,
@@ -24,6 +25,7 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { DriveFolderExplorer } from "@/components/drive/DriveFolderExplorer";
+import { DriveFolderPicker } from "@/components/drive/DriveFolderPicker";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -866,6 +868,10 @@ function ConventionEditorModal({
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Cible courante du sélecteur de dossier visuel (null = fermé).
+  const [pickerTarget, setPickerTarget] = useState<
+    "parent" | "template" | null
+  >(null);
 
   const selectedType = useMemo(
     () => types.find((t) => t.key === state.entity_type) || null,
@@ -998,21 +1004,31 @@ function ConventionEditorModal({
           </Field>
 
           <Field label="Dossier parent Drive (ID)">
-            <input
-              type="text"
-              value={state.parent_folder_drive_id}
-              onChange={(e) =>
-                setState({
-                  ...state,
-                  parent_folder_drive_id: e.target.value
-                })
-              }
-              className={`${INPUT_DARK} font-mono`}
-              placeholder="ex. 1tj3wzyxLC2yK0laiQNCs3es2-3s0_mee"
-            />
-            <p className="mt-1 text-[11px] text-white/40">
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={state.parent_folder_drive_id}
+                onChange={(e) =>
+                  setState({
+                    ...state,
+                    parent_folder_drive_id: e.target.value
+                  })
+                }
+                className={`${INPUT_DARK} font-mono`}
+                placeholder="ex. 1tj3wzyxLC2yK0laiQNCs3es2-3s0_mee"
+              />
+              <button
+                type="button"
+                onClick={() => setPickerTarget("parent")}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3 py-2 text-xs font-semibold text-white hover:border-accent-500/50 hover:bg-accent-500/10"
+              >
+                <FolderSearch className="h-3.5 w-3.5" /> Parcourir…
+              </button>
+            </div>
+            <p className="mt-1 text-[11px] text-white/45">
               ID du dossier Drive où créer les sous-dossiers de chaque entité.
-              Copie-le depuis l&apos;URL Drive
+              Clique « Parcourir… » pour le choisir visuellement, ou copie-le
+              depuis l&apos;URL Drive
               (drive.google.com/drive/folders/<strong>ID</strong>) ou{" "}
               <a
                 href="https://drive.google.com/drive/my-drive"
@@ -1053,18 +1069,27 @@ function ConventionEditorModal({
           </Field>
 
           <Field label="Template à copier (ID, optionnel)">
-            <input
-              type="text"
-              value={state.template_folder_to_copy_drive_id}
-              onChange={(e) =>
-                setState({
-                  ...state,
-                  template_folder_to_copy_drive_id: e.target.value
-                })
-              }
-              className={`${INPUT_DARK} font-mono`}
-              placeholder="ID d'un dossier Drive modèle à cloner (laisser vide pour créer un dossier vide)"
-            />
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={state.template_folder_to_copy_drive_id}
+                onChange={(e) =>
+                  setState({
+                    ...state,
+                    template_folder_to_copy_drive_id: e.target.value
+                  })
+                }
+                className={`${INPUT_DARK} font-mono`}
+                placeholder="ID d'un dossier Drive modèle à cloner (laisser vide pour créer un dossier vide)"
+              />
+              <button
+                type="button"
+                onClick={() => setPickerTarget("template")}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-brand-700 bg-brand-900 px-3 py-2 text-xs font-semibold text-white hover:border-accent-500/50 hover:bg-accent-500/10"
+              >
+                <FolderSearch className="h-3.5 w-3.5" /> Parcourir…
+              </button>
+            </div>
           </Field>
 
           <Field label="Sous-dossiers à créer (un par ligne)">
@@ -1176,6 +1201,25 @@ function ConventionEditorModal({
           {convention ? "Enregistrer" : "Créer"}
         </button>
       </div>
+
+      {/* Sélecteur visuel de dossier Drive — remplit le champ ciblé. */}
+      <DriveFolderPicker
+        open={pickerTarget !== null}
+        initialFolderId={
+          pickerTarget === "template"
+            ? state.template_folder_to_copy_drive_id || undefined
+            : state.parent_folder_drive_id || undefined
+        }
+        onClose={() => setPickerTarget(null)}
+        onSelect={(folderId) => {
+          setState((prev) =>
+            pickerTarget === "template"
+              ? { ...prev, template_folder_to_copy_drive_id: folderId }
+              : { ...prev, parent_folder_drive_id: folderId }
+          );
+          setPickerTarget(null);
+        }}
+      />
     </Modal>
   );
 }
@@ -1546,7 +1590,11 @@ function PageModulesSection() {
                   >
                     {p.pole}
                   </span>
-                  <span className="mt-0.5 text-[10px] text-white/45">
+                  <span
+                    className={`mt-0.5 text-[10px] ${
+                      selected ? "text-white/75" : "text-white/55"
+                    }`}
+                  >
                     {p.total} page{p.total > 1 ? "s" : ""}, {p.active} active
                     {p.active > 1 ? "s" : ""}
                   </span>
@@ -1582,13 +1630,13 @@ function PageModulesSection() {
                         <Pencil className="h-3 w-3" />
                       </button>
                     </div>
-                    <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-white/40">
+                    <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-white/55">
                       {m.route ? (
                         <code className="font-mono">{m.route}</code>
                       ) : (
                         <code className="font-mono">{m.entity_type}</code>
                       )}
-                      <span className="text-white/25">·</span>
+                      <span className="text-white/35">·</span>
                       <span>
                         {m.linked_count} dossier
                         {m.linked_count > 1 ? "s" : ""} lié
