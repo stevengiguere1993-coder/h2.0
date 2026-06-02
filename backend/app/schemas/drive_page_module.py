@@ -27,6 +27,10 @@ class DrivePageModuleRead(BaseModel):
     active: bool
     display_title: Optional[str] = None
     display_order: int
+    # Métadonnées du registry (navigation par pôle dans Settings).
+    pole: Optional[str] = None
+    label: Optional[str] = None
+    route: Optional[str] = None
     # Nombre de DriveEntityLink existants pour ce type (stat affichage).
     linked_count: int = 0
     created_at: datetime

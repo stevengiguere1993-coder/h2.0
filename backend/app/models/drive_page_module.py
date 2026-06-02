@@ -57,6 +57,16 @@ class DrivePageModule(Base):
     display_order: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0
     )
+    # Métadonnées du registry (seedées, cf. drive_page_modules_seed) qui
+    # alimentent la navigation par pôle dans la page Settings. Nullables
+    # pour les types auto-créés via PATCH sans passer par le seed.
+    # Pôle métier : Construction, Prospection, Développement logiciel,
+    # Gestion d'entreprises, Gestion immobilière.
+    pole: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Libellé lisible de la page (ex. "Deal Pipeline", "Client").
+    label: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # Route de la page d'entité (ex. "/prospection/pipeline/[id]").
+    route: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
