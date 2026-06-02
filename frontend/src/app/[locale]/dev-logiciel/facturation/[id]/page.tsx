@@ -21,6 +21,7 @@ import { useConfirm } from "@/components/confirm-dialog";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { useDevlogLayout } from "../../layout";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 
 type Invoice = {
   id: number;
@@ -440,6 +441,13 @@ export default function DevlogInvoiceDetailPage() {
           <p className="text-center text-sm text-white/40">Facture introuvable.</p>
         ) : (
           <>
+            <EntityDriveSection
+              entityType="DevlogInvoice"
+              entityId={inv.id}
+              pole="Développement logiciel"
+              label="Facture"
+              route="/dev-logiciel/facturation/[id]"
+            />
             <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h1 className="text-2xl font-bold text-white">
