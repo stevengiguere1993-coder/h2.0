@@ -761,6 +761,9 @@ function ConventionsSection() {
             setTesting(null);
             void reload();
           }}
+          onConventionActivated={() => {
+            void reload();
+          }}
         />
       ) : null}
     </section>
@@ -1112,19 +1115,64 @@ function ConventionEditorModal({
 // Modal Test
 // -----------------------------------------------------------------------------
 
+async function readFastApiError(res: Response): Promise<string> {
+  try {
+    const body = await res.json();
+    if (body && typeof body.detail === "string") return body.detail;
+    if (body && body.detail) return JSON.stringify(body.detail);
+    return `HTTP ${res.status}`;
+  } catch {
+    try {
+      const text = await res.text();
+      return text || `HTTP ${res.status}`;
+    } catch {
+      return `HTTP ${res.status}`;
+    }
+  }
+}
+
 function ConventionTestModal({
   convention,
   onClose,
-  onApplied
+  onApplied,
+  onConventionActivated
 }: {
   convention: DriveConvention;
   onClose: () => void;
   onApplied: () => void;
+  onConventionActivated?: () => void;
 }) {
   const [entityId, setEntityId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ApplyResult | null>(null);
+  const [localActive, setLocalActive] = useState<boolean>(convention.active);
+  const [activating, setActivating] = useState(false);
+
+  async function activate() {
+    setActivating(true);
+    setError(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/drive/conventions/${convention.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ active: true })
+        }
+      );
+      if (!res.ok) {
+        setError(await readFastApiError(res));
+        return;
+      }
+      setLocalActive(true);
+      onConventionActivated?.();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setActivating(false);
+    }
+  }
 
   async function apply() {
     setBusy(true);
@@ -1142,8 +1190,8 @@ function ConventionTestModal({
         }
       );
       if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt || `http_${res.status}`);
+        setError(await readFastApiError(res));
+        return;
       }
       setResult((await res.json()) as ApplyResult);
     } catch (e) {
@@ -1157,6 +1205,27 @@ function ConventionTestModal({
     <Modal title={`Tester « ${convention.name} »`} onClose={onClose}>
       {!result ? (
         <>
+          {!localActive ? (
+            <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3">
+              <p className="text-xs text-amber-300">
+                ⚠️ Cette convention est <strong>inactive</strong>. Active-la
+                d&apos;abord pour pouvoir l&apos;appliquer.
+              </p>
+              <button
+                type="button"
+                onClick={activate}
+                disabled={activating}
+                className="mt-2 inline-flex items-center gap-1 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+              >
+                {activating ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Power className="h-3.5 w-3.5" />
+                )}
+                Activer cette convention
+              </button>
+            </div>
+          ) : null}
           <p className="text-xs text-white/60">
             Applique cette convention à une entité existante :{" "}
             <strong>{convention.entity_type}</strong>. Le dossier Drive sera
