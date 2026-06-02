@@ -124,11 +124,11 @@ async def _extract_prospection_deal(entity: Any, db: AsyncSession) -> dict[str, 
     try:
         la = getattr(entity, "lead_analysis", None)
         if la is not None:
-            # LeadAnalysis -> lead -> city/postal_code (best-effort).
-            lead = getattr(la, "lead", None) or getattr(la, "prospection_lead", None)
-            if lead is not None:
-                city = getattr(lead, "city", "") or ""
-                postal_code = getattr(lead, "postal_code", "") or ""
+            # LeadAnalysis a directement city/postal_code (champs extraits par parser/Gemini).
+            # Champs directs sur la fiche d analyse (LeadAnalysis).
+            city = getattr(la, "city", "") or ""
+            postal_code = getattr(la, "postal_code", "") or ""
+
     except Exception:  # noqa: BLE001
         pass
     return {
