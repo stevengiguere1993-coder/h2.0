@@ -49,7 +49,7 @@ import { useTelephonieLayout } from "./_client-shell";
 
 const TELEPHONIE_ALLOWED_EMAILS = ["sgiguere@immohorizon.com"];
 
-type Me = { email?: string | null };
+type Me = { email?: string | null; role?: string | null };
 
 import type { TelephonieSection as Section } from "./_client-shell";
 
@@ -353,7 +353,12 @@ export default function TelephonieHome() {
       try {
         const me = (await getMe(tok)) as Me;
         const email = (me?.email || "").toLowerCase().trim();
-        const ok = TELEPHONIE_ALLOWED_EMAILS.includes(email);
+        const role = (me?.role || "").toLowerCase().trim();
+        // Owner & admin = accès total ; sinon whitelist email héritée.
+        const ok =
+          role === "owner" ||
+          role === "admin" ||
+          TELEPHONIE_ALLOWED_EMAILS.includes(email);
         if (!cancelled) {
           setAllowed(ok);
           setChecking(false);
