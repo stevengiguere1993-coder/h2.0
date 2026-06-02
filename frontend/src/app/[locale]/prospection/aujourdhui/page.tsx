@@ -16,6 +16,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { useProspectionLayout } from "../layout";
 import { PAMilestonesWidget } from "./_pa-milestones-widget";
 
@@ -210,6 +211,14 @@ export default function ProspectionAujourdhuiPage() {
           Ta queue de prospection — immeubles à contacter, à visiter,
           relances et pipeline actif.
         </p>
+
+        <PageDriveSection
+          pageKey="page:prospection:aujourdhui"
+          pole="Prospection"
+          label="Aujourd'hui"
+          route="/prospection/aujourdhui"
+          className="mt-4"
+        />
 
         {error ? (
           <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">

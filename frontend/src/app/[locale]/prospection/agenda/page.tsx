@@ -16,6 +16,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { authedFetch } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { useProspectionLayout } from "../layout";
 
 type UnifiedEvent = {
@@ -271,6 +272,14 @@ export default function ProspectionAgendaPage() {
             </button>
           </div>
         </header>
+
+        <PageDriveSection
+          pageKey="page:prospection:agenda"
+          pole="Prospection"
+          label="Agenda"
+          route="/prospection/agenda"
+          className="mb-4"
+        />
 
         <div className="mb-3 flex flex-wrap items-center gap-3">
           <p className="text-sm text-white/70">
