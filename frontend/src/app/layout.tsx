@@ -1,35 +1,44 @@
 import type { Metadata, Viewport } from "next";
-import { Fraunces, Inter, JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
 import { PwaRegister } from "@/components/pwa-register";
 
-const inter = Inter({
-  subsets: ["latin"],
+// Polices self-hostées (sous-ensemble latin, fichiers variables) plutôt
+// que next/font/google : le build Render n'a pas accès à
+// fonts.gstatic.com, donc le téléchargement au build échouait. Les
+// woff2 vivent dans ./fonts et sont servis depuis l'app — zéro requête
+// réseau au build comme au runtime.
+const inter = localFont({
+  src: "./fonts/inter-normal.woff2",
   variable: "--font-sans",
-  display: "swap"
+  display: "swap",
+  weight: "100 900"
 });
 
-const display = Plus_Jakarta_Sans({
-  subsets: ["latin"],
+const display = localFont({
+  src: "./fonts/jakarta-normal.woff2",
   variable: "--font-display",
-  display: "swap"
+  display: "swap",
+  weight: "200 800"
 });
 
 // Fonts QG (volet Entreprises) — serif italique pour les titres,
-// mono pour les chiffres/timestamps. Optimisé pour le glyphe italic.
-const fraunces = Fraunces({
-  subsets: ["latin"],
+// mono pour les chiffres/timestamps. Fichier variable normal + italic.
+const fraunces = localFont({
+  src: [
+    { path: "./fonts/fraunces-normal.woff2", style: "normal", weight: "100 900" },
+    { path: "./fonts/fraunces-italic.woff2", style: "italic", weight: "100 900" }
+  ],
   variable: "--font-fraunces",
-  display: "swap",
-  style: ["normal", "italic"],
-  weight: ["500", "600", "700"]
+  display: "swap"
 });
 
-const mono = JetBrains_Mono({
-  subsets: ["latin"],
+const mono = localFont({
+  src: "./fonts/mono-normal.woff2",
   variable: "--font-mono",
-  display: "swap"
+  display: "swap",
+  weight: "100 800"
 });
 
 export const metadata: Metadata = {
