@@ -5,6 +5,7 @@ import { Loader2, Sparkles, Wrench } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { ImmobilierTopbar } from "../layout";
 
 type ImmeubleListItem = {
@@ -55,6 +56,14 @@ export default function MaintenancePage() {
             </p>
           </div>
         </header>
+
+        <PageDriveSection
+          pageKey="page:immobilier:maintenance"
+          pole="Gestion immobilière"
+          label="Maintenance"
+          route="/immobilier/maintenance"
+          className="mt-6"
+        />
 
         <div className="mt-6 inline-flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-semibold text-amber-200">
           <Sparkles className="h-3.5 w-3.5" />

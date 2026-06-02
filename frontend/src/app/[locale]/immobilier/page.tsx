@@ -13,6 +13,7 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch, getToken } from "@/lib/auth";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { ImmobilierTopbar, useImmobilierLayout } from "./layout";
 
 type ImmeubleListItem = {
@@ -125,6 +126,14 @@ export default function ImmobilierDashboard() {
             </p>
           </div>
         </header>
+
+        <PageDriveSection
+          pageKey="page:immobilier:vue-ensemble"
+          pole="Gestion immobilière"
+          label="Vue d'ensemble"
+          route="/immobilier"
+          className="mt-6"
+        />
 
         {error ? (
           <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">

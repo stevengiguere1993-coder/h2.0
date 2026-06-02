@@ -32,6 +32,7 @@ import { CallButton } from "@/components/call-button";
 import { DialPad } from "@/components/dial-pad";
 import { DialPadFab } from "@/components/dial-pad-fab";
 import { PushNotificationsToggle } from "@/components/push-notifications-toggle";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { useTelephonieLayout } from "./_client-shell";
 
 // Volet « Téléphonie / Secrétaire d'appels » — interface premium.
@@ -431,6 +432,14 @@ export default function TelephonieHome() {
             Erreur de chargement : {loadError}
           </div>
         ) : null}
+
+        <PageDriveSection
+          pageKey="page:telephonie:accueil"
+          pole="Téléphonie"
+          label="Téléphonie"
+          route="/telephonie"
+          className="mt-3"
+        />
 
         {section === "dashboard" ? (
           <DashboardSection
