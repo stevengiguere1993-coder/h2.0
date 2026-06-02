@@ -35,6 +35,7 @@ from app.api.v1.endpoints import (
     clients,
     devlog,
     drive_auth,
+    drive_auto_uploads,
     drive_conventions,
     drive_files,
     drive_page_modules,
@@ -244,6 +245,11 @@ api_router.include_router(drive_conventions.router)
 # pages d'entités, PATCH/POST/list réservés admin/owner. Cf.
 # docs/DRIVE_INTEGRATION.md.
 api_router.include_router(drive_page_modules.router)
+# Drive Auto-Upload Phase 6 — CRUD des règles "document généré →
+# sous-dossier Drive de l'entité" (admin/owner). Le dispatcher
+# (drive_auto_upload_dispatcher) consomme ces règles depuis les endpoints
+# de génération de documents. Cf. docs/DRIVE_INTEGRATION.md.
+api_router.include_router(drive_auto_uploads.router)
 api_router.include_router(client_qbo.router)
 api_router.include_router(achat_qbo.router)
 api_router.include_router(achat_payment.router)
@@ -398,4 +404,5 @@ api_router.include_router(
 api_router.include_router(
     devlog_project_recurring_services.router, dependencies=_devlog_admin_only
 )
+
 

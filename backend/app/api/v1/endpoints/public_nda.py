@@ -276,6 +276,30 @@ async def sign_nda(
             )
         except Exception:
             pass
+
+        # Phase 6 — auto-classement Drive (best-effort, NON bloquant).
+        # Dépose le NDA signé dans le sous-dossier « Dossier investisseur »
+        # du deal lié, si une règle est active. Endpoint public (pas
+        # d'utilisateur) : le dispatcher résout un propriétaire Drive.
+        # Ne JAMAIS faire échouer la signature.
+        try:
+            from app.services.drive_auto_upload_dispatcher import (
+                dispatch_auto_upload,
+            )
+
+            await dispatch_auto_upload(
+                "nda_signed",
+                "ProspectionDeal",
+                nda.deal_id,
+                None,
+                signed_bytes,
+                db,
+                {"nom_signataire": nda.signed_name},
+                mime_type="application/pdf",
+            )
+            await db.commit()
+        except Exception:
+            log.exception("Auto-upload Drive NDA signé non bloquant")
     except Exception as exc:
         log.warning(
             "[NDA_SIGN] Génération PDF signé échouée pour NDA %s — "
@@ -315,3 +339,4 @@ async def sign_nda(
         pass
 
     return await _to_public(db, nda)
+

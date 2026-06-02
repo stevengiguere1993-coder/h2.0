@@ -96,6 +96,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:
         logger.warning("drive_page_modules seed failed: %s", exc)
 
+    # Drive Auto-Upload — seeder idempotent Phase 6. Crée 5 règles
+    # "document généré → sous-dossier Drive de l'entité" inactives par
+    # défaut (fiche d'analyse, offre PPTX, NDA signé, soumission,
+    # facture). Phil active chaque règle via /parametres/drive après
+    # vérification. Best-effort silencieux.
+    try:
+        from app.db.session import AsyncSessionLocal as _DriveAutoUploadSession
+        from app.services.drive_auto_upload_seed import (
+            seed_default_drive_auto_uploads,
+        )
+
+        async with _DriveAutoUploadSession() as session:
+            n = await seed_default_drive_auto_uploads(session)
+            if n:
+                logger.info(
+                    "Drive auto-uploads seed: %d regle(s) creee(s)",
+                    n,
+                )
+    except Exception as exc:
+        logger.warning("drive_auto_uploads seed failed: %s", exc)
+
     # Téléphonie — auto-bootstrap Twilio : si les credentials et le
     # numéro sont configurés en env, on s'assure que la ligne existe en
     # DB et que le webhook URL pointe sur ce backend. Idempotent ;
@@ -187,3 +208,4 @@ async def api_ping() -> dict:
     both the frontend (which serves /api/*) and the backend (this
     handler). Cheap: no DB, no I/O."""
     return {"status": "ok"}
+
