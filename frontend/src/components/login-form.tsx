@@ -202,11 +202,13 @@ export function LoginForm() {
     const role = (userRole || "").toLowerCase().trim();
     const isOwner = role === "owner";
     const isAdminOrOwner = role === "owner" || role === "admin";
+    // Owner & admin = accès total ; sinon whitelist email héritée.
     const showTelephonie =
-      !!userEmail &&
-      TELEPHONIE_ALLOWED_EMAILS.includes(
-        userEmail.toLowerCase().trim()
-      );
+      isAdminOrOwner ||
+      (!!userEmail &&
+        TELEPHONIE_ALLOWED_EMAILS.includes(
+          userEmail.toLowerCase().trim()
+        ));
     return (
       <div className="relative space-y-4">
         {showDev ? (
