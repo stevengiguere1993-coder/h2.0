@@ -452,6 +452,9 @@ export default function ContractDetailPage() {
               </div>
             </header>
 
+            {/* Documents Drive (en haut, sous le header) */}
+            <EntityDriveSection entityType="DevlogContract" entityId={id} />
+
             {/* Métadonnées éditables */}
             <section className="mb-5 grid grid-cols-1 gap-4 rounded-xl border border-brand-800 bg-brand-900/60 p-4 sm:grid-cols-2 lg:grid-cols-3">
               <Field label="Titre">
@@ -592,10 +595,6 @@ export default function ContractDetailPage() {
             ) : null}
           </>
         )}
-
-        {contract ? (
-          <EntityDriveSection entityType="DevlogContract" entityId={id} />
-        ) : null}
       </div>
 
       {/* Modal "marquer dépôt payé" */}

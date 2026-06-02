@@ -982,6 +982,9 @@ export default function SoumissionDetailPage() {
               ) : null}
             </header>
 
+            {/* Documents Drive (en haut, sous le header) */}
+            <EntityDriveSection entityType="DevlogSoumission" entityId={id} />
+
             {/* Encadré client (fix #6) — toujours visible en haut sous le
                 header, qu'on soit en vue propriétaire ou client. */}
             <ClientBox
@@ -1022,10 +1025,6 @@ export default function SoumissionDetailPage() {
             )}
           </>
         )}
-
-        {s ? (
-          <EntityDriveSection entityType="DevlogSoumission" entityId={id} />
-        ) : null}
       </div>
     </>
   );
