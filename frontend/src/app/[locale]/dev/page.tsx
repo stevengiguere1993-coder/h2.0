@@ -23,9 +23,13 @@ export default function DevPage() {
   const { user, loading } = useCurrentUser();
   const router = useRouter();
 
+  // Owner & admin = accès total ; sinon whitelist email héritée.
+  const role = (user?.role || "").toLowerCase().trim();
   const allowed =
-    !!user?.email &&
-    DEV_ALLOWED_EMAILS.includes(user.email.toLowerCase().trim());
+    role === "owner" ||
+    role === "admin" ||
+    (!!user?.email &&
+      DEV_ALLOWED_EMAILS.includes(user.email.toLowerCase().trim()));
 
   useEffect(() => {
     if (!loading && user && !allowed) {
