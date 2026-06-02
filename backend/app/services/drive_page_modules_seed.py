@@ -44,13 +44,23 @@ POLE_DEVLOG = "Développement logiciel"
 POLE_CONSTRUCTION = "Construction"
 POLE_ENTREPRISES = "Gestion d'entreprises"
 POLE_IMMOBILIER = "Gestion immobilière"
+POLE_INVESTISSEURS = "Investisseurs"
+POLE_TELEPHONIE = "Téléphonie"
 
 
-# Registry complet des pages d'entité câblables. L'ordre = display_order
+# Registry complet des pages câblables. L'ordre = display_order
 # (regroupé par pôle pour une lecture naturelle). Chaque ``entity_type``
-# est la SOURCE DE VÉRITÉ : le composant <EntityDriveSection> est câblé
-# côté pages avec exactement ces noms. Pour câbler une nouvelle page :
-# ajouter une entrée ici (cf. docs/DRIVE_INTEGRATION.md).
+# est la SOURCE DE VÉRITÉ : le composant <EntityDriveSection> /
+# <PageDriveSection> est câblé côté pages avec exactement ces noms. Pour
+# câbler une nouvelle page : ajouter une entrée ici (cf.
+# docs/DRIVE_INTEGRATION.md).
+#
+# Deux portées (``scope``) :
+#   - "entity" (défaut quand la clé est absente) → un dossier Drive PAR
+#     fiche (un par deal, par client…). Les 22 entrées historiques.
+#   - "page" → un dossier Drive UNIQUE pour la page entière (singleton ;
+#     ex. organigramme, vision, dashboard). ``entity_type`` est alors une
+#     pageKey ``page:<pole>:<slug>``.
 _REGISTRY: list[dict[str, Any]] = [
     # --- Prospection -------------------------------------------------
     {
@@ -189,6 +199,194 @@ _REGISTRY: list[dict[str, Any]] = [
         "label": "Immeuble",
         "route": "/immobilier/immeubles/[id]",
     },
+    # =================================================================
+    # PAGES GÉNÉRALES (scope="page") — un dossier Drive UNIQUE par page
+    # (singleton). entity_type = pageKey "page:<pole>:<slug>". Ces 25
+    # entrées s'auto-enregistraient déjà à la 1re visite ; on les seede
+    # ici pour qu'elles apparaissent immédiatement dans Settings.
+    # =================================================================
+    # --- Prospection (pages générales) -------------------------------
+    {
+        "entity_type": "page:prospection:carte",
+        "pole": POLE_PROSPECTION,
+        "label": "Carte",
+        "route": "/prospection",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:prospection:aujourdhui",
+        "pole": POLE_PROSPECTION,
+        "label": "Aujourd'hui",
+        "route": "/prospection/aujourdhui",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:prospection:agenda",
+        "pole": POLE_PROSPECTION,
+        "label": "Agenda",
+        "route": "/prospection/agenda",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:prospection:dashboard",
+        "pole": POLE_PROSPECTION,
+        "label": "Tableau de bord",
+        "route": "/prospection/dashboard",
+        "scope": "page",
+    },
+    # --- Développement logiciel (pages générales) --------------------
+    {
+        "entity_type": "page:dev-logiciel:accueil",
+        "pole": POLE_DEVLOG,
+        "label": "Accueil",
+        "route": "/dev-logiciel",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:dev-logiciel:agenda",
+        "pole": POLE_DEVLOG,
+        "label": "Agenda",
+        "route": "/dev-logiciel/agenda",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:dev-logiciel:heures",
+        "pole": POLE_DEVLOG,
+        "label": "Suivi des heures",
+        "route": "/dev-logiciel/heures",
+        "scope": "page",
+    },
+    # --- Construction (pages générales) ------------------------------
+    {
+        "entity_type": "page:app:accueil",
+        "pole": POLE_CONSTRUCTION,
+        "label": "Accueil portail",
+        "route": "/app",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:app:crm-aujourdhui",
+        "pole": POLE_CONSTRUCTION,
+        "label": "CRM — Aujourd'hui",
+        "route": "/app/crm/aujourdhui",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:app:crm-dashboard",
+        "pole": POLE_CONSTRUCTION,
+        "label": "CRM — Tableau de bord",
+        "route": "/app/crm/dashboard",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:app:agenda",
+        "pole": POLE_CONSTRUCTION,
+        "label": "Agenda",
+        "route": "/app/agenda",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:app:assignations",
+        "pole": POLE_CONSTRUCTION,
+        "label": "Assignations",
+        "route": "/app/assignations",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:app:conges",
+        "pole": POLE_CONSTRUCTION,
+        "label": "Congés",
+        "route": "/app/conges",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:app:suivis",
+        "pole": POLE_CONSTRUCTION,
+        "label": "Suivis",
+        "route": "/app/suivis",
+        "scope": "page",
+    },
+    # --- Gestion d'entreprises (pages générales) ---------------------
+    {
+        "entity_type": "page:entreprises:organigramme",
+        "pole": POLE_ENTREPRISES,
+        "label": "Organigramme",
+        "route": "/entreprises/organigramme",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:entreprises:vision",
+        "pole": POLE_ENTREPRISES,
+        "label": "Vision",
+        "route": "/entreprises/vision",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:entreprises:comparatif",
+        "pole": POLE_ENTREPRISES,
+        "label": "Comparatif",
+        "route": "/entreprises/comparatif",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:entreprises:plan-suivi",
+        "pole": POLE_ENTREPRISES,
+        "label": "Plan de suivi",
+        "route": "/entreprises/plan-suivi",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:entreprises:dashboards",
+        "pole": POLE_ENTREPRISES,
+        "label": "Tableaux de bord",
+        "route": "/entreprises/dashboards",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:entreprises:kratos",
+        "pole": POLE_ENTREPRISES,
+        "label": "Cerveau Kratos",
+        "route": "/entreprises/kratos",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:entreprises:taches-recurrentes",
+        "pole": POLE_ENTREPRISES,
+        "label": "Tâches récurrentes",
+        "route": "/entreprises/taches/recurrentes",
+        "scope": "page",
+    },
+    # --- Gestion immobilière (pages générales) -----------------------
+    {
+        "entity_type": "page:immobilier:vue-ensemble",
+        "pole": POLE_IMMOBILIER,
+        "label": "Vue d'ensemble",
+        "route": "/immobilier",
+        "scope": "page",
+    },
+    {
+        "entity_type": "page:immobilier:maintenance",
+        "pole": POLE_IMMOBILIER,
+        "label": "Maintenance",
+        "route": "/immobilier/maintenance",
+        "scope": "page",
+    },
+    # --- Investisseurs (pages générales) -----------------------------
+    {
+        "entity_type": "page:investisseur:portail",
+        "pole": POLE_INVESTISSEURS,
+        "label": "Portail investisseurs",
+        "route": "/investisseur",
+        "scope": "page",
+    },
+    # --- Téléphonie (pages générales) --------------------------------
+    {
+        "entity_type": "page:telephonie:accueil",
+        "pole": POLE_TELEPHONIE,
+        "label": "Téléphonie",
+        "route": "/telephonie",
+        "scope": "page",
+    },
 ]
 
 
@@ -211,12 +409,16 @@ async def seed_default_drive_page_modules(db: AsyncSession) -> int:
                 DrivePageModule.entity_type == spec["entity_type"]
             )
             existing = (await db.execute(stmt)).scalar_one_or_none()
+            # Portée : "entity" par défaut (clé absente sur les 22 fiches
+            # historiques), "page" pour les pages générales singleton.
+            scope = spec.get("scope", "entity")
             if existing is None:
                 module = DrivePageModule(
                     entity_type=spec["entity_type"],
                     active=False,
                     display_title="Documents Drive",
                     display_order=order,
+                    scope=scope,
                     pole=spec["pole"],
                     label=spec["label"],
                     route=spec["route"],
@@ -236,6 +438,12 @@ async def seed_default_drive_page_modules(db: AsyncSession) -> int:
                 changed = True
             if existing.route != spec["route"]:
                 existing.route = spec["route"]
+                changed = True
+            # scope vient du registry (source de vérité de la portée). On
+            # le resynchronise si la ligne legacy avait une valeur NULL /
+            # divergente — sans jamais toucher active / display_title.
+            if (existing.scope or "entity") != scope:
+                existing.scope = scope
                 changed = True
             if existing.display_order != order:
                 existing.display_order = order
