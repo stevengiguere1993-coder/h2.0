@@ -350,7 +350,7 @@ export function LoginForm() {
           {/* Colonne droite : volets en développement, partenaires,
               et secrétaire IA téléphonique. */}
           <div className="space-y-3">
-          {has("entreprises") && isOwner ? (
+          {has("entreprises") && isAdminOrOwner ? (
             <button
               type="button"
               onClick={() => {

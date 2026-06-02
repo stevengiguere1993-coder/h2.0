@@ -235,6 +235,11 @@ class User(Base, TimestampMixin):
         whitelist correspondante — peu importe ce qui est stocké dans
         `volets_json`. Ça permet d'activer un volet sans toucher la
         DB le temps du développement."""
+        # Owner & admin = « accès total » (cf. définition des rôles dans
+        # /utilisateurs) : ils voient TOUS les volets sans avoir à les
+        # cocher un par un, et sans dépendre des whitelists de dev.
+        if self.role in (UserRole.OWNER.value, UserRole.ADMIN.value):
+            return list(VALID_VOLETS)
         base: list[str]
         if not self.volets_json:
             base = list(DEFAULT_VOLETS)

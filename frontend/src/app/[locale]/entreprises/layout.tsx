@@ -241,13 +241,14 @@ export default function EntreprisesLayout({
   if (!user) return null;
 
   const initialTheme = (user.theme_preference as Theme) || "light";
-  // Le volet Gestion d'entreprise est restreint aux owners pour
-  // l'instant — l'assignation des tâches utilise les users (pas les
-  // employés) et certains modules ne sont pas prêts pour les autres
-  // rôles. Dès qu'on aura clarifié employés vs users, on rouvrira aux
-  // admins/managers.
+  // Le volet Gestion d'entreprise est ouvert aux owners ET admins
+  // (« accès total » dans la définition des rôles). Reste fermé aux
+  // managers/employés tant que certains modules ne sont pas prêts pour
+  // ces rôles (l'assignation des tâches utilise les users, pas les
+  // employés).
   const allowed =
-    (user.volets || []).includes("entreprises") && user.role === "owner";
+    (user.volets || []).includes("entreprises") &&
+    (user.role === "owner" || user.role === "admin");
 
   const NAVIGATION: NavItem[] = [
     { href: "/entreprises", label: "Entreprises", icon: Briefcase },
