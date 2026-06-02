@@ -103,6 +103,29 @@ type ApplyResult = {
   drive_folder_url?: string | null;
 };
 
+// Phase 6 — règle d'auto-classement « document généré → sous-dossier
+// Drive de l'entité ». Miroir du modèle backend DriveAutoUpload.
+type DriveAutoUpload = {
+  id: number;
+  name: string;
+  document_type: string;
+  entity_type: string;
+  subfolder_path_template?: string | null;
+  file_name_template?: string | null;
+  overwrite_strategy: string;
+  active: boolean;
+  description?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type AutoUploadMetaItem = { key: string; label: string; description?: string };
+type AutoUploadMeta = {
+  document_types: AutoUploadMetaItem[];
+  entity_types: AutoUploadMetaItem[];
+  overwrite_strategies: AutoUploadMetaItem[];
+};
+
 // Phase 7 — module Drive par type de page entité. Les champs pole /
 // label / route viennent du registry backend (seed) et alimentent la
 // navigation par pôle de la section Settings.
@@ -112,10 +135,6 @@ type DrivePageModule = {
   active: boolean;
   display_title?: string | null;
   display_order: number;
-  // Portée : "entity" (un dossier par fiche) ou "page" (dossier unique
-  // singleton). Détermine le sous-groupe d'affichage (Fiches / Pages
-  // générales). Toléré absent (modules legacy) → traité comme "entity".
-  scope?: string | null;
   pole?: string | null;
   label?: string | null;
   route?: string | null;
@@ -269,13 +288,10 @@ export default function DriveSettingsPage() {
         {status?.connected ? <PageModulesSection /> : null}
         {status?.connected ? <EntityLinksSection /> : null}
 
-        {/* Sections restées placeholder pour Phases 4+ */}
-        <PlaceholderSection
-          icon={UploadCloud}
-          title="Classement automatique des documents"
-          description="Quand Kratos génère un document (fiche d'analyse, soumission, contrat signé, NDA, facture…), il le dépose tout seul dans le bon dossier Drive. Plus besoin de classer à la main."
-          phase="Bientôt"
-        />
+        {/* Phase 6 — section active : Classement automatique des documents */}
+        {status?.connected ? <AutoUploadsSection /> : null}
+
+        {/* Sections restées placeholder pour Phases ultérieures */}
         <PlaceholderSection
           icon={History}
           title="Historique des actions Drive"
@@ -1446,28 +1462,6 @@ function modulePole(m: DrivePageModule): string {
   return m?.pole || POLE_FALLBACK;
 }
 
-// Portée d'un module, avec repli "entity" pour les modules legacy (scope
-// NULL/absent en BDD). Sert à scinder l'affichage en deux sous-groupes :
-// "Fiches" (un dossier par instance) et "Pages générales" (dossier unique).
-function moduleScope(m: DrivePageModule): "entity" | "page" {
-  return m?.scope === "page" ? "page" : "entity";
-}
-
-// Liste de référence stable des 7 pôles de Kratos, dans l'ordre voulu.
-// Sert à afficher TOUS les pôles comme onglets, même ceux qui n'ont
-// encore aucune page de fiche documentaire (ex: Investisseurs, Téléphonie).
-// ⚠️ Les PAGES sous chaque pôle restent 100 % dynamiques (issues des
-// modules backend) — seule cette liste de pôles est codée en dur.
-const POLES_KRATOS = [
-  "Prospection",
-  "Développement logiciel",
-  "Construction",
-  "Gestion d'entreprises",
-  "Gestion immobilière",
-  "Investisseurs",
-  "Téléphonie"
-] as const;
-
 function PageModulesSection() {
   const [modules, setModules] = useState<DrivePageModule[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1496,31 +1490,21 @@ function PageModulesSection() {
     void reload();
   }, [reload]);
 
-  // Liste des pôles affichés en onglets = UNION de la liste de référence
-  // stable (POLES_KRATOS, les 7 pôles de Kratos) + tout pôle distinct
-  // présent dans les modules backend (au cas où un nouveau pôle
-  // apparaîtrait via auto-enregistrement). Les stats « X pages, Y actives »
-  // sont calculées dynamiquement depuis les modules de chaque pôle.
+  // Liste des pôles (ordre stable = ordre de display_order) + stats.
   const poles = useMemo(() => {
+    const order: string[] = [];
     const stats = new Map<string, { total: number; active: number }>();
     for (const m of modules || []) {
       const p = modulePole(m);
-      if (!stats.has(p)) stats.set(p, { total: 0, active: 0 });
+      if (!stats.has(p)) {
+        stats.set(p, { total: 0, active: 0 });
+        order.push(p);
+      }
       const s = stats.get(p)!;
       s.total += 1;
       if (m?.active) s.active += 1;
     }
-    // Ordre stable : d'abord les 7 pôles de référence, puis tout pôle
-    // supplémentaire découvert dans les modules (non déjà listé).
-    const order: string[] = [...POLES_KRATOS];
-    for (const p of stats.keys()) {
-      if (!order.includes(p)) order.push(p);
-    }
-    return order.map((p) => ({
-      pole: p,
-      total: stats.get(p)?.total ?? 0,
-      active: stats.get(p)?.active ?? 0
-    }));
+    return order.map((p) => ({ pole: p, ...stats.get(p)! }));
   }, [modules]);
 
   // Sélectionne le 1er pôle par défaut une fois les données chargées.
@@ -1534,18 +1518,6 @@ function PageModulesSection() {
     () =>
       (modules || []).filter((m) => modulePole(m) === activePole),
     [modules, activePole]
-  );
-
-  // Scinde les modules du pôle courant en deux sous-groupes par portée :
-  //  - "Fiches"          (scope=entity) → un dossier Drive par fiche.
-  //  - "Pages générales" (scope=page)   → un dossier Drive unique / page.
-  const entityModules = useMemo(
-    () => visibleModules.filter((m) => moduleScope(m) === "entity"),
-    [visibleModules]
-  );
-  const pageModules = useMemo(
-    () => visibleModules.filter((m) => moduleScope(m) === "page"),
-    [visibleModules]
   );
 
   async function patchModule(
@@ -1593,16 +1565,6 @@ function PageModulesSection() {
             apparaît. Organisé par pôle : sélectionne un pôle, puis active
             Drive sur ses pages une à une.
           </p>
-          <p className="mt-1.5 text-xs text-white/60">
-            Chaque pôle se divise en deux groupes :{" "}
-            <span className="font-semibold text-white/80">Fiches</span> (un
-            dossier Drive par élément précis : un deal, un client, un
-            immeuble…) et{" "}
-            <span className="font-semibold text-white/80">Pages générales</span>{" "}
-            (un dossier Drive unique pour toute une page : organigramme,
-            vision, tableaux de bord…). Les pages de liste (kanban, tableau)
-            n'apparaissent pas ici.
-          </p>
         </div>
         <button
           type="button"
@@ -1649,8 +1611,8 @@ function PageModulesSection() {
                     {p.pole}
                   </span>
                   <span
-                    className={`mt-0.5 text-[10px] font-medium ${
-                      selected ? "text-white" : "text-white/70"
+                    className={`mt-0.5 text-[10px] ${
+                      selected ? "text-white/75" : "text-white/55"
                     }`}
                   >
                     {p.total} page{p.total > 1 ? "s" : ""}, {p.active} active
@@ -1661,45 +1623,87 @@ function PageModulesSection() {
             })}
           </div>
 
-          {/* Pages du pôle sélectionné, scindées par portée */}
-          {visibleModules.length > 0 ? (
-            <div className="mt-4 space-y-5">
-              {/* Sous-groupe "Fiches" (scope=entity) — un dossier par fiche.
-                  Affiché seulement si le pôle a au moins une fiche. */}
-              {entityModules.length > 0 ? (
-                <ModuleSubGroup
-                  title="Fiches"
-                  subtitle="Un dossier Drive par fiche."
-                  modules={entityModules}
-                  savingType={savingType}
-                  onEdit={setEditing}
-                  onToggle={(et, active) =>
-                    void patchModule(et, { active })
-                  }
-                />
-              ) : null}
+          {/* Pages du pôle sélectionné */}
+          <div className="mt-4 space-y-2">
+            {visibleModules.length > 0 ? (
+              visibleModules.map((m) => (
+                <div
+                  key={m.entity_type}
+                  className="flex flex-wrap items-center gap-3 rounded-xl border border-brand-800 bg-brand-950/40 px-4 py-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium text-white">
+                        {moduleLabel(m)}
+                      </span>
+                      {m.display_title ? (
+                        <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/50">
+                          Titre : {m.display_title}
+                        </span>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => setEditing(m)}
+                        title="Éditer le titre affiché sur la page"
+                        className="rounded p-0.5 text-white/35 hover:bg-white/10 hover:text-white"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                    </div>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-white/55">
+                      {m.route ? (
+                        <code className="font-mono">{m.route}</code>
+                      ) : (
+                        <code className="font-mono">{m.entity_type}</code>
+                      )}
+                      <span className="text-white/35">·</span>
+                      <span>
+                        {m.linked_count} dossier
+                        {m.linked_count > 1 ? "s" : ""} lié
+                        {m.linked_count > 1 ? "s" : ""}
+                      </span>
+                    </div>
+                  </div>
 
-              {/* Sous-groupe "Pages générales" (scope=page) — dossier unique.
-                  Affiché seulement si le pôle a au moins une page singleton. */}
-              {pageModules.length > 0 ? (
-                <ModuleSubGroup
-                  title="Pages générales"
-                  subtitle="Un dossier Drive unique pour la page."
-                  modules={pageModules}
-                  savingType={savingType}
-                  onEdit={setEditing}
-                  onToggle={(et, active) =>
-                    void patchModule(et, { active })
-                  }
-                />
-              ) : null}
-            </div>
-          ) : (
-            <p className="mt-4 rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/60">
-              Aucune page dans ce pôle pour l'instant. Les pages apparaissent
-              ici automatiquement quand elles sont câblées dans Kratos.
-            </p>
-          )}
+                  <div className="flex items-center gap-2">
+                    {savingType === m.entity_type ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-white/40" />
+                    ) : null}
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
+                        m.active
+                          ? "border border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                          : "border border-white/15 bg-white/5 text-white/40"
+                      }`}
+                    >
+                      {m.active ? "Activé" : "Inactif"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void patchModule(m.entity_type, {
+                          active: !m.active
+                        })
+                      }
+                      disabled={savingType === m.entity_type}
+                      className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50 ${
+                        m.active
+                          ? "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
+                          : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20"
+                      }`}
+                    >
+                      <Power className="h-3 w-3" />
+                      {m.active ? "Désactiver" : "Activer"}
+                    </button>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/50">
+                Aucune page pour ce pôle.
+              </p>
+            )}
+          </div>
         </>
       ) : (
         <p className="mt-4 rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/50">
@@ -1719,123 +1723,6 @@ function PageModulesSection() {
         />
       ) : null}
     </section>
-  );
-}
-
-// Sous-groupe de modules (Fiches / Pages générales) — en-tête + lignes.
-// Mutualise le rendu pour les deux portées sans dupliquer le markup.
-function ModuleSubGroup({
-  title,
-  subtitle,
-  modules,
-  savingType,
-  onEdit,
-  onToggle
-}: {
-  title: string;
-  subtitle: string;
-  modules: DrivePageModule[];
-  savingType: string | null;
-  onEdit: (m: DrivePageModule) => void;
-  onToggle: (entityType: string, active: boolean) => void;
-}) {
-  return (
-    <div>
-      <div className="mb-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-white/80">
-          {title}
-        </h3>
-        <p className="text-[11px] text-white/50">{subtitle}</p>
-      </div>
-      <div className="space-y-2">
-        {modules.map((m) => (
-          <ModuleRow
-            key={m.entity_type}
-            m={m}
-            saving={savingType === m.entity_type}
-            onEdit={() => onEdit(m)}
-            onToggle={() => onToggle(m.entity_type, !m.active)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// Ligne d'un module : libellé + route + nb dossiers liés + toggle actif.
-// Markup identique à l'ancien rendu (contraste lisible conservé).
-function ModuleRow({
-  m,
-  saving,
-  onEdit,
-  onToggle
-}: {
-  m: DrivePageModule;
-  saving: boolean;
-  onEdit: () => void;
-  onToggle: () => void;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-brand-800 bg-brand-950/40 px-4 py-3">
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-medium text-white">{moduleLabel(m)}</span>
-          {m.display_title ? (
-            <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/50">
-              Titre : {m.display_title}
-            </span>
-          ) : null}
-          <button
-            type="button"
-            onClick={onEdit}
-            title="Éditer le titre affiché sur la page"
-            className="rounded p-0.5 text-white/35 hover:bg-white/10 hover:text-white"
-          >
-            <Pencil className="h-3 w-3" />
-          </button>
-        </div>
-        <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-white/60">
-          {m.route ? (
-            <code className="font-mono">{m.route}</code>
-          ) : (
-            <code className="font-mono">{m.entity_type}</code>
-          )}
-          <span className="text-white/40">·</span>
-          <span>
-            {m.linked_count} dossier{m.linked_count > 1 ? "s" : ""} lié
-            {m.linked_count > 1 ? "s" : ""}
-          </span>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2">
-        {saving ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-white/40" />
-        ) : null}
-        <span
-          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
-            m.active
-              ? "border border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-              : "border border-white/15 bg-white/5 text-white/40"
-          }`}
-        >
-          {m.active ? "Activé" : "Inactif"}
-        </span>
-        <button
-          type="button"
-          onClick={onToggle}
-          disabled={saving}
-          className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50 ${
-            m.active
-              ? "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
-              : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20"
-          }`}
-        >
-          <Power className="h-3 w-3" />
-          {m.active ? "Désactiver" : "Activer"}
-        </button>
-      </div>
-    </div>
   );
 }
 
@@ -2071,6 +1958,498 @@ function EntityLinksSection() {
 // -----------------------------------------------------------------------------
 // Composants utilitaires
 // -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// Phase 6 — Section « Classement automatique des documents »
+// -----------------------------------------------------------------------------
+
+function strategyBadge(strategy: string): {
+  label: string;
+  className: string;
+} {
+  switch (strategy) {
+    case "overwrite":
+      return {
+        label: "Remplacer",
+        className: "bg-amber-500/15 text-amber-300"
+      };
+    case "keep_both":
+      return {
+        label: "Garder",
+        className: "bg-sky-500/15 text-sky-300"
+      };
+    default:
+      return {
+        label: "Versionner",
+        className: "bg-violet-500/15 text-violet-300"
+      };
+  }
+}
+
+function AutoUploadsSection() {
+  const [rules, setRules] = useState<DriveAutoUpload[] | null>(null);
+  const [meta, setMeta] = useState<AutoUploadMeta | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState<DriveAutoUpload | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const labelFor = useCallback(
+    (items: AutoUploadMetaItem[] | undefined, key: string) =>
+      items?.find((i) => i.key === key)?.label ?? key,
+    []
+  );
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [rulesRes, metaRes] = await Promise.all([
+        authedFetch("/api/v1/drive/auto-uploads"),
+        authedFetch("/api/v1/drive/auto-uploads/meta")
+      ]);
+      if (!rulesRes.ok) throw new Error(`http_${rulesRes.status}`);
+      if (!metaRes.ok) throw new Error(`http_${metaRes.status}`);
+      const rulesJson = await rulesRes.json();
+      const metaJson = await metaRes.json();
+      setRules(Array.isArray(rulesJson) ? (rulesJson as DriveAutoUpload[]) : []);
+      setMeta(metaJson as AutoUploadMeta);
+    } catch (e) {
+      setError(`Chargement échoué : ${(e as Error).message}`);
+      setRules([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  async function toggleActive(r: DriveAutoUpload) {
+    try {
+      const res = await authedFetch(`/api/v1/drive/auto-uploads/${r.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: !r.active })
+      });
+      if (!res.ok) throw new Error(`http_${res.status}`);
+      await reload();
+    } catch (e) {
+      setError(`Toggle échoué : ${(e as Error).message}`);
+    }
+  }
+
+  async function remove(r: DriveAutoUpload) {
+    if (
+      !window.confirm(
+        `Supprimer la règle « ${r.name} » ? Elle sera désactivée (soft-delete).`
+      )
+    )
+      return;
+    try {
+      const res = await authedFetch(`/api/v1/drive/auto-uploads/${r.id}`, {
+        method: "DELETE"
+      });
+      if (!res.ok && res.status !== 204) throw new Error(`http_${res.status}`);
+      await reload();
+    } catch (e) {
+      setError(`Suppression échouée : ${(e as Error).message}`);
+    }
+  }
+
+  return (
+    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
+      <header className="flex flex-wrap items-start gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
+          <UploadCloud className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-base font-bold text-white">
+              Classement automatique des documents
+            </h2>
+            <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
+              Actif
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs text-white/60">
+            Quand Kratos génère un document (fiche d&apos;analyse, offre,
+            NDA signé, soumission, facture), il le dépose tout seul dans le
+            bon sous-dossier Drive de l&apos;entité liée. Active une règle
+            une fois ses sous-dossier / nom de fichier vérifiés.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setCreating(true)}
+          className="inline-flex items-center gap-1 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600"
+        >
+          <Plus className="h-3.5 w-3.5" /> Nouvelle règle
+        </button>
+      </header>
+
+      {error ? (
+        <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {error}
+        </p>
+      ) : null}
+
+      {loading ? (
+        <div className="mt-5 flex items-center gap-2 text-xs text-white/50">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement…
+        </div>
+      ) : rules && rules.length > 0 ? (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[820px] text-xs">
+            <thead className="text-left text-white/40">
+              <tr>
+                <th className="px-2 py-2">Document</th>
+                <th className="px-2 py-2">Entité cible</th>
+                <th className="px-2 py-2">Sous-dossier</th>
+                <th className="px-2 py-2">Nom fichier</th>
+                <th className="px-2 py-2">Stratégie</th>
+                <th className="px-2 py-2">Actif</th>
+                <th className="px-2 py-2 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="text-white/80">
+              {rules.map((r) => (
+                <tr key={r.id} className="border-t border-brand-800">
+                  <td className="px-2 py-2">
+                    <div className="font-medium text-white">{r.name}</div>
+                    <div className="text-[10px] text-white/40">
+                      {labelFor(meta?.document_types, r.document_type)}
+                    </div>
+                  </td>
+                  <td className="px-2 py-2">
+                    <span className="rounded bg-brand-950 px-1.5 py-0.5 font-mono text-[10px]">
+                      {r.entity_type}
+                    </span>
+                  </td>
+                  <td className="px-2 py-2 font-mono text-[10px] text-white/60">
+                    {r.subfolder_path_template ? (
+                      r.subfolder_path_template
+                    ) : (
+                      <span className="text-white/40">(racine)</span>
+                    )}
+                  </td>
+                  <td className="px-2 py-2 font-mono text-[10px]">
+                    {r.file_name_template || "—"}
+                  </td>
+                  <td className="px-2 py-2">
+                    <span
+                      className={`inline-flex w-fit items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${strategyBadge(r.overwrite_strategy).className}`}
+                    >
+                      {strategyBadge(r.overwrite_strategy).label}
+                    </span>
+                  </td>
+                  <td className="px-2 py-2">
+                    {r.active ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-300">
+                        <CheckCircle2 className="h-3 w-3" /> Actif
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-white/40">
+                        Inactif
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-2 py-2 text-right">
+                    <div className="inline-flex gap-1">
+                      <button
+                        type="button"
+                        title="Modifier"
+                        onClick={() => setEditing(r)}
+                        className="rounded p-1 text-white/60 hover:bg-white/10 hover:text-white"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        title={r.active ? "Désactiver" : "Activer"}
+                        onClick={() => toggleActive(r)}
+                        className="rounded p-1 text-white/60 hover:bg-white/10 hover:text-white"
+                      >
+                        <Power className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        title="Supprimer"
+                        onClick={() => remove(r)}
+                        className="rounded p-1 text-rose-300 hover:bg-rose-500/10"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="mt-3 text-[11px] text-white/40">
+            Variables disponibles dans les templates :{" "}
+            <code className="font-mono">{"{numero}"}</code>,{" "}
+            <code className="font-mono">{"{nom_signataire}"}</code>,{" "}
+            <code className="font-mono">{"{date}"}</code>,{" "}
+            <code className="font-mono">{"{annee}"}</code>,{" "}
+            <code className="font-mono">{"{timestamp}"}</code>. Un
+            sous-dossier vide dépose à la racine du dossier de l&apos;entité.
+          </p>
+        </div>
+      ) : (
+        <p className="mt-4 rounded-lg border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center text-xs text-white/50">
+          Aucune règle. Crée-en une avec le bouton ci-dessus.
+        </p>
+      )}
+
+      {creating && meta ? (
+        <AutoUploadEditorModal
+          meta={meta}
+          onClose={() => setCreating(false)}
+          onSaved={() => {
+            setCreating(false);
+            void reload();
+          }}
+        />
+      ) : null}
+      {editing && meta ? (
+        <AutoUploadEditorModal
+          meta={meta}
+          rule={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            void reload();
+          }}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+type AutoUploadEditorState = {
+  name: string;
+  document_type: string;
+  entity_type: string;
+  subfolder_path_template: string;
+  file_name_template: string;
+  overwrite_strategy: string;
+  description: string;
+  active: boolean;
+};
+
+function AutoUploadEditorModal({
+  meta,
+  rule,
+  onClose,
+  onSaved
+}: {
+  meta: AutoUploadMeta;
+  rule?: DriveAutoUpload;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const isEdit = !!rule;
+  const [state, setState] = useState<AutoUploadEditorState>({
+    name: rule?.name || "",
+    document_type: rule?.document_type || meta.document_types[0]?.key || "",
+    entity_type: rule?.entity_type || meta.entity_types[0]?.key || "",
+    subfolder_path_template: rule?.subfolder_path_template || "",
+    file_name_template: rule?.file_name_template || "",
+    overwrite_strategy: rule?.overwrite_strategy || "version",
+    description: rule?.description || "",
+    active: rule?.active ?? false
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function set<K extends keyof AutoUploadEditorState>(
+    key: K,
+    value: AutoUploadEditorState[K]
+  ) {
+    setState((s) => ({ ...s, [key]: value }));
+  }
+
+  async function save() {
+    setSaving(true);
+    setErr(null);
+    try {
+      // En édition : PATCH des champs éditables (le type de document /
+      // entité reste figé pour ne pas casser le routage). En création :
+      // POST complet.
+      const body = isEdit
+        ? {
+            name: state.name,
+            subfolder_path_template: state.subfolder_path_template,
+            file_name_template: state.file_name_template,
+            overwrite_strategy: state.overwrite_strategy,
+            description: state.description,
+            active: state.active
+          }
+        : {
+            name: state.name,
+            document_type: state.document_type,
+            entity_type: state.entity_type,
+            subfolder_path_template: state.subfolder_path_template,
+            file_name_template: state.file_name_template,
+            overwrite_strategy: state.overwrite_strategy,
+            description: state.description,
+            active: state.active
+          };
+      const url = isEdit
+        ? `/api/v1/drive/auto-uploads/${rule!.id}`
+        : "/api/v1/drive/auto-uploads";
+      const res = await authedFetch(url, {
+        method: isEdit ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        let detail = `http_${res.status}`;
+        try {
+          const j = await res.json();
+          if (j?.detail) detail = typeof j.detail === "string" ? j.detail : detail;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail);
+      }
+      onSaved();
+    } catch (e) {
+      setErr(`Enregistrement échoué : ${(e as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={isEdit ? "Modifier la règle" : "Nouvelle règle d'auto-classement"}
+      onClose={onClose}
+    >
+      {err ? (
+        <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {err}
+        </p>
+      ) : null}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="sm:col-span-2">
+          <Field label="Nom de la règle">
+            <input
+              value={state.name}
+              onChange={(e) => set("name", e.target.value)}
+              placeholder="Ex. NDA signé → Dossier investisseur"
+              className={INPUT_DARK}
+            />
+          </Field>
+        </div>
+        <Field label="Type de document">
+          <select
+            value={state.document_type}
+            onChange={(e) => set("document_type", e.target.value)}
+            disabled={isEdit}
+            className={`${INPUT_DARK} disabled:opacity-50`}
+          >
+            {meta.document_types.map((d) => (
+              <option key={d.key} value={d.key}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Entité cible">
+          <select
+            value={state.entity_type}
+            onChange={(e) => set("entity_type", e.target.value)}
+            disabled={isEdit}
+            className={`${INPUT_DARK} disabled:opacity-50`}
+          >
+            {meta.entity_types.map((en) => (
+              <option key={en.key} value={en.key}>
+                {en.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Sous-dossier (vide = racine du dossier de l'entité)">
+          <input
+            value={state.subfolder_path_template}
+            onChange={(e) => set("subfolder_path_template", e.target.value)}
+            placeholder="Ex. Dossier investisseur"
+            className={`${INPUT_DARK} font-mono`}
+          />
+        </Field>
+        <Field label="Nom du fichier (templates {numero}, {date}…)">
+          <input
+            value={state.file_name_template}
+            onChange={(e) => set("file_name_template", e.target.value)}
+            placeholder="Ex. NDA_{nom_signataire}_signé.pdf"
+            className={`${INPUT_DARK} font-mono`}
+          />
+        </Field>
+        <Field label="Stratégie si fichier existant">
+          <select
+            value={state.overwrite_strategy}
+            onChange={(e) => set("overwrite_strategy", e.target.value)}
+            className={INPUT_DARK}
+          >
+            {meta.overwrite_strategies.map((s) => (
+              <option key={s.key} value={s.key}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+          <span className="mt-1 block text-[10px] text-white/40">
+            {meta.overwrite_strategies.find(
+              (s) => s.key === state.overwrite_strategy
+            )?.description || ""}
+          </span>
+        </Field>
+        <div className="flex items-end">
+          <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-white/80">
+            <input
+              type="checkbox"
+              checked={state.active}
+              onChange={(e) => set("active", e.target.checked)}
+              className="h-4 w-4 rounded border-brand-700 bg-brand-950"
+            />
+            Règle active
+          </label>
+        </div>
+        <div className="sm:col-span-2">
+          <Field label="Description (optionnel)">
+            <textarea
+              value={state.description}
+              onChange={(e) => set("description", e.target.value)}
+              rows={2}
+              placeholder="Pourquoi cette règle existe…"
+              className={INPUT_DARK}
+            />
+          </Field>
+        </div>
+      </div>
+      <div className="mt-5 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg border border-brand-800 px-4 py-2 text-sm text-white/70 hover:bg-white/5"
+        >
+          Annuler
+        </button>
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving || !state.name.trim()}
+          className="inline-flex items-center gap-2 rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-600 disabled:opacity-50"
+        >
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          {isEdit ? "Enregistrer" : "Créer"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
 
 function PlaceholderSection({
   icon: Icon,

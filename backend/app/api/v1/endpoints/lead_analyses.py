@@ -1090,6 +1090,28 @@ async def export_pdf(
     except Exception:  # noqa: BLE001
         log.exception("Audit log lead_analysis.pdf_exported échoué")
 
+    # Phase 6 — auto-classement Drive (best-effort, NON bloquant). Si la
+    # fiche est convertie en deal et qu'une règle est active, dépose le
+    # PDF dans le dossier Drive du deal. N'altère jamais la réponse.
+    try:
+        from app.services.drive_auto_upload_dispatcher import (
+            dispatch_auto_upload,
+        )
+
+        await dispatch_auto_upload(
+            "fiche_analyse",
+            "ProspectionDeal",
+            rec.converted_to_deal_id,
+            user.id,
+            pdf_bytes,
+            db,
+            {"filename": filename},
+            mime_type="application/pdf",
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        log.exception("Auto-upload Drive fiche d'analyse non bloquant")
+
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -1262,6 +1284,31 @@ async def export_offre_investissement(
         log.exception(
             "Audit log lead_analysis.offre_investissement_generated échoué"
         )
+
+    # Phase 6 — auto-classement Drive (best-effort, NON bloquant). Dépose
+    # l'offre PPTX dans le sous-dossier « Dossier investisseur » du deal
+    # lié, si une règle est active. N'altère jamais la réponse.
+    try:
+        from app.services.drive_auto_upload_dispatcher import (
+            dispatch_auto_upload,
+        )
+
+        await dispatch_auto_upload(
+            "offre_pptx",
+            "ProspectionDeal",
+            rec.converted_to_deal_id,
+            user.id,
+            pptx_bytes,
+            db,
+            {"filename": filename},
+            mime_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "presentationml.presentation"
+            ),
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        log.exception("Auto-upload Drive offre PPTX non bloquant")
 
     return Response(
         content=pptx_bytes,
@@ -2570,6 +2617,7 @@ async def check_ocr_health(user: CurrentUser) -> dict:
     installé tesseract/poppler."""
     _require_prospection(user)
     return _ocr_health_payload()
+
 
 
 

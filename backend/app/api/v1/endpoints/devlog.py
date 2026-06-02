@@ -1300,7 +1300,7 @@ async def send_soumission(
     summary="PDF de la soumission devis_dev (vue client uniquement)",
 )
 async def get_soumission_pdf(
-    soumission_id: int, db: DBSession, _: CurrentUser
+    soumission_id: int, db: DBSession, user: CurrentUser
 ):
     soumission = await GenericCrud(db, DevlogSoumission).get(soumission_id)
     if soumission is None:
@@ -1315,6 +1315,33 @@ async def get_soumission_pdf(
         )
     pdf_bytes = await generate_devis_pdf(db, soumission_id)
     filename = f"soumission-devlog-{soumission_id}.pdf"
+
+    # Phase 6 — auto-classement Drive (best-effort, NON bloquant). Dépose
+    # la soumission PDF dans le sous-dossier « Soumissions » du client lié,
+    # si une règle est active. N'altère jamais la réponse.
+    try:
+        from app.services.drive_auto_upload_dispatcher import (
+            dispatch_auto_upload,
+        )
+
+        await dispatch_auto_upload(
+            "soumission_pdf",
+            "DevlogClient",
+            soumission.client_id,
+            user.id,
+            pdf_bytes,
+            db,
+            {"numero": getattr(soumission, "number", None) or soumission_id},
+            mime_type="application/pdf",
+        )
+        await db.commit()
+    except Exception:
+        import logging as _logging
+
+        _logging.getLogger(__name__).exception(
+            "Auto-upload Drive soumission PDF non bloquant"
+        )
+
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -1511,13 +1538,40 @@ async def send_invoice(
     summary="PDF de la facture (vue client)",
 )
 async def get_invoice_pdf(
-    invoice_id: int, db: DBSession, _: CurrentUser
+    invoice_id: int, db: DBSession, user: CurrentUser
 ):
     invoice = await GenericCrud(db, DevlogInvoice).get(invoice_id)
     if invoice is None:
         raise HTTPException(status_code=404, detail="Facture introuvable")
     pdf_bytes = await generate_invoice_pdf(db, invoice_id)
     label = invoice.number or f"facture-{invoice_id}"
+
+    # Phase 6 — auto-classement Drive (best-effort, NON bloquant). Dépose
+    # la facture PDF dans le sous-dossier « Factures » du client lié, si
+    # une règle est active. N'altère jamais la réponse.
+    try:
+        from app.services.drive_auto_upload_dispatcher import (
+            dispatch_auto_upload,
+        )
+
+        await dispatch_auto_upload(
+            "facture_pdf",
+            "DevlogClient",
+            invoice.client_id,
+            user.id,
+            pdf_bytes,
+            db,
+            {"numero": invoice.number or invoice_id},
+            mime_type="application/pdf",
+        )
+        await db.commit()
+    except Exception:
+        import logging as _logging
+
+        _logging.getLogger(__name__).exception(
+            "Auto-upload Drive facture PDF non bloquant"
+        )
+
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -3283,5 +3337,6 @@ async def public_sign_contract(
     await on_contract_signed(obj, db)
 
     return DevlogContractPublicRead.model_validate(obj)
+
 
 

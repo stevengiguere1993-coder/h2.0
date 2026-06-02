@@ -36,9 +36,9 @@ partager).
 | **2** | Wrapper Drive API (list / upload / move / share / etc.)     | livré (juin 2026) |
 | **3** | Composant `<DriveFolderExplorer>` réutilisable              | livré (juin 2026) |
 | **4** | UI Conventions + moteur d'application manuelle              | livré (juin 2026) |
-| 5     | Event listeners SQLAlchemy → exécution des Conventions      | à venir |
-| 6     | Hooks d'auto-upload sur les services de génération PDF      | à venir |
-| 7     | Intégration de `<DriveFolderExplorer>` sur les pages entité | à venir |
+| **5** | Hooks automatiques `created` + `status_changed`             | livré (juin 2026) |
+| **6** | Hooks d'auto-upload des documents générés vers Drive        | livré (juin 2026) |
+| **7** | Intégration de `<DriveFolderExplorer>` sur les pages entité | livré (juin 2026) |
 
 ## Phase 1 — Ce qui est livré
 
@@ -736,123 +736,153 @@ devient bloquante.
 Phase 5 = hooks `created` + `status_changed` branchés sur les
 endpoints principaux, best-effort, audit log complet.
 
----
+## Phase 6 — Auto-upload des documents générés vers Drive
 
-## Phase 7 — Sections Drive sur les pages d'entités
+Dernière brique : quand Kratos **génère un document** (PDF d'une fiche
+d'analyse, NDA signé, soumission, facture, offre PPTX), il le **dépose
+automatiquement** dans le bon sous-dossier Drive de l'entité concernée —
+sans intervention humaine.
 
-Objectif : afficher le dossier Drive d'une entité **directement sur sa
-fiche** (page deal, client, projet, soumission, contrat, etc.) au lieu
-de devoir passer par `/parametres/drive`. Phil active chaque type de
-page via un toggle dans les paramètres ; tant qu'un type n'est pas
-activé, sa section reste totalement invisible.
+### Dispatcher `drive_auto_upload_dispatcher`
 
-### Architecture
+Point d'entrée unique appelé après chaque génération de document :
 
-**Composant générique `<EntityDriveSection>`**
-(`frontend/src/components/drive/EntityDriveSection.tsx`)
+```python
+await dispatch_auto_upload(
+    document_type="nda_signed",       # quel document
+    entity_type="ProspectionDeal",    # type du DriveEntityLink
+    entity_id=nda.deal_id,            # id de l'entité (None → no-op)
+    user_id=None,                     # None (endpoint public) → propriétaire Drive
+    file_bytes=signed_bytes,          # contenu binaire
+    db=db,
+    template_vars={"nom_signataire": nda.signed_name},
+    mime_type="application/pdf",
+)
+```
 
-Props : `{ entityType: string; entityId: number; title?: string;
-className?: string }`. Déposé en bas de chaque page d'entité. 100 %
-autonome et défensif — ne crash jamais la page hôte.
+Logique (best-effort **absolu** — ne lève jamais, retourne `None` en cas
+d'inapplicabilité) :
 
-Flux :
+1. Charge la règle `DriveAutoUpload` **active** pour
+   `(document_type, entity_type)`. Aucune → `None` silencieux.
+2. Résout un `user_id` capable d'agir sur Drive
+   (`resolve_drive_owner_user_id` : le `user_id` fourni s'il a un token
+   valide, sinon le premier utilisateur connecté à Drive). Aucun → audit
+   `drive_auto_upload.no_connection` + `None`.
+3. Charge le `DriveEntityLink` `(entity_type, entity_id)` → dossier racine
+   de l'entité. Aucun → audit `drive_auto_upload.no_link` + `None`.
+4. Résout le sous-dossier cible via `ensure_subfolder_path(user_id,
+   root_folder_id, path, db)` : crée/trouve récursivement (insensible à la
+   casse) chaque segment de `subfolder_path_template`. Vide → racine de
+   l'entité.
+5. Résout le nom de fichier depuis `file_name_template` + `template_vars`
+   (placeholders auto : `{date}`, `{datetime}`, `{annee}`, `{mois}`,
+   `{jour}`, `{timestamp}`).
+6. Applique la `overwrite_strategy`, puis `drive_api.upload_file(...)`.
+   Audit `drive_auto_upload.uploaded`.
 
-1. `GET /api/v1/drive/page-modules/{entityType}/status`
-   → `{active, display_title, has_convention}`.
-2. Si `active === false` → le composant **ne rend rien** (même pas un
-   titre). Le pré-câblage est donc invisible tant que Phil n'a pas
-   activé le type.
-3. Si actif → `GET /api/v1/drive/entity-links?entity_type=X&entity_id=Y`.
-   - Lien existant → titre + `<DriveFolderExplorer folderId=...>`
-     (réutilise le composant Phase 3).
-   - Aucun lien → encart "Cette entité n'a pas encore de dossier Drive
-     lié" + 2 boutons :
-     - **Lier un dossier existant** → modale (saisie de l'ID Drive) →
-       `POST /api/v1/drive/entity-links`.
-     - **Créer auto via convention** → visible seulement si une
-       convention active existe pour le type → `POST
-       /api/v1/drive/conventions/{id}/apply`.
+### Stratégies overwrite
 
-États gérés : loading (skeleton), 401 (encart "Drive non connecté" +
-lien vers Paramètres), erreur réseau (bouton Réessayer).
+| Stratégie   | Comportement                                                      |
+| ----------- | ----------------------------------------------------------------- |
+| `overwrite` | Corbeille le fichier de même nom dans le dossier, puis upload.    |
+| `version`   | Suffixe horodaté `_AAAAMMJJ-HHMMSS` avant l'extension (historique). |
+| `keep_both` | Upload tel quel (Drive tolère les doublons de nom).               |
 
-**Table `drive_page_modules`**
-(`backend/app/models/drive_page_module.py`)
+### Table de routage document → entité
 
-Une ligne par `entity_type` : `active` (défaut False), `display_title`
-(nullable → "Documents Drive" par défaut), `display_order`,
-`created_at`, `updated_at`, `created_by_user_id`. Créée au boot via
-`Base.metadata.create_all` (import dans `models/__init__.py`).
+| `document_type`   | `entity_type`   | id de l'entité            | endpoint instrumenté                                      |
+| ----------------- | --------------- | ------------------------- | --------------------------------------------------------- |
+| `fiche_analyse`   | ProspectionDeal | `LeadAnalysis.converted_to_deal_id` | `GET /lead-analyses/{id}/pdf`                    |
+| `offre_pptx`      | ProspectionDeal | `LeadAnalysis.converted_to_deal_id` | `POST /lead-analyses/{id}/offre-investissement` |
+| `nda_signed`      | ProspectionDeal | `NDA.deal_id`             | `POST /public/ndas/{token}/sign`                          |
+| `soumission_pdf`  | DevlogClient    | `DevlogSoumission.client_id` | `GET /devlog/soumissions/{id}/pdf`                     |
+| `facture_pdf`     | DevlogClient    | `DevlogInvoice.client_id` | `GET /devlog/invoices/{id}/pdf`                            |
 
-**Endpoints**
-(`backend/app/api/v1/endpoints/drive_page_modules.py`, admin/owner)
+> **Contrat de Dev Logiciel** : exclu pour l'instant. Le modèle
+> `DevlogContract` ne stocke **aucun blob PDF** (que `signed_at` /
+> `signed_name` / `signed_ip`) — il n'y a donc pas de document à déposer.
+> À réintégrer si un PDF de contrat signé est généré et persisté plus
+> tard.
 
-- `GET   /api/v1/drive/page-modules` — liste + stat `linked_count`
-  (nb `DriveEntityLink` par type).
-- `GET   /api/v1/drive/page-modules/{entity_type}/status` — statut
-  minimal consommé par le composant. Si la ligne n'existe pas →
-  `{active: false}` (jamais un 404).
-- `PATCH /api/v1/drive/page-modules/{entity_type}` — upsert du toggle
-  et/ou du titre (auto-crée la ligne si absente). Audit log.
-- `POST  /api/v1/drive/page-modules` — création explicite. Audit log.
+Pour `fiche_analyse` et `offre_pptx`, si la `LeadAnalysis` n'est pas
+convertie en deal (`converted_to_deal_id is None`), le dispatcher
+court-circuite silencieusement : le document reste un téléchargement
+normal, aucun upload.
 
-**Seed au boot** (`backend/app/services/drive_page_modules_seed.py`,
-idempotent) : 1 ligne `active=False` par type :
-`ProspectionDeal`, `DevlogClient`, `DevlogProject`, `DevlogSoumission`,
-`DevlogContract`, `ConstructionProject`, `ProspectionLead`,
-`Entreprise`.
+### Best-effort : la génération du document n'est jamais bloquée
 
-### UI Settings
+Chaque endpoint instrumenté enveloppe l'appel dans un
+`try/except Exception` qui logge mais **ne propage jamais**. Si Drive est
+down, si aucun utilisateur n'a connecté Drive, si la règle est inactive —
+le document est quand même retourné normalement au client. Le dispatcher
+lui-même a un `try/except` global redondant (ceinture + bretelles).
 
-Sur `/parametres/drive`, deux sections distinctes :
+### Règles seedées par défaut (inactives)
 
-1. **Sections Drive par page** (Phase 7) : tableau
-   (Type entité | Titre affiché | Dossiers liés | Statut + Actions)
-   avec un toggle Activer/Désactiver par ligne (PATCH) et un bouton
-   crayon pour éditer le titre affiché. Bouton refresh pour
-   recharger les stats.
-2. **Liens enregistrés** (ex « Liens existants » Phase 4) : la liste
-   brute des `DriveEntityLink`, juste re-titrée.
+`seed_default_drive_auto_uploads` (appelé au boot, idempotent par
+`(document_type, entity_type)`) crée 5 règles **inactives** — Phil les
+active après vérification :
 
-### Pages câblées
+| # | document          | entité          | sous-dossier            | nom fichier                    | stratégie  |
+| - | ----------------- | --------------- | ----------------------- | ------------------------------ | ---------- |
+| 1 | `fiche_analyse`   | ProspectionDeal | _(racine)_              | `Fiche d'analyse.pdf`          | overwrite  |
+| 2 | `offre_pptx`      | ProspectionDeal | `Dossier investisseur`  | `Offre_{date}.pptx`            | version    |
+| 3 | `nda_signed`      | ProspectionDeal | `Dossier investisseur`  | `NDA_{nom_signataire}_signé.pdf` | keep_both |
+| 4 | `soumission_pdf`  | DevlogClient    | `Soumissions`           | `Soumission_{numero}.pdf`      | overwrite  |
+| 5 | `facture_pdf`     | DevlogClient    | `Factures`              | `Facture_{numero}.pdf`         | overwrite  |
 
-| Page | entity_type |
-|---|---|
-| `prospection/pipeline/[id]/page.tsx` | `ProspectionDeal` |
-| `dev-logiciel/clients/[id]/page.tsx` | `DevlogClient` |
-| `dev-logiciel/projets/[id]/page.tsx` | `DevlogProject` |
-| `dev-logiciel/soumissions/[id]/page.tsx` | `DevlogSoumission` |
-| `dev-logiciel/contrats/[id]/page.tsx` | `DevlogContract` |
-| `app/projets/[id]/page.tsx` (Construction) | `ConstructionProject` |
-| `prospection/[id]/page.tsx` (lead drive-by) | `ProspectionLead` |
-| `entreprises/[id]/page.tsx` | `Entreprise` |
+### Endpoints REST de configuration
 
-> Note : `DevlogSoumission`, `DevlogContract` et `Entreprise` n'ont pas
-> (encore) de convention dans le registry du moteur Phase 4 — sur ces
-> pages, seul le bouton « Lier un dossier existant » s'affiche tant
-> qu'aucune convention n'est créée pour ces types.
+CRUD `RequireAdminOrOwner`, préfixe `/api/v1/drive/auto-uploads` :
 
-### Câbler une nouvelle page (procédure, 5-10 min)
+```text
+GET    /api/v1/drive/auto-uploads          # liste (filtres document_type, entity_type, active)
+GET    /api/v1/drive/auto-uploads/meta     # types de documents / entités / stratégies (dropdowns UI)
+GET    /api/v1/drive/auto-uploads/{id}
+POST   /api/v1/drive/auto-uploads          # crée (inactive par défaut)
+PATCH  /api/v1/drive/auto-uploads/{id}     # toggle active / édite templates / stratégie
+DELETE /api/v1/drive/auto-uploads/{id}     # soft-delete (active=False)
+```
 
-1. **Backend** : ajouter l'`entity_type` à la liste `_DEFAULT_MODULES`
-   dans `backend/app/services/drive_page_modules_seed.py` (le seed le
-   créera inactif au prochain boot). Optionnel : ajouter un libellé FR
-   dans `PAGE_MODULE_LABELS` (page Settings) pour un tableau lisible.
-2. **Frontend** : sur la page cible, importer le composant
-   (`import { EntityDriveSection } from
-   "@/components/drive/EntityDriveSection";`) et déposer
-   `<EntityDriveSection entityType="MonType" entityId={obj.id} />`
-   vers la fin du contenu (avant les modales/footer), gardé par
-   l'objet chargé (`{obj ? <EntityDriveSection .../> : null}`).
-3. **Activer** : aller dans `/parametres/drive` > « Sections Drive par
-   page » > toggle « Activer » sur la ligne du type.
+### UI Settings — « Classement automatique des documents »
 
-Aucune migration ni redéploiement spécial : le composant reste
-invisible tant que le toggle n'est pas activé, donc le pré-câblage est
-sans risque.
+La section (anciennement placeholder « Bientôt ») est **active** sur
+`/parametres/drive` quand Drive est connecté : tableau des règles
+(Document | Entité cible | Sous-dossier | Nom fichier | Stratégie | Actif
+| Actions), toggle Activer/Désactiver, modale d'édition (sous-dossier,
+nom de fichier, stratégie, actif), bouton « + Nouvelle règle ».
 
-### Limites Phase 7
+### Comment Phil active une règle
 
-- Une seule section Drive par page (pas de multi-dossiers).
-- Pas de personnalisation au-delà du titre affiché.
-- Pas d'auto-upload des PDFs Kratos (Phase 6).
+1. `/parametres/drive` → section **Classement automatique des documents**.
+2. Vérifier (ou éditer via le crayon) le sous-dossier et le nom de
+   fichier d'une règle.
+3. Cliquer l'icône **Power** pour l'activer (badge passe à « Actif »).
+4. **Pré-requis** : l'entité cible doit avoir un dossier Drive lié
+   (`DriveEntityLink`) — créé via une convention Phase 5 (`created`) ou
+   manuellement via la section « Liens enregistrés ». Sans lien, le
+   dispatcher logge `drive_auto_upload.no_link` et n'upload rien.
+
+### Test rapide (NDA signé)
+
+1. Activer la règle **« NDA signé → Deal »** (sous-dossier `Dossier
+   investisseur`, stratégie `keep_both`).
+2. S'assurer que le deal cible a un dossier Drive lié.
+3. Envoyer puis **signer un NDA de test** depuis la page publique de
+   signature.
+4. Vérifier que `NDA_<nom>_signé.pdf` apparaît dans le sous-dossier
+   `Dossier investisseur` du dossier Drive du deal. L'audit
+   `drive_audit_logs` contient une ligne `drive_auto_upload.uploaded`.
+
+### Limites Phase 6
+
+- Upload synchrone (bloque l'endpoint le temps de l'appel Drive), mais
+  enveloppé en best-effort : un échec ne ralentit pas la réponse au-delà
+  du timeout interne et ne la fait jamais échouer.
+- Pas de retry. Un échec réseau ponctuel = pas d'upload (le document
+  reste téléchargeable ; Phil peut le re-générer pour re-déclencher).
+- Le contrat Dev Logiciel est exclu (pas de PDF persisté — cf. ci-dessus).
+- `resolve_drive_owner_user_id` choisit le **premier** utilisateur
+  connecté à Drive pour les endpoints publics (NDA) : adapté au contexte
+  mono-Drive « Horizon ». À raffiner si plusieurs Drive coexistent.
