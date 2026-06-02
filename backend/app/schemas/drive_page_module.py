@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class DrivePageModuleRead(BaseModel):
@@ -27,6 +27,10 @@ class DrivePageModuleRead(BaseModel):
     active: bool
     display_title: Optional[str] = None
     display_order: int
+    # Portée : "entity" (un dossier par fiche — défaut) ou "page" (un
+    # dossier unique pour la page, singleton). Replié sur "entity" si la
+    # valeur BDD est NULL (lignes antérieures à la migration).
+    scope: str = "entity"
     # Métadonnées du registry (navigation par pôle dans Settings).
     pole: Optional[str] = None
     label: Optional[str] = None
@@ -37,6 +41,12 @@ class DrivePageModuleRead(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("scope", mode="before")
+    @classmethod
+    def _default_scope(cls, v: Optional[str]) -> str:
+        # NULL (ligne pré-migration) ou vide → "entity".
+        return (v or "entity") if isinstance(v, str) else "entity"
 
 
 class DrivePageModuleStatus(BaseModel):
@@ -71,6 +81,11 @@ class DrivePageModulePatch(BaseModel):
     pole: Optional[str] = Field(default=None, max_length=64)
     label: Optional[str] = Field(default=None, max_length=128)
     route: Optional[str] = Field(default=None, max_length=256)
+    # Portée du module — fournie par <PageDriveSection> lors de
+    # l'auto-enregistrement (scope="page" pour un dossier singleton).
+    # Restreinte à "entity" / "page". PATCH partiel : écrite seulement si
+    # fournie et différente de la valeur courante.
+    scope: Optional[str] = Field(default=None, pattern="^(entity|page)$")
 
 
 class DrivePageModuleCreate(BaseModel):

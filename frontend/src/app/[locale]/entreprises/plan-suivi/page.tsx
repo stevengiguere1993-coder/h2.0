@@ -16,6 +16,7 @@ import {
   X
 } from "lucide-react";
 
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { authedFetch } from "@/lib/auth";
 import { QGTopbar, useEntreprisesLayout } from "../layout";
 
@@ -446,6 +447,12 @@ export default function PlanSuiviPage() {
       />
 
       <div className="mx-auto max-w-6xl px-4 py-6 lg:px-6">
+        <PageDriveSection
+          pageKey="page:entreprises:plan-suivi"
+          pole="Gestion d'entreprises"
+          label="Plan de suivi"
+          route="/entreprises/plan-suivi"
+        />
         {/* Vision groupe — hero */}
         <section className="mb-6 rounded-2xl border border-indigo-500/30 bg-gradient-to-br from-indigo-500/10 to-violet-500/10 p-5">
           <div className="flex items-center gap-3">

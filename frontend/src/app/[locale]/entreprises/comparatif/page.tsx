@@ -10,6 +10,7 @@ import {
   TrendingUp
 } from "lucide-react";
 
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { EntreprisesTopbar } from "../layout";
@@ -101,6 +102,12 @@ export default function ComparatifPage() {
         ]}
       />
       <div className="p-4 lg:p-6">
+        <PageDriveSection
+          pageKey="page:entreprises:comparatif"
+          pole="Gestion d'entreprises"
+          label="Comparatif"
+          route="/entreprises/comparatif"
+        />
         <header className="flex items-start gap-3">
           <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/15 text-violet-300">
             <BarChart3 className="h-5 w-5" />

@@ -33,6 +33,7 @@ import {
 
 import { authedFetch } from "@/lib/auth";
 import { MultiSelectDropdown } from "@/components/multi-select-dropdown";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { RessourcesDispatchView } from "@/components/ressources-dispatch-view";
 import { RolesResponsibilitiesView } from "@/components/roles-responsibilities-view";
 import { QGTopbar, useEntreprisesLayout } from "../layout";
@@ -612,6 +613,12 @@ export default function OrganigrammePage() {
       />
 
       <div className="p-4 lg:p-6">
+        <PageDriveSection
+          pageKey="page:entreprises:organigramme"
+          pole="Gestion d'entreprises"
+          label="Organigramme"
+          route="/entreprises/organigramme"
+        />
         {error ? (
           <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-600">
             {error}

@@ -411,7 +411,8 @@ async def list_entity_links(
     db: DBSession,
     user: RequireAdminOrOwner,
     entity_type: Optional[str] = Query(default=None, max_length=64),
-    entity_id: Optional[int] = Query(default=None, ge=1),
+    # ge=0 : entity_id=0 filtre les liens "Drive de page" (singleton).
+    entity_id: Optional[int] = Query(default=None, ge=0),
 ) -> list[DriveEntityLinkRead]:
     """Liste les liens entité ↔ Drive. Filtres optionnels."""
     stmt = select(DriveEntityLink).order_by(DriveEntityLink.created_at.desc())
