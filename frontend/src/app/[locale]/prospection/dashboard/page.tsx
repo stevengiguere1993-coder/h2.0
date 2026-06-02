@@ -15,6 +15,7 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { authedFetch } from "@/lib/auth";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { useProspectionLayout } from "../layout";
 
 type DashboardStats = {
@@ -135,6 +136,14 @@ export default function ProspectionDashboardPage() {
           Vue d&apos;ensemble du pipeline et de la qualité des leads
           captés en mode drive-by.
         </p>
+
+        <PageDriveSection
+          pageKey="page:prospection:dashboard"
+          pole="Prospection"
+          label="Tableau de bord"
+          route="/prospection/dashboard"
+          className="mt-4"
+        />
 
         {error ? (
           <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">

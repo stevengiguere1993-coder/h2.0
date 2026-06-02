@@ -14,6 +14,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { useDevlogLayout } from "../layout";
 
 // L'agenda du pôle Dév logiciel agrège dans une vue chronologique
@@ -298,6 +299,14 @@ export default function DevlogAgendaPage() {
             </p>
           </div>
         </header>
+
+        <PageDriveSection
+          pageKey="page:dev-logiciel:agenda"
+          pole="Développement logiciel"
+          label="Agenda"
+          route="/dev-logiciel/agenda"
+          className="mb-4"
+        />
 
         {/* Filtres par type */}
         <div className="mb-4 flex flex-wrap items-center gap-2">

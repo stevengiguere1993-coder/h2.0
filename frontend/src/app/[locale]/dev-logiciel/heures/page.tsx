@@ -7,6 +7,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { useConfirm } from "@/components/confirm-dialog";
 import { authedFetch } from "@/lib/auth";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { useDevlogLayout } from "../layout";
 
 type TimeEntry = {
@@ -170,6 +171,14 @@ export default function DevlogHoursPage() {
       />
 
       <div className="mx-auto max-w-4xl px-4 py-4 lg:px-6">
+        <PageDriveSection
+          pageKey="page:dev-logiciel:heures"
+          pole="Développement logiciel"
+          label="Suivi des heures"
+          route="/dev-logiciel/heures"
+          className="mb-4"
+        />
+
         {error ? (
           <div className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {error}
