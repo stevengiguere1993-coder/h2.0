@@ -15,6 +15,7 @@ import {
   X
 } from "lucide-react";
 
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { QGTopbar } from "../layout";
 import { authedFetch } from "@/lib/auth";
 import { Link } from "@/i18n/navigation";
@@ -382,6 +383,12 @@ export default function KratosPage() {
       />
 
       <div className="p-4 lg:p-6">
+        <PageDriveSection
+          pageKey="page:entreprises:kratos"
+          pole="Gestion d'entreprises"
+          label="Cerveau Kratos"
+          route="/entreprises/kratos"
+        />
         <header className="flex items-center gap-3">
           <span
             className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500"

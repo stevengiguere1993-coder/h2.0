@@ -196,6 +196,15 @@ async def patch_page_module(
         if module.route != new_route:
             module.route = new_route
             changes["route"] = new_route
+    # Portée (entity/page) — fournie par <PageDriveSection> à
+    # l'auto-enregistrement. Écrite seulement si fournie ET différente, pour
+    # ne pas polluer l'audit log à chaque visite. La valeur courante NULL
+    # (ligne pré-migration) est repliée sur "entity".
+    if payload.scope is not None:
+        current_scope = module.scope or "entity"
+        if current_scope != payload.scope:
+            module.scope = payload.scope
+            changes["scope"] = payload.scope
 
     # Anti-spam : si la ligne existait déjà et qu'aucune valeur n'a changé,
     # on n'écrit rien et on ne logge rien (PATCH idempotent silencieux).

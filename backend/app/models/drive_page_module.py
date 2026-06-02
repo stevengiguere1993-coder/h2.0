@@ -48,6 +48,18 @@ class DrivePageModule(Base):
     active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
+    # Portée du module — détermine la cardinalité des dossiers Drive :
+    #   "entity" (défaut) → un dossier Drive PAR instance (un par deal,
+    #     par client…). C'est le comportement historique : la page de
+    #     fiche lit/écrit un DriveEntityLink à (entity_type, entity_id).
+    #   "page" → un dossier Drive UNIQUE pour la page entière (singleton ;
+    #     ex. organigramme, vision, dashboard). Le lien singleton utilise
+    #     la convention entity_id=0, garantissant un seul DriveEntityLink
+    #     pour ce entity_type.
+    # Les 22 modules de fiche historiques restent "entity" (le défaut).
+    scope: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="entity", server_default="entity"
+    )
     # Titre affiché au-dessus de l'explorer Drive. NULL → libellé par
     # défaut ("Documents Drive") côté composant.
     display_title: Mapped[Optional[str]] = mapped_column(

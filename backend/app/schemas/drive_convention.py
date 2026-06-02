@@ -194,7 +194,10 @@ class DriveEntityLinkCreate(BaseModel):
     Kratos sans passer par le moteur d'exécution."""
 
     entity_type: str = Field(min_length=1, max_length=64)
-    entity_id: int = Field(ge=1)
+    # ge=0 : entity_id=0 est la convention des liens "Drive de page"
+    # (singleton) — un dossier unique pour une page générale (organigramme,
+    # vision…). Les fiches utilisent un id réel (>=1).
+    entity_id: int = Field(ge=0)
     drive_folder_id: str = Field(min_length=1, max_length=128)
     drive_folder_name: Optional[str] = Field(default=None, max_length=255)
 

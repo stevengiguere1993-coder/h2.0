@@ -86,6 +86,14 @@ export type EntityDriveSectionProps = {
   pole?: string;
   label?: string;
   route?: string;
+  /**
+   * Portée du module. "entity" (défaut) = un dossier Drive par instance
+   * (entityId doit être > 0). "page" = dossier unique singleton pour une
+   * page générale : on passe alors entityId=0 (id réservé au singleton) et
+   * l'auto-enregistrement déclare scope="page" dans le registry. Voir
+   * <PageDriveSection> qui n'est qu'un appel pré-configuré de ce mode.
+   */
+  scope?: "entity" | "page";
 };
 
 type LoadState = "loading" | "disabled" | "ready" | "oauth" | "error";
@@ -97,7 +105,8 @@ export function EntityDriveSection({
   className,
   pole,
   label,
-  route
+  route,
+  scope = "entity"
 }: EntityDriveSectionProps) {
   const [state, setState] = useState<LoadState>("loading");
   const [status, setStatus] = useState<PageModuleStatus | null>(null);
@@ -109,10 +118,15 @@ export function EntityDriveSection({
   const [linking, setLinking] = useState(false);
   const [creatingAuto, setCreatingAuto] = useState(false);
 
+  // En mode "page" (singleton), entityId=0 est l'id réservé du dossier
+  // unique de la page → on accepte 0. En mode "entity", il faut un id réel
+  // (>0) : tant que la page n'est pas hydratée (id absent), on reste
+  // silencieux plutôt que d'afficher une erreur.
+  const minEntityId = scope === "page" ? 0 : 1;
   const validEntity =
     typeof entityId === "number" &&
     Number.isFinite(entityId) &&
-    entityId > 0 &&
+    entityId >= minEntityId &&
     !!entityType;
 
   const load = useCallback(async () => {
@@ -215,7 +229,9 @@ export function EntityDriveSection({
     if (!entityType || !pole || !label) return;
     if (typeof window === "undefined") return;
 
-    const guardKey = `kratos.drivePageModule.registered.${entityType}`;
+    // Le scope fait partie de la clé de garde : si une page change de
+    // scope, l'enregistrement est rejoué une fois.
+    const guardKey = `kratos.drivePageModule.registered.${entityType}.${scope}`;
     try {
       if (window.sessionStorage.getItem(guardKey) === "1") return;
     } catch {
@@ -233,7 +249,8 @@ export function EntityDriveSection({
             body: JSON.stringify({
               pole,
               label,
-              route: route ?? null
+              route: route ?? null,
+              scope
             })
           }
         );
@@ -253,7 +270,7 @@ export function EntityDriveSection({
     return () => {
       cancelled = true;
     };
-  }, [entityType, pole, label, route]);
+  }, [entityType, pole, label, route, scope]);
 
   // -------------------------------------------------------------------------
   // Liaison d'un dossier (commune au picker visuel et à la saisie manuelle).
@@ -387,6 +404,7 @@ export function EntityDriveSection({
       ) : (
         <NoLinkCard
           entityType={entityType}
+          scope={scope}
           convention={convention}
           creatingAuto={creatingAuto}
           linking={linking}
@@ -478,6 +496,7 @@ function SectionHeader({
 
 function NoLinkCard({
   entityType,
+  scope,
   convention,
   creatingAuto,
   linking,
@@ -486,6 +505,7 @@ function NoLinkCard({
   onCreateAuto
 }: {
   entityType: string;
+  scope: "entity" | "page";
   convention: DriveConvention | null;
   creatingAuto: boolean;
   linking: boolean;
@@ -496,7 +516,9 @@ function NoLinkCard({
   return (
     <div className="mt-4 rounded-xl border border-dashed border-brand-800 bg-brand-950/40 px-4 py-6 text-center">
       <p className="text-sm text-white/70">
-        Cette entité n&apos;a pas encore de dossier Drive lié.
+        {scope === "page"
+          ? "Cette page n'a pas encore de dossier Drive lié."
+          : "Cette entité n'a pas encore de dossier Drive lié."}
       </p>
       <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
         <button

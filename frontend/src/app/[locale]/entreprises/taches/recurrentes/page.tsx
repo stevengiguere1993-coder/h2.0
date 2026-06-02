@@ -14,6 +14,7 @@ import {
   X
 } from "lucide-react";
 
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { QGTopbar, useEntreprisesLayout } from "../../layout";
@@ -234,6 +235,12 @@ export default function TachesRecurrentesPage() {
       />
 
       <div className="px-5 py-6 lg:px-8">
+        <PageDriveSection
+          pageKey="page:entreprises:taches-recurrentes"
+          pole="Gestion d'entreprises"
+          label="Tâches récurrentes"
+          route="/entreprises/taches/recurrentes"
+        />
         {/* Toolbar : « Nouveau modèle » à gauche, « Matérialiser
             maintenant » poussé tout à droite. */}
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
