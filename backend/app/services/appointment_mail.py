@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from app.integrations.email_graph import EmailAttachment, get_mailer
 from app.models.agenda_event import AgendaEvent
@@ -20,10 +21,34 @@ from app.services.ics_event import render_event_ics
 
 log = logging.getLogger(__name__)
 
+# Les rendez-vous sont dans l'Est (Montréal). Les datetimes en base sont
+# en UTC ; on les convertit ici pour l'affichage client.
+_APPT_TZ = ZoneInfo("America/Toronto")  # = heure de Montréal (Est)
+_FR_JOURS = (
+    "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche",
+)
+_FR_MOIS = (
+    "janvier", "février", "mars", "avril", "mai", "juin", "juillet",
+    "août", "septembre", "octobre", "novembre", "décembre",
+)
+
 
 def _fmt(dt: datetime) -> str:
-    # Local-looking format, readable by the prospect.
-    return dt.astimezone(timezone.utc).strftime("%A %d %B %Y à %H:%M UTC")
+    """Date + heure du RV en français, à l'heure de Montréal.
+
+    Ex. « dimanche 7 juin 2026 à 9 h 00 (heure de Montréal) ». On
+    n'utilise pas strftime pour les noms (locale C = anglais sur le
+    serveur) : on mappe jours/mois à la main."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local = dt.astimezone(_APPT_TZ)
+    jour = _FR_JOURS[local.weekday()]
+    mois = _FR_MOIS[local.month - 1]
+    heure = f"{local.hour} h {local.minute:02d}"
+    return (
+        f"{jour} {local.day} {mois} {local.year} "
+        f"à {heure} (heure de Montréal)"
+    )
 
 
 def _body(

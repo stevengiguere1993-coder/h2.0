@@ -107,3 +107,8 @@ openpyxl>=3.1.0,<4.0.0
 # `app/services/devlog_stripe.py` + `app/api/v1/endpoints/webhooks.py`.
 # 11.x minimum pour le typage natif `Webhook.construct_event`.
 stripe>=11.0.0,<16.0.0
+
+# tzdata — base de fuseaux horaires pour zoneinfo (affichage des RV à
+# l'heure de Montréal dans les courriels). Garantit America/Toronto même
+# si l'image de base n'embarque pas la tz database système.
+tzdata>=2024.1
