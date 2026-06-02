@@ -37,6 +37,7 @@ import { useDevlogLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { formatPhone } from "@/lib/utils";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 
 type Prospect = {
   id: number;
@@ -374,6 +375,13 @@ export default function ProspectDetailPage() {
           </p>
         ) : p ? (
           <>
+            <EntityDriveSection
+              entityType="DevlogLead"
+              entityId={p.id}
+              pole="Développement logiciel"
+              label="Lead"
+              route="/dev-logiciel/leads/[id]"
+            />
             {/* Header */}
             <header className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
