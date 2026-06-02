@@ -10,6 +10,7 @@ Endpoints :
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime
 from typing import List, Optional
 
@@ -19,6 +20,8 @@ from sqlalchemy import case, select
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.prospection_deal import PRIORITY_ORDER, ProspectionDeal
+
+log = logging.getLogger(__name__)
 from app.models.prospection_deal_task import (
     TASK_PRIORITIES,
     TASK_STATUSES,
@@ -173,7 +176,7 @@ async def get_deal(
 async def create_deal(
     data: DealCreate,
     db: DBSession,
-    _: CurrentUser,
+    user: CurrentUser,
 ) -> DealRead:
     deal = ProspectionDeal(
         address=data.address.strip(),
@@ -183,6 +186,24 @@ async def create_deal(
     db.add(deal)
     await db.flush()
     await db.refresh(deal)
+
+    # Phase 5 — hook Drive Conventions. Best-effort.
+    try:
+        from app.services.drive_conventions_hooks import on_entity_created
+
+        await on_entity_created(
+            entity_type="ProspectionDeal",
+            entity_id=deal.id,
+            user_id=user.id,
+            db=db,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "drive hook 'created' a echoue pour ProspectionDeal #%s "
+            "(non bloquant)",
+            deal.id,
+        )
+
     return DealRead.model_validate(deal)
 
 

@@ -490,8 +490,32 @@ const TRIGGER_LABELS: Record<string, string> = {
   status_changed: "Au changement de statut"
 };
 
-function isPhase5Trigger(t: string) {
+// Phase 5 — types de trigger automatiques (hooks backend actifs).
+function isAutoTrigger(t: string) {
   return t === "created" || t === "status_changed";
+}
+
+// Badge couleur + libellé court selon le trigger pour le tableau.
+function triggerBadge(t: string): { label: string; className: string } {
+  if (t === "created") {
+    return {
+      label: "Auto (création)",
+      className:
+        "bg-sky-500/15 text-sky-300 border border-sky-500/30"
+    };
+  }
+  if (t === "status_changed") {
+    return {
+      label: "Auto (statut)",
+      className:
+        "bg-violet-500/15 text-violet-300 border border-violet-500/30"
+    };
+  }
+  return {
+    label: "Manuel",
+    className:
+      "bg-white/5 text-white/60 border border-white/10"
+  };
 }
 
 function ConventionsSection() {
@@ -581,14 +605,15 @@ function ConventionsSection() {
               Conventions de dossiers
             </h2>
             <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
-              Phase 4 · actif
+              Phase 5 · auto actif
             </span>
           </div>
           <p className="mt-0.5 text-xs text-white/60">
             Règles qui créent et lient automatiquement des dossiers Drive à
-            tes entités Kratos. Pour cette phase, l&apos;application est
-            manuelle (bouton « Tester ») ; les hooks automatiques arrivent en
-            Phase 5.
+            tes entités Kratos. Les conventions actives avec trigger
+            <strong> Auto (création) </strong>
+            s&apos;appliquent dès la création d&apos;une entité ; les
+            conventions <strong>Manuel</strong> nécessitent le bouton « Tester ».
           </p>
         </div>
         <button
@@ -659,12 +684,16 @@ function ConventionsSection() {
                     </span>
                   </td>
                   <td className="px-2 py-2">
-                    {TRIGGER_LABELS[c.trigger_event] || c.trigger_event}
-                    {isPhase5Trigger(c.trigger_event) ? (
-                      <span className="ml-1 rounded bg-amber-500/20 px-1 py-0.5 text-[9px] uppercase text-amber-300">
-                        Phase 5
+                    <div className="flex flex-col gap-0.5">
+                      <span>
+                        {TRIGGER_LABELS[c.trigger_event] || c.trigger_event}
                       </span>
-                    ) : null}
+                      <span
+                        className={`inline-flex w-fit items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${triggerBadge(c.trigger_event).className}`}
+                      >
+                        {triggerBadge(c.trigger_event).label}
+                      </span>
+                    </div>
                   </td>
                   <td className="px-2 py-2 font-mono text-[10px] text-white/60">
                     {c.parent_folder_drive_id || (
@@ -919,17 +948,29 @@ function ConventionEditorModal({
               }
               className={INPUT_DARK}
             >
-              <option value="manuel">Manuel (seul actif Phase 4)</option>
-              <option value="created">À la création (Phase 5)</option>
+              <option value="manuel">
+                Manuel — s&apos;applique uniquement via le bouton « Tester »
+              </option>
+              <option value="created">
+                À la création — s&apos;applique automatiquement à chaque
+                nouvelle entité
+              </option>
               <option value="status_changed">
-                Au changement de statut (Phase 5)
+                Au changement de statut — déplace le dossier quand le
+                statut change (mapping requis)
               </option>
             </select>
-            {isPhase5Trigger(state.trigger_event) ? (
-              <p className="mt-1 text-[11px] text-amber-300">
-                Sera ignoré tant que les hooks automatiques (Phase 5) ne sont
-                pas livrés. Pour l&apos;instant tu peux toujours appliquer la
-                convention manuellement via « Tester ».
+            {state.trigger_event === "created" ? (
+              <p className="mt-1 text-[11px] text-sky-300">
+                Chaque nouvelle entité de ce type déclenchera la création
+                automatique du dossier Drive dès qu&apos;elle sera enregistrée.
+              </p>
+            ) : null}
+            {state.trigger_event === "status_changed" ? (
+              <p className="mt-1 text-[11px] text-violet-300">
+                Configure le mapping <code>statut → dossier parent</code>{" "}
+                ci-dessous pour que le dossier soit déplacé à chaque
+                changement de statut.
               </p>
             ) : null}
           </Field>
@@ -1072,14 +1113,20 @@ function ConventionEditorModal({
         </aside>
       </div>
 
-      <details className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
-        <summary className="cursor-pointer font-semibold text-amber-200">
-          Actions sur changement de statut (Phase 5)
+      <details className="mt-4 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3 text-xs">
+        <summary className="cursor-pointer font-semibold text-violet-200">
+          Actions sur changement de statut (Phase 5 — actif)
         </summary>
-        <p className="mt-2 text-amber-200/70">
-          Le mapping <code>statut → dossier parent</code> permettra de
-          déplacer le dossier Drive quand l&apos;entité change de statut.
-          Désactivé pour le MVP — sera exposé en Phase 5.
+        <p className="mt-2 text-violet-200/70">
+          Quand le statut d&apos;une entité change (ex. un deal passe de
+          <code> en_cours </code> à <code> gagne</code>), Kratos déplace
+          automatiquement le dossier Drive lié vers le parent configuré
+          dans <code>status_to_parent_map</code>. Aucun déplacement n&apos;a
+          lieu si l&apos;entité n&apos;a pas encore de dossier (le hook ne
+          crée rien rétroactivement) ou si le statut cible n&apos;est pas
+          dans le mapping. L&apos;édition complète du mapping JSON sera
+          exposée dans un prochain itérat (pour l&apos;instant : édition via
+          l&apos;API <code>PATCH /api/v1/drive/conventions/&#123;id&#125;</code>).
         </p>
       </details>
 

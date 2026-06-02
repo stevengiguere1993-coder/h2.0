@@ -110,6 +110,7 @@ def _make_crud_router(
     read_schema: Type[BaseModel],
     not_found: str,
     audit_entity: Optional[str] = None,
+    drive_entity_type: Optional[str] = None,
 ) -> APIRouter:
     """CRUD générique du pôle — ouvert à tout utilisateur authentifié.
 
@@ -117,7 +118,12 @@ def _make_crud_router(
     sont pas réservées aux managers (petit pôle interne partagé).
 
     ``audit_entity`` : si fourni, log les mutations dans audit_logs avec
-    des actions ``{audit_entity}.created/updated/deleted``."""
+    des actions ``{audit_entity}.created/updated/deleted``.
+
+    ``drive_entity_type`` : si fourni (ex. ``"DevlogProject"``,
+    ``"DevlogClient"``), invoque le hook Drive Conventions Phase 5
+    après la création. Best-effort — un échec ne bloque jamais
+    l'endpoint."""
     router = APIRouter(prefix=prefix, tags=["devlog"])
 
     @router.post(
@@ -134,6 +140,28 @@ def _make_crud_router(
                 entity_id=getattr(obj, "id", None),
                 details=data.model_dump(exclude_unset=True),
             )
+        # Phase 5 — hook Drive Conventions (best-effort, ne bloque pas).
+        if drive_entity_type and getattr(obj, "id", None) is not None:
+            try:
+                from app.services.drive_conventions_hooks import (
+                    on_entity_created,
+                )
+
+                await on_entity_created(
+                    entity_type=drive_entity_type,
+                    entity_id=obj.id,
+                    user_id=user.id,
+                    db=db,
+                )
+            except Exception:  # noqa: BLE001
+                import logging
+
+                logging.getLogger(__name__).exception(
+                    "drive hook 'created' a echoue pour %s #%s "
+                    "(non bloquant)",
+                    drive_entity_type,
+                    obj.id,
+                )
         return read_schema.model_validate(obj)
 
     @router.get("", response_model=List[read_schema])  # type: ignore[valid-type]
@@ -218,6 +246,26 @@ async def create_client(
             "company": getattr(obj, "company", None),
         },
     )
+
+    # Phase 5 — hook Drive Conventions (best-effort).
+    try:
+        from app.services.drive_conventions_hooks import on_entity_created
+
+        await on_entity_created(
+            entity_type="DevlogClient",
+            entity_id=obj.id,
+            user_id=user.id,
+            db=db,
+        )
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "drive hook 'created' a echoue pour DevlogClient #%s "
+            "(non bloquant)",
+            obj.id,
+        )
+
     return DevlogClientRead.model_validate(obj)
 
 
@@ -949,6 +997,28 @@ async def _provision_project_for_soumission(
     db.add(project)
     await db.flush()
     await db.refresh(project)
+
+    # Phase 5 — hook Drive Conventions sur la création auto d'un
+    # projet depuis le passage en acceptee d'une soumission. Best-effort.
+    if user is not None and getattr(user, "id", None) is not None:
+        try:
+            from app.services.drive_conventions_hooks import on_entity_created
+
+            await on_entity_created(
+                entity_type="DevlogProject",
+                entity_id=project.id,
+                user_id=user.id,
+                db=db,
+            )
+        except Exception:  # noqa: BLE001
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "drive hook 'created' a echoue pour DevlogProject #%s "
+                "(provision auto, non bloquant)",
+                project.id,
+            )
+
     return project
 
 
@@ -1320,6 +1390,7 @@ projects_router = _make_crud_router(
     read_schema=DevlogProjectRead,
     not_found="Projet introuvable",
     audit_entity="devlog_project",
+    drive_entity_type="DevlogProject",
 )
 
 
