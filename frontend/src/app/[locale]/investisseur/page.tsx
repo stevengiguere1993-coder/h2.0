@@ -13,6 +13,7 @@ import {
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { InvestisseurTopbar } from "./layout";
 
 type Investissement = {
@@ -107,6 +108,14 @@ export default function InvestisseurPortefeuille() {
             </p>
           </div>
         </header>
+
+        <PageDriveSection
+          pageKey="page:investisseur:portail"
+          pole="Investisseurs"
+          label="Portail investisseurs"
+          route="/investisseur"
+          className="mt-6"
+        />
 
         {error ? (
           <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
