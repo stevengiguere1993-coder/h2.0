@@ -130,6 +130,11 @@ export function FollowUpTimeline({
         method: "POST",
         body: JSON.stringify(payload)
       });
+      if (res.status === 401) {
+        // Token expiré : message clair plutôt que le JSON brut
+        // « Could not validate credentials ». La note reste saisie.
+        throw new Error("SESSION_EXPIRED");
+      }
       if (!res.ok) {
         const t = await res.text();
         throw new Error(t.slice(0, 200) || `http_${res.status}`);
@@ -150,7 +155,12 @@ export function FollowUpTimeline({
       setShowForm(false);
       await load();
     } catch (e) {
-      setError(`Échec : ${(e as Error).message}`);
+      const msg = (e as Error).message;
+      setError(
+        msg === "SESSION_EXPIRED"
+          ? "Session expirée — reconnecte-toi (ta note reste saisie), puis ré-enregistre."
+          : `Échec : ${msg}`
+      );
     } finally {
       setSubmitting(false);
     }
