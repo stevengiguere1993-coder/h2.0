@@ -441,6 +441,9 @@ export default function ProjectDetailPage() {
               </div>
             </header>
 
+            {/* Documents Drive (en haut, sous le header, avant les onglets) */}
+            <EntityDriveSection entityType="ConstructionProject" entityId={id} />
+
             {error ? (
               <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
                 {error}
@@ -560,10 +563,6 @@ export default function ProjectDetailPage() {
               )}
             </div>
           </>
-        ) : null}
-
-        {p ? (
-          <EntityDriveSection entityType="ConstructionProject" entityId={id} />
         ) : null}
       </div>
 

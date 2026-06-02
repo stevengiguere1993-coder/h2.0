@@ -470,6 +470,11 @@ export default function ProjectDetailPage() {
               </div>
             </header>
 
+            {/* Documents Drive (en haut, sous le header, avant les onglets) */}
+            {p ? (
+              <EntityDriveSection entityType="DevlogProject" entityId={id} />
+            ) : null}
+
             {error ? (
               <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
                 {error}
@@ -600,10 +605,6 @@ export default function ProjectDetailPage() {
               ) : null}
             </div>
           </>
-        ) : null}
-
-        {p ? (
-          <EntityDriveSection entityType="DevlogProject" entityId={id} />
         ) : null}
       </div>
 

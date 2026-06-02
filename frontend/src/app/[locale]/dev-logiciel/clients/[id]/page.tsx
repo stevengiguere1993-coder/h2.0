@@ -505,6 +505,11 @@ function ClientAccount({
         </div>
       </header>
 
+      {/* ------------------------- Documents Drive (en haut, sous le header) ------------------------- */}
+      {client?.id ? (
+        <EntityDriveSection entityType="DevlogClient" entityId={client.id} />
+      ) : null}
+
       {/* ------------------------- KPI cards ------------------------- */}
       <section className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-5">
         <KpiCard
@@ -640,10 +645,6 @@ function ClientAccount({
             <SourceLeadPanel lead={source_lead} clientLeadId={client.converted_from_lead_id} />
           </CollapsibleSection>
         </section>
-      ) : null}
-
-      {client?.id ? (
-        <EntityDriveSection entityType="DevlogClient" entityId={client.id} />
       ) : null}
     </>
   );
