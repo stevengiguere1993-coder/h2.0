@@ -164,7 +164,11 @@ export function LoginForm() {
   useEffect(() => {
     if (!authed || !userEmail) return;
     const norm = userEmail.toLowerCase().trim();
-    if (!DEV_ALLOWED_EMAILS.includes(norm)) return;
+    const role = (userRole || "").toLowerCase().trim();
+    // Owner & admin = accès dev total ; sinon whitelist email héritée.
+    const devAccess =
+      role === "owner" || role === "admin" || DEV_ALLOWED_EMAILS.includes(norm);
+    if (!devAccess) return;
     let cancelled = false;
     async function fetchCount() {
       try {
@@ -184,12 +188,16 @@ export function LoginForm() {
       cancelled = true;
       clearInterval(t);
     };
-  }, [authed, userEmail]);
+  }, [authed, userEmail, userRole]);
 
   if (authed) {
+    const role0 = (userRole || "").toLowerCase().trim();
+    // Owner & admin = accès dev total ; sinon whitelist email héritée.
     const showDev =
-      !!userEmail &&
-      DEV_ALLOWED_EMAILS.includes(userEmail.toLowerCase().trim());
+      role0 === "owner" ||
+      role0 === "admin" ||
+      (!!userEmail &&
+        DEV_ALLOWED_EMAILS.includes(userEmail.toLowerCase().trim()));
     // Filtre les pastilles de portail selon les volets accessibles.
     // Si la liste est vide (anciens comptes sans volets_json), on
     // affiche tout par sécurité (backward-compat).
