@@ -199,7 +199,7 @@ export default function PipelineDealsListPage() {
     const ok = await confirm({
       title: `Supprimer « ${label} » du Pipeline ?`,
       description:
-        "Le deal, ses taches et son historique seront effaces. La fiche d'analyse liee (si elle existe) restera intacte.",
+        "Le deal, ses taches et son historique seront effaces. La fiche d'analyse liee (si elle existe) restera intacte. La suppression est bloquee si des documents signes (NDA, offre) sont rattaches au deal : il faut alors les supprimer ou archiver le deal.",
       confirmLabel: "Supprimer",
       destructive: true
     });
@@ -211,7 +211,22 @@ export default function PipelineDealsListPage() {
         `/api/v1/prospection/deals/${dealId}`,
         { method: "DELETE" }
       );
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) {
+        // 409 : le backend refuse car des documents signes sont
+        // rattaches au deal — on remonte son message explicite.
+        let msg = "Suppression échouée.";
+        if (r.status === 409) {
+          try {
+            const body = await r.json();
+            if (body?.detail) msg = body.detail;
+          } catch {
+            // corps non-JSON — on garde le message générique
+          }
+        }
+        setDeals(prev);
+        setError(msg);
+        return;
+      }
     } catch {
       setDeals(prev);
       setError("Suppression échouée.");

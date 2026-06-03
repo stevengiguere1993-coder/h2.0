@@ -25,13 +25,17 @@ Surface :
 
 **Métadonnées**
 
-- ``GET /api/v1/drive/conventions/supported-entity-types``
+- ``GET /api/v1/drive/conventions/supported-entity-types`` (legacy)
+- ``GET /api/v1/drive/entity-catalog`` — catalogue COMPLET introspecté
+  des types linkables + leurs champs (alimente la modale dynamique).
 
 **Entity links**
 
 - ``GET    /api/v1/drive/entity-links`` — filtres ``entity_type``,
   ``entity_id``.
 - ``POST   /api/v1/drive/entity-links`` — lien manuel sans convention.
+- ``PATCH  /api/v1/drive/entity-links/{id}`` — re-cible le lien vers un
+  autre dossier Drive ("changer de dossier").
 - ``DELETE /api/v1/drive/entity-links/{id}`` — supprime le lien
   Kratos-side seulement (le dossier Drive reste intact).
 """
@@ -54,7 +58,9 @@ from app.schemas.drive_convention import (
     DriveConventionPatch,
     DriveConventionRead,
     DriveEntityLinkCreate,
+    DriveEntityLinkPatch,
     DriveEntityLinkRead,
+    EntityCatalogType,
     SupportedEntityType,
 )
 from app.services import drive_conventions_engine as engine
@@ -110,10 +116,10 @@ def _raise_for_drive(exc: DriveError) -> None:
 # ---------------------------------------------------------------------------
 
 
-# IMPORTANT : la route littérale ``/conventions/supported-entity-types``
-# doit être déclarée AVANT la route à param ``/conventions/{convention_id}``
-# pour ne pas se faire intercepter par FastAPI (qui tenterait de parser
-# "supported-entity-types" en int).
+# IMPORTANT : les routes littérales ``/conventions/supported-entity-types``
+# et ``/entity-catalog`` doivent être déclarées AVANT la route à param
+# ``/conventions/{convention_id}`` pour ne pas se faire intercepter par
+# FastAPI (qui tenterait de parser le segment littéral en int).
 
 
 @router.get(
@@ -123,9 +129,27 @@ def _raise_for_drive(exc: DriveError) -> None:
 async def list_supported_entity_types(
     user: RequireAdminOrOwner,
 ) -> list[SupportedEntityType]:
-    """Métadonnées pour alimenter les dropdowns du wizard frontend."""
+    """Métadonnées (legacy) pour alimenter les dropdowns du wizard."""
     raw = await engine.get_supported_entity_types()
     return [SupportedEntityType.model_validate(item) for item in raw]
+
+
+@router.get(
+    "/entity-catalog",
+    response_model=list[EntityCatalogType],
+)
+async def get_entity_catalog(
+    user: RequireAdminOrOwner,
+) -> list[EntityCatalogType]:
+    """Catalogue COMPLET des types d'entités linkables + leurs champs.
+
+    Introspecte les colonnes des modèles SQLAlchemy déclarés et expose,
+    pour chaque type, la liste des champs (``path``/``label``/``type``)
+    insérables comme placeholders ``{path}`` dans le pattern de nommage.
+    Alimente la modale dynamique de création de convention.
+    """
+    raw = engine.get_entity_catalog()
+    return [EntityCatalogType.model_validate(item) for item in raw]
 
 
 @router.get(
@@ -192,6 +216,7 @@ async def create_convention(
         folder_name_template=payload.folder_name_template,
         template_folder_to_copy_drive_id=payload.template_folder_to_copy_drive_id,
         subfolders_to_create=payload.subfolders_to_create,
+        variable_mapping=payload.variable_mapping,
         auto_link_to_entity=payload.auto_link_to_entity,
         status_to_parent_map=payload.status_to_parent_map,
         active=payload.active,
@@ -250,6 +275,7 @@ async def patch_convention(
         "folder_name_template",
         "template_folder_to_copy_drive_id",
         "subfolders_to_create",
+        "variable_mapping",
         "auto_link_to_entity",
         "status_to_parent_map",
         "active",
@@ -475,6 +501,62 @@ async def create_entity_link(
             "target_entity_type": payload.entity_type,
             "target_entity_id": payload.entity_id,
             "drive_folder_id": payload.drive_folder_id,
+        },
+    )
+    await db.commit()
+    await db.refresh(link)
+    return DriveEntityLinkRead.model_validate(link)
+
+
+@router.patch(
+    "/entity-links/{link_id}",
+    response_model=DriveEntityLinkRead,
+)
+async def patch_entity_link(
+    link_id: int,
+    db: DBSession,
+    user: RequireAdminOrOwner,
+    payload: DriveEntityLinkPatch = Body(...),
+) -> DriveEntityLinkRead:
+    """Re-cible un lien existant vers un autre dossier Drive.
+
+    Cas d'usage : un mauvais dossier a été lié à l'entité et on veut
+    corriger la liaison sans la recréer. La cible Kratos
+    (``entity_type``/``entity_id``) reste inchangée ; seul le dossier
+    Drive pointé change. Le dossier Drive précédent reste intact.
+    """
+    link = await db.get(DriveEntityLink, link_id)
+    if link is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"Lien #{link_id} introuvable."
+        )
+
+    old_folder_id = link.drive_folder_id
+    new_folder_id = (payload.drive_folder_id or "").strip()
+    if not new_folder_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "drive_folder_id requis."
+        )
+
+    link.drive_folder_id = new_folder_id
+    if payload.drive_folder_name is not None:
+        cleaned_name = payload.drive_folder_name.strip()
+        link.drive_folder_name = cleaned_name or None
+    # Le lien n'est plus issu d'une convention une fois re-ciblé à la main.
+    link.convention_id = None
+
+    await db.flush()
+    await log_action(
+        db,
+        user=user,
+        action="drive_entity_link.relinked",
+        entity_type="drive_entity_link",
+        entity_id=link.id,
+        details={
+            "target_entity_type": link.entity_type,
+            "target_entity_id": link.entity_id,
+            "old_drive_folder_id": old_folder_id,
+            "new_drive_folder_id": new_folder_id,
         },
     )
     await db.commit()

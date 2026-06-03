@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
@@ -63,6 +63,7 @@ type DriveConvention = {
   folder_name_template?: string | null;
   template_folder_to_copy_drive_id?: string | null;
   subfolders_to_create?: string[] | null;
+  variable_mapping?: Record<string, string> | null;
   auto_link_to_entity: boolean;
   status_to_parent_map?: Record<string, unknown> | null;
   active: boolean;
@@ -83,6 +84,22 @@ type SupportedEntityType = {
   key: string;
   label: string;
   variables: SupportedEntityVariable[];
+};
+
+// Catalogue introspecté (endpoint /api/v1/drive/entity-catalog). Couvre
+// TOUS les types linkables (les 5 historiques + Entreprise, Immeuble, …)
+// avec leurs champs disponibles. Chaque `path` est à la fois le
+// placeholder {path} inséré dans le pattern ET la clé du variable_mapping.
+type EntityCatalogField = {
+  path: string;
+  label: string;
+  type: string;
+};
+
+type EntityCatalogType = {
+  key: string;
+  label: string;
+  fields: EntityCatalogField[];
 };
 
 type DriveEntityLink = {
@@ -284,8 +301,6 @@ export default function DriveSettingsPage() {
           onDisconnect={disconnect}
         />
 
-        {status?.connected ? <DriveExplorerDemoSection /> : null}
-
         {/* Phase 4 — section active : Conventions + Liens enregistrés */}
         {status?.connected ? <ConventionsSection /> : null}
         {/* Phase 7 — activation de la section Drive par type de page */}
@@ -445,89 +460,6 @@ function ConnectionSection({
 }
 
 // -----------------------------------------------------------------------------
-// Section démo « Test Drive Explorer » — Phase 3.
-// -----------------------------------------------------------------------------
-
-function DriveExplorerDemoSection() {
-  const [draft, setDraft] = useState("");
-  const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
-
-  return (
-    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
-      <header className="flex items-start gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
-          <Cloud className="h-5 w-5" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-base font-bold text-white">
-              Test Drive Explorer
-            </h2>
-            <span className="shrink-0 rounded-full border border-accent-500/40 bg-accent-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-accent-300">
-              Phase 3 · démo
-            </span>
-          </div>
-          <p className="mt-0.5 text-xs text-white/60">
-            Colle l&apos;ID d&apos;un dossier Drive et clique « Charger » pour
-            naviguer dedans, téléverser, renommer, partager, etc. Cette
-            section sera retirée quand le composant sera intégré sur la page
-            deal (Phase 7).
-          </p>
-        </div>
-      </header>
-
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          const v = draft.trim();
-          if (v) setActiveFolderId(v);
-        }}
-        className="mt-4 flex flex-wrap items-center gap-2"
-      >
-        <input
-          type="text"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Folder ID à explorer (ex: 1tj3wzyxLC2yK0laiQNCs3es2-3s0_mee)"
-          className="min-w-0 flex-1 rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 font-mono text-xs text-white placeholder-white/30 focus:border-accent-500 focus:outline-none"
-        />
-        <button
-          type="submit"
-          disabled={!draft.trim()}
-          className="rounded-lg bg-accent-500 px-3 py-2 text-xs font-semibold text-white hover:bg-accent-600 disabled:opacity-50"
-        >
-          Charger
-        </button>
-        {activeFolderId ? (
-          <button
-            type="button"
-            onClick={() => {
-              setActiveFolderId(null);
-              setDraft("");
-            }}
-            className="rounded-lg border border-white/15 px-3 py-2 text-xs text-white/70 hover:bg-white/5"
-          >
-            Fermer
-          </button>
-        ) : null}
-      </form>
-
-      {activeFolderId ? (
-        <div className="mt-4">
-          <DriveFolderExplorer
-            folderId={activeFolderId}
-            onFileSelected={(f) => {
-              // eslint-disable-next-line no-console
-              console.log("[DriveExplorer] file selected", f);
-            }}
-          />
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-// -----------------------------------------------------------------------------
 // Section « Conventions » — Phase 4
 // -----------------------------------------------------------------------------
 
@@ -570,6 +502,9 @@ function ConventionsSection() {
     null
   );
   const [types, setTypes] = useState<SupportedEntityType[]>([]);
+  // Catalogue complet introspecté — alimente la modale dynamique (dropdown
+  // de TOUS les types + chips de champs cliquables).
+  const [catalog, setCatalog] = useState<EntityCatalogType[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filterType, setFilterType] = useState<string>("");
@@ -585,20 +520,26 @@ function ConventionsSection() {
       const params = new URLSearchParams();
       if (filterType) params.set("entity_type", filterType);
       if (filterActive) params.set("active", filterActive);
-      const [convRes, typesRes] = await Promise.all([
+      const [convRes, typesRes, catalogRes] = await Promise.all([
         authedFetch(`/api/v1/drive/conventions?${params.toString()}`),
-        authedFetch("/api/v1/drive/conventions/supported-entity-types")
+        authedFetch("/api/v1/drive/conventions/supported-entity-types"),
+        authedFetch("/api/v1/drive/entity-catalog")
       ]);
       if (!convRes.ok) throw new Error(`http_${convRes.status}`);
       if (!typesRes.ok) throw new Error(`http_${typesRes.status}`);
       const convJson = await convRes.json();
       const typesJson = await typesRes.json();
+      // Le catalogue est best-effort : s'il échoue, la modale retombe sur
+      // les `types` legacy (le dropdown reste fonctionnel).
+      const catalogJson = catalogRes.ok ? await catalogRes.json() : [];
       setConventions(Array.isArray(convJson) ? (convJson as DriveConvention[]) : []);
       setTypes(Array.isArray(typesJson) ? (typesJson as SupportedEntityType[]) : []);
+      setCatalog(Array.isArray(catalogJson) ? (catalogJson as EntityCatalogType[]) : []);
     } catch (e) {
       setError(`Chargement échoué : ${(e as Error).message}`);
       setConventions([]);
       setTypes([]);
+      setCatalog([]);
     } finally {
       setLoading(false);
     }
@@ -812,6 +753,7 @@ function ConventionsSection() {
       {creating ? (
         <ConventionEditorModal
           types={types}
+          catalog={catalog}
           onClose={() => setCreating(false)}
           onSaved={() => {
             setCreating(false);
@@ -822,6 +764,7 @@ function ConventionsSection() {
       {editing ? (
         <ConventionEditorModal
           types={types}
+          catalog={catalog}
           convention={editing}
           onClose={() => setEditing(null)}
           onSaved={() => {
@@ -865,16 +808,31 @@ type ConventionEditorState = {
 
 function ConventionEditorModal({
   types,
+  catalog,
   convention,
   onClose,
   onSaved
 }: {
   types: SupportedEntityType[];
+  catalog: EntityCatalogType[];
   convention?: DriveConvention;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const initialType = convention?.entity_type || types[0]?.key || "";
+  // Source unifiée des types pour le dropdown : le catalogue introspecté
+  // (TOUS les types) ; repli sur les `types` legacy si le catalogue est
+  // vide (ex. endpoint indisponible).
+  const dropdownTypes: { key: string; label: string }[] = useMemo(() => {
+    if (catalog.length > 0)
+      return catalog.map((c) => ({ key: c.key, label: c.label }));
+    return types.map((t) => ({ key: t.key, label: t.label }));
+  }, [catalog, types]);
+
+  const initialType =
+    convention?.entity_type || dropdownTypes[0]?.key || types[0]?.key || "";
+  // Réf du champ pattern pour insérer un placeholder à la position du
+  // curseur lorsqu'on clique sur un chip de champ.
+  const patternRef = useRef<HTMLInputElement | null>(null);
   const [state, setState] = useState<ConventionEditorState>({
     name: convention?.name || "",
     entity_type: initialType,
@@ -897,26 +855,104 @@ function ConventionEditorModal({
     "parent" | "template" | null
   >(null);
 
-  const selectedType = useMemo(
+  // Type sélectionné dans le CATALOGUE (champs introspectés). Repli sur
+  // null si le catalogue est vide / type absent.
+  const selectedCatalogType = useMemo(
+    () => catalog.find((c) => c.key === state.entity_type) || null,
+    [catalog, state.entity_type]
+  );
+  // Type legacy correspondant (pour le libellé d'aperçu / variables
+  // historiques quand le catalogue n'est pas dispo).
+  const selectedLegacyType = useMemo(
     () => types.find((t) => t.key === state.entity_type) || null,
     [types, state.entity_type]
   );
+  const selectedLabel =
+    selectedCatalogType?.label ||
+    selectedLegacyType?.label ||
+    dropdownTypes.find((d) => d.key === state.entity_type)?.label ||
+    state.entity_type;
+
+  // Liste des champs cliquables (chips) pour le type courant. Source =
+  // catalogue introspecté ; repli sur les variables legacy.
+  const availableFields: { path: string; label: string }[] = useMemo(() => {
+    if (selectedCatalogType)
+      return selectedCatalogType.fields.map((f) => ({
+        path: f.path,
+        label: f.label
+      }));
+    if (selectedLegacyType)
+      return selectedLegacyType.variables.map((v) => ({
+        path: v.key,
+        label: v.label
+      }));
+    return [];
+  }, [selectedCatalogType, selectedLegacyType]);
+
+  // Insère le placeholder {path} dans le pattern à la position du curseur
+  // (ou à la fin si le champ n'a pas le focus).
+  function insertPlaceholder(path: string) {
+    const token = `{${path}}`;
+    const input = patternRef.current;
+    setState((prev) => {
+      const current = prev.folder_name_template;
+      if (input) {
+        const start = input.selectionStart ?? current.length;
+        const end = input.selectionEnd ?? current.length;
+        const next =
+          current.slice(0, start) + token + current.slice(end);
+        // Repositionne le curseur après le token inséré (post-render).
+        const caret = start + token.length;
+        requestAnimationFrame(() => {
+          try {
+            input.focus();
+            input.setSelectionRange(caret, caret);
+          } catch {
+            /* noop */
+          }
+        });
+        return { ...prev, folder_name_template: next };
+      }
+      return { ...prev, folder_name_template: current + token };
+    });
+  }
 
   const previewName = useMemo(() => {
-    if (!selectedType || !state.folder_name_template) return null;
+    if (!state.folder_name_template) return null;
+    // Échantillon "humain" pour les champs courants ; sinon on affiche un
+    // exemple générique « <label> ».
     const sample: Record<string, string> = {
+      name: "Acme Inc.",
       address: "1660 Saint-Clément",
       city: "Montréal",
       postal_code: "H1V 1A1",
       nom_projet: "Refonte CRM Acme",
       nom_client: "Acme Inc.",
-      date_creation: new Date().toISOString().slice(0, 10)
+      date_creation: new Date().toISOString().slice(0, 10),
+      created_at: new Date().toISOString().slice(0, 10),
+      updated_at: new Date().toISOString().slice(0, 10)
     };
-    return state.folder_name_template.replace(
-      /\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g,
-      (_m, k) => sample[k] ?? `{${k}}`
+    const labelByPath = new Map(
+      availableFields.map((f) => [f.path, f.label])
     );
-  }, [selectedType, state.folder_name_template]);
+    return state.folder_name_template.replace(
+      /\{([a-zA-Z_][a-zA-Z0-9_.]*)\}/g,
+      (_m, k) => sample[k] ?? `<${labelByPath.get(k) ?? k}>`
+    );
+  }, [state.folder_name_template, availableFields]);
+
+  // Construit le variable_mapping {x: x} pour chaque placeholder {x} du
+  // pattern (la variable EST le path). L'extracteur générique backend
+  // sait alors quoi résoudre par introspection.
+  function buildVariableMapping(template: string): Record<string, string> {
+    const mapping: Record<string, string> = {};
+    const re = /\{([a-zA-Z_][a-zA-Z0-9_.]*)\}/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(template)) !== null) {
+      mapping[m[1]] = m[1];
+    }
+    return mapping;
+  }
 
   async function save() {
     setBusy(true);
@@ -926,6 +962,9 @@ function ConventionEditorModal({
         .split(/\r?\n/)
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
+      const variableMapping = buildVariableMapping(
+        state.folder_name_template
+      );
       const body = {
         name: state.name,
         entity_type: state.entity_type,
@@ -935,6 +974,9 @@ function ConventionEditorModal({
         template_folder_to_copy_drive_id:
           state.template_folder_to_copy_drive_id || null,
         subfolders_to_create: subfolders,
+        // {x: x} pour chaque placeholder utilisé. Vide => le backend
+        // retombe sur l'extracteur hardcodé (rétrocompat).
+        variable_mapping: variableMapping,
         description: state.description || null,
         active: state.active
       };
@@ -984,7 +1026,7 @@ function ConventionEditorModal({
               }
               className={INPUT_DARK}
             >
-              {types.map((t) => (
+              {dropdownTypes.map((t) => (
                 <option key={t.key} value={t.key}>
                   {t.label}
                 </option>
@@ -1068,6 +1110,7 @@ function ConventionEditorModal({
 
           <Field label="Pattern de nommage">
             <input
+              ref={patternRef}
               type="text"
               value={state.folder_name_template}
               onChange={(e) =>
@@ -1076,20 +1119,32 @@ function ConventionEditorModal({
               className={`${INPUT_DARK} font-mono`}
               placeholder="ex. {address}, {city}"
             />
-            {selectedType && Array.isArray(selectedType.variables) && selectedType.variables.length > 0 ? (
+            {availableFields.length > 0 ? (
+              <div className="mt-2">
+                <p className="mb-1 text-[11px] text-white/50">
+                  Champs disponibles — clique pour insérer dans le pattern :
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {availableFields.map((f) => (
+                    <button
+                      key={f.path}
+                      type="button"
+                      onClick={() => insertPlaceholder(f.path)}
+                      title={`Insère {${f.path}}`}
+                      className="inline-flex items-center gap-1 rounded-md border border-brand-700 bg-brand-950 px-2 py-1 text-[11px] font-medium text-white/80 hover:border-accent-500/60 hover:bg-accent-500/15 hover:text-white"
+                    >
+                      <Plus className="h-3 w-3 text-accent-400" />
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
               <p className="mt-1 text-[11px] text-white/40">
-                Variables dispo :{" "}
-                {selectedType.variables.map((v) => (
-                  <code
-                    key={v.key}
-                    className="mr-1 rounded bg-brand-950 px-1 py-0.5 font-mono"
-                    title={v.description || ""}
-                  >
-                    {`{${v.key}}`}
-                  </code>
-                ))}
+                Sélectionne un type d&apos;entité pour voir ses champs
+                insérables.
               </p>
-            ) : null}
+            )}
           </Field>
 
           <Field label="Template à copier (ID, optionnel)">
@@ -1157,7 +1212,7 @@ function ConventionEditorModal({
           <h3 className="text-sm font-semibold text-white">Aperçu</h3>
           <p className="mt-2 text-white/60">
             Pour un{" "}
-            <strong>{selectedType?.label || state.entity_type}</strong>, le
+            <strong>{selectedLabel}</strong>, le
             dossier sera créé dans :
           </p>
           <code className="mt-1 block break-all rounded bg-brand-950 px-2 py-1 font-mono text-[11px] text-white/80">
@@ -2664,3 +2719,4 @@ function Field({
 // utilisée sur les pages publiques).
 const INPUT_DARK =
   "w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white placeholder-white/30 focus:border-accent-500 focus:outline-none";
+
