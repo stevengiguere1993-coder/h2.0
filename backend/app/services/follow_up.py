@@ -88,6 +88,12 @@ SOUMISSION_CADENCE = [
 
 STOP_OUTCOMES = {"won", "lost", "not_interested"}
 
+# Outcomes « on ne l'a pas joint » : au lieu d'avancer la cadence, on
+# reprogramme un RAPPEL rapproché → le lead repasse « à rappeler ».
+CALLBACK_OUTCOMES = {"voicemail", "no_answer"}
+CALLBACK_LABEL = "Rappeler"
+CALLBACK_DELAY_HOURS = 4  # heures ouvrables — ajustable
+
 
 def _next_step(
     cadence: list[tuple[str, int, bool]], current_label: Optional[str]
@@ -162,4 +168,13 @@ def compute_next_after_log(
     cadence = (
         PROSPECT_CADENCE if subject_type == "prospect" else SOUMISSION_CADENCE
     )
-    return _next_step(cadence, last_label)
+    # Boîte vocale / pas de réponse → on ne fait pas avancer la cadence :
+    # on reprogramme un rappel rapproché. Le prospect réapparaît
+    # « À faire : Rappeler » (à rappeler).
+    if outcome in CALLBACK_OUTCOMES:
+        now = datetime.now(timezone.utc)
+        return (CALLBACK_LABEL, add_business_hours(now, CALLBACK_DELAY_HOURS))
+    # Après un rappel enfin abouti, on reprend la cadence normale (le label
+    # transitoire « Rappeler » est traité comme le 1er palier).
+    effective = cadence[0][0] if last_label == CALLBACK_LABEL else last_label
+    return _next_step(cadence, effective)
