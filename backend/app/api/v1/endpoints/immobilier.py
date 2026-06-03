@@ -706,6 +706,36 @@ async def create_bon_from_immeuble(
     }
 
 
+# ── Signature de bail ──────────────────────────────────────────────────
+
+
+class _BailSendRequest(BaseModel):
+    to: Optional[List[str]] = None  # défaut : courriel du locataire
+
+
+@router.post("/baux/{bail_id}/send")
+async def send_bail(
+    bail_id: int,
+    payload: _BailSendRequest,
+    db: DBSession,
+    user: CurrentUser,
+) -> dict:
+    """Envoie le bail au locataire pour signature électronique (lien
+    public). Retourne le statut d'envoi."""
+    _require_volet(user)
+    from app.services.bail_sign import BailSendError, send_bail_for_signature
+
+    try:
+        bail = await send_bail_for_signature(db, bail_id, to=payload.to)
+    except BailSendError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    await db.commit()
+    return {
+        "sent_to": bail.sent_to_email,
+        "signature_token": bail.signature_token,
+    }
+
+
 # ── Logements ──────────────────────────────────────────────────────────
 
 

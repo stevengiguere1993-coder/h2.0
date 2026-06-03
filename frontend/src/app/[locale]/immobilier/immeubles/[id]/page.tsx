@@ -986,6 +986,7 @@ function BauxTab({
             <th className="px-4 py-2.5">Période</th>
             <th className="px-4 py-2.5 text-right">Loyer/m</th>
             <th className="px-4 py-2.5">Statut</th>
+            <th className="px-4 py-2.5">Signature</th>
             <th className="px-4 py-2.5 text-right">Documents TAL</th>
           </tr>
         </thead>
@@ -1004,6 +1005,9 @@ function BauxTab({
               <td className="px-4 py-2 text-xs">
                 <StatusBadge status={b.status} />
               </td>
+              <td className="px-4 py-2 text-xs">
+                <BailSignButton bailId={b.id} />
+              </td>
               <td className="px-4 py-2 text-right">
                 <TalFormDropdown bailId={b.id} />
               </td>
@@ -1011,6 +1015,48 @@ function BauxTab({
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function BailSignButton({ bailId }: { bailId: number }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  async function send() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/baux/${bailId}/send`,
+        { method: "POST", body: JSON.stringify({}) }
+      );
+      if (!res.ok) {
+        setMsg((await res.text()).slice(0, 120) || `HTTP ${res.status}`);
+        return;
+      }
+      const d = (await res.json()) as { sent_to: string | null };
+      setMsg(`Envoyé à ${d.sent_to || "—"}`);
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="flex flex-col gap-0.5">
+      <button
+        type="button"
+        onClick={() => void send()}
+        disabled={busy}
+        className="inline-flex w-fit items-center gap-1 rounded-md border border-accent-500/40 bg-accent-500/10 px-2 py-1 text-[11px] font-semibold text-accent-500 hover:bg-accent-500/20 disabled:opacity-50"
+        title="Envoyer le bail au locataire pour signature"
+      >
+        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+        Envoyer pour signature
+      </button>
+      {msg ? (
+        <span className="text-[10px] text-white/50">{msg}</span>
+      ) : null}
     </div>
   );
 }

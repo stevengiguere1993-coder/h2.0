@@ -920,6 +920,15 @@ async def init_db() -> None:
                 "scope",
                 "VARCHAR(16) NOT NULL DEFAULT 'entity'",
             ),
+            # Signature électronique des baux (volet immobilier, Phase 2.4).
+            ("imm_baux", "signature_token", "VARCHAR(64)"),
+            ("imm_baux", "sent_to_email", "VARCHAR(320)"),
+            ("imm_baux", "sent_at", "TIMESTAMP WITH TIME ZONE"),
+            ("imm_baux", "signed_at", "TIMESTAMP WITH TIME ZONE"),
+            ("imm_baux", "signed_by_name", "VARCHAR(255)"),
+            ("imm_baux", "signature_ip", "VARCHAR(64)"),
+            ("imm_baux", "signature_image", "BYTEA"),
+            ("imm_baux", "signature_image_content_type", "VARCHAR(100)"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
