@@ -286,6 +286,8 @@ class DevlogSoumissionRead(BaseModel):
 class DevlogSoumissionItemCreate(BaseModel):
     soumission_id: int
     section_id: Optional[int] = None
+    # Module parent (refonte 2026-06). Optionnel et rétrocompatible.
+    module_id: Optional[int] = None
     position: Optional[int] = None
     description: str = Field(..., min_length=1, max_length=500)
     unit: Optional[str] = Field(default=None, max_length=32)
@@ -300,6 +302,7 @@ class DevlogSoumissionItemCreate(BaseModel):
 
 class DevlogSoumissionItemUpdate(BaseModel):
     section_id: Optional[int] = None
+    module_id: Optional[int] = None
     position: Optional[int] = None
     description: Optional[str] = Field(default=None, min_length=1, max_length=500)
     unit: Optional[str] = Field(default=None, max_length=32)
@@ -318,6 +321,9 @@ class DevlogSoumissionItemRead(BaseModel):
     id: int
     soumission_id: int
     section_id: Optional[int]
+    # Module parent (refonte 2026-06) — NULL pour les items legacy /
+    # récurrents. Exposé pour permettre au frontend de regrouper.
+    module_id: Optional[int] = None
     position: int
     description: str
     unit: Optional[str]
@@ -331,6 +337,125 @@ class DevlogSoumissionItemRead(BaseModel):
     # --- Refonte « devis_dev » ---------------------------------------
     item_kind: str = "feature"
     heures: Optional[float] = None
+
+
+# --------------------------------------------------------------------------
+# DevlogSoumissionModule (refonte 2026-06 — niveau MODULE)
+# --------------------------------------------------------------------------
+#
+# Un module regroupe des fonctionnalités (items) DANS la section
+# « investissement initial ». Le prix d'un module = somme des ``total``
+# de ses items. Couche purement organisationnelle en Phase 1 : aucun
+# impact sur le calcul du total de la soumission.
+
+
+class DevlogSoumissionModuleCreate(BaseModel):
+    soumission_id: int
+    section_id: Optional[int] = None
+    name: str = Field(..., min_length=1, max_length=255)
+    position: Optional[int] = None
+    description: Optional[str] = None
+    notes: Optional[str] = None
+    # État de sélection (servira aux phases suivantes). Default True.
+    selected: bool = True
+
+
+class DevlogSoumissionModuleUpdate(BaseModel):
+    section_id: Optional[int] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    position: Optional[int] = None
+    description: Optional[str] = None
+    notes: Optional[str] = None
+    selected: Optional[bool] = None
+
+
+class DevlogSoumissionModuleRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    soumission_id: int
+    section_id: Optional[int]
+    name: str
+    position: int
+    description: Optional[str]
+    notes: Optional[str]
+    selected: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class DevlogSoumissionModuleWithItems(DevlogSoumissionModuleRead):
+    """Module enrichi pour la lecture hiérarchique : ses items + le
+    total dérivé (somme des ``total`` des items du module)."""
+
+    total: float = 0.0
+    items: list[DevlogSoumissionItemRead] = Field(default_factory=list)
+
+
+class DevlogSoumissionItemAssignModule(BaseModel):
+    """Assigne (ou détache si ``module_id`` est NULL) un item à un
+    module."""
+
+    module_id: Optional[int] = None
+
+
+class DevlogModuleReorderRequest(BaseModel):
+    """Réordonne les modules d'une soumission : liste ordonnée d'IDs.
+    La position de chaque module devient son index dans la liste."""
+
+    module_ids: list[int] = Field(..., min_length=1)
+
+
+# --------------------------------------------------------------------------
+# Lecture hiérarchique d'une soumission (sections → modules → items)
+# --------------------------------------------------------------------------
+#
+# Vue d'organisation additive : pour la section « investissement
+# initial » on expose modules → items ; ailleurs (sections récurrentes
+# ou items legacy sans section) on expose les items directs. N'altère
+# AUCUN calcul de total — purement structurelle.
+
+
+class DevlogSoumissionSectionStructure(BaseModel):
+    """Une section avec ses modules (et leurs items) + ses items
+    directs (non rattachés à un module)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    soumission_id: int
+    position: int
+    name: str
+    billing_kind: str
+    markup_percent: Optional[float] = None
+    client_label: Optional[str] = None
+    notes: Optional[str] = None
+    modules: list[DevlogSoumissionModuleWithItems] = Field(
+        default_factory=list
+    )
+    direct_items: list[DevlogSoumissionItemRead] = Field(
+        default_factory=list
+    )
+
+
+class DevlogSoumissionStructure(BaseModel):
+    """Hiérarchie complète d'une soumission pour l'affichage :
+    sections → (modules → items) pour l'initial, items directs ailleurs.
+
+    ``orphan_modules`` : modules sans section (cas où la section a été
+    supprimée — ``section_id`` mis à NULL). ``orphan_items`` : items
+    sans section ET sans module (legacy)."""
+
+    soumission_id: int
+    sections: list[DevlogSoumissionSectionStructure] = Field(
+        default_factory=list
+    )
+    orphan_modules: list[DevlogSoumissionModuleWithItems] = Field(
+        default_factory=list
+    )
+    orphan_items: list[DevlogSoumissionItemRead] = Field(
+        default_factory=list
+    )
 
 
 # --------------------------------------------------------------------------

@@ -40,6 +40,7 @@ from app.models.devlog_project_recurring_service import (  # noqa: F401
 from app.models.devlog_project_task import DevlogProjectTask  # noqa: F401
 from app.models.devlog_soumission import DevlogSoumission  # noqa: F401
 from app.models.devlog_soumission_item import DevlogSoumissionItem  # noqa: F401
+from app.models.devlog_soumission_module import DevlogSoumissionModule  # noqa: F401
 from app.models.devlog_soumission_section import DevlogSoumissionSection  # noqa: F401
 from app.models.devlog_sous_traitant import DevlogSousTraitant  # noqa: F401
 from app.models.devlog_time_entry import DevlogTimeEntry  # noqa: F401
@@ -257,6 +258,7 @@ __all__ = [
     "DevlogProjectTask",
     "DevlogSoumission",
     "DevlogSoumissionItem",
+    "DevlogSoumissionModule",
     "DevlogSoumissionSection",
     "DevlogSousTraitant",
     "DevlogTimeEntry",

@@ -53,6 +53,17 @@ class DevlogSoumissionItem(Base, TimestampUpdateMixin):
         nullable=True,
         index=True,
     )
+    # Module parent (refonte 2026-06). Une fonctionnalité rattachée à
+    # un module appartient à ce module ; le prix du module = somme des
+    # ``total`` de ses items. Nullable : un item legacy ou un item de
+    # section récurrente reste valide sans module (ON DELETE SET NULL —
+    # si le module est supprimé, l'item est détaché, pas effacé). La
+    # colonne est ajoutée via ``additive_columns`` dans ``db/session``.
+    module_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("devlog_soumission_modules.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     position: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
