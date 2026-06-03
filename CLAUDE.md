@@ -2,6 +2,25 @@
 
 Notes de travail pour Claude Code sur ce repo (h2.0 — Horizon Services Immobiliers).
 
+## Règles UI — lisibilité des couleurs (permanent, toutes conversations)
+
+Toute écriture (texte, libellés, chiffres, badges) **doit être lisible à
+l'œil humain**. Cette règle prévaut sur l'esthétique et s'applique en mode
+sombre **comme** en mode clair (`data-portal-theme="light"`).
+
+- **Aucune couleur pastel pour du texte** : pas de tons délavés / trop
+  clairs (jaune pâle, vert menthe, bleu ciel pâle, etc.) sur fond clair, ni
+  l'inverse. Les couleurs pastel sont réservées aux fonds / surfaces, pas à
+  l'encre.
+- **Jamais noir sur noir** (texte sombre sur fond sombre).
+- **Jamais blanc sur blanc** (texte clair sur fond clair) — vérifier en
+  particulier les paliers d'opacité Tailwind (`text-white/85`, etc.) qui
+  doivent être correctement remappés dans le thème clair.
+- Contraste suffisant exigé (vise WCAG AA : ratio ≥ 4.5:1 pour le texte
+  normal). Dans le doute, choisir la teinte plus foncée/contrastée.
+- Avant de livrer une UI, je vérifie mentalement le rendu **dans les deux
+  thèmes** pour qu'aucun texte ne devienne invisible.
+
 ## Workflow Git — merge sans demander la permission
 
 Quand le code est prêt à partir en production, je commit + push + PR + merge
