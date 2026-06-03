@@ -655,6 +655,7 @@ export default function ProspectDetailPage() {
                     title="Appels & SMS"
                     emptyHint="Aucun appel ni SMS lié à ce prospect. Utilise « Appeler » dans la fiche pour démarrer."
                     replyToE164={p.phone || null}
+                    email={p.email || null}
                   />
                 </div>
               ) : null}

@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Bot,
   Loader2,
+  Mail,
   MessageSquare,
   Mic,
   PhoneIncoming,
@@ -30,7 +31,7 @@ export type CommunicationsEntityType =
   | "contact_request";
 
 type Event = {
-  kind: "call" | "sms";
+  kind: "call" | "sms" | "email";
   id: number;
   at: string;
   direction: "inbound" | "outbound" | string;
@@ -44,6 +45,9 @@ type Event = {
   followup_suggestion: string | null;
   body: string | null;
   num_media: number;
+  subject?: string | null;
+  email_from?: string | null;
+  email_to?: string | null;
 };
 
 type Filter = "all" | "call" | "sms" | "voicemail";
@@ -74,7 +78,8 @@ export function CommunicationsTimeline({
   entityId,
   title = "Communications",
   emptyHint,
-  replyToE164
+  replyToE164,
+  email
 }: {
   entityType: CommunicationsEntityType;
   entityId: number;
@@ -84,6 +89,9 @@ export function CommunicationsTimeline({
   // envoie au numéro indiqué (généralement le téléphone CRM du
   // contact en cours).
   replyToE164?: string | null;
+  // Si fourni, affiche un composer courriel (envoi depuis le numéro/
+  // l'identité Horizon, logué dans le fil).
+  email?: string | null;
 }) {
   const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
@@ -93,6 +101,49 @@ export function CommunicationsTimeline({
   const [replyBody, setReplyBody] = useState("");
   const [replyBusy, setReplyBusy] = useState(false);
   const [replyNotice, setReplyNotice] = useState<string | null>(null);
+  const [showEmail, setShowEmail] = useState(false);
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailBody, setEmailBody] = useState("");
+  const [emailBusy, setEmailBusy] = useState(false);
+  const [emailNotice, setEmailNotice] = useState<string | null>(null);
+
+  async function reload() {
+    const lr = await authedFetch(
+      `/api/v1/voice/communications/${entityType}/${entityId}?limit=200`
+    );
+    if (lr.ok) setEvents((await lr.json()) as Event[]);
+  }
+
+  async function sendEmail() {
+    if (!email || !emailSubject.trim() || !emailBody.trim()) return;
+    setEmailBusy(true);
+    setEmailNotice(null);
+    try {
+      const r = await authedFetch("/api/v1/voice/email", {
+        method: "POST",
+        body: JSON.stringify({
+          to: email,
+          subject: emailSubject.trim(),
+          body: emailBody.trim(),
+          entity_type: entityType,
+          entity_id: entityId
+        })
+      });
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(t.slice(0, 200) || `HTTP ${r.status}`);
+      }
+      setEmailSubject("");
+      setEmailBody("");
+      setShowEmail(false);
+      setEmailNotice("Courriel envoyé.");
+      await reload();
+    } catch (e) {
+      setEmailNotice(`Échec d'envoi : ${(e as Error).message}`);
+    } finally {
+      setEmailBusy(false);
+    }
+  }
 
   async function sendQuickReply() {
     if (!replyToE164 || !replyBody.trim()) return;
@@ -303,6 +354,75 @@ export function CommunicationsTimeline({
           </p>
         </div>
       ) : null}
+
+      {email ? (
+        <div className="mt-4 border-t border-brand-800 pt-3">
+          {!showEmail ? (
+            <button
+              type="button"
+              onClick={() => setShowEmail(true)}
+              className="inline-flex items-center gap-2 rounded-md border border-accent-500/40 bg-accent-500/10 px-3 py-1.5 text-xs font-semibold text-accent-500 hover:bg-accent-500/20"
+            >
+              <Mail className="h-3.5 w-3.5" /> Envoyer un courriel
+            </button>
+          ) : (
+            <div>
+              <label className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
+                Courriel
+                <span className="ml-2 font-mono text-white/40">→ {email}</span>
+              </label>
+              <input
+                type="text"
+                value={emailSubject}
+                onChange={(e) => setEmailSubject(e.target.value)}
+                placeholder="Objet"
+                disabled={emailBusy}
+                className="mt-2 w-full rounded-md border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white placeholder:text-white/30 focus:border-accent-500 focus:outline-none"
+              />
+              <textarea
+                value={emailBody}
+                onChange={(e) => setEmailBody(e.target.value)}
+                rows={4}
+                placeholder="Votre message…"
+                disabled={emailBusy}
+                className="mt-2 w-full rounded-md border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white placeholder:text-white/30 focus:border-accent-500 focus:outline-none"
+              />
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={sendEmail}
+                  disabled={
+                    emailBusy || !emailSubject.trim() || !emailBody.trim()
+                  }
+                  className="inline-flex items-center gap-2 rounded-md bg-accent-500 px-4 py-2 text-sm font-semibold text-brand-950 hover:bg-accent-400 disabled:opacity-50"
+                >
+                  {emailBusy ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Mail className="h-4 w-4" />
+                  )}
+                  Envoyer
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowEmail(false)}
+                  disabled={emailBusy}
+                  className="text-xs text-white/50 hover:text-white"
+                >
+                  Annuler
+                </button>
+              </div>
+            </div>
+          )}
+          {emailNotice ? (
+            <p className="mt-2 text-xs text-white/60">{emailNotice}</p>
+          ) : null}
+          <p className="mt-1 text-[10px] text-white/30">
+            Le courriel part depuis l&apos;identité Horizon et apparaît dans
+            la fiche.
+          </p>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -310,9 +430,12 @@ export function CommunicationsTimeline({
 function EventRow({ ev }: { ev: Event }) {
   const isInbound = ev.direction === "inbound";
   const isSms = ev.kind === "sms";
+  const isEmail = ev.kind === "email";
   const isVoicemail = ev.kind === "call" && ev.was_voicemail;
 
-  const Icon = isSms
+  const Icon = isEmail
+    ? Mail
+    : isSms
     ? MessageSquare
     : isVoicemail
     ? Voicemail
@@ -320,7 +443,9 @@ function EventRow({ ev }: { ev: Event }) {
     ? PhoneIncoming
     : PhoneOutgoing;
 
-  const toneClass = isVoicemail
+  const toneClass = isEmail
+    ? "text-indigo-300 border-indigo-500/30 bg-indigo-500/5"
+    : isVoicemail
     ? "text-violet-300 border-violet-500/30 bg-violet-500/5"
     : isSms
     ? "text-blue-300 border-blue-500/30 bg-blue-500/5"
@@ -339,7 +464,11 @@ function EventRow({ ev }: { ev: Event }) {
           <Icon className="mt-0.5 h-4 w-4 flex-shrink-0" />
           <div className="min-w-0">
             <div className="text-xs font-semibold">
-              {isVoicemail
+              {isEmail
+                ? isInbound
+                  ? "Courriel reçu"
+                  : "Courriel envoyé"
+                : isVoicemail
                 ? "Voicemail"
                 : isSms
                 ? isInbound
@@ -353,12 +482,32 @@ function EventRow({ ev }: { ev: Event }) {
               </span>
             </div>
             <div className="mt-0.5 font-mono text-[11px] text-white/50">
-              {isInbound ? ev.from_e164 : ev.to_e164}
-              {!isSms && ev.duration_sec ? (
+              {isEmail
+                ? isInbound
+                  ? ev.email_from
+                  : ev.email_to
+                : isInbound
+                ? ev.from_e164
+                : ev.to_e164}
+              {!isSms && !isEmail && ev.duration_sec ? (
                 <span className="ml-2">{fmtDuration(ev.duration_sec)}</span>
               ) : null}
               <span className="ml-2 text-white/30">· {ev.status}</span>
             </div>
+            {isEmail ? (
+              <>
+                {ev.subject ? (
+                  <p className="mt-1 text-xs font-semibold text-white/90">
+                    {ev.subject}
+                  </p>
+                ) : null}
+                {ev.body ? (
+                  <p className="mt-0.5 line-clamp-3 text-xs text-white/70">
+                    {ev.body}
+                  </p>
+                ) : null}
+              </>
+            ) : null}
             {isSms && ev.body ? (
               <p className="mt-1 line-clamp-3 text-xs text-white/80">
                 {ev.body}
@@ -383,13 +532,15 @@ function EventRow({ ev }: { ev: Event }) {
             ) : null}
           </div>
         </div>
-        <Link
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          href={drawerHref as any}
-          className="text-[11px] text-white/50 underline decoration-dotted hover:text-white"
-        >
-          Détails →
-        </Link>
+        {!isEmail ? (
+          <Link
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            href={drawerHref as any}
+            className="text-[11px] text-white/50 underline decoration-dotted hover:text-white"
+          >
+            Détails →
+          </Link>
+        ) : null}
       </div>
     </li>
   );

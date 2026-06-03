@@ -592,6 +592,7 @@ function ClientTabs({
           title="Appels & SMS"
           emptyHint="Aucun appel ni SMS lié à ce client pour le moment."
           replyToE164={client.phone || null}
+          email={client.email || null}
         />
       ) : null}
 
