@@ -692,7 +692,11 @@ export default function SoumissionDetailPage() {
         })
       });
       if (!r.ok) throw new Error();
-      await refreshModules();
+      // Le backend pré-remplit le nouveau module avec les « fonctionnalités
+      // par défaut » (default_features_json) comme de vrais items feature.
+      // On recharge TOUT (loadAll) — et pas seulement la liste des modules —
+      // pour que ces items pré-remplis apparaissent immédiatement.
+      await loadAll();
       refreshPreview();
     } catch {
       setError("Création du module impossible");
