@@ -48,6 +48,8 @@ type Event = {
   subject?: string | null;
   email_from?: string | null;
   email_to?: string | null;
+  call_summary?: string | null;
+  has_recording?: boolean;
 };
 
 type Filter = "all" | "call" | "sms" | "voicemail";
@@ -299,7 +301,11 @@ export function CommunicationsTimeline({
         ) : (
           <ol className="space-y-2">
             {filtered.map((e) => (
-              <EventRow key={`${e.kind}-${e.id}`} ev={e} />
+              <EventRow
+                key={`${e.kind}-${e.id}`}
+                ev={e}
+                onReload={reload}
+              />
             ))}
           </ol>
         )}
@@ -427,11 +433,39 @@ export function CommunicationsTimeline({
   );
 }
 
-function EventRow({ ev }: { ev: Event }) {
+function EventRow({
+  ev,
+  onReload
+}: {
+  ev: Event;
+  onReload?: () => Promise<void>;
+}) {
   const isInbound = ev.direction === "inbound";
   const isSms = ev.kind === "sms";
   const isEmail = ev.kind === "email";
   const isVoicemail = ev.kind === "call" && ev.was_voicemail;
+  const isCall = ev.kind === "call" && !ev.was_voicemail;
+  const [summarizing, setSummarizing] = useState(false);
+  const [summaryErr, setSummaryErr] = useState<string | null>(null);
+
+  async function summarize() {
+    setSummarizing(true);
+    setSummaryErr(null);
+    try {
+      const r = await authedFetch(`/api/v1/voice/calls/${ev.id}/summarize`, {
+        method: "POST"
+      });
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(t.slice(0, 160) || `HTTP ${r.status}`);
+      }
+      if (onReload) await onReload();
+    } catch (e) {
+      setSummaryErr((e as Error).message);
+    } finally {
+      setSummarizing(false);
+    }
+  }
 
   const Icon = isEmail
     ? Mail
@@ -518,6 +552,30 @@ function EventRow({ ev }: { ev: Event }) {
                 <Mic className="mr-1 inline h-3 w-3" />
                 {ev.voicemail_summary}
               </p>
+            ) : null}
+            {isCall && ev.call_summary ? (
+              <p className="mt-1 text-xs text-white/80">
+                <Bot className="mr-1 inline h-3 w-3" />
+                {ev.call_summary}
+              </p>
+            ) : null}
+            {isCall && ev.has_recording && !ev.call_summary ? (
+              <button
+                type="button"
+                onClick={summarize}
+                disabled={summarizing}
+                className="mt-1 inline-flex items-center gap-1 rounded-md border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-white/60 hover:text-white disabled:opacity-50"
+              >
+                {summarizing ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Bot className="h-3 w-3" />
+                )}
+                Résumer l&apos;appel
+              </button>
+            ) : null}
+            {summaryErr ? (
+              <p className="mt-1 text-[10px] text-rose-300">{summaryErr}</p>
             ) : null}
             {!isSms && !isVoicemail && ev.intent ? (
               <p className="mt-1 text-[11px] text-white/50">

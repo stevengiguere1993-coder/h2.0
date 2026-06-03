@@ -920,6 +920,10 @@ async def init_db() -> None:
                 "scope",
                 "VARCHAR(16) NOT NULL DEFAULT 'entity'",
             ),
+            # Résumé IA de l'enregistrement d'appel (humain) — distinct du
+            # voicemail.
+            ("voice_calls", "recording_transcription", "TEXT"),
+            ("voice_calls", "recording_summary", "TEXT"),
             # Extracteur générique des Drive Conventions : mapping JSON
             # {var_key: field_path} résolu par introspection. NULL =
             # fallback sur l'extracteur hardcodé du registry (rétrocompat
