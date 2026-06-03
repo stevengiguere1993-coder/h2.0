@@ -2,6 +2,7 @@
 
 import { use, useEffect, useState } from "react";
 import {
+  AlertTriangle,
   ArrowLeft,
   Banknote,
   Building2,
@@ -11,13 +12,21 @@ import {
   Home,
   Loader2,
   Percent,
+  Trash2,
   TrendingUp,
-  Wrench
+  Wrench,
+  X
 } from "lucide-react";
 
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
-import { ImmobilierTopbar } from "../../layout";
+import { ImmobilierTopbar, useImmobilierLayout } from "../../layout";
+
+type Ownership = {
+  id: number;
+  entreprise_id: number;
+  ownership_pct: number;
+};
 
 type Immeuble = {
   id: number;
@@ -132,8 +141,15 @@ export default function ImmeubleDetailPage({
 }) {
   const { id } = use(params);
   const immeubleId = Number(id);
+  const router = useRouter();
+  const { entreprises } = useImmobilierLayout();
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("overview");
   const [immeuble, setImmeuble] = useState<Immeuble | null>(null);
+  const [ownerships, setOwnerships] = useState<Ownership[]>([]);
+  const [showDelete, setShowDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [savingOwner, setSavingOwner] = useState(false);
+  const [actionErr, setActionErr] = useState<string | null>(null);
   const [financials, setFinancials] = useState<Financials | null>(null);
   const [logements, setLogements] = useState<Logement[] | null>(null);
   const [baux, setBaux] = useState<Bail[] | null>(null);
@@ -147,25 +163,29 @@ export default function ImmeubleDetailPage({
     let cancelled = false;
     async function loadAll() {
       try {
-        const [imm, fin, logs, bx, hyp, evals, maint] = await Promise.all([
-          authedFetch(`/api/v1/immobilier/immeubles/${immeubleId}`),
-          authedFetch(
-            `/api/v1/immobilier/immeubles/${immeubleId}/financials`
-          ),
-          authedFetch(
-            `/api/v1/immobilier/immeubles/${immeubleId}/logements`
-          ),
-          authedFetch(`/api/v1/immobilier/immeubles/${immeubleId}/baux`),
-          authedFetch(
-            `/api/v1/immobilier/immeubles/${immeubleId}/hypotheques`
-          ),
-          authedFetch(
-            `/api/v1/immobilier/immeubles/${immeubleId}/evaluations`
-          ),
-          authedFetch(
-            `/api/v1/immobilier/immeubles/${immeubleId}/maintenance`
-          )
-        ]);
+        const [imm, fin, logs, bx, hyp, evals, maint, own] =
+          await Promise.all([
+            authedFetch(`/api/v1/immobilier/immeubles/${immeubleId}`),
+            authedFetch(
+              `/api/v1/immobilier/immeubles/${immeubleId}/financials`
+            ),
+            authedFetch(
+              `/api/v1/immobilier/immeubles/${immeubleId}/logements`
+            ),
+            authedFetch(`/api/v1/immobilier/immeubles/${immeubleId}/baux`),
+            authedFetch(
+              `/api/v1/immobilier/immeubles/${immeubleId}/hypotheques`
+            ),
+            authedFetch(
+              `/api/v1/immobilier/immeubles/${immeubleId}/evaluations`
+            ),
+            authedFetch(
+              `/api/v1/immobilier/immeubles/${immeubleId}/maintenance`
+            ),
+            authedFetch(
+              `/api/v1/immobilier/immeubles/${immeubleId}/ownerships`
+            )
+          ]);
         if (cancelled) return;
         if (!imm.ok) throw new Error(`Immeuble HTTP ${imm.status}`);
         setImmeuble((await imm.json()) as Immeuble);
@@ -175,6 +195,7 @@ export default function ImmeubleDetailPage({
         if (hyp.ok) setHypotheques((await hyp.json()) as Hypotheque[]);
         if (evals.ok) setEvaluations((await evals.json()) as Evaluation[]);
         if (maint.ok) setMaintenance((await maint.json()) as Maintenance[]);
+        if (own.ok) setOwnerships((await own.json()) as Ownership[]);
       } catch (err) {
         if (!cancelled) setError((err as Error).message);
       }
@@ -184,6 +205,44 @@ export default function ImmeubleDetailPage({
       cancelled = true;
     };
   }, [immeubleId]);
+
+  const ownerId = ownerships[0]?.entreprise_id ?? null;
+
+  async function onChangeOwner(entrepriseId: number) {
+    if (!entrepriseId || entrepriseId === ownerId) return;
+    setSavingOwner(true);
+    setActionErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/immeubles/${immeubleId}/owner`,
+        { method: "PUT", body: JSON.stringify({ entreprise_id: entrepriseId }) }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setOwnerships((await res.json()) as Ownership[]);
+    } catch (e) {
+      setActionErr(`Changement de propriétaire échoué : ${(e as Error).message}`);
+    } finally {
+      setSavingOwner(false);
+    }
+  }
+
+  async function onDelete() {
+    setDeleting(true);
+    setActionErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/immeubles/${immeubleId}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204)
+        throw new Error(`HTTP ${res.status}`);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      router.replace("/immobilier/immeubles" as any);
+    } catch (e) {
+      setActionErr(`Suppression échouée : ${(e as Error).message}`);
+      setDeleting(false);
+    }
+  }
 
   if (error) {
     return (
@@ -270,7 +329,49 @@ export default function ImmeubleDetailPage({
               ) : null}
             </div>
           </div>
+
+          {/* Actions : propriétaire + suppression */}
+          <div className="flex flex-col items-stretch gap-2 sm:items-end">
+            <label className="flex items-center gap-2 text-[11px] font-semibold text-white/60">
+              Propriétaire
+              <select
+                value={ownerId ?? ""}
+                onChange={(e) => void onChangeOwner(Number(e.target.value))}
+                disabled={savingOwner || entreprises.length === 0}
+                className="rounded-lg border border-brand-800 bg-brand-900 px-2 py-1 text-xs font-semibold text-white outline-none focus:border-sky-300 disabled:opacity-50"
+              >
+                <option value="" disabled className="bg-brand-950 text-white">
+                  — choisir —
+                </option>
+                {entreprises.map((e) => (
+                  <option
+                    key={e.id}
+                    value={e.id}
+                    className="bg-brand-950 text-white"
+                  >
+                    {e.name}
+                  </option>
+                ))}
+              </select>
+              {savingOwner ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-300" />
+              ) : null}
+            </label>
+            <button
+              type="button"
+              onClick={() => setShowDelete(true)}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/20"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Supprimer
+            </button>
+          </div>
         </header>
+
+        {actionErr ? (
+          <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+            {actionErr}
+          </p>
+        ) : null}
 
         {/* KPIs financiers */}
         {financials ? (
@@ -354,6 +455,60 @@ export default function ImmeubleDetailPage({
           {tab === "maintenance" ? <MaintenanceTab list={maintenance} /> : null}
         </div>
       </div>
+
+      {showDelete ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-rose-500/30 bg-brand-950 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
+              <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-rose-300">
+                <AlertTriangle className="h-4 w-4" /> Supprimer l&apos;immeuble
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShowDelete(false)}
+                disabled={deleting}
+                className="rounded-md p-1.5 text-white/60 hover:bg-brand-900 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-3 p-5 text-sm text-white/80">
+              <p>
+                Tu vas supprimer{" "}
+                <strong className="text-white">{immeuble.name}</strong>.
+              </p>
+              <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                ⚠ Action irréversible : tous les logements, baux, hypothèques,
+                évaluations et ordres de maintenance de cet immeuble seront
+                supprimés aussi.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-brand-800 px-5 py-3">
+              <button
+                type="button"
+                onClick={() => setShowDelete(false)}
+                disabled={deleting}
+                className="rounded-lg border border-white/15 px-4 py-2 text-xs font-semibold text-white/70 hover:text-white"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={() => void onDelete()}
+                disabled={deleting}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-rose-500/90 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-500 disabled:opacity-50"
+              >
+                {deleting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5" />
+                )}
+                Supprimer définitivement
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

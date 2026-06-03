@@ -578,6 +578,49 @@ async def delete_ownership(
     await db.commit()
 
 
+class _SetOwnerRequest(BaseModel):
+    entreprise_id: int
+
+
+@router.put(
+    "/immeubles/{immeuble_id}/owner",
+    response_model=List[ImmeubleOwnershipRead],
+)
+async def set_immeuble_owner(
+    immeuble_id: int,
+    payload: _SetOwnerRequest,
+    db: DBSession,
+    user: CurrentUser,
+) -> List[ImmeubleOwnershipRead]:
+    """Réassigne l'immeuble à UNE entreprise propriétaire à 100 %.
+
+    Remplace toutes les ownerships existantes par une seule (cas usuel :
+    corriger la compagnie propriétaire d'un immeuble). Atomique."""
+    _require_volet(user)
+    await _get_immeuble_or_404(db, immeuble_id)
+    ent = await db.get(Entreprise, payload.entreprise_id)
+    if ent is None:
+        raise HTTPException(status_code=404, detail="Entreprise introuvable.")
+    existing = (
+        await db.execute(
+            select(ImmeubleOwnership).where(
+                ImmeubleOwnership.immeuble_id == immeuble_id
+            )
+        )
+    ).scalars().all()
+    for o in existing:
+        await db.delete(o)
+    fresh = ImmeubleOwnership(
+        immeuble_id=immeuble_id,
+        entreprise_id=payload.entreprise_id,
+        ownership_pct=100.0,
+    )
+    db.add(fresh)
+    await db.commit()
+    await db.refresh(fresh)
+    return [ImmeubleOwnershipRead.model_validate(fresh)]
+
+
 # ── Logements ──────────────────────────────────────────────────────────
 
 
