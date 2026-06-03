@@ -734,6 +734,18 @@ async def init_db() -> None:
             # étend la table items existante. Additif et rétrocompatible :
             # NULL pour tous les items legacy.
             ("devlog_soumission_items", "module_id", "INTEGER"),
+            # Gratuité conditionnelle « module → module » (refonte
+            # 2026-06, Phase 2). Si défini ET module déclencheur
+            # sélectionné, ce module devient gratuit côté client. FK
+            # auto-référente (ON DELETE SET NULL côté modèle ; l'ALTER
+            # ajoute la colonne simple, comme pour ``module_id``).
+            # Additif et rétrocompatible : NULL pour tous les modules
+            # existants.
+            (
+                "devlog_soumission_modules",
+                "free_when_module_id",
+                "INTEGER",
+            ),
             ("devlog_leads", "address", "VARCHAR(500)"),
             (
                 "devlog_leads",

@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.devlog_client import DevlogClient
 from app.models.devlog_soumission import DevlogSoumission
 from app.models.devlog_soumission_item import DevlogSoumissionItem
+from app.models.devlog_soumission_module import DevlogSoumissionModule
 from app.services.devlog_devis_calc import compute_devis
 
 
@@ -184,14 +185,19 @@ def _styles(rl: dict[str, Any]):
 
 async def _load(
     db: AsyncSession, soumission_id: int
-) -> tuple[Optional[DevlogSoumission], list[DevlogSoumissionItem], Optional[DevlogClient]]:
+) -> tuple[
+    Optional[DevlogSoumission],
+    list[DevlogSoumissionItem],
+    Optional[DevlogClient],
+    list[DevlogSoumissionModule],
+]:
     soumission = (
         await db.execute(
             select(DevlogSoumission).where(DevlogSoumission.id == soumission_id)
         )
     ).scalar_one_or_none()
     if soumission is None:
-        return None, [], None
+        return None, [], None, []
     items = list(
         (
             await db.execute(
@@ -204,6 +210,17 @@ async def _load(
             )
         ).scalars().all()
     )
+    # Modules (Phase 2) — passés à ``compute_devis`` pour appliquer
+    # sélection + gratuité. Liste vide => chemin legacy inchangé.
+    modules = list(
+        (
+            await db.execute(
+                select(DevlogSoumissionModule).where(
+                    DevlogSoumissionModule.soumission_id == soumission_id
+                )
+            )
+        ).scalars().all()
+    )
     client: Optional[DevlogClient] = None
     if soumission.client_id is not None:
         client = (
@@ -211,13 +228,14 @@ async def _load(
                 select(DevlogClient).where(DevlogClient.id == soumission.client_id)
             )
         ).scalar_one_or_none()
-    return soumission, items, client
+    return soumission, items, client, modules
 
 
 def _render_bytes(
     soumission: DevlogSoumission,
     items: list[DevlogSoumissionItem],
     client: Optional[DevlogClient],
+    modules: Optional[list[DevlogSoumissionModule]] = None,
 ) -> bytes:
     rl = _lazy_reportlab()
     Paragraph = rl["Paragraph"]
@@ -228,7 +246,7 @@ def _render_bytes(
     mm = rl["mm"]
     colors = rl["colors"]
 
-    devis = compute_devis(soumission, items)
+    devis = compute_devis(soumission, items, modules)
     recurring = devis.get("recurring", {})
     initial = devis.get("initial", {})
 
@@ -526,7 +544,7 @@ async def generate_devis_pdf(
     db: AsyncSession, soumission_id: int
 ) -> bytes:
     """Rend le PDF de la soumission devis_dev (vue client uniquement)."""
-    soumission, items, client = await _load(db, soumission_id)
+    soumission, items, client, modules = await _load(db, soumission_id)
     if soumission is None:
         raise ValueError(f"Soumission {soumission_id} introuvable.")
     if not getattr(soumission, "is_devis_dev", False):
@@ -534,13 +552,14 @@ async def generate_devis_pdf(
             "Seules les soumissions au nouveau format devis_dev "
             "peuvent générer un PDF."
         )
-    return _render_bytes(soumission, items, client)
+    return _render_bytes(soumission, items, client, modules)
 
 
 def _render_signed_bytes(
     soumission: DevlogSoumission,
     items: list[DevlogSoumissionItem],
     client: Optional[DevlogClient],
+    modules: Optional[list[DevlogSoumissionModule]] = None,
 ) -> bytes:
     """Variante de ``_render_bytes`` avec un cartouche très visible
     « SIGNÉ ÉLECTRONIQUEMENT » en haut de la première page + IP +
@@ -560,7 +579,7 @@ def _render_signed_bytes(
     colors = rl["colors"]
     SimpleDocTemplate = rl["SimpleDocTemplate"]
 
-    base_pdf = _render_bytes(soumission, items, client)
+    base_pdf = _render_bytes(soumission, items, client, modules)
     # Si reportlab n'est pas dispo, on retombe sur le PDF de base.
     try:
         from pypdf import PdfReader, PdfWriter  # type: ignore
@@ -634,11 +653,11 @@ async def generate_signed_pdf(
     À stocker dans ``DevlogSoumission.signed_pdf_blob`` pour pouvoir
     le servir tel quel via ``GET /devlog/soumissions/{id}/signed-pdf``
     (audit immuable — pas de recalcul à chaque téléchargement)."""
-    soumission, items, client = await _load(db, soumission_id)
+    soumission, items, client, modules = await _load(db, soumission_id)
     if soumission is None:
         raise ValueError(f"Soumission {soumission_id} introuvable.")
     if not getattr(soumission, "is_devis_dev", False):
         raise ValueError(
             "Seules les soumissions devis_dev ont un PDF signé."
         )
-    return _render_signed_bytes(soumission, items, client)
+    return _render_signed_bytes(soumission, items, client, modules)

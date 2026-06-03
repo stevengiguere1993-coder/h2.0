@@ -40,10 +40,48 @@ applique la marge ; les frais fixes ne portent que la marge (le closer
 et le manager ne s'imputent pas à eux). Conséquence vérifiable :
 
        Σ(prix_features_client) + Σ(prix_fixes_client) = Total_final
+
+----------------------------------------------------------------------
+Refonte 2026-06 (Phase 2) — niveau MODULE dans l'investissement initial
+----------------------------------------------------------------------
+
+Un module regroupe deux natures d'items :
+
+* des **fonctionnalités** (``item_kind = feature``) : vue client,
+  heures de dev → coût = heures × ``taux_dev`` ;
+* des **tâches de chargé de projet** (``item_kind = manager_task``) :
+  vue interne, heures de « manager » → coût = heures × ``taux_manager``.
+
+Coût interne d'un module = Σ(heures features × taux_dev) +
+Σ(heures tâches × taux_manager). La marge et la commission closer
+s'appliquent ensuite au global, comme avant.
+
+Trois leviers nouveaux, tous **rétrocompatibles** :
+
+* **Sélection** : un module porte ``selected``. Les items (features et
+  tâches) d'un module NON sélectionné sont exclus du total. Les items
+  SANS module (``module_id`` NULL — soumissions legacy, frais fixes,
+  sections récurrentes) sont TOUJOURS comptés.
+* **Coût manager par tâches** : si la soumission possède au moins un
+  item ``manager_task`` (sur un module sélectionné), le coût manager =
+  Σ(tâches × taux_manager). Sinon (aucun ``manager_task``), on retombe
+  EXACTEMENT sur le scalaire historique ``heures_manager × taux_manager``.
+* **Gratuité « module → module »** : un module peut porter un
+  ``free_when_module_id``. Si le module déclencheur est *sélectionné*,
+  ce module devient **gratuit** : ses features + tâches comptent 0 dans
+  le total CLIENT (mais restent listés, marqués « offert », et leurs
+  heures restent visibles côté interne). Si le déclencheur n'est PAS
+  sélectionné, le module garde son prix normal.
+
+RÉTROCOMPATIBILITÉ — une soumission SANS modules et SANS ``manager_task``
+emprunte exactement le chemin historique : tous les items comptés,
+coût manager = ``heures_manager × taux_manager``, mêmes totaux au cent
+près. ``modules`` est un paramètre optionnel : les appelants existants
+(2 arguments) ne changent pas de comportement.
 """
 
 from decimal import Decimal
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 
 # Tolérance d'arrondi pour les comparaisons finales (cents).
@@ -78,9 +116,52 @@ def _round(value: float, ndigits: int = 2) -> float:
     return rounded
 
 
+def _resolve_module_states(
+    modules: Optional[Iterable[Any]],
+) -> tuple[dict[int, Any], set[int], set[int]]:
+    """Calcule l'état de chaque module à partir de la liste fournie.
+
+    Retourne ``(modules_by_id, selected_ids, free_ids)`` où :
+
+    * ``modules_by_id`` : map id → instance module ;
+    * ``selected_ids``  : ids des modules ``selected = True`` ;
+    * ``free_ids``      : ids des modules gratuits (un module est
+      gratuit s'il porte un ``free_when_module_id`` pointant vers un
+      module présent ET sélectionné). Un module non sélectionné n'est
+      jamais "gratuit" au sens client : il est carrément exclu.
+    """
+    modules_by_id: dict[int, Any] = {}
+    selected_ids: set[int] = set()
+    if modules:
+        for m in modules:
+            mid = getattr(m, "id", None)
+            if mid is None:
+                continue
+            modules_by_id[mid] = m
+            # ``selected`` par défaut True (rétrocompat : un module sans
+            # attribut explicite est considéré sélectionné).
+            if bool(getattr(m, "selected", True)):
+                selected_ids.add(mid)
+
+    free_ids: set[int] = set()
+    for mid, m in modules_by_id.items():
+        if mid not in selected_ids:
+            # Module non sélectionné : exclu, pas "gratuit".
+            continue
+        trigger = getattr(m, "free_when_module_id", None)
+        if trigger is None:
+            continue
+        # Gratuit seulement si le déclencheur existe ET est sélectionné.
+        if trigger in selected_ids:
+            free_ids.add(mid)
+
+    return modules_by_id, selected_ids, free_ids
+
+
 def compute_devis(
     soumission: Any,
     items: Iterable[Any],
+    modules: Optional[Iterable[Any]] = None,
 ) -> dict:
     """Calcule la décomposition d'un devis « devis_dev ».
 
@@ -93,7 +174,13 @@ def compute_devis(
         ``taux_manager_horaire``, ``heures_manager``.
     items
         Iterable d'items (``DevlogSoumissionItem``) — on regroupe par
-        ``item_kind`` : ``recurring_cost`` / ``feature`` / ``fixed_cost``.
+        ``item_kind`` : ``recurring_cost`` / ``feature`` /
+        ``manager_task`` / ``fixed_cost``.
+    modules
+        Iterable optionnel de ``DevlogSoumissionModule``. Sert à
+        filtrer par sélection et à appliquer la gratuité « module →
+        module ». ``None`` (défaut) = chemin legacy : aucun filtrage,
+        tous les items comptés (rétrocompat stricte).
 
     Retour
     ------
@@ -107,9 +194,34 @@ def compute_devis(
     taux_manager = _f(soumission.taux_manager_horaire, 80.0)
     heures_manager = _f(soumission.heures_manager, 0.0)
 
+    # --- État des modules (sélection + gratuité) ------------------------
+    modules_by_id, selected_ids, free_ids = _resolve_module_states(modules)
+
+    def _module_excluded(it: Any) -> bool:
+        """Un item est exclu du total s'il appartient à un module connu
+        NON sélectionné. Les items sans module (module_id NULL) ou
+        rattachés à un module inconnu restent comptés (rétrocompat)."""
+        mid = getattr(it, "module_id", None)
+        if mid is None:
+            return False
+        if mid not in modules_by_id:
+            # Module référencé mais absent de la liste fournie : on ne
+            # peut pas juger -> on compte (comportement legacy sûr).
+            return False
+        return mid not in selected_ids
+
+    def _module_free(it: Any) -> bool:
+        """Un item est gratuit (prix client 0) s'il appartient à un
+        module gratuit."""
+        mid = getattr(it, "module_id", None)
+        if mid is None:
+            return False
+        return mid in free_ids
+
     # --- Tri par item_kind ----------------------------------------------
     recurring_items = []
     features = []
+    manager_tasks = []
     fixed_costs = []
     for it in items:
         kind = getattr(it, "item_kind", "feature") or "feature"
@@ -117,6 +229,8 @@ def compute_devis(
             recurring_items.append(it)
         elif kind == "fixed_cost":
             fixed_costs.append(it)
+        elif kind == "manager_task":
+            manager_tasks.append(it)
         else:
             # ``feature`` (par défaut)
             features.append(it)
@@ -124,6 +238,8 @@ def compute_devis(
     # ================================================================
     # SECTION 1 — Frais Mensuels Récurrents
     # ================================================================
+    # Les sections récurrentes ne sont PAS concernées par les modules :
+    # on compte tous les coûts récurrents comme avant.
     recurring_breakdown = []
     total_owner_recurring = 0.0
     for it in recurring_items:
@@ -162,30 +278,79 @@ def compute_devis(
     # ================================================================
     # SECTION 2 — Frais de Mise en Oeuvre (calcul circulaire)
     # ================================================================
-    # 1. Coûts internes
+    # Rappel rétrocompat : un item exclu (module non sélectionné) ne
+    # contribue PAS à la base et n'apparaît pas dans la vue client. Un
+    # item gratuit contribue 0 à la base ET 0 au prix client (son
+    # travail est offert) mais reste listé (flag ``offert``).
+    #
+    # 1. Coûts internes des features
     couts_dev = 0.0
-    feature_costs_internal = []  # (item, cout_dev_brut)
+    feature_costs_internal = []  # (item, heures, cout_dev_brut, free)
     for it in features:
+        if _module_excluded(it):
+            continue
         heures = _f(getattr(it, "heures", 0))
+        free = _module_free(it)
         cout = heures * taux_dev
-        couts_dev += cout
-        feature_costs_internal.append((it, heures, cout))
+        if not free:
+            couts_dev += cout
+        feature_costs_internal.append((it, heures, cout, free))
 
-    cout_manager = heures_manager * taux_manager
+    # 1bis. Coût manager — NOUVEAU : Σ(manager_task.heures × taux_manager)
+    # sur les modules sélectionnés. RÉTROCOMPAT : si AUCUN item
+    # ``manager_task`` n'existe dans la soumission, on retombe sur le
+    # scalaire historique ``heures_manager × taux_manager``.
+    manager_tasks_internal = []  # (item, heures, cout_brut, free)
+    cout_manager_from_tasks = 0.0
+    has_manager_tasks = len(manager_tasks) > 0
+    for it in manager_tasks:
+        if _module_excluded(it):
+            continue
+        heures = _f(getattr(it, "heures", 0))
+        free = _module_free(it)
+        cout = heures * taux_manager
+        if not free:
+            cout_manager_from_tasks += cout
+        manager_tasks_internal.append((it, heures, cout, free))
+
+    if has_manager_tasks:
+        cout_manager = cout_manager_from_tasks
+    else:
+        # Chemin LEGACY strict : scalaire global sur la soumission.
+        cout_manager = heures_manager * taux_manager
+
+    # 2. Frais fixes — sans module (toujours comptés, rétrocompat).
     frais_fixes_total = 0.0
     fixed_costs_internal = []  # (item, cost_brut)
     for it in fixed_costs:
+        if _module_excluded(it):
+            continue
         cost = _f(getattr(it, "cost_per_unit", 0))
         frais_fixes_total += cost
         fixed_costs_internal.append((it, cost))
 
     base = couts_dev + cout_manager + frais_fixes_total
 
-    # 2. Validation
+    # 3. Validation
     divisor = 1.0 - (1.0 + marge_init_pct) * closer_pct
     is_invalid = divisor <= 0 or base <= 0
 
-    # 3. Résolution circulaire (closing + total_final)
+    # Helpers de sérialisation des heures de tâches (vue interne — pas
+    # de prix client, jamais facturé directement).
+    def _manager_tasks_payload():
+        return [
+            {
+                "id": getattr(it, "id", None),
+                "description": getattr(it, "description", ""),
+                "heures": _round(heures),
+                "module_id": getattr(it, "module_id", None),
+                "offert": bool(free),
+                "cout_interne": _round(cout),
+            }
+            for (it, heures, cout, free) in manager_tasks_internal
+        ]
+
+    # 4. Résolution circulaire (closing + total_final)
     if is_invalid:
         total_final = 0.0
         closing = 0.0
@@ -198,8 +363,10 @@ def compute_devis(
                 "description": getattr(it, "description", ""),
                 "heures": _round(heures),
                 "prix_client": 0.0,
+                "module_id": getattr(it, "module_id", None),
+                "offert": bool(free),
             }
-            for (it, heures, _c) in feature_costs_internal
+            for (it, heures, _c, free) in feature_costs_internal
         ]
         frais_fixes_client = [
             {
@@ -219,24 +386,32 @@ def compute_devis(
         total_apres_marge = total_final  # alias humain
         marge_init_amount = total_final - total_avant_marge
 
-        # 4. Vue client — répartition proportionnelle
+        # 5. Vue client — répartition proportionnelle
         # Les features absorbent (couts_dev + cout_manager + closing)
         # au prorata de leurs coûts dev internes, puis on applique la
-        # marge. Les frais fixes ne portent que la marge.
+        # marge. Les frais fixes ne portent que la marge. Les features
+        # gratuites (module offert) reçoivent 0 et n'absorbent rien.
         features_pool_before_margin = couts_dev + cout_manager + closing
         features_client = []
-        for (it, heures, cout) in feature_costs_internal:
-            if couts_dev > 0:
+        for (it, heures, cout, free) in feature_costs_internal:
+            if free:
+                prix = 0.0
+            elif couts_dev > 0:
                 part = cout / couts_dev
+                prix = (
+                    part * features_pool_before_margin
+                    * (1.0 + marge_init_pct)
+                )
             else:
-                part = 0.0
-            prix = part * features_pool_before_margin * (1.0 + marge_init_pct)
+                prix = 0.0
             features_client.append(
                 {
                     "id": getattr(it, "id", None),
                     "description": getattr(it, "description", ""),
                     "heures": _round(heures),
                     "prix_client": _round(prix),
+                    "module_id": getattr(it, "module_id", None),
+                    "offert": bool(free),
                 }
             )
 
@@ -254,21 +429,25 @@ def compute_devis(
 
     # Vérification d'invariance : la somme des prix clients doit égaler
     # le total final (à 1 cent près). Si l'écart est plus grand qu'EPS,
-    # on absorbe la différence sur la dernière feature pour rester
-    # cohérent avec le total affiché.
+    # on absorbe la différence sur la dernière feature NON gratuite pour
+    # rester cohérent avec le total affiché.
     if not is_invalid and (features_client or frais_fixes_client):
         sum_client = sum(f["prix_client"] for f in features_client) + sum(
             ff["prix_client"] for ff in frais_fixes_client
         )
         delta = _round(total_final - sum_client)
-        if abs(delta) > 0 and features_client:
-            features_client[-1]["prix_client"] = _round(
-                features_client[-1]["prix_client"] + delta
-            )
-        elif abs(delta) > 0 and frais_fixes_client:
-            frais_fixes_client[-1]["prix_client"] = _round(
-                frais_fixes_client[-1]["prix_client"] + delta
-            )
+        if abs(delta) > 0:
+            payable_features = [
+                f for f in features_client if not f.get("offert")
+            ]
+            if payable_features:
+                payable_features[-1]["prix_client"] = _round(
+                    payable_features[-1]["prix_client"] + delta
+                )
+            elif frais_fixes_client:
+                frais_fixes_client[-1]["prix_client"] = _round(
+                    frais_fixes_client[-1]["prix_client"] + delta
+                )
 
     # Taxes initiales — appliquées sur total_final (qui inclut déjà
     # commission closer + marge). Le 10% closer reste calculé AVANT
@@ -276,6 +455,76 @@ def compute_devis(
     tps_initiale = total_final * TPS_RATE
     tvq_initiale = total_final * TVQ_RATE
     total_initial_taxe = total_final * TPS_TVQ_FACTOR
+
+    # --- Détail par module (lecture) ------------------------------------
+    # Pour chaque module connu : ses features (heures dev) + ses tâches
+    # chargé de projet (heures), totaux d'heures, prix client, état
+    # ``selected`` et ``offert`` (+ pourquoi).
+    feature_client_by_id = {
+        f.get("id"): f for f in features_client if f.get("id") is not None
+    }
+    modules_detail = []
+    # Indexe heures par module pour features et tâches.
+    if modules_by_id:
+        feat_by_module: dict[int, list] = {}
+        for (it, heures, cout, free) in feature_costs_internal:
+            mid = getattr(it, "module_id", None)
+            if mid is not None:
+                feat_by_module.setdefault(mid, []).append(
+                    (it, heures, cout, free)
+                )
+        task_by_module: dict[int, list] = {}
+        for (it, heures, cout, free) in manager_tasks_internal:
+            mid = getattr(it, "module_id", None)
+            if mid is not None:
+                task_by_module.setdefault(mid, []).append(
+                    (it, heures, cout, free)
+                )
+        for mid, m in modules_by_id.items():
+            is_selected = mid in selected_ids
+            is_free = mid in free_ids
+            mod_feats = feat_by_module.get(mid, [])
+            mod_tasks = task_by_module.get(mid, [])
+            total_heures_dev = sum(h for (_i, h, _c, _f) in mod_feats)
+            total_heures_manager = sum(h for (_i, h, _c, _f) in mod_tasks)
+            # Prix client du module = somme des prix client de ses
+            # features (0 si gratuit ou non sélectionné/exclu).
+            prix_client_module = 0.0
+            if is_selected and not is_free:
+                for (it, _h, _c, _free) in mod_feats:
+                    fc = feature_client_by_id.get(getattr(it, "id", None))
+                    if fc is not None:
+                        prix_client_module += fc.get("prix_client", 0.0)
+            modules_detail.append(
+                {
+                    "id": mid,
+                    "name": getattr(m, "name", None),
+                    "selected": is_selected,
+                    "offert": is_free,
+                    "free_when_module_id": getattr(
+                        m, "free_when_module_id", None
+                    ),
+                    "total_heures_dev": _round(total_heures_dev),
+                    "total_heures_manager": _round(total_heures_manager),
+                    "prix_client": _round(prix_client_module),
+                    "features": [
+                        {
+                            "id": getattr(it, "id", None),
+                            "description": getattr(it, "description", ""),
+                            "heures": _round(h),
+                        }
+                        for (it, h, _c, _free) in mod_feats
+                    ],
+                    "manager_tasks": [
+                        {
+                            "id": getattr(it, "id", None),
+                            "description": getattr(it, "description", ""),
+                            "heures": _round(h),
+                        }
+                        for (it, h, _c, _free) in mod_tasks
+                    ],
+                }
+            )
 
     initial_block = {
         "couts_dev": _round(couts_dev),
@@ -294,6 +543,10 @@ def compute_devis(
         "heures_manager": _round(heures_manager),
         "features_client": features_client,
         "frais_fixes_client": frais_fixes_client,
+        # --- Tâches de chargé de projet (vue interne) ---------------
+        "manager_tasks": _manager_tasks_payload(),
+        # --- Détail par module (lecture, vide en mode legacy) -------
+        "modules": modules_detail,
         # --- Taxes (Québec) -----------------------------------------
         "tps_amount": _round(tps_initiale),
         "tvq_amount": _round(tvq_initiale),

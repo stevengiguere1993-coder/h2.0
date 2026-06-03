@@ -1164,6 +1164,25 @@ async def update_soumission_status(
     return DevlogSoumissionRead.model_validate(soumission)
 
 
+async def _load_soumission_modules(
+    db, soumission_id: int
+) -> list[DevlogSoumissionModule]:
+    """Charge les modules d'une soumission (pour ``compute_devis``).
+
+    Retourne une liste vide quand la soumission n'a aucun module : dans
+    ce cas ``compute_devis`` retombe sur le chemin legacy (tous les
+    items comptés, coût manager = ``heures_manager`` scalaire)."""
+    return list(
+        (
+            await db.execute(
+                select(DevlogSoumissionModule).where(
+                    DevlogSoumissionModule.soumission_id == soumission_id
+                )
+            )
+        ).scalars().all()
+    )
+
+
 @soumission_automations_router.get(
     "/{soumission_id}/devis-preview",
     response_model=DevisPreview,
@@ -1191,7 +1210,8 @@ async def preview_soumission_devis(
             )
         )
     ).scalars().all()
-    return compute_devis(soumission, list(items))
+    modules = await _load_soumission_modules(db, soumission_id)
+    return compute_devis(soumission, list(items), modules)
 
 
 @soumission_automations_router.post(
@@ -1930,7 +1950,8 @@ async def _refresh_soumission_amount(db, soumission_id: int) -> None:
                 .where(DevlogSoumissionItem.soumission_id == soumission_id)
             )
         ).scalars().all()
-        devis = compute_devis(soumission, list(items))
+        modules = await _load_soumission_modules(db, soumission_id)
+        devis = compute_devis(soumission, list(items), modules)
         soumission.amount = float(devis["initial"]["total_final"])
         await db.flush()
         return
@@ -3530,7 +3551,8 @@ async def create_contract_from_soumission(
     prix_mensuel_ttc = 0.0
     if soum.is_devis_dev:
         try:
-            preview = compute_devis(soum, items)
+            modules = await _load_soumission_modules(db, soumission_id)
+            preview = compute_devis(soum, items, modules)
             if not preview.get("is_invalid"):
                 prix_initial_ttc = float(
                     preview["initial"].get("total_final_taxe", 0.0)

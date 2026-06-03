@@ -13,15 +13,25 @@ initiale via ``section_id`` (NULL si la section est supprimée — d'où
 le ``ON DELETE SET NULL``).
 
 Phase 1 (socle de données) : la table et la colonne ``module_id`` sur
-les items sont purement organisationnelles. Le calcul des totaux de la
-soumission (``app.services.devlog_devis_calc``) n'est PAS modifié : le
-regroupement par module est une couche d'affichage, la sommation des
-items reste identique. Les soumissions existantes (sans aucun module)
-restent valides et se calculent exactement comme avant.
+les items sont purement organisationnelles.
 
-``selected`` (default True) anticipe les phases suivantes (sélection
-cochée/décochée par le client + gratuité conditionnelle) mais n'a
-aucun effet sur le calcul en Phase 1.
+Phase 2 (refonte 2026-06) : le moteur ``app.services.devlog_devis_calc``
+prend désormais les modules en compte. Un module regroupe deux natures
+d'items : des **fonctionnalités** (``item_kind = feature``, heures de
+dev) et des **tâches de chargé de projet** (``item_kind =
+manager_task``, heures de « manager »). Coût d'un module = (Σ heures
+features × taux_dev) + (Σ heures tâches × taux_manager).
+
+* ``selected`` filtre le total : un module non sélectionné voit ses
+  features et tâches exclues du calcul (les items SANS module restent
+  toujours comptés — rétrocompat).
+* ``free_when_module_id`` porte la gratuité conditionnelle « module →
+  module » : si le module déclencheur est sélectionné, ce module
+  devient gratuit (0 côté client, heures visibles côté interne).
+
+RÉTROCOMPAT : une soumission sans aucun module et sans aucun item
+``manager_task`` se calcule EXACTEMENT comme avant (tous les items
+comptés, coût manager = ``heures_manager`` scalaire × taux_manager).
 """
 
 from typing import Optional
@@ -59,6 +69,22 @@ class DevlogSoumissionModule(Base, TimestampUpdateMixin):
     # + gratuité conditionnelle). Sans effet sur le calcul en Phase 1.
     selected: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
+    )
+    # Gratuité conditionnelle « module → module » (refonte 2026-06,
+    # Phase 2). Si ``free_when_module_id`` pointe vers un autre module
+    # de la même soumission ET que ce module déclencheur est
+    # sélectionné, alors CE module devient gratuit : ses fonctionnalités
+    # et tâches comptent 0 dans le total CLIENT (le travail/heures
+    # restent visibles côté interne). NULL = pas de gratuité
+    # conditionnelle (cas par défaut, rétrocompatible). ON DELETE SET
+    # NULL : si le module déclencheur est supprimé, la règle disparaît
+    # sans casser ce module. Colonne ajoutée via ``additive_columns``
+    # dans ``db/session`` (la FK n'est pas matérialisée par l'ALTER —
+    # même précédent que ``module_id`` sur les items).
+    free_when_module_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("devlog_soumission_modules.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     def __repr__(self) -> str:
