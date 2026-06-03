@@ -210,7 +210,7 @@ async def send_appointment_reminder(
     try:
         await mailer.send(
             to=[prospect.email],
-            subject=f"Rappel 24h — {event.title}",
+            subject=f"Rappel — {event.title}",
             html_body=_body(
                 prospect_name=prospect.name,
                 event=event,
