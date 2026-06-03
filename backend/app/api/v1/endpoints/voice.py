@@ -1705,6 +1705,16 @@ async def twilio_call_status(request: Request, db: DBSession) -> Response:
     if rec_url:
         call.recording_url = rec_url
         call.recording_sid = params.get("RecordingSid")
+        # Auto-résumé de l'enregistrement (best-effort, en arrière-plan —
+        # ne bloque pas la réponse au webhook).
+        if not call.recording_summary:
+            import asyncio
+
+            from app.services.call_recording_summary import (
+                summarize_call_in_background,
+            )
+
+            asyncio.create_task(summarize_call_in_background(call.id))
 
     # Anti-spam : compteurs de coût + honeypot.
     if call_status == "completed" and call.duration_sec:
@@ -3376,6 +3386,9 @@ class CommunicationEvent(BaseModel):
     subject: Optional[str] = None
     email_from: Optional[str] = None
     email_to: Optional[str] = None
+    # Résumé IA de l'enregistrement (appels)
+    call_summary: Optional[str] = None
+    has_recording: bool = False
 
 
 _VALID_ENTITY_TYPES = {"client", "locataire", "prospection_lead", "contact_request"}
@@ -3439,6 +3452,8 @@ async def list_communications_for_entity(
                 was_voicemail=bool(c.was_voicemail),
                 voicemail_summary=c.voicemail_summary,
                 followup_suggestion=c.followup_suggestion,
+                call_summary=c.recording_summary,
+                has_recording=bool(c.recording_url),
             )
         )
     for s in sms_rows:
@@ -3555,6 +3570,42 @@ async def send_email_comms(
         email_from=row.from_email,
         email_to=row.to_email,
         body=row.body_preview,
+    )
+
+
+class CallSummaryResult(BaseModel):
+    call_id: int
+    summary: Optional[str] = None
+    transcription: Optional[str] = None
+
+
+@router.post(
+    "/calls/{call_id}/summarize",
+    response_model=CallSummaryResult,
+    summary="Transcrit + résume l'enregistrement d'un appel (Groq + IA)",
+)
+async def summarize_call(
+    call_id: int, user: CurrentUser, db: DBSession
+) -> CallSummaryResult:
+    from app.services.call_recording_summary import (
+        CallSummaryError,
+        summarize_call_recording,
+    )
+
+    call = (
+        await db.execute(select(Call).where(Call.id == call_id))
+    ).scalar_one_or_none()
+    if call is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Appel introuvable.")
+    try:
+        await summarize_call_recording(db, call, force=True)
+    except CallSummaryError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    await db.commit()
+    return CallSummaryResult(
+        call_id=call.id,
+        summary=call.recording_summary,
+        transcription=call.recording_transcription,
     )
 
 

@@ -176,6 +176,15 @@ class Call(Base):
 
     recording_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     recording_sid: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Transcription + résumé IA de l'enregistrement de l'appel (humain),
+    # générés depuis recording_url (Groq Whisper + résumé). Distinct du
+    # voicemail. Colonnes additives (cf. db/session.py).
+    recording_transcription: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+    recording_summary: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
 
     # Verbatim de la conversation côté navigateur (Web Speech API du
     # client : ne capte QUE le micro local, pas la voix du distant

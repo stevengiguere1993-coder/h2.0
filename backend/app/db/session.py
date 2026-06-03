@@ -920,6 +920,10 @@ async def init_db() -> None:
                 "scope",
                 "VARCHAR(16) NOT NULL DEFAULT 'entity'",
             ),
+            # Résumé IA de l'enregistrement d'appel (humain) — distinct du
+            # voicemail.
+            ("voice_calls", "recording_transcription", "TEXT"),
+            ("voice_calls", "recording_summary", "TEXT"),
             # Signature électronique des baux (volet immobilier, Phase 2.4).
             ("imm_baux", "signature_token", "VARCHAR(64)"),
             ("imm_baux", "sent_to_email", "VARCHAR(320)"),
