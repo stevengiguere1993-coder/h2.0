@@ -89,6 +89,37 @@ class _PublicFraisFixeClient(BaseModel):
     prix_client: float
 
 
+class _PublicModuleFeature(BaseModel):
+    """Fonctionnalité d'un module — vue client : libellé + prix.
+
+    ⚠️ Aucune heure, aucun coût interne. On ne sert JAMAIS les tâches
+    du chargé de projet (``manager_task``) côté client."""
+
+    description: str
+    prix_client: float
+
+
+class _PublicModule(BaseModel):
+    """Module présenté au client (regroupement de fonctionnalités).
+
+    * ``optional`` : le client peut le cocher/décocher (tous optionnels
+      par défaut — pas de notion « obligatoire » dans le modèle).
+    * ``selected`` : état courant (sert d'état initial des cases).
+    * ``offert`` : module rendu gratuit par la règle « module → module »
+      (un module déclencheur sélectionné). Prix client = 0, montré dans
+      la section « Inclus gratuitement ».
+    """
+
+    id: int
+    name: str
+    selected: bool
+    optional: bool = True
+    offert: bool = False
+    free_when_module_id: Optional[int] = None
+    prix_client: float = 0.0
+    features: list[_PublicModuleFeature]
+
+
 class _PublicInitialBlock(BaseModel):
     """Bloc « Investissement initial » — facturé en one-shot.
 
@@ -104,6 +135,18 @@ class _PublicInitialBlock(BaseModel):
     tps_pct: float = 5.0
     tvq_pct: float = 9.975
     total_final_taxe: float = 0.0
+    # --- Vue par MODULES (refonte 2026-06, Phase 4) -----------------
+    # Présent uniquement si la soumission a des modules ; vide en mode
+    # legacy (le frontend retombe alors sur la liste plate features /
+    # frais_fixes ci-dessus — rétrocompat stricte). Les modules NON
+    # sélectionnés n'apparaissent PAS dans ``features`` ci-dessus (ils
+    # sont exclus du total) mais restent listés ici pour que le client
+    # puisse les (re)cocher. Les modules offerts apparaissent ici avec
+    # ``offert=True`` et ``prix_client=0``.
+    modules: list[_PublicModule] = []
+    # Y a-t-il au moins un module ? Permet au frontend de basculer en
+    # mode « sélection interactive » sans ambiguïté.
+    has_modules: bool = False
 
 
 class PublicDevisPreview(BaseModel):
@@ -130,6 +173,25 @@ class PublicSoumission(BaseModel):
 class SignRequest(BaseModel):
     signed_name: str = Field(..., min_length=2, max_length=255)
     accept: bool
+    # Sélection finale des modules au moment de la signature (Phase 4).
+    # ``None`` => on garde la sélection déjà persistée (rétrocompat :
+    # une soumission sans modules ignore ce champ). Liste vide => le
+    # client a tout décoché.
+    selected_module_ids: Optional[list[int]] = None
+
+
+class SelectionRequest(BaseModel):
+    """Mise à jour de la sélection des modules par le client (Phase 4).
+
+    ``selected_module_ids`` = ids des modules cochés. Tout module non
+    listé est marqué ``selected=False``. Idempotent / rejouable tant que
+    la soumission n'est pas finalisée."""
+
+    selected_module_ids: list[int] = Field(default_factory=list)
+
+
+class PreviewRequest(SelectionRequest):
+    """Recalcul à la volée (sans persistance) pour la sélection courante."""
 
 
 # --------------------------- Helpers ---------------------------
@@ -211,12 +273,78 @@ async def _load_modules(
     )
 
 
-def _to_public_devis(devis: dict[str, Any], soumission: DevlogSoumission) -> PublicDevisPreview:
+def _to_public_devis(
+    devis: dict[str, Any],
+    soumission: DevlogSoumission,
+    items: Optional[list[DevlogSoumissionItem]] = None,
+) -> PublicDevisPreview:
     """Filtre la sortie de ``compute_devis`` pour ne garder QUE les
     informations destinées au client. Aucun coût interne / marge / taux
     / heures ne doit subsister ici."""
     rec = devis.get("recurring") or {}
     init = devis.get("initial") or {}
+
+    # --- Vue par modules ------------------------------------------------
+    # ``init["modules"]`` (calculé par compute_devis) porte name / selected
+    # / offert / free_when_module_id / prix_client. On rapatrie le
+    # prix_client PAR FEATURE depuis ``features_client`` (indexé par id).
+    feature_price_by_id: dict[Any, float] = {}
+    for f in init.get("features_client") or []:
+        fid = f.get("id")
+        if fid is not None:
+            feature_price_by_id[fid] = float(f.get("prix_client") or 0)
+
+    # Liste COMPLÈTE des fonctionnalités par module, construite à partir
+    # des items bruts (kind=feature uniquement). On ne se fie PAS au
+    # ``features`` de compute_devis qui est vide pour un module non
+    # sélectionné (ses items sont exclus du calcul) : le client doit voir
+    # ce qu'il (re)cocherait. ⚠️ On EXCLUT explicitement ``manager_task``
+    # — les tâches du chargé de projet ne sont jamais montrées au client.
+    feat_descr_by_module: dict[int, list[DevlogSoumissionItem]] = {}
+    if items:
+        for it in items:
+            kind = getattr(it, "item_kind", "feature") or "feature"
+            if kind != "feature":
+                continue
+            mid = getattr(it, "module_id", None)
+            if mid is None:
+                continue
+            feat_descr_by_module.setdefault(int(mid), []).append(it)
+
+    public_modules: list[_PublicModule] = []
+    for m in init.get("modules") or []:
+        mid = m.get("id")
+        if mid is None:
+            continue
+        is_free = bool(m.get("offert"))
+        mod_features: list[_PublicModuleFeature] = []
+        for it in feat_descr_by_module.get(int(mid), []):
+            # Prix client par feature : 0 si module offert ou non
+            # sélectionné (absent de features_client), sinon la part
+            # calculée par compute_devis.
+            fid = getattr(it, "id", None)
+            prix = 0.0 if is_free else feature_price_by_id.get(fid, 0.0)
+            mod_features.append(
+                _PublicModuleFeature(
+                    description=str(getattr(it, "description", "") or ""),
+                    prix_client=float(prix),
+                )
+            )
+        public_modules.append(
+            _PublicModule(
+                id=int(mid),
+                name=str(m.get("name") or "Module"),
+                selected=bool(m.get("selected")),
+                # Tous les modules sont optionnels (pas de champ
+                # « obligatoire » dans le modèle) -> tous décochables.
+                optional=True,
+                offert=is_free,
+                free_when_module_id=m.get("free_when_module_id"),
+                prix_client=float(m.get("prix_client") or 0),
+                features=mod_features,
+            )
+        )
+
     return PublicDevisPreview(
         recurring=_PublicRecurringBlock(
             total_client_amount=float(rec.get("total_client_amount") or 0),
@@ -254,16 +382,42 @@ def _to_public_devis(devis: dict[str, Any], soumission: DevlogSoumission) -> Pub
             tps_pct=float(init.get("tps_pct") or 5.0),
             tvq_pct=float(init.get("tvq_pct") or 9.975),
             total_final_taxe=float(init.get("total_final_taxe") or 0),
+            modules=public_modules,
+            has_modules=len(public_modules) > 0,
         ),
     )
 
 
+def _apply_selection_override(
+    modules: list[DevlogSoumissionModule],
+    selected_module_ids: Optional[list[int]],
+) -> None:
+    """Applique IN-MEMORY une sélection client sur les modules chargés.
+
+    Si ``selected_module_ids`` est ``None``, on ne touche à rien (on
+    garde l'état persisté). Sinon, chaque module est ``selected=True``
+    si son id figure dans la liste, ``False`` sinon. Mute les instances
+    en place — à utiliser soit pour un preview (sans commit), soit juste
+    avant de persister la sélection définitive."""
+    if selected_module_ids is None:
+        return
+    wanted = {int(x) for x in selected_module_ids}
+    for m in modules:
+        m.selected = m.id in wanted
+
+
 async def _to_public(
-    db: AsyncSession, soumission: DevlogSoumission
+    db: AsyncSession,
+    soumission: DevlogSoumission,
+    selected_module_ids: Optional[list[int]] = None,
 ) -> PublicSoumission:
     client = await _load_client(db, soumission.client_id)
     items = await _load_items(db, soumission.id)
     modules = await _load_modules(db, soumission.id)
+    # Override de sélection (preview interactif) : on mute les instances
+    # chargées AVANT le calcul. Sans commit ici => purement éphémère pour
+    # le preview ; pour la persistance, l'appelant commit ensuite.
+    _apply_selection_override(modules, selected_module_ids)
     devis = compute_devis(soumission, items, modules)
     return PublicSoumission(
         id=soumission.id,
@@ -274,7 +428,7 @@ async def _to_public(
         sent_at=getattr(soumission, "sent_at", None),
         signed_at=getattr(soumission, "signed_at", None),
         signed_name=getattr(soumission, "signed_name", None),
-        devis=_to_public_devis(devis, soumission),
+        devis=_to_public_devis(devis, soumission, items),
     )
 
 
@@ -290,6 +444,56 @@ async def read_public_soumission(
     token: str, db: DBSession
 ) -> PublicSoumission:
     soumission = await _load_by_token(db, token)
+    return await _to_public(db, soumission)
+
+
+@router.post(
+    "/{token}/preview",
+    response_model=PublicSoumission,
+    summary="Recalcul à la volée des totaux pour une sélection (sans persister)",
+)
+async def preview_public_soumission(
+    token: str,
+    data: PreviewRequest,
+    db: DBSession,
+) -> PublicSoumission:
+    """Recalcule les totaux (initial, taxes, total) pour la sélection de
+    modules envoyée — SANS rien persister. Le token authentifie ; on
+    refuse si la soumission est déjà signée/refusée (figée)."""
+    soumission = await _load_by_token(db, token)
+    if soumission.status in ("acceptee", "refusee"):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Cette soumission est déjà finalisée.",
+        )
+    # Calcule la vue publique avec la sélection demandée, mais sans
+    # commit : les mutations in-memory sont jetées en fin de requête.
+    return await _to_public(
+        db, soumission, selected_module_ids=data.selected_module_ids
+    )
+
+
+@router.post(
+    "/{token}/select",
+    response_model=PublicSoumission,
+    summary="Persister la sélection de modules du client",
+)
+async def select_public_soumission(
+    token: str,
+    data: SelectionRequest,
+    db: DBSession,
+) -> PublicSoumission:
+    """Persiste la sélection courante des modules (état ``selected``).
+    Utilisable avant la signature. Refuse si déjà finalisée."""
+    soumission = await _load_by_token(db, token)
+    if soumission.status in ("acceptee", "refusee"):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Cette soumission est déjà finalisée.",
+        )
+    modules = await _load_modules(db, soumission.id)
+    _apply_selection_override(modules, data.selected_module_ids)
+    await db.flush()
     return await _to_public(db, soumission)
 
 
@@ -325,6 +529,15 @@ async def sign_public_soumission(
     # Idempotent : si déjà finalisée, on renvoie l'état courant.
     if soumission.status in ("acceptee", "refusee"):
         return await _to_public(db, soumission)
+
+    # Persistance de la sélection finale (Phase 4) AVANT de figer le PDF
+    # signé : on aligne l'état ``selected`` de chaque module sur ce que
+    # le client a coché. ``None`` => on garde la sélection déjà
+    # persistée (rétrocompat : soumission sans modules => no-op).
+    if data.selected_module_ids is not None:
+        modules = await _load_modules(db, soumission.id)
+        _apply_selection_override(modules, data.selected_module_ids)
+        await db.flush()
 
     soumission.signed_name = data.signed_name.strip()[:255]
     soumission.signed_at = datetime.now(timezone.utc)

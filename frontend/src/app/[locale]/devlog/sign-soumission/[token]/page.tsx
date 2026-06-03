@@ -24,6 +24,7 @@ import {
   CheckCircle2,
   Download,
   FileText,
+  Gift,
   Loader2,
   Repeat,
   Sparkles,
@@ -42,6 +43,22 @@ type FeatureClient = {
 type FraisFixeClient = {
   description: string;
   prix_client: number;
+};
+
+type ModuleFeature = {
+  description: string;
+  prix_client: number;
+};
+
+type SoumissionModule = {
+  id: number;
+  name: string;
+  selected: boolean;
+  optional: boolean;
+  offert: boolean;
+  free_when_module_id: number | null;
+  prix_client: number;
+  features: ModuleFeature[];
 };
 
 type DevisPreview = {
@@ -64,6 +81,8 @@ type DevisPreview = {
     tps_pct: number;
     tvq_pct: number;
     total_final_taxe: number; // TTC initial
+    modules?: SoumissionModule[];
+    has_modules?: boolean;
   };
 };
 
@@ -110,6 +129,10 @@ export default function SignSoumissionPage() {
     null
   );
   const [doneMessage, setDoneMessage] = useState<string | null>(null);
+  // Sélection interactive des modules (Phase 4). null tant que la
+  // soumission n'est pas chargée ; ensuite Set des ids cochés.
+  const [selectedIds, setSelectedIds] = useState<Set<number> | null>(null);
+  const [recalculating, setRecalculating] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -120,7 +143,17 @@ export default function SignSoumissionPage() {
         { cache: "no-store" }
       );
       if (!res.ok) throw new Error(`http_${res.status}`);
-      setData((await res.json()) as PublicSoumission);
+      const json = (await res.json()) as PublicSoumission;
+      setData(json);
+      // État initial des cases à cocher = état persisté côté serveur.
+      const mods = json.devis?.initial?.modules || [];
+      if (mods.length > 0) {
+        setSelectedIds(
+          new Set(mods.filter((m) => m.selected).map((m) => m.id))
+        );
+      } else {
+        setSelectedIds(null);
+      }
     } catch {
       setError("Lien invalide ou expiré.");
     } finally {
@@ -131,6 +164,43 @@ export default function SignSoumissionPage() {
   useEffect(() => {
     if (token) void load();
   }, [token, load]);
+
+  // Recalcul en direct : à chaque changement de sélection, on demande
+  // au backend les totaux recalculés (sans persister). Le serveur fait
+  // foi pour le calcul (gratuité « module → module », taxes, etc.).
+  const recalc = useCallback(
+    async (ids: Set<number>) => {
+      setRecalculating(true);
+      try {
+        const res = await fetch(
+          `/api/v1/public/devlog/soumissions/${token}/preview`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ selected_module_ids: Array.from(ids) })
+          }
+        );
+        if (res.ok) {
+          setData((await res.json()) as PublicSoumission);
+        }
+      } catch {
+        // silencieux : on garde l'affichage courant
+      } finally {
+        setRecalculating(false);
+      }
+    },
+    [token]
+  );
+
+  function toggleModule(id: number) {
+    setSelectedIds((prev) => {
+      const base = prev ? new Set(prev) : new Set<number>();
+      if (base.has(id)) base.delete(id);
+      else base.add(id);
+      void recalc(base);
+      return base;
+    });
+  }
 
   async function submit(accept: boolean) {
     if (submitting) return;
@@ -148,7 +218,12 @@ export default function SignSoumissionPage() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             signed_name: signedName.trim(),
-            accept
+            accept,
+            // Sélection finale du client (null => soumission sans
+            // modules : le backend ignore ce champ, rétrocompat).
+            selected_module_ids: selectedIds
+              ? Array.from(selectedIds)
+              : null
           })
         }
       );
@@ -210,8 +285,20 @@ export default function SignSoumissionPage() {
   const fraisFixes = init.frais_fixes || [];
   const initialHT = init.total_final || 0;
   const initialTTC = init.total_final_taxe || 0;
+  // Mode modules (Phase 4) : sélection interactive. Sinon, vue legacy
+  // (liste plate features / frais fixes — rétrocompat stricte).
+  const modules = init.modules || [];
+  const hasModules = Boolean(init.has_modules) && modules.length > 0;
+  // Modules « offerts » (gratuité « module → module » déclenchée).
+  const offeredModules = modules.filter((m) => m.offert);
+  // Modules à proposer en sélection (on retire les offerts, montrés à
+  // part dans « Inclus gratuitement »).
+  const selectableModules = modules.filter((m) => !m.offert);
   const hasInitial =
-    features.length > 0 || fraisFixes.length > 0 || initialHT > 0;
+    features.length > 0 ||
+    fraisFixes.length > 0 ||
+    initialHT > 0 ||
+    hasModules;
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-8">
@@ -355,8 +442,168 @@ export default function SignSoumissionPage() {
                 <p className="mt-1 text-sm font-medium text-blue-700">
                   paiement unique
                 </p>
+                {recalculating ? (
+                  <p className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-blue-600">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Mise à jour du total…
+                  </p>
+                ) : null}
               </div>
-              {/* Détail features + frais fixes + récap taxes */}
+
+              {/* Mode MODULES (Phase 4) : sélection interactive */}
+              {hasModules ? (
+                <>
+                  <p className="mt-4 text-sm text-slate-600">
+                    Personnalisez votre projet : cochez les modules
+                    souhaités. Le total se met à jour automatiquement.
+                  </p>
+                  <div className="mt-3 space-y-3">
+                    {selectableModules.map((m) => {
+                      const checked = selectedIds
+                        ? selectedIds.has(m.id)
+                        : m.selected;
+                      return (
+                        <div
+                          key={`mod-${m.id}`}
+                          className={`overflow-hidden rounded-xl border transition ${
+                            checked
+                              ? "border-blue-300 bg-white"
+                              : "border-slate-200 bg-slate-50"
+                          }`}
+                        >
+                          <label className="flex cursor-pointer items-start gap-3 p-4">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={!m.optional || alreadyDone}
+                              onChange={() => toggleModule(m.id)}
+                              className="mt-1 h-5 w-5 flex-shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-baseline justify-between gap-3">
+                                <span className="text-sm font-bold text-slate-900">
+                                  {m.name}
+                                </span>
+                                <span className="flex-shrink-0 text-sm font-bold text-blue-700">
+                                  {fmtMoney(m.prix_client)}
+                                </span>
+                              </div>
+                              {m.features.length > 0 ? (
+                                <ul className="mt-2 space-y-1">
+                                  {m.features.map((feat, fi) => (
+                                    <li
+                                      key={`mf-${m.id}-${fi}`}
+                                      className="flex items-start justify-between gap-3 text-sm text-slate-600"
+                                    >
+                                      <span className="flex items-start gap-2">
+                                        <span className="mt-1.5 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-blue-400" />
+                                        <span>{feat.description || "—"}</span>
+                                      </span>
+                                      {checked && feat.prix_client > 0 ? (
+                                        <span className="flex-shrink-0 text-xs text-slate-500">
+                                          {fmtMoney(feat.prix_client)}
+                                        </span>
+                                      ) : null}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : null}
+                            </div>
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Section « Inclus gratuitement » */}
+                  {offeredModules.length > 0 ? (
+                    <div className="mt-4">
+                      <div className="flex items-center gap-2">
+                        <Gift className="h-4 w-4 text-emerald-700" />
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-emerald-700">
+                          Inclus gratuitement
+                        </h3>
+                      </div>
+                      <div className="mt-2 space-y-3">
+                        {offeredModules.map((m) => (
+                          <div
+                            key={`free-${m.id}`}
+                            className="overflow-hidden rounded-xl border border-emerald-200 bg-emerald-50 p-4"
+                          >
+                            <div className="flex items-baseline justify-between gap-3">
+                              <span className="text-sm font-bold text-emerald-900">
+                                {m.name}
+                              </span>
+                              <span className="flex-shrink-0 rounded-full bg-emerald-600 px-2 py-0.5 text-xs font-bold text-white">
+                                Offert
+                              </span>
+                            </div>
+                            {m.features.length > 0 ? (
+                              <ul className="mt-2 space-y-1">
+                                {m.features.map((feat, fi) => (
+                                  <li
+                                    key={`free-f-${m.id}-${fi}`}
+                                    className="flex items-start gap-2 text-sm text-emerald-800"
+                                  >
+                                    <span className="mt-1.5 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-500" />
+                                    <span>{feat.description || "—"}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : null}
+                            <p className="mt-2 text-right text-sm font-bold text-emerald-700">
+                              {fmtMoney(0)}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Récap taxes (mode modules) */}
+                  <div className="mt-4 overflow-hidden rounded-xl border border-blue-200 bg-white">
+                    <table className="w-full text-sm">
+                      <tbody className="divide-y divide-slate-200">
+                        <tr>
+                          <td className="px-4 py-2 font-semibold text-slate-800">
+                            Sous-total
+                          </td>
+                          <td className="px-4 py-2 text-right font-semibold text-slate-800">
+                            {fmtMoney(initialHT)}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="px-4 py-2 text-slate-700">
+                            TPS ({init.tps_pct}%)
+                          </td>
+                          <td className="px-4 py-2 text-right text-slate-800">
+                            {fmtMoney(init.tps_amount)}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="px-4 py-2 text-slate-700">
+                            TVQ ({init.tvq_pct}%)
+                          </td>
+                          <td className="px-4 py-2 text-right text-slate-800">
+                            {fmtMoney(init.tvq_amount)}
+                          </td>
+                        </tr>
+                      </tbody>
+                      <tfoot className="bg-blue-50">
+                        <tr>
+                          <td className="px-4 py-3 text-sm font-bold text-blue-900">
+                            Total TTC
+                          </td>
+                          <td className="px-4 py-3 text-right text-base font-bold text-blue-900">
+                            {fmtMoney(initialTTC)}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </>
+              ) : (
+              /* Détail features + frais fixes + récap taxes (mode legacy) */
               <div className="mt-4 overflow-hidden rounded-xl border border-blue-200 bg-white">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-100">
@@ -438,6 +685,7 @@ export default function SignSoumissionPage() {
                   </tfoot>
                 </table>
               </div>
+              )}
             </section>
           ) : null}
 
