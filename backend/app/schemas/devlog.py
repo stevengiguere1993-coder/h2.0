@@ -356,8 +356,13 @@ class DevlogSoumissionModuleCreate(BaseModel):
     position: Optional[int] = None
     description: Optional[str] = None
     notes: Optional[str] = None
-    # État de sélection (servira aux phases suivantes). Default True.
+    # État de sélection — seuls les modules sélectionnés comptent dans
+    # le total (cf. devlog_devis_calc). Default True.
     selected: bool = True
+    # Gratuité conditionnelle « module → module » (Phase 2) : si défini
+    # et que le module déclencheur est sélectionné, CE module est offert
+    # (0 côté client). NULL = pas de gratuité (défaut).
+    free_when_module_id: Optional[int] = None
 
 
 class DevlogSoumissionModuleUpdate(BaseModel):
@@ -367,6 +372,7 @@ class DevlogSoumissionModuleUpdate(BaseModel):
     description: Optional[str] = None
     notes: Optional[str] = None
     selected: Optional[bool] = None
+    free_when_module_id: Optional[int] = None
 
 
 class DevlogSoumissionModuleRead(BaseModel):
@@ -380,6 +386,9 @@ class DevlogSoumissionModuleRead(BaseModel):
     description: Optional[str]
     notes: Optional[str]
     selected: bool
+    # Gratuité conditionnelle « module → module » (Phase 2). NULL si
+    # aucune règle de gratuité.
+    free_when_module_id: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 
@@ -488,6 +497,11 @@ class DevisPreviewFeatureClient(BaseModel):
     description: str
     heures: float
     prix_client: float
+    # Module parent (Phase 2) — NULL pour les features sans module.
+    module_id: Optional[int] = None
+    # True si la feature appartient à un module gratuit (offert) : son
+    # prix_client est alors 0 mais elle reste listée.
+    offert: bool = False
 
 
 class DevisPreviewFixedClient(BaseModel):
@@ -495,6 +509,45 @@ class DevisPreviewFixedClient(BaseModel):
     description: str
     cost_per_unit: float
     prix_client: float
+
+
+class DevisPreviewManagerTask(BaseModel):
+    """Tâche de chargé de projet (Phase 2) — vue INTERNE. Jamais
+    facturée directement : ses heures × taux_manager nourrissent le
+    coût manager. Exposée en lecture pour l'affichage admin."""
+
+    id: Optional[int] = None
+    description: str
+    heures: float
+    module_id: Optional[int] = None
+    offert: bool = False
+    cout_interne: float = 0.0
+
+
+class DevisPreviewModuleFeature(BaseModel):
+    id: Optional[int] = None
+    description: str
+    heures: float
+
+
+class DevisPreviewModuleDetail(BaseModel):
+    """Détail par module (Phase 2) — lecture. Liste les fonctionnalités
+    (heures dev) et les tâches de chargé de projet (heures), les totaux
+    d'heures, le prix client du module, l'état ``selected`` et la
+    gratuité (``offert`` + ``free_when_module_id`` déclencheur)."""
+
+    id: int
+    name: Optional[str] = None
+    selected: bool
+    offert: bool
+    free_when_module_id: Optional[int] = None
+    total_heures_dev: float
+    total_heures_manager: float
+    prix_client: float
+    features: list[DevisPreviewModuleFeature] = Field(default_factory=list)
+    manager_tasks: list[DevisPreviewModuleFeature] = Field(
+        default_factory=list
+    )
 
 
 class DevisPreviewInitial(BaseModel):
@@ -514,6 +567,11 @@ class DevisPreviewInitial(BaseModel):
     heures_manager: float
     features_client: list[DevisPreviewFeatureClient]
     frais_fixes_client: list[DevisPreviewFixedClient]
+    # --- Phase 2 : tâches de chargé de projet + détail par module ---
+    manager_tasks: list[DevisPreviewManagerTask] = Field(
+        default_factory=list
+    )
+    modules: list[DevisPreviewModuleDetail] = Field(default_factory=list)
     # --- Taxes (Quebec) ---------------------------------------------
     tps_amount: float = 0.0
     tvq_amount: float = 0.0

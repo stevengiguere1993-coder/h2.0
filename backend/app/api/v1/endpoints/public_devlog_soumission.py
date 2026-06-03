@@ -35,6 +35,7 @@ from app.api.deps import DBSession
 from app.models.devlog_client import DevlogClient
 from app.models.devlog_soumission import DevlogSoumission
 from app.models.devlog_soumission_item import DevlogSoumissionItem
+from app.models.devlog_soumission_module import DevlogSoumissionModule
 from app.services.audit import log_action
 from app.services.devlog_devis_calc import compute_devis
 from app.services.devlog_soumission_pdf import (
@@ -194,6 +195,22 @@ async def _load_items(
     )
 
 
+async def _load_modules(
+    db: AsyncSession, soumission_id: int
+) -> list[DevlogSoumissionModule]:
+    """Modules (Phase 2) — passés à ``compute_devis`` pour la sélection
+    et la gratuité. Vide => chemin legacy (totaux inchangés)."""
+    return list(
+        (
+            await db.execute(
+                select(DevlogSoumissionModule).where(
+                    DevlogSoumissionModule.soumission_id == soumission_id
+                )
+            )
+        ).scalars().all()
+    )
+
+
 def _to_public_devis(devis: dict[str, Any], soumission: DevlogSoumission) -> PublicDevisPreview:
     """Filtre la sortie de ``compute_devis`` pour ne garder QUE les
     informations destinées au client. Aucun coût interne / marge / taux
@@ -246,7 +263,8 @@ async def _to_public(
 ) -> PublicSoumission:
     client = await _load_client(db, soumission.client_id)
     items = await _load_items(db, soumission.id)
-    devis = compute_devis(soumission, items)
+    modules = await _load_modules(db, soumission.id)
+    devis = compute_devis(soumission, items, modules)
     return PublicSoumission(
         id=soumission.id,
         status=soumission.status,
