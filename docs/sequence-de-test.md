@@ -89,14 +89,35 @@
     s'affichent normalement.
     - *Attendu :* plus d'échec de build sur `fonts.gstatic.com`.
 
+## J. Bon de travail : immobilier → Construction (PR #635)
+
+21. Ouvre un immeuble (avec une compagnie propriétaire). Clique
+    **« Bon de travail »**, remplis titre + (optionnel) logement +
+    description, **Créer le bon**.
+    - *Attendu :* message « Bon BON-… créé », mention que le client
+      (= compagnie propriétaire) est **créé** ou **réutilisé**, et un
+      lien **« Ouvrir dans Construction »**.
+22. Clique le lien → tu arrives sur le bon dans le volet Construction
+    (`/app/bons/{id}`), en **brouillon**, rattaché au bon client.
+    - *Attendu :* un responsable peut y ajouter lignes/budget, l'envoyer
+      pour signature, puis le convertir en projet/facture (flux
+      Construction existant).
+23. Va dans **Clients** (Construction) : la compagnie propriétaire y est
+    désormais (si elle a été créée), `is_company` = vrai.
+
 ---
 
 ## Non couvert (phases à venir)
 
-- **Phase 4** — Bons de travail ↔ Construction (à construire).
-- **Phase 3** — QuickBooks / fiducie (⚠ nécessite identifiants QBO).
-- **Phase 6** — Calendriers employés (⚠ nécessite OAuth Google/Microsoft).
+- **Phase 4.2** — Lien FK bidirectionnel bon ↔ immeuble/maintenance
+  (migration) + suivi du statut côté immobilier.
 - **Phases 2.4-2.6** — Signatures de bail/renouvellement, avis
-  d'augmentation (à construire).
+  d'augmentation conformes TAL (gros sous-système à construire).
 - **Phase 1.7** — Enrichir l'import (dates de bail réelles, dépôt,
   contacts locataire).
+- **Phase 3** — QuickBooks / fiducie (⚠ nécessite identifiants QBO).
+- **Phase 6** — Calendriers employés (⚠ nécessite OAuth Google/Microsoft).
+
+> **Déjà livré** : Phase 1 (import + gestion immeubles), 2.1 (locataires
+> hors menu), 4.1/4.3 (bon de travail + conversion client), 5.1 (courriel
+> lead).
