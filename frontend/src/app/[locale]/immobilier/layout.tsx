@@ -14,6 +14,7 @@ import {
   Check,
   ChevronDown,
   ClipboardList,
+  Hammer,
   Home,
   Loader2,
   LogOut,
@@ -50,7 +51,8 @@ const NAV: NavItem[] = [
   // reste accessible directement au besoin.
   { href: "/immobilier/baux", label: "Baux & paiements", icon: ClipboardList },
   { href: "/immobilier/renouvellements", label: "Renouvellements", icon: ClipboardList },
-  { href: "/immobilier/maintenance", label: "Maintenance", icon: Wrench }
+  { href: "/immobilier/maintenance", label: "Maintenance", icon: Wrench },
+  { href: "/immobilier/bons-travail", label: "Bons de travail", icon: Hammer }
 ];
 
 // ─── Context : entreprise active dans le volet immobilier ────────────
