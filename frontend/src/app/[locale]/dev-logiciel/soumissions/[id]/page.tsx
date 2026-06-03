@@ -1640,10 +1640,10 @@ function DevisDevOwnerInitial({
           projet (vue interne). Les features/tâches d'un module vivent
           dans la carte du module ; les features SANS module restent en
           liste directe ci-dessous (rétrocompat). */}
-      <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-3">
+      <div className="rounded-xl border border-blue-500/20 bg-brand-950/40 p-3">
         <div className="flex flex-wrap items-end justify-between gap-2">
           <div>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-indigo-200">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-blue-200">
               Modules
             </h3>
             <p className="text-[10px] text-white/40">
@@ -1654,14 +1654,14 @@ function DevisDevOwnerInitial({
           <button
             type="button"
             onClick={onAddModule}
-            className="inline-flex items-center gap-1.5 rounded border border-indigo-500/40 px-2 py-1 text-xs text-indigo-200 hover:bg-indigo-500/15"
+            className="inline-flex items-center gap-1.5 rounded border border-blue-500/30 px-2 py-1 text-xs text-blue-200 hover:bg-blue-500/15"
           >
             <Plus className="h-3 w-3" />
             Ajouter un module
           </button>
         </div>
         {sortedModules.length === 0 ? (
-          <p className="mt-2 rounded border border-dashed border-indigo-500/20 px-3 py-4 text-center text-xs text-white/40">
+          <p className="mt-2 rounded border border-dashed border-blue-500/20 px-3 py-4 text-center text-xs text-white/40">
             Aucun module. Les fonctionnalités directes ci-dessous sont
             comptées telles quelles. Crée un module pour regrouper des
             fonctionnalités et activer sélection / gratuité.
@@ -1976,7 +1976,7 @@ function ModuleCard({
     <div
       className={`rounded-lg border p-3 ${
         selected
-          ? "border-indigo-500/40 bg-indigo-500/[0.07]"
+          ? "border-blue-500/20 bg-brand-950/40"
           : "border-white/10 bg-white/[0.02] opacity-70"
       }`}
     >
@@ -1992,7 +1992,7 @@ function ModuleCard({
             onChange={(e) =>
               onPatchModule(md.id, { selected: e.target.checked })
             }
-            className="h-4 w-4 rounded border-white/30 bg-brand-950 accent-indigo-500"
+            className="h-4 w-4 rounded border-white/30 bg-brand-950 accent-blue-500"
           />
           Inclure
         </label>
@@ -2001,7 +2001,7 @@ function ModuleCard({
             value={md.name}
             onCommit={(v) => onPatchModule(md.id, { name: v })}
             placeholder="Nom du module"
-            className="w-full rounded border border-transparent bg-transparent px-1.5 py-1 text-sm font-semibold text-white hover:border-indigo-500/30 focus:border-indigo-500/50 focus:outline-none"
+            className="w-full rounded border border-transparent bg-transparent px-1.5 py-1 text-sm font-semibold text-white hover:border-blue-500/30 focus:border-blue-500/50 focus:outline-none"
           />
         </div>
         {offert ? (
@@ -2078,7 +2078,7 @@ function ModuleCard({
           </span>
           <span>
             Prix client :{" "}
-            <span className="font-bold text-indigo-200">
+            <span className="font-bold text-blue-200">
               {offert ? "Offert" : fmtMoneyShort(prixClient)}
             </span>
           </span>
@@ -2088,7 +2088,7 @@ function ModuleCard({
       {/* Sous-liste 1 — Fonctionnalités (vue client + interne) */}
       <div className="mt-3">
         <div className="flex items-center justify-between">
-          <h4 className="text-[10px] font-bold uppercase tracking-wider text-blue-200/80">
+          <h4 className="text-[10px] font-bold uppercase tracking-wider text-blue-200">
             Fonctionnalités
           </h4>
         </div>
@@ -2098,7 +2098,7 @@ function ModuleCard({
           </p>
         ) : (
           <table className="mt-1 w-full text-xs">
-            <thead className="text-[10px] uppercase tracking-wider text-white/35">
+            <thead className="text-[10px] uppercase tracking-wider text-white/40">
               <tr>
                 <th className="text-left font-medium">Fonctionnalité</th>
                 <th className="text-right font-medium">Heures</th>
@@ -2155,8 +2155,8 @@ function ModuleCard({
       </div>
 
       {/* Sous-liste 2 — Tâches du chargé de projet (vue interne) */}
-      <div className="mt-3 rounded border border-amber-500/20 bg-amber-500/[0.04] p-2">
-        <h4 className="text-[10px] font-bold uppercase tracking-wider text-amber-200/80">
+      <div className="mt-3 rounded border border-blue-500/20 bg-brand-950/40 p-2">
+        <h4 className="text-[10px] font-bold uppercase tracking-wider text-blue-200">
           Tâches du chargé de projet
           <span className="ml-1 font-normal normal-case text-white/35">
             (vue interne seulement)
@@ -2168,7 +2168,7 @@ function ModuleCard({
           </p>
         ) : (
           <table className="mt-1 w-full text-xs">
-            <thead className="text-[10px] uppercase tracking-wider text-white/35">
+            <thead className="text-[10px] uppercase tracking-wider text-white/40">
               <tr>
                 <th className="text-left font-medium">Tâche</th>
                 <th className="text-right font-medium">Heures</th>
@@ -2185,7 +2185,7 @@ function ModuleCard({
                       onCommit={(v) =>
                         onPatchItem(it.id, { description: v })
                       }
-                      className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-white hover:border-amber-500/30 focus:border-amber-500/50 focus:outline-none"
+                      className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-white hover:border-blue-500/30 focus:border-blue-500/50 focus:outline-none"
                     />
                   </td>
                   <td className="py-1">
@@ -2193,7 +2193,7 @@ function ModuleCard({
                       <HoursInput
                         value={Number(it.heures ?? 0)}
                         onCommit={(n) => onPatchItem(it.id, { heures: n })}
-                        className="w-20 rounded border border-amber-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white"
+                        className="w-20 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white"
                       />
                     </div>
                   </td>
