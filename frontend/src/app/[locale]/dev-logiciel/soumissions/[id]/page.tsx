@@ -6,11 +6,14 @@ import {
   ArrowLeft,
   Briefcase,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Copy,
   Download,
   Eye,
   EyeOff,
   FileSignature,
+  Gift,
   Loader2,
   Plus,
   Repeat,
@@ -83,6 +86,9 @@ type Item = {
   id: number;
   soumission_id: number;
   section_id: number | null;
+  // Module parent (refonte 2026-06). NULL pour les items legacy /
+  // récurrents / non rattachés à un module.
+  module_id: number | null;
   position: number;
   description: string;
   unit: string | null;
@@ -92,8 +98,28 @@ type Item = {
   total: number;
   notes: string | null;
   // Devis_dev
-  item_kind: "recurring_cost" | "feature" | "fixed_cost" | string;
+  item_kind:
+    | "recurring_cost"
+    | "feature"
+    | "manager_task"
+    | "fixed_cost"
+    | string;
   heures: number | null;
+};
+
+// Module de l'investissement initial (refonte 2026-06, Phase 3).
+type ModuleRow = {
+  id: number;
+  soumission_id: number;
+  section_id: number | null;
+  name: string;
+  position: number;
+  description: string | null;
+  notes: string | null;
+  selected: boolean;
+  free_when_module_id: number | null;
+  created_at: string;
+  updated_at: string;
 };
 
 type Totals = { initial: number; monthly: number };
@@ -137,12 +163,44 @@ type DevisPreview = {
       description: string;
       heures: number;
       prix_client: number;
+      module_id?: number | null;
+      offert?: boolean;
     }>;
     frais_fixes_client: Array<{
       id: number | null;
       description: string;
       cost_per_unit: number;
       prix_client: number;
+    }>;
+    // Tâches du chargé de projet (vue interne uniquement).
+    manager_tasks?: Array<{
+      id: number | null;
+      description: string;
+      heures: number;
+      module_id?: number | null;
+      offert?: boolean;
+      cout_interne?: number;
+    }>;
+    // Détail par module (refonte 2026-06). Vide en mode legacy.
+    modules?: Array<{
+      id: number;
+      name: string | null;
+      selected: boolean;
+      offert: boolean;
+      free_when_module_id: number | null;
+      total_heures_dev: number;
+      total_heures_manager: number;
+      prix_client: number;
+      features: Array<{
+        id: number | null;
+        description: string;
+        heures: number;
+      }>;
+      manager_tasks: Array<{
+        id: number | null;
+        description: string;
+        heures: number;
+      }>;
     }>;
     // Taxes (Québec) appliquées sur total_final (qui inclut déjà le closer)
     tps_amount: number;
@@ -382,6 +440,8 @@ export default function SoumissionDetailPage() {
   const [s, setS] = useState<Soumission | null>(null);
   const [sections, setSections] = useState<Section[]>([]);
   const [items, setItems] = useState<Item[]>([]);
+  // Modules de l'investissement initial (refonte 2026-06, Phase 3).
+  const [modules, setModules] = useState<ModuleRow[]>([]);
   const [totals, setTotals] = useState<Totals>({ initial: 0, monthly: 0 });
   const [preview, setPreview] = useState<DevisPreview | null>(null);
   const [client, setClient] = useState<ClientInfo | null>(null);
@@ -412,6 +472,12 @@ export default function SoumissionDetailPage() {
           `/api/v1/devlog/soumissions/${id}/devis-preview`
         );
         if (pr.ok) setPreview((await pr.json()) as DevisPreview);
+        // Modules de l'investissement initial (Phase 3). Absents pour
+        // les soumissions sans module (rétrocompat : liste vide).
+        const mr = await authedFetch(
+          `/api/v1/devlog/soumissions/${id}/modules`
+        );
+        if (mr.ok) setModules((await mr.json()) as ModuleRow[]);
       }
       // Charge l'info client (encadré en haut de page) si la soumission
       // est liée à un client.
@@ -583,6 +649,136 @@ export default function SoumissionDetailPage() {
       await loadAll();
     } catch {
       setError("Ajout ligne impossible");
+    }
+  }
+
+  // --- Modules (investissement initial, Phase 3) ----------------------
+  // Recharge la liste des modules (légère, sans reload global) — gardée
+  // pour rester réactif après une mutation de module/item.
+  const refreshModules = useCallback(async () => {
+    try {
+      const mr = await authedFetch(
+        `/api/v1/devlog/soumissions/${id}/modules`
+      );
+      if (mr.ok) setModules((await mr.json()) as ModuleRow[]);
+    } catch {
+      /* ignore */
+    }
+  }, [id]);
+
+  // La section « investissement initial » à laquelle rattacher les
+  // nouveaux modules (la 1re section initial si elle existe).
+  const initialSectionId = useMemo(() => {
+    const sec = sections.find((x) => x.billing_kind === "initial");
+    return sec ? sec.id : null;
+  }, [sections]);
+
+  async function addModule() {
+    const name = prompt("Nom du module (ex. Authentification, Paiements) ?");
+    if (!name?.trim()) return;
+    try {
+      const r = await authedFetch("/api/v1/devlog/soumission-modules", {
+        method: "POST",
+        body: JSON.stringify({
+          soumission_id: id,
+          section_id: initialSectionId,
+          name: name.trim()
+        })
+      });
+      if (!r.ok) throw new Error();
+      await refreshModules();
+      refreshPreview();
+    } catch {
+      setError("Création du module impossible");
+    }
+  }
+
+  async function patchModule(moduleId: number, patch: Partial<ModuleRow>) {
+    setModules((xs) =>
+      xs.map((x) => (x.id === moduleId ? { ...x, ...patch } : x))
+    );
+    refreshPreview();
+    try {
+      const r = await authedFetch(
+        `/api/v1/devlog/soumission-modules/${moduleId}`,
+        { method: "PATCH", body: JSON.stringify(patch) }
+      );
+      if (!r.ok) throw new Error();
+      await refreshModules();
+      refreshPreview();
+    } catch {
+      setError("Mise à jour du module impossible");
+      await refreshModules();
+    }
+  }
+
+  async function deleteModule(moduleId: number) {
+    const ok = await confirm({
+      title: "Supprimer ce module ?",
+      description:
+        "Les fonctionnalités et tâches du module seront détachées (pas supprimées) et repasseront en liste directe.",
+      confirmLabel: "Supprimer",
+      destructive: true
+    });
+    if (!ok) return;
+    try {
+      await authedFetch(
+        `/api/v1/devlog/soumission-modules/${moduleId}`,
+        { method: "DELETE" }
+      );
+      await loadAll();
+    } catch {
+      setError("Suppression du module impossible");
+    }
+  }
+
+  async function moveModule(moduleId: number, dir: -1 | 1) {
+    const ordered = [...modules].sort((a, b) => a.position - b.position);
+    const idx = ordered.findIndex((m) => m.id === moduleId);
+    const swap = idx + dir;
+    if (idx < 0 || swap < 0 || swap >= ordered.length) return;
+    [ordered[idx], ordered[swap]] = [ordered[swap], ordered[idx]];
+    const moduleIds = ordered.map((m) => m.id);
+    setModules(ordered.map((m, i) => ({ ...m, position: i })));
+    try {
+      const r = await authedFetch(
+        `/api/v1/devlog/soumissions/${id}/modules/reorder`,
+        { method: "POST", body: JSON.stringify({ module_ids: moduleIds }) }
+      );
+      if (!r.ok) throw new Error();
+      await refreshModules();
+    } catch {
+      setError("Réordonnancement impossible");
+      await refreshModules();
+    }
+  }
+
+  // Crée une fonctionnalité (feature) ou une tâche de chargé de projet
+  // (manager_task) DANS un module donné.
+  async function addModuleItem(
+    moduleId: number,
+    kind: "feature" | "manager_task"
+  ) {
+    try {
+      const payload: Record<string, unknown> = {
+        soumission_id: id,
+        module_id: moduleId,
+        item_kind: kind,
+        description:
+          kind === "feature"
+            ? "Nouvelle fonctionnalité"
+            : "Nouvelle tâche du chargé de projet",
+        heures: 0,
+        unit: "h"
+      };
+      const r = await authedFetch("/api/v1/devlog/soumission-items", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      if (!r.ok) throw new Error();
+      await loadAll();
+    } catch {
+      setError("Ajout impossible");
     }
   }
 
@@ -787,14 +983,30 @@ export default function SoumissionDetailPage() {
     () => items.filter((it) => it.item_kind === "recurring_cost"),
     [items]
   );
+  // Features SANS module : liste « directe » (rétrocompat — soumissions
+  // sans modules, ou features pas encore rangées dans un module).
   const featureItems = useMemo(
-    () => items.filter((it) => it.item_kind === "feature"),
+    () =>
+      items.filter(
+        (it) => it.item_kind === "feature" && it.module_id == null
+      ),
     [items]
   );
   const fixedItems = useMemo(
     () => items.filter((it) => it.item_kind === "fixed_cost"),
     [items]
   );
+  // Items (features + tâches) groupés par module pour les sous-listes.
+  const itemsByModule = useMemo(() => {
+    const m = new Map<number, Item[]>();
+    for (const it of items) {
+      if (it.module_id == null) continue;
+      const arr = m.get(it.module_id) || [];
+      arr.push(it);
+      m.set(it.module_id, arr);
+    }
+    return m;
+  }, [items]);
 
   return (
     <>
@@ -1007,11 +1219,18 @@ export default function SoumissionDetailPage() {
                 recurringItems={recurringItems}
                 featureItems={featureItems}
                 fixedItems={fixedItems}
+                modules={modules}
+                itemsByModule={itemsByModule}
                 ownerView={adminView}
                 onPatchSoumission={patchSoumission}
                 onAddItem={addDevisItem}
                 onPatchItem={patchItem}
                 onDeleteItem={deleteItem}
+                onAddModule={addModule}
+                onPatchModule={patchModule}
+                onDeleteModule={deleteModule}
+                onMoveModule={moveModule}
+                onAddModuleItem={addModuleItem}
               />
             ) : (
               <LegacyView
@@ -1046,22 +1265,39 @@ function DevisDevEditor({
   recurringItems,
   featureItems,
   fixedItems,
+  modules,
+  itemsByModule,
   ownerView,
   onPatchSoumission,
   onAddItem,
   onPatchItem,
-  onDeleteItem
+  onDeleteItem,
+  onAddModule,
+  onPatchModule,
+  onDeleteModule,
+  onMoveModule,
+  onAddModuleItem
 }: {
   soumission: Soumission;
   preview: DevisPreview | null;
   recurringItems: Item[];
   featureItems: Item[];
   fixedItems: Item[];
+  modules: ModuleRow[];
+  itemsByModule: Map<number, Item[]>;
   ownerView: boolean;
   onPatchSoumission: (patch: Partial<Soumission>) => void;
   onAddItem: (kind: "recurring_cost" | "feature" | "fixed_cost") => void;
   onPatchItem: (itemId: number, patch: Partial<Item>) => void;
   onDeleteItem: (itemId: number) => void;
+  onAddModule: () => void;
+  onPatchModule: (moduleId: number, patch: Partial<ModuleRow>) => void;
+  onDeleteModule: (moduleId: number) => void;
+  onMoveModule: (moduleId: number, dir: -1 | 1) => void;
+  onAddModuleItem: (
+    moduleId: number,
+    kind: "feature" | "manager_task"
+  ) => void;
 }) {
   const rec = preview?.recurring;
   const init = preview?.initial;
@@ -1292,10 +1528,17 @@ function DevisDevEditor({
             preview={preview}
             featureItems={featureItems}
             fixedItems={fixedItems}
+            modules={modules}
+            itemsByModule={itemsByModule}
             onPatchSoumission={onPatchSoumission}
             onAddItem={onAddItem}
             onPatchItem={onPatchItem}
             onDeleteItem={onDeleteItem}
+            onAddModule={onAddModule}
+            onPatchModule={onPatchModule}
+            onDeleteModule={onDeleteModule}
+            onMoveModule={onMoveModule}
+            onAddModuleItem={onAddModuleItem}
           />
         ) : (
           <DevisDevClientInitial preview={preview} />
@@ -1310,21 +1553,48 @@ function DevisDevOwnerInitial({
   preview,
   featureItems,
   fixedItems,
+  modules,
+  itemsByModule,
   onPatchSoumission,
   onAddItem,
   onPatchItem,
-  onDeleteItem
+  onDeleteItem,
+  onAddModule,
+  onPatchModule,
+  onDeleteModule,
+  onMoveModule,
+  onAddModuleItem
 }: {
   soumission: Soumission;
   preview: DevisPreview | null;
   featureItems: Item[];
   fixedItems: Item[];
+  modules: ModuleRow[];
+  itemsByModule: Map<number, Item[]>;
   onPatchSoumission: (patch: Partial<Soumission>) => void;
   onAddItem: (kind: "recurring_cost" | "feature" | "fixed_cost") => void;
   onPatchItem: (itemId: number, patch: Partial<Item>) => void;
   onDeleteItem: (itemId: number) => void;
+  onAddModule: () => void;
+  onPatchModule: (moduleId: number, patch: Partial<ModuleRow>) => void;
+  onDeleteModule: (moduleId: number) => void;
+  onMoveModule: (moduleId: number, dir: -1 | 1) => void;
+  onAddModuleItem: (
+    moduleId: number,
+    kind: "feature" | "manager_task"
+  ) => void;
 }) {
   const init = preview?.initial;
+  // Détail calculé par module (prix client, heures, état) indexé par id.
+  const moduleCalcById = useMemo(() => {
+    const m = new Map<number, NonNullable<DevisPreview["initial"]["modules"]>[number]>();
+    for (const md of init?.modules ?? []) m.set(md.id, md);
+    return m;
+  }, [init?.modules]);
+  const sortedModules = useMemo(
+    () => [...modules].sort((a, b) => a.position - b.position),
+    [modules]
+  );
   return (
     <div className="space-y-4">
       {/* Gestionnaire — inputs compacts (fix #4, fix #5). Les inputs
@@ -1365,11 +1635,67 @@ function DevisDevOwnerInitial({
         </div>
       </div>
 
-      {/* Features */}
+      {/* Modules (refonte 2026-06, Phase 3) — chaque module regroupe
+          des fonctionnalités (vue client) + des tâches de chargé de
+          projet (vue interne). Les features/tâches d'un module vivent
+          dans la carte du module ; les features SANS module restent en
+          liste directe ci-dessous (rétrocompat). */}
+      <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-3">
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-indigo-200">
+              Modules
+            </h3>
+            <p className="text-[10px] text-white/40">
+              Regroupe les fonctionnalités en modules sélectionnables, avec
+              tâches de chargé de projet et règle de gratuité.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onAddModule}
+            className="inline-flex items-center gap-1.5 rounded border border-indigo-500/40 px-2 py-1 text-xs text-indigo-200 hover:bg-indigo-500/15"
+          >
+            <Plus className="h-3 w-3" />
+            Ajouter un module
+          </button>
+        </div>
+        {sortedModules.length === 0 ? (
+          <p className="mt-2 rounded border border-dashed border-indigo-500/20 px-3 py-4 text-center text-xs text-white/40">
+            Aucun module. Les fonctionnalités directes ci-dessous sont
+            comptées telles quelles. Crée un module pour regrouper des
+            fonctionnalités et activer sélection / gratuité.
+          </p>
+        ) : (
+          <div className="mt-3 space-y-3">
+            {sortedModules.map((md, idx) => (
+              <ModuleCard
+                key={md.id}
+                module={md}
+                index={idx}
+                count={sortedModules.length}
+                allModules={sortedModules}
+                items={itemsByModule.get(md.id) ?? []}
+                calc={moduleCalcById.get(md.id)}
+                tauxDev={Number(s.taux_dev_horaire ?? 75)}
+                tauxManager={Number(s.taux_manager_horaire ?? 80)}
+                onPatchModule={onPatchModule}
+                onDeleteModule={onDeleteModule}
+                onMoveModule={onMoveModule}
+                onAddModuleItem={onAddModuleItem}
+                onPatchItem={onPatchItem}
+                onDeleteItem={onDeleteItem}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Features (directes — sans module) */}
       <div className="rounded-xl border border-blue-500/20 bg-brand-950/40 p-3">
         <div className="flex flex-wrap items-end justify-between gap-2">
           <h3 className="text-xs font-bold uppercase tracking-wider text-blue-200">
-            Fonctionnalités (features)
+            Fonctionnalités directes (hors module)
           </h3>
           <label className="inline-flex items-end gap-2 text-xs text-white/70">
             Taux dev
@@ -1384,7 +1710,8 @@ function DevisDevOwnerInitial({
         </div>
         {featureItems.length === 0 ? (
           <p className="mt-2 rounded border border-dashed border-blue-500/20 px-3 py-4 text-center text-xs text-white/40">
-            Aucune feature. Clique sur « + Ajouter une feature » pour commencer.
+            Aucune fonctionnalité hors module. Range tes fonctionnalités
+            dans des modules ci-dessus, ou ajoute-en une directe.
           </p>
         ) : (
           <table className="mt-2 w-full text-xs">
@@ -1448,7 +1775,7 @@ function DevisDevOwnerInitial({
           className="mt-2 inline-flex items-center gap-1.5 rounded text-xs text-white/60 hover:text-white"
         >
           <Plus className="h-3 w-3" />
-          Ajouter une feature
+          Ajouter une fonctionnalité directe
         </button>
       </div>
 
@@ -1593,6 +1920,313 @@ function DevisDevOwnerInitial({
   );
 }
 
+// Carte d'un module (vue interne / propriétaire) : en-tête (sélection,
+// nom, réordonnancement, suppression), règle de gratuité, totaux
+// calculés, et 2 sous-listes éditables (fonctionnalités + tâches du
+// chargé de projet). Phase 3.
+function ModuleCard({
+  module: md,
+  index,
+  count,
+  allModules,
+  items,
+  calc,
+  tauxDev,
+  tauxManager,
+  onPatchModule,
+  onDeleteModule,
+  onMoveModule,
+  onAddModuleItem,
+  onPatchItem,
+  onDeleteItem
+}: {
+  module: ModuleRow;
+  index: number;
+  count: number;
+  allModules: ModuleRow[];
+  items: Item[];
+  calc:
+    | NonNullable<DevisPreview["initial"]["modules"]>[number]
+    | undefined;
+  tauxDev: number;
+  tauxManager: number;
+  onPatchModule: (moduleId: number, patch: Partial<ModuleRow>) => void;
+  onDeleteModule: (moduleId: number) => void;
+  onMoveModule: (moduleId: number, dir: -1 | 1) => void;
+  onAddModuleItem: (
+    moduleId: number,
+    kind: "feature" | "manager_task"
+  ) => void;
+  onPatchItem: (itemId: number, patch: Partial<Item>) => void;
+  onDeleteItem: (itemId: number) => void;
+}) {
+  const features = items.filter((it) => it.item_kind === "feature");
+  const managerTasks = items.filter(
+    (it) => it.item_kind === "manager_task"
+  );
+  const selected = md.selected !== false;
+  const offert = calc?.offert ?? false;
+  const heuresDev = calc?.total_heures_dev ?? 0;
+  const heuresManager = calc?.total_heures_manager ?? 0;
+  const prixClient = calc?.prix_client ?? 0;
+  // Les autres modules (candidats déclencheurs de la gratuité).
+  const otherModules = allModules.filter((m) => m.id !== md.id);
+
+  return (
+    <div
+      className={`rounded-lg border p-3 ${
+        selected
+          ? "border-indigo-500/40 bg-indigo-500/[0.07]"
+          : "border-white/10 bg-white/[0.02] opacity-70"
+      }`}
+    >
+      {/* En-tête module */}
+      <div className="flex flex-wrap items-center gap-2">
+        <label
+          className="inline-flex items-center gap-1.5 text-xs text-white/80"
+          title="Inclure ce module dans la soumission"
+        >
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={(e) =>
+              onPatchModule(md.id, { selected: e.target.checked })
+            }
+            className="h-4 w-4 rounded border-white/30 bg-brand-950 accent-indigo-500"
+          />
+          Inclure
+        </label>
+        <div className="min-w-[8rem] flex-1">
+          <DescInput
+            value={md.name}
+            onCommit={(v) => onPatchModule(md.id, { name: v })}
+            placeholder="Nom du module"
+            className="w-full rounded border border-transparent bg-transparent px-1.5 py-1 text-sm font-semibold text-white hover:border-indigo-500/30 focus:border-indigo-500/50 focus:outline-none"
+          />
+        </div>
+        {offert ? (
+          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+            <Gift className="h-3 w-3" />
+            Offert
+          </span>
+        ) : null}
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            disabled={index === 0}
+            onClick={() => onMoveModule(md.id, -1)}
+            className="rounded p-1 text-white/30 hover:bg-white/10 hover:text-white disabled:opacity-20"
+            title="Monter"
+          >
+            <ChevronUp className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            disabled={index === count - 1}
+            onClick={() => onMoveModule(md.id, 1)}
+            className="rounded p-1 text-white/30 hover:bg-white/10 hover:text-white disabled:opacity-20"
+            title="Descendre"
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onDeleteModule(md.id)}
+            className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+            title="Supprimer le module"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Règle de gratuité + totaux calculés */}
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-y border-white/5 py-2">
+        <label className="inline-flex items-center gap-1.5 text-[11px] text-white/60">
+          <Gift className="h-3.5 w-3.5 text-emerald-300/70" />
+          Offert si le module
+          <select
+            value={md.free_when_module_id ?? ""}
+            onChange={(e) =>
+              onPatchModule(md.id, {
+                free_when_module_id: e.target.value
+                  ? Number(e.target.value)
+                  : null
+              })
+            }
+            className="rounded border border-white/15 bg-brand-950 px-1.5 py-0.5 text-[11px] text-white focus:outline-none"
+          >
+            <option value="">— (jamais offert)</option>
+            {otherModules.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name || `Module #${m.id}`}
+              </option>
+            ))}
+          </select>
+          est sélectionné
+        </label>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-white/70">
+          <span>
+            Dev :{" "}
+            <span className="font-semibold text-white">{heuresDev} h</span>
+          </span>
+          <span>
+            Chargé projet :{" "}
+            <span className="font-semibold text-white">
+              {heuresManager} h
+            </span>
+          </span>
+          <span>
+            Prix client :{" "}
+            <span className="font-bold text-indigo-200">
+              {offert ? "Offert" : fmtMoneyShort(prixClient)}
+            </span>
+          </span>
+        </div>
+      </div>
+
+      {/* Sous-liste 1 — Fonctionnalités (vue client + interne) */}
+      <div className="mt-3">
+        <div className="flex items-center justify-between">
+          <h4 className="text-[10px] font-bold uppercase tracking-wider text-blue-200/80">
+            Fonctionnalités
+          </h4>
+        </div>
+        {features.length === 0 ? (
+          <p className="mt-1 text-[11px] text-white/35">
+            Aucune fonctionnalité.
+          </p>
+        ) : (
+          <table className="mt-1 w-full text-xs">
+            <thead className="text-[10px] uppercase tracking-wider text-white/35">
+              <tr>
+                <th className="text-left font-medium">Fonctionnalité</th>
+                <th className="text-right font-medium">Heures</th>
+                <th className="text-right font-medium">Coût dev</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5 align-middle">
+              {features.map((it) => (
+                <tr key={it.id}>
+                  <td className="py-1">
+                    <DescInput
+                      value={it.description}
+                      onCommit={(v) =>
+                        onPatchItem(it.id, { description: v })
+                      }
+                      className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-white hover:border-blue-500/30 focus:border-blue-500/50 focus:outline-none"
+                    />
+                  </td>
+                  <td className="py-1">
+                    <div className="flex justify-end">
+                      <HoursInput
+                        value={Number(it.heures ?? 0)}
+                        onCommit={(n) => onPatchItem(it.id, { heures: n })}
+                        className="w-20 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white"
+                      />
+                    </div>
+                  </td>
+                  <td className="py-1 text-right text-white/70">
+                    {fmtMoneyShort(Number(it.heures ?? 0) * tauxDev)}
+                  </td>
+                  <td className="py-1">
+                    <button
+                      type="button"
+                      onClick={() => onDeleteItem(it.id)}
+                      className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <button
+          type="button"
+          onClick={() => onAddModuleItem(md.id, "feature")}
+          className="mt-1 inline-flex items-center gap-1 rounded text-[11px] text-white/50 hover:text-white"
+        >
+          <Plus className="h-3 w-3" />
+          Ajouter une fonctionnalité
+        </button>
+      </div>
+
+      {/* Sous-liste 2 — Tâches du chargé de projet (vue interne) */}
+      <div className="mt-3 rounded border border-amber-500/20 bg-amber-500/[0.04] p-2">
+        <h4 className="text-[10px] font-bold uppercase tracking-wider text-amber-200/80">
+          Tâches du chargé de projet
+          <span className="ml-1 font-normal normal-case text-white/35">
+            (vue interne seulement)
+          </span>
+        </h4>
+        {managerTasks.length === 0 ? (
+          <p className="mt-1 text-[11px] text-white/35">
+            Aucune tâche du chargé de projet.
+          </p>
+        ) : (
+          <table className="mt-1 w-full text-xs">
+            <thead className="text-[10px] uppercase tracking-wider text-white/35">
+              <tr>
+                <th className="text-left font-medium">Tâche</th>
+                <th className="text-right font-medium">Heures</th>
+                <th className="text-right font-medium">Coût</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5 align-middle">
+              {managerTasks.map((it) => (
+                <tr key={it.id}>
+                  <td className="py-1">
+                    <DescInput
+                      value={it.description}
+                      onCommit={(v) =>
+                        onPatchItem(it.id, { description: v })
+                      }
+                      className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-white hover:border-amber-500/30 focus:border-amber-500/50 focus:outline-none"
+                    />
+                  </td>
+                  <td className="py-1">
+                    <div className="flex justify-end">
+                      <HoursInput
+                        value={Number(it.heures ?? 0)}
+                        onCommit={(n) => onPatchItem(it.id, { heures: n })}
+                        className="w-20 rounded border border-amber-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white"
+                      />
+                    </div>
+                  </td>
+                  <td className="py-1 text-right text-white/70">
+                    {fmtMoneyShort(Number(it.heures ?? 0) * tauxManager)}
+                  </td>
+                  <td className="py-1">
+                    <button
+                      type="button"
+                      onClick={() => onDeleteItem(it.id)}
+                      className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <button
+          type="button"
+          onClick={() => onAddModuleItem(md.id, "manager_task")}
+          className="mt-1 inline-flex items-center gap-1 rounded text-[11px] text-white/50 hover:text-white"
+        >
+          <Plus className="h-3 w-3" />
+          Ajouter une tâche
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function DevisDevClientRecurring({
   soumission: s,
   recurringItems,
@@ -1712,20 +2346,75 @@ function DevisDevClientInitial({
       </p>
     );
   }
+  // Modules SÉLECTIONNÉS (la vue client n'affiche que ce qui est inclus).
+  // Les tâches du chargé de projet ne sont jamais exposées au client.
+  const selectedModules = (init.modules ?? []).filter((m) => m.selected);
+  // Prix client par feature (depuis features_client) pour afficher le
+  // prix de chaque fonctionnalité dans son module.
+  const featurePriceById = new Map<number, number>();
+  for (const f of init.features_client) {
+    if (f.id != null) featurePriceById.set(f.id, f.prix_client);
+  }
+  // Features SANS module (affichées en bloc « autres » — rétrocompat).
+  const looseFeatures = init.features_client.filter(
+    (f) => f.module_id == null
+  );
+
   return (
     <div className="space-y-4">
-      {init.features_client.length === 0 ? (
-        <p className="rounded border border-dashed border-blue-500/20 px-3 py-4 text-center text-xs text-white/40">
-          Aucune fonctionnalité à afficher.
-        </p>
-      ) : (
+      {selectedModules.length > 0 ? (
+        <div className="space-y-3">
+          {selectedModules.map((m) => (
+            <div
+              key={m.id}
+              className="rounded-lg border border-blue-500/20 bg-blue-500/[0.04] p-3"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-white">
+                  {m.name || "Module"}
+                </h3>
+                <span className="text-sm font-bold text-blue-200">
+                  {m.offert ? "Offert" : fmtAmount(m.prix_client)}
+                </span>
+              </div>
+              {m.features.length > 0 ? (
+                <ul className="mt-1 divide-y divide-blue-500/10">
+                  {m.features.map((f) => (
+                    <li
+                      key={f.id ?? f.description}
+                      className="flex items-center justify-between gap-2 py-1.5 text-sm"
+                    >
+                      <span className="text-white/85">{f.description}</span>
+                      <span className="text-white/60">
+                        {m.offert
+                          ? "Offert"
+                          : f.id != null && featurePriceById.has(f.id)
+                            ? fmtAmount(featurePriceById.get(f.id) ?? 0)
+                            : ""}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1 text-xs text-white/35">
+                  Aucune fonctionnalité.
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {looseFeatures.length > 0 ? (
         <div>
           <h3 className="text-xs uppercase tracking-wider text-white/40">
-            Fonctionnalités incluses
+            {selectedModules.length > 0
+              ? "Autres fonctionnalités"
+              : "Fonctionnalités incluses"}
           </h3>
           <table className="mt-1 w-full text-sm">
             <tbody className="divide-y divide-blue-500/20">
-              {init.features_client.map((f) => (
+              {looseFeatures.map((f) => (
                 <tr key={f.id ?? f.description}>
                   <td className="py-2 text-white">{f.description}</td>
                   <td className="py-2 text-right font-semibold text-white">
@@ -1736,7 +2425,11 @@ function DevisDevClientInitial({
             </tbody>
           </table>
         </div>
-      )}
+      ) : selectedModules.length === 0 ? (
+        <p className="rounded border border-dashed border-blue-500/20 px-3 py-4 text-center text-xs text-white/40">
+          Aucune fonctionnalité à afficher.
+        </p>
+      ) : null}
 
       {init.frais_fixes_client.length > 0 ? (
         <div>
