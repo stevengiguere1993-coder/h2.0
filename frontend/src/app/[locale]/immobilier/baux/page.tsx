@@ -5,7 +5,7 @@ import { ClipboardList, Loader2, Sparkles } from "lucide-react";
 
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
-import { ImmobilierTopbar } from "../layout";
+import { ImmobilierTopbar, useImmobilierLayout } from "../layout";
 
 type ImmeubleListItem = {
   id: number;
@@ -15,13 +15,22 @@ type ImmeubleListItem = {
 };
 
 export default function BauxPage() {
+  const { currentEntrepriseId } = useImmobilierLayout();
   const [list, setList] = useState<ImmeubleListItem[] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setList(null);
     async function load() {
       try {
-        const res = await authedFetch("/api/v1/immobilier/immeubles");
+        // On filtre par la compagnie sélectionnée dans la barre latérale,
+        // comme la vue d'ensemble — sinon on affiche des immeubles qui
+        // n'appartiennent pas à l'entreprise active.
+        const url =
+          currentEntrepriseId != null
+            ? `/api/v1/immobilier/immeubles?entreprise_id=${currentEntrepriseId}`
+            : "/api/v1/immobilier/immeubles";
+        const res = await authedFetch(url);
         if (!res.ok) return;
         const data = (await res.json()) as ImmeubleListItem[];
         if (!cancelled) setList(data);
@@ -33,7 +42,7 @@ export default function BauxPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [currentEntrepriseId]);
 
   return (
     <>
