@@ -371,12 +371,13 @@ function EntrepriseSelector({
   const [countsLoaded, setCountsLoaded] = useState(false);
   const [deleting, setDeleting] = useState<number | null>(null);
   const current = entreprises.find((e) => e.id === currentId) || null;
-  // Volet immo : on ne liste que les propriétaires ayant ≥ 1 immeuble
-  // (plus l'entreprise active, même si on vient de l'ajouter sans immeuble
-  // encore). Avant le chargement des compteurs, on montre tout pour éviter
-  // un flash de liste vide.
+  // Volet immo : on ne liste QUE les propriétaires ayant ≥ 1 immeuble.
+  // Une compagnie tombée à 0 immeuble disparaît de la liste, même si elle
+  // est sélectionnée (son nom reste affiché en haut ; on peut la
+  // re-rattacher via « Ajouter au portefeuille »). Avant le chargement des
+  // compteurs, on montre tout pour éviter un flash de liste vide.
   const portfolio = entreprises.filter(
-    (e) => !countsLoaded || (counts[e.id] ?? 0) > 0 || e.id === currentId
+    (e) => !countsLoaded || (counts[e.id] ?? 0) > 0
   );
   const notInPortfolio = entreprises.filter(
     (e) => countsLoaded && (counts[e.id] ?? 0) === 0 && e.id !== currentId
