@@ -1,12 +1,13 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
   Banknote,
   Building2,
   Calendar,
+  Camera,
   ClipboardList,
   DollarSign,
   Home,
@@ -19,7 +20,7 @@ import {
 } from "lucide-react";
 
 import { Link, useRouter } from "@/i18n/navigation";
-import { authedFetch } from "@/lib/auth";
+import { authedFetch, getToken } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../../layout";
 import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 
@@ -43,6 +44,8 @@ type Immeuble = {
   purchase_date?: string | null;
   description?: string | null;
   is_active: boolean;
+  cover_photo_url?: string | null;
+  has_cover_photo?: boolean;
 };
 
 type Logement = {
@@ -151,6 +154,9 @@ export default function ImmeubleDetailPage({
   const [deleting, setDeleting] = useState(false);
   const [savingOwner, setSavingOwner] = useState(false);
   const [actionErr, setActionErr] = useState<string | null>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoVer, setPhotoVer] = useState(0);
+  const fileRef = useRef<HTMLInputElement | null>(null);
   const [financials, setFinancials] = useState<Financials | null>(null);
   const [logements, setLogements] = useState<Logement[] | null>(null);
   const [baux, setBaux] = useState<Bail[] | null>(null);
@@ -245,6 +251,48 @@ export default function ImmeubleDetailPage({
     }
   }
 
+  async function uploadPhoto(file: File) {
+    setPhotoBusy(true);
+    setActionErr(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await authedFetch(
+        `/api/v1/immobilier/immeubles/${immeubleId}/cover-photo`,
+        { method: "POST", body: fd }
+      );
+      if (!res.ok)
+        throw new Error((await res.text()).slice(0, 160) || `HTTP ${res.status}`);
+      setImmeuble((await res.json()) as Immeuble);
+      setPhotoVer((v) => v + 1);
+    } catch (e) {
+      setActionErr(`Photo : ${(e as Error).message}`);
+    } finally {
+      setPhotoBusy(false);
+    }
+  }
+
+  async function removePhoto() {
+    setPhotoBusy(true);
+    setActionErr(null);
+    try {
+      const res = await authedFetch(
+        `/api/v1/immobilier/immeubles/${immeubleId}/cover-photo`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204)
+        throw new Error(`HTTP ${res.status}`);
+      setImmeuble((prev) =>
+        prev ? { ...prev, has_cover_photo: false, cover_photo_url: null } : prev
+      );
+      setPhotoVer((v) => v + 1);
+    } catch (e) {
+      setActionErr(`Photo : ${(e as Error).message}`);
+    } finally {
+      setPhotoBusy(false);
+    }
+  }
+
   if (error) {
     return (
       <>
@@ -306,8 +354,59 @@ export default function ImmeubleDetailPage({
         </Link>
 
         <header className="mt-4 flex flex-wrap items-start gap-4">
-          <div className="flex h-16 w-16 flex-shrink-0 items-center justify-center rounded-xl bg-sky-500/15 text-sky-300">
-            <Building2 className="h-7 w-7" />
+          <div className="flex flex-col items-center gap-1">
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              disabled={photoBusy}
+              title="Changer la photo de l'immeuble"
+              className="group relative h-16 w-16 flex-shrink-0 overflow-hidden rounded-xl bg-sky-500/15 text-sky-300"
+            >
+              {immeuble.has_cover_photo || immeuble.cover_photo_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={
+                    immeuble.has_cover_photo
+                      ? `/api/v1/immobilier/immeubles/${immeubleId}/cover-photo?t=${getToken() || ""}&v=${photoVer}`
+                      : (immeuble.cover_photo_url as string)
+                  }
+                  alt={immeuble.name}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="flex h-full w-full items-center justify-center">
+                  <Building2 className="h-7 w-7" />
+                </span>
+              )}
+              <span className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition group-hover:opacity-100">
+                {photoBusy ? (
+                  <Loader2 className="h-5 w-5 animate-spin text-white" />
+                ) : (
+                  <Camera className="h-5 w-5 text-white" />
+                )}
+              </span>
+            </button>
+            {immeuble.has_cover_photo || immeuble.cover_photo_url ? (
+              <button
+                type="button"
+                onClick={() => void removePhoto()}
+                disabled={photoBusy}
+                className="text-[10px] text-white/50 hover:text-rose-300"
+              >
+                Retirer
+              </button>
+            ) : null}
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void uploadPhoto(f);
+                e.target.value = "";
+              }}
+            />
           </div>
           <div className="min-w-0 flex-1">
             <h1 className="text-2xl font-bold text-white">{immeuble.name}</h1>
