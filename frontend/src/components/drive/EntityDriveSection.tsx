@@ -10,6 +10,8 @@ import {
   FolderPlus,
   Link2,
   Loader2,
+  Maximize2,
+  Minimize2,
   RefreshCw,
   Replace,
   Settings2,
@@ -153,6 +155,26 @@ export function EntityDriveSection({
       return next;
     });
   }, [collapseKey]);
+
+  // Mode plein écran (quasi plein écran) de l'explorateur Drive. État local,
+  // non persisté. Ouvert via le bouton « agrandir » du header, fermé via le
+  // bouton « réduire » de l'overlay ou la touche Échap.
+  const [fullscreen, setFullscreen] = useState(false);
+  // Échap ferme le plein écran. On verrouille aussi le scroll de la page
+  // hôte tant que l'overlay est ouvert.
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [fullscreen]);
 
   // Toast de confirmation auto-disparaissant (ex. "Dossier Drive mis à jour").
   const toastTimer = useRef<number | null>(null);
@@ -524,6 +546,17 @@ export function EntityDriveSection({
             >
               <RefreshCw className="h-3.5 w-3.5" />
             </button>
+            {folderLinked && !isCollapsed ? (
+              <button
+                type="button"
+                onClick={() => setFullscreen(true)}
+                title="Agrandir (plein écran)"
+                aria-label="Agrandir l'explorateur Drive en plein écran"
+                className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
             {folderLinked ? (
               <button
                 type="button"
@@ -641,6 +674,49 @@ export function EntityDriveSection({
           <div className="pointer-events-auto flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm text-emerald-100 shadow-lg">
             <CheckCircle2 className="h-4 w-4 shrink-0" />
             <span>{toast}</span>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Overlay « plein écran » de l'explorateur Drive. Affiche le même
+          <DriveFolderExplorer> en grand (quasi plein écran). Fonctionne aussi
+          bien pour une Drive d'entité que de page. Fermable via le bouton
+          « réduire » ou la touche Échap. */}
+      {fullscreen && link ? (
+        <div
+          className="fixed inset-0 z-[1300] flex flex-col bg-black/80 p-4 md:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${resolvedTitle} — plein écran`}
+          onClick={() => setFullscreen(false)}
+        >
+          <div
+            className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-2xl border border-brand-800 bg-brand-900 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="flex items-center justify-between gap-3 border-b border-brand-800 px-5 py-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
+                  <Cloud className="h-4.5 w-4.5" />
+                </span>
+                <h2 className="text-base font-bold text-white">
+                  {resolvedTitle}
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFullscreen(false)}
+                title="Réduire (quitter le plein écran)"
+                aria-label="Quitter le plein écran"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-brand-700 px-2.5 py-1.5 text-xs font-semibold text-white/70 hover:bg-white/10 hover:text-white"
+              >
+                <Minimize2 className="h-3.5 w-3.5" />
+                Réduire
+              </button>
+            </header>
+            <div className="min-h-0 flex-1 overflow-auto p-4 md:p-5">
+              <DriveFolderExplorer folderId={link.drive_folder_id} />
+            </div>
           </div>
         </div>
       ) : null}
@@ -869,4 +945,5 @@ function ManualLinkModal({
 }
 
 export default EntityDriveSection;
+
 
