@@ -1,8 +1,16 @@
 """Endpoints REST Google Drive — Phase 2.
 
-Tous protégés par :data:`RequireAdminOrOwner`. Toutes les opérations
-sont déléguées au wrapper :mod:`app.services.drive_api`, qui gère
-l'audit log et la traduction des erreurs Google.
+Navigation, lecture, upload et mutations *récupérables* (renommer,
+déplacer, mise à la corbeille, restauration) sont ouvertes à tout
+utilisateur connecté ayant un Drive lié (:data:`CurrentUser`) — comme
+dans Google Drive, où chacun peut manipuler les fichiers et la corbeille
+est réversible. Les opérations *irréversibles* ou sensibles (suppression
+DÉFINITIVE, gestion des permissions/partage) restent réservées aux
+administrateurs/propriétaires (:data:`RequireAdminOrOwner`).
+
+Toutes les opérations sont déléguées au wrapper
+:mod:`app.services.drive_api`, qui gère l'audit log et la traduction des
+erreurs Google.
 """
 
 from __future__ import annotations
@@ -22,7 +30,7 @@ from fastapi import (
 )
 from fastapi.responses import Response
 
-from app.api.deps import DBSession, RequireAdminOrOwner
+from app.api.deps import CurrentUser, DBSession, RequireAdminOrOwner
 from app.schemas.drive import (
     DriveCopyFolderRequest,
     DriveCreateFolderRequest,
@@ -112,7 +120,7 @@ _EXPORT_EXTENSIONS = {v: k for k, v in _EXPORT_FORMATS.items()}
 async def list_folder_files(
     folder_id: str,
     db: DBSession,
-    user: RequireAdminOrOwner,
+    user: CurrentUser,
     page_size: int = Query(100, ge=1, le=1000),
     page_token: Optional[str] = None,
     order_by: str = "folder,name",
@@ -142,7 +150,7 @@ async def list_folder_files(
 async def get_metadata(
     file_id: str,
     db: DBSession,
-    user: RequireAdminOrOwner,
+    user: CurrentUser,
 ) -> DriveFile:
     """Métadonnées complètes d'un fichier."""
     try:
@@ -159,7 +167,7 @@ async def get_metadata(
 async def get_folder_path(
     folder_id: str,
     db: DBSession,
-    user: RequireAdminOrOwner,
+    user: CurrentUser,
 ) -> DriveFolderPath:
     """Chaîne de breadcrumbs racine → dossier courant."""
     try:
@@ -187,7 +195,7 @@ async def get_folder_path(
 async def upload_file(
     folder_id: str,
     db: DBSession,
-    user: RequireAdminOrOwner,
+    user: CurrentUser,
     file: UploadFile = File(...),
 ) -> DriveFile:
     """Upload multipart d'un fichier dans le dossier ``folder_id``."""
@@ -221,7 +229,7 @@ def _content_disposition(filename: str) -> str:
 async def download_file(
     file_id: str,
     db: DBSession,
-    user: RequireAdminOrOwner,
+    user: CurrentUser,
 ) -> Response:
     """Stream binaire brut. 409 si fichier Google natif (utiliser /export)."""
     try:
@@ -244,7 +252,7 @@ async def download_file(
 async def export_file(
     file_id: str,
     db: DBSession,
-    user: RequireAdminOrOwner,
+    user: CurrentUser,
     format: str = Query("pdf", min_length=2, max_length=8),
 ) -> Response:
     """Exporte un Google Doc / Sheet / Slide vers PDF / DOCX / XLSX / PPTX."""
@@ -275,7 +283,7 @@ async def export_file(
 async def get_preview_url(
     file_id: str,
     db: DBSession,
-    user: RequireAdminOrOwner,
+    user: CurrentUser,
 ) -> DrivePreviewUrl:
     """URL ``drive.google.com/file/d/{id}/preview`` (iframe-friendly).
 
@@ -301,7 +309,7 @@ async def get_preview_url(
 async def patch_file(
     file_id: str,
     db: DBSession,
-    user: RequireAdminOrOwner,
+    user: CurrentUser,
     payload: DriveFilePatch = Body(...),
 ) -> DriveFile:
     """Renomme et/ou déplace selon les champs présents."""
@@ -336,10 +344,19 @@ async def patch_file(
 async def delete_file(
     file_id: str,
     db: DBSession,
-    user: RequireAdminOrOwner,
+    user: CurrentUser,
     permanent: bool = Query(default=False),
 ) -> None:
-    """Trash par défaut. ``?permanent=true`` pour suppression définitive."""
+    """Mise à la corbeille par défaut (action réversible, ouverte à tout
+    utilisateur connecté). ``?permanent=true`` = suppression DÉFINITIVE,
+    irréversible, réservée aux administrateurs/propriétaires.
+    """
+    if permanent and user.role not in ("owner", "admin"):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Suppression définitive réservée aux administrateurs. "
+            "Mets le fichier à la corbeille à la place (réversible).",
+        )
     try:
         if permanent:
             await drive_api.delete_file_permanent(user.id, db, file_id)
@@ -356,9 +373,9 @@ async def delete_file(
 async def restore_file(
     file_id: str,
     db: DBSession,
-    user: RequireAdminOrOwner,
+    user: CurrentUser,
 ) -> DriveFile:
-    """Restaure depuis la corbeille."""
+    """Restaure depuis la corbeille (réversible → tout utilisateur connecté)."""
     try:
         restored = await drive_api.restore_from_trash(user.id, db, file_id)
     except DriveError as exc:
@@ -379,7 +396,7 @@ async def restore_file(
 async def create_subfolder(
     folder_id: str,
     db: DBSession,
-    user: RequireAdminOrOwner,
+    user: CurrentUser,
     payload: DriveCreateFolderRequest = Body(...),
 ) -> DriveFile:
     """Crée un sous-dossier dans ``folder_id``."""
@@ -400,7 +417,7 @@ async def create_subfolder(
 async def copy_folder(
     source_folder_id: str,
     db: DBSession,
-    user: RequireAdminOrOwner,
+    user: CurrentUser,
     payload: DriveCopyFolderRequest = Body(...),
 ) -> DriveFile:
     """Copie récursive d'un dossier (limite profondeur 5)."""
@@ -425,7 +442,7 @@ async def copy_folder(
 @router.get("/search", response_model=DriveSearchResult)
 async def search(
     db: DBSession,
-    user: RequireAdminOrOwner,
+    user: CurrentUser,
     q: str = Query(..., min_length=1, max_length=200),
     parent_folder_id: Optional[str] = None,
     page_size: int = Query(50, ge=1, le=200),
@@ -513,3 +530,4 @@ async def revoke_file_permission(
         await drive_api.revoke_permission(user.id, db, file_id, permission_id)
     except DriveError as exc:
         _raise_for_drive(exc)
+

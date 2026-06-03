@@ -864,7 +864,32 @@ export function DriveFolderExplorer({
       { method: "DELETE" }
     );
     if (!res.ok && res.status !== 204) {
-      const msg = await readErrorDetail(res);
+      const detail = await readErrorDetail(res);
+      // Distingue les causes possibles d'un refus pour un message clair :
+      //  - 403 + mot-clé Google → c'est Google Drive qui refuse (l'utilisateur
+      //    n'est pas propriétaire / n'a pas les droits sur CE fichier).
+      //  - 403 « administrateurs » → refus de rôle Kratos (suppression
+      //    définitive réservée aux admins).
+      //  - autre → message brut renvoyé par l'API.
+      let msg = detail;
+      const lower = (detail || "").toLowerCase();
+      const googleRefusal =
+        lower.includes("google drive a refusé") ||
+        lower.includes("permissions insuffisantes") ||
+        lower.includes("insufficient");
+      if (res.status === 403 && googleRefusal) {
+        msg =
+          "Google Drive a refusé cette opération : tu n'es pas propriétaire " +
+          "de ce fichier (ou tu n'as pas les droits suffisants dessus dans " +
+          "Drive). Demande au propriétaire de le supprimer ou de te donner " +
+          "l'accès en édition.";
+      } else if (res.status === 403 && permanent) {
+        msg =
+          "La suppression définitive est réservée aux administrateurs. " +
+          "Tu peux mettre le fichier à la corbeille à la place (réversible).";
+      } else if (res.status === 403) {
+        msg = detail || "Accès refusé.";
+      }
       toast("error", `Suppression échouée : ${msg}`);
       return;
     }
@@ -2279,3 +2304,4 @@ function PreviewModal({
 }
 
 export default DriveFolderExplorer;
+
