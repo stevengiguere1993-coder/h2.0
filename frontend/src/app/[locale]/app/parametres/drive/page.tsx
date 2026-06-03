@@ -4,8 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
+  ChevronRight,
   Cloud,
+  Info,
   ExternalLink,
   FolderCog,
   FolderSearch,
@@ -132,6 +135,9 @@ type DriveAutoUpload = {
   overwrite_strategy: string;
   active: boolean;
   description?: string | null;
+  // null = règle seedée par le système (exemple pré-rempli) ; un id = règle
+  // créée par un humain. Alimente le badge « Exemple ».
+  created_by_user_id?: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -359,22 +365,17 @@ function ConnectionSection({
 }) {
   const connected = !!status?.connected;
   return (
-    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
-      <header className="flex items-start gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
-          <Cloud className="h-5 w-5" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <h2 className="text-base font-bold text-white">
-            Connexion Google Drive
-          </h2>
-          <p className="mt-0.5 text-xs text-white/60">
-            Donne accès en lecture/écriture aux fichiers que Kratos crée ou
-            ouvre dans ton Drive. Les tokens sont chiffrés (Fernet) avant
-            stockage en base.
-          </p>
-        </div>
-      </header>
+    <CollapsibleSection
+      storageKey="drive-settings:section:connection"
+      icon={Cloud}
+      title="Connexion Google Drive"
+      count={connected ? "Connecté" : "Non connecté"}
+    >
+      <p className="text-xs text-white/60">
+        Donne accès en lecture/écriture aux fichiers que Kratos crée ou ouvre
+        dans ton Drive. Les tokens sont chiffrés (Fernet) avant stockage en
+        base.
+      </p>
 
       {loading ? (
         <div className="mt-5 flex items-center gap-2 text-xs text-white/50">
@@ -455,7 +456,7 @@ function ConnectionSection({
           </button>
         </div>
       )}
-    </section>
+    </CollapsibleSection>
   );
 }
 
@@ -581,38 +582,58 @@ function ConventionsSection() {
     }
   }
 
+  const conventionCount = conventions?.length ?? 0;
   return (
-    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
-      <header className="flex flex-wrap items-start gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
-          <FolderCog className="h-5 w-5" />
+    <CollapsibleSection
+      storageKey="drive-settings:section:conventions"
+      icon={FolderCog}
+      title="Création automatique de dossiers"
+      badge={
+        <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
+          Actif
         </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-base font-bold text-white">
-              Création automatique de dossiers
-            </h2>
-            <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
-              Actif
-            </span>
-          </div>
-          <p className="mt-0.5 text-xs text-white/60">
-            Crée automatiquement un dossier Drive bien rangé (avec ses
-            sous-dossiers) chaque fois que tu ajoutes un deal, un client, un
-            projet, etc. Une règle marquée
-            <strong> Auto (création) </strong>
-            s&apos;applique dès qu&apos;une entité est ajoutée ; une règle
-            <strong> Manuel </strong> se déclenche avec le bouton « Tester ».
-          </p>
-        </div>
+      }
+      count={
+        conventionCount > 0
+          ? `${conventionCount} règle${conventionCount > 1 ? "s" : ""}`
+          : null
+      }
+    >
+      <InfoCallout>
+        <p>
+          Une <strong>« entité »</strong>, c&apos;est un{" "}
+          <strong>type de fiche</strong> dans Kratos : un Deal, un Client Dev
+          Log, une Entreprise, un Immeuble…
+        </p>
+        <p>
+          Une <strong>convention</strong> dit à Kratos : « quand une fiche de ce
+          type est créée, crée automatiquement son dossier Drive — au bon
+          endroit, bien nommé, avec ses sous-dossiers ».
+        </p>
+        <p className="text-sky-100/70">
+          Les règles déjà présentes sont des{" "}
+          <strong>exemples pré-remplis</strong> que tu peux modifier, activer ou
+          supprimer.
+        </p>
+      </InfoCallout>
+
+      <div className="flex flex-wrap items-start gap-3">
+        <p className="min-w-0 flex-1 text-xs text-white/60">
+          Crée automatiquement un dossier Drive bien rangé (avec ses
+          sous-dossiers) chaque fois que tu ajoutes un deal, un client, un
+          projet, etc. Une règle marquée
+          <strong> Auto (création) </strong>
+          s&apos;applique dès qu&apos;une entité est ajoutée ; une règle
+          <strong> Manuel </strong> se déclenche avec le bouton « Tester ».
+        </p>
         <button
           type="button"
           onClick={() => setCreating(true)}
-          className="inline-flex items-center gap-1 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600"
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600"
         >
           <Plus className="h-3.5 w-3.5" /> Nouvelle convention
         </button>
-      </header>
+      </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
         <label className="text-white/40">Filtrer :</label>
@@ -666,7 +687,12 @@ function ConventionsSection() {
             <tbody className="text-white/80">
               {conventions.map((c) => (
                 <tr key={c.id} className="border-t border-brand-800">
-                  <td className="px-2 py-2 font-medium text-white">{c.name}</td>
+                  <td className="px-2 py-2 font-medium text-white">
+                    <span className="inline-flex flex-wrap items-center gap-1.5">
+                      {c.name}
+                      <SeedExampleBadge createdByUserId={c.created_by_user_id} />
+                    </span>
+                  </td>
                   <td className="px-2 py-2">
                     <span className="rounded bg-brand-950 px-1.5 py-0.5 font-mono text-[10px]">
                       {c.entity_type}
@@ -786,7 +812,7 @@ function ConventionsSection() {
           }}
         />
       ) : null}
-    </section>
+    </CollapsibleSection>
   );
 }
 
@@ -1648,22 +1674,26 @@ function PageModulesSection() {
     }
   }
 
+  const activePagesCount = (modules || []).filter((m) => m.active).length;
   return (
-    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
-      <header className="flex flex-wrap items-start gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
-          <LayoutGrid className="h-5 w-5" />
+    <CollapsibleSection
+      storageKey="drive-settings:section:page-modules"
+      icon={LayoutGrid}
+      title="Afficher Drive sur les pages"
+      badge={
+        <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
+          Actif
         </span>
+      }
+      count={
+        activePagesCount > 0
+          ? `${activePagesCount} active${activePagesCount > 1 ? "s" : ""}`
+          : null
+      }
+    >
+      <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-base font-bold text-white">
-              Afficher Drive sur les pages
-            </h2>
-            <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
-              Actif
-            </span>
-          </div>
-          <p className="mt-0.5 text-xs text-white/60">
+          <p className="text-xs text-white/60">
             Choisis sur quelles pages de Kratos la section « Documents Drive »
             apparaît. Organisé par pôle : sélectionne un pôle, puis active
             Drive sur ses pages une à une.
@@ -1681,11 +1711,11 @@ function PageModulesSection() {
           type="button"
           onClick={() => void reload()}
           title="Rafraîchir"
-          className="rounded-lg border border-brand-800 p-1.5 text-white/50 hover:bg-white/5 hover:text-white"
+          className="shrink-0 rounded-lg border border-brand-800 p-1.5 text-white/50 hover:bg-white/5 hover:text-white"
         >
           <RefreshCw className="h-4 w-4" />
         </button>
-      </header>
+      </div>
 
       {error ? (
         <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
@@ -1792,7 +1822,7 @@ function PageModulesSection() {
           }}
         />
       ) : null}
-    </section>
+    </CollapsibleSection>
   );
 }
 
@@ -2023,28 +2053,28 @@ function EntityLinksSection() {
     }
   }
 
+  const linksCount = links?.length ?? 0;
   return (
-    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
-      <header className="flex flex-wrap items-start gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
-          <Link2 className="h-5 w-5" />
+    <CollapsibleSection
+      storageKey="drive-settings:section:entity-links"
+      icon={Link2}
+      title="Dossiers Drive liés"
+      badge={
+        <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
+          Actif
         </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-base font-bold text-white">
-              Dossiers Drive liés
-            </h2>
-            <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
-              Actif
-            </span>
-          </div>
-          <p className="mt-0.5 text-xs text-white/60">
-            La liste de toutes les entités Kratos (deals, clients, projets…)
-            reliées à un dossier Drive. Tu peux retirer un lien — le dossier
-            Drive lui-même reste intact.
-          </p>
-        </div>
-      </header>
+      }
+      count={
+        linksCount > 0
+          ? `${linksCount} lien${linksCount > 1 ? "s" : ""}`
+          : null
+      }
+    >
+      <p className="text-xs text-white/60">
+        La liste de toutes les entités Kratos (deals, clients, projets…) reliées
+        à un dossier Drive. Tu peux retirer un lien — le dossier Drive lui-même
+        reste intact.
+      </p>
 
       <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
         <label className="text-white/40">Filtrer :</label>
@@ -2138,7 +2168,7 @@ function EntityLinksSection() {
           entité (bouton « Tester »).
         </p>
       )}
-    </section>
+    </CollapsibleSection>
   );
 }
 
@@ -2245,36 +2275,51 @@ function AutoUploadsSection() {
     }
   }
 
+  const rulesCount = rules?.length ?? 0;
   return (
-    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
-      <header className="flex flex-wrap items-start gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
-          <UploadCloud className="h-5 w-5" />
+    <CollapsibleSection
+      storageKey="drive-settings:section:auto-uploads"
+      icon={UploadCloud}
+      title="Classement automatique des documents"
+      badge={
+        <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
+          Actif
         </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-base font-bold text-white">
-              Classement automatique des documents
-            </h2>
-            <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
-              Actif
-            </span>
-          </div>
-          <p className="mt-0.5 text-xs text-white/60">
-            Quand Kratos génère un document (fiche d&apos;analyse, offre,
-            NDA signé, soumission, facture), il le dépose tout seul dans le
-            bon sous-dossier Drive de l&apos;entité liée. Active une règle
-            une fois ses sous-dossier / nom de fichier vérifiés.
-          </p>
-        </div>
+      }
+      count={
+        rulesCount > 0
+          ? `${rulesCount} règle${rulesCount > 1 ? "s" : ""}`
+          : null
+      }
+    >
+      <InfoCallout>
+        <p>
+          Kratos range automatiquement les documents qu&apos;il génère dans le
+          bon dossier Drive. Le <strong>« type de document »</strong> correspond
+          aux documents que Kratos sait produire : fiche d&apos;analyse, offre,
+          NDA signé, soumission, facture.
+        </p>
+        <p className="text-sky-100/70">
+          Les règles ci-dessous sont des <strong>exemples pré-remplis</strong>,{" "}
+          <strong>inactifs par défaut</strong> — active celles que tu veux.
+        </p>
+      </InfoCallout>
+
+      <div className="flex flex-wrap items-start gap-3">
+        <p className="min-w-0 flex-1 text-xs text-white/60">
+          Quand Kratos génère un document (fiche d&apos;analyse, offre, NDA
+          signé, soumission, facture), il le dépose tout seul dans le bon
+          sous-dossier Drive de l&apos;entité liée. Active une règle une fois ses
+          sous-dossier / nom de fichier vérifiés.
+        </p>
         <button
           type="button"
           onClick={() => setCreating(true)}
-          className="inline-flex items-center gap-1 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600"
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600"
         >
           <Plus className="h-3.5 w-3.5" /> Nouvelle règle
         </button>
-      </header>
+      </div>
 
       {error ? (
         <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
@@ -2304,7 +2349,10 @@ function AutoUploadsSection() {
               {rules.map((r) => (
                 <tr key={r.id} className="border-t border-brand-800">
                   <td className="px-2 py-2">
-                    <div className="font-medium text-white">{r.name}</div>
+                    <div className="flex flex-wrap items-center gap-1.5 font-medium text-white">
+                      {r.name}
+                      <SeedExampleBadge createdByUserId={r.created_by_user_id} />
+                    </div>
                     <div className="text-[10px] text-white/40">
                       {labelFor(meta?.document_types, r.document_type)}
                     </div>
@@ -2411,7 +2459,7 @@ function AutoUploadsSection() {
           }}
         />
       ) : null}
-    </section>
+    </CollapsibleSection>
   );
 }
 
@@ -2666,6 +2714,127 @@ function PlaceholderSection({
         </div>
       </header>
     </section>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Repli de section + mémorisation localStorage (raccourcit la page)
+// -----------------------------------------------------------------------------
+
+// Hook : état déplié/replié mémorisé en localStorage (une clé par section).
+// Par défaut déplié, sauf préférence sauvegardée. SSR-safe (lit le storage
+// après montage pour éviter tout mismatch d'hydratation).
+function usePersistentCollapse(
+  storageKey: string,
+  defaultOpen = true
+): [boolean, () => void] {
+  const [open, setOpen] = useState(defaultOpen);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const saved = window.localStorage.getItem(storageKey);
+      if (saved === "open") setOpen(true);
+      else if (saved === "closed") setOpen(false);
+    } catch {
+      /* localStorage indispo (mode privé) → on garde le défaut */
+    }
+  }, [storageKey]);
+
+  const toggle = useCallback(() => {
+    setOpen((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(storageKey, next ? "open" : "closed");
+      } catch {
+        /* noop */
+      }
+      return next;
+    });
+  }, [storageKey]);
+
+  return [open, toggle];
+}
+
+// En-tête cliquable (chevron) qui replie/déplie son contenu. Mémorise l'état
+// via `usePersistentCollapse`. Quand replié, ne montre que le titre + un
+// éventuel compteur (ex « 4 règles »). Conserve le style sombre brand-*.
+function CollapsibleSection({
+  storageKey,
+  icon: Icon,
+  title,
+  badge,
+  count,
+  children
+}: {
+  storageKey: string;
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  badge?: React.ReactNode;
+  // Compteur affiché à droite du titre (utile surtout quand replié).
+  count?: string | null;
+  children: React.ReactNode;
+}) {
+  const [open, toggle] = usePersistentCollapse(storageKey, true);
+  return (
+    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className="flex w-full items-center gap-3 rounded-2xl px-5 py-4 text-left hover:bg-white/[0.03]"
+      >
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
+          <Icon className="h-5 w-5" />
+        </span>
+        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          <span className="text-base font-bold text-white">{title}</span>
+          {badge}
+          {count ? (
+            <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] font-medium text-white/60">
+              {count}
+            </span>
+          ) : null}
+        </span>
+        <span className="shrink-0 text-white/50">
+          {open ? (
+            <ChevronDown className="h-5 w-5" />
+          ) : (
+            <ChevronRight className="h-5 w-5" />
+          )}
+        </span>
+      </button>
+      {open ? <div className="px-5 pb-5">{children}</div> : null}
+    </section>
+  );
+}
+
+// Encart pédagogique discret (fond léger, icône info). Texte simple pour Phil.
+function InfoCallout({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-4 flex gap-2.5 rounded-xl border border-sky-500/25 bg-sky-500/5 px-4 py-3 text-xs leading-relaxed text-sky-100/90">
+      <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-300" />
+      <div className="space-y-1.5">{children}</div>
+    </div>
+  );
+}
+
+// Badge « Exemple » — règle seedée par le système (created_by_user_id == null).
+// Gris, discret : signale à l'utilisateur qu'elle est pré-installée, pas créée
+// par lui. N'affiche rien si la règle a un auteur humain.
+function SeedExampleBadge({
+  createdByUserId
+}: {
+  createdByUserId?: number | null;
+}) {
+  if (createdByUserId != null) return null;
+  return (
+    <span
+      title="Règle pré-installée par Kratos (exemple). Tu peux la modifier, l'activer ou la supprimer."
+      className="inline-flex items-center rounded-full border border-white/15 bg-white/5 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white/50"
+    >
+      Exemple
+    </span>
   );
 }
 
