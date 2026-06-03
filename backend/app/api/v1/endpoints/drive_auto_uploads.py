@@ -106,6 +106,10 @@ class DriveAutoUploadRead(BaseModel):
     overwrite_strategy: str
     active: bool
     description: Optional[str] = None
+    # Lecture seule : null = règle seedée par le système (exemple
+    # pré-rempli), un id = règle créée par un utilisateur humain. Le
+    # frontend s'en sert pour afficher un badge « Exemple ».
+    created_by_user_id: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 
