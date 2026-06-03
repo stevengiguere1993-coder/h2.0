@@ -172,6 +172,11 @@ api_router.include_router(devlog.invoice_automations_router, dependencies=_devlo
 api_router.include_router(devlog.invoices_router, dependencies=_devlog_admin_only)
 api_router.include_router(devlog.soumission_items_router, dependencies=_devlog_admin_only)
 api_router.include_router(devlog.soumission_sections_router, dependencies=_devlog_admin_only)
+# Niveau MODULE (refonte 2026-06) — CRUD/reorder/assign + lecture
+# hiérarchique sections → modules → items. Routes statiques
+# (/soumission-modules, /soumissions/{id}/structure) : pas de collision
+# avec le CRUD générique des soumissions.
+api_router.include_router(devlog.soumission_modules_router, dependencies=_devlog_admin_only)
 api_router.include_router(devlog.related_router, dependencies=_devlog_admin_only)
 api_router.include_router(devlog.sous_traitants_router, dependencies=_devlog_admin_only)
 api_router.include_router(devlog.invoice_items_router, dependencies=_devlog_admin_only)

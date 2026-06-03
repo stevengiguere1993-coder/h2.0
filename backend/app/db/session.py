@@ -727,6 +727,13 @@ async def init_db() -> None:
                 "VARCHAR(20) NOT NULL DEFAULT 'feature'",
             ),
             ("devlog_soumission_items", "heures", "NUMERIC(8,2)"),
+            # Niveau MODULE (refonte 2026-06) — un item rattaché à un
+            # module est une fonctionnalité de ce module. La table
+            # ``devlog_soumission_modules`` est créée par create_all ;
+            # cette colonne FK (nullable, ON DELETE SET NULL côté modèle)
+            # étend la table items existante. Additif et rétrocompatible :
+            # NULL pour tous les items legacy.
+            ("devlog_soumission_items", "module_id", "INTEGER"),
             ("devlog_leads", "address", "VARCHAR(500)"),
             (
                 "devlog_leads",

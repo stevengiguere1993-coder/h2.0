@@ -10,12 +10,12 @@ Accessible à tout utilisateur authentifié : nouveau pôle interne,
 petite équipe (closer / PM / devs partagent l'outil).
 """
 
-from typing import List, Optional, Type
+from typing import Iterable, List, Optional, Type
 
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, DBSession
 from app.db.base import Base
@@ -28,6 +28,7 @@ from app.models.devlog_lead_need import DevlogLeadNeed
 from app.models.devlog_project import DevlogProject
 from app.models.devlog_soumission import DevlogSoumission
 from app.models.devlog_soumission_item import DevlogSoumissionItem
+from app.models.devlog_soumission_module import DevlogSoumissionModule
 from app.models.devlog_soumission_section import DevlogSoumissionSection
 from app.models.devlog_sous_traitant import DevlogSousTraitant
 from app.models.devlog_time_entry import DevlogTimeEntry
@@ -63,14 +64,22 @@ from app.schemas.devlog import (
     DevlogProjectCreate,
     DevlogProjectRead,
     DevlogProjectUpdate,
+    DevlogModuleReorderRequest,
     DevlogSoumissionCreate,
+    DevlogSoumissionItemAssignModule,
     DevlogSoumissionItemCreate,
     DevlogSoumissionItemRead,
     DevlogSoumissionItemUpdate,
+    DevlogSoumissionModuleCreate,
+    DevlogSoumissionModuleRead,
+    DevlogSoumissionModuleUpdate,
+    DevlogSoumissionModuleWithItems,
     DevlogSoumissionRead,
     DevlogSoumissionSectionCreate,
     DevlogSoumissionSectionRead,
+    DevlogSoumissionSectionStructure,
     DevlogSoumissionSectionUpdate,
+    DevlogSoumissionStructure,
     DevlogSoumissionUpdate,
     DevlogSousTraitantCreate,
     DevlogSousTraitantRead,
@@ -2256,6 +2265,392 @@ async def get_soumission_totals(
         else:
             initial += t
     return {"initial": round(initial, 2), "monthly": round(monthly, 2)}
+
+
+# --------------------------------------------------------------------------
+# Modules de soumission (refonte 2026-06 — niveau MODULE)
+# --------------------------------------------------------------------------
+#
+# Un module regroupe des fonctionnalités (items de type ``feature``)
+# DANS la section « investissement initial ». Le prix d'un module est,
+# par convention, la somme des ``total`` de ses items. Couche purement
+# organisationnelle en Phase 1 : ces endpoints n'altèrent JAMAIS le
+# calcul du total de la soumission (``_refresh_soumission_amount`` /
+# ``compute_devis`` restent inchangés — la sommation des items est la
+# même qu'avant). Les soumissions sans aucun module continuent de
+# fonctionner exactement comme avant.
+
+soumission_modules_router = APIRouter(prefix="/devlog", tags=["devlog"])
+
+
+def _module_total(items: Iterable[DevlogSoumissionItem]) -> float:
+    """Prix d'un module = somme des ``total`` de ses items."""
+    return round(sum(float(it.total or 0) for it in items), 2)
+
+
+async def _module_with_items(
+    db, module: DevlogSoumissionModule
+) -> DevlogSoumissionModuleWithItems:
+    """Sérialise un module avec ses items + son total dérivé."""
+    items = (
+        await db.execute(
+            select(DevlogSoumissionItem)
+            .where(DevlogSoumissionItem.module_id == module.id)
+            .order_by(
+                DevlogSoumissionItem.position.asc(),
+                DevlogSoumissionItem.id.asc(),
+            )
+        )
+    ).scalars().all()
+    payload = DevlogSoumissionModuleRead.model_validate(module).model_dump()
+    return DevlogSoumissionModuleWithItems(
+        **payload,
+        total=_module_total(items),
+        items=[DevlogSoumissionItemRead.model_validate(it) for it in items],
+    )
+
+
+@soumission_modules_router.get(
+    "/soumissions/{soumission_id}/modules",
+    response_model=List[DevlogSoumissionModuleWithItems],
+    summary="Liste les modules d'une soumission (avec items + total)",
+)
+async def list_soumission_modules(
+    soumission_id: int, db: DBSession, _: CurrentUser
+):
+    modules = (
+        await db.execute(
+            select(DevlogSoumissionModule)
+            .where(DevlogSoumissionModule.soumission_id == soumission_id)
+            .order_by(
+                DevlogSoumissionModule.position.asc(),
+                DevlogSoumissionModule.id.asc(),
+            )
+        )
+    ).scalars().all()
+    return [await _module_with_items(db, m) for m in modules]
+
+
+@soumission_modules_router.post(
+    "/soumission-modules",
+    response_model=DevlogSoumissionModuleRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crée un module dans une soumission",
+)
+async def create_soumission_module(
+    data: DevlogSoumissionModuleCreate, db: DBSession, user: CurrentUser
+):
+    if await GenericCrud(db, DevlogSoumission).get(data.soumission_id) is None:
+        raise HTTPException(status_code=404, detail="Soumission introuvable")
+    if data.section_id is not None:
+        section = await GenericCrud(db, DevlogSoumissionSection).get(
+            data.section_id
+        )
+        if section is None:
+            raise HTTPException(status_code=404, detail="Section introuvable")
+    payload = data.model_dump(exclude_unset=True)
+    # Position par défaut : à la fin de la liste des modules existants.
+    if payload.get("position") is None:
+        count = (
+            await db.execute(
+                select(func.count())
+                .select_from(DevlogSoumissionModule)
+                .where(
+                    DevlogSoumissionModule.soumission_id
+                    == data.soumission_id
+                )
+            )
+        ).scalar_one()
+        payload["position"] = int(count or 0)
+    obj = DevlogSoumissionModule(**payload)
+    db.add(obj)
+    await db.flush()
+    await db.refresh(obj)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission_module.created",
+        entity_type="devlog_soumission_module",
+        entity_id=obj.id,
+        details={
+            "soumission_id": data.soumission_id,
+            "name": getattr(obj, "name", None),
+        },
+    )
+    return DevlogSoumissionModuleRead.model_validate(obj)
+
+
+@soumission_modules_router.patch(
+    "/soumission-modules/{module_id}",
+    response_model=DevlogSoumissionModuleRead,
+    summary="Modifie un module",
+)
+async def update_soumission_module(
+    module_id: int,
+    data: DevlogSoumissionModuleUpdate,
+    db: DBSession,
+    user: CurrentUser,
+):
+    crud = GenericCrud(db, DevlogSoumissionModule)
+    obj = await crud.get(module_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Module introuvable")
+    if data.section_id is not None:
+        section = await GenericCrud(db, DevlogSoumissionSection).get(
+            data.section_id
+        )
+        if section is None:
+            raise HTTPException(status_code=404, detail="Section introuvable")
+    obj = await crud.update(obj, data)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission_module.updated",
+        entity_type="devlog_soumission_module",
+        entity_id=module_id,
+        details=data.model_dump(exclude_unset=True),
+    )
+    return DevlogSoumissionModuleRead.model_validate(obj)
+
+
+@soumission_modules_router.delete(
+    "/soumission-modules/{module_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Supprime un module (ses items sont détachés, pas effacés)",
+)
+async def delete_soumission_module(
+    module_id: int, db: DBSession, user: CurrentUser
+):
+    crud = GenericCrud(db, DevlogSoumissionModule)
+    obj = await crud.get(module_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Module introuvable")
+    soumission_id = obj.soumission_id
+    # Les items du module sont détachés (module_id → NULL) via le
+    # ON DELETE SET NULL du modèle ; ils restent dans la soumission et
+    # continuent de compter dans le total. Aucun item n'est supprimé.
+    await crud.delete(obj)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission_module.deleted",
+        entity_type="devlog_soumission_module",
+        entity_id=module_id,
+        details={"soumission_id": soumission_id},
+    )
+
+
+@soumission_modules_router.post(
+    "/soumissions/{soumission_id}/modules/reorder",
+    response_model=List[DevlogSoumissionModuleRead],
+    summary="Réordonne les modules d'une soumission",
+)
+async def reorder_soumission_modules(
+    soumission_id: int,
+    data: DevlogModuleReorderRequest,
+    db: DBSession,
+    user: CurrentUser,
+):
+    modules = (
+        await db.execute(
+            select(DevlogSoumissionModule).where(
+                DevlogSoumissionModule.soumission_id == soumission_id
+            )
+        )
+    ).scalars().all()
+    by_id = {m.id: m for m in modules}
+    # On n'accepte de réordonner que des modules de CETTE soumission.
+    for idx, mid in enumerate(data.module_ids):
+        mod = by_id.get(mid)
+        if mod is not None:
+            mod.position = idx
+    await db.flush()
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission_module.reordered",
+        entity_type="devlog_soumission",
+        entity_id=soumission_id,
+        details={"module_ids": data.module_ids},
+    )
+    ordered = sorted(
+        modules, key=lambda m: (m.position, m.id)
+    )
+    return [DevlogSoumissionModuleRead.model_validate(m) for m in ordered]
+
+
+@soumission_modules_router.patch(
+    "/soumission-items/{item_id}/module",
+    response_model=DevlogSoumissionItemRead,
+    summary="Assigne (ou détache) une fonctionnalité à un module",
+)
+async def assign_item_to_module(
+    item_id: int,
+    data: DevlogSoumissionItemAssignModule,
+    db: DBSession,
+    user: CurrentUser,
+):
+    """Rattache un item à un module (``module_id`` fourni) ou le détache
+    (``module_id`` NULL). Ne change PAS le ``total`` de l'item ni celui
+    de la soumission — pur lien d'organisation."""
+    item = await GenericCrud(db, DevlogSoumissionItem).get(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item introuvable")
+    if data.module_id is not None:
+        module = await GenericCrud(db, DevlogSoumissionModule).get(
+            data.module_id
+        )
+        if module is None:
+            raise HTTPException(status_code=404, detail="Module introuvable")
+        if module.soumission_id != item.soumission_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Le module et l'item doivent appartenir à la "
+                "même soumission",
+            )
+    item.module_id = data.module_id
+    await db.flush()
+    await db.refresh(item)
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission_item.module_assigned",
+        entity_type="devlog_soumission_item",
+        entity_id=item_id,
+        details={"module_id": data.module_id},
+    )
+    return DevlogSoumissionItemRead.model_validate(item)
+
+
+@soumission_modules_router.get(
+    "/soumissions/{soumission_id}/structure",
+    response_model=DevlogSoumissionStructure,
+    summary=(
+        "Lecture hiérarchique d'une soumission : sections → "
+        "(modules → items) pour l'initial, items directs ailleurs"
+    ),
+)
+async def get_soumission_structure(
+    soumission_id: int, db: DBSession, _: CurrentUser
+):
+    """Hiérarchie d'affichage, additive et rétrocompatible. N'altère
+    aucun total : reconstruit l'arbre sections → modules → items à
+    partir des liens existants. Les items sans module apparaissent
+    comme ``direct_items`` de leur section ; les items sans section ET
+    sans module comme ``orphan_items`` (legacy)."""
+    if await GenericCrud(db, DevlogSoumission).get(soumission_id) is None:
+        raise HTTPException(status_code=404, detail="Soumission introuvable")
+
+    sections = (
+        await db.execute(
+            select(DevlogSoumissionSection)
+            .where(DevlogSoumissionSection.soumission_id == soumission_id)
+            .order_by(
+                DevlogSoumissionSection.position.asc(),
+                DevlogSoumissionSection.id.asc(),
+            )
+        )
+    ).scalars().all()
+    modules = (
+        await db.execute(
+            select(DevlogSoumissionModule)
+            .where(DevlogSoumissionModule.soumission_id == soumission_id)
+            .order_by(
+                DevlogSoumissionModule.position.asc(),
+                DevlogSoumissionModule.id.asc(),
+            )
+        )
+    ).scalars().all()
+    items = (
+        await db.execute(
+            select(DevlogSoumissionItem)
+            .where(DevlogSoumissionItem.soumission_id == soumission_id)
+            .order_by(
+                DevlogSoumissionItem.position.asc(),
+                DevlogSoumissionItem.id.asc(),
+            )
+        )
+    ).scalars().all()
+
+    # Regroupe les items par module_id et par section_id.
+    items_by_module: dict[int, list[DevlogSoumissionItem]] = {}
+    for it in items:
+        if it.module_id is not None:
+            items_by_module.setdefault(it.module_id, []).append(it)
+
+    def _module_payload(
+        module: DevlogSoumissionModule,
+    ) -> DevlogSoumissionModuleWithItems:
+        mod_items = items_by_module.get(module.id, [])
+        base = DevlogSoumissionModuleRead.model_validate(module).model_dump()
+        return DevlogSoumissionModuleWithItems(
+            **base,
+            total=_module_total(mod_items),
+            items=[
+                DevlogSoumissionItemRead.model_validate(it)
+                for it in mod_items
+            ],
+        )
+
+    modules_by_section: dict[int, list[DevlogSoumissionModule]] = {}
+    orphan_modules: list[DevlogSoumissionModule] = []
+    for m in modules:
+        if m.section_id is not None:
+            modules_by_section.setdefault(m.section_id, []).append(m)
+        else:
+            orphan_modules.append(m)
+
+    section_structs: list[DevlogSoumissionSectionStructure] = []
+    for sec in sections:
+        # Items directs de la section : rattachés à la section mais à
+        # AUCUN module (couvre les sections récurrentes + l'initial non
+        # encore modularisé).
+        direct = [
+            it
+            for it in items
+            if it.section_id == sec.id and it.module_id is None
+        ]
+        section_structs.append(
+            DevlogSoumissionSectionStructure(
+                id=sec.id,
+                soumission_id=sec.soumission_id,
+                position=sec.position,
+                name=sec.name,
+                billing_kind=sec.billing_kind,
+                markup_percent=(
+                    float(sec.markup_percent)
+                    if sec.markup_percent is not None
+                    else None
+                ),
+                client_label=sec.client_label,
+                notes=sec.notes,
+                modules=[
+                    _module_payload(m)
+                    for m in modules_by_section.get(sec.id, [])
+                ],
+                direct_items=[
+                    DevlogSoumissionItemRead.model_validate(it)
+                    for it in direct
+                ],
+            )
+        )
+
+    # Items legacy : ni section ni module.
+    orphan_items = [
+        it
+        for it in items
+        if it.section_id is None and it.module_id is None
+    ]
+
+    return DevlogSoumissionStructure(
+        soumission_id=soumission_id,
+        sections=section_structs,
+        orphan_modules=[_module_payload(m) for m in orphan_modules],
+        orphan_items=[
+            DevlogSoumissionItemRead.model_validate(it)
+            for it in orphan_items
+        ],
+    )
 
 
 # --------------------------------------------------------------------------
