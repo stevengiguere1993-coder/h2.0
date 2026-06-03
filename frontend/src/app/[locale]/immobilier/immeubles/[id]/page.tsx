@@ -585,14 +585,11 @@ export default function ImmeubleDetailPage({
                 key={t.id}
                 type="button"
                 onClick={() => setTab(t.id)}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition"
-                style={{
-                  color: active ? "#7dd3fc" : "rgba(245,245,247,0.6)",
-                  borderBottom: active
-                    ? "2px solid #7dd3fc"
-                    : "2px solid transparent",
-                  marginBottom: "-1px"
-                }}
+                className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-4 py-2 text-sm font-medium transition ${
+                  active
+                    ? "border-sky-400 text-sky-500"
+                    : "border-transparent text-white/60 hover:text-white"
+                }`}
               >
                 <Icon className="h-4 w-4" />
                 {t.label}
