@@ -1385,8 +1385,16 @@ async def import_immeuble_from_matricule(
 
 
 def _norm_company(name: str) -> str:
-    s = (name or "").strip().lower().rstrip(",.").strip()
-    return re.sub(r"\s+", " ", s)
+    """Normalise un nom de compagnie pour le matching : minuscules, sans
+    ponctuation, et sans les suffixes juridiques (« inc », « québec inc »,
+    « ltée », etc.) que PlexFlow ajoute mais pas forcément Kratos.
+    Ainsi « 9417-1287 Québec Inc. » et « 9417-1287 » correspondent."""
+    s = (name or "").lower()
+    s = re.sub(r"[.,]", " ", s)
+    s = re.sub(
+        r"\b(inc|québec|quebec|ltée|ltee|enr|senc|cie|co)\b", " ", s
+    )
+    return re.sub(r"\s+", " ", s).strip()
 
 
 def _norm_address(addr: str) -> str:
@@ -1421,7 +1429,14 @@ async def import_plexflow(
     )
 
     for comp in companies:
-        ent = by_norm.get(_norm_company(comp.name))
+        # 1) override explicite fourni par l'utilisateur, sinon 2) match
+        #    automatique par nom normalisé.
+        ent = None
+        override_id = payload.company_overrides.get(comp.name)
+        if override_id:
+            ent = await db.get(Entreprise, override_id)
+        if ent is None:
+            ent = by_norm.get(_norm_company(comp.name))
         oc = PlexImportCompany(
             name=comp.name,
             entreprise_id=ent.id if ent else None,

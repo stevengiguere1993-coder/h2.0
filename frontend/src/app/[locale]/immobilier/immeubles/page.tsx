@@ -284,6 +284,7 @@ export default function ImmeublesListPage() {
 
       {showPlex ? (
         <ImportPlexflowModal
+          entreprises={entreprises}
           onClose={() => setShowPlex(false)}
           onImported={() => void reload()}
         />
@@ -748,9 +749,11 @@ type PlexResult = {
 };
 
 function ImportPlexflowModal({
+  entreprises,
   onClose,
   onImported
 }: {
+  entreprises: { id: number; name: string }[];
   onClose: () => void;
   onImported: () => void;
 }) {
@@ -759,14 +762,20 @@ function ImportPlexflowModal({
   const [preview, setPreview] = useState<PlexResult | null>(null);
   const [committed, setCommitted] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Mapping manuel : nom de compagnie PlexFlow → entreprise_id Kratos.
+  const [overrides, setOverrides] = useState<Record<string, number>>({});
 
-  async function run(dryRun: boolean) {
+  async function run(dryRun: boolean, ov: Record<string, number> = overrides) {
     setLoading(true);
     setErr(null);
     try {
       const res = await authedFetch("/api/v1/immobilier/import-plexflow", {
         method: "POST",
-        body: JSON.stringify({ raw_text: raw, dry_run: dryRun })
+        body: JSON.stringify({
+          raw_text: raw,
+          dry_run: dryRun,
+          company_overrides: ov
+        })
       });
       if (res.status === 401)
         throw new Error("Session expirée — reconnecte-toi puis réessaie.");
@@ -783,6 +792,13 @@ function ImportPlexflowModal({
     } finally {
       setLoading(false);
     }
+  }
+
+  function mapCompany(companyName: string, entrepriseId: number) {
+    const next = { ...overrides, [companyName]: entrepriseId };
+    setOverrides(next);
+    // Re-prévisualise pour rafraîchir le rattachement et les compteurs.
+    void run(true, next);
   }
 
   const importable =
@@ -848,7 +864,12 @@ function ImportPlexflowModal({
           ) : null}
 
           {preview ? (
-            <PlexPreview result={preview} />
+            <PlexPreview
+              result={preview}
+              entreprises={entreprises}
+              onMap={mapCompany}
+              busy={loading}
+            />
           ) : null}
         </div>
 
@@ -901,7 +922,17 @@ function ImportPlexflowModal({
   );
 }
 
-function PlexPreview({ result }: { result: PlexResult }) {
+function PlexPreview({
+  result,
+  entreprises,
+  onMap,
+  busy
+}: {
+  result: PlexResult;
+  entreprises: { id: number; name: string }[];
+  onMap: (companyName: string, entrepriseId: number) => void;
+  busy: boolean;
+}) {
   const t = result.totals || {};
   return (
     <div className="space-y-3">
@@ -942,17 +973,40 @@ function PlexPreview({ result }: { result: PlexResult }) {
             key={ci}
             className="rounded-lg border border-brand-800 bg-brand-900/40 p-3"
           >
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-sm font-semibold text-white">{c.name}</span>
-              {c.matched ? (
-                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
-                  <CheckCircle2 className="h-3 w-3" /> rattachée
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
-                  <AlertTriangle className="h-3 w-3" /> introuvable — ignorée
-                </span>
-              )}
+              <div className="flex items-center gap-2">
+                {c.matched ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                    <CheckCircle2 className="h-3 w-3" /> rattachée
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+                    <AlertTriangle className="h-3 w-3" /> à rattacher
+                  </span>
+                )}
+                {/* Mapping manuel : choisir l'entreprise Kratos (ex. quand
+                    le nom diffère — « 9510-7520 » = BGV). */}
+                <select
+                  value={c.entreprise_id ?? ""}
+                  disabled={busy}
+                  onChange={(e) => onMap(c.name, Number(e.target.value))}
+                  className="rounded-lg border border-brand-800 bg-brand-900 px-2 py-1 text-[11px] font-semibold text-white outline-none focus:border-violet-300 disabled:opacity-50"
+                >
+                  <option value="" disabled className="bg-brand-950 text-white">
+                    — rattacher à —
+                  </option>
+                  {entreprises.map((e) => (
+                    <option
+                      key={e.id}
+                      value={e.id}
+                      className="bg-brand-950 text-white"
+                    >
+                      {e.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
             <div className="mt-2 space-y-1.5">
               {c.buildings.map((b, bi) => (
