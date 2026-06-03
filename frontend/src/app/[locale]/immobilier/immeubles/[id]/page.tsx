@@ -12,6 +12,7 @@ import {
   DollarSign,
   Home,
   Loader2,
+  Pencil,
   Percent,
   Trash2,
   TrendingUp,
@@ -166,6 +167,18 @@ export default function ImmeubleDetailPage({
     client_name: string | null;
     client_created: boolean;
   } | null>(null);
+  const [showEdit, setShowEdit] = useState(false);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editForm, setEditForm] = useState({
+    name: "",
+    address: "",
+    city: "",
+    postal_code: "",
+    type: "residentiel",
+    annee_construction: "",
+    nb_logements: "",
+    purchase_price: ""
+  });
   const [financials, setFinancials] = useState<Financials | null>(null);
   const [logements, setLogements] = useState<Logement[] | null>(null);
   const [baux, setBaux] = useState<Bail[] | null>(null);
@@ -332,6 +345,64 @@ export default function ImmeubleDetailPage({
       setActionErr(`Bon de travail : ${(e as Error).message}`);
     } finally {
       setBonBusy(false);
+    }
+  }
+
+  function openEdit() {
+    if (!immeuble) return;
+    setEditForm({
+      name: immeuble.name || "",
+      address: immeuble.address || "",
+      city: immeuble.city || "",
+      postal_code: immeuble.postal_code || "",
+      type: immeuble.type || "residentiel",
+      annee_construction: immeuble.annee_construction
+        ? String(immeuble.annee_construction)
+        : "",
+      nb_logements: immeuble.nb_logements ? String(immeuble.nb_logements) : "",
+      purchase_price: immeuble.purchase_price
+        ? String(immeuble.purchase_price)
+        : ""
+    });
+    setShowEdit(true);
+  }
+
+  async function saveEdit() {
+    if (!editForm.address.trim()) {
+      setActionErr("L'adresse est requise.");
+      return;
+    }
+    setEditBusy(true);
+    setActionErr(null);
+    try {
+      const body: Record<string, unknown> = {
+        name: editForm.name.trim() || null,
+        address: editForm.address.trim(),
+        city: editForm.city.trim() || null,
+        postal_code: editForm.postal_code.trim() || null,
+        type: editForm.type,
+        annee_construction: editForm.annee_construction
+          ? Number(editForm.annee_construction)
+          : null,
+        nb_logements: editForm.nb_logements
+          ? Number(editForm.nb_logements)
+          : null,
+        purchase_price: editForm.purchase_price
+          ? Number(editForm.purchase_price)
+          : null
+      };
+      const res = await authedFetch(
+        `/api/v1/immobilier/immeubles/${immeubleId}`,
+        { method: "PATCH", body: JSON.stringify(body) }
+      );
+      if (!res.ok)
+        throw new Error((await res.text()).slice(0, 200) || `HTTP ${res.status}`);
+      setImmeuble((await res.json()) as Immeuble);
+      setShowEdit(false);
+    } catch (e) {
+      setActionErr(`Modification échouée : ${(e as Error).message}`);
+    } finally {
+      setEditBusy(false);
     }
   }
 
@@ -507,6 +578,14 @@ export default function ImmeubleDetailPage({
               ) : null}
             </label>
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={openEdit}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-200 hover:bg-sky-500/20"
+                title="Modifier l'immeuble (nom, adresse, etc.)"
+              >
+                <Pencil className="h-3.5 w-3.5" /> Modifier
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -771,7 +850,169 @@ export default function ImmeubleDetailPage({
           </div>
         </div>
       ) : null}
+
+      {showEdit ? (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+          <div className="my-8 w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
+              <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-sky-300">
+                <Pencil className="h-4 w-4" /> Modifier l&apos;immeuble
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShowEdit(false)}
+                disabled={editBusy}
+                className="rounded-md p-1.5 text-white/60 hover:bg-brand-900 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-3 p-5">
+              <EditField label="Nom (optionnel)">
+                <input
+                  value={editForm.name}
+                  onChange={(e) =>
+                    setEditForm((f) => ({ ...f, name: e.target.value }))
+                  }
+                  className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                  placeholder="Laisser vide = adresse"
+                />
+              </EditField>
+              <EditField label="Adresse *">
+                <input
+                  value={editForm.address}
+                  onChange={(e) =>
+                    setEditForm((f) => ({ ...f, address: e.target.value }))
+                  }
+                  className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                />
+              </EditField>
+              <div className="grid grid-cols-2 gap-3">
+                <EditField label="Ville">
+                  <input
+                    value={editForm.city}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, city: e.target.value }))
+                    }
+                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                  />
+                </EditField>
+                <EditField label="Code postal">
+                  <input
+                    value={editForm.postal_code}
+                    onChange={(e) =>
+                      setEditForm((f) => ({
+                        ...f,
+                        postal_code: e.target.value
+                      }))
+                    }
+                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                  />
+                </EditField>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <EditField label="Type">
+                  <select
+                    value={editForm.type}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, type: e.target.value }))
+                    }
+                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                  >
+                    {["residentiel", "commercial", "mixte", "unifamilial", "autre"].map(
+                      (t) => (
+                        <option key={t} value={t} className="bg-brand-950 text-white">
+                          {t}
+                        </option>
+                      )
+                    )}
+                  </select>
+                </EditField>
+                <EditField label="Année">
+                  <input
+                    type="number"
+                    value={editForm.annee_construction}
+                    onChange={(e) =>
+                      setEditForm((f) => ({
+                        ...f,
+                        annee_construction: e.target.value
+                      }))
+                    }
+                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                  />
+                </EditField>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <EditField label="Nb logements">
+                  <input
+                    type="number"
+                    value={editForm.nb_logements}
+                    onChange={(e) =>
+                      setEditForm((f) => ({
+                        ...f,
+                        nb_logements: e.target.value
+                      }))
+                    }
+                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                  />
+                </EditField>
+                <EditField label="Prix d'achat">
+                  <input
+                    type="number"
+                    value={editForm.purchase_price}
+                    onChange={(e) =>
+                      setEditForm((f) => ({
+                        ...f,
+                        purchase_price: e.target.value
+                      }))
+                    }
+                    className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                  />
+                </EditField>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-brand-800 px-5 py-3">
+              <button
+                type="button"
+                onClick={() => setShowEdit(false)}
+                disabled={editBusy}
+                className="rounded-lg border border-white/15 px-4 py-2 text-xs font-semibold text-white/70 hover:text-white"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveEdit()}
+                disabled={editBusy || !editForm.address.trim()}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500/90 px-4 py-2 text-xs font-semibold text-white hover:bg-sky-500 disabled:opacity-50"
+              >
+                {editBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : null}
+                Enregistrer
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
+  );
+}
+
+function EditField({
+  label,
+  children
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-[11px] font-semibold text-white/60">
+        {label}
+      </label>
+      {children}
+    </div>
   );
 }
 
