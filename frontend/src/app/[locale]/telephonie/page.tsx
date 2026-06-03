@@ -1442,7 +1442,14 @@ function MessagesSection({
           </h2>
           <button
             type="button"
-            onClick={() => setShowComposer((v) => !v)}
+            onClick={() => {
+              // Désélectionne la conversation en cours, sinon le composer
+              // (rendu seulement si !selected) ne s'affiche pas.
+              setSelected(null);
+              setComposerTo("");
+              setReply("");
+              setShowComposer(true);
+            }}
             className="rounded-md border border-teal-500/40 bg-teal-500/10 px-2 py-1 text-[10px] font-semibold text-teal-200 hover:bg-teal-500/20"
           >
             + Nouveau
@@ -1553,7 +1560,7 @@ function MessagesSection({
                     key={m.id}
                     className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm ${
                       m.direction === "outbound"
-                        ? "ml-auto bg-teal-500/15 text-teal-100"
+                        ? "ml-auto bg-teal-500/15 text-white/90"
                         : "mr-auto bg-brand-800 text-white/90"
                     }`}
                   >
