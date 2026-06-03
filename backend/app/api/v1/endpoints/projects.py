@@ -51,6 +51,26 @@ async def create_project(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Client not found",
         )
+
+    # Phase 5 — hook Drive Conventions (best-effort).
+    try:
+        from app.services.drive_conventions_hooks import on_entity_created
+
+        await on_entity_created(
+            entity_type="ConstructionProject",
+            entity_id=project.id,
+            user_id=current_user.id,
+            db=db,
+        )
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "drive hook 'created' a echoue pour ConstructionProject #%s "
+            "(non bloquant)",
+            project.id,
+        )
+
     return ProjectRead.model_validate(project)
 
 

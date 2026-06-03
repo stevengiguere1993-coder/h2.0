@@ -26,6 +26,7 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { CallButton } from "@/components/call-button";
 import { CallHistoryDropdown } from "@/components/call-history-dropdown";
 import { CommunicationsTimeline } from "@/components/communications-timeline";
@@ -430,6 +431,14 @@ export default function ProspectDetailPage() {
                 </button>
               </div>
             </header>
+
+            <EntityDriveSection
+              entityType="ContactRequest"
+              entityId={p.id}
+              pole="Construction"
+              label="Prospect CRM"
+              route="/app/crm/[id]"
+            />
 
             {/* Tabs */}
             <div className="mt-8 flex flex-wrap gap-1 border-b border-brand-800">

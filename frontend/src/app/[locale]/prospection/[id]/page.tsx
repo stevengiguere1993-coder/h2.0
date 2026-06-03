@@ -28,7 +28,7 @@ import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { useProspectionLayout } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
-import { DriveButton } from "@/components/drive-button";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { CallButton } from "@/components/call-button";
 import { CommunicationsTimeline } from "@/components/communications-timeline";
 import { ActivityTimeline } from "./_activity-timeline";
@@ -608,20 +608,6 @@ export default function ProspectionDetailPage() {
         rightSlot={
           lead ? (
             <div className="flex items-center gap-2">
-              <DriveButton
-                url={lead.drive_folder_url}
-                onSave={async (newUrl) => {
-                  const r = await authedFetch(
-                    `/api/v1/prospection/leads/${lead.id}`,
-                    {
-                      method: "PATCH",
-                      body: JSON.stringify({ drive_folder_url: newUrl })
-                    }
-                  );
-                  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                  setLead({ ...lead, drive_folder_url: newUrl || null });
-                }}
-              />
               <Link
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 href={
@@ -644,6 +630,17 @@ export default function ProspectionDetailPage() {
         >
           <ArrowLeft className="mr-1 h-4 w-4" /> Retour à la carte
         </Link>
+
+        {/* Documents Drive du lead (tout en haut, sous le header) */}
+        {lead ? (
+          <EntityDriveSection
+            entityType="ProspectionLead"
+            entityId={id}
+            pole="Prospection"
+            label="Lead"
+            route="/prospection/[id]"
+          />
+        ) : null}
 
         {lead ? (
           <div className="mt-4">

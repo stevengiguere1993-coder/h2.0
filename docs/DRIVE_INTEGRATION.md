@@ -34,11 +34,11 @@ partager).
 | ----- | ----------------------------------------------------------- | ------ |
 | **1** | Foundation OAuth + 5 tables + page Settings minimaliste     | livré (juin 2026) |
 | **2** | Wrapper Drive API (list / upload / move / share / etc.)     | livré (juin 2026) |
-| 3     | Composant `<DriveFolderExplorer>` réutilisable              | à venir |
-| 4     | UI Conventions + Auto-upload + Mappings + Audit log         | à venir |
-| 5     | Event listeners SQLAlchemy → exécution des Conventions      | à venir |
-| 6     | Hooks d'auto-upload sur les services de génération PDF      | à venir |
-| 7     | Intégration de `<DriveFolderExplorer>` sur les pages entité | à venir |
+| **3** | Composant `<DriveFolderExplorer>` réutilisable              | livré (juin 2026) |
+| **4** | UI Conventions + moteur d'application manuelle              | livré (juin 2026) |
+| **5** | Hooks automatiques `created` + `status_changed`             | livré (juin 2026) |
+| **6** | Hooks d'auto-upload des documents générés vers Drive        | livré (juin 2026) |
+| **7** | Intégration de `<DriveFolderExplorer>` sur les pages entité | livré (juin 2026) |
 
 ## Phase 1 — Ce qui est livré
 
@@ -448,3 +448,441 @@ curl -s -X DELETE "$BASE/files/$FILE_ID?permanent=true" \
 
 Phase 2 = backend wrapper + endpoints REST. Phil valide via curl
 ci-dessus, et la Phase 3 brancherait l'UI dessus.
+
+## Phase 4 — UI Conventions + Moteur d'application manuelle
+
+La Phase 4 livre :
+
+- Un **moteur d'exécution** côté backend
+  (`app.services.drive_conventions_engine`) capable d'appliquer une
+  convention à une entité existante (création de dossier Drive,
+  copie d'un template, création des sous-dossiers, persistance d'un
+  `DriveEntityLink`).
+- 8 endpoints REST (`/api/v1/drive/conventions/*` et
+  `/api/v1/drive/entity-links/*`) — admin/owner only.
+- Une **UI complète** sur `/parametres/drive` qui transforme les
+  sections "Conventions" et "Liens existants" en sections actives
+  (tableau, modale CRUD avec aperçu, modale "Tester").
+- Un **seeder idempotent** au boot qui ajoute 4 conventions par
+  défaut inactives, que Phil active une à une après avoir configuré
+  le `parent_folder_drive_id` correspondant.
+
+> Phase 4 ≠ Phase 5. Les **hooks automatiques** ("à la création d'un
+> deal, applique la convention X") sont volontairement reportés à
+> la Phase 5. Pour l'instant, l'application se fait **uniquement via
+> le bouton "Tester"** sur la page Conventions, qui appelle
+> `POST /api/v1/drive/conventions/{id}/apply`.
+
+### Service moteur — surface
+
+```python
+from app.services import drive_conventions_engine as engine
+
+# 1. Lister les types d'entités supportées (alimente le wizard UI).
+types = await engine.get_supported_entity_types()
+# → [{"key": "ProspectionDeal", "label": "Deal Pipeline (Prospection)",
+#     "variables": [{"key": "address", "label": "Adresse", ...}]}, ...]
+
+# 2. Résoudre un template (sans créer de dossier — utile pour preview).
+name = await engine.resolve_folder_name(
+    "{address}, {city}", "ProspectionDeal", 42, db
+)
+# → "1660 Saint-Clément, Montréal"
+
+# 3. Appliquer une convention à une entité existante.
+link = await engine.apply_convention_to_entity(
+    convention_id=3,
+    entity_type="ProspectionDeal",
+    entity_id=42,
+    user_id=current_user.id,
+    db=db,
+)
+# Crée le dossier Drive (+ template copié si défini + sous-dossiers)
+# et persiste un DriveEntityLink dans la table drive_entity_links.
+```
+
+Le moteur lève des exceptions custom (`ConventionNotFound`,
+`EntityAlreadyLinked`, `UnsupportedEntityType`,
+`ConventionMisconfigured`, ...) que l'endpoint REST mappe vers les
+codes HTTP appropriés (404, 409, 400, ...).
+
+### Endpoints REST
+
+**Conventions CRUD** (admin/owner only)
+
+- `GET    /api/v1/drive/conventions` — filtres `entity_type`, `active`.
+- `GET    /api/v1/drive/conventions/{id}`
+- `POST   /api/v1/drive/conventions` — création (toujours inactive
+  par défaut via `active=False` côté schéma).
+- `PATCH  /api/v1/drive/conventions/{id}` — modifie les champs
+  fournis.
+- `DELETE /api/v1/drive/conventions/{id}` — **soft delete** :
+  positionne `active=False` pour préserver les `DriveEntityLink` qui
+  référencent cette convention.
+
+**Action d'application**
+
+- `POST /api/v1/drive/conventions/{id}/apply` — body
+  `{entity_type, entity_id}`. Crée le dossier Drive + sous-dossiers
+  et retourne le `DriveEntityLink` créé + l'URL Drive prête à ouvrir.
+
+**Métadonnées**
+
+- `GET /api/v1/drive/conventions/supported-entity-types` — liste des
+  types d'entités supportées avec leurs variables disponibles.
+
+**Entity links** (admin/owner only)
+
+- `GET    /api/v1/drive/entity-links` — filtres `entity_type`,
+  `entity_id`.
+- `POST   /api/v1/drive/entity-links` — lien manuel sans convention
+  (rattache un dossier Drive existant à une entité Kratos).
+- `DELETE /api/v1/drive/entity-links/{id}` — supprime le lien Kratos.
+  Le dossier Drive reste intact côté Google.
+
+Toutes les mutations posent un audit log dans la table générique
+`audit_logs` (action `drive_convention.create`, `.update`,
+`.soft_delete`, `.apply`, `drive_entity_link.create`, `.delete`).
+
+### Conventions seedées par défaut
+
+Au boot, 4 conventions sont créées (idempotent — vérifie l'existence
+par `(name, entity_type)` avant insert) :
+
+1. **Deal Pipeline → 0 - En cours** (`ProspectionDeal`)
+2. **Nouveau client Dev Log → Clients Dev** (`DevlogClient`)
+3. **Nouveau projet Dev Log** (`DevlogProject`)
+4. **Nouveau projet Construction** (`ConstructionProject`)
+
+Toutes ont `active=False` et `parent_folder_drive_id=None` — Phil les
+configure une à une dans l'UI avant de les activer.
+
+### Comment Phil teste
+
+1. Sur `/parametres/drive`, scroller jusqu'à **"Conventions de dossiers"**.
+2. Cliquer sur le crayon d'une convention seedée (ex. *Deal Pipeline*).
+3. Remplir le **dossier parent Drive (ID)** — copié depuis l'URL
+   Drive — puis cocher *Active* et enregistrer.
+4. Cliquer sur l'icône *Play* (▶) de la convention dans le tableau.
+5. Saisir l'ID d'un `ProspectionDeal` existant (ex. 42).
+6. **Appliquer** — un dossier `{address}, {city}` est créé dans le
+   parent, avec les sous-dossiers `Photos / Soumissions / ...`.
+7. Vérifier dans la section **"Liens existants"** que la ligne
+   apparaît, puis cliquer sur le lien externe pour ouvrir le dossier
+   directement dans Drive.
+
+### Variables supportées par type d'entité
+
+| Type d'entité          | Variables                                                       |
+| ---------------------- | --------------------------------------------------------------- |
+| `ProspectionDeal`      | `{address}`, `{city}`, `{postal_code}`, `{date_creation}`       |
+| `DevlogProject`        | `{nom_projet}`, `{nom_client}`, `{date_creation}`               |
+| `DevlogClient`         | `{nom_client}`, `{date_creation}`                               |
+| `ProspectionLead`      | `{address}`, `{city}`, `{date_creation}`                        |
+| `ConstructionProject`  | `{address}`, `{nom_projet}`, `{date_creation}`                  |
+
+Les placeholders non résolus (variable absente OU valeur vide) sont
+**laissés tels quels** dans le nom final avec un warning loggé. Pas
+de crash — Phil peut corriger le template a posteriori.
+
+## Limites Phase 4
+
+- Aucun hook automatique sur création/changement de statut d'entité
+  (Phase 5 — event listeners SQLAlchemy).
+- Aucun mapping `status → folder_parent` exécuté (champ
+  `status_to_parent_map` exposé en lecture/écriture API mais ignoré
+  par le moteur Phase 4).
+- Aucun auto-upload de PDF Kratos (Phase 6).
+- Aucune intégration `<DriveFolderExplorer>` sur les pages entité
+  (Phase 7).
+
+Phase 4 = UI Conventions + moteur d'application manuelle. Phil
+configure ses règles, les teste sur des entités existantes, et voit
+les liens persistés s'accumuler dans la section "Liens existants".
+
+## Phase 5 — Hooks automatiques (`created` + `status_changed`)
+
+La Phase 5 branche les conventions Phase 4 sur les événements métier
+de Kratos. Aucun event listener SQLAlchemy magique : on appelle
+explicitement le hook depuis chaque endpoint qui crée une entité
+supportée, juste après le `db.flush()` / `db.commit()`. Ce design
+garde la chaîne de causalité lisible (un coup d'œil au endpoint
+suffit pour savoir si l'auto-création Drive est en place) et permet
+le pattern « best-effort » sans surprise.
+
+### Service `drive_conventions_hooks`
+
+Nouveau module : `backend/app/services/drive_conventions_hooks.py`
+exposant deux fonctions async :
+
+- `on_entity_created(entity_type, entity_id, user_id, db)` —
+  cherche la convention active `trigger_event='created'` de plus
+  haute priorité pour `entity_type`, et délègue à
+  `drive_conventions_engine.apply_convention_to_entity`. Retourne
+  le `DriveEntityLink` créé ou `None`. JAMAIS d'exception.
+
+- `on_entity_status_changed(entity_type, entity_id, old_status,
+  new_status, user_id, db)` — cherche la convention active
+  `trigger_event='status_changed'`, lit
+  `status_to_parent_map[new_status]`, et déplace le dossier lié
+  via `drive_api.move_file`. Retourne `True/False`. JAMAIS
+  d'exception.
+
+### Contrat best-effort
+
+Aucune erreur Drive (réseau, quota, auth, convention mal
+configurée) ne doit jamais bloquer la création d'une entité
+Kratos. Le hook :
+
+1. Capture toute exception via un `try/except` global ;
+2. Logge un warning (`log.exception`) ;
+3. Pose un audit log :
+   - `drive_convention.auto_applied` — succès
+   - `drive_convention.auto_skipped` — pré-conditions manquantes
+     (pas de connexion Drive, parent_folder_drive_id vide, etc.)
+   - `drive_convention.auto_failed` — exception au moment de
+     l'appel API Drive
+   - `drive_convention.auto_moved` / `.auto_move_skipped` /
+     `.auto_move_failed` pour le hook `status_changed`
+4. Retourne `None` / `False`.
+
+Le pattern d'intégration côté endpoint est uniforme :
+
+```python
+db.add(deal)
+await db.flush()
+await db.refresh(deal)
+
+try:
+    from app.services.drive_conventions_hooks import on_entity_created
+    await on_entity_created(
+        entity_type="ProspectionDeal",
+        entity_id=deal.id,
+        user_id=user.id,
+        db=db,
+    )
+except Exception:
+    log.exception("drive hook 'created' a echoue (non bloquant)")
+
+return deal
+```
+
+### Endpoints instrumentés
+
+| Entité Kratos        | Endpoint                                       |
+| -------------------- | ---------------------------------------------- |
+| `ProspectionDeal`    | `POST /api/v1/prospection/deals`               |
+| `ProspectionDeal`    | `POST /api/v1/lead-analyses/{id}/convert-to-deal` |
+| `DevlogProject`      | `POST /api/v1/devlog/projects`                 |
+| `DevlogProject`      | Provisionning auto sur soumission acceptée (`_provision_project_for_soumission`) |
+| `DevlogClient`       | `POST /api/v1/devlog/clients`                  |
+| `ConstructionProject`| `POST /api/v1/projects`                        |
+| `ProspectionLead`    | `POST /api/v1/prospection/leads`               |
+
+### Idempotence
+
+Le hook `on_entity_created` vérifie d'abord qu'aucun
+`DriveEntityLink` n'existe pour `(entity_type, entity_id)`. Si un
+lien existe (par exemple parce que Phil a déjà appliqué une
+convention manuellement, ou parce que le frontend a fait un double
+POST), le hook return `None` silencieusement — pas de dossier
+dupliqué.
+
+Le hook `on_entity_status_changed` ne crée jamais de dossier
+rétroactivement : si l'entité n'a pas encore de lien Drive, le
+hook return `False` immédiatement.
+
+### Comment Phil active l'auto
+
+Sur `/parametres/drive` → section Conventions :
+
+1. Éditer la convention (par exemple « Deal Pipeline → 0 - En
+   cours »).
+2. Changer le champ « Événement déclencheur » de **Manuel** à
+   **À la création**.
+3. Vérifier que `parent_folder_drive_id` et `folder_name_template`
+   sont remplis.
+4. Cocher **Active**, sauvegarder.
+5. Au prochain deal créé, Kratos crée le dossier Drive
+   automatiquement (3-8 secondes de latence côté requête à cause
+   de l'appel Drive API).
+
+L'auto reste désactivable à tout moment via le toggle « Actif »
+dans le tableau de la page Conventions.
+
+### Performance
+
+L'appel Drive API bloque la requête HTTP de création d'entité
+(latence Drive + nombre de sous-dossiers à créer). Mesure observée
+en Phase 4 : ~2-3 secondes pour un dossier vide, ~5-8 secondes
+pour un dossier avec 5 sous-dossiers (chaque sous-dossier =
+1 round-trip Drive). Pas optimisé Phase 5 — un déport vers une
+task queue est laissé pour une phase ultérieure si la latence
+devient bloquante.
+
+### Limites Phase 5
+
+- Pas d'auto-upload des PDFs Kratos vers le dossier créé (Phase 6).
+- Pas d'intégration `<DriveFolderExplorer>` directement sur les
+  fiches deal/projet (Phase 7).
+- Pas de hook sur la suppression / archive d'entités.
+- Pas d'UI dédiée pour éditer le mapping `status_to_parent_map`
+  d'une convention `status_changed` (l'édition passe par
+  `PATCH /api/v1/drive/conventions/{id}` direct via curl ou
+  Postman pour l'instant).
+- Pas de retry en cas d'échec réseau ponctuel (Phil peut relancer
+  manuellement via le bouton « Tester » Phase 4).
+
+Phase 5 = hooks `created` + `status_changed` branchés sur les
+endpoints principaux, best-effort, audit log complet.
+
+## Phase 6 — Auto-upload des documents générés vers Drive
+
+Dernière brique : quand Kratos **génère un document** (PDF d'une fiche
+d'analyse, NDA signé, soumission, facture, offre PPTX), il le **dépose
+automatiquement** dans le bon sous-dossier Drive de l'entité concernée —
+sans intervention humaine.
+
+### Dispatcher `drive_auto_upload_dispatcher`
+
+Point d'entrée unique appelé après chaque génération de document :
+
+```python
+await dispatch_auto_upload(
+    document_type="nda_signed",       # quel document
+    entity_type="ProspectionDeal",    # type du DriveEntityLink
+    entity_id=nda.deal_id,            # id de l'entité (None → no-op)
+    user_id=None,                     # None (endpoint public) → propriétaire Drive
+    file_bytes=signed_bytes,          # contenu binaire
+    db=db,
+    template_vars={"nom_signataire": nda.signed_name},
+    mime_type="application/pdf",
+)
+```
+
+Logique (best-effort **absolu** — ne lève jamais, retourne `None` en cas
+d'inapplicabilité) :
+
+1. Charge la règle `DriveAutoUpload` **active** pour
+   `(document_type, entity_type)`. Aucune → `None` silencieux.
+2. Résout un `user_id` capable d'agir sur Drive
+   (`resolve_drive_owner_user_id` : le `user_id` fourni s'il a un token
+   valide, sinon le premier utilisateur connecté à Drive). Aucun → audit
+   `drive_auto_upload.no_connection` + `None`.
+3. Charge le `DriveEntityLink` `(entity_type, entity_id)` → dossier racine
+   de l'entité. Aucun → audit `drive_auto_upload.no_link` + `None`.
+4. Résout le sous-dossier cible via `ensure_subfolder_path(user_id,
+   root_folder_id, path, db)` : crée/trouve récursivement (insensible à la
+   casse) chaque segment de `subfolder_path_template`. Vide → racine de
+   l'entité.
+5. Résout le nom de fichier depuis `file_name_template` + `template_vars`
+   (placeholders auto : `{date}`, `{datetime}`, `{annee}`, `{mois}`,
+   `{jour}`, `{timestamp}`).
+6. Applique la `overwrite_strategy`, puis `drive_api.upload_file(...)`.
+   Audit `drive_auto_upload.uploaded`.
+
+### Stratégies overwrite
+
+| Stratégie   | Comportement                                                      |
+| ----------- | ----------------------------------------------------------------- |
+| `overwrite` | Corbeille le fichier de même nom dans le dossier, puis upload.    |
+| `version`   | Suffixe horodaté `_AAAAMMJJ-HHMMSS` avant l'extension (historique). |
+| `keep_both` | Upload tel quel (Drive tolère les doublons de nom).               |
+
+### Table de routage document → entité
+
+| `document_type`   | `entity_type`   | id de l'entité            | endpoint instrumenté                                      |
+| ----------------- | --------------- | ------------------------- | --------------------------------------------------------- |
+| `fiche_analyse`   | ProspectionDeal | `LeadAnalysis.converted_to_deal_id` | `GET /lead-analyses/{id}/pdf`                    |
+| `offre_pptx`      | ProspectionDeal | `LeadAnalysis.converted_to_deal_id` | `POST /lead-analyses/{id}/offre-investissement` |
+| `nda_signed`      | ProspectionDeal | `NDA.deal_id`             | `POST /public/ndas/{token}/sign`                          |
+| `soumission_pdf`  | DevlogClient    | `DevlogSoumission.client_id` | `GET /devlog/soumissions/{id}/pdf`                     |
+| `facture_pdf`     | DevlogClient    | `DevlogInvoice.client_id` | `GET /devlog/invoices/{id}/pdf`                            |
+
+> **Contrat de Dev Logiciel** : exclu pour l'instant. Le modèle
+> `DevlogContract` ne stocke **aucun blob PDF** (que `signed_at` /
+> `signed_name` / `signed_ip`) — il n'y a donc pas de document à déposer.
+> À réintégrer si un PDF de contrat signé est généré et persisté plus
+> tard.
+
+Pour `fiche_analyse` et `offre_pptx`, si la `LeadAnalysis` n'est pas
+convertie en deal (`converted_to_deal_id is None`), le dispatcher
+court-circuite silencieusement : le document reste un téléchargement
+normal, aucun upload.
+
+### Best-effort : la génération du document n'est jamais bloquée
+
+Chaque endpoint instrumenté enveloppe l'appel dans un
+`try/except Exception` qui logge mais **ne propage jamais**. Si Drive est
+down, si aucun utilisateur n'a connecté Drive, si la règle est inactive —
+le document est quand même retourné normalement au client. Le dispatcher
+lui-même a un `try/except` global redondant (ceinture + bretelles).
+
+### Règles seedées par défaut (inactives)
+
+`seed_default_drive_auto_uploads` (appelé au boot, idempotent par
+`(document_type, entity_type)`) crée 5 règles **inactives** — Phil les
+active après vérification :
+
+| # | document          | entité          | sous-dossier            | nom fichier                    | stratégie  |
+| - | ----------------- | --------------- | ----------------------- | ------------------------------ | ---------- |
+| 1 | `fiche_analyse`   | ProspectionDeal | _(racine)_              | `Fiche d'analyse.pdf`          | overwrite  |
+| 2 | `offre_pptx`      | ProspectionDeal | `Dossier investisseur`  | `Offre_{date}.pptx`            | version    |
+| 3 | `nda_signed`      | ProspectionDeal | `Dossier investisseur`  | `NDA_{nom_signataire}_signé.pdf` | keep_both |
+| 4 | `soumission_pdf`  | DevlogClient    | `Soumissions`           | `Soumission_{numero}.pdf`      | overwrite  |
+| 5 | `facture_pdf`     | DevlogClient    | `Factures`              | `Facture_{numero}.pdf`         | overwrite  |
+
+### Endpoints REST de configuration
+
+CRUD `RequireAdminOrOwner`, préfixe `/api/v1/drive/auto-uploads` :
+
+```text
+GET    /api/v1/drive/auto-uploads          # liste (filtres document_type, entity_type, active)
+GET    /api/v1/drive/auto-uploads/meta     # types de documents / entités / stratégies (dropdowns UI)
+GET    /api/v1/drive/auto-uploads/{id}
+POST   /api/v1/drive/auto-uploads          # crée (inactive par défaut)
+PATCH  /api/v1/drive/auto-uploads/{id}     # toggle active / édite templates / stratégie
+DELETE /api/v1/drive/auto-uploads/{id}     # soft-delete (active=False)
+```
+
+### UI Settings — « Classement automatique des documents »
+
+La section (anciennement placeholder « Bientôt ») est **active** sur
+`/parametres/drive` quand Drive est connecté : tableau des règles
+(Document | Entité cible | Sous-dossier | Nom fichier | Stratégie | Actif
+| Actions), toggle Activer/Désactiver, modale d'édition (sous-dossier,
+nom de fichier, stratégie, actif), bouton « + Nouvelle règle ».
+
+### Comment Phil active une règle
+
+1. `/parametres/drive` → section **Classement automatique des documents**.
+2. Vérifier (ou éditer via le crayon) le sous-dossier et le nom de
+   fichier d'une règle.
+3. Cliquer l'icône **Power** pour l'activer (badge passe à « Actif »).
+4. **Pré-requis** : l'entité cible doit avoir un dossier Drive lié
+   (`DriveEntityLink`) — créé via une convention Phase 5 (`created`) ou
+   manuellement via la section « Liens enregistrés ». Sans lien, le
+   dispatcher logge `drive_auto_upload.no_link` et n'upload rien.
+
+### Test rapide (NDA signé)
+
+1. Activer la règle **« NDA signé → Deal »** (sous-dossier `Dossier
+   investisseur`, stratégie `keep_both`).
+2. S'assurer que le deal cible a un dossier Drive lié.
+3. Envoyer puis **signer un NDA de test** depuis la page publique de
+   signature.
+4. Vérifier que `NDA_<nom>_signé.pdf` apparaît dans le sous-dossier
+   `Dossier investisseur` du dossier Drive du deal. L'audit
+   `drive_audit_logs` contient une ligne `drive_auto_upload.uploaded`.
+
+### Limites Phase 6
+
+- Upload synchrone (bloque l'endpoint le temps de l'appel Drive), mais
+  enveloppé en best-effort : un échec ne ralentit pas la réponse au-delà
+  du timeout interne et ne la fait jamais échouer.
+- Pas de retry. Un échec réseau ponctuel = pas d'upload (le document
+  reste téléchargeable ; Phil peut le re-générer pour re-déclencher).
+- Le contrat Dev Logiciel est exclu (pas de PDF persisté — cf. ci-dessus).
+- `resolve_drive_owner_user_id` choisit le **premier** utilisateur
+  connecté à Drive pour les endpoints publics (NDA) : adapté au contexte
+  mono-Drive « Horizon ». À raffiner si plusieurs Drive coexistent.

@@ -9,6 +9,7 @@ import {
   Target
 } from "lucide-react";
 
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { QGTopbar, useEntreprisesLayout } from "../layout";
@@ -164,6 +165,12 @@ export default function VisionPage() {
       />
 
       <div className="px-5 py-6 lg:px-8">
+        <PageDriveSection
+          pageKey="page:entreprises:vision"
+          pole="Gestion d'entreprises"
+          label="Vision"
+          route="/entreprises/vision"
+        />
         {/* Sélecteur d'entreprise */}
         <div className="mb-6 flex flex-wrap items-center gap-3">
           <span className="text-[11px] uppercase tracking-wider text-[var(--qg-text-soft)]">

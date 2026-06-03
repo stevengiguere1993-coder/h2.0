@@ -13,6 +13,7 @@ import {
   RefreshCw
 } from "lucide-react";
 
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { authedFetch } from "@/lib/auth";
 import { Link } from "@/i18n/navigation";
 import { QGTopbar } from "../layout";
@@ -178,6 +179,12 @@ export default function DashboardsPage() {
       />
 
       <div className="px-5 py-6 lg:px-8">
+        <PageDriveSection
+          pageKey="page:entreprises:dashboards"
+          pole="Gestion d'entreprises"
+          label="Tableaux de bord"
+          route="/entreprises/dashboards"
+        />
         {err ? (
           <p className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-600">
             {err}

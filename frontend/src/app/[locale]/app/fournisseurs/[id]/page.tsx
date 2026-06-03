@@ -5,6 +5,7 @@ import { useParams, useRouter as useNextRouter } from "next/navigation";
 import { ArrowLeft, Loader2, Save, Trash2 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -223,6 +224,14 @@ export default function FournisseurDetailPage() {
                 </button>
               </div>
             </header>
+
+            <EntityDriveSection
+              entityType="Fournisseur"
+              entityId={f.id}
+              pole="Construction"
+              label="Fournisseur"
+              route="/app/fournisseurs/[id]"
+            />
 
             {error ? (
               <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">

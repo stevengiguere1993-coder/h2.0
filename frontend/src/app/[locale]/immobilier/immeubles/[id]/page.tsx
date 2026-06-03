@@ -21,6 +21,7 @@ import {
 import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { ImmobilierTopbar, useImmobilierLayout } from "../../layout";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 
 type Ownership = {
   id: number;
@@ -289,6 +290,13 @@ export default function ImmeubleDetailPage({
       />
 
       <div className="p-4 lg:p-6">
+        <EntityDriveSection
+          entityType="Immeuble"
+          entityId={immeuble.id}
+          pole="Gestion immobilière"
+          label="Immeuble"
+          route="/immobilier/immeubles/[id]"
+        />
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           href={"/immobilier/immeubles" as any}

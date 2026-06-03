@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { FournisseurModal } from "@/components/fournisseur-modal";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
@@ -369,6 +370,14 @@ export default function PurchaseOrderDetailPage() {
                 </button>
               </div>
             </header>
+
+            <EntityDriveSection
+              entityType="PurchaseOrder"
+              entityId={po.id}
+              pole="Construction"
+              label="Bon de commande"
+              route="/app/po/[id]"
+            />
 
             {poNotice ? (
               <p

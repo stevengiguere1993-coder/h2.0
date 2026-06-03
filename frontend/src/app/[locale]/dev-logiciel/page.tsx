@@ -16,6 +16,7 @@ import {
 import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { useDevlogLayout } from "./layout";
 
 type Lead = { id: number; status: string; created_at: string };
@@ -262,6 +263,14 @@ export default function DevlogHomePage() {
             ))}
           </div>
         </header>
+
+        <PageDriveSection
+          pageKey="page:dev-logiciel:accueil"
+          pole="Développement logiciel"
+          label="Accueil"
+          route="/dev-logiciel"
+          className="mt-6"
+        />
 
         {loading ? (
           <div className="mt-10 flex justify-center">

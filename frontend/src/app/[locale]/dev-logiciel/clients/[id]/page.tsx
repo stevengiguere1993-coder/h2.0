@@ -47,6 +47,7 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { Link } from "@/i18n/navigation";
 import { useDevlogLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -503,6 +504,17 @@ function ClientAccount({
           </button>
         </div>
       </header>
+
+      {/* ------------------------- Documents Drive (en haut, sous le header) ------------------------- */}
+      {client?.id ? (
+        <EntityDriveSection
+          entityType="DevlogClient"
+          entityId={client.id}
+          pole="Développement logiciel"
+          label="Client"
+          route="/dev-logiciel/clients/[id]"
+        />
+      ) : null}
 
       {/* ------------------------- KPI cards ------------------------- */}
       <section className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-5">

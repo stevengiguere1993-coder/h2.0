@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { useDevlogLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -980,6 +981,15 @@ export default function SoumissionDetailPage() {
                 </div>
               ) : null}
             </header>
+
+            {/* Documents Drive (en haut, sous le header) */}
+            <EntityDriveSection
+              entityType="DevlogSoumission"
+              entityId={id}
+              pole="Développement logiciel"
+              label="Soumission"
+              route="/dev-logiciel/soumissions/[id]"
+            />
 
             {/* Encadré client (fix #6) — toujours visible en haut sous le
                 header, qu'on soit en vue propriétaire ou client. */}

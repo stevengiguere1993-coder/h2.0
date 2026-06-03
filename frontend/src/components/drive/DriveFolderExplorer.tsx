@@ -15,6 +15,7 @@ import {
   ArrowUpAZ,
   ChevronRight,
   Download,
+  ExternalLink,
   Eye,
   File as FileIcon,
   FileImage,
@@ -223,7 +224,8 @@ function formatDate(iso: string | null | undefined): string {
  * Étiquette courte du type de fichier pour l'affichage dans la colonne « Type ».
  * On normalise les MIME Google + Office vers une étiquette compréhensible.
  */
-function shortMimeLabel(mime: string): string {
+function shortMimeLabel(mime: string | undefined | null): string {
+  if (!mime) return "Fichier";
   if (mime === FOLDER_MIME) return "Dossier";
   if (mime.startsWith("application/vnd.google-apps.document")) return "Google Doc";
   if (mime.startsWith("application/vnd.google-apps.spreadsheet"))
@@ -287,25 +289,52 @@ function FileTypeIcon({
   return <FileIcon className={`${className} text-white/60`} />;
 }
 
+/**
+ * Logique inversée : tout type est previewable par défaut via l'iframe Drive
+ * viewer (`https://drive.google.com/file/d/{id}/preview`). Drive supporte
+ * nativement énormément de formats (images, vidéo, audio, PDF, Office, texte,
+ * CSV, etc.) et affiche son propre placeholder élégant pour les types qu'il ne
+ * sait pas rendre. C'est mieux que de tomber dans notre fallback
+ * "Télécharger" trop tôt sur des types courants. On garde une blacklist courte
+ * pour les rares types vraiment opaques (archives, exécutables, binaires)
+ * où l'iframe ne montrera rien d'utile.
+ */
 function canPreviewInline(mime: string): boolean {
-  if (!mime) return false;
+  if (!mime) return true; // type inconnu → essayer quand même
   if (mime === FOLDER_MIME) return false;
-  if (mime.startsWith("image/")) return true;
-  if (mime.startsWith("video/")) return true;
-  if (mime === "application/pdf") return true;
-  if (mime.startsWith("application/vnd.google-apps.")) return true;
-  return false;
-}
 
-function isOfficeMime(mime: string): boolean {
-  return (
-    mime ===
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-    mime ===
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
-    mime ===
-      "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-  );
+  // Blacklist des types VRAIMENT opaques (archives, exécutables, binaires).
+  const OPAQUE_PREFIXES = [
+    "application/zip",
+    "application/x-rar",
+    "application/x-rar-compressed",
+    "application/x-7z-compressed",
+    "application/x-tar",
+    "application/gzip",
+    "application/x-gzip",
+    "application/x-bzip2",
+    "application/x-iso9660-image",
+    "application/x-msdownload", // .exe, .msi
+    "application/x-msi",
+    "application/x-sh",
+    "application/x-shellscript",
+    "application/x-executable",
+    "application/x-mach-binary", // macOS executables
+    "application/x-apple-diskimage", // .dmg
+    "application/x-rpm",
+    "application/x-deb",
+    "application/vnd.android.package-archive", // .apk
+    "application/octet-stream", // données binaires génériques
+    "application/x-sharedlib",
+    "application/x-object"
+  ];
+
+  if (OPAQUE_PREFIXES.some((prefix) => mime.startsWith(prefix))) {
+    return false;
+  }
+
+  // Sinon → previewable (Drive viewer gérera ou affichera son propre placeholder).
+  return true;
 }
 
 /**
@@ -1146,6 +1175,15 @@ export function DriveFolderExplorer({
           fullscreen={previewFullscreen}
           onToggleFullscreen={() => setPreviewFullscreen((v) => !v)}
           onDownload={() => doDownload(previewing)}
+          onOpenInDrive={() => {
+            if (previewing.web_view_link) {
+              window.open(
+                previewing.web_view_link,
+                "_blank",
+                "noopener,noreferrer"
+              );
+            }
+          }}
           onClose={closePreview}
         />
       ) : null}
@@ -1205,6 +1243,11 @@ export function DriveFolderExplorer({
         return;
       case "preview":
         if (!isFolder(file)) void openPreview(file);
+        return;
+      case "openInDrive":
+        if (file.web_view_link) {
+          window.open(file.web_view_link, "_blank", "noopener,noreferrer");
+        }
         return;
       case "download":
         void doDownload(file);
@@ -1402,6 +1445,7 @@ function ErrorState({
 type ActionKind =
   | "open"
   | "preview"
+  | "openInDrive"
   | "download"
   | "rename"
   | "move"
@@ -1698,6 +1742,16 @@ function ItemActionsMenu({
                 onClick={() => {
                   setOpen(false);
                   onAction(file, "preview");
+                }}
+              />
+            ) : null}
+            {!folder && file.web_view_link ? (
+              <MenuItem
+                icon={ExternalLink}
+                label="Ouvrir dans Drive"
+                onClick={() => {
+                  setOpen(false);
+                  onAction(file, "openInDrive");
                 }}
               />
             ) : null}
@@ -2120,6 +2174,7 @@ function PreviewModal({
   fullscreen,
   onToggleFullscreen,
   onDownload,
+  onOpenInDrive,
   onClose
 }: {
   file: DriveFile;
@@ -2127,10 +2182,10 @@ function PreviewModal({
   fullscreen: boolean;
   onToggleFullscreen: () => void;
   onDownload: () => void;
+  onOpenInDrive: () => void;
   onClose: () => void;
 }) {
   const inline = canPreviewInline(file.mime_type);
-  const office = isOfficeMime(file.mime_type);
   return (
     <div
       className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/80 p-2"
@@ -2159,6 +2214,17 @@ function PreviewModal({
             >
               <Download className="h-4 w-4" />
             </button>
+            {file.web_view_link ? (
+              <button
+                type="button"
+                onClick={onOpenInDrive}
+                className="rounded-md p-1.5 text-white/60 hover:bg-white/5 hover:text-white"
+                title="Ouvrir dans Drive (nouvel onglet)"
+                aria-label="Ouvrir dans Drive (nouvel onglet)"
+              >
+                <ExternalLink className="h-4 w-4" />
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={onToggleFullscreen}
@@ -2184,22 +2250,7 @@ function PreviewModal({
           </div>
         </div>
         <div className="flex flex-1 items-center justify-center overflow-hidden bg-black/40">
-          {office ? (
-            <div className="flex flex-col items-center gap-3 p-8 text-center text-sm text-white/70">
-              <FileTypeIcon file={file} className="h-12 w-12" />
-              <p className="max-w-md">
-                Ce type de fichier ne peut pas être prévisualisé en ligne.
-                Télécharge-le pour l&apos;ouvrir.
-              </p>
-              <button
-                type="button"
-                onClick={onDownload}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600"
-              >
-                <Download className="h-3.5 w-3.5" /> Télécharger
-              </button>
-            </div>
-          ) : !inline ? (
+          {!inline ? (
             <div className="flex flex-col items-center gap-3 p-8 text-center text-sm text-white/70">
               <FileTypeIcon file={file} className="h-12 w-12" />
               <p>Aperçu non disponible pour ce type de fichier.</p>

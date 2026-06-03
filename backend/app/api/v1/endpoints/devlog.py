@@ -110,6 +110,7 @@ def _make_crud_router(
     read_schema: Type[BaseModel],
     not_found: str,
     audit_entity: Optional[str] = None,
+    drive_entity_type: Optional[str] = None,
 ) -> APIRouter:
     """CRUD générique du pôle — ouvert à tout utilisateur authentifié.
 
@@ -117,7 +118,12 @@ def _make_crud_router(
     sont pas réservées aux managers (petit pôle interne partagé).
 
     ``audit_entity`` : si fourni, log les mutations dans audit_logs avec
-    des actions ``{audit_entity}.created/updated/deleted``."""
+    des actions ``{audit_entity}.created/updated/deleted``.
+
+    ``drive_entity_type`` : si fourni (ex. ``"DevlogProject"``,
+    ``"DevlogClient"``), invoque le hook Drive Conventions Phase 5
+    après la création. Best-effort — un échec ne bloque jamais
+    l'endpoint."""
     router = APIRouter(prefix=prefix, tags=["devlog"])
 
     @router.post(
@@ -134,6 +140,28 @@ def _make_crud_router(
                 entity_id=getattr(obj, "id", None),
                 details=data.model_dump(exclude_unset=True),
             )
+        # Phase 5 — hook Drive Conventions (best-effort, ne bloque pas).
+        if drive_entity_type and getattr(obj, "id", None) is not None:
+            try:
+                from app.services.drive_conventions_hooks import (
+                    on_entity_created,
+                )
+
+                await on_entity_created(
+                    entity_type=drive_entity_type,
+                    entity_id=obj.id,
+                    user_id=user.id,
+                    db=db,
+                )
+            except Exception:  # noqa: BLE001
+                import logging
+
+                logging.getLogger(__name__).exception(
+                    "drive hook 'created' a echoue pour %s #%s "
+                    "(non bloquant)",
+                    drive_entity_type,
+                    obj.id,
+                )
         return read_schema.model_validate(obj)
 
     @router.get("", response_model=List[read_schema])  # type: ignore[valid-type]
@@ -218,6 +246,26 @@ async def create_client(
             "company": getattr(obj, "company", None),
         },
     )
+
+    # Phase 5 — hook Drive Conventions (best-effort).
+    try:
+        from app.services.drive_conventions_hooks import on_entity_created
+
+        await on_entity_created(
+            entity_type="DevlogClient",
+            entity_id=obj.id,
+            user_id=user.id,
+            db=db,
+        )
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "drive hook 'created' a echoue pour DevlogClient #%s "
+            "(non bloquant)",
+            obj.id,
+        )
+
     return DevlogClientRead.model_validate(obj)
 
 
@@ -949,6 +997,28 @@ async def _provision_project_for_soumission(
     db.add(project)
     await db.flush()
     await db.refresh(project)
+
+    # Phase 5 — hook Drive Conventions sur la création auto d'un
+    # projet depuis le passage en acceptee d'une soumission. Best-effort.
+    if user is not None and getattr(user, "id", None) is not None:
+        try:
+            from app.services.drive_conventions_hooks import on_entity_created
+
+            await on_entity_created(
+                entity_type="DevlogProject",
+                entity_id=project.id,
+                user_id=user.id,
+                db=db,
+            )
+        except Exception:  # noqa: BLE001
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "drive hook 'created' a echoue pour DevlogProject #%s "
+                "(provision auto, non bloquant)",
+                project.id,
+            )
+
     return project
 
 
@@ -1230,7 +1300,7 @@ async def send_soumission(
     summary="PDF de la soumission devis_dev (vue client uniquement)",
 )
 async def get_soumission_pdf(
-    soumission_id: int, db: DBSession, _: CurrentUser
+    soumission_id: int, db: DBSession, user: CurrentUser
 ):
     soumission = await GenericCrud(db, DevlogSoumission).get(soumission_id)
     if soumission is None:
@@ -1245,6 +1315,33 @@ async def get_soumission_pdf(
         )
     pdf_bytes = await generate_devis_pdf(db, soumission_id)
     filename = f"soumission-devlog-{soumission_id}.pdf"
+
+    # Phase 6 — auto-classement Drive (best-effort, NON bloquant). Dépose
+    # la soumission PDF dans le sous-dossier « Soumissions » du client lié,
+    # si une règle est active. N'altère jamais la réponse.
+    try:
+        from app.services.drive_auto_upload_dispatcher import (
+            dispatch_auto_upload,
+        )
+
+        await dispatch_auto_upload(
+            "soumission_pdf",
+            "DevlogClient",
+            soumission.client_id,
+            user.id,
+            pdf_bytes,
+            db,
+            {"numero": getattr(soumission, "number", None) or soumission_id},
+            mime_type="application/pdf",
+        )
+        await db.commit()
+    except Exception:
+        import logging as _logging
+
+        _logging.getLogger(__name__).exception(
+            "Auto-upload Drive soumission PDF non bloquant"
+        )
+
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -1320,6 +1417,7 @@ projects_router = _make_crud_router(
     read_schema=DevlogProjectRead,
     not_found="Projet introuvable",
     audit_entity="devlog_project",
+    drive_entity_type="DevlogProject",
 )
 
 
@@ -1440,13 +1538,40 @@ async def send_invoice(
     summary="PDF de la facture (vue client)",
 )
 async def get_invoice_pdf(
-    invoice_id: int, db: DBSession, _: CurrentUser
+    invoice_id: int, db: DBSession, user: CurrentUser
 ):
     invoice = await GenericCrud(db, DevlogInvoice).get(invoice_id)
     if invoice is None:
         raise HTTPException(status_code=404, detail="Facture introuvable")
     pdf_bytes = await generate_invoice_pdf(db, invoice_id)
     label = invoice.number or f"facture-{invoice_id}"
+
+    # Phase 6 — auto-classement Drive (best-effort, NON bloquant). Dépose
+    # la facture PDF dans le sous-dossier « Factures » du client lié, si
+    # une règle est active. N'altère jamais la réponse.
+    try:
+        from app.services.drive_auto_upload_dispatcher import (
+            dispatch_auto_upload,
+        )
+
+        await dispatch_auto_upload(
+            "facture_pdf",
+            "DevlogClient",
+            invoice.client_id,
+            user.id,
+            pdf_bytes,
+            db,
+            {"numero": invoice.number or invoice_id},
+            mime_type="application/pdf",
+        )
+        await db.commit()
+    except Exception:
+        import logging as _logging
+
+        _logging.getLogger(__name__).exception(
+            "Auto-upload Drive facture PDF non bloquant"
+        )
+
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -3212,5 +3337,6 @@ async def public_sign_contract(
     await on_contract_signed(obj, db)
 
     return DevlogContractPublicRead.model_validate(obj)
+
 
 

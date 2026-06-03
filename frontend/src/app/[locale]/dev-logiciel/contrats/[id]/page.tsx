@@ -35,6 +35,7 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useConfirm } from "@/components/confirm-dialog";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { authedFetch } from "@/lib/auth";
 import { useDevlogLayout } from "../../layout";
 import { Link } from "@/i18n/navigation";
@@ -450,6 +451,15 @@ export default function ContractDetailPage() {
                 ) : null}
               </div>
             </header>
+
+            {/* Documents Drive (en haut, sous le header) */}
+            <EntityDriveSection
+              entityType="DevlogContract"
+              entityId={id}
+              pole="Développement logiciel"
+              label="Contrat"
+              route="/dev-logiciel/contrats/[id]"
+            />
 
             {/* Métadonnées éditables */}
             <section className="mb-5 grid grid-cols-1 gap-4 rounded-xl border border-brand-800 bg-brand-900/60 p-4 sm:grid-cols-2 lg:grid-cols-3">

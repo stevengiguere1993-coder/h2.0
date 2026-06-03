@@ -18,6 +18,7 @@ import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
 import { Link, useRouter } from "@/i18n/navigation";
 import { QGTopbar, useEntreprisesLayout } from "../../layout";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 
 /**
  * Page détail d'une rencontre. Liste les sections (= topics), permet
@@ -306,6 +307,13 @@ export default function RencontreDetailPage() {
           </p>
         ) : !data ? null : (
           <div className="space-y-5">
+            <EntityDriveSection
+              entityType="Rencontre"
+              entityId={data.id}
+              pole="Gestion d'entreprises"
+              label="Rencontre"
+              route="/entreprises/rencontres/[id]"
+            />
             {/* Métadonnées rencontre */}
             <section
               className="rounded-xl border p-4"

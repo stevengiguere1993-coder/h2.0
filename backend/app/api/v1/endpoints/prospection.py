@@ -649,6 +649,26 @@ async def create_lead(
         photos_count = 1
 
     await db.refresh(lead)
+
+    # Phase 5 — hook Drive Conventions (best-effort).
+    try:
+        from app.services.drive_conventions_hooks import on_entity_created
+
+        await on_entity_created(
+            entity_type="ProspectionLead",
+            entity_id=lead.id,
+            user_id=user.id,
+            db=db,
+        )
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "drive hook 'created' a echoue pour ProspectionLead #%s "
+            "(non bloquant)",
+            lead.id,
+        )
+
     return _serialize(lead, photos_count)
 
 

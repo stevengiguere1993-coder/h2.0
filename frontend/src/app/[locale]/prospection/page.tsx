@@ -17,6 +17,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { loadPrefs } from "@/lib/prospection-prefs";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { useProspectionLayout } from "./layout";
 import "leaflet/dist/leaflet.css";
 
@@ -370,6 +371,13 @@ export default function ProspectionWebPage() {
           </div>
 
           <div className="flex-1 overflow-y-auto">
+            <PageDriveSection
+              pageKey="page:prospection:carte"
+              pole="Prospection"
+              label="Carte"
+              route="/prospection"
+              className="m-3"
+            />
             {error ? (
               <p className="m-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
                 {error}

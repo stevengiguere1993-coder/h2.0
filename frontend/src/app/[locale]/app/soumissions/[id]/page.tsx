@@ -22,6 +22,7 @@ import {
 
 import { AddressInput } from "@/components/address-input";
 import { AppTopbar } from "@/components/app-topbar";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import {
   ContractForm,
   defaultContractData,
@@ -834,6 +835,14 @@ export default function SoumissionDetailPage() {
                 </button>
               </div>
             </header>
+
+            <EntityDriveSection
+              entityType="ConstructionSoumission"
+              entityId={s.id}
+              pole="Construction"
+              label="Soumission"
+              route="/app/soumissions/[id]"
+            />
 
             {/* Suivi côté client : ouverture du lien + signature.
                 S'affiche dès que la soumission a été envoyée. */}

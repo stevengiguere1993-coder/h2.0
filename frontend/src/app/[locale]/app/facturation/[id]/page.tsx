@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { PaymentsPanel } from "@/components/payments-panel";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
@@ -843,6 +844,14 @@ export default function FactureDetailPage() {
                 </button>
               </div>
             </header>
+
+            <EntityDriveSection
+              entityType="ConstructionFacture"
+              entityId={f.id}
+              pole="Construction"
+              label="Facture"
+              route="/app/facturation/[id]"
+            />
 
             {error ? (
               <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">

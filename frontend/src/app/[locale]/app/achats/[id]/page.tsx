@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { FournisseurModal } from "@/components/fournisseur-modal";
 import { ReceiptScanner } from "@/components/receipt-scanner";
 import { Link } from "@/i18n/navigation";
@@ -463,6 +464,14 @@ export default function AchatDetailPage() {
                 </button>
               </div>
             </header>
+
+            <EntityDriveSection
+              entityType="Achat"
+              entityId={a.id}
+              pole="Construction"
+              label="Achat / dépense"
+              route="/app/achats/[id]"
+            />
 
             {error ? (
               <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">

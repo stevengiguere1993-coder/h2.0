@@ -17,6 +17,7 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { AddressInput } from "@/components/address-input";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
@@ -439,6 +440,15 @@ export default function ProjectDetailPage() {
                 </button>
               </div>
             </header>
+
+            {/* Documents Drive (en haut, sous le header, avant les onglets) */}
+            <EntityDriveSection
+              entityType="ConstructionProject"
+              entityId={id}
+              pole="Construction"
+              label="Projet"
+              route="/app/projets/[id]"
+            />
 
             {error ? (
               <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">

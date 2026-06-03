@@ -22,7 +22,7 @@ import { Link, useRouter } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { EntreprisesTopbar } from "../layout";
 import { useConfirm } from "@/components/confirm-dialog";
-import { DriveButton } from "@/components/drive-button";
+import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
 import {
   AssigneePicker,
   type TaskUserMini
@@ -423,20 +423,6 @@ export default function EntrepriseDetailPage() {
           <div className="flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-2xl font-bold text-white">{ent.name}</h1>
-              <DriveButton
-                url={ent.drive_folder_url}
-                onSave={async (newUrl) => {
-                  const r = await authedFetch(
-                    `/api/v1/entreprises/${ent.id}`,
-                    {
-                      method: "PATCH",
-                      body: JSON.stringify({ drive_folder_url: newUrl })
-                    }
-                  );
-                  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                  setEnt({ ...ent, drive_folder_url: newUrl || null });
-                }}
-              />
             </div>
             {ent.description ? (
               <p className="mt-1 text-sm text-white/60">{ent.description}</p>
@@ -475,6 +461,17 @@ export default function EntrepriseDetailPage() {
         {/* Daily Pulse — briefing IA quotidien */}
         <DailyPulseCard entrepriseId={ent.id} accent={ent.color_accent} />
 
+        {/* Documents Drive de l'entreprise (juste après le briefing IA) */}
+        {ent ? (
+          <EntityDriveSection
+            entityType="Entreprise"
+            entityId={id}
+            pole="Gestion d'entreprises"
+            label="Entreprise"
+            route="/entreprises/[id]"
+          />
+        ) : null}
+
         {/* Lien rapide vers les rencontres tagguées sur cette entreprise */}
         <Link
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -499,9 +496,6 @@ export default function EntrepriseDetailPage() {
 
         {/* Partenaires + parts de détention */}
         <PartnersSection entrepriseId={ent.id} />
-
-        {/* Liens documentation (Drive, SharePoint…) */}
-        <LinksSection entrepriseId={ent.id} />
 
         {error ? (
           <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
@@ -1395,234 +1389,6 @@ function PartnerModal({
               ) : (
                 "Ajouter"
               )}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-// ─── Section Liens documentation ───────────────────────────────────────
-
-type EntrepriseLink = {
-  id: number;
-  entreprise_id: number;
-  label: string;
-  url: string;
-  kind: string;
-  notes: string | null;
-  created_at: string;
-};
-
-const LINK_KINDS = [
-  { value: "drive", label: "Google Drive", icon: "🗂️" },
-  { value: "sharepoint", label: "SharePoint / OneDrive", icon: "🔷" },
-  { value: "dropbox", label: "Dropbox", icon: "📦" },
-  { value: "onenote", label: "OneNote", icon: "📓" },
-  { value: "notion", label: "Notion", icon: "📑" },
-  { value: "website", label: "Site web", icon: "🌐" },
-  { value: "autre", label: "Autre", icon: "🔗" }
-];
-
-function LinksSection({ entrepriseId }: { entrepriseId: number }) {
-  const [list, setList] = useState<EntrepriseLink[] | null>(null);
-  const [showAdd, setShowAdd] = useState(false);
-
-  async function reload() {
-    const res = await authedFetch(
-      `/api/v1/entreprises/${entrepriseId}/links`
-    );
-    if (res.ok) setList((await res.json()) as EntrepriseLink[]);
-  }
-  useEffect(() => {
-    void reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entrepriseId]);
-
-  async function remove(l: EntrepriseLink) {
-    if (!confirm(`Retirer le lien « ${l.label} » ?`)) return;
-    await authedFetch(`/api/v1/entreprises/links/${l.id}`, {
-      method: "DELETE"
-    });
-    void reload();
-  }
-
-  return (
-    <section className="mt-6 rounded-2xl border border-brand-800 bg-brand-900 p-5">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-violet-300">
-          Liens & documentation
-        </h2>
-        <button
-          type="button"
-          onClick={() => setShowAdd(true)}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-violet-400 px-3 py-1.5 text-xs font-semibold text-brand-950 shadow hover:bg-violet-300"
-        >
-          <Plus className="h-3.5 w-3.5" /> Ajouter un lien
-        </button>
-      </div>
-
-      {list === null ? (
-        <p className="text-xs text-white/50">
-          <Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Chargement…
-        </p>
-      ) : list.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-brand-800 bg-brand-950 p-3 text-xs text-white/50">
-          Aucun lien. Ajoute le drive de l&apos;entreprise pour accès rapide.
-        </p>
-      ) : (
-        <ul className="grid gap-2 sm:grid-cols-2">
-          {list.map((l) => {
-            const kind = LINK_KINDS.find((k) => k.value === l.kind);
-            return (
-              <li key={l.id}>
-                <div className="flex items-center gap-2 rounded-xl border border-brand-800 bg-brand-950 p-3">
-                  <span className="text-xl">{kind?.icon || "🔗"}</span>
-                  <div className="min-w-0 flex-1">
-                    <a
-                      href={l.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block truncate text-sm font-bold text-white hover:text-violet-300"
-                    >
-                      {l.label} ↗
-                    </a>
-                    <p className="truncate text-[10px] text-white/40">
-                      {kind?.label || l.kind}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => remove(l)}
-                    className="rounded-lg border border-white/15 bg-brand-900 p-1.5 text-white/40 hover:border-rose-400/50 hover:text-rose-300"
-                    title="Retirer"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-
-      {showAdd ? (
-        <LinkModal
-          entrepriseId={entrepriseId}
-          onClose={() => setShowAdd(false)}
-          onSaved={() => {
-            setShowAdd(false);
-            void reload();
-          }}
-        />
-      ) : null}
-    </section>
-  );
-}
-
-function LinkModal({
-  entrepriseId,
-  onClose,
-  onSaved
-}: {
-  entrepriseId: number;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const [label, setLabel] = useState("");
-  const [url, setUrl] = useState("");
-  const [kind, setKind] = useState("drive");
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-    setErr(null);
-    try {
-      const res = await authedFetch("/api/v1/entreprises/links", {
-        method: "POST",
-        body: JSON.stringify({
-          entreprise_id: entrepriseId,
-          label: label.trim(),
-          url: url.trim(),
-          kind
-        })
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t.slice(0, 240) || `HTTP ${res.status}`);
-      }
-      onSaved();
-    } catch (e2) {
-      setErr((e2 as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
-      <div className="my-8 w-full max-w-lg rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
-        <div className="border-b border-brand-800 px-5 py-3">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-violet-300">
-            Nouveau lien
-          </h2>
-        </div>
-        <form onSubmit={submit} className="grid gap-3 p-5">
-          <div>
-            <label className="label">Libellé</label>
-            <input
-              required
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              className="input"
-              placeholder="ex. Drive HSI, statuts, P&L…"
-            />
-          </div>
-          <div>
-            <label className="label">URL</label>
-            <input
-              required
-              type="url"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              className="input font-mono text-xs"
-              placeholder="https://drive.google.com/drive/folders/..."
-            />
-          </div>
-          <div>
-            <label className="label">Type</label>
-            <select
-              value={kind}
-              onChange={(e) => setKind(e.target.value)}
-              className="input"
-            >
-              {LINK_KINDS.map((k) => (
-                <option key={k.value} value={k.value}>
-                  {k.icon} {k.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {err ? (
-            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-              {err}
-            </p>
-          ) : null}
-
-          <div className="flex items-center justify-end gap-2 border-t border-brand-800 pt-3">
-            <button type="button" onClick={onClose} className="btn-secondary text-sm">
-              Annuler
-            </button>
-            <button
-              type="submit"
-              disabled={saving || !label.trim() || !url.trim()}
-              className="btn-accent inline-flex items-center text-sm disabled:opacity-60"
-            >
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Ajouter"}
             </button>
           </div>
         </form>
