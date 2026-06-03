@@ -204,19 +204,19 @@ async def _replace_tache_immeubles(
 
 @router.get("", response_model=List[EntrepriseRead])
 async def list_entreprises(
-    db: DBSession, user: CurrentUser
+    db: DBSession, user: CurrentUser, include_inactive: bool = False
 ) -> List[EntrepriseRead]:
     _require_volet(user)
-    # Tri par `position` (modifiable via drag & drop dans la sidebar),
-    # puis par nom en fallback. Position 0 = entreprises jamais
-    # repositionnées (les nouvelles + le legacy avant migration) ;
-    # leur sous-tri par nom garde l'ordre stable.
+    # Par défaut on ne montre que les entreprises actives. Les entreprises
+    # « supprimées » sont en réalité soft-deletées (is_active=False) et
+    # restent récupérables via la corbeille (include_inactive=true).
+    # Tri par `position` (drag & drop sidebar), puis par nom en fallback.
+    stmt = select(Entreprise)
+    if not include_inactive:
+        stmt = stmt.where(Entreprise.is_active.is_(True))
     rows = (
         await db.execute(
-            select(Entreprise).order_by(
-                Entreprise.position.asc(),
-                Entreprise.name.asc(),
-            )
+            stmt.order_by(Entreprise.position.asc(), Entreprise.name.asc())
         )
     ).scalars().all()
     return [EntrepriseRead.model_validate(e) for e in rows]
@@ -343,16 +343,32 @@ async def update_entreprise(
 async def delete_entreprise(
     entreprise_id: int, db: DBSession, user: CurrentUser
 ) -> None:
-    """Supprime définitivement une entreprise et toutes ses données liées
-    (tâches, templates, snapshots financiers, plans de valeur, ownerships
-    immeubles, investissements...). Cascade géré par les ON DELETE des FK.
-    """
+    """Soft-delete : désactive l'entreprise (is_active=False) sans rien
+    détruire. Toutes les données liées (tâches, snapshots, ownerships,
+    investissements...) restent en base et sont récupérables via la
+    corbeille (POST /entreprises/{id}/restore). On ne fait plus de
+    suppression définitive en cascade — trop risqué (perte de données)."""
     _require_volet(user)
     e = await db.get(Entreprise, entreprise_id)
     if e is None:
         raise HTTPException(404, "Entreprise non trouvée")
-    await db.delete(e)
+    e.is_active = False
     await db.commit()
+
+
+@router.post("/{entreprise_id}/restore", response_model=EntrepriseRead)
+async def restore_entreprise(
+    entreprise_id: int, db: DBSession, user: CurrentUser
+) -> EntrepriseRead:
+    """Restaure une entreprise soft-deletée (corbeille → réactive)."""
+    _require_volet(user)
+    e = await db.get(Entreprise, entreprise_id)
+    if e is None:
+        raise HTTPException(404, "Entreprise non trouvée")
+    e.is_active = True
+    await db.commit()
+    await db.refresh(e)
+    return EntrepriseRead.model_validate(e)
 
 
 # ── Tâches CRUD ─────────────────────────────────────────────────────────

@@ -706,6 +706,32 @@ async def create_bon_from_immeuble(
     }
 
 
+# ── Retirer une entreprise du portefeuille immobilier ──────────────────
+
+
+@router.post("/entreprises/{entreprise_id}/retirer-portefeuille")
+async def retirer_entreprise_portefeuille(
+    entreprise_id: int, db: DBSession, user: CurrentUser
+) -> dict:
+    """Retire l'entreprise du volet immobilier : supprime uniquement les
+    liens de propriété (ImmeubleOwnership) entre cette entreprise et ses
+    immeubles. NE touche PAS l'entreprise ni ses tâches côté gestion
+    d'entreprise (séparation des volets). Les immeubles eux-mêmes restent
+    (sans propriétaire — à réassigner au besoin)."""
+    _require_volet(user)
+    rows = (
+        await db.execute(
+            select(ImmeubleOwnership).where(
+                ImmeubleOwnership.entreprise_id == entreprise_id
+            )
+        )
+    ).scalars().all()
+    for o in rows:
+        await db.delete(o)
+    await db.commit()
+    return {"removed_ownerships": len(rows)}
+
+
 # ── Signature de bail ──────────────────────────────────────────────────
 
 
