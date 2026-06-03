@@ -34,6 +34,7 @@ from app.api.v1.endpoints import (
     calendar,
     clients,
     devlog,
+    devlog_soumission_defaults,
     drive_auth,
     drive_auto_uploads,
     drive_conventions,
@@ -163,6 +164,11 @@ api_router.include_router(devlog.leads_router, dependencies=_devlog_admin_only)
 # /soumissions/{id}/convert-to-project matchent avant le CRUD générique.
 api_router.include_router(devlog.soumission_automations_router, dependencies=_devlog_admin_only)
 api_router.include_router(devlog.soumissions_router, dependencies=_devlog_admin_only)
+# Phase 6 (juin 2026) — Valeurs par défaut CONFIGURABLES des soumissions
+# devis_dev (taux, marges, commission closer, template modules/fonctionnalités
+# de base). Prefix statique /devlog/soumission-defaults : pas de collision avec
+# le CRUD /devlog/soumissions/{id}. Admin/owner appliqué dans les routes.
+api_router.include_router(devlog_soumission_defaults.router)
 api_router.include_router(devlog.projects_router, dependencies=_devlog_admin_only)
 api_router.include_router(devlog.time_entries_router, dependencies=_devlog_admin_only)
 # invoice_automations_router DOIT être registered AVANT invoices_router

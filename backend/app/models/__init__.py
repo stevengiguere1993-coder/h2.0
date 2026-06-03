@@ -39,6 +39,9 @@ from app.models.devlog_project_recurring_service import (  # noqa: F401
 )
 from app.models.devlog_project_task import DevlogProjectTask  # noqa: F401
 from app.models.devlog_soumission import DevlogSoumission  # noqa: F401
+from app.models.devlog_soumission_defaults import (  # noqa: F401
+    DevlogSoumissionDefaults,
+)
 from app.models.devlog_soumission_item import DevlogSoumissionItem  # noqa: F401
 from app.models.devlog_soumission_module import DevlogSoumissionModule  # noqa: F401
 from app.models.devlog_soumission_section import DevlogSoumissionSection  # noqa: F401
@@ -257,6 +260,7 @@ __all__ = [
     "DevlogProjectPurchase",
     "DevlogProjectTask",
     "DevlogSoumission",
+    "DevlogSoumissionDefaults",
     "DevlogSoumissionItem",
     "DevlogSoumissionModule",
     "DevlogSoumissionSection",

@@ -1978,6 +1978,32 @@ async def init_db() -> None:
                 # Table/colonne absente au premier boot — silencieux.
                 pass
 
+        # ── Seed des valeurs par défaut des soumissions devis_dev (Phase 6,
+        # juin 2026) ─────────────────────────────────────────────────────
+        # Table singleton `devlog_soumission_defaults` (id=1) créée par
+        # `create_all`. On insère la ligne avec les valeurs historiques
+        # (75/80/10/50/50, template vide) UNIQUEMENT si elle est absente —
+        # ON CONFLICT DO NOTHING préserve les réglages déjà modifiés par
+        # Phil depuis l'UI. Idempotent au boot. Plus aucun hard-code côté
+        # application : la création d'une soumission lit cette ligne.
+        try:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO devlog_soumission_defaults
+                      (id, taux_dev_horaire, taux_manager_horaire,
+                       commission_closer_pct, marge_initiale_pct,
+                       marge_recurrente_pct, base_modules_json, updated_at)
+                    VALUES (1, 75, 80, 10, 50, 50, '[]'::jsonb, NOW())
+                    ON CONFLICT (id) DO NOTHING
+                    """
+                )
+            )
+        except Exception:
+            # Table absente au tout premier boot (create_all n'a pas encore
+            # tourné) — retentera au prochain démarrage.
+            pass
+
 
 async def close_db() -> None:
     """
