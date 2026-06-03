@@ -32,6 +32,8 @@ Surface :
 - ``GET    /api/v1/drive/entity-links`` — filtres ``entity_type``,
   ``entity_id``.
 - ``POST   /api/v1/drive/entity-links`` — lien manuel sans convention.
+- ``PATCH  /api/v1/drive/entity-links/{id}`` — re-cible le lien vers un
+  autre dossier Drive ("changer de dossier").
 - ``DELETE /api/v1/drive/entity-links/{id}`` — supprime le lien
   Kratos-side seulement (le dossier Drive reste intact).
 """
@@ -54,6 +56,7 @@ from app.schemas.drive_convention import (
     DriveConventionPatch,
     DriveConventionRead,
     DriveEntityLinkCreate,
+    DriveEntityLinkPatch,
     DriveEntityLinkRead,
     SupportedEntityType,
 )
@@ -482,6 +485,62 @@ async def create_entity_link(
     return DriveEntityLinkRead.model_validate(link)
 
 
+@router.patch(
+    "/entity-links/{link_id}",
+    response_model=DriveEntityLinkRead,
+)
+async def patch_entity_link(
+    link_id: int,
+    db: DBSession,
+    user: RequireAdminOrOwner,
+    payload: DriveEntityLinkPatch = Body(...),
+) -> DriveEntityLinkRead:
+    """Re-cible un lien existant vers un autre dossier Drive.
+
+    Cas d'usage : un mauvais dossier a été lié à l'entité et on veut
+    corriger la liaison sans la recréer. La cible Kratos
+    (``entity_type``/``entity_id``) reste inchangée ; seul le dossier
+    Drive pointé change. Le dossier Drive précédent reste intact.
+    """
+    link = await db.get(DriveEntityLink, link_id)
+    if link is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"Lien #{link_id} introuvable."
+        )
+
+    old_folder_id = link.drive_folder_id
+    new_folder_id = (payload.drive_folder_id or "").strip()
+    if not new_folder_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "drive_folder_id requis."
+        )
+
+    link.drive_folder_id = new_folder_id
+    if payload.drive_folder_name is not None:
+        cleaned_name = payload.drive_folder_name.strip()
+        link.drive_folder_name = cleaned_name or None
+    # Le lien n'est plus issu d'une convention une fois re-ciblé à la main.
+    link.convention_id = None
+
+    await db.flush()
+    await log_action(
+        db,
+        user=user,
+        action="drive_entity_link.relinked",
+        entity_type="drive_entity_link",
+        entity_id=link.id,
+        details={
+            "target_entity_type": link.entity_type,
+            "target_entity_id": link.entity_id,
+            "old_drive_folder_id": old_folder_id,
+            "new_drive_folder_id": new_folder_id,
+        },
+    )
+    await db.commit()
+    await db.refresh(link)
+    return DriveEntityLinkRead.model_validate(link)
+
+
 @router.delete(
     "/entity-links/{link_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -513,3 +572,4 @@ async def delete_entity_link(
         details=snapshot,
     )
     await db.commit()
+
