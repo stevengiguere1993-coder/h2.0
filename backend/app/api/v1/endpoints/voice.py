@@ -71,6 +71,7 @@ from app.models.voice import (
     VoiceSms,
     VoiceUsageDaily,
 )
+from app.models.email_log import EmailLog
 
 log = logging.getLogger(__name__)
 
@@ -3355,13 +3356,13 @@ async def list_sms(
 # /app/crm, /app/clients. On scope strictement par (entity_type,
 # entity_id) — pas de listing global.
 class CommunicationEvent(BaseModel):
-    kind: str  # "call" | "sms"
+    kind: str  # "call" | "sms" | "email"
     id: int
     at: datetime
     direction: str  # inbound | outbound
     status: str
-    from_e164: str
-    to_e164: str
+    from_e164: str = ""
+    to_e164: str = ""
     # Champs propres aux appels
     duration_sec: Optional[int] = None
     intent: Optional[str] = None
@@ -3371,6 +3372,10 @@ class CommunicationEvent(BaseModel):
     # Champs propres aux SMS
     body: Optional[str] = None
     num_media: int = 0
+    # Champs propres aux courriels
+    subject: Optional[str] = None
+    email_from: Optional[str] = None
+    email_to: Optional[str] = None
 
 
 _VALID_ENTITY_TYPES = {"client", "locataire", "prospection_lead", "contact_request"}
@@ -3450,8 +3455,107 @@ async def list_communications_for_entity(
                 num_media=s.num_media or 0,
             )
         )
+
+    email_rows = (
+        await db.execute(
+            select(EmailLog)
+            .where(
+                EmailLog.entity_type == entity_type,
+                EmailLog.entity_id == entity_id,
+            )
+            .order_by(EmailLog.created_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    for em in email_rows:
+        events.append(
+            CommunicationEvent(
+                kind="email",
+                id=em.id,
+                at=em.sent_at or em.received_at or em.created_at,
+                direction=em.direction,
+                status=em.status,
+                subject=em.subject,
+                email_from=em.from_email,
+                email_to=em.to_email,
+                body=em.body_preview or em.body_html,
+            )
+        )
+
     events.sort(key=lambda e: e.at, reverse=True)
     return events[:limit]
+
+
+class EmailComposeRequest(BaseModel):
+    to: str = Field(..., min_length=3, max_length=320)
+    subject: str = Field(..., min_length=1, max_length=500)
+    body: str = Field(..., min_length=1)
+    entity_type: Optional[str] = None
+    entity_id: Optional[int] = None
+
+
+@router.post(
+    "/email",
+    response_model=CommunicationEvent,
+    status_code=status.HTTP_201_CREATED,
+    summary="Envoie un courriel à une entité CRM et le logge dans le fil",
+)
+async def send_email_comms(
+    payload: EmailComposeRequest, user: CurrentUser, db: DBSession
+) -> CommunicationEvent:
+    from app.integrations.email_graph import get_mailer
+
+    mailer = get_mailer()
+    if not mailer.ready:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Courriel non configuré (AZURE_* / MAIL_FROM_EMAIL).",
+        )
+    body_html = (
+        '<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;'
+        'color:#0f172a;line-height:1.5">'
+        + payload.body.strip().replace("\n", "<br>")
+        + "</div>"
+    )
+    try:
+        await mailer.send(
+            to=[payload.to.strip()],
+            subject=payload.subject.strip(),
+            html_body=body_html,
+            reply_to=mailer.sender,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail=f"Envoi échoué : {exc}"
+        )
+    now = datetime.now(timezone.utc)
+    row = EmailLog(
+        direction="outbound",
+        status="sent",
+        from_email=mailer.sender,
+        to_email=payload.to.strip(),
+        subject=payload.subject.strip(),
+        body_html=body_html,
+        body_preview=payload.body.strip()[:2000],
+        entity_type=payload.entity_type,
+        entity_id=payload.entity_id,
+        sent_by_user_id=user.id,
+        sent_at=now,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return CommunicationEvent(
+        kind="email",
+        id=row.id,
+        at=now,
+        direction="outbound",
+        status="sent",
+        subject=row.subject,
+        email_from=row.from_email,
+        email_to=row.to_email,
+        body=row.body_preview,
+    )
 
 
 @router.get(

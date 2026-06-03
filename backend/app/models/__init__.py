@@ -49,6 +49,7 @@ from app.models.drive_convention import DriveConvention  # noqa: F401
 from app.models.drive_entity_link import DriveEntityLink  # noqa: F401
 from app.models.drive_page_module import DrivePageModule  # noqa: F401
 from app.models.drive_user_token import DriveUserToken  # noqa: F401
+from app.models.email_log import EmailLog
 from app.models.email_template import EmailTemplate
 from app.models.employe import Employe
 from app.models.employe_rate_history import EmployeRateHistory  # noqa: F401
@@ -265,6 +266,7 @@ __all__ = [
     "DriveEntityLink",
     "DrivePageModule",
     "DriveUserToken",
+    "EmailLog",
     "EmailTemplate",
     "Employe",
     "Facture",
