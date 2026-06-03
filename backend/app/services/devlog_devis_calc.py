@@ -42,36 +42,42 @@ et le manager ne s'imputent pas à eux). Conséquence vérifiable :
        Σ(prix_features_client) + Σ(prix_fixes_client) = Total_final
 
 ----------------------------------------------------------------------
-Refonte 2026-06 (Phase 2) — niveau MODULE dans l'investissement initial
+Refonte 2026-06 (Phase 2 → Phase 3) — MODULE + chargé de projet GLOBAL
 ----------------------------------------------------------------------
 
-Un module regroupe deux natures d'items :
+Un module regroupe UNIQUEMENT des **fonctionnalités**
+(``item_kind = feature``) : vue client, heures de dev → coût =
+heures × ``taux_dev``. C'est la seule nature d'item filtrée par la
+sélection des modules et concernée par la gratuité.
 
-* des **fonctionnalités** (``item_kind = feature``) : vue client,
-  heures de dev → coût = heures × ``taux_dev`` ;
-* des **tâches de chargé de projet** (``item_kind = manager_task``) :
-  vue interne, heures de « manager » → coût = heures × ``taux_manager``.
+Les **tâches de chargé de projet** (``item_kind = manager_task``) sont
+désormais **centralisées et globales** : elles ne sont PLUS rattachées
+à un module (``module_id`` NULL) et leur coût s'ajoute TOUJOURS au
+total, peu importe la sélection du client. La gestion de projet est une
+charge globale du projet, pas une option par fonctionnalité.
 
-Coût interne d'un module = Σ(heures features × taux_dev) +
-Σ(heures tâches × taux_manager). La marge et la commission closer
-s'appliquent ensuite au global, comme avant.
+Coût interne d'un module = Σ(heures features × taux_dev). Le coût du
+chargé de projet (Σ heures tâches × taux_manager) s'ajoute au global,
+puis la marge et la commission closer s'appliquent, comme avant.
 
-Trois leviers nouveaux, tous **rétrocompatibles** :
+Leviers (tous **rétrocompatibles**) :
 
-* **Sélection** : un module porte ``selected``. Les items (features et
-  tâches) d'un module NON sélectionné sont exclus du total. Les items
-  SANS module (``module_id`` NULL — soumissions legacy, frais fixes,
-  sections récurrentes) sont TOUJOURS comptés.
-* **Coût manager par tâches** : si la soumission possède au moins un
-  item ``manager_task`` (sur un module sélectionné), le coût manager =
-  Σ(tâches × taux_manager). Sinon (aucun ``manager_task``), on retombe
-  EXACTEMENT sur le scalaire historique ``heures_manager × taux_manager``.
+* **Sélection** : un module porte ``selected``. Les **features** d'un
+  module NON sélectionné sont exclues du total. Les items SANS module
+  (``module_id`` NULL — soumissions legacy, frais fixes, sections
+  récurrentes, tâches du chargé de projet) sont TOUJOURS comptés.
+* **Coût manager par tâches (GLOBAL)** : si la soumission possède au
+  moins un item ``manager_task``, le coût manager =
+  Σ(toutes les tâches × taux_manager), SANS filtre de module ni de
+  sélection. Sinon (aucun ``manager_task``), on retombe EXACTEMENT sur
+  le scalaire historique ``heures_manager × taux_manager``.
 * **Gratuité « module → module »** : un module peut porter un
   ``free_when_module_id``. Si le module déclencheur est *sélectionné*,
-  ce module devient **gratuit** : ses features + tâches comptent 0 dans
-  le total CLIENT (mais restent listés, marqués « offert », et leurs
-  heures restent visibles côté interne). Si le déclencheur n'est PAS
-  sélectionné, le module garde son prix normal.
+  ce module devient **gratuit** : ses features comptent 0 dans le total
+  CLIENT (mais restent listées, marquées « offert », et leurs heures
+  restent visibles côté interne). Si le déclencheur n'est PAS
+  sélectionné, le module garde son prix normal. La gratuité ne touche
+  jamais le chargé de projet (global).
 
 RÉTROCOMPATIBILITÉ — une soumission SANS modules et SANS ``manager_task``
 emprunte exactement le chemin historique : tous les items comptés,
@@ -296,22 +302,23 @@ def compute_devis(
             couts_dev += cout
         feature_costs_internal.append((it, heures, cout, free))
 
-    # 1bis. Coût manager — NOUVEAU : Σ(manager_task.heures × taux_manager)
-    # sur les modules sélectionnés. RÉTROCOMPAT : si AUCUN item
+    # 1bis. Coût manager — GLOBAL : Σ(manager_task.heures × taux_manager)
+    # sur TOUTES les tâches du chargé de projet, peu importe leur
+    # ``module_id`` et peu importe la sélection des modules. La gestion
+    # de projet est une charge globale du projet, indépendante des
+    # fonctionnalités choisies par le client. RÉTROCOMPAT : si AUCUN item
     # ``manager_task`` n'existe dans la soumission, on retombe sur le
     # scalaire historique ``heures_manager × taux_manager``.
     manager_tasks_internal = []  # (item, heures, cout_brut, free)
     cout_manager_from_tasks = 0.0
     has_manager_tasks = len(manager_tasks) > 0
     for it in manager_tasks:
-        if _module_excluded(it):
-            continue
+        # Pas de filtrage par module ni de gratuité : le chargé de projet
+        # est centralisé et toujours compté (free=False par convention).
         heures = _f(getattr(it, "heures", 0))
-        free = _module_free(it)
         cout = heures * taux_manager
-        if not free:
-            cout_manager_from_tasks += cout
-        manager_tasks_internal.append((it, heures, cout, free))
+        cout_manager_from_tasks += cout
+        manager_tasks_internal.append((it, heures, cout, False))
 
     if has_manager_tasks:
         cout_manager = cout_manager_from_tasks
@@ -457,9 +464,12 @@ def compute_devis(
     total_initial_taxe = total_final * TPS_TVQ_FACTOR
 
     # --- Détail par module (lecture) ------------------------------------
-    # Pour chaque module connu : ses features (heures dev) + ses tâches
-    # chargé de projet (heures), totaux d'heures, prix client, état
-    # ``selected`` et ``offert`` (+ pourquoi).
+    # Pour chaque module connu : ses features (heures dev), totaux
+    # d'heures, prix client, état ``selected`` et ``offert``. Les tâches
+    # du chargé de projet sont désormais GLOBALES (module_id NULL) :
+    # ``task_by_module`` reste vide pour les nouvelles soumissions et ne
+    # capte que d'éventuelles tâches legacy encore rattachées à un module
+    # (total_heures_manager = 0 sinon).
     feature_client_by_id = {
         f.get("id"): f for f in features_client if f.get("id") is not None
     }

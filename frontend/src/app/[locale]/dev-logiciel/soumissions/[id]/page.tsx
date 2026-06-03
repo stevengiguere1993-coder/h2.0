@@ -622,7 +622,9 @@ export default function SoumissionDetailPage() {
   }
 
   // Variantes devis_dev — pas de section, item typé par item_kind.
-  async function addDevisItem(kind: "recurring_cost" | "feature" | "fixed_cost") {
+  async function addDevisItem(
+    kind: "recurring_cost" | "feature" | "fixed_cost" | "manager_task"
+  ) {
     try {
       const payload: Record<string, unknown> = {
         soumission_id: id,
@@ -631,10 +633,14 @@ export default function SoumissionDetailPage() {
             ? "Nouveau coût mensuel"
             : kind === "feature"
               ? "Nouvelle fonctionnalité"
-              : "Nouveau frais fixe",
+              : kind === "manager_task"
+                ? "Nouvelle tâche du chargé de projet"
+                : "Nouveau frais fixe",
         item_kind: kind
+        // Pas de module_id : les tâches du chargé de projet sont
+        // centralisées (globales), rattachées à la soumission.
       };
-      if (kind === "feature") {
+      if (kind === "feature" || kind === "manager_task") {
         payload.heures = 0;
         payload.unit = "h";
       } else {
@@ -753,21 +759,16 @@ export default function SoumissionDetailPage() {
     }
   }
 
-  // Crée une fonctionnalité (feature) ou une tâche de chargé de projet
-  // (manager_task) DANS un module donné.
-  async function addModuleItem(
-    moduleId: number,
-    kind: "feature" | "manager_task"
-  ) {
+  // Crée une fonctionnalité (feature) DANS un module donné. Un module ne
+  // porte QUE des fonctionnalités (les tâches du chargé de projet sont
+  // centralisées dans le bloc « Gestionnaire de projet », hors module).
+  async function addModuleItem(moduleId: number, kind: "feature") {
     try {
       const payload: Record<string, unknown> = {
         soumission_id: id,
         module_id: moduleId,
         item_kind: kind,
-        description:
-          kind === "feature"
-            ? "Nouvelle fonctionnalité"
-            : "Nouvelle tâche du chargé de projet",
+        description: "Nouvelle fonctionnalité",
         heures: 0,
         unit: "h"
       };
@@ -996,6 +997,14 @@ export default function SoumissionDetailPage() {
     () => items.filter((it) => it.item_kind === "fixed_cost"),
     [items]
   );
+  // Tâches du chargé de projet — CENTRALISÉES (hors module). Vivent dans
+  // le bloc « Gestionnaire de projet », coût global indépendant des
+  // modules. On inclut aussi d'éventuelles tâches legacy encore
+  // rattachées à un module pour qu'elles restent éditables/visibles.
+  const managerTaskItems = useMemo(
+    () => items.filter((it) => it.item_kind === "manager_task"),
+    [items]
+  );
   // Items (features + tâches) groupés par module pour les sous-listes.
   const itemsByModule = useMemo(() => {
     const m = new Map<number, Item[]>();
@@ -1219,6 +1228,7 @@ export default function SoumissionDetailPage() {
                 recurringItems={recurringItems}
                 featureItems={featureItems}
                 fixedItems={fixedItems}
+                managerTaskItems={managerTaskItems}
                 modules={modules}
                 itemsByModule={itemsByModule}
                 ownerView={adminView}
@@ -1265,6 +1275,7 @@ function DevisDevEditor({
   recurringItems,
   featureItems,
   fixedItems,
+  managerTaskItems,
   modules,
   itemsByModule,
   ownerView,
@@ -1283,21 +1294,22 @@ function DevisDevEditor({
   recurringItems: Item[];
   featureItems: Item[];
   fixedItems: Item[];
+  managerTaskItems: Item[];
   modules: ModuleRow[];
   itemsByModule: Map<number, Item[]>;
   ownerView: boolean;
   onPatchSoumission: (patch: Partial<Soumission>) => void;
-  onAddItem: (kind: "recurring_cost" | "feature" | "fixed_cost") => void;
+  onAddItem: (
+    kind: "recurring_cost" | "feature" | "fixed_cost" | "manager_task"
+  ) => void;
   onPatchItem: (itemId: number, patch: Partial<Item>) => void;
   onDeleteItem: (itemId: number) => void;
   onAddModule: () => void;
   onPatchModule: (moduleId: number, patch: Partial<ModuleRow>) => void;
   onDeleteModule: (moduleId: number) => void;
   onMoveModule: (moduleId: number, dir: -1 | 1) => void;
-  onAddModuleItem: (
-    moduleId: number,
-    kind: "feature" | "manager_task"
-  ) => void;
+  // Un module ne porte QUE des fonctionnalités désormais.
+  onAddModuleItem: (moduleId: number, kind: "feature") => void;
 }) {
   const rec = preview?.recurring;
   const init = preview?.initial;
@@ -1528,6 +1540,7 @@ function DevisDevEditor({
             preview={preview}
             featureItems={featureItems}
             fixedItems={fixedItems}
+            managerTaskItems={managerTaskItems}
             modules={modules}
             itemsByModule={itemsByModule}
             onPatchSoumission={onPatchSoumission}
@@ -1553,6 +1566,7 @@ function DevisDevOwnerInitial({
   preview,
   featureItems,
   fixedItems,
+  managerTaskItems,
   modules,
   itemsByModule,
   onPatchSoumission,
@@ -1569,20 +1583,21 @@ function DevisDevOwnerInitial({
   preview: DevisPreview | null;
   featureItems: Item[];
   fixedItems: Item[];
+  managerTaskItems: Item[];
   modules: ModuleRow[];
   itemsByModule: Map<number, Item[]>;
   onPatchSoumission: (patch: Partial<Soumission>) => void;
-  onAddItem: (kind: "recurring_cost" | "feature" | "fixed_cost") => void;
+  onAddItem: (
+    kind: "recurring_cost" | "feature" | "fixed_cost" | "manager_task"
+  ) => void;
   onPatchItem: (itemId: number, patch: Partial<Item>) => void;
   onDeleteItem: (itemId: number) => void;
   onAddModule: () => void;
   onPatchModule: (moduleId: number, patch: Partial<ModuleRow>) => void;
   onDeleteModule: (moduleId: number) => void;
   onMoveModule: (moduleId: number, dir: -1 | 1) => void;
-  onAddModuleItem: (
-    moduleId: number,
-    kind: "feature" | "manager_task"
-  ) => void;
+  // Un module ne porte QUE des fonctionnalités désormais.
+  onAddModuleItem: (moduleId: number, kind: "feature") => void;
 }) {
   const init = preview?.initial;
   // Détail calculé par module (prix client, heures, état) indexé par id.
@@ -1597,48 +1612,125 @@ function DevisDevOwnerInitial({
   );
   return (
     <div className="space-y-4">
-      {/* Gestionnaire — inputs compacts (fix #4, fix #5). Les inputs
-          Taux horaire et Heures sont à `w-28`, alignés à gauche dans
-          leur cellule grid. Le « Coût manager » est aligné en
-          baseline avec eux via `sm:items-end` sur la grille. */}
+      {/* Gestionnaire de projet — bloc UNIQUE et GLOBAL (refonte
+          2026-06). Le chargé de projet n'est plus rattaché aux modules :
+          c'est une liste de tâches (description + heures) propre à la
+          soumission, dont le coût total (Σ heures × taux horaire) s'ajoute
+          toujours au total, indépendamment de la sélection des modules. */}
       <div className="rounded-xl border border-blue-500/20 bg-brand-950/40 p-3">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-blue-200">
-          Gestionnaire de projet
-        </h3>
-        <div className="mt-2 grid gap-2 sm:grid-cols-3 sm:items-end">
-          <label className="text-xs text-white/70">
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-blue-200">
+              Gestionnaire de projet
+            </h3>
+            <p className="text-[10px] text-white/40">
+              Tâches de gestion globales du projet — coût indépendant des
+              modules sélectionnés par le client.
+            </p>
+          </div>
+          <label className="inline-flex items-end gap-2 text-xs text-white/70">
             Taux horaire
             <MoneyInput
               value={Number(s.taux_manager_horaire ?? 80)}
               onCommit={(n) =>
                 onPatchSoumission({ taux_manager_horaire: n })
               }
-              className="mt-1 block w-28 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-1 text-right text-white focus:outline-none"
+              className="block w-24 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white focus:outline-none"
             />
           </label>
-          <label className="text-xs text-white/70">
-            Heures
-            <HoursInput
-              value={Number(s.heures_manager ?? 0)}
-              onCommit={(n) => onPatchSoumission({ heures_manager: n })}
-              className="mt-1 block w-28 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-1 text-right text-white focus:outline-none"
-            />
-          </label>
-          <div className="text-xs text-white/70">
-            Coût manager
-            {/* Hauteur identique aux inputs voisins (py-1 + border)
-                pour que la valeur s'aligne sur la même ligne. */}
-            <p className="mt-1 block w-28 rounded border border-transparent px-1.5 py-1 text-right text-base font-semibold text-white">
-              {fmtMoneyShort(Number(init?.cout_manager ?? 0))}
-            </p>
+        </div>
+        {managerTaskItems.length === 0 ? (
+          <p className="mt-2 rounded border border-dashed border-blue-500/20 px-3 py-4 text-center text-xs text-white/40">
+            Aucune tâche du chargé de projet. Ajoute-en une pour
+            comptabiliser la gestion de projet.
+          </p>
+        ) : (
+          <table className="mt-2 w-full text-xs">
+            <thead className="text-[10px] uppercase tracking-wider text-white/40">
+              <tr>
+                <th className="text-left">Tâche</th>
+                <th className="text-right">Heures</th>
+                <th className="text-right">Coût</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-blue-500/20 align-middle">
+              {managerTaskItems.map((it) => (
+                <tr key={it.id}>
+                  <td className="py-1.5">
+                    <DescInput
+                      value={it.description}
+                      onCommit={(v) =>
+                        onPatchItem(it.id, { description: v })
+                      }
+                      className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-white hover:border-blue-500/30 focus:border-blue-500/50 focus:outline-none"
+                    />
+                  </td>
+                  <td className="py-1.5">
+                    <div className="flex justify-end">
+                      <HoursInput
+                        value={Number(it.heures ?? 0)}
+                        onCommit={(n) =>
+                          onPatchItem(it.id, { heures: n })
+                        }
+                        className="w-24 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white"
+                      />
+                    </div>
+                  </td>
+                  <td className="py-1.5 text-right text-white/80">
+                    {fmtMoneyShort(
+                      Number(it.heures ?? 0) *
+                        Number(s.taux_manager_horaire ?? 80)
+                    )}
+                  </td>
+                  <td className="py-1.5">
+                    <button
+                      type="button"
+                      onClick={() => onDeleteItem(it.id)}
+                      className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => onAddItem("manager_task")}
+            className="inline-flex items-center gap-1.5 rounded text-xs text-white/60 hover:text-white"
+          >
+            <Plus className="h-3 w-3" />
+            Ajouter une tâche
+          </button>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5 text-xs text-white/70">
+            <span>
+              Total heures :{" "}
+              <span className="font-semibold text-white">
+                {managerTaskItems.reduce(
+                  (acc, it) => acc + Number(it.heures ?? 0),
+                  0
+                )}{" "}
+                h
+              </span>
+            </span>
+            <span>
+              Coût manager :{" "}
+              <span className="font-bold text-blue-200">
+                {fmtMoneyShort(Number(init?.cout_manager ?? 0))}
+              </span>
+            </span>
           </div>
         </div>
       </div>
 
-      {/* Modules (refonte 2026-06, Phase 3) — chaque module regroupe
-          des fonctionnalités (vue client) + des tâches de chargé de
-          projet (vue interne). Les features/tâches d'un module vivent
-          dans la carte du module ; les features SANS module restent en
+      {/* Modules (refonte 2026-06) — chaque module regroupe UNIQUEMENT
+          des fonctionnalités (vue client). Les tâches du chargé de projet
+          sont centralisées dans le bloc « Gestionnaire de projet »
+          ci-dessus (coût global). Les features SANS module restent en
           liste directe ci-dessous (rétrocompat). */}
       <div className="rounded-xl border border-blue-500/20 bg-brand-950/40 p-3">
         <div className="flex flex-wrap items-end justify-between gap-2">
@@ -1648,7 +1740,7 @@ function DevisDevOwnerInitial({
             </h3>
             <p className="text-[10px] text-white/40">
               Regroupe les fonctionnalités en modules sélectionnables, avec
-              tâches de chargé de projet et règle de gratuité.
+              règle de gratuité « module → module ».
             </p>
           </div>
           <button
@@ -1678,7 +1770,6 @@ function DevisDevOwnerInitial({
                 items={itemsByModule.get(md.id) ?? []}
                 calc={moduleCalcById.get(md.id)}
                 tauxDev={Number(s.taux_dev_horaire ?? 75)}
-                tauxManager={Number(s.taux_manager_horaire ?? 80)}
                 onPatchModule={onPatchModule}
                 onDeleteModule={onDeleteModule}
                 onMoveModule={onMoveModule}
@@ -1932,7 +2023,6 @@ function ModuleCard({
   items,
   calc,
   tauxDev,
-  tauxManager,
   onPatchModule,
   onDeleteModule,
   onMoveModule,
@@ -1949,25 +2039,20 @@ function ModuleCard({
     | NonNullable<DevisPreview["initial"]["modules"]>[number]
     | undefined;
   tauxDev: number;
-  tauxManager: number;
   onPatchModule: (moduleId: number, patch: Partial<ModuleRow>) => void;
   onDeleteModule: (moduleId: number) => void;
   onMoveModule: (moduleId: number, dir: -1 | 1) => void;
-  onAddModuleItem: (
-    moduleId: number,
-    kind: "feature" | "manager_task"
-  ) => void;
+  // Un module ne porte QUE des fonctionnalités désormais.
+  onAddModuleItem: (moduleId: number, kind: "feature") => void;
   onPatchItem: (itemId: number, patch: Partial<Item>) => void;
   onDeleteItem: (itemId: number) => void;
 }) {
+  // Un module ne contient QUE des fonctionnalités (les tâches du chargé
+  // de projet sont centralisées dans le bloc « Gestionnaire de projet »).
   const features = items.filter((it) => it.item_kind === "feature");
-  const managerTasks = items.filter(
-    (it) => it.item_kind === "manager_task"
-  );
   const selected = md.selected !== false;
   const offert = calc?.offert ?? false;
   const heuresDev = calc?.total_heures_dev ?? 0;
-  const heuresManager = calc?.total_heures_manager ?? 0;
   const prixClient = calc?.prix_client ?? 0;
   // Les autres modules (candidats déclencheurs de la gratuité).
   const otherModules = allModules.filter((m) => m.id !== md.id);
@@ -2071,12 +2156,6 @@ function ModuleCard({
             <span className="font-semibold text-white">{heuresDev} h</span>
           </span>
           <span>
-            Chargé projet :{" "}
-            <span className="font-semibold text-white">
-              {heuresManager} h
-            </span>
-          </span>
-          <span>
             Prix client :{" "}
             <span className="font-bold text-blue-200">
               {offert ? "Offert" : fmtMoneyShort(prixClient)}
@@ -2085,7 +2164,8 @@ function ModuleCard({
         </div>
       </div>
 
-      {/* Sous-liste 1 — Fonctionnalités (vue client + interne) */}
+      {/* Fonctionnalités du module (vue client + interne). Un module ne
+          contient QUE des fonctionnalités. */}
       <div className="mt-3">
         <div className="flex items-center justify-between">
           <h4 className="text-[10px] font-bold uppercase tracking-wider text-blue-200">
@@ -2151,76 +2231,6 @@ function ModuleCard({
         >
           <Plus className="h-3 w-3" />
           Ajouter une fonctionnalité
-        </button>
-      </div>
-
-      {/* Sous-liste 2 — Tâches du chargé de projet (vue interne) */}
-      <div className="mt-3 rounded border border-blue-500/20 bg-brand-950/40 p-2">
-        <h4 className="text-[10px] font-bold uppercase tracking-wider text-blue-200">
-          Tâches du chargé de projet
-          <span className="ml-1 font-normal normal-case text-white/35">
-            (vue interne seulement)
-          </span>
-        </h4>
-        {managerTasks.length === 0 ? (
-          <p className="mt-1 text-[11px] text-white/35">
-            Aucune tâche du chargé de projet.
-          </p>
-        ) : (
-          <table className="mt-1 w-full text-xs">
-            <thead className="text-[10px] uppercase tracking-wider text-white/40">
-              <tr>
-                <th className="text-left font-medium">Tâche</th>
-                <th className="text-right font-medium">Heures</th>
-                <th className="text-right font-medium">Coût</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5 align-middle">
-              {managerTasks.map((it) => (
-                <tr key={it.id}>
-                  <td className="py-1">
-                    <DescInput
-                      value={it.description}
-                      onCommit={(v) =>
-                        onPatchItem(it.id, { description: v })
-                      }
-                      className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-white hover:border-blue-500/30 focus:border-blue-500/50 focus:outline-none"
-                    />
-                  </td>
-                  <td className="py-1">
-                    <div className="flex justify-end">
-                      <HoursInput
-                        value={Number(it.heures ?? 0)}
-                        onCommit={(n) => onPatchItem(it.id, { heures: n })}
-                        className="w-20 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white"
-                      />
-                    </div>
-                  </td>
-                  <td className="py-1 text-right text-white/70">
-                    {fmtMoneyShort(Number(it.heures ?? 0) * tauxManager)}
-                  </td>
-                  <td className="py-1">
-                    <button
-                      type="button"
-                      onClick={() => onDeleteItem(it.id)}
-                      className="rounded p-1 text-white/30 hover:bg-rose-500/15 hover:text-rose-300"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        <button
-          type="button"
-          onClick={() => onAddModuleItem(md.id, "manager_task")}
-          className="mt-1 inline-flex items-center gap-1 rounded text-[11px] text-white/50 hover:text-white"
-        >
-          <Plus className="h-3 w-3" />
-          Ajouter une tâche
         </button>
       </div>
     </div>
