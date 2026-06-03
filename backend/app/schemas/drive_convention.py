@@ -202,6 +202,18 @@ class DriveEntityLinkCreate(BaseModel):
     drive_folder_name: Optional[str] = Field(default=None, max_length=255)
 
 
+class DriveEntityLinkPatch(BaseModel):
+    """Body PATCH /api/v1/drive/entity-links/{id} — re-cible un lien
+    existant vers un autre dossier Drive (cas « mauvais dossier lié »).
+
+    Seul ``drive_folder_id`` est requis ; ``drive_folder_name`` est mis à
+    jour si fourni. On ne change jamais ``entity_type``/``entity_id`` (la
+    cible Kratos reste la même)."""
+
+    drive_folder_id: str = Field(min_length=1, max_length=128)
+    drive_folder_name: Optional[str] = Field(default=None, max_length=255)
+
+
 # Forward refs : DriveConventionApplyResult dépend de DriveEntityLinkRead.
 DriveConventionApplyResult.model_rebuild()
 
@@ -214,6 +226,8 @@ __all__ = [
     "DriveConventionApplyResult",
     "DriveEntityLinkRead",
     "DriveEntityLinkCreate",
+    "DriveEntityLinkPatch",
     "SupportedEntityType",
     "SupportedEntityVariable",
 ]
+

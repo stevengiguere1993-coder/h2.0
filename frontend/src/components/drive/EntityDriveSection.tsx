@@ -1,13 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Cloud,
   FolderPlus,
   Link2,
   Loader2,
   RefreshCw,
+  Replace,
   Settings2,
   Sparkles,
   X
@@ -117,6 +121,52 @@ export function EntityDriveSection({
   const [showManualModal, setShowManualModal] = useState(false);
   const [linking, setLinking] = useState(false);
   const [creatingAuto, setCreatingAuto] = useState(false);
+  // Le picker sert à deux choses : lier un dossier (aucun lien) OU re-cibler
+  // un lien existant vers un autre dossier ("changer de dossier"). On
+  // distingue les deux via ce mode pour router le onSelect.
+  const [pickerMode, setPickerMode] = useState<"link" | "relink">("link");
+  const [relinking, setRelinking] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  // Clé localStorage stable par cible (entité ou page) pour mémoriser l'état
+  // replié/déplié de la section entre les visites.
+  const collapseKey = `kratos.driveSection.collapsed.${entityType}:${entityId}:${scope}`;
+  const [collapsed, setCollapsed] = useState(false);
+  // Hydrate l'état replié depuis localStorage (best-effort, jamais bloquant).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      setCollapsed(window.localStorage.getItem(collapseKey) === "1");
+    } catch {
+      /* localStorage indisponible → défaut déplié */
+    }
+  }, [collapseKey]);
+
+  const toggleCollapsed = useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage?.setItem(collapseKey, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, [collapseKey]);
+
+  // Toast de confirmation auto-disparaissant (ex. "Dossier Drive mis à jour").
+  const toastTimer = useRef<number | null>(null);
+  const flashToast = useCallback((msg: string) => {
+    setToast(msg);
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 3500);
+  }, []);
+  useEffect(
+    () => () => {
+      if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    },
+    []
+  );
 
   // En mode "page" (singleton), entityId=0 est l'id réservé du dossier
   // unique de la page → on accepte 0. En mode "entity", il faut un id réel
@@ -310,6 +360,57 @@ export function EntityDriveSection({
     [entityType, entityId, load]
   );
 
+  // -------------------------------------------------------------------------
+  // Re-ciblage du lien existant vers un autre dossier Drive ("changer de
+  // dossier"). Utilise le PATCH /entity-links/{id} (relink propre). En repli,
+  // si le lien n'a pas d'id exploitable, on délègue à linkFolder.
+  // -------------------------------------------------------------------------
+  const relinkFolder = useCallback(
+    async (driveFolderId: string, driveFolderName?: string | null) => {
+      const cleaned = (driveFolderId || "").trim();
+      if (!cleaned) {
+        setErrMsg("Aucun dossier sélectionné.");
+        return false;
+      }
+      const linkId = link?.id;
+      if (!linkId) {
+        // Pas d'id (cas limite) → repli sur la liaison classique.
+        return linkFolder(cleaned, driveFolderName);
+      }
+      setRelinking(true);
+      setErrMsg(null);
+      try {
+        const res = await authedFetch(
+          `/api/v1/drive/entity-links/${linkId}`,
+          {
+            method: "PATCH",
+            body: JSON.stringify({
+              drive_folder_id: cleaned,
+              drive_folder_name: (driveFolderName || "").trim() || null
+            })
+          }
+        );
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(txt || `http_${res.status}`);
+        }
+        const updated = (await res.json()) as DriveEntityLink;
+        // MAJ optimiste du state local → l'explorer se recharge sur le
+        // nouveau dossier (DriveFolderExplorer réagit au changement de prop
+        // folderId).
+        setLink((prev) => (prev ? { ...prev, ...updated } : updated));
+        flashToast("Dossier Drive mis à jour");
+        return true;
+      } catch (e) {
+        setErrMsg((e as Error)?.message || "Changement de dossier échoué.");
+        return false;
+      } finally {
+        setRelinking(false);
+      }
+    },
+    [link?.id, linkFolder, flashToast]
+  );
+
   // --- États qui ne rendent rien (section invisible) -----------------
   if (state === "disabled") return null;
 
@@ -381,23 +482,76 @@ export function EntityDriveSection({
   }
 
   // --- state === "ready" ---------------------------------------------
+  // Le repli ne concerne que l'explorateur (gourmand en place) : il n'a de
+  // sens que lorsqu'un dossier est lié. Sans lien, on garde l'encart visible.
+  const folderLinked = !!link;
+  const isCollapsed = folderLinked && collapsed;
+  const collapsedHint =
+    link?.drive_folder_name?.trim() ||
+    (link?.drive_folder_id ? `Dossier ${link.drive_folder_id}` : "réduit");
+
   return (
     <section className={wrapperClass}>
       <SectionHeader
         title={resolvedTitle}
         right={
-          <button
-            type="button"
-            onClick={() => void load()}
-            title="Rafraîchir"
-            className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </button>
+          <div className="flex items-center gap-1">
+            {folderLinked ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setPickerMode("relink");
+                  setShowPicker(true);
+                }}
+                disabled={relinking}
+                title="Changer le dossier Drive lié"
+                aria-label="Changer le dossier Drive lié"
+                className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white disabled:opacity-50"
+              >
+                {relinking ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Replace className="h-3.5 w-3.5" />
+                )}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void load()}
+              title="Rafraîchir"
+              aria-label="Rafraîchir"
+              className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </button>
+            {folderLinked ? (
+              <button
+                type="button"
+                onClick={toggleCollapsed}
+                title={isCollapsed ? "Déplier la section" : "Réduire la section"}
+                aria-label={
+                  isCollapsed ? "Déplier la section" : "Réduire la section"
+                }
+                aria-expanded={!isCollapsed}
+                className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
+              >
+                {isCollapsed ? (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronUp className="h-3.5 w-3.5" />
+                )}
+              </button>
+            ) : null}
+          </div>
         }
       />
 
-      {link ? (
+      {isCollapsed ? (
+        <p className="mt-3 flex items-center gap-1.5 text-xs text-white/45">
+          <Cloud className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">{collapsedHint}</span>
+        </p>
+      ) : link ? (
         <div className="mt-4">
           <DriveFolderExplorer folderId={link.drive_folder_id} />
         </div>
@@ -445,13 +599,27 @@ export function EntityDriveSection({
         </p>
       ) : null}
 
-      {/* Sélecteur visuel de dossier Drive (picker plein écran). */}
+      {/* Sélecteur visuel de dossier Drive (picker plein écran). Sert à la
+          liaison initiale (mode "link") ET au changement de dossier d'un lien
+          existant (mode "relink", déclenché par le bouton du header). */}
       <DriveFolderPicker
         open={showPicker}
-        onClose={() => setShowPicker(false)}
+        initialFolderId={
+          pickerMode === "relink" ? link?.drive_folder_id : undefined
+        }
+        onClose={() => {
+          setShowPicker(false);
+          setPickerMode("link");
+        }}
         onSelect={async (folderId, folderName) => {
           setShowPicker(false);
-          await linkFolder(folderId, folderName);
+          const mode = pickerMode;
+          setPickerMode("link");
+          if (mode === "relink") {
+            await relinkFolder(folderId, folderName);
+          } else {
+            await linkFolder(folderId, folderName);
+          }
         }}
       />
 
@@ -465,6 +633,16 @@ export function EntityDriveSection({
             if (ok) setShowManualModal(false);
           }}
         />
+      ) : null}
+
+      {/* Toast de confirmation (ex. après changement de dossier). */}
+      {toast ? (
+        <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[1100] flex justify-center px-3">
+          <div className="pointer-events-auto flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm text-emerald-100 shadow-lg">
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>{toast}</span>
+          </div>
+        </div>
       ) : null}
     </section>
   );
@@ -691,3 +869,4 @@ function ManualLinkModal({
 }
 
 export default EntityDriveSection;
+
