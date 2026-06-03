@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { FileText, Loader2, Plus, Trash2 } from "lucide-react";
+import {
+  FileText,
+  Loader2,
+  Plus,
+  Settings,
+  Trash2,
+  X
+} from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
 import { useDevlogLayout } from "../layout";
@@ -91,6 +98,9 @@ export default function SoumissionsPage() {
   const [search, setSearch] = useState("");
   const [dragging, setDragging] = useState<number | null>(null);
   const [hoverCol, setHoverCol] = useState<string | null>(null);
+  // Phase 6 (juin 2026) : modale « Valeurs par défaut » des soumissions
+  // devis_dev (taux, marges, commission closer, template modules de base).
+  const [showDefaults, setShowDefaults] = useState(false);
 
   // Fallback : somme des items par soumission. Utilisé quand le total
   // persisté en DB est null/0 (cas legacy ou items ajoutés sans
@@ -301,16 +311,31 @@ export default function SoumissionsPage() {
         onSearch={setSearch}
         searchPlaceholder="Rechercher une soumission…"
         rightSlot={
-          <Link
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            href={"/dev-logiciel/soumissions/new" as any}
-            className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm"
-          >
-            <Plus className="mr-1.5 h-4 w-4" />
-            Nouvelle soumission
-          </Link>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowDefaults(true)}
+              title="Régler les valeurs par défaut des nouvelles soumissions"
+              className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-3 font-medium text-white/80 transition hover:bg-white/10 hover:text-white text-sm"
+            >
+              <Settings className="mr-1.5 h-4 w-4" />
+              Valeurs par défaut
+            </button>
+            <Link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              href={"/dev-logiciel/soumissions/new" as any}
+              className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-3 font-semibold text-white transition hover:bg-blue-400 text-sm"
+            >
+              <Plus className="mr-1.5 h-4 w-4" />
+              Nouvelle soumission
+            </Link>
+          </div>
         }
       />
+
+      {showDefaults ? (
+        <SoumissionDefaultsModal onClose={() => setShowDefaults(false)} />
+      ) : null}
 
       <div className="p-4 lg:p-6">
         {error ? (
@@ -543,6 +568,424 @@ function EmptyState() {
         <Plus className="mr-1.5 h-4 w-4" />
         Nouvelle soumission
       </Link>
+    </div>
+  );
+}
+
+// ── Phase 6 (juin 2026) : modale « Valeurs par défaut » ────────────────
+// Phil règle ici, sans toucher au code, les défauts appliqués à CHAQUE
+// nouvelle soumission devis_dev : taux dev/manager, commission closer,
+// marges, et un template optionnel de modules + fonctionnalités de base.
+
+type DefaultsFeature = { description: string; heures: number };
+type DefaultsModule = { name: string; features: DefaultsFeature[] };
+type DefaultsPayload = {
+  taux_dev_horaire: number | null;
+  taux_manager_horaire: number | null;
+  commission_closer_pct: number | null;
+  marge_initiale_pct: number | null;
+  marge_recurrente_pct: number | null;
+  base_modules_json: DefaultsModule[] | null;
+};
+
+function NumberField({
+  label,
+  suffix,
+  value,
+  onChange
+}: {
+  label: string;
+  suffix: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs font-medium text-white/60">
+        {label}
+      </span>
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          min={0}
+          step="0.01"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full rounded-lg border border-white/10 bg-brand-950/60 px-3 py-2 text-sm text-white outline-none focus:border-blue-400"
+        />
+        <span className="text-xs text-white/40">{suffix}</span>
+      </div>
+    </label>
+  );
+}
+
+function SoumissionDefaultsModal({ onClose }: { onClose: () => void }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const [tauxDev, setTauxDev] = useState("");
+  const [tauxManager, setTauxManager] = useState("");
+  const [closer, setCloser] = useState("");
+  const [margeInit, setMargeInit] = useState("");
+  const [margeRec, setMargeRec] = useState("");
+  const [modules, setModules] = useState<DefaultsModule[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await authedFetch("/api/v1/devlog/soumission-defaults");
+        if (!res.ok) throw new Error(`http_${res.status}`);
+        const d = (await res.json()) as DefaultsPayload;
+        if (cancelled) return;
+        setTauxDev(String(d.taux_dev_horaire ?? 75));
+        setTauxManager(String(d.taux_manager_horaire ?? 80));
+        setCloser(String(d.commission_closer_pct ?? 10));
+        setMargeInit(String(d.marge_initiale_pct ?? 50));
+        setMargeRec(String(d.marge_recurrente_pct ?? 50));
+        setModules(
+          (d.base_modules_json ?? []).map((m) => ({
+            name: m.name ?? "",
+            features: (m.features ?? []).map((f) => ({
+              description: f.description ?? "",
+              heures: Number(f.heures) || 0
+            }))
+          }))
+        );
+      } catch (err) {
+        if (!cancelled)
+          setError(
+            `Chargement échoué : ${(err as Error).message || "erreur"}`
+          );
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function addModule() {
+    setModules((m) => [...m, { name: "", features: [] }]);
+  }
+  function removeModule(idx: number) {
+    setModules((m) => m.filter((_, i) => i !== idx));
+  }
+  function setModuleName(idx: number, name: string) {
+    setModules((m) =>
+      m.map((mod, i) => (i === idx ? { ...mod, name } : mod))
+    );
+  }
+  function addFeature(mIdx: number) {
+    setModules((m) =>
+      m.map((mod, i) =>
+        i === mIdx
+          ? { ...mod, features: [...mod.features, { description: "", heures: 0 }] }
+          : mod
+      )
+    );
+  }
+  function removeFeature(mIdx: number, fIdx: number) {
+    setModules((m) =>
+      m.map((mod, i) =>
+        i === mIdx
+          ? { ...mod, features: mod.features.filter((_, j) => j !== fIdx) }
+          : mod
+      )
+    );
+  }
+  function setFeature(
+    mIdx: number,
+    fIdx: number,
+    field: "description" | "heures",
+    value: string
+  ) {
+    setModules((m) =>
+      m.map((mod, i) =>
+        i === mIdx
+          ? {
+              ...mod,
+              features: mod.features.map((f, j) =>
+                j === fIdx
+                  ? {
+                      ...f,
+                      [field]:
+                        field === "heures" ? Number(value) || 0 : value
+                    }
+                  : f
+              )
+            }
+          : mod
+      )
+    );
+  }
+
+  async function onSave() {
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      // Nettoie le template : on ne garde que les modules nommés et les
+      // fonctionnalités avec une description (le backend valide aussi).
+      const cleanModules = modules
+        .map((m) => ({
+          name: m.name.trim(),
+          features: m.features
+            .filter((f) => f.description.trim())
+            .map((f) => ({
+              description: f.description.trim(),
+              heures: Number(f.heures) || 0
+            }))
+        }))
+        .filter((m) => m.name);
+      const payload = {
+        taux_dev_horaire: Number(tauxDev),
+        taux_manager_horaire: Number(tauxManager),
+        commission_closer_pct: Number(closer),
+        marge_initiale_pct: Number(margeInit),
+        marge_recurrente_pct: Number(margeRec),
+        base_modules_json: cleanModules
+      };
+      const res = await authedFetch("/api/v1/devlog/soumission-defaults", {
+        method: "PUT",
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(text.slice(0, 200) || `http_${res.status}`);
+      }
+      setSaved(true);
+    } catch (err) {
+      setError(`Sauvegarde échouée : ${(err as Error).message || "erreur"}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="my-8 w-full max-w-2xl rounded-2xl border border-brand-800 bg-brand-900 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-white/10 px-6 py-4">
+          <div className="flex items-center gap-2">
+            <Settings className="h-5 w-5 text-blue-400" />
+            <h2 className="text-base font-semibold text-white">
+              Valeurs par défaut des soumissions
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-white/60 transition hover:bg-white/10 hover:text-white"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="flex min-h-[200px] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+          </div>
+        ) : (
+          <div className="space-y-6 px-6 py-5">
+            <p className="text-xs text-white/50">
+              Ces valeurs s&apos;appliquent à chaque{" "}
+              <strong className="text-white/70">nouvelle</strong> soumission
+              devis. Les soumissions existantes ne sont pas modifiées.
+            </p>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <NumberField
+                label="Taux horaire développeur"
+                suffix="$/h"
+                value={tauxDev}
+                onChange={setTauxDev}
+              />
+              <NumberField
+                label="Taux horaire chargé de projet"
+                suffix="$/h"
+                value={tauxManager}
+                onChange={setTauxManager}
+              />
+              <NumberField
+                label="Commission closer"
+                suffix="%"
+                value={closer}
+                onChange={setCloser}
+              />
+              <NumberField
+                label="Marge initiale (mise en oeuvre)"
+                suffix="%"
+                value={margeInit}
+                onChange={setMargeInit}
+              />
+              <NumberField
+                label="Marge récurrente (mensuel)"
+                suffix="%"
+                value={margeRec}
+                onChange={setMargeRec}
+              />
+            </div>
+
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-white">
+                  Modules &amp; fonctionnalités de base
+                </h3>
+                <button
+                  type="button"
+                  onClick={addModule}
+                  className="inline-flex items-center rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs font-medium text-white/80 transition hover:bg-white/10 hover:text-white"
+                >
+                  <Plus className="mr-1 h-3.5 w-3.5" />
+                  Ajouter un module
+                </button>
+              </div>
+              <p className="mb-3 text-xs text-white/40">
+                Optionnel — ces modules et fonctionnalités sont pré-remplis
+                sur chaque nouvelle soumission. Laissez vide pour ne rien
+                ajouter.
+              </p>
+
+              {modules.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-white/10 px-3 py-4 text-center text-xs text-white/40">
+                  Aucun module de base.
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  {modules.map((mod, mIdx) => (
+                    <div
+                      key={mIdx}
+                      className="rounded-xl border border-white/10 bg-brand-950/40 p-3"
+                    >
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          placeholder="Nom du module"
+                          value={mod.name}
+                          onChange={(e) =>
+                            setModuleName(mIdx, e.target.value)
+                          }
+                          className="w-full rounded-lg border border-white/10 bg-brand-950/60 px-3 py-2 text-sm font-medium text-white outline-none focus:border-blue-400"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeModule(mIdx)}
+                          title="Retirer le module"
+                          className="rounded-lg p-2 text-white/50 transition hover:bg-rose-500/10 hover:text-rose-300"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+
+                      <div className="mt-2 space-y-2 pl-2">
+                        {mod.features.map((f, fIdx) => (
+                          <div
+                            key={fIdx}
+                            className="flex items-center gap-2"
+                          >
+                            <input
+                              type="text"
+                              placeholder="Fonctionnalité"
+                              value={f.description}
+                              onChange={(e) =>
+                                setFeature(
+                                  mIdx,
+                                  fIdx,
+                                  "description",
+                                  e.target.value
+                                )
+                              }
+                              className="w-full rounded-lg border border-white/10 bg-brand-950/60 px-2.5 py-1.5 text-xs text-white outline-none focus:border-blue-400"
+                            />
+                            <input
+                              type="number"
+                              min={0}
+                              step="0.5"
+                              placeholder="h"
+                              value={f.heures}
+                              onChange={(e) =>
+                                setFeature(
+                                  mIdx,
+                                  fIdx,
+                                  "heures",
+                                  e.target.value
+                                )
+                              }
+                              className="w-20 rounded-lg border border-white/10 bg-brand-950/60 px-2 py-1.5 text-xs text-white outline-none focus:border-blue-400"
+                            />
+                            <span className="text-[10px] text-white/40">
+                              h
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => removeFeature(mIdx, fIdx)}
+                              className="rounded-lg p-1.5 text-white/50 transition hover:bg-rose-500/10 hover:text-rose-300"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => addFeature(mIdx)}
+                          className="inline-flex items-center text-xs text-blue-400 transition hover:text-blue-300"
+                        >
+                          <Plus className="mr-1 h-3 w-3" />
+                          Ajouter une fonctionnalité
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {error ? (
+              <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+                {error}
+              </p>
+            ) : null}
+            {saved ? (
+              <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+                Valeurs par défaut enregistrées.
+              </p>
+            ) : null}
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 border-t border-white/10 px-6 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl px-4 py-2.5 text-sm font-medium text-white/70 transition hover:text-white"
+          >
+            Fermer
+          </button>
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={saving || loading}
+            className="inline-flex items-center justify-center rounded-xl bg-blue-500 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-400 disabled:opacity-50"
+          >
+            {saving ? (
+              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+            ) : null}
+            Enregistrer
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

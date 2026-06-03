@@ -27,6 +27,11 @@ from app.models.devlog_lead import LEAD_STATUSES, DevlogLead
 from app.models.devlog_lead_need import DevlogLeadNeed
 from app.models.devlog_project import DevlogProject
 from app.models.devlog_soumission import DevlogSoumission
+from app.models.devlog_soumission_defaults import (
+    DEVLOG_SOUMISSION_DEFAULT_VALUES,
+    DEVLOG_SOUMISSION_DEFAULTS_ID,
+    DevlogSoumissionDefaults,
+)
 from app.models.devlog_soumission_item import DevlogSoumissionItem
 from app.models.devlog_soumission_module import DevlogSoumissionModule
 from app.models.devlog_soumission_section import DevlogSoumissionSection
@@ -900,9 +905,35 @@ async def create_soumission_with_automations(
             raise HTTPException(status_code=404, detail="Client introuvable")
 
     obj = DevlogSoumission(**payload)
+
+    # --- Phase 6 : valeurs par defaut CONFIGURABLES (juin 2026) -------------
+    # Pour une nouvelle soumission devis_dev, on pre-remplit les 5 parametres
+    # (taux dev, taux charge de projet, commission closer, marges) depuis la
+    # table de defauts editable ``devlog_soumission_defaults`` AU LIEU des
+    # constantes en dur. L'appelant peut toujours forcer une valeur explicite
+    # (envoyee dans le payload) : on ne surcharge QUE les champs non fournis.
+    # RETROCOMPAT : si la table est absente/vide, on retombe sur les valeurs
+    # historiques (75/80/10/50/50) via ``DEVLOG_SOUMISSION_DEFAULT_VALUES``.
+    base_modules_template: list = []
+    if getattr(obj, "is_devis_dev", False):
+        defaults_row = await _get_soumission_defaults_row(db)
+        applied = _apply_soumission_defaults(obj, payload, defaults_row)
+        base_modules_template = applied
+
     db.add(obj)
     await db.flush()
     await db.refresh(obj)
+
+    # --- Template de modules/fonctionnalites de base (optionnel) -----------
+    # Si un template est defini dans les defauts, on cree les modules + leurs
+    # fonctionnalites (items ``feature``) dans la nouvelle soumission. Un
+    # template vide / absent ne cree rien (« ne pas en mettre »).
+    created_modules = 0
+    created_features = 0
+    if base_modules_template:
+        created_modules, created_features = await _seed_base_modules(
+            db, obj.id, base_modules_template
+        )
 
     await log_action(
         db,
@@ -915,9 +946,114 @@ async def create_soumission_with_automations(
             "lead_id": obj.lead_id,
             "client_id": obj.client_id,
             "is_devis_dev": getattr(obj, "is_devis_dev", False),
+            "base_modules_created": created_modules,
+            "base_features_created": created_features,
         },
     )
     return DevlogSoumissionRead.model_validate(obj)
+
+
+async def _get_soumission_defaults_row(db) -> Optional[DevlogSoumissionDefaults]:
+    """Lit la ligne singleton des valeurs par defaut (id=1). Retourne None si
+    la table n'existe pas encore (premier boot avant seed) — l'appelant
+    retombe alors sur les constantes historiques."""
+    try:
+        return (
+            await db.execute(
+                select(DevlogSoumissionDefaults).where(
+                    DevlogSoumissionDefaults.id == DEVLOG_SOUMISSION_DEFAULTS_ID
+                )
+            )
+        ).scalar_one_or_none()
+    except Exception:
+        return None
+
+
+def _apply_soumission_defaults(
+    obj: DevlogSoumission,
+    payload: dict,
+    defaults_row: Optional[DevlogSoumissionDefaults],
+) -> list:
+    """Pre-remplit sur ``obj`` les 5 parametres devis_dev a partir de la ligne
+    de defauts (fallback constantes historiques). Ne touche QUE les champs que
+    l'appelant n'a pas explicitement fournis dans ``payload``. Retourne le
+    template de modules de base (liste, eventuellement vide)."""
+    numeric_keys = (
+        "taux_dev_horaire",
+        "taux_manager_horaire",
+        "commission_closer_pct",
+        "marge_initiale_pct",
+        "marge_recurrente_pct",
+    )
+    for key in numeric_keys:
+        # L'appelant a fourni une valeur explicite -> on la respecte.
+        if payload.get(key) is not None:
+            continue
+        value = None
+        if defaults_row is not None:
+            value = getattr(defaults_row, key, None)
+        if value is None:
+            value = DEVLOG_SOUMISSION_DEFAULT_VALUES[key]
+        setattr(obj, key, value)
+    # heures_manager : defaut 0 si non fourni (comme l'ancien comportement).
+    if payload.get("heures_manager") is None:
+        obj.heures_manager = 0
+
+    template = []
+    if defaults_row is not None:
+        template = defaults_row.base_modules_json or []
+    return template
+
+
+async def _seed_base_modules(
+    db, soumission_id: int, template: list
+) -> tuple[int, int]:
+    """Cree, dans la soumission, les modules + fonctionnalites du template de
+    base. Best-effort et tolerant : ignore les entrees malformees. Retourne
+    ``(nb_modules, nb_features)``."""
+    nb_modules = 0
+    nb_features = 0
+    for position, mod in enumerate(template):
+        if not isinstance(mod, dict):
+            continue
+        name = (mod.get("name") or "").strip()
+        if not name:
+            continue
+        module = DevlogSoumissionModule(
+            soumission_id=soumission_id,
+            name=name[:255],
+            position=position,
+            selected=True,
+        )
+        db.add(module)
+        await db.flush()
+        await db.refresh(module)
+        nb_modules += 1
+        features = mod.get("features") or []
+        for feat_pos, feat in enumerate(features):
+            if not isinstance(feat, dict):
+                continue
+            description = (feat.get("description") or "").strip()
+            if not description:
+                continue
+            try:
+                heures = float(feat.get("heures") or 0)
+            except (TypeError, ValueError):
+                heures = 0.0
+            db.add(
+                DevlogSoumissionItem(
+                    soumission_id=soumission_id,
+                    module_id=module.id,
+                    item_kind="feature",
+                    description=description[:500],
+                    heures=heures,
+                    position=feat_pos,
+                )
+            )
+            nb_features += 1
+    if nb_modules:
+        await db.flush()
+    return nb_modules, nb_features
 
 
 async def _ensure_client_for_soumission(
