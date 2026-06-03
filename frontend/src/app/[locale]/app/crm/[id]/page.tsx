@@ -1660,12 +1660,11 @@ function AppointmentScheduler({
               onChange={(e) => {
                 const v = e.target.value;
                 setStartHm(v);
-                // Auto-cale la fin a debut + 1h si vide ou en-deca
-                if (v) {
-                  const minEnd = addHour(v, 1);
-                  if (!endHm || endHm <= v || endHm < minEnd) {
-                    setEndHm(minEnd);
-                  }
+                // Défaut : fin = début + 1h. On ne réécrase la fin que si
+                // elle est vide ou n'est plus après le nouveau début (on
+                // préserve une fin manuelle valide, ex. 12:15).
+                if (v && (!endHm || endHm <= v)) {
+                  setEndHm(addHour(v, 1));
                 }
               }}
               className="input"
@@ -1677,15 +1676,10 @@ function AppointmentScheduler({
               type="time"
               value={endHm}
               onChange={(e) => {
-                const v = e.target.value;
-                if (startHm && v) {
-                  const minEnd = addHour(startHm, 1);
-                  if (v < minEnd) {
-                    setEndHm(minEnd);
-                    return;
-                  }
-                }
-                setEndHm(v);
+                // Saisie libre : n'importe quelle heure (la validation
+                // « fin après début » se fait à l'enregistrement). Permet
+                // ex. début 12:00 → fin 12:15.
+                setEndHm(e.target.value);
               }}
               className="input"
             />
@@ -1820,15 +1814,10 @@ function AppointmentScheduler({
                         onChange={(e) => {
                           const v = e.target.value;
                           setEditStartHm(v);
-                          if (v) {
-                            const minEnd = addHour(v, 1);
-                            if (
-                              !editEndHm ||
-                              editEndHm <= v ||
-                              editEndHm < minEnd
-                            ) {
-                              setEditEndHm(minEnd);
-                            }
+                          // Défaut fin = début + 1h ; on préserve une fin
+                          // manuelle valide (après le nouveau début).
+                          if (v && (!editEndHm || editEndHm <= v)) {
+                            setEditEndHm(addHour(v, 1));
                           }
                         }}
                         className="input text-xs"
@@ -1840,15 +1829,9 @@ function AppointmentScheduler({
                         type="time"
                         value={editEndHm}
                         onChange={(e) => {
-                          const v = e.target.value;
-                          if (editStartHm && v) {
-                            const minEnd = addHour(editStartHm, 1);
-                            if (v < minEnd) {
-                              setEditEndHm(minEnd);
-                              return;
-                            }
-                          }
-                          setEditEndHm(v);
+                          // Saisie libre (validation « fin après début » à
+                          // l'enregistrement).
+                          setEditEndHm(e.target.value);
                         }}
                         className="input text-xs"
                       />
