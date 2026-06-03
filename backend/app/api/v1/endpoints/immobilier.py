@@ -31,6 +31,8 @@ from app.repositories.user import UserRepository
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.entreprise import Entreprise
+from app.models.bon_travail import BonTravail
+from app.models.client import Client
 from app.models.immobilier import (
     Bail,
     BailStatus,
@@ -619,6 +621,89 @@ async def set_immeuble_owner(
     await db.commit()
     await db.refresh(fresh)
     return [ImmeubleOwnershipRead.model_validate(fresh)]
+
+
+# ── Bon de travail (réparation → volet Construction) ───────────────────
+
+
+class _BonFromImmeubleRequest(BaseModel):
+    titre: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    logement: Optional[str] = None  # n° de logement concerné (optionnel)
+
+
+@router.post("/immeubles/{immeuble_id}/bon-travail")
+async def create_bon_from_immeuble(
+    immeuble_id: int,
+    payload: _BonFromImmeubleRequest,
+    db: DBSession,
+    user: CurrentUser,
+) -> dict:
+    """Crée un bon de travail (volet Construction) pour une réparation sur
+    cet immeuble. Convertit au passage la compagnie propriétaire en client
+    si elle n'en est pas déjà un. Le bon est créé en brouillon — un
+    responsable construction le reprend ensuite (estimé, envoi, signature,
+    conversion en projet/facture)."""
+    _require_volet(user)
+    imm = await _get_immeuble_or_404(db, immeuble_id)
+
+    own = (
+        await db.execute(
+            select(ImmeubleOwnership).where(
+                ImmeubleOwnership.immeuble_id == immeuble_id
+            )
+        )
+    ).scalars().first()
+    ent = await db.get(Entreprise, own.entreprise_id) if own else None
+
+    client = None
+    client_created = False
+    if ent is not None:
+        client = (
+            await db.execute(
+                select(Client).where(
+                    func.lower(Client.name) == ent.name.strip().lower()
+                )
+            )
+        ).scalars().first()
+        if client is None:
+            client = Client(
+                name=ent.name,
+                is_company=True,
+                address=imm.address,
+                language="fr",
+            )
+            db.add(client)
+            await db.flush()
+            client_created = True
+
+    loc = f" — logement {payload.logement}" if payload.logement else ""
+    where = f"{imm.address}{(', ' + imm.city) if imm.city else ''}"
+    scope = (
+        f"Immeuble : {imm.name}{loc}\n"
+        f"Adresse : {where}\n"
+        "Source : Gestion immobilière (réparation)."
+    )
+    bon = BonTravail(
+        reference=f"BON-{_now():%Y%m%d-%H%M%S}",
+        title=payload.titre,
+        description=payload.description,
+        scope_md=scope,
+        client_id=client.id if client else None,
+        status="draft",
+    )
+    bon.created_at = _now()
+    bon.updated_at = _now()
+    db.add(bon)
+    await db.commit()
+    await db.refresh(bon)
+    return {
+        "bon_id": bon.id,
+        "reference": bon.reference,
+        "client_id": client.id if client else None,
+        "client_name": ent.name if ent else None,
+        "client_created": client_created,
+    }
 
 
 # ── Logements ──────────────────────────────────────────────────────────
