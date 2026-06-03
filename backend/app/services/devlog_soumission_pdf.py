@@ -231,6 +231,378 @@ async def _load(
     return soumission, items, client, modules
 
 
+def _initial_totals_rows(
+    rl: dict[str, Any],
+    s: dict[str, Any],
+    total_initial: float,
+    tps_init: float,
+    tvq_init: float,
+    total_initial_taxe: float,
+) -> list[list[Any]]:
+    """Construit les 4 lignes de totaux (sous-total / TPS / TVQ / TTC)
+    communes au rendu legacy et au rendu par module."""
+    Paragraph = rl["Paragraph"]
+    return [
+        [
+            Paragraph("<b>Sous-total</b>", s["body_bold"]),
+            Paragraph(f"<b>{_fmt_money(total_initial)}</b>", s["body_bold"]),
+        ],
+        [
+            Paragraph("TPS (5%)", s["body"]),
+            Paragraph(_fmt_money(tps_init), s["body"]),
+        ],
+        [
+            Paragraph("TVQ (9,975%)", s["body"]),
+            Paragraph(_fmt_money(tvq_init), s["body"]),
+        ],
+        [
+            Paragraph("<b>Total TTC</b>", s["body_bold"]),
+            Paragraph(
+                f"<b>{_fmt_money(total_initial_taxe)}</b>", s["body_bold"]
+            ),
+        ],
+    ]
+
+
+def _render_flat_initial(
+    rl: dict[str, Any],
+    s: dict[str, Any],
+    story: list,
+    features_client: list[dict[str, Any]],
+    frais_fixes_client: list[dict[str, Any]],
+    total_initial: float,
+    tps_init: float,
+    tvq_init: float,
+    total_initial_taxe: float,
+) -> None:
+    """Rendu LEGACY (sans modules) — liste plate de fonctionnalités.
+
+    Comportement strictement identique au PDF historique : c'est le
+    chemin emprunté par toute soumission qui n'a PAS de modules
+    (rétrocompat). Ne pas modifier sans raison."""
+    Paragraph = rl["Paragraph"]
+    Table = rl["Table"]
+    TableStyle = rl["TableStyle"]
+    colors = rl["colors"]
+
+    rows: list[list[Any]] = []
+    rows.append([
+        Paragraph("<b>Description</b>", s["body_bold"]),
+        Paragraph("<b>Montant</b>", s["body_bold"]),
+    ])
+    for feat in features_client:
+        desc = (feat.get("description") or "").strip() or "—"
+        prix = float(feat.get("prix_client") or 0)
+        rows.append([
+            Paragraph(desc, s["body"]),
+            Paragraph(_fmt_money(prix), s["body"]),
+        ])
+    if frais_fixes_client:
+        # Petit séparateur visuel : titre « Frais fixes » avant
+        # les frais fixes du client.
+        rows.append([
+            Paragraph("<b>Frais fixes</b>", s["body_bold"]),
+            Paragraph("", s["body"]),
+        ])
+        for ff in frais_fixes_client:
+            desc = (ff.get("description") or "").strip() or "—"
+            prix = float(ff.get("prix_client") or 0)
+            rows.append([
+                Paragraph(desc, s["body"]),
+                Paragraph(_fmt_money(prix), s["body"]),
+            ])
+    rows.extend(
+        _initial_totals_rows(
+            rl, s, total_initial, tps_init, tvq_init, total_initial_taxe
+        )
+    )
+
+    table = Table(rows, colWidths=["72%", "28%"])
+    # Indice des lignes spéciales : sous-total (4 lignes avant la
+    # fin), Total TTC (dernière ligne).
+    subtotal_row = len(rows) - 4
+    ttc_row = len(rows) - 1
+    table.setStyle(
+        TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
+            ("LINEABOVE", (0, subtotal_row), (-1, subtotal_row), 0.5, colors.HexColor("#1e40af")),
+            ("LINEABOVE", (0, ttc_row), (-1, ttc_row), 1, colors.HexColor("#1e40af")),
+            ("BACKGROUND", (0, ttc_row), (-1, ttc_row), colors.HexColor("#eff6ff")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("ROWBACKGROUNDS", (0, 1), (-1, subtotal_row - 1), [colors.white, colors.HexColor("#fafafa")]),
+        ])
+    )
+    story.append(table)
+
+
+def _render_modules_initial(
+    rl: dict[str, Any],
+    s: dict[str, Any],
+    story: list,
+    features_client: list[dict[str, Any]],
+    frais_fixes_client: list[dict[str, Any]],
+    modules_detail: list[dict[str, Any]],
+    total_initial: float,
+    tps_init: float,
+    tvq_init: float,
+    total_initial_taxe: float,
+) -> None:
+    """Rendu « PAR MODULE » (refonte 2026-06, Phase 5) — VUE CLIENT.
+
+    Regroupe l'investissement initial par module RETENU :
+
+    * Un sous-bloc par module sélectionné et payant : nom du module,
+      ses fonctionnalités (description + prix client), prix du module.
+    * Une section « Inclus gratuitement » regroupant les modules offerts
+      (gratuité « module → module » déclenchée) : mention « Offert »,
+      prix 0.
+    * Les fonctionnalités SANS module (``module_id`` NULL) restent
+      listées dans un bloc « Autres fonctionnalités », pour ne rien
+      perdre.
+    * Les frais fixes (toujours hors module) suivent comme avant.
+    * Les totaux (sous-total / TPS / TVQ / TTC) ferment la section,
+      réutilisés tels quels depuis ``compute_devis``.
+
+    ⚠️ On ne montre JAMAIS au client : les heures de dev, les tâches du
+    chargé de projet (``manager_task``, global, déjà fondu dans les
+    totaux), les coûts internes. Un module NON sélectionné n'apparaît
+    pas (il est exclu du total). Cohérent avec le PDF signé figé qui ne
+    reflète que la sélection au moment de la signature."""
+    Paragraph = rl["Paragraph"]
+    Spacer = rl["Spacer"]
+    Table = rl["Table"]
+    TableStyle = rl["TableStyle"]
+    KeepTogether = rl["KeepTogether"]
+    colors = rl["colors"]
+
+    # Prix client par feature, indexé par id (depuis features_client, qui
+    # ne contient que les features RETENUES — module sélectionné ou hors
+    # module ; les features offertes y sont présentes avec prix 0).
+    price_by_id: dict[Any, float] = {}
+    for f in features_client:
+        fid = f.get("id")
+        if fid is not None:
+            price_by_id[fid] = float(f.get("prix_client") or 0)
+
+    # Ids des modules réellement connus (présents dans modules_detail).
+    # Une feature dont le module_id n'est PAS connu (cas limite : item
+    # rattaché à un module non chargé) bascule en « hors module » pour
+    # ne jamais disparaître de l'affichage tout en restant dans le total.
+    known_module_ids = {
+        m.get("id") for m in modules_detail if m.get("id") is not None
+    }
+
+    # Regroupe les features RETENUES par module_id ; ``None`` = hors
+    # module. On itère features_client (déjà filtré par la sélection),
+    # donc un module non sélectionné n'apparaît jamais ici.
+    feats_by_module: dict[Any, list[dict[str, Any]]] = {}
+    for f in features_client:
+        mid = f.get("module_id")
+        if mid not in known_module_ids:
+            mid = None
+        feats_by_module.setdefault(mid, []).append(f)
+
+    def _feat_rows(feats: list[dict[str, Any]], free: bool) -> list[list[Any]]:
+        out: list[list[Any]] = []
+        for feat in feats:
+            desc = (feat.get("description") or "").strip() or "—"
+            if free:
+                montant = Paragraph("<i>Offert</i>", s["body"])
+            else:
+                fid = feat.get("id")
+                prix = (
+                    price_by_id.get(fid)
+                    if fid is not None
+                    else float(feat.get("prix_client") or 0)
+                )
+                montant = Paragraph(_fmt_money(prix or 0), s["body"])
+            out.append([Paragraph(f"&bull; {desc}", s["body"]), montant])
+        return out
+
+    def _module_block(
+        title_html: str,
+        feats: list[dict[str, Any]],
+        prix_module: float,
+        free: bool,
+    ) -> Any:
+        """Construit un sous-bloc « module » sous forme de table, gardé
+        ensemble (KeepTogether) pour éviter une coupure de page disgra-
+        cieuse au milieu d'un module."""
+        rows: list[list[Any]] = []
+        rows.append([
+            Paragraph(title_html, s["body_bold"]),
+            Paragraph("", s["body"]),
+        ])
+        rows.extend(_feat_rows(feats, free))
+        # Ligne de prix du module.
+        if free:
+            prix_cell = Paragraph("<b>Offert — 0,00 $</b>", s["body_bold"])
+        else:
+            prix_cell = Paragraph(
+                f"<b>{_fmt_money(prix_module)}</b>", s["body_bold"]
+            )
+        rows.append([
+            Paragraph("<b>Prix du module</b>", s["body_bold"]),
+            prix_cell,
+        ])
+        t = Table(rows, colWidths=["72%", "28%"])
+        last = len(rows) - 1
+        t.setStyle(
+            TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
+                ("LINEABOVE", (0, last), (-1, last), 0.5, colors.HexColor("#1e40af")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ])
+        )
+        return KeepTogether([t, Spacer(1, 8)])
+
+    # --- Modules RETENUS et PAYANTS -------------------------------------
+    # On respecte l'ordre de ``modules_detail``. On n'affiche que les
+    # modules ``selected`` et non ``offert`` ici ; les offerts vont dans
+    # « Inclus gratuitement », les non sélectionnés sont omis.
+    paid_modules = [
+        m
+        for m in modules_detail
+        if m.get("selected") and not m.get("offert")
+    ]
+    free_modules = [
+        m
+        for m in modules_detail
+        if m.get("selected") and m.get("offert")
+    ]
+
+    for m in paid_modules:
+        mid = m.get("id")
+        name = (m.get("name") or "Module").strip() or "Module"
+        feats = feats_by_module.get(mid, [])
+        prix_module = float(m.get("prix_client") or 0)
+        story.append(
+            _module_block(name, feats, prix_module, free=False)
+        )
+
+    # --- Fonctionnalités HORS module (module_id NULL) -------------------
+    orphan_feats = feats_by_module.get(None, [])
+    if orphan_feats:
+        story.append(_orphan_block(rl, s, orphan_feats, price_by_id))
+
+    # --- Section « Inclus gratuitement » --------------------------------
+    if free_modules:
+        story.append(Paragraph("INCLUS GRATUITEMENT", s["section"]))
+        for m in free_modules:
+            mid = m.get("id")
+            name = (m.get("name") or "Module").strip() or "Module"
+            feats = feats_by_module.get(mid, [])
+            story.append(_module_block(name, feats, 0.0, free=True))
+
+    # --- Frais fixes (toujours hors module) -----------------------------
+    if frais_fixes_client:
+        ff_rows: list[list[Any]] = []
+        ff_rows.append([
+            Paragraph("<b>Frais fixes</b>", s["body_bold"]),
+            Paragraph("", s["body"]),
+        ])
+        for ff in frais_fixes_client:
+            desc = (ff.get("description") or "").strip() or "—"
+            prix = float(ff.get("prix_client") or 0)
+            ff_rows.append([
+                Paragraph(f"&bull; {desc}", s["body"]),
+                Paragraph(_fmt_money(prix), s["body"]),
+            ])
+        ff_table = Table(ff_rows, colWidths=["72%", "28%"])
+        ff_table.setStyle(
+            TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ])
+        )
+        story.append(ff_table)
+        story.append(Spacer(1, 4))
+
+    # --- Totaux ---------------------------------------------------------
+    total_rows = _initial_totals_rows(
+        rl, s, total_initial, tps_init, tvq_init, total_initial_taxe
+    )
+    totals_table = Table(total_rows, colWidths=["72%", "28%"])
+    ttc_row = len(total_rows) - 1
+    totals_table.setStyle(
+        TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+            ("LINEABOVE", (0, 0), (-1, 0), 0.5, colors.HexColor("#1e40af")),
+            ("LINEABOVE", (0, ttc_row), (-1, ttc_row), 1, colors.HexColor("#1e40af")),
+            ("BACKGROUND", (0, ttc_row), (-1, ttc_row), colors.HexColor("#eff6ff")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ])
+    )
+    story.append(totals_table)
+
+
+def _orphan_block(
+    rl: dict[str, Any],
+    s: dict[str, Any],
+    orphan_feats: list[dict[str, Any]],
+    price_by_id: dict[Any, float],
+) -> Any:
+    """Bloc « Autres fonctionnalités » — features retenues sans module
+    (``module_id`` NULL). Pas de prix de module agrégé (elles ne forment
+    pas un module) : chaque feature porte son propre prix client."""
+    Paragraph = rl["Paragraph"]
+    Spacer = rl["Spacer"]
+    Table = rl["Table"]
+    TableStyle = rl["TableStyle"]
+    KeepTogether = rl["KeepTogether"]
+    colors = rl["colors"]
+
+    rows: list[list[Any]] = []
+    rows.append([
+        Paragraph("<b>Autres fonctionnalités</b>", s["body_bold"]),
+        Paragraph("", s["body"]),
+    ])
+    for feat in orphan_feats:
+        desc = (feat.get("description") or "").strip() or "—"
+        fid = feat.get("id")
+        prix = (
+            price_by_id.get(fid)
+            if fid is not None
+            else float(feat.get("prix_client") or 0)
+        )
+        rows.append([
+            Paragraph(f"&bull; {desc}", s["body"]),
+            Paragraph(_fmt_money(prix or 0), s["body"]),
+        ])
+    t = Table(rows, colWidths=["72%", "28%"])
+    t.setStyle(
+        TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ])
+    )
+    return KeepTogether([t, Spacer(1, 8)])
+
+
 def _render_bytes(
     soumission: DevlogSoumission,
     items: list[DevlogSoumissionItem],
@@ -395,82 +767,47 @@ def _render_bytes(
     # --- 3. Section Investissement initial ---
     features_client = initial.get("features_client") or []
     frais_fixes_client = initial.get("frais_fixes_client") or []
+    modules_detail = initial.get("modules") or []
     total_initial = float(initial.get("total_final") or 0)
     tps_init = float(initial.get("tps_amount") or 0)
     tvq_init = float(initial.get("tvq_amount") or 0)
     total_initial_taxe = float(initial.get("total_final_taxe") or 0)
 
+    # ``has_modules`` distingue le rendu « par module » (refonte 2026-06,
+    # Phase 5) du chemin LEGACY (liste plate de fonctionnalités). On ne
+    # bascule en mode module QUE si la soumission a réellement des
+    # modules : une soumission sans modules produit un PDF strictement
+    # identique à avant (rétrocompat).
+    has_modules = bool(modules_detail)
+
     if features_client or frais_fixes_client or total_initial > 0:
         story.append(Paragraph("INVESTISSEMENT INITIAL", s["section"]))
 
-        rows: list[list[Any]] = []
-        rows.append([
-            Paragraph("<b>Description</b>", s["body_bold"]),
-            Paragraph("<b>Montant</b>", s["body_bold"]),
-        ])
-        for feat in features_client:
-            desc = (feat.get("description") or "").strip() or "—"
-            prix = float(feat.get("prix_client") or 0)
-            rows.append([
-                Paragraph(desc, s["body"]),
-                Paragraph(_fmt_money(prix), s["body"]),
-            ])
-        if frais_fixes_client:
-            # Petit séparateur visuel : titre « Frais fixes » avant
-            # les frais fixes du client.
-            rows.append([
-                Paragraph("<b>Frais fixes</b>", s["body_bold"]),
-                Paragraph("", s["body"]),
-            ])
-            for ff in frais_fixes_client:
-                desc = (ff.get("description") or "").strip() or "—"
-                prix = float(ff.get("prix_client") or 0)
-                rows.append([
-                    Paragraph(desc, s["body"]),
-                    Paragraph(_fmt_money(prix), s["body"]),
-                ])
-        rows.append([
-            Paragraph("<b>Sous-total</b>", s["body_bold"]),
-            Paragraph(
-                f"<b>{_fmt_money(total_initial)}</b>", s["body_bold"]
-            ),
-        ])
-        rows.append([
-            Paragraph("TPS (5%)", s["body"]),
-            Paragraph(_fmt_money(tps_init), s["body"]),
-        ])
-        rows.append([
-            Paragraph("TVQ (9,975%)", s["body"]),
-            Paragraph(_fmt_money(tvq_init), s["body"]),
-        ])
-        rows.append([
-            Paragraph("<b>Total TTC</b>", s["body_bold"]),
-            Paragraph(
-                f"<b>{_fmt_money(total_initial_taxe)}</b>", s["body_bold"]
-            ),
-        ])
-
-        table = Table(rows, colWidths=["72%", "28%"])
-        # Indice des lignes spéciales : sous-total (4 lignes avant la
-        # fin), Total TTC (dernière ligne).
-        subtotal_row = len(rows) - 4
-        ttc_row = len(rows) - 1
-        table.setStyle(
-            TableStyle([
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
-                ("LINEABOVE", (0, subtotal_row), (-1, subtotal_row), 0.5, colors.HexColor("#1e40af")),
-                ("LINEABOVE", (0, ttc_row), (-1, ttc_row), 1, colors.HexColor("#1e40af")),
-                ("BACKGROUND", (0, ttc_row), (-1, ttc_row), colors.HexColor("#eff6ff")),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-                ("ROWBACKGROUNDS", (0, 1), (-1, subtotal_row - 1), [colors.white, colors.HexColor("#fafafa")]),
-            ])
-        )
-        story.append(table)
+        if has_modules:
+            _render_modules_initial(
+                rl,
+                s,
+                story,
+                features_client,
+                frais_fixes_client,
+                modules_detail,
+                total_initial,
+                tps_init,
+                tvq_init,
+                total_initial_taxe,
+            )
+        else:
+            _render_flat_initial(
+                rl,
+                s,
+                story,
+                features_client,
+                frais_fixes_client,
+                total_initial,
+                tps_init,
+                tvq_init,
+                total_initial_taxe,
+            )
 
     # --- Conditions ---
     story.append(Spacer(1, 10))
