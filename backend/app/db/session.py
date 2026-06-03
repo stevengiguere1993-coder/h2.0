@@ -920,6 +920,11 @@ async def init_db() -> None:
                 "scope",
                 "VARCHAR(16) NOT NULL DEFAULT 'entity'",
             ),
+            # Extracteur générique des Drive Conventions : mapping JSON
+            # {var_key: field_path} résolu par introspection. NULL =
+            # fallback sur l'extracteur hardcodé du registry (rétrocompat
+            # des conventions existantes sans mapping).
+            ("drive_conventions", "variable_mapping", "JSON"),
             # Signature électronique des baux (volet immobilier, Phase 2.4).
             ("imm_baux", "signature_token", "VARCHAR(64)"),
             ("imm_baux", "sent_to_email", "VARCHAR(320)"),

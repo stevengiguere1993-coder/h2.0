@@ -25,7 +25,9 @@ Surface :
 
 **Métadonnées**
 
-- ``GET /api/v1/drive/conventions/supported-entity-types``
+- ``GET /api/v1/drive/conventions/supported-entity-types`` (legacy)
+- ``GET /api/v1/drive/entity-catalog`` — catalogue COMPLET introspecté
+  des types linkables + leurs champs (alimente la modale dynamique).
 
 **Entity links**
 
@@ -58,6 +60,7 @@ from app.schemas.drive_convention import (
     DriveEntityLinkCreate,
     DriveEntityLinkPatch,
     DriveEntityLinkRead,
+    EntityCatalogType,
     SupportedEntityType,
 )
 from app.services import drive_conventions_engine as engine
@@ -113,10 +116,10 @@ def _raise_for_drive(exc: DriveError) -> None:
 # ---------------------------------------------------------------------------
 
 
-# IMPORTANT : la route littérale ``/conventions/supported-entity-types``
-# doit être déclarée AVANT la route à param ``/conventions/{convention_id}``
-# pour ne pas se faire intercepter par FastAPI (qui tenterait de parser
-# "supported-entity-types" en int).
+# IMPORTANT : les routes littérales ``/conventions/supported-entity-types``
+# et ``/entity-catalog`` doivent être déclarées AVANT la route à param
+# ``/conventions/{convention_id}`` pour ne pas se faire intercepter par
+# FastAPI (qui tenterait de parser le segment littéral en int).
 
 
 @router.get(
@@ -126,9 +129,27 @@ def _raise_for_drive(exc: DriveError) -> None:
 async def list_supported_entity_types(
     user: RequireAdminOrOwner,
 ) -> list[SupportedEntityType]:
-    """Métadonnées pour alimenter les dropdowns du wizard frontend."""
+    """Métadonnées (legacy) pour alimenter les dropdowns du wizard."""
     raw = await engine.get_supported_entity_types()
     return [SupportedEntityType.model_validate(item) for item in raw]
+
+
+@router.get(
+    "/entity-catalog",
+    response_model=list[EntityCatalogType],
+)
+async def get_entity_catalog(
+    user: RequireAdminOrOwner,
+) -> list[EntityCatalogType]:
+    """Catalogue COMPLET des types d'entités linkables + leurs champs.
+
+    Introspecte les colonnes des modèles SQLAlchemy déclarés et expose,
+    pour chaque type, la liste des champs (``path``/``label``/``type``)
+    insérables comme placeholders ``{path}`` dans le pattern de nommage.
+    Alimente la modale dynamique de création de convention.
+    """
+    raw = engine.get_entity_catalog()
+    return [EntityCatalogType.model_validate(item) for item in raw]
 
 
 @router.get(
@@ -195,6 +216,7 @@ async def create_convention(
         folder_name_template=payload.folder_name_template,
         template_folder_to_copy_drive_id=payload.template_folder_to_copy_drive_id,
         subfolders_to_create=payload.subfolders_to_create,
+        variable_mapping=payload.variable_mapping,
         auto_link_to_entity=payload.auto_link_to_entity,
         status_to_parent_map=payload.status_to_parent_map,
         active=payload.active,
@@ -253,6 +275,7 @@ async def patch_convention(
         "folder_name_template",
         "template_folder_to_copy_drive_id",
         "subfolders_to_create",
+        "variable_mapping",
         "auto_link_to_entity",
         "status_to_parent_map",
         "active",
@@ -572,4 +595,3 @@ async def delete_entity_link(
         details=snapshot,
     )
     await db.commit()
-

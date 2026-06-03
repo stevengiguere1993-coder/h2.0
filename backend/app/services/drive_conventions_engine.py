@@ -18,22 +18,35 @@ Ce module implémente le moteur d'application des conventions :
   avec un warning, jamais une crash.
 
 - :func:`get_supported_entity_types` — métadonnées des types d'entités
-  supportés et de leurs variables disponibles, utilisé par l'UI pour
-  populer les dropdowns du wizard de création de convention.
+  supportés et de leurs variables disponibles (legacy, basé sur le
+  registry hardcodé), utilisé par l'UI pour populer les dropdowns du
+  wizard de création de convention.
 
-Phase 4 ne déclenche AUCUN hook automatique (pas d'event listener
-SQLAlchemy "à la création de l'entité, appliquer la convention X").
-Cette responsabilité est reportée à la Phase 5. Pour l'instant on
-applique uniquement via l'endpoint ``POST /api/v1/drive/conventions/{id}/apply``.
+- :func:`get_entity_catalog` — catalogue COMPLET et introspecté des
+  types d'entités "linkables" + leurs champs disponibles (colonnes
+  SQLAlchemy utiles + relations déclarées). Sert à la nouvelle modale
+  dynamique : Phil choisit un type, voit tous les champs sous forme de
+  chips cliquables qui insèrent un placeholder ``{champ}`` dans le
+  pattern de nommage. La résolution runtime de ces placeholders passe
+  par l'extracteur générique :func:`_extract_generic` (via le
+  ``variable_mapping`` de la convention).
+
+Compatibilité : une convention SANS ``variable_mapping`` continue
+d'utiliser l'extracteur hardcodé du registry (les 5 types historiques
+fonctionnent à l'identique). Une convention AVEC ``variable_mapping``
+non vide utilise l'extracteur générique par introspection — ce qui
+permet de gérer N'IMPORTE quel type/champ sans hardcoder.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Optional
 
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -82,7 +95,45 @@ class ConventionMisconfigured(ConventionEngineError):
 
 
 # ---------------------------------------------------------------------------
-# Registry des types d'entités supportés
+# Helpers de formatage
+# ---------------------------------------------------------------------------
+
+
+def _fmt_date(dt: Any) -> str:
+    """Formatte un datetime/date en ``YYYY-MM-DD``. Retourne "" si None."""
+    if dt is None:
+        return ""
+    if isinstance(dt, datetime):
+        return dt.date().isoformat()
+    try:
+        return dt.isoformat()  # date object
+    except Exception:  # noqa: BLE001
+        return str(dt)
+
+
+def _fmt_value(value: Any) -> str:
+    """Formatte une valeur arbitraire en chaîne propre pour un nom de
+    dossier. Dates -> ``YYYY-MM-DD`` ; None -> "" ; Decimal/float/int ->
+    texte sans surprise ; bool -> "oui"/"non". Jamais d'exception."""
+    if value is None:
+        return ""
+    if isinstance(value, (datetime, date)):
+        return _fmt_date(value)
+    if isinstance(value, bool):
+        return "oui" if value else "non"
+    if isinstance(value, Decimal):
+        # Evite les "10.00" inutiles : entier si pas de fraction.
+        try:
+            if value == value.to_integral_value():
+                return str(int(value))
+        except Exception:  # noqa: BLE001
+            pass
+        return str(value)
+    return str(value)
+
+
+# ---------------------------------------------------------------------------
+# Registry hardcodé des types d'entités (LEGACY — rétrocompat)
 # ---------------------------------------------------------------------------
 #
 # Chaque entrée déclare :
@@ -97,20 +148,10 @@ class ConventionMisconfigured(ConventionEngineError):
 # - ``extract`` : callable async qui prend ``(entity, db)`` et retourne
 #   un dict ``{var_name: str}`` prêt à interpoler.
 #
-# L'ordre suit la priorité business de Phil : prospection deals d'abord
-# (cas le plus fréquent), puis devlog, puis construction.
-
-
-def _fmt_date(dt: Any) -> str:
-    """Formatte un datetime/date en ``YYYY-MM-DD``. Retourne "" si None."""
-    if dt is None:
-        return ""
-    if isinstance(dt, datetime):
-        return dt.date().isoformat()
-    try:
-        return dt.isoformat()  # date object
-    except Exception:  # noqa: BLE001
-        return str(dt)
+# Les conventions SANS ``variable_mapping`` passent par ces extracteurs
+# (comportement historique préservé). Les nouvelles conventions
+# (créées via la modale dynamique) déclarent un ``variable_mapping`` et
+# court-circuitent ce registry au profit de :func:`_extract_generic`.
 
 
 async def _extract_prospection_deal(entity: Any, db: AsyncSession) -> dict[str, str]:
@@ -236,7 +277,10 @@ _ENTITY_REGISTRY: dict[str, dict[str, Any]] = {
 
 
 async def get_supported_entity_types() -> list[dict[str, Any]]:
-    """Métadonnées pour les dropdowns du wizard frontend.
+    """Métadonnées (LEGACY) pour les dropdowns du wizard frontend.
+
+    Conservé pour rétrocompat (endpoint ``supported-entity-types``).
+    La nouvelle modale dynamique utilise plutôt :func:`get_entity_catalog`.
 
     Format de retour pour chaque entrée ::
 
@@ -260,23 +304,352 @@ async def get_supported_entity_types() -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Catalogue d'entités introspecté (NOUVEAU)
+# ---------------------------------------------------------------------------
+#
+# Liste DECLARATIVE et facile à étendre : pour ajouter un type d'entité
+# "linkable" au catalogue, il suffit d'ajouter une ligne ici (key, label
+# FR, model_path, et optionnellement quelques chemins de relation à
+# exposer). L'introspection des colonnes fait le reste automatiquement.
+#
+# Champs :
+# - ``key`` : identifiant stable (utilisé comme ``entity_type`` côté
+#   convention). Pour les 5 types historiques, on réutilise EXACTEMENT
+#   les clés du registry pour la cohérence.
+# - ``label`` : libellé FR affiché dans le dropdown.
+# - ``model_path`` : (module, classe) SQLAlchemy.
+# - ``relation_paths`` : liste optionnelle de tuples
+#   ``(path, label, type)`` pour exposer des champs accessibles via une
+#   relation (ex. ``lead_analysis.city``). Le ``type`` est purement
+#   indicatif pour l'UI.
+
+_ENTITY_CATALOG: list[dict[str, Any]] = [
+    {
+        "key": "ProspectionDeal",
+        "label": "Deal Pipeline (Prospection)",
+        "model_path": ("app.models.prospection_deal", "ProspectionDeal"),
+        "relation_paths": [
+            ("lead_analysis.city", "Ville (lead lié)", "string"),
+            ("lead_analysis.postal_code", "Code postal (lead lié)", "string"),
+        ],
+    },
+    {
+        "key": "DevlogProject",
+        "label": "Projet Dev Logiciel",
+        "model_path": ("app.models.devlog_project", "DevlogProject"),
+        "relation_paths": [],
+    },
+    {
+        "key": "DevlogClient",
+        "label": "Client Dev Logiciel",
+        "model_path": ("app.models.devlog_client", "DevlogClient"),
+        "relation_paths": [],
+    },
+    {
+        "key": "ProspectionLead",
+        "label": "Lead Prospection",
+        "model_path": ("app.models.prospection_lead", "ProspectionLead"),
+        "relation_paths": [],
+    },
+    {
+        "key": "ConstructionProject",
+        "label": "Projet Construction",
+        "model_path": ("app.models.project", "Project"),
+        "relation_paths": [],
+    },
+    {
+        "key": "Entreprise",
+        "label": "Entreprise",
+        "model_path": ("app.models.entreprise", "Entreprise"),
+        "relation_paths": [],
+    },
+    {
+        "key": "Immeuble",
+        "label": "Immeuble (Immobilier)",
+        "model_path": ("app.models.immobilier", "Immeuble"),
+        "relation_paths": [],
+    },
+]
+
+
+# Types Python considérés "utiles" (affichables dans un nom de dossier).
+# On exclut le binaire/JSON.
+_USEFUL_PY_TYPES = (str, int, float, Decimal, bool, date, datetime)
+
+# Noms de colonnes techniques à exclure du catalogue (clés internes,
+# tokens, secrets, blobs). On garde les colonnes "métier".
+_EXCLUDED_EXACT = {
+    "id",
+    "password",
+    "password_hash",
+    "hashed_password",
+}
+_EXCLUDED_SUFFIXES = (
+    "_id",
+    "_token",
+    "_blob",
+    "_image",
+    "_hash",
+    "_ip",
+    "_content_type",
+    "_secret",
+)
+_EXCLUDED_CONTAINS = (
+    "token",
+    "secret",
+    "password",
+)
+
+# Traductions FR pour les noms de colonnes courants (sinon dérivation
+# automatique depuis le nom snake_case).
+_FIELD_LABELS_FR: dict[str, str] = {
+    "name": "Nom",
+    "address": "Adresse",
+    "city": "Ville",
+    "postal_code": "Code postal",
+    "neq": "NEQ",
+    "type": "Type",
+    "description": "Description",
+    "notes": "Notes",
+    "matricule": "Matricule",
+    "created_at": "Date de création",
+    "updated_at": "Date de mise à jour",
+    "purchase_date": "Date d'achat",
+    "purchase_price": "Prix d'achat",
+    "annee_construction": "Année de construction",
+    "nb_logements": "Nombre de logements",
+    "priority": "Priorité",
+    "status": "Statut",
+    "email": "Courriel",
+    "phone": "Téléphone",
+}
+
+
+def _humanize_field(col_name: str) -> str:
+    """Déduit un label FR lisible depuis un nom de colonne snake_case."""
+    if col_name in _FIELD_LABELS_FR:
+        return _FIELD_LABELS_FR[col_name]
+    words = col_name.replace("_", " ").strip()
+    return words[:1].upper() + words[1:] if words else col_name
+
+
+def _py_type_label(python_type: Any) -> str:
+    """Type lisible pour l'UI (string/number/date/boolean)."""
+    try:
+        if python_type in (datetime, date):
+            return "date"
+        if python_type is bool:
+            return "boolean"
+        if python_type in (int, float, Decimal):
+            return "number"
+    except Exception:  # noqa: BLE001
+        pass
+    return "string"
+
+
+def _is_useful_column(col_name: str, python_type: Any) -> bool:
+    """Filtre les colonnes "métier" affichables. created_at/updated_at
+    sont gérés explicitement ailleurs (toujours inclus)."""
+    if col_name in _EXCLUDED_EXACT:
+        return False
+    if any(col_name.endswith(suf) for suf in _EXCLUDED_SUFFIXES):
+        return False
+    if any(frag in col_name for frag in _EXCLUDED_CONTAINS):
+        return False
+    if python_type is None:
+        return False
+    try:
+        if not issubclass(python_type, _USEFUL_PY_TYPES):
+            return False
+    except TypeError:
+        return False
+    return True
+
+
+def _resolve_model(model_path: tuple[str, str]) -> Any:
+    import importlib
+
+    module_path, class_name = model_path
+    module = importlib.import_module(module_path)
+    return getattr(module, class_name)
+
+
+def get_entity_catalog() -> list[dict[str, Any]]:
+    """Catalogue COMPLET des types d'entités linkables + champs dispo.
+
+    Pour chaque type déclaré dans :data:`_ENTITY_CATALOG` ::
+
+        {
+            "key": "Immeuble",
+            "label": "Immeuble (Immobilier)",
+            "fields": [
+                {"path": "name", "label": "Nom", "type": "string"},
+                {"path": "address", "label": "Adresse", "type": "string"},
+                {"path": "created_at", "label": "Date de création", "type": "date"},
+                ...
+            ]
+        }
+
+    Les ``fields`` sont obtenus par INTROSPECTION des colonnes du modèle
+    SQLAlchemy (en gardant str/text/date/datetime/numeric et en excluant
+    les clés techniques / tokens / blobs), plus les ``relation_paths``
+    déclarés, plus ``created_at``/``updated_at`` toujours présents.
+
+    Robuste : si un modèle ne peut être importé/inspecté, il est ignoré
+    (jamais d'exception qui casserait l'endpoint).
+    """
+    catalog: list[dict[str, Any]] = []
+    for entry in _ENTITY_CATALOG:
+        try:
+            model = _resolve_model(entry["model_path"])
+            mapper = sa_inspect(model)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "drive entity-catalog: introspection impossible pour %s : %s",
+                entry.get("key"),
+                exc,
+            )
+            continue
+
+        fields: list[dict[str, str]] = []
+        seen_paths: set[str] = set()
+
+        for column in mapper.columns:
+            col_name = column.key
+            try:
+                python_type = column.type.python_type
+            except Exception:  # noqa: BLE001
+                python_type = None
+            # created_at/updated_at gérés en fin de liste (libellés fixes).
+            if col_name in ("created_at", "updated_at"):
+                continue
+            if not _is_useful_column(col_name, python_type):
+                continue
+            if col_name in seen_paths:
+                continue
+            seen_paths.add(col_name)
+            fields.append(
+                {
+                    "path": col_name,
+                    "label": _humanize_field(col_name),
+                    "type": _py_type_label(python_type),
+                }
+            )
+
+        # Relations déclarées explicitement.
+        for path, label, ftype in entry.get("relation_paths", []):
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            fields.append({"path": path, "label": label, "type": ftype})
+
+        # Toujours offrir les dates de création / mise à jour si le
+        # modèle les possède.
+        col_keys = {c.key for c in mapper.columns}
+        for date_col, date_label in (
+            ("created_at", "Date de création"),
+            ("updated_at", "Date de mise à jour"),
+        ):
+            if date_col in col_keys and date_col not in seen_paths:
+                seen_paths.add(date_col)
+                fields.append(
+                    {"path": date_col, "label": date_label, "type": "date"}
+                )
+
+        catalog.append(
+            {
+                "key": entry["key"],
+                "label": entry["label"],
+                "fields": fields,
+            }
+        )
+
+    return catalog
+
+
+# ---------------------------------------------------------------------------
+# Extracteur générique par introspection
+# ---------------------------------------------------------------------------
+
+
+def _resolve_field_path(entity: Any, field_path: str) -> Any:
+    """Résout ``field_path`` par getattr en chaîne sur ``entity``.
+
+    Supporte les relations simples (ex. ``lead_analysis.city``). Retourne
+    ``None`` dès qu'un maillon est introuvable ou None. Ne lève jamais.
+    """
+    current: Any = entity
+    for part in field_path.split("."):
+        if current is None:
+            return None
+        try:
+            current = getattr(current, part)
+        except Exception:  # noqa: BLE001
+            return None
+    return current
+
+
+def _extract_generic(
+    entity: Any, db: AsyncSession, mapping: dict[str, str]
+) -> dict[str, str]:
+    """Extracteur générique : résout chaque ``var_key -> field_path``.
+
+    Pour chaque entrée du ``variable_mapping`` :
+    - résout le chemin via :func:`_resolve_field_path` (getattr en chaîne,
+      supporte les relations),
+    - formate (dates -> ``YYYY-MM-DD``, etc.) via :func:`_fmt_value`,
+    - met ``""`` si introuvable.
+
+    Aucune exception ne remonte : un champ qui plante donne ``""``.
+    ``db`` est accepté pour symétrie avec les extracteurs hardcodés (et
+    pour évolutions futures), même s'il n'est pas utilisé ici — les
+    relations sont chargées paresseusement par l'ORM si nécessaire.
+    """
+    out: dict[str, str] = {}
+    for var_key, field_path in (mapping or {}).items():
+        if not field_path:
+            out[var_key] = ""
+            continue
+        try:
+            raw = _resolve_field_path(entity, field_path)
+            out[var_key] = _fmt_value(raw)
+        except Exception:  # noqa: BLE001
+            out[var_key] = ""
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Chargement d'une entité Kratos par (type, id)
 # ---------------------------------------------------------------------------
+
+
+# Index secondaire des types du catalogue (pour charger une entité même
+# si elle n'est PAS dans le registry hardcodé — ex. Entreprise/Immeuble).
+_CATALOG_BY_KEY: dict[str, dict[str, Any]] = {e["key"]: e for e in _ENTITY_CATALOG}
+
+
+def _model_path_for(entity_type: str) -> Optional[tuple[str, str]]:
+    """Retourne le ``model_path`` du type, depuis le registry OU le
+    catalogue. ``None`` si type inconnu des deux."""
+    if entity_type in _ENTITY_REGISTRY:
+        return _ENTITY_REGISTRY[entity_type]["model_path"]
+    entry = _CATALOG_BY_KEY.get(entity_type)
+    if entry is not None:
+        return entry["model_path"]
+    return None
 
 
 async def _load_entity(
     entity_type: str, entity_id: int, db: AsyncSession
 ) -> Any:
-    if entity_type not in _ENTITY_REGISTRY:
+    model_path = _model_path_for(entity_type)
+    if model_path is None:
+        supported = sorted(set(_ENTITY_REGISTRY) | set(_CATALOG_BY_KEY))
         raise UnsupportedEntityType(
             f"Type d'entité non supporté par les conventions : {entity_type}. "
-            f"Types supportés : {', '.join(_ENTITY_REGISTRY)}."
+            f"Types supportés : {', '.join(supported)}."
         )
-    module_path, class_name = _ENTITY_REGISTRY[entity_type]["model_path"]
-    import importlib
-
-    module = importlib.import_module(module_path)
-    cls = getattr(module, class_name)
+    cls = _resolve_model(model_path)
     entity = await db.get(cls, entity_id)
     if entity is None:
         raise EntityNotFound(
@@ -290,7 +663,33 @@ async def _load_entity(
 # ---------------------------------------------------------------------------
 
 
-_TEMPLATE_VAR_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+_TEMPLATE_VAR_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_.]*)\}")
+
+
+async def _variables_for(
+    convention: Optional[DriveConvention],
+    entity_type: str,
+    entity: Any,
+    db: AsyncSession,
+) -> dict[str, str]:
+    """Calcule le dict de variables pour interpoler le template.
+
+    - Si la convention a un ``variable_mapping`` non vide -> extracteur
+      GENERIQUE par introspection (gère N'IMPORTE quel type/champ).
+    - Sinon -> extracteur HARDCODE du registry (rétrocompat totale pour
+      les 5 types et conventions existantes).
+    """
+    mapping = getattr(convention, "variable_mapping", None) if convention else None
+    if mapping:
+        return _extract_generic(entity, db, mapping)
+
+    entry = _ENTITY_REGISTRY.get(entity_type)
+    if entry is None:
+        # Pas de mapping ET pas d'extracteur hardcodé -> on ne sait pas
+        # résoudre. Plutôt que crasher, on renvoie un dict vide (les
+        # placeholders resteront tels quels avec un warning).
+        return {}
+    return await entry["extract"](entity, db)
 
 
 async def resolve_folder_name(
@@ -298,13 +697,18 @@ async def resolve_folder_name(
     entity_type: str,
     entity_id: int,
     db: AsyncSession,
+    convention: Optional[DriveConvention] = None,
 ) -> str:
     """Résout ``template`` avec les variables disponibles pour ce type.
 
-    Variables manquantes (clé absente du registry ou valeur vide) : on
-    laisse le placeholder ``{var}`` tel quel + on logge un warning. Ne
-    crash pas — l'UI affichera un nom partiellement résolu, à Phil de
-    corriger sa convention.
+    Si ``convention`` est fournie et porte un ``variable_mapping`` non
+    vide, on utilise l'extracteur générique (introspection). Sinon on
+    retombe sur l'extracteur hardcodé du registry (rétrocompat).
+
+    Variables manquantes (clé absente ou valeur vide) : on laisse le
+    placeholder ``{var}`` tel quel + on logge un warning. Ne crash pas —
+    l'UI affichera un nom partiellement résolu, à Phil de corriger sa
+    convention.
 
     Espaces superflus dûs à des variables vides : nettoyés à la marge
     (séquences ``,  ,``, ``  ``) pour des noms propres.
@@ -314,14 +718,20 @@ async def resolve_folder_name(
             "Le template de nom de la convention est vide."
         )
 
-    entry = _ENTITY_REGISTRY.get(entity_type)
-    if entry is None:
+    # Si pas de mapping et type inconnu du registry/catalogue -> erreur
+    # claire (comportement legacy conservé pour les types historiques).
+    has_mapping = bool(getattr(convention, "variable_mapping", None)) if convention else False
+    if (
+        not has_mapping
+        and entity_type not in _ENTITY_REGISTRY
+        and entity_type not in _CATALOG_BY_KEY
+    ):
         raise UnsupportedEntityType(
             f"Type d'entité non supporté par les conventions : {entity_type}."
         )
 
     entity = await _load_entity(entity_type, entity_id, db)
-    variables = await entry["extract"](entity, db)
+    variables = await _variables_for(convention, entity_type, entity, db)
 
     def _replace(match: re.Match[str]) -> str:
         key = match.group(1)
@@ -335,12 +745,12 @@ async def resolve_folder_name(
             entity_id,
             template,
         )
-        # Variable absente ou vide → on laisse le placeholder tel quel.
+        # Variable absente ou vide -> on laisse le placeholder tel quel.
         return match.group(0)
 
     resolved = _TEMPLATE_VAR_RE.sub(_replace, template)
 
-    # Nettoyage léger : si une variable vide a laissé "X, , Y" → "X, Y".
+    # Nettoyage léger : si une variable vide a laissé "X, , Y" -> "X, Y".
     resolved = re.sub(r",\s*,", ",", resolved)
     resolved = re.sub(r"\s{2,}", " ", resolved)
     resolved = resolved.strip(" ,")
@@ -387,8 +797,10 @@ async def apply_convention_to_entity(
     3. Vérifie qu'aucun :class:`DriveEntityLink` n'existe déjà pour
        ce couple ``(entity_type, entity_id)`` — sinon
        :class:`EntityAlreadyLinked`.
-    4. Résout ``folder_name_template`` via :func:`resolve_folder_name`.
-    5. Si ``template_folder_to_copy_drive_id`` défini → clone récursif
+    4. Résout ``folder_name_template`` via :func:`resolve_folder_name`
+       (extracteur générique si la convention a un ``variable_mapping``,
+       sinon registry hardcodé).
+    5. Si ``template_folder_to_copy_drive_id`` défini -> clone récursif
        du template ; sinon création d'un dossier vide.
     6. Crée chaque sous-dossier listé dans ``subfolders_to_create``.
     7. Persiste le :class:`DriveEntityLink` (avec ``convention_id``
@@ -438,9 +850,14 @@ async def apply_convention_to_entity(
             f"Supprime-le d'abord si tu veux appliquer une nouvelle convention."
         )
 
-    # Résout le nom du dossier.
+    # Résout le nom du dossier (en passant la convention pour activer
+    # l'extracteur générique si un variable_mapping est présent).
     folder_name = await resolve_folder_name(
-        convention.folder_name_template, entity_type, entity_id, db
+        convention.folder_name_template,
+        entity_type,
+        entity_id,
+        db,
+        convention=convention,
     )
 
     # Crée le dossier (copie template OU création vide).
@@ -515,4 +932,5 @@ __all__ = [
     "apply_convention_to_entity",
     "resolve_folder_name",
     "get_supported_entity_types",
+    "get_entity_catalog",
 ]

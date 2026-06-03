@@ -5,6 +5,7 @@ Couvre :
 - CRUD des :class:`DriveConvention` (admin/owner only via le router).
 - Action ``apply`` (corps minimal ``{entity_type, entity_id}``).
 - Liste des types d'entités supportées + variables disponibles.
+- Catalogue introspecté des entités linkables + leurs champs.
 - CRUD minimal des :class:`DriveEntityLink` (création manuelle d'un
   lien sans passer par une convention, lecture, suppression).
 """
@@ -12,7 +13,7 @@ Couvre :
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -33,6 +34,9 @@ class DriveConventionRead(BaseModel):
     folder_name_template: Optional[str] = None
     template_folder_to_copy_drive_id: Optional[str] = None
     subfolders_to_create: Optional[List[str]] = None
+    # Mapping {var_key: field_path} pour l'extracteur générique. None/vide
+    # = fallback registry hardcodé (rétrocompat).
+    variable_mapping: Optional[Dict[str, str]] = None
     auto_link_to_entity: bool = True
     status_to_parent_map: Optional[dict[str, Any]] = None
     active: bool
@@ -71,6 +75,7 @@ class DriveConventionCreate(BaseModel):
         default=None, max_length=128
     )
     subfolders_to_create: Optional[List[str]] = None
+    variable_mapping: Optional[Dict[str, str]] = None
     auto_link_to_entity: bool = True
     status_to_parent_map: Optional[dict[str, Any]] = None
     active: bool = False  # Toujours inactif par défaut (Phil active ensuite).
@@ -105,6 +110,7 @@ class DriveConventionPatch(BaseModel):
         default=None, max_length=128
     )
     subfolders_to_create: Optional[List[str]] = None
+    variable_mapping: Optional[Dict[str, str]] = None
     auto_link_to_entity: Optional[bool] = None
     status_to_parent_map: Optional[dict[str, Any]] = None
     active: Optional[bool] = None
@@ -149,7 +155,7 @@ class DriveConventionApplyResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Métadonnées entités supportées
+# Métadonnées entités supportées (LEGACY — endpoint supported-entity-types)
 # ---------------------------------------------------------------------------
 
 
@@ -163,6 +169,30 @@ class SupportedEntityType(BaseModel):
     key: str
     label: str
     variables: List[SupportedEntityVariable]
+
+
+# ---------------------------------------------------------------------------
+# Catalogue introspecté (NOUVEAU — endpoint entity-catalog)
+# ---------------------------------------------------------------------------
+
+
+class EntityCatalogField(BaseModel):
+    """Un champ disponible pour insertion dans le pattern de nommage.
+
+    ``path`` est le placeholder ``{path}`` ET la clé du
+    ``variable_mapping`` (la variable et son path sont identiques)."""
+
+    path: str
+    label: str
+    type: str
+
+
+class EntityCatalogType(BaseModel):
+    """Un type d'entité linkable + ses champs introspectés."""
+
+    key: str
+    label: str
+    fields: List[EntityCatalogField]
 
 
 # ---------------------------------------------------------------------------
@@ -229,5 +259,6 @@ __all__ = [
     "DriveEntityLinkPatch",
     "SupportedEntityType",
     "SupportedEntityVariable",
+    "EntityCatalogField",
+    "EntityCatalogType",
 ]
-
