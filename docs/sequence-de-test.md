@@ -105,19 +105,34 @@
 23. Va dans **Clients** (Construction) : la compagnie propriétaire y est
     désormais (si elle a été créée), `is_company` = vrai.
 
+## K. Signature électronique des baux (PR #637)
+
+24. Assure-toi qu'un **bail** a un **locataire avec courriel**. Ouvre
+    l'immeuble → onglet **Baux** → bouton **« Envoyer pour signature »**.
+    - *Attendu :* message « Envoyé à <courriel> » ; le locataire reçoit
+      un courriel avec un lien « Consulter et signer mon bail ».
+25. Ouvre le lien `/sign-bail/<token>` (page publique, sans connexion).
+    - *Attendu :* conditions du bail affichées (loyer, dates, dépôt,
+      inclusions) + zone de signature (nom + tracé).
+26. Signe (nom + signature) → soumets.
+    - *Attendu :* « Bail signé » confirmé ; un bail « proposé » passe
+      « actif ». Rouvrir le lien montre l'état signé (pas de re-signature).
+
 ---
 
 ## Non couvert (phases à venir)
 
-- **Phase 4.2** — Lien FK bidirectionnel bon ↔ immeuble/maintenance
-  (migration) + suivi du statut côté immobilier.
-- **Phases 2.4-2.6** — Signatures de bail/renouvellement, avis
-  d'augmentation conformes TAL (gros sous-système à construire).
+- **Phase 2.5** — Renouvellement de bail + signature (modèle
+  `imm_bail_renouvellements` existe ; à brancher comme 2.4).
+- **Phase 2.6** — Avis d'augmentation : partiellement présent
+  (`TalFormDropdown` → « avis de modification ») ; à compléter en avis
+  d'augmentation dédié.
+- **Phase 4.2** — Lien FK bidirectionnel bon ↔ immeuble/maintenance.
 - **Phase 1.7** — Enrichir l'import (dates de bail réelles, dépôt,
   contacts locataire).
 - **Phase 3** — QuickBooks / fiducie (⚠ nécessite identifiants QBO).
 - **Phase 6** — Calendriers employés (⚠ nécessite OAuth Google/Microsoft).
 
 > **Déjà livré** : Phase 1 (import + gestion immeubles), 2.1 (locataires
-> hors menu), 4.1/4.3 (bon de travail + conversion client), 5.1 (courriel
-> lead).
+> hors menu), **2.4 (signature de bail)**, 4.1/4.3 (bon de travail +
+> conversion client), 5.1 (courriel lead).
