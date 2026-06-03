@@ -366,9 +366,21 @@ function EntrepriseSelector({
 }) {
   const [open, setOpen] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [showAddExisting, setShowAddExisting] = useState(false);
   const [counts, setCounts] = useState<Record<number, number>>({});
+  const [countsLoaded, setCountsLoaded] = useState(false);
   const [deleting, setDeleting] = useState<number | null>(null);
   const current = entreprises.find((e) => e.id === currentId) || null;
+  // Volet immo : on ne liste que les propriétaires ayant ≥ 1 immeuble
+  // (plus l'entreprise active, même si on vient de l'ajouter sans immeuble
+  // encore). Avant le chargement des compteurs, on montre tout pour éviter
+  // un flash de liste vide.
+  const portfolio = entreprises.filter(
+    (e) => !countsLoaded || (counts[e.id] ?? 0) > 0 || e.id === currentId
+  );
+  const notInPortfolio = entreprises.filter(
+    (e) => countsLoaded && (counts[e.id] ?? 0) === 0 && e.id !== currentId
+  );
 
   // Charge le nb d'immeubles par entreprise pour signaler celles qui
   // sont vides (pas de portefeuille immobilier).
@@ -385,6 +397,7 @@ function EntrepriseSelector({
       const map: Record<number, number> = {};
       for (const r of data) map[r.entreprise_id] = r.nb_immeubles;
       setCounts(map);
+      setCountsLoaded(true);
     } catch {
       /* silent */
     }
@@ -492,10 +505,10 @@ function EntrepriseSelector({
             <span>Toutes les entreprises</span>
             {currentId == null ? <Check className="h-3.5 w-3.5" /> : null}
           </button>
-          {entreprises.length > 0 ? (
+          {portfolio.length > 0 ? (
             <div className="my-1 border-t border-brand-800" />
           ) : null}
-          {entreprises.map((e) => {
+          {portfolio.map((e) => {
             const nb = counts[e.id] ?? 0;
             const isCurrent = currentId === e.id;
             return (
@@ -573,6 +586,41 @@ function EntrepriseSelector({
             );
           })}
           <div className="my-1 border-t border-brand-800" />
+          {notInPortfolio.length > 0 ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowAddExisting((v) => !v)}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-sky-300 transition hover:bg-sky-500/10"
+                title="Sélectionner une entreprise existante pour lui créer un immeuble"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Ajouter au portefeuille
+              </button>
+              {showAddExisting ? (
+                <div className="max-h-40 overflow-y-auto border-y border-brand-800 bg-brand-950/60">
+                  {notInPortfolio.map((e) => (
+                    <button
+                      key={e.id}
+                      type="button"
+                      onClick={() => {
+                        onChange(e.id);
+                        setShowAddExisting(false);
+                        setOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2 px-5 py-1.5 text-left text-xs text-white/70 transition hover:bg-brand-900"
+                    >
+                      <span
+                        className="h-2 w-2 flex-shrink-0 rounded-full"
+                        style={{ backgroundColor: e.color_accent }}
+                      />
+                      <span className="truncate">{e.name}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          ) : null}
           <button
             type="button"
             onClick={() => {
