@@ -1743,14 +1743,26 @@ function DevisDevOwnerInitial({
               règle de gratuité « module → module ».
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onAddModule}
-            className="inline-flex items-center gap-1.5 rounded border border-blue-500/30 px-2 py-1 text-xs text-blue-200 hover:bg-blue-500/15"
-          >
-            <Plus className="h-3 w-3" />
-            Ajouter un module
-          </button>
+          <div className="flex items-end gap-2">
+            <label className="inline-flex items-end gap-2 text-xs text-white/70">
+              Taux dev
+              <MoneyInput
+                value={Number(s.taux_dev_horaire ?? 75)}
+                onCommit={(n) =>
+                  onPatchSoumission({ taux_dev_horaire: n })
+                }
+                className="block w-24 rounded border border-blue-500/30 bg-brand-950 px-1.5 py-0.5 text-right text-white focus:outline-none"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={onAddModule}
+              className="inline-flex items-center gap-1.5 rounded border border-blue-500/30 px-2 py-1 text-xs text-blue-200 hover:bg-blue-500/15"
+            >
+              <Plus className="h-3 w-3" />
+              Ajouter un module
+            </button>
+          </div>
         </div>
         {sortedModules.length === 0 ? (
           <p className="mt-2 rounded border border-dashed border-blue-500/20 px-3 py-4 text-center text-xs text-white/40">
