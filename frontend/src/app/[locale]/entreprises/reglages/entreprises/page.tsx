@@ -9,6 +9,7 @@ import {
   Loader2,
   Pencil,
   Plus,
+  RotateCcw,
   Save,
   Trash2,
   X
@@ -71,14 +72,40 @@ export default function ReglagesEntreprisesPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedToast, setSavedToast] = useState(false);
 
+  const [trash, setTrash] = useState<Entreprise[]>([]);
+  const [restoringId, setRestoringId] = useState<number | null>(null);
+
   async function load() {
     setLoadError(null);
     try {
-      const res = await authedFetch("/api/v1/entreprises");
+      const res = await authedFetch(
+        "/api/v1/entreprises?include_inactive=true"
+      );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setList((await res.json()) as Entreprise[]);
+      const all = (await res.json()) as Entreprise[];
+      setList(all.filter((e) => e.is_active));
+      setTrash(all.filter((e) => !e.is_active));
     } catch (err) {
       setLoadError((err as Error).message);
+    }
+  }
+
+  async function restore(e: Entreprise) {
+    setRestoringId(e.id);
+    try {
+      const res = await authedFetch(
+        `/api/v1/entreprises/${e.id}/restore`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        alert((await res.text()).slice(0, 200) || `HTTP ${res.status}`);
+        return;
+      }
+      await load();
+    } catch (err) {
+      alert((err as Error).message);
+    } finally {
+      setRestoringId(null);
     }
   }
 
@@ -307,7 +334,7 @@ export default function ReglagesEntreprisesPage() {
                     type="button"
                     onClick={() => remove(e)}
                     className="rounded-lg border border-white/15 bg-brand-950 p-2 text-white/50 transition hover:border-rose-400/50 hover:text-rose-300"
-                    title="Supprimer"
+                    title="Mettre à la corbeille (récupérable)"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
@@ -337,6 +364,49 @@ export default function ReglagesEntreprisesPage() {
           </ul>
         )}
       </section>
+
+      {trash.length > 0 ? (
+        <section className="mt-8">
+          <h2 className="mb-1 text-sm font-semibold text-white/80">
+            Corbeille ({trash.length})
+          </h2>
+          <p className="mb-3 text-xs text-white/50">
+            Entreprises supprimées (désactivées). Leurs données sont
+            conservées et peuvent être restaurées.
+          </p>
+          <ul className="space-y-2">
+            {trash.map((e) => (
+              <li
+                key={e.id}
+                className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-brand-950 px-4 py-2.5"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-white/70">
+                    {e.name}
+                  </p>
+                  <p className="text-[11px] text-white/40">
+                    {e.type}
+                    {e.neq ? ` · NEQ ${e.neq}` : ""}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void restore(e)}
+                  disabled={restoringId === e.id}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-50"
+                >
+                  {restoringId === e.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  )}
+                  Restaurer
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
     </div>
   );
 }
