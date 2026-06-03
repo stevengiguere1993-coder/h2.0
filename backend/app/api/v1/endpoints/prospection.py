@@ -898,7 +898,7 @@ async def enrich_owner(
 async def delete_lead(
     lead_id: int,
     db: DBSession,
-    _: CurrentUser,
+    user: CurrentUser,
     hard: bool = False,
 ) -> None:
     """Supprime un lead. Par défaut, soft-delete (set archived=true)
@@ -909,6 +909,14 @@ async def delete_lead(
     sur la corbeille, on peut récupérer. Et les associations
     (FollowUp, etc.) restent intactes.
     """
+    # Le hard-delete cascade (photos, transactions, etc.) est
+    # irréversible — il est réservé aux admins/owners. Le soft-delete
+    # (archivage) reste permis à tous les utilisateurs authentifiés.
+    if hard and user.role not in ("owner", "admin"):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Suppression définitive réservée aux administrateurs.",
+        )
     lead = (
         await db.execute(
             select(ProspectionLead).where(ProspectionLead.id == lead_id)

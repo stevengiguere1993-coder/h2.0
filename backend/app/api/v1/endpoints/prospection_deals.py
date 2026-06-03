@@ -16,9 +16,11 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import case, select
+from sqlalchemy import case, func, select
 
 from app.api.deps import CurrentUser, DBSession
+from app.models.nda import NDA, NDAStatus
+from app.models.offer import Offer, OfferStatus
 from app.models.prospection_deal import PRIORITY_ORDER, ProspectionDeal
 
 log = logging.getLogger(__name__)
@@ -33,6 +35,7 @@ from app.models.prospection_deal_task_assignee import (
 from app.models.prospection_deal_task_immeuble import (
     ProspectionDealTaskImmeuble,
 )
+from app.services.audit import log_action
 from sqlalchemy import delete
 
 
@@ -237,7 +240,7 @@ async def update_deal(
 async def delete_deal(
     deal_id: int,
     db: DBSession,
-    _: CurrentUser,
+    user: CurrentUser,
 ) -> None:
     deal = (
         await db.execute(
@@ -246,8 +249,64 @@ async def delete_deal(
     ).scalar_one_or_none()
     if deal is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Deal introuvable.")
+
+    # Garde-fou perte de données — les modèles NDA et Offer ont une FK
+    # ON DELETE CASCADE vers prospection_deals : supprimer le deal
+    # effacerait DÉFINITIVEMENT les documents signés rattachés, en
+    # contournant les protections déjà présentes sur leur suppression
+    # directe (cf. delete_nda / delete_offer → HTTP 409 si signé).
+    # On refuse donc la suppression du deal tant qu'un document est en
+    # statut final.
+    signed_ndas = (
+        await db.execute(
+            select(func.count())
+            .select_from(NDA)
+            .where(
+                NDA.deal_id == deal_id,
+                NDA.status == NDAStatus.SIGNE.value,
+            )
+        )
+    ).scalar_one()
+    signed_offers = (
+        await db.execute(
+            select(func.count())
+            .select_from(Offer)
+            .where(
+                Offer.deal_id == deal_id,
+                Offer.status == OfferStatus.SIGNE.value,
+            )
+        )
+    ).scalar_one()
+
+    if signed_ndas or signed_offers:
+        blockers: list[str] = []
+        if signed_ndas:
+            blockers.append(
+                f"{signed_ndas} NDA signé"
+                + ("s" if signed_ndas > 1 else "")
+            )
+        if signed_offers:
+            blockers.append(
+                f"{signed_offers} offre signée"
+                + ("s" if signed_offers > 1 else "")
+            )
+        detail = (
+            "Ce deal a "
+            + " et ".join(blockers)
+            + ". Supprime-les ou archive le deal."
+        )
+        raise HTTPException(status.HTTP_409_CONFLICT, detail)
+
     await db.delete(deal)
     await db.flush()
+    await log_action(
+        db,
+        user=user,
+        action="prospection_deal.deleted",
+        entity_type="prospection_deal",
+        entity_id=deal_id,
+        details={"address": deal.address},
+    )
 
 
 # ============================================================
