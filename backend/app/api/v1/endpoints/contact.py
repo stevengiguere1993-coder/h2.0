@@ -184,6 +184,17 @@ async def submit_contact(
     except Exception:
         pass
 
+    # Accusé de réception au prospect : « demande reçue, on vous rappelle
+    # bientôt ». Best-effort — n'interrompt jamais la soumission.
+    try:
+        from app.services.contact_request_mail import (
+            send_contact_acknowledgment,
+        )
+
+        await send_contact_acknowledgment(record)
+    except Exception:
+        pass
+
     # AI outbound : Léa rappelle automatiquement le lead dans 60 sec
     # pour qualifier et proposer un RDV. Best-effort — la création du
     # ContactRequest n'échoue jamais à cause de ça.
