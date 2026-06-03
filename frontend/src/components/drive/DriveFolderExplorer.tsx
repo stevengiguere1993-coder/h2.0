@@ -13,6 +13,7 @@ import {
   AlertCircle,
   ArrowDownAZ,
   ArrowUpAZ,
+  CheckSquare,
   ChevronRight,
   Download,
   ExternalLink,
@@ -39,6 +40,7 @@ import {
   RefreshCw,
   Search,
   Share2,
+  Square,
   Trash2,
   Upload,
   UploadCloud,
@@ -46,6 +48,7 @@ import {
 } from "lucide-react";
 
 import { useConfirm } from "@/components/confirm-dialog";
+import { DriveFolderPicker } from "@/components/drive/DriveFolderPicker";
 import { authedFetch } from "@/lib/auth";
 
 // ---------------------------------------------------------------------------
@@ -807,7 +810,15 @@ export function DriveFolderExplorer({
     refresh();
   }
 
-  async function doMove(file: DriveFile, newParentId: string) {
+  /**
+   * Déplace un fichier vers `newParentId` — bas niveau, sans toast ni refresh.
+   * Renvoie `null` si succès, ou un message d'erreur lisible sinon. Réutilisé
+   * par le déplacement unitaire ET le déplacement en lot.
+   */
+  async function moveFileTo(
+    file: DriveFile,
+    newParentId: string
+  ): Promise<string | null> {
     const body = JSON.stringify({
       parent_folder_id: newParentId,
       old_parent_folder_id: currentFolderId
@@ -817,8 +828,15 @@ export function DriveFolderExplorer({
       { method: "PATCH", body }
     );
     if (!res.ok) {
-      const msg = await readErrorDetail(res);
-      toast("error", `Déplacement échoué : ${msg}`);
+      return await readErrorDetail(res);
+    }
+    return null;
+  }
+
+  async function doMove(file: DriveFile, newParentId: string) {
+    const err = await moveFileTo(file, newParentId);
+    if (err) {
+      toast("error", `Déplacement échoué : ${err}`);
       return;
     }
     toast("success", "Déplacé.");
@@ -897,16 +915,19 @@ export function DriveFolderExplorer({
     refresh();
   }
 
-  async function doDownload(file: DriveFile) {
-    if (isFolder(file)) return;
+  /**
+   * Télécharge un fichier sur le poste — bas niveau, sans toast.
+   * Renvoie `null` si succès, ou un message d'erreur sinon. Réutilisé par le
+   * téléchargement unitaire ET le téléchargement en lot.
+   */
+  async function downloadFileBlob(file: DriveFile): Promise<string | null> {
+    if (isFolder(file)) return "Les dossiers ne peuvent pas être téléchargés.";
     try {
       const res = await authedFetch(
         `/api/v1/drive/files/${encodeURIComponent(file.id)}/download`
       );
       if (!res.ok) {
-        const msg = await readErrorDetail(res);
-        toast("error", `Téléchargement échoué : ${msg}`);
-        return;
+        return await readErrorDetail(res);
       }
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
@@ -917,9 +938,15 @@ export function DriveFolderExplorer({
       a.click();
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
+      return null;
     } catch (e) {
-      toast("error", `Téléchargement échoué : ${(e as Error).message}`);
+      return (e as Error).message || "Erreur réseau";
     }
+  }
+
+  async function doDownload(file: DriveFile) {
+    const err = await downloadFileBlob(file);
+    if (err) toast("error", `Téléchargement échoué : ${err}`);
   }
 
   async function doCreateFolder(name: string) {
@@ -933,6 +960,130 @@ export function DriveFolderExplorer({
       return;
     }
     toast("success", "Dossier créé.");
+    refresh();
+  }
+
+  // -------------------------------------------------------------------------
+  // Multi-sélection + actions groupées (façon Google Drive)
+  // -------------------------------------------------------------------------
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
+
+  // On nettoie la sélection à chaque changement de dossier ou de recherche :
+  // les ids ne sont plus visibles, garder une sélection fantôme prête à
+  // s'appliquer ailleurs serait dangereux.
+  useEffect(() => {
+    setSelectedIds(new Set());
+    setBulkMoveOpen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentFolderId, searchQuery]);
+
+  const selectedFiles = useMemo(
+    () => files.filter((f) => selectedIds.has(f.id)),
+    [files, selectedIds]
+  );
+  const selectionCount = selectedFiles.length;
+  const allSelected =
+    files.length > 0 && files.every((f) => selectedIds.has(f.id));
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    setSelectedIds((prev) => {
+      if (files.length > 0 && files.every((f) => prev.has(f.id))) {
+        return new Set();
+      }
+      return new Set(files.map((f) => f.id));
+    });
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+
+  async function bulkDownload() {
+    const targets = selectedFiles.filter((f) => !isFolder(f));
+    if (targets.length === 0) {
+      toast("info", "Seuls les fichiers peuvent être téléchargés.");
+      return;
+    }
+    setBulkBusy(true);
+    let ok = 0;
+    let ko = 0;
+    // Téléchargements séquentiels : éviter que le navigateur bloque une rafale
+    // de clics programmatiques sur des ancres.
+    for (const f of targets) {
+      const err = await downloadFileBlob(f);
+      if (err) ko += 1;
+      else ok += 1;
+    }
+    setBulkBusy(false);
+    if (ok > 0)
+      toast("success", `${ok} fichier${ok > 1 ? "s" : ""} téléchargé${ok > 1 ? "s" : ""}.`);
+    if (ko > 0)
+      toast("error", `${ko} téléchargement${ko > 1 ? "s" : ""} échoué${ko > 1 ? "s" : ""}.`);
+  }
+
+  async function bulkMoveTo(newParentId: string) {
+    if (!newParentId || newParentId === currentFolderId) {
+      setBulkMoveOpen(false);
+      return;
+    }
+    setBulkBusy(true);
+    let ok = 0;
+    let ko = 0;
+    for (const f of selectedFiles) {
+      const err = await moveFileTo(f, newParentId);
+      if (err) ko += 1;
+      else ok += 1;
+    }
+    setBulkBusy(false);
+    setBulkMoveOpen(false);
+    if (ok > 0) {
+      toast("success", `${ok} élément${ok > 1 ? "s" : ""} déplacé${ok > 1 ? "s" : ""}.`);
+      clearSelection();
+    }
+    if (ko > 0)
+      toast("error", `${ko} déplacement${ko > 1 ? "s" : ""} échoué${ko > 1 ? "s" : ""}.`);
+    refresh();
+  }
+
+  async function bulkDelete() {
+    if (selectionCount === 0) return;
+    const ok = await confirm({
+      title: `Envoyer ${selectionCount} élément${selectionCount > 1 ? "s" : ""} à la corbeille ?`,
+      description:
+        "Les éléments resteront récupérables depuis la corbeille Drive.",
+      confirmLabel: "Mettre à la corbeille",
+      destructive: true
+    });
+    if (!ok) return;
+    setBulkBusy(true);
+    let done = 0;
+    let failed = 0;
+    for (const f of selectedFiles) {
+      const res = await authedFetch(
+        `/api/v1/drive/files/${encodeURIComponent(f.id)}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok && res.status !== 204) failed += 1;
+      else done += 1;
+    }
+    setBulkBusy(false);
+    if (done > 0) {
+      toast("success", `${done} élément${done > 1 ? "s" : ""} mis à la corbeille.`);
+      clearSelection();
+    }
+    if (failed > 0)
+      toast("error", `${failed} suppression${failed > 1 ? "s" : ""} échouée${failed > 1 ? "s" : ""}.`);
     refresh();
   }
 
@@ -1073,6 +1224,70 @@ export function DriveFolderExplorer({
         </div>
       </div>
 
+      {/* Barre d'actions groupées (multi-sélection) --------------------- */}
+      {selectionCount > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 border-b border-brand-800 bg-brand-950/80 px-3 py-2">
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="rounded-md p-1 text-white/60 hover:bg-white/10 hover:text-white"
+            title="Effacer la sélection"
+            aria-label="Effacer la sélection"
+          >
+            <X className="h-4 w-4" />
+          </button>
+          <span className="text-xs font-semibold text-white">
+            {selectionCount} sélectionné{selectionCount > 1 ? "s" : ""}
+          </span>
+          <button
+            type="button"
+            onClick={toggleSelectAll}
+            className="inline-flex items-center gap-1 rounded-lg border border-brand-800 px-2 py-1 text-xs text-white/70 hover:bg-white/5"
+          >
+            {allSelected ? (
+              <CheckSquare className="h-3.5 w-3.5" />
+            ) : (
+              <Square className="h-3.5 w-3.5" />
+            )}
+            {allSelected ? "Tout désélectionner" : "Tout sélectionner"}
+          </button>
+
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void bulkDownload()}
+              disabled={bulkBusy}
+              className="inline-flex items-center gap-1 rounded-lg border border-brand-800 px-2.5 py-1 text-xs text-white/80 hover:bg-white/5 disabled:opacity-50"
+            >
+              <Download className="h-3.5 w-3.5" /> Télécharger
+            </button>
+            {actions.move ? (
+              <button
+                type="button"
+                onClick={() => setBulkMoveOpen(true)}
+                disabled={bulkBusy}
+                className="inline-flex items-center gap-1 rounded-lg border border-brand-800 px-2.5 py-1 text-xs text-white/80 hover:bg-white/5 disabled:opacity-50"
+              >
+                <Move className="h-3.5 w-3.5" /> Déplacer
+              </button>
+            ) : null}
+            {actions.delete ? (
+              <button
+                type="button"
+                onClick={() => void bulkDelete()}
+                disabled={bulkBusy}
+                className="inline-flex items-center gap-1 rounded-lg border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-xs text-rose-200 hover:bg-rose-500/20 disabled:opacity-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Supprimer
+              </button>
+            ) : null}
+            {bulkBusy ? (
+              <Loader2 className="h-4 w-4 animate-spin text-accent-400" />
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       {/* Corps ---------------------------------------------------------- */}
       <div className="relative min-h-[14rem]">
         {loading ? (
@@ -1093,6 +1308,8 @@ export function DriveFolderExplorer({
           <GridView
             files={sortedFiles}
             actions={actions}
+            selectedIds={selectedIds}
+            onToggleSelect={toggleSelect}
             onOpenFolder={navigateInto}
             onPreviewFile={openPreview}
             onAction={(file, kind) => handleAction(file, kind)}
@@ -1102,6 +1319,10 @@ export function DriveFolderExplorer({
           <ListView
             files={sortedFiles}
             actions={actions}
+            selectedIds={selectedIds}
+            onToggleSelect={toggleSelect}
+            allSelected={allSelected}
+            onToggleSelectAll={toggleSelectAll}
             sortField={sortField}
             sortDir={sortDir}
             onToggleSort={toggleSort}
@@ -1227,7 +1448,7 @@ export function DriveFolderExplorer({
       {actionModal?.kind === "move" ? (
         <MoveModal
           file={actionModal.file}
-          currentFolderId={currentFolderId}
+          rootFolderId={folderId}
           onCancel={() => setActionModal(null)}
           onSubmit={async (newParent) => {
             setActionModal(null);
@@ -1254,6 +1475,16 @@ export function DriveFolderExplorer({
           }}
         />
       ) : null}
+
+      {/* Picker visuel pour le déplacement EN LOT */}
+      <DriveFolderPicker
+        open={bulkMoveOpen}
+        initialFolderId={folderId}
+        onClose={() => setBulkMoveOpen(false)}
+        onSelect={(destId) => {
+          void bulkMoveTo(destId);
+        }}
+      />
     </div>
   );
 
@@ -1481,6 +1712,8 @@ type ActionKind =
 function GridView({
   files,
   actions,
+  selectedIds,
+  onToggleSelect,
   onOpenFolder,
   onPreviewFile,
   onAction,
@@ -1488,6 +1721,8 @@ function GridView({
 }: {
   files: DriveFile[];
   actions: Required<DriveActions>;
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
   onOpenFolder: (f: DriveFile) => void;
   onPreviewFile: (f: DriveFile) => void;
   onAction: (f: DriveFile, kind: ActionKind) => void;
@@ -1500,6 +1735,8 @@ function GridView({
           key={f.id}
           file={f}
           actions={actions}
+          selected={selectedIds.has(f.id)}
+          onToggleSelect={onToggleSelect}
           onOpenFolder={onOpenFolder}
           onPreviewFile={onPreviewFile}
           onAction={onAction}
@@ -1513,6 +1750,8 @@ function GridView({
 function GridCard({
   file,
   actions,
+  selected,
+  onToggleSelect,
   onOpenFolder,
   onPreviewFile,
   onAction,
@@ -1520,6 +1759,8 @@ function GridCard({
 }: {
   file: DriveFile;
   actions: Required<DriveActions>;
+  selected: boolean;
+  onToggleSelect: (id: string) => void;
   onOpenFolder: (f: DriveFile) => void;
   onPreviewFile: (f: DriveFile) => void;
   onAction: (f: DriveFile, kind: ActionKind) => void;
@@ -1552,8 +1793,30 @@ function GridCard({
         // Pas de vrai menu contextuel positionné — on ouvre le menu actions
         // standard de la card via le bouton « ... ».
       }}
-      className="group relative flex h-32 cursor-pointer flex-col justify-between overflow-hidden rounded-xl border border-brand-800 bg-brand-950 p-2 text-left transition hover:border-accent-500/50 hover:shadow-lg focus:border-accent-500 focus:outline-none"
+      className={`group relative flex h-32 cursor-pointer flex-col justify-between overflow-hidden rounded-xl border bg-brand-950 p-2 text-left transition hover:border-accent-500/50 hover:shadow-lg focus:border-accent-500 focus:outline-none ${
+        selected ? "border-accent-500 ring-1 ring-accent-500/50" : "border-brand-800"
+      }`}
     >
+      {/* Case à cocher de sélection (visible au survol ou si sélectionnée) */}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleSelect(file.id);
+        }}
+        className={`absolute left-1 top-1 z-10 rounded-md bg-brand-950/80 p-0.5 text-white/70 transition hover:text-white ${
+          selected ? "opacity-100 text-accent-400" : "opacity-0 group-hover:opacity-100"
+        }`}
+        aria-label={selected ? "Désélectionner" : "Sélectionner"}
+        title={selected ? "Désélectionner" : "Sélectionner"}
+      >
+        {selected ? (
+          <CheckSquare className="h-4 w-4 text-accent-400" />
+        ) : (
+          <Square className="h-4 w-4" />
+        )}
+      </button>
+
       <div className="flex h-16 items-center justify-center overflow-hidden rounded-lg bg-brand-900">
         {file.thumbnail_link ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -1594,6 +1857,10 @@ function GridCard({
 function ListView({
   files,
   actions,
+  selectedIds,
+  onToggleSelect,
+  allSelected,
+  onToggleSelectAll,
   sortField,
   sortDir,
   onToggleSort,
@@ -1604,6 +1871,10 @@ function ListView({
 }: {
   files: DriveFile[];
   actions: Required<DriveActions>;
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
+  allSelected: boolean;
+  onToggleSelectAll: () => void;
   sortField: SortField;
   sortDir: SortDir;
   onToggleSort: (f: SortField) => void;
@@ -1625,6 +1896,21 @@ function ListView({
       <table className="w-full min-w-[36rem] text-left text-xs">
         <thead className="border-b border-brand-800 text-[10px] uppercase tracking-wider text-white/40">
           <tr>
+            <th className="w-9 px-3 py-2">
+              <button
+                type="button"
+                onClick={onToggleSelectAll}
+                className="text-white/60 hover:text-white"
+                aria-label={allSelected ? "Tout désélectionner" : "Tout sélectionner"}
+                title={allSelected ? "Tout désélectionner" : "Tout sélectionner"}
+              >
+                {allSelected ? (
+                  <CheckSquare className="h-4 w-4 text-accent-400" />
+                ) : (
+                  <Square className="h-4 w-4" />
+                )}
+              </button>
+            </th>
             <th className="px-3 py-2 font-semibold">
               <button
                 type="button"
@@ -1661,6 +1947,7 @@ function ListView({
         <tbody>
           {files.map((f) => {
             const folder = isFolder(f);
+            const selected = selectedIds.has(f.id);
             return (
               <tr
                 key={f.id}
@@ -1671,8 +1958,27 @@ function ListView({
                     onPreviewFile(f);
                   }
                 }}
-                className="cursor-pointer border-b border-brand-800/60 text-white/80 hover:bg-white/5"
+                className={`cursor-pointer border-b border-brand-800/60 text-white/80 hover:bg-white/5 ${
+                  selected ? "bg-accent-500/10" : ""
+                }`}
               >
+                <td
+                  className="w-9 px-3 py-2"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    onClick={() => onToggleSelect(f.id)}
+                    className="text-white/50 hover:text-white"
+                    aria-label={selected ? "Désélectionner" : "Sélectionner"}
+                  >
+                    {selected ? (
+                      <CheckSquare className="h-4 w-4 text-accent-400" />
+                    ) : (
+                      <Square className="h-4 w-4" />
+                    )}
+                  </button>
+                </td>
                 <td className="max-w-[18rem] px-3 py-2">
                   <div className="flex items-center gap-2 truncate">
                     <FileTypeIcon file={f} className="h-4 w-4 shrink-0" />
@@ -1974,65 +2280,32 @@ function RenameModal({
   );
 }
 
+/**
+ * Déplacement unitaire : on réutilise directement le <DriveFolderPicker>
+ * (mini-navigateur visuel de dossiers Drive, façon Google Drive) au lieu de
+ * l'ancienne saisie d'ID manuelle. L'utilisateur navigue dans son arborescence
+ * et choisit le dossier de destination.
+ */
 function MoveModal({
   file,
-  currentFolderId,
+  rootFolderId,
   onCancel,
   onSubmit
 }: {
   file: DriveFile;
-  currentFolderId: string;
+  rootFolderId: string;
   onCancel: () => void;
   onSubmit: (newParentId: string) => Promise<void> | void;
 }) {
-  const [target, setTarget] = useState("");
-  const [saving, setSaving] = useState(false);
   return (
-    <ModalShell title={`Déplacer « ${file.name} »`} onCancel={onCancel}>
-      <form
-        onSubmit={async (e) => {
-          e.preventDefault();
-          const t = target.trim();
-          if (!t || t === currentFolderId) {
-            onCancel();
-            return;
-          }
-          setSaving(true);
-          await onSubmit(t);
-        }}
-        className="grid gap-3 p-4"
-      >
-        <p className="text-xs text-white/60">
-          Colle l&apos;ID du dossier Drive de destination. Le picker visuel
-          arrive en Phase 4.
-        </p>
-        <input
-          type="text"
-          value={target}
-          autoFocus
-          onChange={(e) => setTarget(e.target.value)}
-          placeholder="1abc...xyz"
-          className="w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 font-mono text-xs text-white focus:border-accent-500 focus:outline-none"
-        />
-        <div className="flex items-center justify-end gap-2 pt-1">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/70 hover:bg-white/5"
-          >
-            Annuler
-          </button>
-          <button
-            type="submit"
-            disabled={saving || !target.trim()}
-            className="inline-flex items-center gap-1 rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-600 disabled:opacity-50"
-          >
-            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-            Déplacer
-          </button>
-        </div>
-      </form>
-    </ModalShell>
+    <DriveFolderPicker
+      open
+      initialFolderId={rootFolderId}
+      onClose={onCancel}
+      onSelect={(destId) => {
+        void onSubmit(destId);
+      }}
+    />
   );
 }
 
