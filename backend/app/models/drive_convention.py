@@ -71,6 +71,17 @@ class DriveConvention(Base):
     subfolders_to_create: Mapped[Optional[Any]] = mapped_column(
         JSON, nullable=True
     )
+    # Mapping JSON {var_key: field_path} pour l'extracteur GENERIQUE par
+    # introspection. Chaque placeholder {x} du folder_name_template est
+    # résolu en allant chercher field_path sur l'entité (getattr en
+    # chaîne, supporte les relations type "lead_analysis.city"). Quand ce
+    # mapping est NULL/vide, le moteur retombe sur l'extracteur hardcodé
+    # du registry (rétrocompat des 5 types historiques). Les nouvelles
+    # conventions créées via la modale dynamique déclarent {x: "x"} pour
+    # chaque champ inséré (la variable EST le path).
+    variable_mapping: Mapped[Optional[Any]] = mapped_column(
+        JSON, nullable=True
+    )
     # Si True, on crée également une DriveEntityLink pointant vers le
     # dossier créé (lien entité ↔ dossier visible dans <DriveFolderExplorer>).
     auto_link_to_entity: Mapped[bool] = mapped_column(
