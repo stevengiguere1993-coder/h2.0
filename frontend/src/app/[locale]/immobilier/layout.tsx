@@ -18,6 +18,7 @@ import {
   Loader2,
   LogOut,
   Menu,
+  Pencil,
   Plus,
   Sparkles,
   Trash2,
@@ -391,6 +392,25 @@ function EntrepriseSelector({
     void loadCounts();
   }, [entreprises.length]);
 
+  async function renameEntreprise(e: EntrepriseLite) {
+    const name = window.prompt(`Nouveau nom pour « ${e.name} » :`, e.name);
+    const trimmed = name?.trim();
+    if (!trimmed || trimmed === e.name) return;
+    try {
+      const res = await authedFetch(`/api/v1/entreprises/${e.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: trimmed })
+      });
+      if (!res.ok) {
+        alert((await res.text()).slice(0, 240) || `HTTP ${res.status}`);
+        return;
+      }
+      await onAdded(); // refresh la liste
+    } catch (err) {
+      alert((err as Error).message);
+    }
+  }
+
   async function deleteEntreprise(e: EntrepriseLite) {
     const nb = counts[e.id] ?? 0;
     const warn =
@@ -517,6 +537,17 @@ function EntrepriseSelector({
                       <Check className="h-3.5 w-3.5" />
                     ) : null}
                   </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    void renameEntreprise(e);
+                  }}
+                  className="flex-shrink-0 rounded p-1.5 text-white/30 opacity-0 transition hover:text-sky-300 group-hover:opacity-100"
+                  title="Renommer cette entreprise"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
                 </button>
                 <button
                   type="button"
