@@ -1,5 +1,17 @@
-"""Cron: send 24h-before reminders for agenda events tied to a
-prospect. Runs hourly so the "24h window" is roughly honored.
+"""Cron: rappels (au moins ~24 h à l'avance) pour les événements
+d'agenda liés à un prospect.
+
+⚠ Ce job est lancé **une fois par jour** par le mega-cron
+(`cron_runner` / cron-job.org). Avec une exécution quotidienne, une
+fenêtre « +24 h » est insuffisante : un RDV en matinée plus tard que
+l'heure du cron n'entre dans la fenêtre que le matin même → préavis de
+quelques heures (bug observé : ~8 h au lieu de 24 h).
+
+On utilise donc une fenêtre de **48 h** : combinée au run quotidien et à
+la déduplication (`reminder_sent_at`), chaque RDV est rappelé une seule
+fois, **entre 24 h et 48 h avant — jamais moins de 24 h**. (Si le job
+repassait à un cadencement horaire, réduire la fenêtre à ~25 h pour
+viser ~24 h pile.)
 
     python -m app.jobs.appointment_reminders
 """
@@ -23,10 +35,10 @@ log = logging.getLogger(__name__)
 
 async def run() -> None:
     now = datetime.now(timezone.utc)
-    # Send reminders for events starting in the next ~25 hours, that
-    # haven't been reminded yet. The hourly cadence gives us a natural
-    # ~1h imprecision which is fine for a "day-before" reminder.
-    window_end = now + timedelta(hours=25)
+    # Fenêtre de 48 h (cf. docstring) : avec un cron quotidien, ça garantit
+    # un préavis ≥ 24 h pour tout RDV, peu importe l'heure de la journée.
+    # La déduplication via reminder_sent_at évite tout doublon.
+    window_end = now + timedelta(hours=48)
 
     async with AsyncSessionLocal() as db:
         stmt = (
