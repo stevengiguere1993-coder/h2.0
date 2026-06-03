@@ -410,10 +410,16 @@ class ImmeubleImportResult(BaseModel):
 
 
 class PlexImportRequest(BaseModel):
-    """Texte brut copié depuis PlexFlow. `dry_run` = aperçu sans écrire."""
+    """Texte brut copié depuis PlexFlow. `dry_run` = aperçu sans écrire.
+
+    `company_overrides` : mapping explicite nom de compagnie (tel que
+    parsé) → entreprise_id, pour les cas où le nom PlexFlow ne
+    correspond pas au nom Kratos (ex. « 9510-7520 Québec inc. » = BGV).
+    """
 
     raw_text: str = Field(..., min_length=1)
     dry_run: bool = True
+    company_overrides: dict[str, int] = Field(default_factory=dict)
 
 
 class PlexImportUnit(BaseModel):
