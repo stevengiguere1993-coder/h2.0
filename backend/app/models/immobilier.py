@@ -335,6 +335,33 @@ class Bail(Base, TimestampUpdateMixin):
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Signature électronique du bail (lien tokenisé envoyé au locataire).
+    # Colonnes ajoutées de façon additive via init_db (cf. db/session.py).
+    signature_token: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    sent_to_email: Mapped[Optional[str]] = mapped_column(
+        String(320), nullable=True
+    )
+    sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    signed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    signed_by_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    signature_ip: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    signature_image: Mapped[Optional[bytes]] = deferred(
+        mapped_column(LargeBinary, nullable=True)
+    )
+    signature_image_content_type: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True
+    )
+
 
 class BailRenouvellement(Base, TimestampUpdateMixin):
     """Cycle de renouvellement annuel d'un bail.

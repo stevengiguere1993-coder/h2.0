@@ -85,6 +85,7 @@ from app.api.v1.endpoints import (
     project_tasks,
     project_to_facture,
     projects,
+    public_bail,
     public_bon,
     public_devlog_contact,
     public_devlog_invoice,
@@ -208,6 +209,7 @@ api_router.include_router(public_facture.router)
 api_router.include_router(contract_sign.router)
 api_router.include_router(contract_sign.docs_router)
 api_router.include_router(public_bon.router)
+api_router.include_router(public_bail.router)
 api_router.include_router(push.router)
 api_router.include_router(appointment_types.router)
 api_router.include_router(agenda_availability.router)
