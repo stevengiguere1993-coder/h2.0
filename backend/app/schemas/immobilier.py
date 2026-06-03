@@ -404,3 +404,56 @@ class ImmeubleImportResult(BaseModel):
     immeuble: ImmeubleRead
     nb_logements_crees: int = 0
     matched_unit_id: Optional[int] = None
+
+
+# ─── Import « rent roll » PlexFlow (copier-coller) ──────────────────────
+
+
+class PlexImportRequest(BaseModel):
+    """Texte brut copié depuis PlexFlow. `dry_run` = aperçu sans écrire."""
+
+    raw_text: str = Field(..., min_length=1)
+    dry_run: bool = True
+
+
+class PlexImportUnit(BaseModel):
+    numero: str
+    tenant: Optional[str] = None
+    rent: Optional[float] = None
+    status: str
+    will_create_lease: bool = False
+    warnings: List[str] = Field(default_factory=list)
+
+
+class PlexImportBuilding(BaseModel):
+    address: str
+    city: Optional[str] = None
+    postal_code: Optional[str] = None
+    nb_units: int = 0
+    nb_leases: int = 0
+    already_exists: bool = False
+    units: List[PlexImportUnit] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
+class PlexImportCompany(BaseModel):
+    name: str
+    entreprise_id: Optional[int] = None
+    matched: bool = False
+    buildings: List[PlexImportBuilding] = Field(default_factory=list)
+
+
+class PlexImportCreated(BaseModel):
+    immeubles: int = 0
+    logements: int = 0
+    locataires: int = 0
+    baux: int = 0
+    buildings_skipped: int = 0
+
+
+class PlexImportResult(BaseModel):
+    dry_run: bool
+    companies: List[PlexImportCompany] = Field(default_factory=list)
+    totals: dict = Field(default_factory=dict)
+    created: Optional[PlexImportCreated] = None
+    warnings: List[str] = Field(default_factory=list)

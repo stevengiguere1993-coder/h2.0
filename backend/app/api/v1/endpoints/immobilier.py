@@ -17,7 +17,8 @@ Couvre :
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+import re
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, status
@@ -29,6 +30,7 @@ from app.core.security import decode_token
 from app.repositories.user import UserRepository
 
 from app.api.deps import CurrentUser, DBSession
+from app.models.entreprise import Entreprise
 from app.models.immobilier import (
     Bail,
     BailStatus,
@@ -75,7 +77,14 @@ from app.schemas.immobilier import (
     MaintenanceOrdreUpdate,
     PaiementLoyerCreate,
     PaiementLoyerRead,
+    PlexImportBuilding,
+    PlexImportCompany,
+    PlexImportCreated,
+    PlexImportRequest,
+    PlexImportResult,
+    PlexImportUnit,
 )
+from app.services.plexflow_import import parse_plexflow
 
 
 log = logging.getLogger(__name__)
@@ -1326,4 +1335,199 @@ async def import_immeuble_from_matricule(
         immeuble=_immeuble_to_read(imm),
         nb_logements_crees=nb_crees,
         matched_unit_id=getattr(unit, "id", None),
+    )
+
+
+# ── Import « rent roll » PlexFlow (copier-coller) ──────────────────────
+
+
+def _norm_company(name: str) -> str:
+    s = (name or "").strip().lower().rstrip(",.").strip()
+    return re.sub(r"\s+", " ", s)
+
+
+def _norm_address(addr: str) -> str:
+    return re.sub(r"\s+", " ", (addr or "").strip().lower()).rstrip(",.")
+
+
+@router.post("/import-plexflow", response_model=PlexImportResult)
+async def import_plexflow(
+    payload: PlexImportRequest, db: DBSession, user: CurrentUser
+) -> PlexImportResult:
+    """Parse un rent roll collé depuis PlexFlow et (si `dry_run=False`)
+    crée immeubles + logements + locataires + baux, rattachés à la
+    compagnie correspondante (match par nom). `dry_run=True` retourne
+    seulement l'aperçu sans rien écrire."""
+    _require_volet(user)
+    companies, warnings = parse_plexflow(payload.raw_text)
+
+    ent_rows = (await db.execute(select(Entreprise))).scalars().all()
+    by_norm: dict[str, Entreprise] = {}
+    for e in ent_rows:
+        by_norm.setdefault(_norm_company(e.name), e)
+
+    created = PlexImportCreated()
+    out_companies: list[PlexImportCompany] = []
+
+    # PlexFlow ne fournit pas les dates de bail : valeurs par défaut.
+    today = _now().date()
+    default_debut = today.replace(day=1)
+    default_fin = default_debut + timedelta(days=365)
+    import_note = (
+        f"Importé de PlexFlow le {today.isoformat()} — dates à confirmer."
+    )
+
+    for comp in companies:
+        ent = by_norm.get(_norm_company(comp.name))
+        oc = PlexImportCompany(
+            name=comp.name,
+            entreprise_id=ent.id if ent else None,
+            matched=ent is not None,
+        )
+
+        existing_addr: set[str] = set()
+        if ent is not None:
+            rows = (
+                await db.execute(
+                    select(Immeuble.address)
+                    .join(
+                        ImmeubleOwnership,
+                        ImmeubleOwnership.immeuble_id == Immeuble.id,
+                    )
+                    .where(ImmeubleOwnership.entreprise_id == ent.id)
+                )
+            ).scalars().all()
+            existing_addr = {_norm_address(a) for a in rows if a}
+
+        for b in comp.buildings:
+            dup = _norm_address(b.address) in existing_addr
+            units_out: list[PlexImportUnit] = []
+            leases = 0
+            for u in b.units:
+                will_lease = bool(
+                    u.tenant and u.rent and u.status in ("active", "scheduled")
+                )
+                if will_lease:
+                    leases += 1
+                units_out.append(
+                    PlexImportUnit(
+                        numero=u.numero,
+                        tenant=u.tenant,
+                        rent=u.rent,
+                        status=u.status,
+                        will_create_lease=will_lease,
+                        warnings=list(u.warnings),
+                    )
+                )
+            ob = PlexImportBuilding(
+                address=b.address,
+                city=b.city,
+                postal_code=b.postal_code,
+                nb_units=len(b.units),
+                nb_leases=leases,
+                already_exists=dup,
+                units=units_out,
+                warnings=list(b.warnings),
+            )
+
+            if not payload.dry_run and ent is not None and not dup:
+                imm = Immeuble(
+                    name=f"{b.address}, {b.city}" if b.city else b.address,
+                    address=b.address,
+                    city=b.city,
+                    postal_code=b.postal_code,
+                    type=ImmeubleType.RESIDENTIEL.value,
+                    nb_logements=len(b.units),
+                    is_active=True,
+                )
+                imm.created_at = _now()
+                imm.updated_at = _now()
+                db.add(imm)
+                await db.flush()
+                db.add(
+                    ImmeubleOwnership(
+                        immeuble_id=imm.id,
+                        entreprise_id=ent.id,
+                        ownership_pct=100.0,
+                    )
+                )
+                created.immeubles += 1
+                existing_addr.add(_norm_address(b.address))
+
+                for u, pu in zip(b.units, units_out):
+                    if pu.will_create_lease and u.status == "active":
+                        lstatus = LogementStatus.OCCUPE.value
+                    elif pu.will_create_lease and u.status == "scheduled":
+                        lstatus = LogementStatus.RESERVE.value
+                    else:
+                        lstatus = LogementStatus.VACANT.value
+                    log_obj = Logement(
+                        immeuble_id=imm.id,
+                        numero=(u.numero or "—")[:32],
+                        type=ImmeubleType.RESIDENTIEL.value,
+                        status=lstatus,
+                        loyer_demande=u.rent,
+                    )
+                    log_obj.created_at = _now()
+                    log_obj.updated_at = _now()
+                    db.add(log_obj)
+                    await db.flush()
+                    created.logements += 1
+
+                    if pu.will_create_lease:
+                        loc = Locataire(full_name=(u.tenant or "")[:255])
+                        loc.created_at = _now()
+                        loc.updated_at = _now()
+                        db.add(loc)
+                        await db.flush()
+                        created.locataires += 1
+                        bail = Bail(
+                            logement_id=log_obj.id,
+                            locataire_id=loc.id,
+                            date_debut=default_debut,
+                            date_fin=default_fin,
+                            loyer_mensuel=u.rent,
+                            status=(
+                                BailStatus.ACTIF.value
+                                if u.status == "active"
+                                else BailStatus.PROPOSE.value
+                            ),
+                            notes=import_note,
+                        )
+                        bail.created_at = _now()
+                        bail.updated_at = _now()
+                        db.add(bail)
+                        created.baux += 1
+            elif not payload.dry_run and dup:
+                created.buildings_skipped += 1
+
+            oc.buildings.append(ob)
+
+        if not oc.matched:
+            warnings.append(
+                f"Compagnie « {comp.name} » introuvable dans Kratos — "
+                "ses immeubles n'ont pas été importés."
+            )
+        out_companies.append(oc)
+
+    if not payload.dry_run:
+        await db.commit()
+
+    totals = {
+        "companies": len(out_companies),
+        "companies_matched": sum(1 for c in out_companies if c.matched),
+        "buildings": sum(len(c.buildings) for c in out_companies),
+        "buildings_duplicate": sum(
+            1 for c in out_companies for b in c.buildings if b.already_exists
+        ),
+        "units": sum(b.nb_units for c in out_companies for b in c.buildings),
+        "leases": sum(b.nb_leases for c in out_companies for b in c.buildings),
+    }
+
+    return PlexImportResult(
+        dry_run=payload.dry_run,
+        companies=out_companies,
+        totals=totals,
+        created=None if payload.dry_run else created,
+        warnings=warnings,
     )

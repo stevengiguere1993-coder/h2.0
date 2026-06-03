@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   Building2,
   CheckCircle2,
+  ClipboardPaste,
   Download,
   Loader2,
   Plus,
@@ -56,6 +57,7 @@ export default function ImmeublesListPage() {
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showPlex, setShowPlex] = useState(false);
 
   const currentEnt = entreprises.find((e) => e.id === currentEntrepriseId) || null;
 
@@ -101,6 +103,14 @@ export default function ImmeublesListPage() {
         ]}
         rightSlot={
           <>
+            <button
+              type="button"
+              onClick={() => setShowPlex(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-200 hover:bg-violet-500/20"
+            >
+              <ClipboardPaste className="h-3.5 w-3.5" />
+              Importer PlexFlow
+            </button>
             <button
               type="button"
               onClick={() => setShowImport(true)}
@@ -269,6 +279,13 @@ export default function ImmeublesListPage() {
             setShowImport(false);
             void reload();
           }}
+        />
+      ) : null}
+
+      {showPlex ? (
+        <ImportPlexflowModal
+          onClose={() => setShowPlex(false)}
+          onImported={() => void reload()}
         />
       ) : null}
     </>
@@ -687,5 +704,308 @@ function ImportMatriculeModal({
         </div>
       </form>
     </ModalShell>
+  );
+}
+
+// ─── Import « rent roll » PlexFlow (copier-coller) ──────────────────────
+
+type PlexUnit = {
+  numero: string;
+  tenant: string | null;
+  rent: number | null;
+  status: string;
+  will_create_lease: boolean;
+  warnings: string[];
+};
+type PlexBuilding = {
+  address: string;
+  city: string | null;
+  postal_code: string | null;
+  nb_units: number;
+  nb_leases: number;
+  already_exists: boolean;
+  units: PlexUnit[];
+  warnings: string[];
+};
+type PlexCompany = {
+  name: string;
+  entreprise_id: number | null;
+  matched: boolean;
+  buildings: PlexBuilding[];
+};
+type PlexResult = {
+  dry_run: boolean;
+  companies: PlexCompany[];
+  totals: Record<string, number>;
+  created: {
+    immeubles: number;
+    logements: number;
+    locataires: number;
+    baux: number;
+    buildings_skipped: number;
+  } | null;
+  warnings: string[];
+};
+
+function ImportPlexflowModal({
+  onClose,
+  onImported
+}: {
+  onClose: () => void;
+  onImported: () => void;
+}) {
+  const [raw, setRaw] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [preview, setPreview] = useState<PlexResult | null>(null);
+  const [committed, setCommitted] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function run(dryRun: boolean) {
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await authedFetch("/api/v1/immobilier/import-plexflow", {
+        method: "POST",
+        body: JSON.stringify({ raw_text: raw, dry_run: dryRun })
+      });
+      if (res.status === 401)
+        throw new Error("Session expirée — reconnecte-toi puis réessaie.");
+      if (!res.ok)
+        throw new Error((await res.text()).slice(0, 300) || `http_${res.status}`);
+      const data = (await res.json()) as PlexResult;
+      setPreview(data);
+      if (!dryRun) {
+        setCommitted(true);
+        onImported();
+      }
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const importable =
+    !!preview &&
+    preview.companies.some(
+      (c) => c.matched && c.buildings.some((b) => !b.already_exists)
+    );
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+      <div className="my-8 w-full max-w-3xl rounded-2xl border border-brand-800 bg-brand-950 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-brand-800 px-5 py-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-violet-300">
+            Importer depuis PlexFlow
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-1.5 text-white/60 hover:bg-brand-900 hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-4 p-5">
+          {!committed ? (
+            <>
+              <p className="text-xs text-white/60">
+                Copie une ou plusieurs fiches « Property » depuis PlexFlow et
+                colle-les ici. Les compagnies sont rattachées par leur nom aux
+                entreprises déjà créées dans Kratos. Prévisualise d&apos;abord,
+                puis importe.
+              </p>
+              <textarea
+                value={raw}
+                onChange={(e) => setRaw(e.target.value)}
+                rows={8}
+                placeholder="Colle ici le texte copié depuis PlexFlow…"
+                className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 font-mono text-xs text-white/90 outline-none focus:border-violet-300"
+              />
+            </>
+          ) : null}
+
+          {err ? (
+            <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+              {err}
+            </p>
+          ) : null}
+
+          {committed && preview?.created ? (
+            <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+              <p className="font-semibold">Import terminé ✅</p>
+              <p className="mt-1 text-xs">
+                {preview.created.immeubles} immeuble(s) ·{" "}
+                {preview.created.logements} logement(s) ·{" "}
+                {preview.created.locataires} locataire(s) ·{" "}
+                {preview.created.baux} bail/baux créés.
+                {preview.created.buildings_skipped > 0
+                  ? ` ${preview.created.buildings_skipped} immeuble(s) déjà présent(s) ignoré(s).`
+                  : ""}
+              </p>
+            </div>
+          ) : null}
+
+          {preview ? (
+            <PlexPreview result={preview} />
+          ) : null}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-brand-800 px-5 py-3">
+          {committed ? (
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg bg-violet-500/20 px-4 py-2 text-xs font-semibold text-violet-100 hover:bg-violet-500/30"
+            >
+              Fermer
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-lg border border-white/15 px-4 py-2 text-xs font-semibold text-white/70 hover:text-white"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={() => void run(true)}
+                disabled={loading || !raw.trim()}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-brand-900 px-4 py-2 text-xs font-semibold text-white/80 hover:text-white disabled:opacity-50"
+              >
+                {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                Prévisualiser
+              </button>
+              <button
+                type="button"
+                onClick={() => void run(false)}
+                disabled={loading || !importable}
+                title={
+                  !importable
+                    ? "Prévisualise d'abord ; au moins une compagnie doit être reconnue."
+                    : "Créer les immeubles, logements, locataires et baux"
+                }
+                className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/30 bg-violet-500/15 px-4 py-2 text-xs font-semibold text-violet-100 hover:bg-violet-500/25 disabled:opacity-50"
+              >
+                {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                Importer pour de vrai
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlexPreview({ result }: { result: PlexResult }) {
+  const t = result.totals || {};
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2 text-[11px]">
+        <span className="rounded-full bg-brand-900 px-2.5 py-1 text-white/70">
+          {t.companies_matched ?? 0}/{t.companies ?? 0} compagnies reconnues
+        </span>
+        <span className="rounded-full bg-brand-900 px-2.5 py-1 text-white/70">
+          {t.buildings ?? 0} immeubles
+        </span>
+        <span className="rounded-full bg-brand-900 px-2.5 py-1 text-white/70">
+          {t.units ?? 0} logements
+        </span>
+        <span className="rounded-full bg-brand-900 px-2.5 py-1 text-white/70">
+          {t.leases ?? 0} baux
+        </span>
+        {t.buildings_duplicate ? (
+          <span className="rounded-full bg-amber-500/15 px-2.5 py-1 text-amber-200">
+            {t.buildings_duplicate} déjà présent(s)
+          </span>
+        ) : null}
+      </div>
+
+      {result.warnings.length > 0 ? (
+        <ul className="space-y-1 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2 text-[11px] text-amber-200">
+          {result.warnings.map((w, i) => (
+            <li key={i} className="flex gap-1.5">
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+              {w}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      <div className="space-y-2">
+        {result.companies.map((c, ci) => (
+          <div
+            key={ci}
+            className="rounded-lg border border-brand-800 bg-brand-900/40 p-3"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-semibold text-white">{c.name}</span>
+              {c.matched ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                  <CheckCircle2 className="h-3 w-3" /> rattachée
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+                  <AlertTriangle className="h-3 w-3" /> introuvable — ignorée
+                </span>
+              )}
+            </div>
+            <div className="mt-2 space-y-1.5">
+              {c.buildings.map((b, bi) => (
+                <details key={bi} className="rounded-md bg-brand-950/50 px-2 py-1.5">
+                  <summary className="cursor-pointer text-xs text-white/80">
+                    <span className="font-medium text-white">{b.address}</span>
+                    {b.city ? `, ${b.city}` : ""}{" "}
+                    <span className="text-white/50">
+                      — {b.nb_units} logements · {b.nb_leases} baux
+                    </span>
+                    {b.already_exists ? (
+                      <span className="ml-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-200">
+                        déjà importé
+                      </span>
+                    ) : null}
+                  </summary>
+                  {b.warnings.map((w, wi) => (
+                    <p key={wi} className="mt-1 text-[10px] text-amber-300/90">
+                      ⚠ {w}
+                    </p>
+                  ))}
+                  <table className="mt-1.5 w-full text-[11px]">
+                    <tbody className="divide-y divide-brand-800/60">
+                      {b.units.map((u, ui) => (
+                        <tr key={ui} className="text-white/70">
+                          <td className="py-0.5 pr-2 font-mono">{u.numero}</td>
+                          <td className="py-0.5 pr-2">{u.tenant || "—"}</td>
+                          <td className="py-0.5 pr-2 text-right tabular-nums">
+                            {u.rent ? fmtCurrency(u.rent) : "—"}
+                          </td>
+                          <td className="py-0.5 text-right">
+                            <span
+                              className={
+                                u.status === "active"
+                                  ? "text-emerald-300"
+                                  : u.status === "vacant"
+                                    ? "text-white/40"
+                                    : "text-sky-300"
+                              }
+                            >
+                              {u.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </details>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
