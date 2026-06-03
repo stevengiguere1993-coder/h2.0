@@ -21,7 +21,7 @@ import {
   Pencil,
   Plus,
   Sparkles,
-  Trash2,
+  Unlink,
   Wrench,
   X
 } from "lucide-react";
@@ -416,25 +416,28 @@ function EntrepriseSelector({
     const nb = counts[e.id] ?? 0;
     const warn =
       nb > 0
-        ? `\n\n⚠ Cette entreprise détient ${nb} immeuble${nb > 1 ? "s" : ""}. La suppression retirera l'ownership et toutes les données liées (tâches, finance, etc.).`
+        ? `\n\nLes ${nb} immeuble${nb > 1 ? "s" : ""} détenu${nb > 1 ? "s" : ""} ne seront plus rattaché${nb > 1 ? "s" : ""} à cette compagnie (les immeubles restent, sans propriétaire).`
         : "";
+    // Séparation des volets : on RETIRE seulement la compagnie du
+    // portefeuille immobilier (délie les immeubles). On NE supprime PAS
+    // la compagnie ni ses tâches côté gestion d'entreprise.
     if (
       !confirm(
-        `Supprimer définitivement l'entreprise « ${e.name} » ?${warn}`
+        `Retirer « ${e.name} » du portefeuille immobilier ?${warn}`
       )
     )
       return;
     setDeleting(e.id);
     try {
-      const res = await authedFetch(`/api/v1/entreprises/${e.id}`, {
-        method: "DELETE"
-      });
+      const res = await authedFetch(
+        `/api/v1/immobilier/entreprises/${e.id}/retirer-portefeuille`,
+        { method: "POST" }
+      );
       if (!res.ok && res.status !== 204) {
         const t = await res.text();
         alert(t.slice(0, 240) || `HTTP ${res.status}`);
         return;
       }
-      // Si on supprime l'entreprise active, retombe sur « Toutes ».
       if (currentId === e.id) onChange(null);
       await onAdded(); // refresh la liste
       void loadCounts();
@@ -557,13 +560,13 @@ function EntrepriseSelector({
                     void deleteEntreprise(e);
                   }}
                   disabled={deleting === e.id}
-                  className="flex-shrink-0 rounded p-1.5 text-white/30 opacity-0 transition hover:text-rose-300 group-hover:opacity-100 disabled:opacity-50"
-                  title="Supprimer cette entreprise"
+                  className="flex-shrink-0 rounded p-1.5 text-white/30 opacity-0 transition hover:text-amber-300 group-hover:opacity-100 disabled:opacity-50"
+                  title="Retirer du portefeuille immobilier (ne supprime pas la compagnie)"
                 >
                   {deleting === e.id ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
-                    <Trash2 className="h-3.5 w-3.5" />
+                    <Unlink className="h-3.5 w-3.5" />
                   )}
                 </button>
               </div>
