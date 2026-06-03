@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
@@ -113,6 +114,14 @@ export default function SuivisPage() {
           — relances commerciales aux prospects et clients ayant reçu une
           soumission.
         </p>
+
+        <PageDriveSection
+          pageKey="page:app:suivis"
+          pole="Construction"
+          label="Suivis"
+          route="/app/suivis"
+          className="mt-6"
+        />
 
         {loading ? (
           <div className="mt-10 flex items-center justify-center">

@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
@@ -402,6 +403,14 @@ export default function AssignationsPage() {
             </p>
           </div>
         </div>
+
+        <PageDriveSection
+          pageKey="page:app:assignations"
+          pole="Construction"
+          label="Assignations"
+          route="/app/assignations"
+          className="mb-4"
+        />
 
         {error ? (
           <p className="mb-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">

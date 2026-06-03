@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { Link } from "@/i18n/navigation";
 import { authedFetch } from "@/lib/auth";
 import { useAppLayout } from "../../layout";
@@ -252,6 +253,14 @@ export default function CrmAujourdhuiPage() {
           Ta queue de prospection — appels et relances à faire aujourd&apos;hui,
           en retard d&apos;abord.
         </p>
+
+        <PageDriveSection
+          pageKey="page:app:crm-aujourdhui"
+          pole="Construction"
+          label="CRM — Aujourd'hui"
+          route="/app/crm/aujourdhui"
+          className="mt-6"
+        />
 
         {error ? (
           <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">

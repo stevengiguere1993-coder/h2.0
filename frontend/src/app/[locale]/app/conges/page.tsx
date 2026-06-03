@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { useAppLayout } from "../layout";
 import { authedFetch } from "@/lib/auth";
 
@@ -152,6 +153,14 @@ export default function CongesAdminPage() {
       />
 
       <div className="p-4 lg:p-6">
+        <PageDriveSection
+          pageKey="page:app:conges"
+          pole="Construction"
+          label="Congés"
+          route="/app/conges"
+          className="mb-4"
+        />
+
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-xl font-bold text-white">Vacances & congés</h1>
           <button

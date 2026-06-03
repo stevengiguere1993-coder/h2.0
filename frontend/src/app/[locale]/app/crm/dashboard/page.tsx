@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { authedFetch } from "@/lib/auth";
 import { useAppLayout } from "../../layout";
 
@@ -168,6 +169,14 @@ export default function CrmDashboardPage() {
           Volume de leads, conversion et performance par prospecteur
           sur les {period} derniers jours.
         </p>
+
+        <PageDriveSection
+          pageKey="page:app:crm-dashboard"
+          pole="Construction"
+          label="CRM — Tableau de bord"
+          route="/app/crm/dashboard"
+          className="mt-6"
+        />
 
         {error ? (
           <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">

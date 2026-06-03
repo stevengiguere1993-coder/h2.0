@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import { AppTopbar } from "@/components/app-topbar";
+import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { AddressInput } from "@/components/address-input";
 import { Link } from "@/i18n/navigation";
 import { useAppLayout } from "../layout";
@@ -638,6 +639,14 @@ export default function AgendaPage() {
       />
 
       <div className="p-4 lg:p-6">
+        <PageDriveSection
+          pageKey="page:app:agenda"
+          pole="Construction"
+          label="Agenda"
+          route="/app/agenda"
+          className="mb-4"
+        />
+
         {error ? (
           <p className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">
             {error}
