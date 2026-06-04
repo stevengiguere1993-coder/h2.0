@@ -398,7 +398,10 @@ export function SoumissionClientView({
 
               {/* Autres fonctionnalités (hors module) — fonctionnalités
                   directes, toujours incluses dans l'investissement
-                  initial (non décochables, pas rattachées à un module). */}
+                  initial (non décochables, pas rattachées à un module).
+                  Côté client, on liste les NOMS sans prix individuel
+                  (comme les modules) et on n'affiche qu'UN SEUL total pour
+                  tout le bloc. */}
               {directFeatures.length > 0 ? (
                 <div className="mt-4">
                   <div className="flex items-center gap-2">
@@ -408,20 +411,32 @@ export function SoumissionClientView({
                     </h3>
                   </div>
                   <div className="mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white">
-                    <table className="w-full text-sm">
-                      <tbody className="divide-y divide-slate-200">
+                    <div className="p-4">
+                      <ul className="space-y-1">
                         {directFeatures.map((feat, idx) => (
-                          <tr key={`direct-${idx}`}>
-                            <td className="px-4 py-2 text-slate-800">
-                              {feat.description || "—"}
-                            </td>
-                            <td className="px-4 py-2 text-right text-slate-800">
-                              {fmtMoney(feat.prix_client)}
-                            </td>
-                          </tr>
+                          <li
+                            key={`direct-${idx}`}
+                            className="flex items-start gap-2 text-sm text-slate-600"
+                          >
+                            <span className="mt-1.5 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-slate-400" />
+                            <span>{feat.description || "—"}</span>
+                          </li>
                         ))}
-                      </tbody>
-                    </table>
+                      </ul>
+                    </div>
+                    <div className="flex items-baseline justify-between gap-3 border-t border-slate-200 bg-slate-50 px-4 py-2">
+                      <span className="text-sm font-semibold text-slate-700">
+                        Total
+                      </span>
+                      <span className="text-sm font-bold text-slate-800">
+                        {fmtMoney(
+                          directFeatures.reduce(
+                            (acc, feat) => acc + (feat.prix_client || 0),
+                            0
+                          )
+                        )}
+                      </span>
+                    </div>
                   </div>
                 </div>
               ) : null}
@@ -557,3 +572,4 @@ export function SoumissionClientView({
     </>
   );
 }
+
