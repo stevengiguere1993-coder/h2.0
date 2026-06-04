@@ -93,14 +93,19 @@ async def schedule_appointment(
     await db.flush()
     await db.refresh(event)
 
-    # Auto-transition vers "rdv_prevu" si le prospect est encore en
-    # debut de pipeline. On evite d'ecraser un statut deja avance
-    # (qualified/quoted/won/lost/spam) — la planification d'un RDV
-    # supplementaire ne doit pas faire reculer le pipeline.
-    if prospect.status in (
-        ContactRequestStatus.NEW.value,
-        ContactRequestStatus.CONTACTED.value,
-    ):
+    # Auto-transition vers "rdv_prevu" : planifier un RDV doit toujours
+    # refleter le prochain rendez-vous a venir. On bascule donc depuis
+    # n'importe quel statut ACTIF (new, contacted, qualified, quoted),
+    # y compris apres l'envoi d'une soumission. On ne touche PAS aux
+    # dossiers CLOS (won/lost/spam) pour ne pas ressusciter un dossier
+    # termine. Re-affecter "rdv_prevu" a un prospect deja en "rdv_prevu"
+    # est un no-op sans effet de bord.
+    _CLOSED_STATUSES = {
+        ContactRequestStatus.WON.value,
+        ContactRequestStatus.LOST.value,
+        ContactRequestStatus.SPAM.value,
+    }
+    if prospect.status not in _CLOSED_STATUSES:
         prospect.status = ContactRequestStatus.RDV_PREVU.value
 
     # Un RDV planifié remplace les relances automatiques : on suspend la
