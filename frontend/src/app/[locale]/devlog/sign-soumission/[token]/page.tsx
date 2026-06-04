@@ -294,6 +294,14 @@ export default function SignSoumissionPage() {
   // Modules à proposer en sélection (on retire les offerts, montrés à
   // part dans « Inclus gratuitement »).
   const selectableModules = modules.filter((m) => !m.offert);
+  // Nom du module déclencheur d'une gratuité (free_when_module_id), pour
+  // afficher la condition « Si le module "<nom>" est sélectionné » dans
+  // la section « Inclus gratuitement ».
+  const triggerModuleName = (id: number | null): string | null => {
+    if (id === null || id === undefined) return null;
+    const trigger = modules.find((mod) => mod.id === id);
+    return trigger ? trigger.name : null;
+  };
   const hasInitial =
     features.length > 0 ||
     fraisFixes.length > 0 ||
@@ -493,17 +501,10 @@ export default function SignSoumissionPage() {
                                   {m.features.map((feat, fi) => (
                                     <li
                                       key={`mf-${m.id}-${fi}`}
-                                      className="flex items-start justify-between gap-3 text-sm text-slate-600"
+                                      className="flex items-start gap-2 text-sm text-slate-600"
                                     >
-                                      <span className="flex items-start gap-2">
-                                        <span className="mt-1.5 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-blue-400" />
-                                        <span>{feat.description || "—"}</span>
-                                      </span>
-                                      {checked && feat.prix_client > 0 ? (
-                                        <span className="flex-shrink-0 text-xs text-slate-500">
-                                          {fmtMoney(feat.prix_client)}
-                                        </span>
-                                      ) : null}
+                                      <span className="mt-1.5 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-blue-400" />
+                                      <span>{feat.description || "—"}</span>
                                     </li>
                                   ))}
                                 </ul>
@@ -525,7 +526,11 @@ export default function SignSoumissionPage() {
                         </h3>
                       </div>
                       <div className="mt-2 space-y-3">
-                        {offeredModules.map((m) => (
+                        {offeredModules.map((m) => {
+                          const triggerName = triggerModuleName(
+                            m.free_when_module_id
+                          );
+                          return (
                           <div
                             key={`free-${m.id}`}
                             className="overflow-hidden rounded-xl border border-emerald-200 bg-emerald-50 p-4"
@@ -538,6 +543,12 @@ export default function SignSoumissionPage() {
                                 Offert
                               </span>
                             </div>
+                            {triggerName ? (
+                              <p className="mt-1 text-xs font-medium italic text-emerald-700">
+                                (Si le module &laquo;&nbsp;{triggerName}&nbsp;&raquo; est
+                                sélectionné)
+                              </p>
+                            ) : null}
                             {m.features.length > 0 ? (
                               <ul className="mt-2 space-y-1">
                                 {m.features.map((feat, fi) => (
@@ -555,7 +566,8 @@ export default function SignSoumissionPage() {
                               {fmtMoney(0)}
                             </p>
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   ) : null}
@@ -747,7 +759,7 @@ export default function SignSoumissionPage() {
                     placeholder="Prénom Nom"
                     value={signedName}
                     onChange={(e) => setSignedName(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
                 </label>
 
