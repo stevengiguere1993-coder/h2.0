@@ -26,7 +26,9 @@ from app.api.v1.endpoints import (
     lea_web,
     letmetalk,
     webhooks_meta,
+    activity,
     ai,
+    api_keys,
     appointments,
     audit,
     auth,
@@ -151,6 +153,12 @@ api_router = APIRouter()
 # Core
 api_router.include_router(auth.router)
 api_router.include_router(users.router)
+# Clés d'API personnelles (gestion via JWT) + activité du compte
+# (lecture seule via clé d'API krts_...). Socle « Temps 1 » pour les
+# agents externes de Phil. api_keys = CRUD des clés (auth JWT) ;
+# activity = lecture de l'activité du compte (auth par clé d'API).
+api_router.include_router(api_keys.router)
+api_router.include_router(activity.router)
 api_router.include_router(clients.router)
 # Le pôle Dev Logiciel est restreint à admin/owner (Phil + Steven).
 # La garde est appliquée à TOUS les routers internes du pôle ; seuls
