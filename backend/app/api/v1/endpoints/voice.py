@@ -2366,7 +2366,7 @@ async def create_outbound_call(
     décroché. Crée la ligne `Call` AVANT l'API call pour pouvoir
     référencer `call_id` dans l'URL du bridge TwiML.
     """
-    target = payload.target_e164.strip()
+    target = _normalize_e164(payload.target_e164)
     if not target.startswith("+"):
         raise HTTPException(status_code=400, detail="target must be E.164 (+...)")
     if payload.entity_type and payload.entity_type not in SUPPORTED_ENTITY_TYPES:
@@ -3664,7 +3664,7 @@ async def list_sms_threads(
 async def send_sms(
     payload: SmsSend, user: CurrentUser, db: DBSession
 ) -> SmsRead:
-    target = payload.to_e164.strip()
+    target = _normalize_e164(payload.to_e164)
     if not target.startswith("+"):
         raise HTTPException(status_code=400, detail="to_e164 must be E.164 (+...)")
 
