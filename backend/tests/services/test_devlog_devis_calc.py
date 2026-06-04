@@ -158,13 +158,18 @@ def test_unselected_module_excluded():
     items = [
         _Item(1, "feature", heures=40, module_id=10),  # compté
         _Item(2, "feature", heures=100, module_id=20),  # exclu
-        _Item(3, "manager_task", heures=5, module_id=10),  # compté
-        _Item(4, "manager_task", heures=99, module_id=20),  # exclu
+        _Item(3, "manager_task", heures=5, module_id=10),  # compté (global)
+        _Item(4, "manager_task", heures=99, module_id=20),  # compté (global)
         _Item(5, "feature", heures=10, module_id=None),  # sans module
     ]
     ini = compute_devis(soum, items, mods)["initial"]
-    assert ini["couts_dev"] == 3750.0  # (40+10)*75
-    assert ini["cout_manager"] == 400.0  # 5*80
+    # Un module NON sélectionné est EXCLU : sa feature ne contribue ni à
+    # la base ni à la vue client (contrairement à un module OFFERT dont
+    # le coût est rechargé). couts_dev = (40+10)*75.
+    assert ini["couts_dev"] == 3750.0
+    # Les manager_task sont GLOBALES (jamais filtrées par module ni par
+    # sélection) : (5+99)*80 = 8320.
+    assert ini["cout_manager"] == 8320.0
     client_ids = [f["id"] for f in ini["features_client"]]
     assert 2 not in client_ids
     assert 5 in client_ids  # item sans module toujours compté
@@ -176,6 +181,8 @@ def test_unselected_module_excluded():
 
 
 def test_free_module_when_trigger_selected():
+    """Module offert : son COÛT est RECHARGÉ (entre dans la base), mais
+    son prix CLIENT reste 0 — il est listé « offert »."""
     soum = _Soum(heures_manager=0)
     mods = [
         _Module(10, selected=True),
@@ -183,21 +190,123 @@ def test_free_module_when_trigger_selected():
     ]
     items = [
         _Item(1, "feature", heures=40, module_id=10),
-        _Item(2, "feature", heures=20, module_id=30),  # gratuit
-        _Item(3, "manager_task", heures=4, module_id=30),  # offert
+        _Item(2, "feature", heures=20, module_id=30),  # offert (rechargé)
     ]
     ini = compute_devis(soum, items, mods)["initial"]
-    assert ini["couts_dev"] == 3000.0  # 40*75, module 30 gratuit
-    assert ini["cout_manager"] == 0.0
+    # Phase 4 : le coût du module offert ENTRE dans la base.
+    # couts_dev = 40*75 (payant) + 20*75 (offert rechargé) = 4500.
+    assert ini["couts_dev"] == 4500.0
+    # Le module offert affiche un prix client 0.
     f2 = next(f for f in ini["features_client"] if f["id"] == 2)
     assert f2["prix_client"] == 0.0
     assert f2["offert"] is True
+    # Le module payant absorbe le coût de l'offert : son prix client est
+    # > au coût dev brut du payant seul (3000 * (1+marge)) — la marge est
+    # préservée sur la base GONFLÉE par l'offert.
+    f1 = next(f for f in ini["features_client"] if f["id"] == 1)
+    assert f1["offert"] is False
+    assert f1["prix_client"] > 3000 * (1 + 0.5)  # absorbe le cadeau
     mod30 = next(m for m in ini["modules"] if m["id"] == 30)
     assert mod30["offert"] is True
     assert mod30["prix_client"] == 0.0
     # heures restent visibles côté interne
     assert mod30["total_heures_dev"] == 20.0
-    assert mod30["total_heures_manager"] == 4.0
+    # Invariant : Σ(prix client) == total_final.
+    sum_client = sum(f["prix_client"] for f in ini["features_client"]) + sum(
+        ff["prix_client"] for ff in ini["frais_fixes_client"]
+    )
+    assert abs(round(sum_client, 2) - ini["total_final"]) <= 0.01
+
+
+def test_free_module_cost_recharged_on_paying_modules():
+    """Le coût de l'offert est rechargé : à features payantes égales,
+    ajouter un module OFFERT augmente le prix des payantes et le
+    total_final, tout en gardant l'invariant et la marge."""
+    soum = _Soum(heures_manager=0)
+
+    # (a) Référence : un seul module payant, pas d'offert.
+    mods_a = [_Module(10, selected=True)]
+    items_a = [_Item(1, "feature", heures=40, module_id=10)]
+    ini_a = compute_devis(soum, items_a, mods_a)["initial"]
+
+    # (b) Même module payant + un module OFFERT déclenché par le payant.
+    mods_b = [
+        _Module(10, selected=True),
+        _Module(30, selected=True, free_when_module_id=10),
+    ]
+    items_b = [
+        _Item(1, "feature", heures=40, module_id=10),
+        _Item(2, "feature", heures=20, module_id=30),  # offert
+    ]
+    ini_b = compute_devis(soum, items_b, mods_b)["initial"]
+
+    # Le coût de l'offert gonfle la base et le total_final.
+    assert ini_b["couts_dev"] > ini_a["couts_dev"]
+    assert ini_b["total_final"] > ini_a["total_final"]
+    # Le module payant absorbe : son prix client augmente.
+    f1_a = next(f for f in ini_a["features_client"] if f["id"] == 1)
+    f1_b = next(f for f in ini_b["features_client"] if f["id"] == 1)
+    assert f1_b["prix_client"] > f1_a["prix_client"]
+    # L'offert reste à 0 côté client.
+    f2_b = next(f for f in ini_b["features_client"] if f["id"] == 2)
+    assert f2_b["prix_client"] == 0.0
+    # Invariant respecté dans les deux cas.
+    for ini in (ini_a, ini_b):
+        s = sum(f["prix_client"] for f in ini["features_client"]) + sum(
+            ff["prix_client"] for ff in ini["frais_fixes_client"]
+        )
+        assert abs(round(s, 2) - ini["total_final"]) <= 0.01
+    # Marge préservée : le total_final correspond à la base * (1+marge) /
+    # divisor (formule inchangée). On le vérifie via marge_pct affichée.
+    assert ini_b["marge_pct"] == ini_a["marge_pct"] == 50.0
+
+
+def test_all_free_modules_no_crash():
+    """Cas limite : TOUS les modules retenus sont offerts. Pas de module
+    payant pour absorber → on retombe sur l'ancien comportement (coût de
+    l'offert exclu de la base), sans crash ni division par zéro."""
+    soum = _Soum(heures_manager=0)
+    # Module 10 déclencheur sans feature, module 30 offert avec features,
+    # plus un frais fixe pour porter le total_final.
+    mods = [
+        _Module(10, selected=True),
+        _Module(30, selected=True, free_when_module_id=10),
+    ]
+    items = [
+        _Item(2, "feature", heures=20, module_id=30),  # offert
+        _Item(3, "feature", heures=10, module_id=30),  # offert
+        _Item(5, "fixed_cost", cost_per_unit=1000),
+    ]
+    res = compute_devis(soum, items, mods)
+    ini = res["initial"]
+    assert res["is_invalid"] is False
+    # Aucune feature payante : le coût des offerts est exclu de la base
+    # (retombe sur l'ancien comportement), couts_dev = 0.
+    assert ini["couts_dev"] == 0.0
+    assert ini["base"] == 1000.0  # uniquement le frais fixe
+    # Les features offertes restent à 0 côté client.
+    for f in ini["features_client"]:
+        assert f["prix_client"] == 0.0
+    # Invariant : tout le total_final est porté par le frais fixe.
+    sum_client = sum(f["prix_client"] for f in ini["features_client"]) + sum(
+        ff["prix_client"] for ff in ini["frais_fixes_client"]
+    )
+    assert abs(round(sum_client, 2) - ini["total_final"]) <= 0.01
+
+
+def test_all_free_no_payer_invalid_no_crash():
+    """Cas limite extrême : tout offert, aucun frais/manager → base 0,
+    is_invalid True, aucun crash."""
+    soum = _Soum(heures_manager=0)
+    mods = [
+        _Module(10, selected=True),
+        _Module(30, selected=True, free_when_module_id=10),
+    ]
+    items = [_Item(2, "feature", heures=20, module_id=30)]  # offert seul
+    res = compute_devis(soum, items, mods)
+    assert res["is_invalid"] is True
+    assert res["initial"]["couts_dev"] == 0.0
+    assert res["initial"]["total_final"] == 0.0
 
 
 def test_free_module_inactive_when_trigger_unselected():
