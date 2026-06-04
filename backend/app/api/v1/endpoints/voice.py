@@ -78,6 +78,56 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/voice", tags=["voice"])
 
 
+@router.get("/calls/{call_id}/recording")
+async def stream_call_recording(
+    call_id: int, db: DBSession, user: CurrentUser
+) -> Response:
+    """Streame l'enregistrement (voicemail / appel) à travers Kratos pour
+    qu'il s'écoute DANS le portail, sans renvoyer l'utilisateur vers
+    Twilio. On proxy le média Twilio avec l'auth Basic du compte (les URLs
+    Twilio ne sont pas publiques) et on renvoie un audio/mpeg.
+    """
+    import base64
+
+    import httpx
+
+    call = await db.get(Call, call_id)
+    if call is None or not call.recording_url:
+        raise HTTPException(status_code=404, detail="Enregistrement introuvable.")
+
+    sid = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+    token = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+    if not sid or not token:
+        raise HTTPException(
+            status_code=503, detail="Twilio non configuré (creds manquantes)."
+        )
+
+    # L'URL Twilio peut être l'API recording sans extension : on force .mp3
+    # pour récupérer le média audio plutôt que le JSON de métadonnées.
+    url = call.recording_url
+    if not url.lower().endswith((".mp3", ".wav")):
+        url = f"{url}.mp3"
+
+    basic = base64.b64encode(f"{sid}:{token}".encode()).decode("ascii")
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as http:
+            r = await http.get(url, headers={"Authorization": f"Basic {basic}"})
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Échec de récupération Twilio.")
+    if r.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Twilio a répondu {r.status_code} pour l'enregistrement.",
+        )
+
+    media_type = r.headers.get("content-type", "audio/mpeg")
+    return Response(
+        content=r.content,
+        media_type=media_type,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
 # ---------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------
