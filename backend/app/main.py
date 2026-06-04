@@ -180,6 +180,22 @@ def create_application() -> FastAPI:
     )
 
     app.include_router(api_router, prefix="/api/v1")
+
+    # ── Serveur MCP « remote » (connecteur custom Claude) ───────────
+    # Montage BEST-EFFORT et TOTALEMENT ISOLÉ : tout import ou montage qui
+    # échoue est loggué mais n'empêche JAMAIS le démarrage de l'app. Si ce
+    # bloc lève, Kratos démarre normalement, simplement sans /mcp.
+    # Le serveur MCP n'expose QUE l'activité en lecture seule, scopée à la
+    # clé d'API krts_... passée dans l'URL (/mcp/{key}). Aucun lifespan ni
+    # middleware global ajouté : c'est un simple APIRouter.
+    try:
+        from app.api.v1.endpoints.mcp_server import router as mcp_router
+
+        app.include_router(mcp_router)
+        logger.info("MCP server mounted at /mcp/{api_key} (read-only).")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("MCP server mount skipped (app starts normally): %s", exc)
+
     return app
 
 
@@ -208,4 +224,3 @@ async def api_ping() -> dict:
     both the frontend (which serves /api/*) and the backend (this
     handler). Cheap: no DB, no I/O."""
     return {"status": "ok"}
-
