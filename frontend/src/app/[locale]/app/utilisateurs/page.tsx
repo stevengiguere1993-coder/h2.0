@@ -25,9 +25,19 @@ type User = {
   is_active: boolean;
   is_admin: boolean;
   role: UserRole;
+  volets: string[];
   must_change_password: boolean;
   created_at: string;
 };
+
+const VOLET_OPTIONS: { key: string; label: string }[] = [
+  { key: "construction", label: "Construction" },
+  { key: "prospection", label: "Prospection" },
+  { key: "immobilier", label: "Gestion immobilière" },
+  { key: "entreprises", label: "Gestion d'entreprises" },
+  { key: "investisseur", label: "Investisseurs" },
+  { key: "developpement_logiciel", label: "Dév. logiciel" }
+];
 
 type Project = {
   id: number;
@@ -147,6 +157,28 @@ export default function UtilisateursPage() {
       setUsers((xs) => xs.map((x) => (x.id === u.id ? updated : x)));
     } catch {
       setError("Changement de rôle échoué.");
+    } finally {
+      setBusyUser(null);
+    }
+  }
+
+  async function toggleVolet(u: User, volet: string) {
+    const current = u.volets || [];
+    const next = current.includes(volet)
+      ? current.filter((v) => v !== volet)
+      : [...current, volet];
+    setBusyUser(u.id);
+    setError(null);
+    try {
+      const res = await authedFetch(`/api/v1/users/${u.id}/volets`, {
+        method: "PATCH",
+        body: JSON.stringify({ volets: next })
+      });
+      if (!res.ok) throw new Error();
+      const updated = (await res.json()) as User;
+      setUsers((xs) => xs.map((x) => (x.id === u.id ? updated : x)));
+    } catch {
+      setError("Changement de volets échoué.");
     } finally {
       setBusyUser(null);
     }
@@ -505,6 +537,51 @@ export default function UtilisateursPage() {
                           );
                         })}
                       </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-semibold uppercase tracking-wider text-accent-500">
+                        Volets accessibles
+                      </label>
+                      {selectedUser.role === "owner" ||
+                      selectedUser.role === "admin" ? (
+                        <p className="mt-2 text-[11px] text-white/50">
+                          Accès total : les {ROLE_LABEL[selectedUser.role]} voient
+                          automatiquement tous les volets.
+                        </p>
+                      ) : (
+                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                          {VOLET_OPTIONS.map((v) => {
+                            const on = (selectedUser.volets || []).includes(
+                              v.key
+                            );
+                            return (
+                              <button
+                                key={v.key}
+                                type="button"
+                                onClick={() => toggleVolet(selectedUser, v.key)}
+                                disabled={busyUser === selectedUser.id}
+                                className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition disabled:opacity-60 ${
+                                  on
+                                    ? "border-accent-500/50 bg-accent-500/10 text-white"
+                                    : "border-brand-800 bg-brand-950 text-white/60 hover:border-accent-500"
+                                }`}
+                              >
+                                <span
+                                  className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border ${
+                                    on
+                                      ? "border-accent-500 bg-accent-500 text-brand-950"
+                                      : "border-white/30"
+                                  }`}
+                                >
+                                  {on ? <Check className="h-3 w-3" /> : null}
+                                </span>
+                                {v.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   </div>
 

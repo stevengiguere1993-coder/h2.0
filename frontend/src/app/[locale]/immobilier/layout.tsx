@@ -21,6 +21,7 @@ import {
   Menu,
   Pencil,
   Plus,
+  Settings,
   Sparkles,
   Unlink,
   Wrench,
@@ -52,7 +53,10 @@ const NAV: NavItem[] = [
   { href: "/immobilier/baux", label: "Baux & paiements", icon: ClipboardList },
   { href: "/immobilier/renouvellements", label: "Renouvellements", icon: ClipboardList },
   { href: "/immobilier/maintenance", label: "Maintenance", icon: Wrench },
-  { href: "/immobilier/bons-travail", label: "Bons de travail", icon: Hammer }
+  { href: "/immobilier/bons-travail", label: "Bons de travail", icon: Hammer },
+  // Paramètres = gestion des utilisateurs/employés + volets (page partagée
+  // /app/utilisateurs). Réservée owner/admin côté page.
+  { href: "/app/utilisateurs", label: "Paramètres", icon: Settings }
 ];
 
 // ─── Context : entreprise active dans le volet immobilier ────────────
