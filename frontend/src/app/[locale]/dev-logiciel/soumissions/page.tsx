@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type Dispatch,
+  type SetStateAction
+} from "react";
 import {
   FileText,
   Loader2,
@@ -99,7 +105,8 @@ export default function SoumissionsPage() {
   const [dragging, setDragging] = useState<number | null>(null);
   const [hoverCol, setHoverCol] = useState<string | null>(null);
   // Phase 6 (juin 2026) : modale « Valeurs par défaut » des soumissions
-  // devis_dev (taux, marges, commission closer, template modules de base).
+  // devis_dev (taux, marges, commission closer, fonctionnalités par défaut
+  // de chaque module, tâches du chargé de projet par défaut).
   const [showDefaults, setShowDefaults] = useState(false);
 
   // Fallback : somme des items par soumission. Utilisé quand le total
@@ -575,17 +582,22 @@ function EmptyState() {
 // ── Phase 6 (juin 2026) : modale « Valeurs par défaut » ────────────────
 // Phil règle ici, sans toucher au code, les défauts appliqués à CHAQUE
 // nouvelle soumission devis_dev : taux dev/manager, commission closer,
-// marges, et un template optionnel de modules + fonctionnalités de base.
+// marges, les fonctionnalités par défaut (pré-remplies à chaque nouveau
+// module) et les tâches du chargé de projet par défaut (pré-remplies à
+// chaque nouvelle soumission).
 
-type DefaultsFeature = { description: string; heures: number };
-type DefaultsModule = { name: string; features: DefaultsFeature[] };
+// Une ligne par defaut (description + heures) : sert a la fois aux
+// fonctionnalites par defaut (chaque nouveau module) et aux taches du
+// charge de projet par defaut (chaque nouvelle soumission).
+type DefaultsLine = { description: string; heures: number };
 type DefaultsPayload = {
   taux_dev_horaire: number | null;
   taux_manager_horaire: number | null;
   commission_closer_pct: number | null;
   marge_initiale_pct: number | null;
   marge_recurrente_pct: number | null;
-  base_modules_json: DefaultsModule[] | null;
+  default_features_json: DefaultsLine[] | null;
+  default_manager_tasks_json: DefaultsLine[] | null;
 };
 
 function NumberField({
@@ -619,6 +631,84 @@ function NumberField({
   );
 }
 
+// Editeur generique d'une liste de lignes {description, heures} avec
+// ajouter / editer / retirer. Utilise pour les deux nouvelles sections
+// (fonctionnalites par defaut + taches du charge de projet par defaut).
+function LineListEditor({
+  title,
+  hint,
+  addLabel,
+  placeholder,
+  emptyLabel,
+  lines,
+  onAdd,
+  onRemove,
+  onChange
+}: {
+  title: string;
+  hint: string;
+  addLabel: string;
+  placeholder: string;
+  emptyLabel: string;
+  lines: DefaultsLine[];
+  onAdd: () => void;
+  onRemove: (idx: number) => void;
+  onChange: (idx: number, field: "description" | "heures", value: string) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-white">{title}</h3>
+        <button
+          type="button"
+          onClick={onAdd}
+          className="inline-flex items-center rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs font-medium text-white/80 transition hover:bg-white/10 hover:text-white"
+        >
+          <Plus className="mr-1 h-3.5 w-3.5" />
+          {addLabel}
+        </button>
+      </div>
+      <p className="mb-3 text-xs text-white/40">{hint}</p>
+      {lines.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-white/10 px-3 py-4 text-center text-xs text-white/40">
+          {emptyLabel}
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {lines.map((line, idx) => (
+            <div key={idx} className="flex items-center gap-2">
+              <input
+                type="text"
+                placeholder={placeholder}
+                value={line.description}
+                onChange={(e) => onChange(idx, "description", e.target.value)}
+                className="w-full rounded-lg border border-white/10 bg-brand-950/60 px-2.5 py-1.5 text-xs text-white outline-none focus:border-blue-400"
+              />
+              <input
+                type="number"
+                min={0}
+                step="0.5"
+                placeholder="h"
+                value={line.heures}
+                onChange={(e) => onChange(idx, "heures", e.target.value)}
+                className="w-20 rounded-lg border border-white/10 bg-brand-950/60 px-2 py-1.5 text-xs text-white outline-none focus:border-blue-400"
+              />
+              <span className="text-[10px] text-white/40">h</span>
+              <button
+                type="button"
+                onClick={() => onRemove(idx)}
+                className="rounded-lg p-1.5 text-white/50 transition hover:bg-rose-500/10 hover:text-rose-300"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SoumissionDefaultsModal({ onClose }: { onClose: () => void }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -630,7 +720,11 @@ function SoumissionDefaultsModal({ onClose }: { onClose: () => void }) {
   const [closer, setCloser] = useState("");
   const [margeInit, setMargeInit] = useState("");
   const [margeRec, setMargeRec] = useState("");
-  const [modules, setModules] = useState<DefaultsModule[]>([]);
+  // Fonctionnalites par defaut : pre-remplissent CHAQUE nouveau module.
+  const [features, setFeatures] = useState<DefaultsLine[]>([]);
+  // Taches du charge de projet par defaut : pre-remplies a CHAQUE nouvelle
+  // soumission dans le bloc « Gestionnaire de projet ».
+  const [managerTasks, setManagerTasks] = useState<DefaultsLine[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -647,13 +741,16 @@ function SoumissionDefaultsModal({ onClose }: { onClose: () => void }) {
         setCloser(String(d.commission_closer_pct ?? 10));
         setMargeInit(String(d.marge_initiale_pct ?? 50));
         setMargeRec(String(d.marge_recurrente_pct ?? 50));
-        setModules(
-          (d.base_modules_json ?? []).map((m) => ({
-            name: m.name ?? "",
-            features: (m.features ?? []).map((f) => ({
-              description: f.description ?? "",
-              heures: Number(f.heures) || 0
-            }))
+        setFeatures(
+          (d.default_features_json ?? []).map((f) => ({
+            description: f.description ?? "",
+            heures: Number(f.heures) || 0
+          }))
+        );
+        setManagerTasks(
+          (d.default_manager_tasks_json ?? []).map((t) => ({
+            description: t.description ?? "",
+            heures: Number(t.heures) || 0
           }))
         );
       } catch (err) {
@@ -671,86 +768,54 @@ function SoumissionDefaultsModal({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
-  function addModule() {
-    setModules((m) => [...m, { name: "", features: [] }]);
-  }
-  function removeModule(idx: number) {
-    setModules((m) => m.filter((_, i) => i !== idx));
-  }
-  function setModuleName(idx: number, name: string) {
-    setModules((m) =>
-      m.map((mod, i) => (i === idx ? { ...mod, name } : mod))
-    );
-  }
-  function addFeature(mIdx: number) {
-    setModules((m) =>
-      m.map((mod, i) =>
-        i === mIdx
-          ? { ...mod, features: [...mod.features, { description: "", heures: 0 }] }
-          : mod
-      )
-    );
-  }
-  function removeFeature(mIdx: number, fIdx: number) {
-    setModules((m) =>
-      m.map((mod, i) =>
-        i === mIdx
-          ? { ...mod, features: mod.features.filter((_, j) => j !== fIdx) }
-          : mod
-      )
-    );
-  }
-  function setFeature(
-    mIdx: number,
-    fIdx: number,
-    field: "description" | "heures",
-    value: string
+  // Fabrique des handlers ajouter/retirer/editer pour une liste de lignes.
+  function makeLineHandlers(
+    setter: Dispatch<SetStateAction<DefaultsLine[]>>
   ) {
-    setModules((m) =>
-      m.map((mod, i) =>
-        i === mIdx
-          ? {
-              ...mod,
-              features: mod.features.map((f, j) =>
-                j === fIdx
-                  ? {
-                      ...f,
-                      [field]:
-                        field === "heures" ? Number(value) || 0 : value
-                    }
-                  : f
-              )
-            }
-          : mod
-      )
-    );
+    return {
+      add: () =>
+        setter((xs) => [...xs, { description: "", heures: 0 }]),
+      remove: (idx: number) =>
+        setter((xs) => xs.filter((_, i) => i !== idx)),
+      change: (idx: number, field: "description" | "heures", value: string) =>
+        setter((xs) =>
+          xs.map((x, i) =>
+            i === idx
+              ? {
+                  ...x,
+                  [field]:
+                    field === "heures" ? Number(value) || 0 : value
+                }
+              : x
+          )
+        )
+    };
   }
+  const featureHandlers = makeLineHandlers(setFeatures);
+  const taskHandlers = makeLineHandlers(setManagerTasks);
 
   async function onSave() {
     setSaving(true);
     setError(null);
     setSaved(false);
     try {
-      // Nettoie le template : on ne garde que les modules nommés et les
-      // fonctionnalités avec une description (le backend valide aussi).
-      const cleanModules = modules
-        .map((m) => ({
-          name: m.name.trim(),
-          features: m.features
-            .filter((f) => f.description.trim())
-            .map((f) => ({
-              description: f.description.trim(),
-              heures: Number(f.heures) || 0
-            }))
-        }))
-        .filter((m) => m.name);
+      // Nettoie les listes : on ne garde que les lignes avec une description
+      // (le backend valide aussi min_length=1 + heures>=0).
+      const cleanLines = (lines: DefaultsLine[]) =>
+        lines
+          .filter((l) => l.description.trim())
+          .map((l) => ({
+            description: l.description.trim(),
+            heures: Number(l.heures) || 0
+          }));
       const payload = {
         taux_dev_horaire: Number(tauxDev),
         taux_manager_horaire: Number(tauxManager),
         commission_closer_pct: Number(closer),
         marge_initiale_pct: Number(margeInit),
         marge_recurrente_pct: Number(margeRec),
-        base_modules_json: cleanModules
+        default_features_json: cleanLines(features),
+        default_manager_tasks_json: cleanLines(managerTasks)
       };
       const res = await authedFetch("/api/v1/devlog/soumission-defaults", {
         method: "PUT",
@@ -838,119 +903,29 @@ function SoumissionDefaultsModal({ onClose }: { onClose: () => void }) {
               />
             </div>
 
-            <div>
-              <div className="mb-2 flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-white">
-                  Modules &amp; fonctionnalités de base
-                </h3>
-                <button
-                  type="button"
-                  onClick={addModule}
-                  className="inline-flex items-center rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs font-medium text-white/80 transition hover:bg-white/10 hover:text-white"
-                >
-                  <Plus className="mr-1 h-3.5 w-3.5" />
-                  Ajouter un module
-                </button>
-              </div>
-              <p className="mb-3 text-xs text-white/40">
-                Optionnel — ces modules et fonctionnalités sont pré-remplis
-                sur chaque nouvelle soumission. Laissez vide pour ne rien
-                ajouter.
-              </p>
+            <LineListEditor
+              title="Fonctionnalités par défaut (à chaque nouveau module)"
+              hint="Chaque fois que vous ajoutez un module dans une soumission, ces fonctionnalités y sont pré-remplies (modifiables et supprimables ensuite). Laissez vide pour des modules vides."
+              addLabel="Ajouter une fonctionnalité"
+              placeholder="Fonctionnalité"
+              emptyLabel="Aucune fonctionnalité par défaut."
+              lines={features}
+              onAdd={featureHandlers.add}
+              onRemove={featureHandlers.remove}
+              onChange={featureHandlers.change}
+            />
 
-              {modules.length === 0 ? (
-                <p className="rounded-lg border border-dashed border-white/10 px-3 py-4 text-center text-xs text-white/40">
-                  Aucun module de base.
-                </p>
-              ) : (
-                <div className="space-y-4">
-                  {modules.map((mod, mIdx) => (
-                    <div
-                      key={mIdx}
-                      className="rounded-xl border border-white/10 bg-brand-950/40 p-3"
-                    >
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          placeholder="Nom du module"
-                          value={mod.name}
-                          onChange={(e) =>
-                            setModuleName(mIdx, e.target.value)
-                          }
-                          className="w-full rounded-lg border border-white/10 bg-brand-950/60 px-3 py-2 text-sm font-medium text-white outline-none focus:border-blue-400"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => removeModule(mIdx)}
-                          title="Retirer le module"
-                          className="rounded-lg p-2 text-white/50 transition hover:bg-rose-500/10 hover:text-rose-300"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-
-                      <div className="mt-2 space-y-2 pl-2">
-                        {mod.features.map((f, fIdx) => (
-                          <div
-                            key={fIdx}
-                            className="flex items-center gap-2"
-                          >
-                            <input
-                              type="text"
-                              placeholder="Fonctionnalité"
-                              value={f.description}
-                              onChange={(e) =>
-                                setFeature(
-                                  mIdx,
-                                  fIdx,
-                                  "description",
-                                  e.target.value
-                                )
-                              }
-                              className="w-full rounded-lg border border-white/10 bg-brand-950/60 px-2.5 py-1.5 text-xs text-white outline-none focus:border-blue-400"
-                            />
-                            <input
-                              type="number"
-                              min={0}
-                              step="0.5"
-                              placeholder="h"
-                              value={f.heures}
-                              onChange={(e) =>
-                                setFeature(
-                                  mIdx,
-                                  fIdx,
-                                  "heures",
-                                  e.target.value
-                                )
-                              }
-                              className="w-20 rounded-lg border border-white/10 bg-brand-950/60 px-2 py-1.5 text-xs text-white outline-none focus:border-blue-400"
-                            />
-                            <span className="text-[10px] text-white/40">
-                              h
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => removeFeature(mIdx, fIdx)}
-                              className="rounded-lg p-1.5 text-white/50 transition hover:bg-rose-500/10 hover:text-rose-300"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        ))}
-                        <button
-                          type="button"
-                          onClick={() => addFeature(mIdx)}
-                          className="inline-flex items-center text-xs text-blue-400 transition hover:text-blue-300"
-                        >
-                          <Plus className="mr-1 h-3 w-3" />
-                          Ajouter une fonctionnalité
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <LineListEditor
+              title="Tâches du chargé de projet par défaut"
+              hint="Ces tâches sont créées automatiquement dans le bloc « Gestionnaire de projet » à chaque nouvelle soumission. Laissez vide pour ne rien ajouter."
+              addLabel="Ajouter une tâche"
+              placeholder="Tâche du chargé de projet"
+              emptyLabel="Aucune tâche par défaut."
+              lines={managerTasks}
+              onAdd={taskHandlers.add}
+              onRemove={taskHandlers.remove}
+              onChange={taskHandlers.change}
+            />
 
             {error ? (
               <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">

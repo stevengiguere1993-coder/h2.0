@@ -914,25 +914,26 @@ async def create_soumission_with_automations(
     # (envoyee dans le payload) : on ne surcharge QUE les champs non fournis.
     # RETROCOMPAT : si la table est absente/vide, on retombe sur les valeurs
     # historiques (75/80/10/50/50) via ``DEVLOG_SOUMISSION_DEFAULT_VALUES``.
-    base_modules_template: list = []
+    default_manager_tasks: list = []
     if getattr(obj, "is_devis_dev", False):
         defaults_row = await _get_soumission_defaults_row(db)
-        applied = _apply_soumission_defaults(obj, payload, defaults_row)
-        base_modules_template = applied
+        default_manager_tasks = _apply_soumission_defaults(obj, payload, defaults_row)
 
     db.add(obj)
     await db.flush()
     await db.refresh(obj)
 
-    # --- Template de modules/fonctionnalites de base (optionnel) -----------
-    # Si un template est defini dans les defauts, on cree les modules + leurs
-    # fonctionnalites (items ``feature``) dans la nouvelle soumission. Un
-    # template vide / absent ne cree rien (« ne pas en mettre »).
-    created_modules = 0
-    created_features = 0
-    if base_modules_template:
-        created_modules, created_features = await _seed_base_modules(
-            db, obj.id, base_modules_template
+    # --- Taches du charge de projet par defaut (juin 2026) -----------------
+    # On NE cree PLUS de modules a la creation (les noms de modules varient a
+    # chaque soumission -> le template de modules nommes n'avait pas de sens).
+    # A la place, on pre-cree les TACHES du charge de projet definies dans les
+    # defauts (``default_manager_tasks_json``) comme de vrais items
+    # ``manager_task`` (module_id NULL) dans le bloc « Gestionnaire de projet ».
+    # Liste vide / absente => aucune tache (comportement neutre, retrocompat).
+    created_manager_tasks = 0
+    if default_manager_tasks:
+        created_manager_tasks = await _seed_default_manager_tasks(
+            db, obj.id, default_manager_tasks
         )
 
     await log_action(
@@ -946,8 +947,7 @@ async def create_soumission_with_automations(
             "lead_id": obj.lead_id,
             "client_id": obj.client_id,
             "is_devis_dev": getattr(obj, "is_devis_dev", False),
-            "base_modules_created": created_modules,
-            "base_features_created": created_features,
+            "manager_tasks_created": created_manager_tasks,
         },
     )
     return DevlogSoumissionRead.model_validate(obj)
@@ -976,8 +976,9 @@ def _apply_soumission_defaults(
 ) -> list:
     """Pre-remplit sur ``obj`` les 5 parametres devis_dev a partir de la ligne
     de defauts (fallback constantes historiques). Ne touche QUE les champs que
-    l'appelant n'a pas explicitement fournis dans ``payload``. Retourne le
-    template de modules de base (liste, eventuellement vide)."""
+    l'appelant n'a pas explicitement fournis dans ``payload``. Retourne la liste
+    des taches du charge de projet par defaut (``default_manager_tasks_json``,
+    eventuellement vide) a pre-creer dans la nouvelle soumission."""
     numeric_keys = (
         "taux_dev_horaire",
         "taux_manager_horaire",
@@ -999,61 +1000,84 @@ def _apply_soumission_defaults(
     if payload.get("heures_manager") is None:
         obj.heures_manager = 0
 
-    template = []
+    manager_tasks = []
     if defaults_row is not None:
-        template = defaults_row.base_modules_json or []
-    return template
+        manager_tasks = defaults_row.default_manager_tasks_json or []
+    return manager_tasks
 
 
-async def _seed_base_modules(
-    db, soumission_id: int, template: list
-) -> tuple[int, int]:
-    """Cree, dans la soumission, les modules + fonctionnalites du template de
-    base. Best-effort et tolerant : ignore les entrees malformees. Retourne
-    ``(nb_modules, nb_features)``."""
-    nb_modules = 0
-    nb_features = 0
-    for position, mod in enumerate(template):
-        if not isinstance(mod, dict):
+def _coerce_default_line_items(raw: object) -> list:
+    """Normalise une liste JSON de lignes ``{description, heures}`` (defaults).
+
+    Tolerant : ignore les entrees malformees / sans description. Retourne une
+    liste de tuples ``(description, heures)`` propres et bornes."""
+    out: list = []
+    if not isinstance(raw, list):
+        return out
+    for entry in raw:
+        if not isinstance(entry, dict):
             continue
-        name = (mod.get("name") or "").strip()
-        if not name:
+        description = (entry.get("description") or "").strip()
+        if not description:
             continue
-        module = DevlogSoumissionModule(
-            soumission_id=soumission_id,
-            name=name[:255],
-            position=position,
-            selected=True,
-        )
-        db.add(module)
-        await db.flush()
-        await db.refresh(module)
-        nb_modules += 1
-        features = mod.get("features") or []
-        for feat_pos, feat in enumerate(features):
-            if not isinstance(feat, dict):
-                continue
-            description = (feat.get("description") or "").strip()
-            if not description:
-                continue
-            try:
-                heures = float(feat.get("heures") or 0)
-            except (TypeError, ValueError):
-                heures = 0.0
-            db.add(
-                DevlogSoumissionItem(
-                    soumission_id=soumission_id,
-                    module_id=module.id,
-                    item_kind="feature",
-                    description=description[:500],
-                    heures=heures,
-                    position=feat_pos,
-                )
+        try:
+            heures = float(entry.get("heures") or 0)
+        except (TypeError, ValueError):
+            heures = 0.0
+        out.append((description[:500], heures))
+    return out
+
+
+async def _seed_default_manager_tasks(
+    db, soumission_id: int, tasks: list
+) -> int:
+    """Cree, dans la soumission, les taches du charge de projet par defaut comme
+    des items ``manager_task`` (``module_id`` NULL) dans le bloc « Gestionnaire
+    de projet ». Best-effort et tolerant. Retourne le nombre de taches creees."""
+    nb = 0
+    for position, (description, heures) in enumerate(
+        _coerce_default_line_items(tasks)
+    ):
+        db.add(
+            DevlogSoumissionItem(
+                soumission_id=soumission_id,
+                module_id=None,
+                item_kind="manager_task",
+                description=description,
+                heures=heures,
+                position=position,
             )
-            nb_features += 1
-    if nb_modules:
+        )
+        nb += 1
+    if nb:
         await db.flush()
-    return nb_modules, nb_features
+    return nb
+
+
+async def _seed_default_features_for_module(
+    db, soumission_id: int, module_id: int, features: list
+) -> int:
+    """Cree, dans un module fraichement cree, les fonctionnalites par defaut
+    (``default_features_json``) comme de vrais items ``feature`` rattaches au
+    module. Best-effort et tolerant. Retourne le nombre de features creees."""
+    nb = 0
+    for position, (description, heures) in enumerate(
+        _coerce_default_line_items(features)
+    ):
+        db.add(
+            DevlogSoumissionItem(
+                soumission_id=soumission_id,
+                module_id=module_id,
+                item_kind="feature",
+                description=description,
+                heures=heures,
+                position=position,
+            )
+        )
+        nb += 1
+    if nb:
+        await db.flush()
+    return nb
 
 
 async def _ensure_client_for_soumission(
@@ -2523,6 +2547,32 @@ async def create_soumission_module(
     db.add(obj)
     await db.flush()
     await db.refresh(obj)
+
+    # --- Pre-remplissage : fonctionnalites par defaut (juin 2026) ----------
+    # A chaque nouveau module, on cree les fonctionnalites par defaut definies
+    # dans ``devlog_soumission_defaults.default_features_json`` comme de vrais
+    # items ``feature`` rattaches a ce module (donc modifiables/supprimables
+    # ensuite). Le pre-remplissage est fait COTE BACKEND (atomique avec la
+    # creation du module, une seule transaction, robuste quel que soit
+    # l'appelant). Liste vide / absente => module vide (comportement actuel,
+    # retrocompat). Best-effort : un echec ici ne casse pas la creation.
+    created_features = 0
+    try:
+        defaults_row = await _get_soumission_defaults_row(db)
+        default_features = (
+            defaults_row.default_features_json if defaults_row is not None else None
+        )
+        if default_features:
+            created_features = await _seed_default_features_for_module(
+                db, data.soumission_id, obj.id, default_features
+            )
+    except Exception:
+        import logging as _logging
+
+        _logging.getLogger(__name__).exception(
+            "Pre-remplissage des fonctionnalites par defaut non bloquant"
+        )
+
     await log_action(
         db,
         user=user,
@@ -2532,6 +2582,7 @@ async def create_soumission_module(
         details={
             "soumission_id": data.soumission_id,
             "name": getattr(obj, "name", None),
+            "default_features_created": created_features,
         },
     )
     return DevlogSoumissionModuleRead.model_validate(obj)

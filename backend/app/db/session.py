@@ -957,6 +957,17 @@ async def init_db() -> None:
             ("imm_baux", "signature_ip", "VARCHAR(64)"),
             ("imm_baux", "signature_image", "BYTEA"),
             ("imm_baux", "signature_image_content_type", "VARCHAR(100)"),
+            # Valeurs par defaut des soumissions devis_dev (juin 2026) :
+            # fonctionnalites par defaut (pre-remplissent CHAQUE nouveau
+            # module) + taches du charge de projet par defaut (pre-remplies a
+            # CHAQUE nouvelle soumission). Listes JSON [{description, heures}].
+            # NULL sur les lignes existantes => comportement neutre (retrocompat).
+            ("devlog_soumission_defaults", "default_features_json", "JSONB"),
+            (
+                "devlog_soumission_defaults",
+                "default_manager_tasks_json",
+                "JSONB",
+            ),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(

@@ -46,10 +46,21 @@ class BaseModuleFeature(BaseModel):
 
 
 class BaseModuleTemplate(BaseModel):
-    """Un module template (nom + fonctionnalites de base)."""
+    """Un module template (nom + fonctionnalites de base). [LEGACY]"""
 
     name: str = Field(..., min_length=1, max_length=255)
     features: List[BaseModuleFeature] = Field(default_factory=list)
+
+
+class DefaultLineItem(BaseModel):
+    """Une ligne par defaut (description + heures).
+
+    Utilisee pour ``default_features_json`` (fonctionnalites pre-remplies a
+    chaque nouveau module) et ``default_manager_tasks_json`` (taches du charge
+    de projet pre-remplies a chaque nouvelle soumission)."""
+
+    description: str = Field(..., min_length=1, max_length=500)
+    heures: float = Field(default=0, ge=0)
 
 
 class SoumissionDefaultsRead(BaseModel):
@@ -59,7 +70,12 @@ class SoumissionDefaultsRead(BaseModel):
     commission_closer_pct: Optional[float] = None
     marge_initiale_pct: Optional[float] = None
     marge_recurrente_pct: Optional[float] = None
+    # [LEGACY] conserve en lecture pour retrocompat, plus expose dans l'UI.
     base_modules_json: Optional[List[BaseModuleTemplate]] = None
+    # Fonctionnalites pre-remplies a chaque nouveau module.
+    default_features_json: Optional[List[DefaultLineItem]] = None
+    # Taches du charge de projet pre-remplies a chaque nouvelle soumission.
+    default_manager_tasks_json: Optional[List[DefaultLineItem]] = None
     updated_at: Optional[datetime] = None
     updated_by_user_id: Optional[int] = None
 
@@ -70,9 +86,15 @@ class SoumissionDefaultsUpdate(BaseModel):
     commission_closer_pct: Optional[float] = Field(default=None, ge=0, le=100)
     marge_initiale_pct: Optional[float] = Field(default=None, ge=0, le=500)
     marge_recurrente_pct: Optional[float] = Field(default=None, ge=0, le=500)
-    # Template de modules de base. Passer ``[]`` pour vider, ``None`` (absent)
-    # pour ne pas y toucher.
+    # [LEGACY] template de modules de base : plus modifiable depuis l'UI mais
+    # garde au cas ou un appelant l'envoie encore. ``[]`` vide, ``None`` ignore.
     base_modules_json: Optional[List[BaseModuleTemplate]] = None
+    # Fonctionnalites par defaut (a chaque nouveau module). Passer ``[]`` pour
+    # vider, ``None`` (absent) pour ne pas y toucher.
+    default_features_json: Optional[List[DefaultLineItem]] = None
+    # Taches du charge de projet par defaut. Passer ``[]`` pour vider, ``None``
+    # (absent) pour ne pas y toucher.
+    default_manager_tasks_json: Optional[List[DefaultLineItem]] = None
 
 
 # -- Helpers ----------------------------------------------------------------
@@ -142,6 +164,8 @@ async def update_soumission_defaults(
         "marge_initiale_pct": rec.marge_initiale_pct,
         "marge_recurrente_pct": rec.marge_recurrente_pct,
         "base_modules_count": len(rec.base_modules_json or []),
+        "default_features_count": len(rec.default_features_json or []),
+        "default_manager_tasks_count": len(rec.default_manager_tasks_json or []),
     }
 
     fields_set = payload.model_fields_set
@@ -156,9 +180,17 @@ async def update_soumission_defaults(
     if "marge_recurrente_pct" in fields_set:
         rec.marge_recurrente_pct = payload.marge_recurrente_pct
     if "base_modules_json" in fields_set:
-        # Serialise les sous-modeles Pydantic en dict JSON-stockables.
+        # [LEGACY] Serialise les sous-modeles Pydantic en dict JSON-stockables.
         rec.base_modules_json = [
             m.model_dump() for m in (payload.base_modules_json or [])
+        ]
+    if "default_features_json" in fields_set:
+        rec.default_features_json = [
+            m.model_dump() for m in (payload.default_features_json or [])
+        ]
+    if "default_manager_tasks_json" in fields_set:
+        rec.default_manager_tasks_json = [
+            m.model_dump() for m in (payload.default_manager_tasks_json or [])
         ]
 
     rec.updated_by_user_id = getattr(user, "id", None)
@@ -180,6 +212,10 @@ async def update_soumission_defaults(
                 "marge_initiale_pct": rec.marge_initiale_pct,
                 "marge_recurrente_pct": rec.marge_recurrente_pct,
                 "base_modules_count": len(rec.base_modules_json or []),
+                "default_features_count": len(rec.default_features_json or []),
+                "default_manager_tasks_count": len(
+                    rec.default_manager_tasks_json or []
+                ),
             },
         },
     )
