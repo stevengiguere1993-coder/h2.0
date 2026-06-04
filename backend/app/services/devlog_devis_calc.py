@@ -73,11 +73,54 @@ Leviers (tous **rétrocompatibles**) :
   le scalaire historique ``heures_manager × taux_manager``.
 * **Gratuité « module → module »** : un module peut porter un
   ``free_when_module_id``. Si le module déclencheur est *sélectionné*,
-  ce module devient **gratuit** : ses features comptent 0 dans le total
-  CLIENT (mais restent listées, marquées « offert », et leurs heures
-  restent visibles côté interne). Si le déclencheur n'est PAS
-  sélectionné, le module garde son prix normal. La gratuité ne touche
-  jamais le chargé de projet (global).
+  ce module devient **gratuit** : son prix CLIENT est 0 (features
+  marquées « offert », heures visibles côté interne), mais — voir
+  ci-dessous — son COÛT interne reste facturé indirectement. Si le
+  déclencheur n'est PAS sélectionné, le module garde son prix normal.
+  La gratuité ne touche jamais le chargé de projet (global).
+
+----------------------------------------------------------------------
+Refonte 2026-06 (Phase 4) — le CADEAU est RECHARGÉ sur les payants
+----------------------------------------------------------------------
+
+Auparavant un module offert était totalement ignoré du calcul : son
+coût n'entrait pas dans la Base et son prix client valait 0 — le cadeau
+ne coûtait rien à personne. **Ce n'est plus le cas.**
+
+Désormais le coût d'un module offert (Σ heures features × ``taux_dev``)
+ENTRE dans la Base comme n'importe quel coût, donc dans le
+``Total_final``. Le prix CLIENT du module offert reste 0 (« Offert »),
+mais le ``Total_final`` — gonflé par ce coût — est réparti **uniquement
+sur les features des modules PAYANTS** (au prorata de leurs coûts dev).
+Conséquence : les modules payants « absorbent » le coût du cadeau, leur
+prix client augmente, et **la marge est préservée**. Le client paie le
+cadeau indirectement, via les modules payants.
+
+Deux notions de coût dev cohabitent donc :
+
+* ``couts_dev``          : Σ coûts dev de TOUTES les features retenues
+  (payantes ET offertes) → alimente la Base / le ``Total_final``.
+* ``couts_dev_payants``  : Σ coûts dev des SEULES features payantes →
+  dénominateur du prorata de répartition client. Les features offertes
+  reçoivent un prix client 0 et n'absorbent rien ; ce sont les payantes
+  qui se partagent le pool ``couts_dev + cout_manager + closing``
+  (offert inclus dans ``couts_dev``).
+
+Invariant CONSERVÉ :
+
+       Σ(prix_features_payantes) + Σ(prix_fixes_client) = Total_final
+
+(les offertes contribuent 0 au prix client mais leur coût est bien dans
+le ``Total_final``).
+
+CAS LIMITE « tout offert » — si TOUS les modules retenus sont offerts
+(``couts_dev_payants == 0`` alors qu'un coût d'offert existe), aucun
+module payant ne peut absorber le cadeau. On ne peut recharger nulle
+part sans casser l'invariant ni risquer une division par zéro. Dans ce
+seul cas on RETOMBE sur l'ancien comportement : le coût des offerts est
+EXCLU de la Base (le cadeau redevient « gratuit pour tout le monde »),
+``Total_final`` reste porté par les frais fixes / le manager, pas de
+crash.
 
 RÉTROCOMPATIBILITÉ — une soumission SANS modules et SANS ``manager_task``
 emprunte exactement le chemin historique : tous les items comptés,
@@ -285,12 +328,19 @@ def compute_devis(
     # SECTION 2 — Frais de Mise en Oeuvre (calcul circulaire)
     # ================================================================
     # Rappel rétrocompat : un item exclu (module non sélectionné) ne
-    # contribue PAS à la base et n'apparaît pas dans la vue client. Un
-    # item gratuit contribue 0 à la base ET 0 au prix client (son
-    # travail est offert) mais reste listé (flag ``offert``).
+    # contribue PAS à la base et n'apparaît pas dans la vue client.
+    #
+    # CHANGEMENT 2026-06 (Phase 4) : un item OFFERT (module gratuit)
+    # contribue désormais son coût dev à la Base (``couts_dev``), comme
+    # un item payant — le cadeau est rechargé. Son prix CLIENT reste 0
+    # et il n'absorbe rien dans la répartition : ce sont les features
+    # PAYANTES qui se partagent le pool. On suit donc deux totaux :
+    #   * ``couts_dev``         : payants + offerts (→ Base / Total_final)
+    #   * ``couts_dev_payants`` : payants seuls (→ dénominateur prorata)
     #
     # 1. Coûts internes des features
     couts_dev = 0.0
+    couts_dev_payants = 0.0
     feature_costs_internal = []  # (item, heures, cout_dev_brut, free)
     for it in features:
         if _module_excluded(it):
@@ -298,9 +348,21 @@ def compute_devis(
         heures = _f(getattr(it, "heures", 0))
         free = _module_free(it)
         cout = heures * taux_dev
+        # Le coût entre TOUJOURS dans la Base (payant comme offert).
+        couts_dev += cout
         if not free:
-            couts_dev += cout
+            couts_dev_payants += cout
         feature_costs_internal.append((it, heures, cout, free))
+
+    # CAS LIMITE « tout offert » : un coût d'offert existe mais AUCUNE
+    # feature payante ne peut l'absorber (``couts_dev_payants == 0`` et
+    # ``couts_dev > 0``). On ne peut recharger nulle part sans casser
+    # l'invariant. On retombe sur l'ANCIEN comportement : le coût des
+    # offerts est exclu de la Base (cadeau redevenu gratuit pour tous),
+    # ce qui ramène ``couts_dev`` au total payant et évite toute
+    # division par zéro ou ``Total_final`` non porté par un prix client.
+    if couts_dev_payants <= 0 < couts_dev:
+        couts_dev = couts_dev_payants
 
     # 1bis. Coût manager — GLOBAL : Σ(manager_task.heures × taux_manager)
     # sur TOUTES les tâches du chargé de projet, peu importe leur
@@ -394,17 +456,20 @@ def compute_devis(
         marge_init_amount = total_final - total_avant_marge
 
         # 5. Vue client — répartition proportionnelle
-        # Les features absorbent (couts_dev + cout_manager + closing)
-        # au prorata de leurs coûts dev internes, puis on applique la
+        # Les features PAYANTES absorbent
+        # (couts_dev + cout_manager + closing) — ``couts_dev`` inclut
+        # désormais le coût des OFFERTS — au prorata de leurs SEULS
+        # coûts dev payants (``couts_dev_payants``), puis on applique la
         # marge. Les frais fixes ne portent que la marge. Les features
-        # gratuites (module offert) reçoivent 0 et n'absorbent rien.
+        # offertes (module gratuit) reçoivent 0 et n'absorbent rien :
+        # leur coût est rechargé sur les payantes via le pool.
         features_pool_before_margin = couts_dev + cout_manager + closing
         features_client = []
         for (it, heures, cout, free) in feature_costs_internal:
             if free:
                 prix = 0.0
-            elif couts_dev > 0:
-                part = cout / couts_dev
+            elif couts_dev_payants > 0:
+                part = cout / couts_dev_payants
                 prix = (
                     part * features_pool_before_margin
                     * (1.0 + marge_init_pct)
