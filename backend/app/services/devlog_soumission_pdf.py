@@ -102,13 +102,32 @@ def _lazy_reportlab() -> dict[str, Any]:
     }
 
 
+# --- Palette (alignée sur la page web publique de signature) ----------
+# slate / blue / emerald de Tailwind, repris à l'identique pour que le
+# PDF et la page web racontent la même histoire visuelle.
+_DARK = "#0f172a"        # slate-900
+_MUTED = "#475569"       # slate-600
+_FAINT = "#64748b"       # slate-500
+_LINE = "#e2e8f0"        # slate-200 (séparateurs)
+_BLUE = "#1d4ed8"        # blue-700 (accent initial)
+_BLUE_DARK = "#1e3a8a"   # blue-900 (total TTC)
+_BLUE_BORDER = "#bfdbfe"  # blue-200
+_BLUE_SOFT = "#eff6ff"   # blue-50 (cartouche / total)
+_CARD_BG = "#f8fafc"     # slate-50 (fond de carte module)
+_CARD_BORDER = "#e2e8f0"  # slate-200 (bordure carte)
+_EMERALD = "#047857"     # emerald-700
+_EMERALD_DARK = "#064e3b"  # emerald-900
+_EMERALD_BADGE = "#059669"  # emerald-600 (badge « Offert »)
+_EMERALD_BORDER = "#a7f3d0"  # emerald-200
+_EMERALD_SOFT = "#ecfdf5"  # emerald-50
+
+
 def _styles(rl: dict[str, Any]):
     PS = rl["ParagraphStyle"]
     base = rl["getSampleStyleSheet"]()
     colors = rl["colors"]
-    dark = colors.HexColor("#111111")
-    muted = colors.HexColor("#6b6b6b")
-    accent = colors.HexColor("#1e40af")  # bleu Horizon dev
+    dark = colors.HexColor(_DARK)
+    muted = colors.HexColor(_MUTED)
     return {
         "title": PS(
             "title",
@@ -126,19 +145,27 @@ def _styles(rl: dict[str, Any]):
             leading=13,
             textColor=muted,
         ),
+        # Titre de section léger : petites capitales colorées, pas de
+        # bandeau plein. Couleur surchargée par section (bleu/émeraude).
         "section": PS(
             "section",
             parent=base["Normal"],
             fontName="Helvetica-Bold",
-            fontSize=11,
-            leading=14,
-            textColor=colors.white,
-            backColor=accent,
-            leftIndent=4,
-            rightIndent=4,
-            spaceBefore=8,
-            spaceAfter=4,
-            borderPadding=4,
+            fontSize=9,
+            leading=12,
+            textColor=colors.HexColor(_BLUE),
+            spaceBefore=2,
+            spaceAfter=2,
+        ),
+        "section_emerald": PS(
+            "section_emerald",
+            parent=base["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=9,
+            leading=12,
+            textColor=colors.HexColor(_EMERALD),
+            spaceBefore=2,
+            spaceAfter=2,
         ),
         "body": PS(
             "body",
@@ -172,53 +199,128 @@ def _styles(rl: dict[str, Any]):
             leading=11,
             textColor=muted,
         ),
+        # Gros montant centré des cartouches (couleur surchargée).
         "big_amount": PS(
             "big_amount",
             parent=base["Normal"],
             fontName="Helvetica-Bold",
-            fontSize=16,
-            leading=20,
-            textColor=accent,
+            fontSize=26,
+            leading=30,
+            alignment=1,  # centré
+            textColor=colors.HexColor(_BLUE),
         ),
-        "amount_caption": PS(
-            "amount_caption",
-            parent=base["Normal"],
-            fontName="Helvetica",
-            fontSize=9,
-            leading=12,
-            textColor=muted,
-        ),
-        "module_title": PS(
-            "module_title",
+        "big_amount_emerald": PS(
+            "big_amount_emerald",
             parent=base["Normal"],
             fontName="Helvetica-Bold",
-            fontSize=11,
-            leading=14,
-            textColor=accent,
+            fontSize=26,
+            leading=30,
+            alignment=1,
+            textColor=colors.HexColor(_EMERALD),
         ),
-        "feature": PS(
-            "feature",
+        # Légende du cartouche (au-dessus / en-dessous du gros montant).
+        "amount_cap_blue": PS(
+            "amount_cap_blue",
             parent=base["Normal"],
-            fontName="Helvetica",
-            fontSize=9.5,
-            leading=13,
-            textColor=muted,
+            fontName="Helvetica-Bold",
+            fontSize=8,
+            leading=11,
+            alignment=1,
+            textColor=colors.HexColor(_BLUE),
         ),
+        "amount_cap_emerald": PS(
+            "amount_cap_emerald",
+            parent=base["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=8,
+            leading=11,
+            alignment=1,
+            textColor=colors.HexColor(_EMERALD),
+        ),
+        # En-tête de carte module : nom (gras, foncé) à gauche.
+        "module_name": PS(
+            "module_name",
+            parent=base["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=10.5,
+            leading=14,
+            textColor=dark,
+        ),
+        # Prix du module (gras, bleu) à droite.
         "module_price": PS(
             "module_price",
             parent=base["Normal"],
             fontName="Helvetica-Bold",
-            fontSize=11,
+            fontSize=10.5,
             leading=14,
-            textColor=dark,
+            alignment=2,  # aligné à droite
+            textColor=colors.HexColor(_BLUE),
         ),
+        # Fonctionnalités en sous-puces discrètes.
+        "feature": PS(
+            "feature",
+            parent=base["Normal"],
+            fontName="Helvetica",
+            fontSize=9,
+            leading=12.5,
+            leftIndent=8,
+            textColor=muted,
+        ),
+        # Variante émeraude des sous-puces (modules offerts).
+        "feature_green": PS(
+            "feature_green",
+            parent=base["Normal"],
+            fontName="Helvetica",
+            fontSize=9,
+            leading=12.5,
+            leftIndent=8,
+            textColor=colors.HexColor(_EMERALD_DARK),
+        ),
+        # Nom d'un module offert (gras, émeraude foncé).
+        "free_name": PS(
+            "free_name",
+            parent=base["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=10.5,
+            leading=14,
+            textColor=colors.HexColor(_EMERALD_DARK),
+        ),
+        # Prix d'un module offert (« 0,00 $ », émeraude, à droite).
+        "free_price": PS(
+            "free_price",
+            parent=base["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=10.5,
+            leading=14,
+            alignment=2,
+            textColor=colors.HexColor(_EMERALD),
+        ),
+        # Condition de gratuité, italique émeraude.
         "free_cond": PS(
             "free_cond",
             parent=base["Normal"],
             fontName="Helvetica-Oblique",
             fontSize=8.5,
             leading=11,
+            textColor=colors.HexColor(_EMERALD),
+        ),
+        # Lignes du récap de taxes.
+        "tax_label": PS(
+            "tax_label",
+            parent=base["Normal"],
+            fontName="Helvetica",
+            fontSize=9.5,
+            leading=13,
             textColor=muted,
+        ),
+        "tax_amount": PS(
+            "tax_amount",
+            parent=base["Normal"],
+            fontName="Helvetica",
+            fontSize=9.5,
+            leading=13,
+            alignment=2,
+            textColor=dark,
         ),
     }
 
@@ -271,70 +373,131 @@ async def _load(
     return soumission, items, client, modules
 
 
-def _initial_totals_rows(
+def _tax_recap_table(
     rl: dict[str, Any],
     s: dict[str, Any],
-    total_initial: float,
-    tps_init: float,
-    tvq_init: float,
-    total_initial_taxe: float,
-) -> list[list[Any]]:
-    """Construit les 4 lignes de totaux (sous-total / TPS / TVQ / TTC)
-    communes au rendu legacy et au rendu par module."""
+    subtotal: float,
+    tps: float,
+    tvq: float,
+    total_ttc: float,
+    *,
+    subtotal_label: str = "Sous-total",
+    ttc_label: str = "Total TTC",
+    accent: str = _BLUE,
+    total_bg: str = _BLUE_SOFT,
+    total_fg: str = _BLUE_DARK,
+    border: str = _BLUE_BORDER,
+) -> Any:
+    """Récap de taxes net, façon page web : table encadrée fine, lignes
+    sous-total / TPS / TVQ discrètes, puis ligne Total TTC mise en valeur
+    (fond pâle coloré, gras). Alignement des montants à droite.
+
+    Couleurs surchargeables pour la variante émeraude (frais mensuels)."""
     Paragraph = rl["Paragraph"]
-    return [
+    Table = rl["Table"]
+    TableStyle = rl["TableStyle"]
+    colors = rl["colors"]
+
+    def _amt(style_color, text):
+        ps = rl["ParagraphStyle"](
+            "amt_tmp",
+            parent=s["tax_amount"],
+            textColor=colors.HexColor(style_color),
+        )
+        return Paragraph(text, ps)
+
+    rows = [
         [
-            Paragraph("<b>Sous-total</b>", s["body_bold"]),
-            Paragraph(f"<b>{_fmt_money(total_initial)}</b>", s["body_bold"]),
+            Paragraph(subtotal_label, s["tax_label"]),
+            Paragraph(_fmt_money(subtotal), s["tax_amount"]),
         ],
         [
-            Paragraph("TPS (5%)", s["body"]),
-            Paragraph(_fmt_money(tps_init), s["body"]),
+            Paragraph("TPS (5%)", s["tax_label"]),
+            Paragraph(_fmt_money(tps), s["tax_amount"]),
         ],
         [
-            Paragraph("TVQ (9,975%)", s["body"]),
-            Paragraph(_fmt_money(tvq_init), s["body"]),
+            Paragraph("TVQ (9,975%)", s["tax_label"]),
+            Paragraph(_fmt_money(tvq), s["tax_amount"]),
         ],
         [
-            Paragraph("<b>Total TTC</b>", s["body_bold"]),
             Paragraph(
-                f"<b>{_fmt_money(total_initial_taxe)}</b>", s["body_bold"]
+                f"<b>{ttc_label}</b>",
+                rl["ParagraphStyle"](
+                    "ttc_lbl",
+                    parent=s["tax_label"],
+                    fontName="Helvetica-Bold",
+                    fontSize=10.5,
+                    textColor=colors.HexColor(total_fg),
+                ),
             ),
+            _amt(total_fg, f"<b>{_fmt_money(total_ttc)}</b>"),
         ],
     ]
+    t = Table(rows, colWidths=["68%", "32%"])
+    last = len(rows) - 1
+    t.setStyle(
+        TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+            ("BOX", (0, 0), (-1, -1), 0.75, colors.HexColor(border)),
+            ("LINEBELOW", (0, 0), (-1, last - 1), 0.4, colors.HexColor(_LINE)),
+            ("BACKGROUND", (0, last), (-1, last), colors.HexColor(total_bg)),
+            ("LINEABOVE", (0, last), (-1, last), 0.75, colors.HexColor(accent)),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ])
+    )
+    return t
 
 
 def _amount_box(
     rl: dict[str, Any],
     s: dict[str, Any],
     amount: float,
-    caption: str,
+    caption_top: str,
+    caption_bottom: str,
+    *,
+    emerald: bool = False,
 ) -> Any:
-    """Encadré « gros montant clair » réutilisable (bleu Horizon).
+    """Grand cartouche « prix vedette » centré, calqué sur la page web :
+    petite légende en capitales au-dessus, gros montant au centre, puis
+    une légende discrète en dessous. Bordure colorée (2px) + fond pâle.
 
-    Même habillage que le bloc « Frais mensuels récurrents » pour une
-    cohérence visuelle parfaite entre toutes les sections : fond bleu
-    pâle, bordure bleue, montant en gros, légende discrète en dessous
-    (ex. « payé une seule fois »)."""
+    ``emerald=True`` => habillage vert (frais mensuels) ; sinon bleu
+    (investissement initial)."""
     Paragraph = rl["Paragraph"]
     Table = rl["Table"]
     TableStyle = rl["TableStyle"]
     colors = rl["colors"]
 
-    cell: list = [
-        Paragraph(f"<b>{_fmt_money(amount)}</b>", s["big_amount"]),
-    ]
-    if caption:
-        cell.append(Paragraph(caption, s["amount_caption"]))
+    if emerald:
+        cap_style = s["amount_cap_emerald"]
+        amt_style = s["big_amount_emerald"]
+        border = _EMERALD_BORDER
+        bg = _EMERALD_SOFT
+    else:
+        cap_style = s["amount_cap_blue"]
+        amt_style = s["big_amount"]
+        border = _BLUE_BORDER
+        bg = _BLUE_SOFT
+
+    cell: list = []
+    if caption_top:
+        cell.append(Paragraph(caption_top.upper(), cap_style))
+    cell.append(Paragraph(_fmt_money(amount), amt_style))
+    if caption_bottom:
+        cell.append(Paragraph(caption_bottom, cap_style))
     box = Table([[cell]], colWidths=["100%"])
     box.setStyle(
         TableStyle([
-            ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#1e40af")),
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#eff6ff")),
-            ("LEFTPADDING", (0, 0), (-1, -1), 10),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-            ("TOPPADDING", (0, 0), (-1, -1), 8),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("BOX", (0, 0), (-1, -1), 1.5, colors.HexColor(border)),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(bg)),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+            ("TOPPADDING", (0, 0), (-1, -1), 12),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
             ("ALIGN", (0, 0), (-1, -1), "CENTER"),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ])
@@ -355,10 +518,13 @@ def _render_flat_initial(
 ) -> None:
     """Rendu LEGACY (sans modules) — liste plate de fonctionnalités.
 
-    Comportement strictement identique au PDF historique : c'est le
-    chemin emprunté par toute soumission qui n'a PAS de modules
-    (rétrocompat). Ne pas modifier sans raison."""
+    Chemin emprunté par toute soumission qui n'a PAS de modules
+    (rétrocompat). On garde la liste plate description / montant, mais on
+    l'habille du même langage visuel que le reste (table encadrée fine,
+    en-tête slate, montants à droite) puis on ferme par le récap de taxes
+    net partagé avec le rendu par module."""
     Paragraph = rl["Paragraph"]
+    Spacer = rl["Spacer"]
     Table = rl["Table"]
     TableStyle = rl["TableStyle"]
     colors = rl["colors"]
@@ -366,18 +532,21 @@ def _render_flat_initial(
     rows: list[list[Any]] = []
     rows.append([
         Paragraph("<b>Description</b>", s["body_bold"]),
-        Paragraph("<b>Montant</b>", s["body_bold"]),
+        Paragraph("<b>Montant</b>", s["module_price"]),
     ])
+    body_start = len(rows)
     for feat in features_client:
         desc = (feat.get("description") or "").strip() or "—"
         prix = float(feat.get("prix_client") or 0)
         rows.append([
             Paragraph(desc, s["body"]),
-            Paragraph(_fmt_money(prix), s["body"]),
+            Paragraph(_fmt_money(prix), s["tax_amount"]),
         ])
+    ff_header_idx = None
     if frais_fixes_client:
         # Petit séparateur visuel : titre « Frais fixes » avant
         # les frais fixes du client.
+        ff_header_idx = len(rows)
         rows.append([
             Paragraph("<b>Frais fixes</b>", s["body_bold"]),
             Paragraph("", s["body"]),
@@ -387,35 +556,46 @@ def _render_flat_initial(
             prix = float(ff.get("prix_client") or 0)
             rows.append([
                 Paragraph(desc, s["body"]),
-                Paragraph(_fmt_money(prix), s["body"]),
+                Paragraph(_fmt_money(prix), s["tax_amount"]),
             ])
-    rows.extend(
-        _initial_totals_rows(
+    body_end = len(rows) - 1
+
+    table = Table(rows, colWidths=["68%", "32%"])
+    style = [
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+        ("BOX", (0, 0), (-1, -1), 0.75, colors.HexColor(_CARD_BORDER)),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor(_LINE)),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]
+    if body_end >= body_start:
+        style.append(
+            ("ROWBACKGROUNDS", (0, body_start), (-1, body_end),
+             [colors.white, colors.HexColor("#fafafa")])
+        )
+    if ff_header_idx is not None:
+        style.append(
+            ("BACKGROUND", (0, ff_header_idx), (-1, ff_header_idx),
+             colors.HexColor("#f1f5f9"))
+        )
+        style.append(
+            ("LINEABOVE", (0, ff_header_idx), (-1, ff_header_idx),
+             0.4, colors.HexColor(_LINE))
+        )
+    table.setStyle(TableStyle(style))
+    story.append(table)
+    story.append(Spacer(1, 8))
+
+    # Récap de taxes net (même style que le rendu par module).
+    story.append(
+        _tax_recap_table(
             rl, s, total_initial, tps_init, tvq_init, total_initial_taxe
         )
     )
-
-    table = Table(rows, colWidths=["72%", "28%"])
-    # Indice des lignes spéciales : sous-total (4 lignes avant la
-    # fin), Total TTC (dernière ligne).
-    subtotal_row = len(rows) - 4
-    ttc_row = len(rows) - 1
-    table.setStyle(
-        TableStyle([
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
-            ("LINEABOVE", (0, subtotal_row), (-1, subtotal_row), 0.5, colors.HexColor("#1e40af")),
-            ("LINEABOVE", (0, ttc_row), (-1, ttc_row), 1, colors.HexColor("#1e40af")),
-            ("BACKGROUND", (0, ttc_row), (-1, ttc_row), colors.HexColor("#eff6ff")),
-            ("LEFTPADDING", (0, 0), (-1, -1), 6),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ("ROWBACKGROUNDS", (0, 1), (-1, subtotal_row - 1), [colors.white, colors.HexColor("#fafafa")]),
-        ])
-    )
-    story.append(table)
 
 
 def _render_modules_initial(
@@ -494,79 +674,89 @@ def _render_modules_initial(
             mid = None
         feats_by_module.setdefault(mid, []).append(f)
 
-    def _feat_rows(feats: list[dict[str, Any]]) -> list[list[Any]]:
-        """Lignes de fonctionnalités — VUE CLIENT : on liste UNIQUEMENT
-        les descriptions (le client achète un module, pas des lignes
-        détaillées). Aucun prix par fonctionnalité n'est affiché ; seul
-        le « Prix du module » fait foi."""
-        out: list[list[Any]] = []
+    def _feature_flowables(
+        feats: list[dict[str, Any]], green: bool
+    ) -> list[Any]:
+        """Sous-puces de fonctionnalités — VUE CLIENT : descriptions
+        seules (le client achète un module, pas des lignes détaillées).
+        Aucun prix par fonctionnalité ; seul le prix du module fait foi.
+        Puces colorées discrètes, comme la page web."""
+        style = s["feature_green"] if green else s["feature"]
+        bullet = "&#8226;"  # • puce
+        out: list[Any] = []
         for feat in feats:
             desc = (feat.get("description") or "").strip() or "—"
-            out.append([
-                Paragraph(f"&bull; {desc}", s["feature"]),
-                Paragraph("", s["feature"]),
-            ])
+            out.append(Paragraph(f"{bullet}&nbsp;&nbsp;{desc}", style))
         return out
 
-    def _module_block(
+    def _module_card(
         name: str,
         feats: list[dict[str, Any]],
         prix_module: float,
-        free: bool,
+        *,
+        free: bool = False,
         condition: Optional[str] = None,
     ) -> Any:
-        """Construit un sous-bloc « module » sous forme de table, gardé
-        ensemble (KeepTogether) pour éviter une coupure de page disgra-
-        cieuse au milieu d'un module.
+        """Carte « module » calquée sur la page web : encadré arrondi
+        (bordure fine + léger fond), en-tête avec le nom à gauche (gras)
+        et le prix à droite (gras), puis les fonctionnalités en sous-puces
+        discrètes SANS prix. Gardée ensemble (KeepTogether) pour ne pas
+        couper une carte en plein milieu.
 
-        Hiérarchie : nom du module bien visible (sous-titre bleu) +
-        éventuelle condition de gratuité à droite, fonctionnalités en
-        sous-liste discrète SANS prix, puis « Prix du module » aligné à
-        droite et mis en valeur."""
-        rows: list[list[Any]] = []
-        # En-tête module : nom à gauche, mention/condition à droite.
+        Variante ``free`` : fond/bordure émeraude, badge « Offert »,
+        condition de gratuité italique, prix « 0,00 $ »."""
+        # En-tête : nom à gauche, prix (ou badge « Offert ») à droite.
         if free:
-            header_right = Paragraph("<b>Offert</b>", s["module_price"])
+            name_p = Paragraph(name, s["free_name"])
+            right_p = _offert_badge(rl, s)
         else:
-            header_right = Paragraph("", s["body"])
-        rows.append([
-            Paragraph(name, s["module_title"]),
-            header_right,
-        ])
-        if condition:
-            rows.append([
-                Paragraph(condition, s["free_cond"]),
-                Paragraph("", s["body"]),
-            ])
-        rows.extend(_feat_rows(feats))
-        # Ligne de prix du module (mise en valeur).
-        if free:
-            prix_cell = Paragraph("<b>0,00 $</b>", s["module_price"])
-        else:
-            prix_cell = Paragraph(
-                f"<b>{_fmt_money(prix_module)}</b>", s["module_price"]
-            )
-        rows.append([
-            Paragraph("<b>Prix du module</b>", s["module_price"]),
-            prix_cell,
-        ])
-        t = Table(rows, colWidths=["72%", "28%"])
-        last = len(rows) - 1
-        t.setStyle(
+            name_p = Paragraph(name, s["module_name"])
+            right_p = Paragraph(_fmt_money(prix_module), s["module_price"])
+        header = Table(
+            [[name_p, right_p]], colWidths=["68%", "32%"]
+        )
+        header.setStyle(
             TableStyle([
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2ff")),
-                ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#c7d2fe")),
-                ("LINEABOVE", (0, last), (-1, last), 0.75, colors.HexColor("#1e40af")),
-                ("BACKGROUND", (0, last), (-1, last), colors.HexColor("#f8fafc")),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
             ])
         )
-        return KeepTogether([t, Spacer(1, 8)])
+
+        inner: list[Any] = [header]
+        if condition:
+            inner.append(Spacer(1, 2))
+            inner.append(Paragraph(condition, s["free_cond"]))
+        feat_flows = _feature_flowables(feats, green=free)
+        if feat_flows:
+            inner.append(Spacer(1, 4))
+            inner.extend(feat_flows)
+        if free:
+            inner.append(Spacer(1, 3))
+            inner.append(Paragraph(_fmt_money(0), s["free_price"]))
+
+        card = Table([[inner]], colWidths=["100%"])
+        if free:
+            border = _EMERALD_BORDER
+            bg = _EMERALD_SOFT
+        else:
+            border = _CARD_BORDER
+            bg = _CARD_BG
+        card.setStyle(
+            TableStyle([
+                ("BOX", (0, 0), (-1, -1), 0.75, colors.HexColor(border)),
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(bg)),
+                ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ("TOPPADDING", (0, 0), (-1, -1), 8),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ])
+        )
+        return KeepTogether([card, Spacer(1, 6)])
 
     # --- Modules RETENUS et PAYANTS -------------------------------------
     # On respecte l'ordre de ``modules_detail``. On n'affiche que les
@@ -588,9 +778,7 @@ def _render_modules_initial(
         name = (m.get("name") or "Module").strip() or "Module"
         feats = feats_by_module.get(mid, [])
         prix_module = float(m.get("prix_client") or 0)
-        story.append(
-            _module_block(name, feats, prix_module, free=False)
-        )
+        story.append(_module_card(name, feats, prix_module))
 
     # --- Fonctionnalités HORS module (module_id NULL) -------------------
     orphan_feats = feats_by_module.get(None, [])
@@ -599,7 +787,9 @@ def _render_modules_initial(
 
     # --- Section « Inclus gratuitement » --------------------------------
     if free_modules:
-        story.append(Paragraph("INCLUS GRATUITEMENT", s["section"]))
+        story.append(Spacer(1, 4))
+        story.append(Paragraph("INCLUS GRATUITEMENT", s["section_emerald"]))
+        story.append(Spacer(1, 2))
         for m in free_modules:
             mid = m.get("id")
             name = (m.get("name") or "Module").strip() or "Module"
@@ -615,7 +805,7 @@ def _render_modules_initial(
                         f"(Si le module « {trigger_name} » est sélectionné)"
                     )
             story.append(
-                _module_block(
+                _module_card(
                     name, feats, 0.0, free=True, condition=condition
                 )
             )
@@ -631,44 +821,70 @@ def _render_modules_initial(
             desc = (ff.get("description") or "").strip() or "—"
             prix = float(ff.get("prix_client") or 0)
             ff_rows.append([
-                Paragraph(f"&bull; {desc}", s["body"]),
-                Paragraph(_fmt_money(prix), s["body"]),
+                Paragraph(f"&#8226;&nbsp;&nbsp;{desc}", s["body"]),
+                Paragraph(_fmt_money(prix), s["tax_amount"]),
             ])
-        ff_table = Table(ff_rows, colWidths=["72%", "28%"])
+        ff_table = Table(ff_rows, colWidths=["68%", "32%"])
         ff_table.setStyle(
             TableStyle([
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+                ("BOX", (0, 0), (-1, -1), 0.75, colors.HexColor(_CARD_BORDER)),
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.4, colors.HexColor(_LINE)),
+                ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
             ])
         )
+        story.append(Spacer(1, 2))
         story.append(ff_table)
-        story.append(Spacer(1, 4))
+        story.append(Spacer(1, 6))
 
     # --- Totaux ---------------------------------------------------------
-    total_rows = _initial_totals_rows(
-        rl, s, total_initial, tps_init, tvq_init, total_initial_taxe
+    story.append(Spacer(1, 2))
+    story.append(
+        _tax_recap_table(
+            rl, s, total_initial, tps_init, tvq_init, total_initial_taxe
+        )
     )
-    totals_table = Table(total_rows, colWidths=["72%", "28%"])
-    ttc_row = len(total_rows) - 1
-    totals_table.setStyle(
+
+
+def _offert_badge(rl: dict[str, Any], s: dict[str, Any]) -> Any:
+    """Petit badge « Offert » (texte blanc sur pastille émeraude), façon
+    page web. Rendu via une mini-table d'une cellule pour le fond et le
+    padding serré ; alignée à droite par la cellule hôte."""
+    Paragraph = rl["Paragraph"]
+    Table = rl["Table"]
+    TableStyle = rl["TableStyle"]
+    colors = rl["colors"]
+
+    badge_style = rl["ParagraphStyle"](
+        "offert_badge",
+        parent=s["body"],
+        fontName="Helvetica-Bold",
+        fontSize=8,
+        leading=10,
+        alignment=1,
+        textColor=colors.white,
+    )
+    pill = Table(
+        [[Paragraph("Offert", badge_style)]],
+        colWidths=[42],
+        hAlign="RIGHT",
+    )
+    pill.setStyle(
         TableStyle([
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-            ("LINEABOVE", (0, 0), (-1, 0), 0.5, colors.HexColor("#1e40af")),
-            ("LINEABOVE", (0, ttc_row), (-1, ttc_row), 1, colors.HexColor("#1e40af")),
-            ("BACKGROUND", (0, ttc_row), (-1, ttc_row), colors.HexColor("#eff6ff")),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(_EMERALD_BADGE)),
             ("LEFTPADDING", (0, 0), (-1, -1), 6),
             ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ])
     )
-    story.append(totals_table)
+    return pill
 
 
 def _orphan_block(
@@ -678,10 +894,10 @@ def _orphan_block(
     price_by_id: dict[Any, float],
 ) -> Any:
     """Bloc « Autres fonctionnalités » — features retenues sans module
-    (``module_id`` NULL). VUE CLIENT : on liste UNIQUEMENT les
-    descriptions (pas de prix ligne par ligne, cohérent avec les
-    modules) et on affiche un « Prix » agrégé du bloc en bas, mis en
-    valeur comme un prix de module."""
+    (``module_id`` NULL). Présenté comme un petit bloc à part (PAS une
+    carte de module) : titre clair, sous-puces de descriptions, et le
+    prix agrégé du bloc aligné à droite en bas. VUE CLIENT : pas de prix
+    ligne par ligne, cohérent avec les modules."""
     Paragraph = rl["Paragraph"]
     Spacer = rl["Spacer"]
     Table = rl["Table"]
@@ -689,12 +905,8 @@ def _orphan_block(
     KeepTogether = rl["KeepTogether"]
     colors = rl["colors"]
 
-    rows: list[list[Any]] = []
-    rows.append([
-        Paragraph("Autres fonctionnalités", s["module_title"]),
-        Paragraph("", s["body"]),
-    ])
     total_orphan = 0.0
+    feat_flows: list[Any] = []
     for feat in orphan_feats:
         desc = (feat.get("description") or "").strip() or "—"
         fid = feat.get("id")
@@ -704,31 +916,46 @@ def _orphan_block(
             else float(feat.get("prix_client") or 0)
         )
         total_orphan += float(prix or 0)
-        rows.append([
-            Paragraph(f"&bull; {desc}", s["feature"]),
-            Paragraph("", s["feature"]),
-        ])
-    rows.append([
-        Paragraph("<b>Prix</b>", s["module_price"]),
-        Paragraph(f"<b>{_fmt_money(total_orphan)}</b>", s["module_price"]),
-    ])
-    t = Table(rows, colWidths=["72%", "28%"])
-    last = len(rows) - 1
-    t.setStyle(
+        feat_flows.append(
+            Paragraph(f"&#8226;&nbsp;&nbsp;{desc}", s["feature"])
+        )
+
+    # En-tête : titre à gauche, prix agrégé à droite.
+    header = Table(
+        [[
+            Paragraph("Autres fonctionnalités", s["module_name"]),
+            Paragraph(_fmt_money(total_orphan), s["module_price"]),
+        ]],
+        colWidths=["68%", "32%"],
+    )
+    header.setStyle(
         TableStyle([
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2ff")),
-            ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#c7d2fe")),
-            ("LINEABOVE", (0, last), (-1, last), 0.75, colors.HexColor("#1e40af")),
-            ("BACKGROUND", (0, last), (-1, last), colors.HexColor("#f8fafc")),
-            ("LEFTPADDING", (0, 0), (-1, -1), 6),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
         ])
     )
-    return KeepTogether([t, Spacer(1, 8)])
+    inner: list[Any] = [header]
+    if feat_flows:
+        inner.append(Spacer(1, 4))
+        inner.extend(feat_flows)
+
+    card = Table([[inner]], colWidths=["100%"])
+    card.setStyle(
+        TableStyle([
+            ("BOX", (0, 0), (-1, -1), 0.75, colors.HexColor(_CARD_BORDER)),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#ffffff")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ])
+    )
+    return KeepTogether([card, Spacer(1, 6)])
 
 
 def _render_bytes(
@@ -819,66 +1046,61 @@ def _render_bytes(
     tvq_rec = float(recurring.get("tvq_amount") or 0)
     total_monthly_taxe = float(recurring.get("total_client_amount_taxe") or 0)
     if recurring_items_breakdown or total_monthly_client > 0:
-        story.append(Paragraph("FRAIS MENSUELS RÉCURRENTS", s["section"]))
-        # Encadré « gros montant » (TTC — taxes incluses), cohérent avec
-        # le bloc « Investissement initial » (même helper).
+        story.append(Spacer(1, 8))
+        story.append(
+            Paragraph("FRAIS MENSUELS RÉCURRENTS", s["section_emerald"])
+        )
+        story.append(Spacer(1, 3))
+        # Grand cartouche vedette VERT (émeraude), comme la page web :
+        # légende + gros montant TTC mensuel + « par mois ».
         story.append(
             _amount_box(
                 rl,
                 s,
                 total_monthly_taxe,
-                "par mois — taxes incluses",
+                "Total mensuel taxes incluses",
+                "par mois",
+                emerald=True,
             )
         )
-        story.append(Spacer(1, 4))
 
-        # Détail des taxes (TPS / TVQ) sous l'encadré récurrent
-        if total_monthly_client > 0:
-            tax_rows = [
-                [
-                    Paragraph("Sous-total mensuel", s["body"]),
-                    Paragraph(_fmt_money(total_monthly_client), s["body"]),
-                ],
-                [
-                    Paragraph("TPS (5%)", s["body"]),
-                    Paragraph(_fmt_money(tps_rec), s["body"]),
-                ],
-                [
-                    Paragraph("TVQ (9,975%)", s["body"]),
-                    Paragraph(_fmt_money(tvq_rec), s["body"]),
-                ],
-                [
-                    Paragraph("<b>Total mensuel TTC</b>", s["body_bold"]),
-                    Paragraph(
-                        f"<b>{_fmt_money(total_monthly_taxe)}</b>",
-                        s["body_bold"],
-                    ),
-                ],
-            ]
-            tax_table = Table(tax_rows, colWidths=["72%", "28%"])
-            tax_table.setStyle(
-                TableStyle([
-                    ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-                    ("LINEABOVE", (0, -1), (-1, -1), 0.5, colors.HexColor("#1e40af")),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                    ("TOPPADDING", (0, 0), (-1, -1), 3),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-                ])
-            )
-            story.append(tax_table)
-            story.append(Spacer(1, 4))
-
+        # Inclusions (description libre ou liste de libellés) — puces
+        # émeraude discrètes, façon page web.
         client_recurring_desc = (
             soumission.client_recurring_description or ""
         ).strip()
         if client_recurring_desc:
+            story.append(Spacer(1, 6))
             story.append(Paragraph(client_recurring_desc, s["body"]))
         elif recurring_items_breakdown:
-            story.append(Paragraph("Inclut :", s["body"]))
+            story.append(Spacer(1, 6))
+            story.append(Paragraph("<b>Inclut</b>", s["body_bold"]))
+            story.append(Spacer(1, 2))
             for it in recurring_items_breakdown:
                 desc = (it.get("description") or "").strip() or "—"
-                story.append(Paragraph(f"&bull; {desc}", s["body"]))
+                story.append(
+                    Paragraph(f"&#8226;&nbsp;&nbsp;{desc}", s["feature_green"])
+                )
+
+        # Détail des taxes (récap émeraude, même composant que l'initial)
+        if total_monthly_client > 0:
+            story.append(Spacer(1, 6))
+            story.append(
+                _tax_recap_table(
+                    rl,
+                    s,
+                    total_monthly_client,
+                    tps_rec,
+                    tvq_rec,
+                    total_monthly_taxe,
+                    subtotal_label="Sous-total mensuel",
+                    ttc_label="Total mensuel TTC",
+                    accent=_EMERALD,
+                    total_bg=_EMERALD_SOFT,
+                    total_fg=_EMERALD_DARK,
+                    border=_EMERALD_BORDER,
+                )
+            )
 
     # --- 3. Section Investissement initial ---
     features_client = initial.get("features_client") or []
@@ -897,20 +1119,23 @@ def _render_bytes(
     has_modules = bool(modules_detail)
 
     if features_client or frais_fixes_client or total_initial > 0:
+        story.append(Spacer(1, 10))
         story.append(Paragraph("INVESTISSEMENT INITIAL", s["section"]))
+        story.append(Spacer(1, 3))
 
-        # Gros montant total clair en tête de section (style identique au
-        # bloc mensuel) : le total TTC, payé une seule fois. Le détail par
-        # module et les totaux suivent en dessous.
+        # Grand cartouche vedette BLEU : le total TTC, payé une seule fois,
+        # bien en évidence en tête de section (comme la page web). Le
+        # détail par module / liste plate et les totaux suivent dessous.
         story.append(
             _amount_box(
                 rl,
                 s,
                 total_initial_taxe,
-                "payé une seule fois — taxes incluses",
+                "Total taxes incluses",
+                "payé une seule fois",
             )
         )
-        story.append(Spacer(1, 6))
+        story.append(Spacer(1, 8))
 
         if has_modules:
             _render_modules_initial(
@@ -941,6 +1166,7 @@ def _render_bytes(
     # --- Conditions ---
     story.append(Spacer(1, 10))
     story.append(Paragraph("CONDITIONS", s["section"]))
+    story.append(Spacer(1, 3))
     conditions_txt = (
         "Cette soumission est valide pour 30 jours suivant la date "
         "d'émission. L'acceptation par signature électronique vaut "
@@ -953,6 +1179,7 @@ def _render_bytes(
     # --- Signatures ---
     story.append(Spacer(1, 10))
     story.append(Paragraph("SIGNATURES", s["section"]))
+    story.append(Spacer(1, 3))
     signed_at_txt = (
         soumission.signed_at.strftime("%Y-%m-%d")
         if getattr(soumission, "signed_at", None)
