@@ -1624,6 +1624,16 @@ function buildClientViewData(
         description: f.description || "",
         prix_client: f.prix_client ?? 0
       })),
+      // Fonctionnalités DIRECTES (hors module) = features sans module_id.
+      // Toujours facturées (incluses dans total_final), elles doivent
+      // apparaître côté client même en présence de modules — le bloc plat
+      // `features` n'est pas rendu en mode modules.
+      direct_features: (init.features_client ?? [])
+        .filter((f) => f.module_id == null)
+        .map((f) => ({
+          description: f.description || "",
+          prix_client: f.prix_client ?? 0
+        })),
       total_final: init.total_final ?? 0,
       tps_amount: init.tps_amount ?? 0,
       tvq_amount: init.tvq_amount ?? 0,
@@ -1634,6 +1644,119 @@ function buildClientViewData(
       has_modules: publicModules.length > 0
     }
   };
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Aperçu « Vue client » INTERACTIF de l'éditeur admin.
+//
+// Rend EXACTEMENT le composant partagé <SoumissionClientView> (le même
+// que la page publique de signature), mais en mode interactif : l'admin
+// coche/décoche les modules pour visualiser ce que le client pourra
+// faire, avec recalcul du total en direct via l'endpoint POST
+// `devis-preview` (sélection simulée, AUCUNE persistance — l'état réel
+// des modules et le flux de signature public restent intacts).
+//
+// La sélection est LOCALE à cet aperçu : on initialise les cases sur
+// l'état persisté (`modules[].selected`) puis on laisse l'admin jouer
+// avec, sans rien sauvegarder.
+// ───────────────────────────────────────────────────────────────────
+function AdminClientPreview({
+  soumissionId,
+  soumission,
+  preview,
+  modules,
+  itemsByModule
+}: {
+  soumissionId: number;
+  soumission: Soumission;
+  preview: DevisPreview | null;
+  modules: ModuleRow[];
+  itemsByModule: Map<number, Item[]>;
+}) {
+  // Aperçu vivant : initialisé sur le preview persisté, remplacé par le
+  // recalcul à chaque bascule de module.
+  const [livePreview, setLivePreview] = useState<DevisPreview | null>(preview);
+  const [selectedIds, setSelectedIds] = useState<Set<number> | null>(null);
+  const [recalculating, setRecalculating] = useState(false);
+
+  // Resynchronise l'aperçu quand le preview persisté change (édition
+  // d'items en vue propriétaire puis bascule en vue client).
+  useEffect(() => {
+    setLivePreview(preview);
+  }, [preview]);
+
+  // Initialise / resynchronise les cases sur l'état persisté des modules.
+  useEffect(() => {
+    if (modules.length > 0) {
+      setSelectedIds(
+        new Set(modules.filter((m) => m.selected).map((m) => m.id))
+      );
+    } else {
+      setSelectedIds(null);
+    }
+  }, [modules]);
+
+  // Recalcul à la volée (sélection simulée, sans persistance).
+  const recalc = useCallback(
+    async (ids: Set<number>) => {
+      setRecalculating(true);
+      try {
+        const r = await authedFetch(
+          `/api/v1/devlog/soumissions/${soumissionId}/devis-preview`,
+          {
+            method: "POST",
+            body: JSON.stringify({ selected_module_ids: Array.from(ids) })
+          }
+        );
+        if (r.ok) setLivePreview((await r.json()) as DevisPreview);
+      } catch {
+        // silencieux : on garde l'aperçu courant
+      } finally {
+        setRecalculating(false);
+      }
+    },
+    [soumissionId]
+  );
+
+  function toggleModule(mid: number) {
+    setSelectedIds((prev) => {
+      const base = prev ? new Set(prev) : new Set<number>();
+      if (base.has(mid)) base.delete(mid);
+      else base.add(mid);
+      void recalc(base);
+      return base;
+    });
+  }
+
+  const clientData = buildClientViewData(
+    livePreview,
+    soumission,
+    itemsByModule
+  );
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 text-slate-900 shadow-sm sm:p-6">
+      <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+        Aperçu — exactement ce que verra le client
+      </p>
+      <p className="mb-1 text-[11px] text-slate-400">
+        Coche / décoche les modules pour simuler le choix du client. Le
+        total se recalcule en direct. (Cet aperçu ne modifie rien.)
+      </p>
+      {clientData ? (
+        <SoumissionClientView
+          devis={clientData}
+          selectedIds={selectedIds}
+          onToggleModule={toggleModule}
+          recalculating={recalculating}
+        />
+      ) : (
+        <p className="py-6 text-center text-sm text-slate-400">
+          Chargement de la vue client…
+        </p>
+      )}
+    </div>
+  );
 }
 
 function DevisDevEditor({
@@ -1696,27 +1819,23 @@ function DevisDevEditor({
   // ───────────────────────────────────────────────────────────────
   // VUE CLIENT (aperçu) — rendu STRICTEMENT identique à la page
   // publique de signature, via le composant partagé
-  // <SoumissionClientView>. Lecture seule : la pré-sélection des
-  // modules est reflétée (cases cochées selon `selected`) mais non
-  // interactive (pas de recalcul ni de signature ici). On enveloppe
-  // dans un cartouche clair pour reproduire le contexte visuel public
-  // (fond blanc, texte slate) au sein de l'éditeur sombre.
+  // <SoumissionClientView>. INTERACTIF : l'admin peut cocher/décocher
+  // les modules pour visualiser EXACTEMENT ce que le client pourra
+  // faire, avec recalcul du total en direct (endpoint POST
+  // `devis-preview` avec sélection simulée — purement éphémère, ne
+  // touche pas l'état persisté ni le flux de signature public). On
+  // enveloppe dans un cartouche clair pour reproduire le contexte
+  // visuel public (fond blanc, texte slate) au sein de l'éditeur sombre.
   // ───────────────────────────────────────────────────────────────
   if (!ownerView) {
-    const clientData = buildClientViewData(preview, s, itemsByModule);
     return (
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 text-slate-900 shadow-sm sm:p-6">
-        <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
-          Aperçu — exactement ce que verra le client
-        </p>
-        {clientData ? (
-          <SoumissionClientView devis={clientData} disableToggles />
-        ) : (
-          <p className="py-6 text-center text-sm text-slate-400">
-            Chargement de la vue client…
-          </p>
-        )}
-      </div>
+      <AdminClientPreview
+        soumissionId={s.id}
+        soumission={s}
+        preview={preview}
+        modules={modules}
+        itemsByModule={itemsByModule}
+      />
     );
   }
 

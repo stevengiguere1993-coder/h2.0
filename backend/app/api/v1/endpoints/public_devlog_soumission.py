@@ -129,6 +129,14 @@ class _PublicInitialBlock(BaseModel):
 
     features: list[_PublicFeatureClient]
     frais_fixes: list[_PublicFraisFixeClient]
+    # Fonctionnalités DIRECTES (hors module) — items ``feature`` sans
+    # ``module_id``. Elles font partie de l'investissement initial et ont
+    # un prix, mais ne sont rattachées à aucun module. En mode modules, le
+    # frontend ne rend PAS la liste plate ``features`` (qui mélange tout) :
+    # il affiche ces fonctionnalités directes dans un bloc dédié pour
+    # qu'elles restent visibles côté client. Vide en mode legacy (sans
+    # modules), où ``features`` est déjà rendu tel quel.
+    direct_features: list[_PublicFeatureClient] = []
     total_final: float
     tps_amount: float = 0.0
     tvq_amount: float = 0.0
@@ -368,6 +376,14 @@ def _to_public_devis(
                     prix_client=float(f.get("prix_client") or 0),
                 )
                 for f in (init.get("features_client") or [])
+            ],
+            direct_features=[
+                _PublicFeatureClient(
+                    description=str(f.get("description") or ""),
+                    prix_client=float(f.get("prix_client") or 0),
+                )
+                for f in (init.get("features_client") or [])
+                if f.get("module_id") is None
             ],
             frais_fixes=[
                 _PublicFraisFixeClient(

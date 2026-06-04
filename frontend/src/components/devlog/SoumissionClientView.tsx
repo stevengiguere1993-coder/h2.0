@@ -80,6 +80,15 @@ export type ClientInitialBlock = {
   total_final_taxe: number; // TTC initial
   modules?: ClientModule[];
   has_modules?: boolean;
+  /**
+   * Fonctionnalités DIRECTES (hors module) — items `feature` sans
+   * `module_id`. Elles font partie de l'investissement initial et ont un
+   * prix, mais n'appartiennent à aucun module sélectionnable. En mode
+   * modules, le bloc plat `features` n'est pas rendu : on affiche ces
+   * fonctionnalités directes dans un bloc dédié « Autres fonctionnalités
+   * (hors module) » pour qu'elles restent visibles côté client.
+   */
+  direct_features?: ClientFeature[];
 };
 
 export type SoumissionClientViewData = {
@@ -132,6 +141,9 @@ export function SoumissionClientView({
   const fraisFixes = init.frais_fixes || [];
   const initialHT = init.total_final || 0;
   const initialTTC = init.total_final_taxe || 0;
+  // Fonctionnalités directes (hors module) — montrées en mode modules
+  // dans un bloc dédié (en mode legacy elles sont déjà dans `features`).
+  const directFeatures = init.direct_features || [];
 
   // Mode modules : sélection interactive. Sinon, vue plate (legacy).
   const modules = init.modules || [];
@@ -380,6 +392,36 @@ export function SoumissionClientView({
                         </div>
                       );
                     })}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Autres fonctionnalités (hors module) — fonctionnalités
+                  directes, toujours incluses dans l'investissement
+                  initial (non décochables, pas rattachées à un module). */}
+              {directFeatures.length > 0 ? (
+                <div className="mt-4">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-slate-500" />
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      Autres fonctionnalités (incluses)
+                    </h3>
+                  </div>
+                  <div className="mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                    <table className="w-full text-sm">
+                      <tbody className="divide-y divide-slate-200">
+                        {directFeatures.map((feat, idx) => (
+                          <tr key={`direct-${idx}`}>
+                            <td className="px-4 py-2 text-slate-800">
+                              {feat.description || "—"}
+                            </td>
+                            <td className="px-4 py-2 text-right text-slate-800">
+                              {fmtMoney(feat.prix_client)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               ) : null}

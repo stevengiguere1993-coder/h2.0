@@ -1375,6 +1375,71 @@ async def preview_soumission_devis(
     return compute_devis(soumission, list(items), modules)
 
 
+class DevisPreviewSelectionRequest(BaseModel):
+    """Override IN-MEMORY de la sélection des modules pour un aperçu.
+
+    Permet à la « Vue client » de l'éditeur admin de simuler les choix du
+    client (cocher / décocher des modules) avec recalcul en direct, SANS
+    rien persister. ``selected_module_ids`` = ids des modules cochés ;
+    tout module absent est traité comme décoché. ``None`` => on garde
+    l'état persisté (équivalent au GET ``devis-preview``)."""
+
+    selected_module_ids: Optional[list[int]] = None
+
+
+@soumission_automations_router.post(
+    "/{soumission_id}/devis-preview",
+    response_model=DevisPreview,
+    summary=(
+        "Prévisualise les totaux devis_dev avec une sélection de modules "
+        "simulée (aperçu admin interactif, sans persistance)"
+    ),
+)
+async def preview_soumission_devis_with_selection(
+    soumission_id: int,
+    data: DevisPreviewSelectionRequest,
+    db: DBSession,
+    _: CurrentUser,
+):
+    """Comme le GET ``devis-preview``, mais applique une sélection de
+    modules fournie par l'appelant AVANT le calcul — purement éphémère
+    (aucun ``commit``). Sert à la « Vue client » de l'éditeur pour
+    visualiser ce que verrait le client en cochant/décochant des modules,
+    avec recalcul du total (gratuité « module → module », taxes…).
+
+    ⚠️ Ne persiste RIEN : l'état ``selected`` des modules en base reste
+    inchangé. La sélection définitive du client passe par le flux public
+    de signature."""
+    soumission = await GenericCrud(db, DevlogSoumission).get(soumission_id)
+    if soumission is None:
+        raise HTTPException(status_code=404, detail="Soumission introuvable")
+    items = (
+        await db.execute(
+            select(DevlogSoumissionItem)
+            .where(DevlogSoumissionItem.soumission_id == soumission_id)
+            .order_by(
+                DevlogSoumissionItem.position.asc(),
+                DevlogSoumissionItem.id.asc(),
+            )
+        )
+    ).scalars().all()
+    modules = await _load_soumission_modules(db, soumission_id)
+    # Override de sélection IN-MEMORY (aperçu). On mute les instances ORM
+    # AVANT le calcul, puis on calcule le résultat (dict pur, détaché de
+    # la session). ``get_db`` committe en fin de requête : pour garantir
+    # qu'AUCUNE de ces mutations ``selected`` ne soit persistée (la
+    # sélection de l'aperçu admin doit rester purement visuelle, sans
+    # toucher l'état réel ni le flux de signature public), on annule la
+    # session juste après le calcul.
+    if data.selected_module_ids is not None:
+        wanted = {int(x) for x in data.selected_module_ids}
+        for m in modules:
+            m.selected = m.id in wanted
+    result = compute_devis(soumission, list(items), modules)
+    await db.rollback()
+    return result
+
+
 @soumission_automations_router.post(
     "/{soumission_id}/convert-to-project",
     response_model=DevlogProjectRead,
@@ -2195,6 +2260,22 @@ async def create_soumission_item(
         raise HTTPException(status_code=404, detail="Soumission introuvable")
     payload = data.model_dump(exclude_unset=True)
 
+    # Position globale par défaut = nombre d'items déjà présents dans la
+    # soumission (l'item s'ajoute donc en fin de liste). Sans ça, tous les
+    # items naissent à ``position = 0`` et le drag & drop, qui réordonne
+    # une sous-liste, entrerait en collision avec les autres listes.
+    if payload.get("position") is None:
+        existing_count = (
+            await db.execute(
+                select(func.count())
+                .select_from(DevlogSoumissionItem)
+                .where(
+                    DevlogSoumissionItem.soumission_id == data.soumission_id
+                )
+            )
+        ).scalar_one()
+        payload["position"] = int(existing_count or 0)
+
     if getattr(soumission, "is_devis_dev", False):
         # Mode devis_dev : pas de markup section, totaux dérivés du
         # type d'item via ``_apply_devis_dev_totals``.
@@ -2319,7 +2400,18 @@ async def reorder_soumission_items(
     Réordonnancement INTRA-liste : on n'accepte que des items de CETTE
     soumission, et on ne touche qu'à ``position`` — ni ``total`` ni le
     montant de la soumission ne changent (la sommation des items reste
-    identique, donc ``devis-preview`` est inchangé)."""
+    identique, donc ``devis-preview`` est inchangé).
+
+    ⚠️ ``position`` est GLOBAL à la soumission, mais ``item_ids`` ne
+    décrit qu'UNE sous-liste (les fonctionnalités d'un module, les frais
+    fixes, etc.). Si l'on se contentait d'écrire ``position = index`` sur
+    cette seule sous-liste, on entrerait en collision avec les positions
+    des autres sous-listes (les items sont créés avec ``position = 0`` par
+    défaut) : au re-fetch trié par ``(position, id)`` l'ordre se mélange
+    et le drag & drop semble « revenir à sa place ». On reconstruit donc
+    la liste COMPLÈTE ordonnée, on y remplace la sous-séquence déplacée
+    par le nouvel ordre (aux MÊMES emplacements), puis on renumérote TOUS
+    les items de 0..N — positions globales uniques et stables."""
     items = (
         await db.execute(
             select(DevlogSoumissionItem).where(
@@ -2328,10 +2420,21 @@ async def reorder_soumission_items(
         )
     ).scalars().all()
     by_id = {it.id: it for it in items}
-    for idx, iid in enumerate(data.item_ids):
-        it = by_id.get(iid)
-        if it is not None:
-            it.position = idx
+    # Ordre global courant (déterministe) avant réordonnancement.
+    current = sorted(items, key=lambda it: (it.position, it.id))
+    # Sous-liste demandée, restreinte aux items réellement présents dans
+    # CETTE soumission (on ignore tout id inconnu / d'une autre soumission).
+    moved = [by_id[i] for i in data.item_ids if i in by_id]
+    moved_set = {it.id for it in moved}
+    # On réinjecte la sous-liste réordonnée aux emplacements (slots) que
+    # ses items occupaient dans la liste globale : les autres items ne
+    # bougent pas, seul l'ordre interne de la sous-liste change.
+    moved_iter = iter(moved)
+    new_order = [
+        next(moved_iter) if it.id in moved_set else it for it in current
+    ]
+    for idx, it in enumerate(new_order):
+        it.position = idx
     await db.flush()
     await log_action(
         db,
