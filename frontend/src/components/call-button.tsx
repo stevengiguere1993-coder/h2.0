@@ -59,7 +59,19 @@ export function CallButton({
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        throw new Error(text || `http_${res.status}`);
+        let detail = text;
+        try {
+          const j = JSON.parse(text) as { detail?: string };
+          if (j.detail) detail = j.detail;
+        } catch {
+          /* garde le texte brut */
+        }
+        if (detail.startsWith("no_user_phone")) {
+          detail =
+            "Ajoute ton numéro de mobile dans ton profil pour passer " +
+            "des appels (Profil → Mobile).";
+        }
+        throw new Error(detail || `http_${res.status}`);
       }
       setOkMsg("Ton mobile va sonner — décroche pour parler.");
     } catch (err) {

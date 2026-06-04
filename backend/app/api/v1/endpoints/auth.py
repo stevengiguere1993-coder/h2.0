@@ -246,6 +246,29 @@ class ProfileUpdate(BaseModel):
     profile_color: Optional[str] = Field(
         default=None, pattern=PROFILE_COLOR_PATTERN
     )
+    # Mobile perso pour le click-to-call (chaîne vide = effacer). On
+    # accepte un format libre (514-961-9015, (514) 961-9015…) et on
+    # normalise en E.164 côté serveur.
+    phone_e164: Optional[str] = Field(default=None, max_length=32)
+
+
+def _normalize_phone_e164(raw: str) -> str:
+    """Normalise un numéro NANP en E.164 (+1XXXXXXXXXX). Tolérant aux
+    espaces / parenthèses / tirets. Renvoie '' si vide/inexploitable."""
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    if s.startswith("+"):
+        digits = "".join(c for c in s[1:] if c.isdigit())
+        return f"+{digits}" if digits else ""
+    digits = "".join(c for c in s if c.isdigit())
+    if len(digits) == 10:
+        return f"+1{digits}"
+    if len(digits) == 11 and digits.startswith("1"):
+        return f"+{digits}"
+    if len(digits) >= 8:
+        return f"+{digits}"
+    return ""
 
 
 @router.patch(
@@ -265,6 +288,10 @@ async def update_my_profile(
     # prénom ou nom). exclude_unset garantit qu'on ne remet pas les
     # champs absents à NULL par accident.
     fields = body.model_dump(exclude_unset=True)
+    # Le numéro de mobile est normalisé en E.164 (et '' => NULL).
+    if "phone_e164" in fields:
+        raw = fields.pop("phone_e164")
+        u.phone_e164 = _normalize_phone_e164(raw) or None
     for k, v in fields.items():
         if v == "":
             v = None

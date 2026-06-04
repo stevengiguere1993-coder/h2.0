@@ -2476,7 +2476,7 @@ class OutboundCallResponse(BaseModel):
     summary="Initie un appel sortant click-to-call (admin)",
 )
 async def create_outbound_call(
-    payload: OutboundCallRequest, _: CurrentAdmin, db: DBSession
+    payload: OutboundCallRequest, user: CurrentAdmin, db: DBSession
 ) -> OutboundCallResponse:
     """Click-to-call : Twilio appelle d'abord le mobile interne
     (`TWILIO_FORWARD_TO`), puis bridge vers la cible une fois qu'on a
@@ -2511,13 +2511,19 @@ async def create_outbound_call(
     if pn is None:
         raise HTTPException(status_code=400, detail="no_active_phone_number")
 
-    bridge_to = (
-        (pn.forward_to_e164 or os.getenv("TWILIO_FORWARD_TO") or "").strip()
-    )
-    if not bridge_to:
+    # Le téléphone mis en relation DOIT être celui de l'utilisateur
+    # connecté qui lance l'appel — pas un numéro fixe partagé. On exige
+    # donc un mobile renseigné dans le profil (Réglages → Profil). Ainsi,
+    # quel que soit le commercial qui clique « Appeler » dans Kratos,
+    # c'est SON téléphone qui sonne.
+    bridge_to = _normalize_e164(getattr(user, "phone_e164", None) or "")
+    if not bridge_to.startswith("+"):
         raise HTTPException(
             status_code=400,
-            detail="no_bridge_target (set forward_to_e164 or TWILIO_FORWARD_TO)",
+            detail=(
+                "no_user_phone: renseigne ton numéro de mobile dans ton "
+                "profil pour passer des appels depuis Kratos."
+            ),
         )
 
     # On crée la ligne d'abord pour avoir l'ID dispo dans l'URL TwiML.

@@ -203,6 +203,13 @@ class User(Base, TimestampMixin):
     profile_color: Mapped[Optional[str]] = mapped_column(
         String(16), nullable=True
     )
+    # Numéro de mobile personnel (E.164, ex. « +15149619015 »). Sert au
+    # click-to-call Kratos : quand CET utilisateur lance un appel sortant,
+    # c'est SON téléphone qui sonne pour le mettre en relation (et non un
+    # numéro fixe partagé). Renseigné par l'utilisateur dans son profil.
+    phone_e164: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True
+    )
 
     @property
     def display_name(self) -> str:

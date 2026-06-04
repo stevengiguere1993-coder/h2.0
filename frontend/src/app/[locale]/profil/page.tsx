@@ -35,6 +35,7 @@ export default function ProfilePage() {
   const { user, loading, signOut } = useCurrentUser();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
+  const [phone, setPhone] = useState("");
   const [profileColor, setProfileColor] = useState<ProfileColor | null>(
     null
   );
@@ -60,6 +61,10 @@ export default function ProfilePage() {
     if (user) {
       setFirstName(user.first_name || "");
       setLastName(user.last_name || "");
+      setPhone(
+        ((user as unknown) as { phone_e164?: string | null }).phone_e164 ||
+          ""
+      );
       setProfileColor(
         ((user as unknown) as { profile_color?: ProfileColor | null })
           .profile_color ?? null
@@ -106,6 +111,7 @@ export default function ProfilePage() {
         body: JSON.stringify({
           first_name: firstName,
           last_name: lastName,
+          phone_e164: phone,
           profile_color: profileColor
         })
       });
@@ -368,6 +374,21 @@ export default function ProfilePage() {
                 className="input"
               />
             </div>
+          </div>
+          <div>
+            <label className="label">Mobile (click-to-call)</label>
+            <input
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="Ex. 514-961-9015"
+              maxLength={32}
+              className="input"
+            />
+            <p className="mt-1 text-[11px] text-white/40">
+              C&apos;est ce numéro qui sonnera quand tu lances un appel
+              depuis Kratos, pour te mettre en relation avec le contact.
+            </p>
           </div>
           <div>
             <label className="label">Courriel</label>

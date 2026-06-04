@@ -821,6 +821,9 @@ async def init_db() -> None:
             # POURQUOI le lead est perdu. Posé en même temps que
             # status='lost' depuis la fiche prospect.
             ("contact_requests", "lost_reason", "VARCHAR(120)"),
+            # Mobile perso de l'utilisateur — click-to-call Kratos fait
+            # sonner CE numéro quand l'utilisateur lance un appel.
+            ("users", "phone_e164", "VARCHAR(20)"),
             # Phase 8 : cibles de routage par scénario, configurables
             # depuis l'app (au lieu d'env vars Render).
             ("voice_phone_numbers", "urgency_forward_e164", "VARCHAR(20)"),
