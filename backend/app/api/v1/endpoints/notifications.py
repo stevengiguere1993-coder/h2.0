@@ -114,11 +114,16 @@ async def unread_count(
     db: DBSession,
     user: CurrentUser,
     scope: Optional[str] = Query(default=None),
+    kind: Optional[str] = Query(default=None),
 ) -> int:
     stmt = select(func.count(Notification.id)).where(
         Notification.user_id == user.id,
         Notification.is_read.is_(False),
     )
+    if kind:
+        # Filtre par type (ex. voicemail_received) — sert aux badges
+        # ciblés dans les menus latéraux.
+        stmt = stmt.where(Notification.kind == kind)
     clause = _volet_filter(scope)
     if clause is not None:
         stmt = stmt.where(clause)

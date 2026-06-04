@@ -20,9 +20,12 @@ import {
   X
 } from "lucide-react";
 
+import { useEffect, useState } from "react";
+
 import { AccountBadge } from "@/components/account-badge";
 import { HorizonLogo } from "@/components/horizon-logo";
 import { Link } from "@/i18n/navigation";
+import { authedFetch } from "@/lib/auth";
 
 import type { TelephonieSection } from "@/app/[locale]/telephonie/_client-shell";
 
@@ -55,6 +58,32 @@ export function TelephonieSidebar({
   section: TelephonieSection;
   onSectionChange: (s: TelephonieSection) => void;
 }) {
+  // Badge « messages vocaux non lus » sur l'onglet Appels — basé sur les
+  // notifications voicemail_received non lues (s'efface quand l'appel est
+  // consulté via la cloche). Sondage léger toutes les 60 s.
+  const [vmUnread, setVmUnread] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const r = await authedFetch(
+          "/api/v1/notifications/unread-count?kind=voicemail_received"
+        );
+        if (!r.ok) return;
+        const n = (await r.json()) as number;
+        if (!cancelled) setVmUnread(Number(n) || 0);
+      } catch {
+        /* ignore */
+      }
+    }
+    void load();
+    const t = setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [section]);
+
   return (
     <>
       {open ? (
@@ -99,6 +128,7 @@ export function TelephonieSidebar({
             {SECTIONS.map((s) => {
               const Icon = s.icon;
               const active = section === s.key;
+              const badge = s.key === "appels" ? vmUnread : 0;
               return (
                 <li key={s.key}>
                   <button
@@ -111,7 +141,15 @@ export function TelephonieSidebar({
                     }`}
                   >
                     <Icon className="h-4 w-4" />
-                    {s.label}
+                    <span className="flex-1 text-left">{s.label}</span>
+                    {badge > 0 ? (
+                      <span
+                        className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-brand-950"
+                        title={`${badge} message(s) vocal(aux) non lu(s)`}
+                      >
+                        {badge > 99 ? "99+" : badge}
+                      </span>
+                    ) : null}
                   </button>
                 </li>
               );

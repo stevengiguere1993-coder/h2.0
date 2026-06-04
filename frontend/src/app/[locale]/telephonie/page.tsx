@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Bot,
@@ -341,6 +341,26 @@ export default function TelephonieHome() {
     },
     [turnsByCallId]
   );
+
+  // Deep-link : une notification cloche pointe vers /telephonie?call={id}.
+  // Dès que la liste d'appels est chargée, on ouvre directement le drawer
+  // du bon appel et on bascule sur l'onglet Appels — pour atterrir
+  // exactement sur l'info concernée (ex. le message vocal).
+  const deepLinkDone = useRef(false);
+  useEffect(() => {
+    if (deepLinkDone.current || calls.length === 0) return;
+    const raw = new URLSearchParams(window.location.search).get("call");
+    if (!raw) {
+      deepLinkDone.current = true;
+      return;
+    }
+    const callId = Number(raw);
+    if (Number.isFinite(callId) && calls.some((c) => c.id === callId)) {
+      deepLinkDone.current = true;
+      setSection("appels");
+      void openDrawer(callId);
+    }
+  }, [calls, openDrawer, setSection]);
 
   useEffect(() => {
     let cancelled = false;
