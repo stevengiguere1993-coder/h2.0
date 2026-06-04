@@ -25,6 +25,10 @@ import {
 
 import { AppTopbar } from "@/components/app-topbar";
 import { EntityDriveSection } from "@/components/drive/EntityDriveSection";
+import {
+  SoumissionClientView,
+  type SoumissionClientViewData
+} from "@/components/devlog/SoumissionClientView";
 import { useDevlogLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -1299,6 +1303,137 @@ export default function SoumissionDetailPage() {
 // NOUVELLE VUE — devis_dev (refonte mai 2026)
 // ============================================================
 
+// Note additionnelle du bloc récurrent, éditée par le propriétaire et
+// servie telle quelle au client (champ `client_recurring_description`).
+// State local indépendant des reloads de la soumission pour ne pas
+// perturber la frappe (même pattern que les inputs contrôlés).
+function ClientRecurringNote({
+  soumission: s,
+  onPatchSoumission
+}: {
+  soumission: Soumission;
+  onPatchSoumission: (patch: Partial<Soumission>) => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const [v, setV] = useState(s.client_recurring_description ?? "");
+  useEffect(() => {
+    if (!focused) setV(s.client_recurring_description ?? "");
+  }, [s.client_recurring_description, focused]);
+
+  return (
+    <div className="mt-3">
+      <label className="text-xs uppercase tracking-wider text-white/40">
+        Notes additionnelles client (optionnel)
+      </label>
+      <textarea
+        value={v}
+        onFocus={() => setFocused(true)}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={() => {
+          setFocused(false);
+          if ((s.client_recurring_description ?? "") !== v) {
+            onPatchSoumission({ client_recurring_description: v });
+          }
+        }}
+        placeholder="Précisions sur l'abonnement mensuel (SLA, fréquence des sauvegardes, etc.)..."
+        rows={3}
+        className="mt-1 w-full rounded border border-emerald-500/30 bg-brand-950 px-3 py-2 text-sm text-white focus:border-emerald-500/60 focus:outline-none"
+      />
+    </div>
+  );
+}
+
+// Adapte la sortie de l'endpoint d'aperçu admin (`/devis-preview`) vers
+// la forme normalisée consommée par <SoumissionClientView> (la MÊME que
+// l'endpoint public `PublicDevisPreview`). Objectif : la « Vue client »
+// de l'éditeur affiche EXACTEMENT le rendu de la page publique de
+// signature, avec les mêmes montants (prix PAR MODULE, « Inclus
+// gratuitement » + condition, totaux initial/mensuel/TPS/TVQ).
+//
+// On réplique fidèlement la logique du backend `_build_public_preview` :
+//   * le prix client PAR FONCTIONNALITÉ vient de `features_client`
+//     (indexé par id) ;
+//   * la liste COMPLÈTE des fonctionnalités d'un module est reconstruite
+//     depuis les items BRUTS (kind=feature uniquement) — y compris pour
+//     un module non sélectionné, dont les features sont absentes du
+//     calcul mais que le client doit pouvoir (re)cocher. Les
+//     `manager_task` sont exclues (jamais montrées au client) ;
+//   * un module offert -> prix 0 sur le module et ses features.
+//
+// Rétrocompat : sans modules, `modules`/`has_modules` restent vides et le
+// composant retombe sur la vue plate (features / frais fixes).
+function buildClientViewData(
+  preview: DevisPreview | null,
+  soumission: Soumission,
+  itemsByModule: Map<number, Item[]>
+): SoumissionClientViewData | null {
+  if (!preview) return null;
+  const rec = preview.recurring;
+  const init = preview.initial;
+
+  // Prix client par feature (id -> prix_client), depuis features_client.
+  const featurePriceById = new Map<number, number>();
+  for (const f of init.features_client) {
+    if (f.id != null) featurePriceById.set(f.id, f.prix_client);
+  }
+
+  const publicModules = (init.modules ?? []).map((m) => {
+    const isFree = Boolean(m.offert);
+    // Fonctionnalités du module = items bruts kind=feature de ce module.
+    const rawFeatures = (itemsByModule.get(m.id) ?? []).filter(
+      (it) => it.item_kind === "feature"
+    );
+    const features = rawFeatures.map((it) => ({
+      description: it.description || "",
+      prix_client: isFree ? 0 : featurePriceById.get(it.id) ?? 0
+    }));
+    return {
+      id: m.id,
+      name: m.name || "Module",
+      selected: Boolean(m.selected),
+      // Tous les modules sont optionnels (pas de notion « obligatoire »).
+      optional: true,
+      offert: isFree,
+      free_when_module_id: m.free_when_module_id ?? null,
+      prix_client: m.prix_client ?? 0,
+      features
+    };
+  });
+
+  return {
+    recurring: {
+      total_client_amount: rec.total_client_amount ?? 0,
+      items: (rec.items_breakdown ?? []).map((it) => ({
+        description: it.description || ""
+      })),
+      description: soumission.client_recurring_description || null,
+      tps_amount: rec.tps_amount ?? 0,
+      tvq_amount: rec.tvq_amount ?? 0,
+      tps_pct: rec.tps_pct ?? 5,
+      tvq_pct: rec.tvq_pct ?? 9.975,
+      total_client_amount_taxe: rec.total_client_amount_taxe ?? 0
+    },
+    initial: {
+      features: (init.features_client ?? []).map((f) => ({
+        description: f.description || "",
+        prix_client: f.prix_client ?? 0
+      })),
+      frais_fixes: (init.frais_fixes_client ?? []).map((f) => ({
+        description: f.description || "",
+        prix_client: f.prix_client ?? 0
+      })),
+      total_final: init.total_final ?? 0,
+      tps_amount: init.tps_amount ?? 0,
+      tvq_amount: init.tvq_amount ?? 0,
+      tps_pct: init.tps_pct ?? 5,
+      tvq_pct: init.tvq_pct ?? 9.975,
+      total_final_taxe: init.total_final_taxe ?? 0,
+      modules: publicModules,
+      has_modules: publicModules.length > 0
+    }
+  };
+}
+
 function DevisDevEditor({
   soumission: s,
   preview,
@@ -1344,6 +1479,33 @@ function DevisDevEditor({
   const rec = preview?.recurring;
   const init = preview?.initial;
   const invalid = preview?.is_invalid ?? false;
+
+  // ───────────────────────────────────────────────────────────────
+  // VUE CLIENT (aperçu) — rendu STRICTEMENT identique à la page
+  // publique de signature, via le composant partagé
+  // <SoumissionClientView>. Lecture seule : la pré-sélection des
+  // modules est reflétée (cases cochées selon `selected`) mais non
+  // interactive (pas de recalcul ni de signature ici). On enveloppe
+  // dans un cartouche clair pour reproduire le contexte visuel public
+  // (fond blanc, texte slate) au sein de l'éditeur sombre.
+  // ───────────────────────────────────────────────────────────────
+  if (!ownerView) {
+    const clientData = buildClientViewData(preview, s, itemsByModule);
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 text-slate-900 shadow-sm sm:p-6">
+        <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+          Aperçu — exactement ce que verra le client
+        </p>
+        {clientData ? (
+          <SoumissionClientView devis={clientData} disableToggles />
+        ) : (
+          <p className="py-6 text-center text-sm text-slate-400">
+            Chargement de la vue client…
+          </p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <>
@@ -1400,9 +1562,11 @@ function DevisDevEditor({
           ) : null}
         </header>
 
+        {/* Vue propriétaire — liste éditable. (La « Vue client » est
+            rendue plus haut par un retour anticipé via le composant
+            partagé <SoumissionClientView>.) */}
         {ownerView ? (
           <>
-            {/* Vue propriétaire — liste éditable */}
             {recurringItems.length === 0 ? (
               <p className="rounded border border-dashed border-emerald-500/30 px-3 py-4 text-center text-xs text-white/40">
                 Aucun coût mensuel. Clique sur « + Ajouter un coût » pour en
@@ -1504,22 +1668,15 @@ function DevisDevEditor({
               <Plus className="h-3 w-3" />
               Ajouter un coût
             </button>
+            {/* Note client (anciennement dans la vue client) — éditable
+                côté propriétaire ; affichée telle quelle au client
+                (champ ``description`` du bloc récurrent). */}
+            <ClientRecurringNote
+              soumission={s}
+              onPatchSoumission={onPatchSoumission}
+            />
           </>
-        ) : (
-          // Vue client — liste des inclusions (labels uniquement) +
-          // total mensuel en bas, pattern identique à la section 2.
-          <DevisDevClientRecurring
-            soumission={s}
-            recurringItems={recurringItems}
-            totalClientAmount={rec?.total_client_amount ?? 0}
-            totalClientAmountTaxe={rec?.total_client_amount_taxe ?? 0}
-            tpsAmount={rec?.tps_amount ?? 0}
-            tvqAmount={rec?.tvq_amount ?? 0}
-            tpsPct={rec?.tps_pct ?? 5}
-            tvqPct={rec?.tvq_pct ?? 9.975}
-            onPatchSoumission={onPatchSoumission}
-          />
-        )}
+        ) : null}
       </section>
 
       {/* ========== SECTION 2 — Investissement initial ========== */}
@@ -1564,28 +1721,26 @@ function DevisDevEditor({
           ) : null}
         </header>
 
-        {ownerView ? (
-          <DevisDevOwnerInitial
-            soumission={s}
-            preview={preview}
-            featureItems={featureItems}
-            fixedItems={fixedItems}
-            managerTaskItems={managerTaskItems}
-            modules={modules}
-            itemsByModule={itemsByModule}
-            onPatchSoumission={onPatchSoumission}
-            onAddItem={onAddItem}
-            onPatchItem={onPatchItem}
-            onDeleteItem={onDeleteItem}
-            onAddModule={onAddModule}
-            onPatchModule={onPatchModule}
-            onDeleteModule={onDeleteModule}
-            onMoveModule={onMoveModule}
-            onAddModuleItem={onAddModuleItem}
-          />
-        ) : (
-          <DevisDevClientInitial preview={preview} />
-        )}
+        {/* Vue propriétaire (interne). La « Vue client » est rendue plus
+            haut via le retour anticipé + <SoumissionClientView>. */}
+        <DevisDevOwnerInitial
+          soumission={s}
+          preview={preview}
+          featureItems={featureItems}
+          fixedItems={fixedItems}
+          managerTaskItems={managerTaskItems}
+          modules={modules}
+          itemsByModule={itemsByModule}
+          onPatchSoumission={onPatchSoumission}
+          onAddItem={onAddItem}
+          onPatchItem={onPatchItem}
+          onDeleteItem={onDeleteItem}
+          onAddModule={onAddModule}
+          onPatchModule={onPatchModule}
+          onDeleteModule={onDeleteModule}
+          onMoveModule={onMoveModule}
+          onAddModuleItem={onAddModuleItem}
+        />
       </section>
     </>
   );
@@ -2274,258 +2429,6 @@ function ModuleCard({
           <Plus className="h-3 w-3" />
           Ajouter une fonctionnalité
         </button>
-      </div>
-    </div>
-  );
-}
-
-function DevisDevClientRecurring({
-  soumission: s,
-  recurringItems,
-  totalClientAmount,
-  totalClientAmountTaxe,
-  tpsAmount,
-  tvqAmount,
-  tpsPct,
-  tvqPct,
-  onPatchSoumission
-}: {
-  soumission: Soumission;
-  recurringItems: Item[];
-  totalClientAmount: number;
-  totalClientAmountTaxe: number;
-  tpsAmount: number;
-  tvqAmount: number;
-  tpsPct: number;
-  tvqPct: number;
-  onPatchSoumission: (patch: Partial<Soumission>) => void;
-}) {
-  // Notes optionnelles : on garde un state local pour que la frappe
-  // dans la textarea ne soit pas perturbée par les reloads de la
-  // soumission (même bug que les inputs — pattern FieldText).
-  const [focused, setFocused] = useState(false);
-  const initial = s.client_recurring_description ?? "";
-  const [v, setV] = useState(initial);
-  useEffect(() => {
-    if (!focused) setV(s.client_recurring_description ?? "");
-  }, [s.client_recurring_description, focused]);
-
-  return (
-    <div className="space-y-4">
-      {recurringItems.length === 0 ? (
-        <p className="rounded border border-dashed border-emerald-500/20 px-3 py-4 text-center text-xs text-white/40">
-          Aucune inclusion à afficher.
-        </p>
-      ) : (
-        <div>
-          <h3 className="text-xs uppercase tracking-wider text-white/40">
-            Inclusions
-          </h3>
-          <ul className="mt-1 divide-y divide-emerald-500/20">
-            {recurringItems.map((it) => (
-              <li key={it.id} className="py-2 text-sm text-white">
-                {it.description || "—"}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <div className="space-y-1 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm">
-        <div className="flex items-center justify-between text-white/80">
-          <span>Sous-total mensuel</span>
-          <span className="font-semibold text-white">
-            {fmtAmount(totalClientAmount)}
-          </span>
-        </div>
-        <div className="flex items-center justify-between text-white/70">
-          <span>+ TPS ({tpsPct}%)</span>
-          <span>{fmtAmount(tpsAmount)}</span>
-        </div>
-        <div className="flex items-center justify-between text-white/70">
-          <span>+ TVQ ({tvqPct}%)</span>
-          <span>{fmtAmount(tvqAmount)}</span>
-        </div>
-        <div className="flex items-center justify-between border-t border-emerald-500/30 pt-1">
-          <span className="text-sm font-semibold text-emerald-200">
-            Total mensuel TTC
-          </span>
-          <span className="text-2xl font-bold text-emerald-200">
-            {fmtAmount(totalClientAmountTaxe)}
-            {/* Fix #9 — "/mois" lisible sur fond vert : on passe à
-                text-white/70 (au lieu de l'ancien emerald-200/70 qui
-                disparaissait sur le bg emerald-500/10). */}
-            <span className="ml-1 text-sm font-normal text-white/70">
-              / mois
-            </span>
-          </span>
-        </div>
-      </div>
-
-      <div>
-        <label className="text-xs uppercase tracking-wider text-white/40">
-          Notes additionnelles (optionnel)
-        </label>
-        <textarea
-          value={v}
-          onFocus={() => setFocused(true)}
-          onChange={(e) => setV(e.target.value)}
-          onBlur={() => {
-            setFocused(false);
-            if ((s.client_recurring_description ?? "") !== v) {
-              onPatchSoumission({ client_recurring_description: v });
-            }
-          }}
-          placeholder="Précisions sur l'abonnement mensuel (SLA, fréquence des sauvegardes, etc.)..."
-          rows={3}
-          className="mt-1 w-full rounded border border-emerald-500/30 bg-brand-950 px-3 py-2 text-sm text-white focus:border-emerald-500/60 focus:outline-none"
-        />
-      </div>
-    </div>
-  );
-}
-
-function DevisDevClientInitial({
-  preview
-}: {
-  preview: DevisPreview | null;
-}) {
-  const init = preview?.initial;
-  if (!init) {
-    return (
-      <p className="py-4 text-center text-xs text-white/40">
-        Chargement de la vue client…
-      </p>
-    );
-  }
-  // Modules SÉLECTIONNÉS (la vue client n'affiche que ce qui est inclus).
-  // Les tâches du chargé de projet ne sont jamais exposées au client.
-  const selectedModules = (init.modules ?? []).filter((m) => m.selected);
-  // Prix client par feature (depuis features_client) pour afficher le
-  // prix de chaque fonctionnalité dans son module.
-  const featurePriceById = new Map<number, number>();
-  for (const f of init.features_client) {
-    if (f.id != null) featurePriceById.set(f.id, f.prix_client);
-  }
-  // Features SANS module (affichées en bloc « autres » — rétrocompat).
-  const looseFeatures = init.features_client.filter(
-    (f) => f.module_id == null
-  );
-
-  return (
-    <div className="space-y-4">
-      {selectedModules.length > 0 ? (
-        <div className="space-y-3">
-          {selectedModules.map((m) => (
-            <div
-              key={m.id}
-              className="rounded-lg border border-blue-500/20 bg-blue-500/[0.04] p-3"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold text-white">
-                  {m.name || "Module"}
-                </h3>
-                <span className="text-sm font-bold text-blue-200">
-                  {m.offert ? "Offert" : fmtAmount(m.prix_client)}
-                </span>
-              </div>
-              {m.features.length > 0 ? (
-                <ul className="mt-1 divide-y divide-blue-500/10">
-                  {m.features.map((f) => (
-                    <li
-                      key={f.id ?? f.description}
-                      className="flex items-center justify-between gap-2 py-1.5 text-sm"
-                    >
-                      <span className="text-white/85">{f.description}</span>
-                      <span className="text-white/60">
-                        {m.offert
-                          ? "Offert"
-                          : f.id != null && featurePriceById.has(f.id)
-                            ? fmtAmount(featurePriceById.get(f.id) ?? 0)
-                            : ""}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="mt-1 text-xs text-white/35">
-                  Aucune fonctionnalité.
-                </p>
-              )}
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      {looseFeatures.length > 0 ? (
-        <div>
-          <h3 className="text-xs uppercase tracking-wider text-white/40">
-            {selectedModules.length > 0
-              ? "Autres fonctionnalités"
-              : "Fonctionnalités incluses"}
-          </h3>
-          <table className="mt-1 w-full text-sm">
-            <tbody className="divide-y divide-blue-500/20">
-              {looseFeatures.map((f) => (
-                <tr key={f.id ?? f.description}>
-                  <td className="py-2 text-white">{f.description}</td>
-                  <td className="py-2 text-right font-semibold text-white">
-                    {fmtAmount(f.prix_client)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : selectedModules.length === 0 ? (
-        <p className="rounded border border-dashed border-blue-500/20 px-3 py-4 text-center text-xs text-white/40">
-          Aucune fonctionnalité à afficher.
-        </p>
-      ) : null}
-
-      {init.frais_fixes_client.length > 0 ? (
-        <div>
-          <h3 className="text-xs uppercase tracking-wider text-white/40">
-            Frais fixes
-          </h3>
-          <table className="mt-1 w-full text-sm">
-            <tbody className="divide-y divide-blue-500/20">
-              {init.frais_fixes_client.map((f) => (
-                <tr key={f.id ?? f.description}>
-                  <td className="py-2 text-white">{f.description}</td>
-                  <td className="py-2 text-right font-semibold text-white">
-                    {fmtAmount(f.prix_client)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
-
-      <div className="space-y-1 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm">
-        <div className="flex items-center justify-between text-white/80">
-          <span>Sous-total</span>
-          <span className="font-semibold text-white">
-            {fmtAmount(init.total_final)}
-          </span>
-        </div>
-        <div className="flex items-center justify-between text-white/70">
-          <span>+ TPS ({init.tps_pct}%)</span>
-          <span>{fmtAmount(init.tps_amount)}</span>
-        </div>
-        <div className="flex items-center justify-between text-white/70">
-          <span>+ TVQ ({init.tvq_pct}%)</span>
-          <span>{fmtAmount(init.tvq_amount)}</span>
-        </div>
-        <div className="flex items-center justify-between border-t border-blue-500/30 pt-1">
-          <span className="text-sm font-semibold text-blue-200">
-            Total TTC
-          </span>
-          <span className="text-2xl font-bold text-blue-200">
-            {fmtAmount(init.total_final_taxe)}
-          </span>
-        </div>
       </div>
     </div>
   );
