@@ -146,6 +146,79 @@ def _immeuble_to_read(obj: Immeuble) -> ImmeubleRead:
 # ── Immeubles : liste + KPIs agrégés ────────────────────────────────────
 
 
+@router.get("/immeubles/diagnostic", response_model=List[dict])
+async def immeubles_diagnostic(db: DBSession, user: CurrentUser) -> List[dict]:
+    """Diagnostic anti-doublons (admin) : TOUS les immeubles avec leur
+    nombre de logements / baux et leur scope (entreprise / deal / global).
+    Permet d'identifier les vrais doublons (ex. deux « Elgin ») avant toute
+    fusion/suppression — un immeuble sans logement ni bail créé sans adresse
+    via un picker de tâche est typiquement le doublon à nettoyer.
+    """
+    _require_volet(user)
+    if not user.has_min_role("admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Diagnostic réservé aux administrateurs.",
+        )
+    immeubles = (
+        await db.execute(select(Immeuble).order_by(Immeuble.name.asc()))
+    ).scalars().all()
+    if not immeubles:
+        return []
+    ids = [i.id for i in immeubles]
+
+    log_counts = dict(
+        (
+            await db.execute(
+                select(Logement.immeuble_id, func.count(Logement.id))
+                .where(Logement.immeuble_id.in_(ids))
+                .group_by(Logement.immeuble_id)
+            )
+        ).all()
+    )
+    bail_counts = dict(
+        (
+            await db.execute(
+                select(Logement.immeuble_id, func.count(Bail.id))
+                .join(Bail, Bail.logement_id == Logement.id)
+                .where(Logement.immeuble_id.in_(ids))
+                .group_by(Logement.immeuble_id)
+            )
+        ).all()
+    )
+
+    # Compte les occurrences par nom normalisé pour signaler les doublons.
+    from collections import Counter
+
+    name_counts = Counter((i.name or "").strip().lower() for i in immeubles)
+
+    out: List[dict] = []
+    for i in immeubles:
+        scope = (
+            "entreprise"
+            if i.owner_entreprise_id
+            else ("deal" if i.owner_deal_id else "global")
+        )
+        out.append(
+            {
+                "id": i.id,
+                "name": i.name,
+                "address": i.address,
+                "city": i.city,
+                "scope": scope,
+                "owner_entreprise_id": i.owner_entreprise_id,
+                "owner_deal_id": i.owner_deal_id,
+                "nb_logements": int(log_counts.get(i.id, 0)),
+                "nb_baux": int(bail_counts.get(i.id, 0)),
+                "is_duplicate_name": name_counts[(i.name or "").strip().lower()]
+                > 1,
+                "is_active": i.is_active,
+                "created_at": i.created_at.isoformat() if i.created_at else None,
+            }
+        )
+    return out
+
+
 @router.get("/immeubles/picker", response_model=List[dict])
 async def immeubles_picker(
     db: DBSession,
