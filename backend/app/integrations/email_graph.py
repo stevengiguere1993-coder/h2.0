@@ -136,6 +136,48 @@ class GraphMailer:
                 log.error("Graph sendMail failed: %s %s", r.status_code, r.text)
                 r.raise_for_status()
 
+    async def list_inbox_messages(self, top: int = 50) -> list[dict]:
+        """Liste les derniers messages reçus dans la boîte (nécessite la
+        permission Graph Mail.Read sur la boîte). Retourne une liste de
+        dicts : id, subject, from_email, received_at, preview, conversation_id.
+        Vide si non configuré / permission absente (log + best-effort)."""
+        token = await self._token()
+        url = (
+            f"https://graph.microsoft.com/v1.0/users/{self.sender}"
+            "/mailFolders/inbox/messages"
+            f"?$top={int(top)}"
+            "&$select=id,subject,from,receivedDateTime,bodyPreview,conversationId"
+            "&$orderby=receivedDateTime desc"
+        )
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            r = await http.get(
+                url, headers={"Authorization": f"Bearer {token}"}
+            )
+            if r.status_code >= 400:
+                log.warning(
+                    "Graph list messages failed: %s %s",
+                    r.status_code,
+                    r.text[:200],
+                )
+                return []
+            data = r.json()
+        out: list[dict] = []
+        for m in data.get("value", []):
+            frm = (
+                (m.get("from") or {}).get("emailAddress") or {}
+            ).get("address")
+            out.append(
+                {
+                    "id": m.get("id"),
+                    "subject": m.get("subject"),
+                    "from_email": (frm or "").strip().lower() or None,
+                    "received_at": m.get("receivedDateTime"),
+                    "preview": m.get("bodyPreview"),
+                    "conversation_id": m.get("conversationId"),
+                }
+            )
+        return out
+
 
 # Singleton
 _mailer: Optional[GraphMailer] = None
