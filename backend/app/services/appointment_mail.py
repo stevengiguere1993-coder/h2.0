@@ -200,6 +200,76 @@ async def send_appointment_assignee_invite(
         return False
 
 
+async def send_appointment_owner_invite(
+    owner_email: str,
+    event: AgendaEvent,
+    prospect: Optional[ContactRequest] = None,
+) -> bool:
+    """Invitation calendrier (.ics) vers l'adresse « agenda » du
+    propriétaire, pour CHAQUE RDV prospect — même non assigné — afin
+    qu'il atterrisse toujours dans son agenda.
+
+    Distinct de l'invite à l'employé assigné : ici le destinataire est
+    une boîte fixe (settings.appointment_owner_email). On garde un .ics
+    avec ORGANIZER + ATTENDEE pour le bouton natif « Ajouter au
+    calendrier ».
+    """
+    mailer = get_mailer()
+    owner_email = (owner_email or "").strip()
+    if not mailer.ready or not owner_email:
+        return False
+    prospect_block = ""
+    if prospect is not None:
+        prospect_block = (
+            f"<p style='margin:4px 0'><strong>Prospect :</strong> "
+            f"{prospect.name}"
+            + (f" — {prospect.phone}" if prospect.phone else "")
+            + (f" — {prospect.email}" if prospect.email else "")
+            + "</p>"
+        )
+    loc_line = (
+        f"<p style='margin:4px 0'><strong>Lieu :</strong> {event.location}</p>"
+        if event.location
+        else ""
+    )
+    html = f"""\
+<div style="font-family:Helvetica,Arial,sans-serif;color:#111;line-height:1.5;max-width:640px">
+  <p>Un rendez-vous prospect a été planifié :</p>
+  <div style="padding:12px 16px;background:#f4f1ec;border-left:3px solid #d89b3c;margin:12px 0">
+    <p style="margin:0 0 4px 0"><strong>{event.title}</strong></p>
+    <p style="margin:4px 0"><strong>Quand :</strong> {_fmt(event.start_at)}</p>
+    {loc_line}
+    {prospect_block}
+  </div>
+  <p>L'invitation est jointe à ce courriel (.ics) — clique dessus pour
+  l'ajouter à ton agenda (Outlook, Gmail, Apple).</p>
+  <p style="margin-top:24px;color:#555;font-size:12px">
+    Horizon Services Immobiliers
+  </p>
+</div>
+"""
+    try:
+        ics_bytes = render_event_ics(event, attendee_email=owner_email)
+        await mailer.send(
+            to=[owner_email],
+            subject=f"RDV agenda — {event.title}",
+            html_body=html,
+            attachments=[
+                EmailAttachment(
+                    name=f"rdv-{event.id}.ics",
+                    content_bytes=ics_bytes,
+                    content_type="text/calendar",
+                )
+            ],
+        )
+        return True
+    except Exception as exc:
+        log.exception(
+            "Owner agenda invite failed for %s: %s", owner_email, exc
+        )
+        return False
+
+
 async def send_appointment_reminder(
     prospect: ContactRequest,
     event: AgendaEvent,
