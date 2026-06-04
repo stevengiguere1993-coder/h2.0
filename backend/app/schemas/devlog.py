@@ -415,6 +415,16 @@ class DevlogModuleReorderRequest(BaseModel):
     module_ids: list[int] = Field(..., min_length=1)
 
 
+class DevlogItemReorderRequest(BaseModel):
+    """Réordonne des items d'une soumission au sein d'une même liste
+    (glisser-déposer). On passe la liste ORDONNÉE des ids de la liste
+    concernée ; la position de chaque item devient son index. Réordonner
+    une liste ne touche jamais aux autres listes ni au calcul des totaux
+    (la sommation des items reste identique)."""
+
+    item_ids: list[int] = Field(..., min_length=1)
+
+
 # --------------------------------------------------------------------------
 # Lecture hiérarchique d'une soumission (sections → modules → items)
 # --------------------------------------------------------------------------

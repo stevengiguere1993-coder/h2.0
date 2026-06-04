@@ -57,6 +57,7 @@ from app.schemas.devlog import (
     DevlogInvoiceItemUpdate,
     DevlogInvoiceRead,
     DevlogInvoiceUpdate,
+    DevlogItemReorderRequest,
     DevlogLeadCreate,
     DevlogLeadNeedCreate,
     DevlogLeadNeedRead,
@@ -2298,6 +2299,50 @@ async def delete_soumission_item(
         entity_id=item_id,
         details={"soumission_id": soumission_id},
     )
+
+
+@soumission_items_router.post(
+    "/soumissions/{soumission_id}/items/reorder",
+    response_model=List[DevlogSoumissionItemRead],
+    summary="Réordonne des items d'une soumission (glisser-déposer)",
+)
+async def reorder_soumission_items(
+    soumission_id: int,
+    data: DevlogItemReorderRequest,
+    db: DBSession,
+    user: CurrentUser,
+):
+    """Réordonne une liste d'items (fonctionnalités d'un module, tâches
+    du chargé de projet, fonctionnalités directes, frais récurrents,
+    frais fixes…) en réécrivant leur ``position`` selon l'ordre fourni.
+
+    Réordonnancement INTRA-liste : on n'accepte que des items de CETTE
+    soumission, et on ne touche qu'à ``position`` — ni ``total`` ni le
+    montant de la soumission ne changent (la sommation des items reste
+    identique, donc ``devis-preview`` est inchangé)."""
+    items = (
+        await db.execute(
+            select(DevlogSoumissionItem).where(
+                DevlogSoumissionItem.soumission_id == soumission_id
+            )
+        )
+    ).scalars().all()
+    by_id = {it.id: it for it in items}
+    for idx, iid in enumerate(data.item_ids):
+        it = by_id.get(iid)
+        if it is not None:
+            it.position = idx
+    await db.flush()
+    await log_action(
+        db,
+        user=user,
+        action="devlog_soumission_item.reordered",
+        entity_type="devlog_soumission",
+        entity_id=soumission_id,
+        details={"item_ids": data.item_ids},
+    )
+    ordered = sorted(items, key=lambda it: (it.position, it.id))
+    return [DevlogSoumissionItemRead.model_validate(it) for it in ordered]
 
 
 # --------------------------------------------------------------------------

@@ -14,6 +14,7 @@ import {
   EyeOff,
   FileSignature,
   Gift,
+  GripVertical,
   Loader2,
   Plus,
   Repeat,
@@ -435,6 +436,146 @@ function PctInput({
   );
 }
 
+// ──────────────────────────────────────────────────────────────────
+// Glisser-déposer (drag & drop) INTRA-liste — réordonnancement.
+//
+// On réutilise le drag & drop HTML5 natif (même approche que le
+// Pipeline Prospection — `draggable` + `onDragStart/onDragOver/onDrop`),
+// le projet n'embarque pas de lib DnD type @dnd-kit. Chaque ligne reçoit
+// une poignée `GripVertical` ; un liseré bleu discret indique où l'item
+// va se déposer. Au drop, on calcule le nouvel ordre des ids et on le
+// remonte via `onReorder` (réordonne localement + persiste côté serveur).
+//
+// `useDnd` est générique : il gère l'état de drag d'UNE liste (id en
+// cours, index survolé) et fabrique les props à étaler sur chaque
+// ligne. `ids` est l'ordre courant de la liste rendue.
+// ──────────────────────────────────────────────────────────────────
+function useDnd(ids: number[], onReorder: (orderedIds: number[]) => void) {
+  const [dragId, setDragId] = useState<number | null>(null);
+  // Index AVANT lequel l'item déposé s'insèrera (0..ids.length).
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+
+  function reset() {
+    setDragId(null);
+    setOverIndex(null);
+  }
+
+  function commit(targetIndex: number) {
+    if (dragId == null) return;
+    const from = ids.indexOf(dragId);
+    if (from < 0) return;
+    const next = ids.filter((x) => x !== dragId);
+    // `targetIndex` est exprimé dans la liste D'ORIGINE : on corrige
+    // d'un cran si l'item part d'AVANT la cible (l'index glisse).
+    let insertAt = targetIndex;
+    if (from < targetIndex) insertAt -= 1;
+    insertAt = Math.max(0, Math.min(insertAt, next.length));
+    next.splice(insertAt, 0, dragId);
+    reset();
+    const changed = next.some((x, i) => x !== ids[i]);
+    if (changed) onReorder(next);
+  }
+
+  // Props pour la poignée (icône GripVertical) — c'est ELLE qui rend la
+  // ligne draggable, pour ne pas gêner la sélection/édition des inputs.
+  function handleProps(id: number) {
+    return {
+      draggable: true,
+      onDragStart: (ev: React.DragEvent) => {
+        setDragId(id);
+        try {
+          ev.dataTransfer.effectAllowed = "move";
+          ev.dataTransfer.setData("text/plain", String(id));
+        } catch {
+          /* ignore (jsdom) */
+        }
+      },
+      onDragEnd: reset
+    };
+  }
+
+  // Props pour chaque ligne réordonnable (cible de drop). `index` est la
+  // position de la ligne dans la liste rendue.
+  function rowProps(index: number) {
+    return {
+      onDragOver: (ev: React.DragEvent) => {
+        // On ne réagit QUE si c'est cette liste qui est en cours de
+        // drag (chaque liste a son propre hook). Sinon on laisse passer
+        // (ex. un drag de fonctionnalité ne doit pas activer le drop du
+        // module parent).
+        if (dragId == null) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        ev.dataTransfer.dropEffect = "move";
+        // Moitié haute → insérer avant cette ligne ; moitié basse →
+        // après (index + 1).
+        const rect = (
+          ev.currentTarget as HTMLElement
+        ).getBoundingClientRect();
+        const after = ev.clientY - rect.top > rect.height / 2;
+        const next = after ? index + 1 : index;
+        if (overIndex !== next) setOverIndex(next);
+      },
+      onDrop: (ev: React.DragEvent) => {
+        if (dragId == null) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        commit(overIndex ?? index);
+      }
+    };
+  }
+
+  return {
+    dragId,
+    overIndex,
+    isDragging: dragId != null,
+    handleProps,
+    rowProps,
+    reset
+  };
+}
+
+// Poignée de glissement discrète (cohérente avec le thème sombre).
+function DragHandle(
+  props: React.HTMLAttributes<HTMLSpanElement> & {
+    draggable?: boolean;
+    onDragStart?: (ev: React.DragEvent) => void;
+    onDragEnd?: (ev: React.DragEvent) => void;
+  }
+) {
+  return (
+    <span
+      {...props}
+      role="button"
+      aria-label="Glisser pour réordonner"
+      title="Glisser pour réordonner"
+      className="inline-flex cursor-grab touch-none text-white/25 hover:text-white/60 active:cursor-grabbing"
+    >
+      <GripVertical className="h-3.5 w-3.5" />
+    </span>
+  );
+}
+
+// Classe du liseré de drop pour une ligne de tableau réordonnable.
+// `overIndex` = index AVANT lequel l'item se déposera (cf. useDnd). On
+// matérialise le liseré bleu en bordure haute de la ligne ciblée, et en
+// bordure basse de la dernière ligne quand on dépose tout en bas.
+function dropRowClass(
+  index: number,
+  count: number,
+  overIndex: number | null,
+  isDragging: boolean
+): string {
+  if (!isDragging || overIndex == null) return "";
+  if (overIndex === index) {
+    return "shadow-[inset_0_2px_0_0_rgb(96,165,250)]";
+  }
+  if (index === count - 1 && overIndex >= count) {
+    return "shadow-[inset_0_-2px_0_0_rgb(96,165,250)]";
+  }
+  return "";
+}
+
 export default function SoumissionDetailPage() {
   const params = useParams<{ id: string }>();
   const id = Number(params?.id);
@@ -850,6 +991,65 @@ export default function SoumissionDetailPage() {
       await loadAll();
     } catch {
       void loadAll();
+    }
+  }
+
+  // Réordonnancement d'une liste d'items (drag & drop). `orderedIds` est
+  // l'ordre voulu pour CETTE liste (module / récurrents / features /
+  // fixes / tâches manager). On réécrit `position` localement (ordre
+  // optimiste) puis on persiste via l'endpoint reorder. Le calcul des
+  // totaux est inchangé (même somme d'items) — on rafraîchit le preview
+  // par sécurité.
+  async function reorderItems(orderedIds: number[]) {
+    const rank = new Map<number, number>();
+    orderedIds.forEach((iid, i) => rank.set(iid, i));
+    // Patch optimiste : on applique les nouvelles positions aux items
+    // concernés, puis on re-trie la liste complète par position pour que
+    // les sous-listes dérivées (filter) reflètent le nouvel ordre.
+    setItems((xs) => {
+      const next = xs.map((it) =>
+        rank.has(it.id) ? { ...it, position: rank.get(it.id)! } : it
+      );
+      return [...next].sort((a, b) => a.position - b.position || a.id - b.id);
+    });
+    refreshPreview();
+    try {
+      const r = await authedFetch(
+        `/api/v1/devlog/soumissions/${id}/items/reorder`,
+        { method: "POST", body: JSON.stringify({ item_ids: orderedIds }) }
+      );
+      if (!r.ok) throw new Error();
+      const r2 = await authedFetch(
+        `/api/v1/devlog/soumissions/${id}/items`
+      );
+      if (r2.ok) setItems((await r2.json()) as Item[]);
+      refreshPreview();
+    } catch {
+      setError("Réordonnancement impossible");
+      await loadAll();
+    }
+  }
+
+  // Réordonnancement des modules par drag & drop (l'endpoint reorder est
+  // déjà utilisé par les flèches ↑/↓ via `moveModule`).
+  async function reorderModules(orderedIds: number[]) {
+    const rank = new Map<number, number>();
+    orderedIds.forEach((mid, i) => rank.set(mid, i));
+    setModules((xs) =>
+      [...xs]
+        .map((m) => (rank.has(m.id) ? { ...m, position: rank.get(m.id)! } : m))
+        .sort((a, b) => a.position - b.position || a.id - b.id)
+    );
+    try {
+      const r = await authedFetch(
+        `/api/v1/devlog/soumissions/${id}/modules/reorder`,
+        { method: "POST", body: JSON.stringify({ module_ids: orderedIds }) }
+      );
+      if (!r.ok) throw new Error();
+      await refreshModules();
+    } catch {
+      setError("Réordonnancement impossible");
+      await refreshModules();
     }
   }
 
@@ -1274,7 +1474,9 @@ export default function SoumissionDetailPage() {
                 onPatchModule={patchModule}
                 onDeleteModule={deleteModule}
                 onMoveModule={moveModule}
+                onReorderModules={reorderModules}
                 onAddModuleItem={addModuleItem}
+                onReorderItems={reorderItems}
               />
             ) : (
               <LegacyView
@@ -1452,7 +1654,9 @@ function DevisDevEditor({
   onPatchModule,
   onDeleteModule,
   onMoveModule,
-  onAddModuleItem
+  onReorderModules,
+  onAddModuleItem,
+  onReorderItems
 }: {
   soumission: Soumission;
   preview: DevisPreview | null;
@@ -1473,12 +1677,21 @@ function DevisDevEditor({
   onPatchModule: (moduleId: number, patch: Partial<ModuleRow>) => void;
   onDeleteModule: (moduleId: number) => void;
   onMoveModule: (moduleId: number, dir: -1 | 1) => void;
+  onReorderModules: (orderedIds: number[]) => void;
   // Un module ne porte QUE des fonctionnalités désormais.
   onAddModuleItem: (moduleId: number, kind: "feature") => void;
+  onReorderItems: (orderedIds: number[]) => void;
 }) {
   const rec = preview?.recurring;
   const init = preview?.initial;
   const invalid = preview?.is_invalid ?? false;
+
+  // DnD de la liste des frais récurrents (les autres listes vivent dans
+  // <DevisDevOwnerInitial> / <ModuleCard>, qui ont leur propre hook).
+  const recDnd = useDnd(
+    recurringItems.map((it) => it.id),
+    onReorderItems
+  );
 
   // ───────────────────────────────────────────────────────────────
   // VUE CLIENT (aperçu) — rendu STRICTEMENT identique à la page
@@ -1576,6 +1789,7 @@ function DevisDevEditor({
               <table className="mt-2 w-full text-xs">
                 <thead className="text-[10px] uppercase tracking-wider text-white/40">
                   <tr>
+                    <th className="w-5"></th>
                     <th className="text-left">Description</th>
                     <th className="text-right">Coût mensuel</th>
                     <th className="text-right">Total ligne</th>
@@ -1583,8 +1797,20 @@ function DevisDevEditor({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-emerald-500/20">
-                  {recurringItems.map((it) => (
-                    <tr key={it.id}>
+                  {recurringItems.map((it, idx) => (
+                    <tr
+                      key={it.id}
+                      {...recDnd.rowProps(idx)}
+                      className={dropRowClass(
+                        idx,
+                        recurringItems.length,
+                        recDnd.overIndex,
+                        recDnd.isDragging
+                      )}
+                    >
+                      <td className="py-1.5 align-middle">
+                        <DragHandle {...recDnd.handleProps(it.id)} />
+                      </td>
                       <td className="py-1.5">
                         <DescInput
                           value={it.description}
@@ -1628,6 +1854,7 @@ function DevisDevEditor({
                       dans la 2e ; la colonne « Total ligne » reste
                       vide pour préserver le tableau. (fix #2) */}
                   <tr>
+                    <td></td>
                     <td className="pt-2 text-right text-white/60">
                       Coût interne mensuel
                     </td>
@@ -1638,6 +1865,7 @@ function DevisDevEditor({
                     <td></td>
                   </tr>
                   <tr>
+                    <td></td>
                     <td className="text-right text-white/60">
                       Marge ({s.marge_recurrente_pct ?? 50}%)
                     </td>
@@ -1648,6 +1876,7 @@ function DevisDevEditor({
                     <td></td>
                   </tr>
                   <tr>
+                    <td></td>
                     <td className="pb-1 text-right text-sm font-bold text-emerald-300">
                       Mensuel client
                     </td>
@@ -1739,7 +1968,9 @@ function DevisDevEditor({
           onPatchModule={onPatchModule}
           onDeleteModule={onDeleteModule}
           onMoveModule={onMoveModule}
+          onReorderModules={onReorderModules}
           onAddModuleItem={onAddModuleItem}
+          onReorderItems={onReorderItems}
         />
       </section>
     </>
@@ -1762,7 +1993,9 @@ function DevisDevOwnerInitial({
   onPatchModule,
   onDeleteModule,
   onMoveModule,
-  onAddModuleItem
+  onReorderModules,
+  onAddModuleItem,
+  onReorderItems
 }: {
   soumission: Soumission;
   preview: DevisPreview | null;
@@ -1781,8 +2014,10 @@ function DevisDevOwnerInitial({
   onPatchModule: (moduleId: number, patch: Partial<ModuleRow>) => void;
   onDeleteModule: (moduleId: number) => void;
   onMoveModule: (moduleId: number, dir: -1 | 1) => void;
+  onReorderModules: (orderedIds: number[]) => void;
   // Un module ne porte QUE des fonctionnalités désormais.
   onAddModuleItem: (moduleId: number, kind: "feature") => void;
+  onReorderItems: (orderedIds: number[]) => void;
 }) {
   const init = preview?.initial;
   // Détail calculé par module (prix client, heures, état) indexé par id.
@@ -1795,6 +2030,26 @@ function DevisDevOwnerInitial({
     () => [...modules].sort((a, b) => a.position - b.position),
     [modules]
   );
+
+  // DnD : tâches du chargé de projet, fonctionnalités directes, frais
+  // fixes, et modules entre eux (en complément des flèches ↑/↓).
+  const taskDnd = useDnd(
+    managerTaskItems.map((it) => it.id),
+    onReorderItems
+  );
+  const featDnd = useDnd(
+    featureItems.map((it) => it.id),
+    onReorderItems
+  );
+  const fixedDnd = useDnd(
+    fixedItems.map((it) => it.id),
+    onReorderItems
+  );
+  const moduleDnd = useDnd(
+    sortedModules.map((m) => m.id),
+    onReorderModules
+  );
+
   return (
     <div className="space-y-4">
       {/* Gestionnaire de projet — bloc UNIQUE et GLOBAL (refonte
@@ -1833,6 +2088,7 @@ function DevisDevOwnerInitial({
           <table className="mt-2 w-full text-xs">
             <thead className="text-[10px] uppercase tracking-wider text-white/40">
               <tr>
+                <th className="w-5"></th>
                 <th className="text-left">Tâche</th>
                 <th className="text-right">Heures</th>
                 <th className="text-right">Coût</th>
@@ -1840,8 +2096,20 @@ function DevisDevOwnerInitial({
               </tr>
             </thead>
             <tbody className="divide-y divide-blue-500/20 align-middle">
-              {managerTaskItems.map((it) => (
-                <tr key={it.id}>
+              {managerTaskItems.map((it, idx) => (
+                <tr
+                  key={it.id}
+                  {...taskDnd.rowProps(idx)}
+                  className={dropRowClass(
+                    idx,
+                    managerTaskItems.length,
+                    taskDnd.overIndex,
+                    taskDnd.isDragging
+                  )}
+                >
+                  <td className="py-1.5 align-middle">
+                    <DragHandle {...taskDnd.handleProps(it.id)} />
+                  </td>
                   <td className="py-1.5">
                     <DescInput
                       value={it.description}
@@ -1958,22 +2226,34 @@ function DevisDevOwnerInitial({
         ) : (
           <div className="mt-3 space-y-3">
             {sortedModules.map((md, idx) => (
-              <ModuleCard
+              <div
                 key={md.id}
-                module={md}
-                index={idx}
-                count={sortedModules.length}
-                allModules={sortedModules}
-                items={itemsByModule.get(md.id) ?? []}
-                calc={moduleCalcById.get(md.id)}
-                tauxDev={Number(s.taux_dev_horaire ?? 75)}
-                onPatchModule={onPatchModule}
-                onDeleteModule={onDeleteModule}
-                onMoveModule={onMoveModule}
-                onAddModuleItem={onAddModuleItem}
-                onPatchItem={onPatchItem}
-                onDeleteItem={onDeleteItem}
-              />
+                {...moduleDnd.rowProps(idx)}
+                className={`rounded-lg ${dropRowClass(
+                  idx,
+                  sortedModules.length,
+                  moduleDnd.overIndex,
+                  moduleDnd.isDragging
+                )}`}
+              >
+                <ModuleCard
+                  module={md}
+                  index={idx}
+                  count={sortedModules.length}
+                  allModules={sortedModules}
+                  items={itemsByModule.get(md.id) ?? []}
+                  calc={moduleCalcById.get(md.id)}
+                  tauxDev={Number(s.taux_dev_horaire ?? 75)}
+                  dragHandleProps={moduleDnd.handleProps(md.id)}
+                  onPatchModule={onPatchModule}
+                  onDeleteModule={onDeleteModule}
+                  onMoveModule={onMoveModule}
+                  onAddModuleItem={onAddModuleItem}
+                  onReorderItems={onReorderItems}
+                  onPatchItem={onPatchItem}
+                  onDeleteItem={onDeleteItem}
+                />
+              </div>
             ))}
           </div>
         )}
@@ -2005,6 +2285,7 @@ function DevisDevOwnerInitial({
           <table className="mt-2 w-full text-xs">
             <thead className="text-[10px] uppercase tracking-wider text-white/40">
               <tr>
+                <th className="w-5"></th>
                 <th className="text-left">Feature</th>
                 <th className="text-right">Heures</th>
                 <th className="text-right">Coût dev</th>
@@ -2012,8 +2293,20 @@ function DevisDevOwnerInitial({
               </tr>
             </thead>
             <tbody className="divide-y divide-blue-500/20 align-middle">
-              {featureItems.map((it) => (
-                <tr key={it.id}>
+              {featureItems.map((it, idx) => (
+                <tr
+                  key={it.id}
+                  {...featDnd.rowProps(idx)}
+                  className={dropRowClass(
+                    idx,
+                    featureItems.length,
+                    featDnd.overIndex,
+                    featDnd.isDragging
+                  )}
+                >
+                  <td className="py-1.5 align-middle">
+                    <DragHandle {...featDnd.handleProps(it.id)} />
+                  </td>
                   <td className="py-1.5">
                     <DescInput
                       value={it.description}
@@ -2083,14 +2376,27 @@ function DevisDevOwnerInitial({
           <table className="mt-2 w-full text-xs">
             <thead className="text-[10px] uppercase tracking-wider text-white/40">
               <tr>
+                <th className="w-5"></th>
                 <th className="text-left">Description</th>
                 <th className="text-right">Coût</th>
                 <th></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-blue-500/20 align-middle">
-              {fixedItems.map((it) => (
-                <tr key={it.id}>
+              {fixedItems.map((it, idx) => (
+                <tr
+                  key={it.id}
+                  {...fixedDnd.rowProps(idx)}
+                  className={dropRowClass(
+                    idx,
+                    fixedItems.length,
+                    fixedDnd.overIndex,
+                    fixedDnd.isDragging
+                  )}
+                >
+                  <td className="py-1.5 align-middle">
+                    <DragHandle {...fixedDnd.handleProps(it.id)} />
+                  </td>
                   <td className="py-1.5">
                     <DescInput
                       value={it.description}
@@ -2220,10 +2526,12 @@ function ModuleCard({
   items,
   calc,
   tauxDev,
+  dragHandleProps,
   onPatchModule,
   onDeleteModule,
   onMoveModule,
   onAddModuleItem,
+  onReorderItems,
   onPatchItem,
   onDeleteItem
 }: {
@@ -2236,17 +2544,27 @@ function ModuleCard({
     | NonNullable<DevisPreview["initial"]["modules"]>[number]
     | undefined;
   tauxDev: number;
+  // Poignée de glissement du module (drag du module entier).
+  dragHandleProps: React.HTMLAttributes<HTMLSpanElement> & {
+    draggable?: boolean;
+  };
   onPatchModule: (moduleId: number, patch: Partial<ModuleRow>) => void;
   onDeleteModule: (moduleId: number) => void;
   onMoveModule: (moduleId: number, dir: -1 | 1) => void;
   // Un module ne porte QUE des fonctionnalités désormais.
   onAddModuleItem: (moduleId: number, kind: "feature") => void;
+  onReorderItems: (orderedIds: number[]) => void;
   onPatchItem: (itemId: number, patch: Partial<Item>) => void;
   onDeleteItem: (itemId: number) => void;
 }) {
   // Un module ne contient QUE des fonctionnalités (les tâches du chargé
   // de projet sont centralisées dans le bloc « Gestionnaire de projet »).
   const features = items.filter((it) => it.item_kind === "feature");
+  // DnD des fonctionnalités DANS ce module (réordonnancement intra-module).
+  const featDnd = useDnd(
+    features.map((it) => it.id),
+    onReorderItems
+  );
   const selected = md.selected !== false;
   const offert = calc?.offert ?? false;
   const heuresDev = calc?.total_heures_dev ?? 0;
@@ -2264,6 +2582,7 @@ function ModuleCard({
     >
       {/* En-tête module */}
       <div className="flex flex-wrap items-center gap-2">
+        <DragHandle {...dragHandleProps} />
         <label
           className="inline-flex items-center gap-1.5 text-xs text-white/80"
           title="Inclure ce module dans la soumission"
@@ -2377,6 +2696,7 @@ function ModuleCard({
           <table className="mt-1 w-full text-xs">
             <thead className="text-[10px] uppercase tracking-wider text-white/40">
               <tr>
+                <th className="w-5"></th>
                 <th className="text-left font-medium">Fonctionnalité</th>
                 <th className="text-right font-medium">Heures</th>
                 <th className="text-right font-medium">Coût dev</th>
@@ -2384,8 +2704,20 @@ function ModuleCard({
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5 align-middle">
-              {features.map((it) => (
-                <tr key={it.id}>
+              {features.map((it, idx) => (
+                <tr
+                  key={it.id}
+                  {...featDnd.rowProps(idx)}
+                  className={dropRowClass(
+                    idx,
+                    features.length,
+                    featDnd.overIndex,
+                    featDnd.isDragging
+                  )}
+                >
+                  <td className="py-1 align-middle">
+                    <DragHandle {...featDnd.handleProps(it.id)} />
+                  </td>
                   <td className="py-1">
                     <DescInput
                       value={it.description}
