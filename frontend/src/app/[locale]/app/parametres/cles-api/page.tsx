@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   Check,
+  ChevronDown,
   ChevronLeft,
+  ChevronRight,
   Copy,
   KeyRound,
   Loader2,
@@ -20,15 +22,19 @@ import { useAppLayout } from "../../layout";
 import { authedFetch } from "@/lib/auth";
 
 /**
- * Page « Clés API » — chaque utilisateur gère SES propres clés.
+ * Page « Clés API » — chaque utilisateur gère SES propres clés ET les
+ * permissions de chaque clé, ORGANISÉES PAR PÔLE (comme la gestion du
+ * Drive « Afficher Drive sur les pages »).
  *
- * S'appuie sur les endpoints livrés en PR #685 :
- *   POST   /api/v1/api-keys        → génère une clé (secret en clair UNE fois)
- *   GET    /api/v1/api-keys        → liste mes clés (jamais le secret)
- *   DELETE /api/v1/api-keys/{id}   → révoque une clé
+ * Endpoints :
+ *   POST   /api/v1/api-keys              → génère une clé (secret UNE fois)
+ *   GET    /api/v1/api-keys              → liste mes clés (+ scopes)
+ *   GET    /api/v1/api-keys/capabilities → catalogue des capacités par pôle
+ *   PATCH  /api/v1/api-keys/{id}         → met à jour les scopes d'une clé
+ *   DELETE /api/v1/api-keys/{id}         → révoque une clé
  *
- * Le secret `krts_…` n'est jamais stocké en clair côté serveur : il
- * n'apparaît qu'une seule fois, à la création, dans l'encadré de copie.
+ * Une clé ne fait QUE ce que ses scopes autorisent, pôle par pôle. Le
+ * secret `krts_…` n'apparaît qu'une seule fois, à la création.
  */
 
 type ApiKey = {
@@ -39,11 +45,33 @@ type ApiKey = {
   created_at: string;
   last_used_at: string | null;
   expires_at: string | null;
+  scopes: string[];
 };
 
 type ApiKeyCreated = ApiKey & {
   api_key: string;
   warning: string;
+};
+
+type Capability = {
+  id: string;
+  pole: string;
+  label_fr: string;
+  description: string;
+  category: "lecture" | "ecriture";
+  risk: string;
+  coming_soon: boolean;
+};
+
+type PoleCatalog = {
+  slug: string;
+  label_fr: string;
+  capabilities: Capability[];
+};
+
+type Catalog = {
+  poles: PoleCatalog[];
+  legacy_global_read: string;
 };
 
 function fmtDate(iso: string | null): string {
@@ -61,11 +89,156 @@ function fmtDate(iso: string | null): string {
   }
 }
 
+/** Interrupteur sobre (on/off) réutilisable. */
+function Toggle({
+  on,
+  disabled,
+  busy,
+  onClick
+}: {
+  on: boolean;
+  disabled?: boolean;
+  busy?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      disabled={disabled || busy}
+      onClick={onClick}
+      className={
+        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors " +
+        (on ? "bg-accent-500/80" : "bg-white/15") +
+        (disabled ? " cursor-not-allowed opacity-40" : " hover:opacity-90")
+      }
+    >
+      <span
+        className={
+          "inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform " +
+          (on ? "translate-x-4" : "translate-x-0.5")
+        }
+      />
+      {busy ? (
+        <Loader2 className="absolute -right-5 h-3.5 w-3.5 animate-spin text-white/50" />
+      ) : null}
+    </button>
+  );
+}
+
+/**
+ * Bloc de permissions groupées PAR PÔLE. Utilisé à la fois pour une clé
+ * existante (édition via PATCH) et pour le formulaire de génération
+ * (sélection initiale). `selected` = set de scope ids ; `onToggle` bascule
+ * un scope. `busyScope` = scope en cours d'enregistrement (clé existante).
+ */
+function PolePermissions({
+  catalog,
+  selected,
+  onToggle,
+  busyScope,
+  disabled
+}: {
+  catalog: Catalog;
+  selected: Set<string>;
+  onToggle: (scopeId: string) => void;
+  busyScope?: string | null;
+  disabled?: boolean;
+}) {
+  const [openPoles, setOpenPoles] = useState<Set<string>>(new Set());
+
+  const toggleOpen = (slug: string) => {
+    setOpenPoles((prev) => {
+      const next = new Set(prev);
+      if (next.has(slug)) next.delete(slug);
+      else next.add(slug);
+      return next;
+    });
+  };
+
+  return (
+    <div className="space-y-2">
+      {catalog.poles.map((pole) => {
+        const open = openPoles.has(pole.slug);
+        const activeCount = pole.capabilities.filter(
+          (c) => selected.has(c.id) && !c.coming_soon
+        ).length;
+        return (
+          <div
+            key={pole.slug}
+            className="overflow-hidden rounded-xl border border-brand-800 bg-brand-950/40"
+          >
+            <button
+              type="button"
+              onClick={() => toggleOpen(pole.slug)}
+              className="flex w-full items-center justify-between px-3 py-2.5 text-left hover:bg-brand-800/30"
+            >
+              <span className="flex items-center gap-2 text-sm font-semibold text-white/90">
+                {open ? (
+                  <ChevronDown className="h-4 w-4 text-white/50" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-white/50" />
+                )}
+                {pole.label_fr}
+              </span>
+              <span className="text-[11px] text-white/40">
+                {activeCount > 0
+                  ? `${activeCount} activée${activeCount > 1 ? "s" : ""}`
+                  : "Aucune"}
+              </span>
+            </button>
+            {open ? (
+              <div className="divide-y divide-brand-800/60 border-t border-brand-800">
+                {pole.capabilities.map((cap) => {
+                  const on = selected.has(cap.id) && !cap.coming_soon;
+                  return (
+                    <div
+                      key={cap.id}
+                      className="flex items-start justify-between gap-3 px-3 py-2.5"
+                    >
+                      <div className="min-w-0">
+                        <p className="flex items-center gap-2 text-sm text-white/85">
+                          {cap.label_fr}
+                          {cap.category === "ecriture" ? (
+                            <span className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-300/90">
+                              écriture
+                            </span>
+                          ) : null}
+                          {cap.coming_soon ? (
+                            <span className="rounded border border-white/15 bg-white/5 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white/40">
+                              à venir
+                            </span>
+                          ) : null}
+                        </p>
+                        <p className="mt-0.5 text-xs text-white/45">
+                          {cap.description}
+                        </p>
+                      </div>
+                      <Toggle
+                        on={on}
+                        disabled={disabled || cap.coming_soon}
+                        busy={busyScope === cap.id}
+                        onClick={() => onToggle(cap.id)}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function ClesApiPage() {
   const { onOpenSidebar } = useAppLayout();
   const confirm = useConfirm();
 
   const [keys, setKeys] = useState<ApiKey[]>([]);
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -73,18 +246,41 @@ export default function ClesApiPage() {
   const [showForm, setShowForm] = useState(false);
   const [label, setLabel] = useState("");
   const [creating, setCreating] = useState(false);
+  // Scopes sélectionnés pour la NOUVELLE clé (défaut : lecture tous pôles).
+  const [newScopes, setNewScopes] = useState<Set<string>>(new Set());
 
   // Clé fraîchement créée — affichée UNE seule fois.
   const [freshKey, setFreshKey] = useState<ApiKeyCreated | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // Édition des scopes d'une clé existante.
+  const [editingKeyId, setEditingKeyId] = useState<number | null>(null);
+  const [busyScope, setBusyScope] = useState<string | null>(null);
+
+  const defaultReadScopes = useMemo(() => {
+    if (!catalog) return new Set<string>();
+    const s = new Set<string>();
+    for (const p of catalog.poles) {
+      for (const c of p.capabilities) {
+        if (c.category === "lecture" && !c.coming_soon) s.add(c.id);
+      }
+    }
+    return s;
+  }, [catalog]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await authedFetch("/api/v1/api-keys");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setKeys((await res.json()) as ApiKey[]);
+      const [keysRes, capRes] = await Promise.all([
+        authedFetch("/api/v1/api-keys"),
+        authedFetch("/api/v1/api-keys/capabilities")
+      ]);
+      if (!keysRes.ok) throw new Error(`HTTP ${keysRes.status}`);
+      setKeys((await keysRes.json()) as ApiKey[]);
+      if (capRes.ok) {
+        setCatalog((await capRes.json()) as Catalog);
+      }
     } catch (e) {
       setError("Chargement des clés échoué : " + (e as Error).message);
     } finally {
@@ -96,13 +292,33 @@ export default function ClesApiPage() {
     void load();
   }, [load]);
 
+  // Quand le catalogue arrive et que le formulaire s'ouvre sans sélection,
+  // pré-coche le défaut sûr (lecture de tous les pôles).
+  useEffect(() => {
+    if (showForm && catalog && newScopes.size === 0) {
+      setNewScopes(new Set(defaultReadScopes));
+    }
+  }, [showForm, catalog, defaultReadScopes, newScopes.size]);
+
+  function toggleNewScope(scopeId: string) {
+    setNewScopes((prev) => {
+      const next = new Set(prev);
+      if (next.has(scopeId)) next.delete(scopeId);
+      else next.add(scopeId);
+      return next;
+    });
+  }
+
   async function createKey() {
     setCreating(true);
     setError(null);
     try {
       const res = await authedFetch("/api/v1/api-keys", {
         method: "POST",
-        body: JSON.stringify({ label: label.trim() || null })
+        body: JSON.stringify({
+          label: label.trim() || null,
+          scopes: Array.from(newScopes)
+        })
       });
       if (!res.ok) {
         const txt = await res.text();
@@ -113,7 +329,7 @@ export default function ClesApiPage() {
       setCopied(false);
       setShowForm(false);
       setLabel("");
-      // Recharge la liste pour faire apparaître la nouvelle ligne.
+      setNewScopes(new Set());
       void load();
     } catch (e) {
       setError("Génération de la clé échouée : " + (e as Error).message);
@@ -132,6 +348,32 @@ export default function ClesApiPage() {
       setError(
         "Copie automatique impossible — sélectionne et copie la clé à la main."
       );
+    }
+  }
+
+  // Bascule un scope sur une clé EXISTANTE (PATCH la liste complète).
+  async function toggleKeyScope(key: ApiKey, scopeId: string) {
+    const set = new Set(key.scopes);
+    if (set.has(scopeId)) set.delete(scopeId);
+    else set.add(scopeId);
+    const nextScopes = Array.from(set);
+
+    setBusyScope(scopeId);
+    setError(null);
+    try {
+      const res = await authedFetch(`/api/v1/api-keys/${key.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ scopes: nextScopes })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const updated = (await res.json()) as ApiKey;
+      setKeys((prev) =>
+        prev.map((k) => (k.id === key.id ? updated : k))
+      );
+    } catch (e) {
+      setError("Mise à jour des permissions échouée : " + (e as Error).message);
+    } finally {
+      setBusyScope(null);
     }
   }
 
@@ -184,9 +426,11 @@ export default function ClesApiPage() {
           Clés API
         </h1>
         <p className="mt-1 max-w-2xl text-sm text-white/60">
-          Une clé API permet à tes assistants Claude (ou autres outils) de
-          lire ton activité Kratos en lecture seule. Garde-la secrète —
-          quiconque la possède peut consulter tes données.
+          Une clé API permet à tes assistants Claude (ou autres outils)
+          d&apos;agir sur Kratos en ton nom. Les permissions sont organisées
+          PAR PÔLE — comme la gestion du Drive — : pour chaque clé, active
+          uniquement ce que l&apos;assistant peut faire dans chaque pôle.
+          Garde la clé secrète.
         </p>
 
         {error ? (
@@ -259,15 +503,28 @@ export default function ClesApiPage() {
                   placeholder="Ex. Mon assistant Claude"
                   maxLength={120}
                   className="input sm:w-80"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !creating) void createKey();
-                  }}
                 />
                 <p className="mt-1 text-xs text-white/50">
                   Un nom te permet de reconnaître la clé plus tard (ex. quel
                   outil l&apos;utilise).
                 </p>
               </div>
+
+              {catalog ? (
+                <div className="mt-5">
+                  <label className="label">Permissions par pôle</label>
+                  <p className="mb-2 text-xs text-white/50">
+                    Active ce que l&apos;assistant pourra faire, pôle par
+                    pôle. Par défaut : lecture de tous les pôles.
+                  </p>
+                  <PolePermissions
+                    catalog={catalog}
+                    selected={newScopes}
+                    onToggle={toggleNewScope}
+                  />
+                </div>
+              ) : null}
+
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
@@ -287,6 +544,7 @@ export default function ClesApiPage() {
                   onClick={() => {
                     setShowForm(false);
                     setLabel("");
+                    setNewScopes(new Set());
                   }}
                   disabled={creating}
                   className="btn-secondary text-sm"
@@ -321,66 +579,67 @@ export default function ClesApiPage() {
               <KeyRound className="mx-auto h-8 w-8 text-white/30" />
               <p className="mt-3 text-sm text-white/60">
                 Aucune clé pour l&apos;instant. Génère ta première clé pour
-                connecter un assistant en lecture seule.
+                connecter un assistant.
               </p>
             </div>
           ) : (
-            <div className="mt-4 overflow-x-auto rounded-xl border border-brand-800 bg-brand-900">
-              <table className="w-full min-w-[680px] text-sm">
-                <thead className="border-b border-brand-800 bg-brand-950/50 text-left text-[11px] uppercase tracking-wider text-white/50">
-                  <tr>
-                    <th className="px-3 py-2">Libellé</th>
-                    <th className="px-3 py-2">Préfixe</th>
-                    <th className="px-3 py-2">Créée le</th>
-                    <th className="px-3 py-2">Dernière utilisation</th>
-                    <th className="px-3 py-2">Statut</th>
-                    <th className="px-3 py-2 text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-brand-800">
-                  {keys.map((k) => (
-                    <tr
-                      key={k.id}
-                      className={
-                        k.is_active
-                          ? "hover:bg-brand-800/30"
-                          : "opacity-50"
-                      }
-                    >
-                      <td className="px-3 py-2 text-white/90">
-                        {k.label || (
-                          <span className="text-white/40 italic">
-                            Sans libellé
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        <code className="font-mono text-white/70">
-                          {k.key_prefix}…
-                        </code>
-                      </td>
-                      <td className="px-3 py-2 whitespace-nowrap text-white/70">
-                        {fmtDate(k.created_at)}
-                      </td>
-                      <td className="px-3 py-2 whitespace-nowrap text-white/70">
-                        {k.last_used_at ? (
-                          fmtDate(k.last_used_at)
-                        ) : (
-                          <span className="text-white/40">Jamais</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        {k.is_active ? (
-                          <span className="rounded-full border border-emerald-500/30 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
-                            Active
-                          </span>
-                        ) : (
-                          <span className="rounded-full border border-white/20 bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white/50">
-                            Révoquée
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-right">
+            <div className="mt-4 space-y-3">
+              {keys.map((k) => {
+                const editing = editingKeyId === k.id;
+                const selected = new Set(k.scopes);
+                return (
+                  <div
+                    key={k.id}
+                    className={
+                      "rounded-2xl border border-brand-800 bg-brand-900 " +
+                      (k.is_active ? "" : "opacity-60")
+                    }
+                  >
+                    <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="flex items-center gap-2 text-sm font-medium text-white/90">
+                          {k.label || (
+                            <span className="italic text-white/40">
+                              Sans libellé
+                            </span>
+                          )}
+                          {k.is_active ? (
+                            <span className="rounded-full border border-emerald-500/30 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                              Active
+                            </span>
+                          ) : (
+                            <span className="rounded-full border border-white/20 bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white/50">
+                              Révoquée
+                            </span>
+                          )}
+                        </p>
+                        <p className="mt-0.5 text-xs text-white/50">
+                          <code className="font-mono text-white/60">
+                            {k.key_prefix}…
+                          </code>
+                          {" · Créée le "}
+                          {fmtDate(k.created_at)}
+                          {" · Dernière utilisation : "}
+                          {k.last_used_at ? fmtDate(k.last_used_at) : "jamais"}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {k.is_active && catalog ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setEditingKeyId(editing ? null : k.id)
+                            }
+                            className="inline-flex items-center gap-1 rounded-lg border border-brand-700 bg-brand-800/60 px-2.5 py-1 text-xs font-medium text-white/80 hover:bg-brand-800"
+                          >
+                            {editing ? (
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            ) : (
+                              <ChevronRight className="h-3.5 w-3.5" />
+                            )}
+                            Permissions
+                          </button>
+                        ) : null}
                         {k.is_active ? (
                           <button
                             type="button"
@@ -389,14 +648,28 @@ export default function ClesApiPage() {
                           >
                             <Trash2 className="h-3.5 w-3.5" /> Révoquer
                           </button>
-                        ) : (
-                          <span className="text-xs text-white/30">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    {editing && catalog ? (
+                      <div className="border-t border-brand-800 px-4 py-3">
+                        <p className="mb-2 text-xs text-white/50">
+                          Active ou désactive ce que cette clé peut faire,
+                          pôle par pôle. Les changements sont enregistrés
+                          immédiatement.
+                        </p>
+                        <PolePermissions
+                          catalog={catalog}
+                          selected={selected}
+                          onToggle={(scopeId) => void toggleKeyScope(k, scopeId)}
+                          busyScope={busyScope}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           )}
         </section>

@@ -1,36 +1,38 @@
 """Serveur MCP « remote » de Kratos — connecteur custom pour Claude.
 
-Expose, EN LECTURE SEULE, l'activité Kratos de l'utilisateur propriétaire
-d'une clé d'API (`krts_...`) au protocole Model Context Protocol (MCP),
-transport « Streamable HTTP » (JSON-RPC 2.0 sur un POST unique). C'est ce
-que consomment les connecteurs custom de claude.ai / Claude Code / Cowork.
+Expose l'activité Kratos de l'utilisateur propriétaire d'une clé d'API
+(`krts_...`) au protocole Model Context Protocol (MCP), transport
+« Streamable HTTP » (JSON-RPC 2.0 sur un POST unique). C'est ce que
+consomment les connecteurs custom de claude.ai / Claude Code / Cowork.
+
+Permissions PAR PÔLE : la clé porte des ``scopes`` (``<pole>:<capability>``).
+Les outils de LECTURE ne renvoient que l'activité des pôles autorisés
+(``<pole>:activity:read``) ; l'outil d'ÉCRITURE ``kratos_create_task``
+exige ``<pole>:tasks:create``. RÉTROCOMPAT : une clé sans scopes lit tous
+les pôles (mais ne peut rien écrire).
 
 Pourquoi une implémentation JSON-RPC native plutôt que le SDK FastMCP ?
   - Kratos est en PRODUCTION. La priorité absolue est de NE JAMAIS casser
     le démarrage de l'app. Monter une sous-application ASGI FastMCP impose
     de propager son `lifespan` (sinon le session-manager n'est pas
     initialisé) : un couplage fragile au cœur du cycle de vie de l'app.
-    FastMCP est par ailleurs passé en 3.x (refonte d'API) en 2026 et
-    tirerait des dépendances supplémentaires au `pip install` — un risque
-    de cassure du déploiement Render.
   - Le protocole « Streamable HTTP » est un standard ouvert simple : un
-    POST JSON-RPC sur une seule URL. Pour 3 outils en lecture seule, le
-    coder nativement supprime TOUTE dépendance externe et TOUT couplage au
-    lifespan → impossible de casser le startup. C'est aussi un simple
-    `APIRouter` : si son montage échoue, l'app démarre quand même (le
-    montage est de toute façon entouré d'un try/except dans main.py).
+    POST JSON-RPC sur une seule URL. Le coder nativement supprime TOUTE
+    dépendance externe et TOUT couplage au lifespan → impossible de casser
+    le startup. C'est aussi un simple `APIRouter` : si son montage échoue,
+    l'app démarre quand même (try/except dans main.py).
 
 Authentification (connecteur « authless » côté Claude) :
-  La clé voyage dans le PATH : `…/api/v1/mcp/{api_key}`. claude.ai ne
-  permet pas d'en-tête custom fiable pour un connecteur, mais accepte une
-  URL dédiée. À chaque requête on valide la clé (hash SHA-256 + lookup
-  `api_keys` active/non expirée), on charge le User, et on scope TOUS les
-  outils à cet utilisateur. Clé invalide → erreur JSON-RPC d'auth propre.
+  La clé voyage dans le PATH : `…/api/v1/mcp/{api_key}`. À chaque requête
+  on valide la clé (hash SHA-256 + lookup `api_keys` active/non expirée),
+  on charge le User, on récupère ses scopes, et on scope TOUS les outils à
+  cet utilisateur. Clé invalide → erreur JSON-RPC d'auth propre.
 
-Outils exposés (tous en LECTURE SEULE, aucune mutation) :
-  - kratos_my_activity   : activité d'un jour (tâches tous pôles + audit).
+Outils exposés :
+  - kratos_my_activity   : activité d'un jour (tâches pôles autorisés + audit).
   - kratos_my_summary    : résumé en français de l'activité d'un jour.
   - kratos_activity_range: activité agrégée sur une plage from/to.
+  - kratos_create_task   : crée une tâche dans un pôle (capacité requise).
 """
 
 from __future__ import annotations
@@ -48,10 +50,17 @@ from app.api.v1.endpoints.activity import (
     _collect_audit,
     _collect_tasks,
     _resolve_window,
+    create_task_for_pole,
 )
 from app.db.session import AsyncSessionLocal
 from app.models.api_key import ApiKey
 from app.models.user import User
+from app.services.api_capabilities import (
+    POLE_LABELS,
+    POLE_SLUGS,
+    key_has_scope,
+    readable_poles,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,13 +72,13 @@ DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 
 # Métadonnées du serveur renvoyées à l'`initialize`.
 SERVER_NAME = "kratos-activity"
-SERVER_VERSION = "1.0.0"
+SERVER_VERSION = "1.1.0"
 
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
 
-# ── Définition des outils (lecture seule) ──────────────────────────
+# ── Définition des outils ──────────────────────────────────────────
 #
 # Descriptions soignées : c'est ce qui permet à Claude de savoir QUAND
 # appeler chaque outil. Toutes les dates sont au format YYYY-MM-DD, fuseau
@@ -83,17 +92,16 @@ _DATE_PROP = {
     ),
 }
 
-TOOLS: list[dict[str, Any]] = [
+# Outils de lecture (toujours présents tant qu'au moins un pôle est lisible).
+_READ_TOOLS: list[dict[str, Any]] = [
     {
         "name": "kratos_my_activity",
         "description": (
             "Renvoie l'activité Kratos de l'utilisateur pour une journée : "
-            "toutes les tâches complétées / créées / modifiées sur tous les "
-            "pôles (dev logiciel, entreprise, prospection, ventes, chantier) "
-            "ainsi que les entrées du journal d'audit (soumissions, factures, "
-            "etc.). Utilise cet outil quand on te demande « qu'est-ce que j'ai "
-            "fait aujourd'hui / tel jour » ou un détail de l'activité d'une "
-            "journée précise. Lecture seule."
+            "tâches complétées / créées / modifiées sur les pôles autorisés "
+            "par la clé, ainsi que les entrées du journal d'audit. Utilise cet "
+            "outil quand on te demande « qu'est-ce que j'ai fait aujourd'hui / "
+            "tel jour ». Lecture seule."
         ),
         "inputSchema": {
             "type": "object",
@@ -105,10 +113,8 @@ TOOLS: list[dict[str, Any]] = [
         "name": "kratos_my_summary",
         "description": (
             "Renvoie un RÉSUMÉ en français, prêt à lire, de l'activité Kratos "
-            "de l'utilisateur pour une journée (nombre de tâches complétées par "
-            "pôle, créées, modifiées, soumissions/factures envoyées…). Utilise "
-            "cet outil quand on veut une synthèse rapide d'une journée plutôt "
-            "que le détail. Lecture seule."
+            "de l'utilisateur pour une journée. Utilise cet outil pour une "
+            "synthèse rapide d'une journée plutôt que le détail. Lecture seule."
         ),
         "inputSchema": {
             "type": "object",
@@ -121,9 +127,8 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Renvoie l'activité Kratos agrégée sur une PLAGE de dates "
             "(paramètres `from` et `to`, inclus, format YYYY-MM-DD, fuseau "
-            "America/Toronto) : tâches tous pôles, audit et résumé en français. "
-            "Utilise cet outil pour « cette semaine », « du X au Y », un bilan "
-            "sur plusieurs jours. Lecture seule."
+            "America/Toronto). Utilise cet outil pour « cette semaine », « du X "
+            "au Y », un bilan sur plusieurs jours. Lecture seule."
         ),
         "inputSchema": {
             "type": "object",
@@ -143,26 +148,92 @@ TOOLS: list[dict[str, Any]] = [
     },
 ]
 
-_TOOLS_BY_NAME = {t["name"]: t for t in TOOLS}
+# Outil d'écriture (présent seulement si la clé peut créer une tâche dans
+# au moins un pôle). La description liste les pôles autorisés au handshake.
+_CREATE_TASK_TOOL_NAME = "kratos_create_task"
+
+
+def _create_task_tool(creatable_poles: list[str]) -> dict[str, Any]:
+    labels = ", ".join(POLE_LABELS.get(p, p) for p in creatable_poles)
+    return {
+        "name": _CREATE_TASK_TOOL_NAME,
+        "description": (
+            "Crée une tâche Kratos dans un pôle, assignée à l'utilisateur. "
+            f"Pôles autorisés pour cette clé : {labels}. Fournis `pole` (un "
+            "de ces slugs), `parent_id` (l'ID de l'entité parente : projet "
+            "devlog, entreprise, deal de prospection, ou projet de chantier "
+            "selon le pôle), et `title`. `description` et `due_date` "
+            "(YYYY-MM-DD) sont optionnels. Écriture — n'utilise cet outil que "
+            "sur demande explicite de créer/ajouter une tâche."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pole": {
+                    "type": "string",
+                    "enum": creatable_poles,
+                    "description": "Slug du pôle où créer la tâche.",
+                },
+                "parent_id": {
+                    "type": "integer",
+                    "description": (
+                        "ID de l'entité parente : projet devlog / entreprise / "
+                        "deal de prospection / projet de chantier selon le pôle."
+                    ),
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Titre de la tâche (requis).",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Description de la tâche (optionnel).",
+                },
+                "due_date": {
+                    "type": "string",
+                    "description": "Échéance YYYY-MM-DD (optionnel).",
+                },
+            },
+            "required": ["pole", "parent_id", "title"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _tools_for_scopes(scopes: Optional[list[str]]) -> list[dict[str, Any]]:
+    """Liste des outils exposés à cette clé, selon ses scopes. Les outils de
+    lecture apparaissent si au moins un pôle est lisible ; l'outil de
+    création apparaît si au moins un pôle autorise la création de tâche."""
+    tools: list[dict[str, Any]] = []
+    if readable_poles(scopes):
+        tools.extend(_READ_TOOLS)
+    creatable = [
+        slug for slug in POLE_SLUGS
+        if key_has_scope(scopes, f"{slug}:tasks:create")
+    ]
+    if creatable:
+        tools.append(_create_task_tool(creatable))
+    return tools
 
 
 # ── Authentification par clé d'API (clé dans le path) ──────────────
 
 
-async def _user_from_key(db, raw_key: str) -> Optional[User]:
-    """Valide une clé `krts_...` et retourne le User propriétaire (actif),
-    ou None si la clé est absente / invalide / révoquée / expirée / sans
-    utilisateur actif. Met à jour `last_used_at` (best-effort).
+async def _context_from_key(
+    db, raw_key: str
+) -> tuple[Optional[User], Optional[list[str]]]:
+    """Valide une clé `krts_...` et retourne (User propriétaire actif,
+    scopes), ou (None, None) si la clé est absente / invalide / révoquée /
+    expirée / sans utilisateur actif. Met à jour `last_used_at` (best-effort).
 
     Réutilise exactement la même logique de validation que la dépendance
-    d'auth `get_user_from_api_key` (hash SHA-256, lookup `api_keys` active,
-    contrôle d'expiration en UTC, User actif)."""
+    d'auth `get_api_context`."""
     from datetime import timezone
 
     from sqlalchemy import select
 
     if not raw_key or not raw_key.startswith(API_KEY_PREFIX):
-        return None
+        return None, None
 
     key_hash = hash_api_key(raw_key)
     stmt = select(ApiKey).where(
@@ -171,7 +242,7 @@ async def _user_from_key(db, raw_key: str) -> Optional[User]:
     )
     api_key = (await db.execute(stmt)).scalar_one_or_none()
     if api_key is None:
-        return None
+        return None, None
 
     now = datetime.now(timezone.utc)
     if api_key.expires_at is not None:
@@ -179,11 +250,13 @@ async def _user_from_key(db, raw_key: str) -> Optional[User]:
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
         if expires_at <= now:
-            return None
+            return None, None
 
     user = await db.get(User, api_key.user_id)
     if user is None or not user.is_active:
-        return None
+        return None, None
+
+    scopes = api_key.scopes
 
     # Traçabilité du dernier usage — best-effort, ne bloque jamais l'auth.
     try:
@@ -193,7 +266,7 @@ async def _user_from_key(db, raw_key: str) -> Optional[User]:
     except Exception:
         pass
 
-    return user
+    return user, scopes
 
 
 # ── Construction des résultats d'outils (réutilise activity.py) ────
@@ -202,19 +275,19 @@ async def _user_from_key(db, raw_key: str) -> Optional[User]:
 async def _activity_payload(
     db,
     user: User,
+    allowed_poles: set[str],
     *,
     date: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Calcule l'activité (tâches + audit + résumé) en réutilisant la
-    logique des endpoints `/activity/me`. Retourne un dict JSON-sérialisable
-    scopé à `user`."""
+    """Calcule l'activité (tâches + audit + résumé) pour les pôles
+    autorisés, en réutilisant la logique des endpoints `/activity/me`."""
     start, end = _resolve_window(date, date_from, date_to)
     single_day = (end - start) <= timedelta(days=1)
 
-    tasks = await _collect_tasks(db, user, start, end)
-    audit = await _collect_audit(db, user, start, end)
+    tasks = await _collect_tasks(db, user, start, end, allowed_poles=allowed_poles)
+    audit = await _collect_audit(db, user, start, end, allowed_poles=allowed_poles)
     summary = _build_summary(tasks, audit, start, end, single_day)
 
     return {
@@ -251,15 +324,23 @@ async def _activity_payload(
     }
 
 
-async def _call_tool(db, user: User, name: str, arguments: dict[str, Any]) -> Any:
+async def _call_tool(
+    db,
+    user: User,
+    scopes: Optional[list[str]],
+    name: str,
+    arguments: dict[str, Any],
+) -> Any:
     """Exécute un outil et retourne sa valeur (dict ou str). Lève
-    KeyError/ValueError pour un outil inconnu ou des arguments invalides."""
+    KeyError/ValueError pour un outil inconnu, des arguments invalides, ou
+    une capacité non accordée."""
     arguments = arguments or {}
+    allowed = readable_poles(scopes)
+
     if name == "kratos_my_activity":
-        return await _activity_payload(db, user, date=arguments.get("date"))
+        return await _activity_payload(db, user, allowed, date=arguments.get("date"))
     if name == "kratos_my_summary":
-        payload = await _activity_payload(db, user, date=arguments.get("date"))
-        # On ne renvoie que le résumé texte pour cet outil.
+        payload = await _activity_payload(db, user, allowed, date=arguments.get("date"))
         return {
             "period_start": payload["period_start"],
             "period_end": payload["period_end"],
@@ -271,8 +352,56 @@ async def _call_tool(db, user: User, name: str, arguments: dict[str, Any]) -> An
         if not date_from or not date_to:
             raise ValueError("Les paramètres `from` et `to` (YYYY-MM-DD) sont requis.")
         return await _activity_payload(
-            db, user, date_from=date_from, date_to=date_to
+            db, user, allowed, date_from=date_from, date_to=date_to
         )
+    if name == _CREATE_TASK_TOOL_NAME:
+        pole = str(arguments.get("pole") or "").strip().lower()
+        if pole not in POLE_LABELS:
+            raise ValueError(f"Pôle inconnu : « {arguments.get('pole')} ».")
+        if not key_has_scope(scopes, f"{pole}:tasks:create"):
+            raise ValueError(
+                f"Capacité « Créer une tâche » non activée pour le pôle "
+                f"« {POLE_LABELS[pole]} » sur cette clé d'API."
+            )
+        parent_id = arguments.get("parent_id")
+        if parent_id is None:
+            raise ValueError("`parent_id` (ID de l'entité parente) est requis.")
+        try:
+            parent_id = int(parent_id)
+        except (TypeError, ValueError):
+            raise ValueError("`parent_id` doit être un entier.")
+        title = str(arguments.get("title") or "").strip()
+        if not title:
+            raise ValueError("`title` (titre de la tâche) est requis.")
+        due_raw = arguments.get("due_date")
+        due_date = None
+        if due_raw:
+            from datetime import date as _date_cls
+            try:
+                due_date = _date_cls.fromisoformat(str(due_raw))
+            except ValueError:
+                raise ValueError("`due_date` doit être au format YYYY-MM-DD.")
+        created = await create_task_for_pole(
+            db,
+            user,
+            pole=pole,
+            parent_id=parent_id,
+            title=title,
+            description=(arguments.get("description") or None),
+            due_date=due_date,
+            via="mcp",
+        )
+        # On commit explicitement : on est hors du graphe FastAPI (session
+        # gérée à la main dans l'endpoint Streamable HTTP).
+        await db.commit()
+        return {
+            "created": True,
+            "pole": created.pole,
+            "entity_type": created.entity_type,
+            "entity_id": created.entity_id,
+            "title": created.title,
+            "status": created.status,
+        }
     raise KeyError(name)
 
 
@@ -292,18 +421,19 @@ def _content_text(text: str) -> dict[str, Any]:
 
 
 async def _handle_rpc(
-    db, user: User, message: dict[str, Any]
+    db,
+    user: User,
+    scopes: Optional[list[str]],
+    message: dict[str, Any],
 ) -> Optional[dict[str, Any]]:
     """Traite un message JSON-RPC MCP et retourne la réponse JSON-RPC, ou
     None pour une notification (pas de réponse attendue). `user` est déjà
-    authentifié et toutes les données sont scopées à lui."""
+    authentifié ; `scopes` détermine les outils disponibles et leurs droits."""
     import json
 
     method = message.get("method")
     req_id = message.get("id")
 
-    # Notifications (« notifications/initialized », « notifications/* ») :
-    # pas de réponse JSON-RPC.
     if method is not None and method.startswith("notifications/"):
         return None
     if method == "initialized":  # tolérance legacy
@@ -312,6 +442,8 @@ async def _handle_rpc(
     if method == "initialize":
         params = message.get("params") or {}
         client_proto = params.get("protocolVersion") or DEFAULT_PROTOCOL_VERSION
+        readable = sorted(readable_poles(scopes))
+        readable_labels = ", ".join(POLE_LABELS.get(p, p) for p in readable) or "aucun"
         return _rpc_result(
             req_id,
             {
@@ -319,9 +451,11 @@ async def _handle_rpc(
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
                 "instructions": (
-                    "Outils en lecture seule sur l'activité Kratos de "
-                    f"{user.email} : tâches (tous pôles) et journal d'audit, "
-                    "par jour ou par plage de dates (fuseau America/Toronto)."
+                    "Outils sur l'activité Kratos de "
+                    f"{user.email}. Pôles lisibles par cette clé : "
+                    f"{readable_labels}. Lecture par jour ou par plage de "
+                    "dates (fuseau America/Toronto) ; création de tâche dans "
+                    "les pôles explicitement autorisés."
                 ),
             },
         )
@@ -330,19 +464,21 @@ async def _handle_rpc(
         return _rpc_result(req_id, {})
 
     if method == "tools/list":
-        return _rpc_result(req_id, {"tools": TOOLS})
+        return _rpc_result(req_id, {"tools": _tools_for_scopes(scopes)})
 
     if method == "tools/call":
         params = message.get("params") or {}
         name = params.get("name")
         arguments = params.get("arguments") or {}
-        if name not in _TOOLS_BY_NAME:
-            return _rpc_error(req_id, -32602, f"Outil inconnu : {name}")
+        available = {t["name"] for t in _tools_for_scopes(scopes)}
+        if name not in available:
+            return _rpc_error(
+                req_id, -32602,
+                f"Outil indisponible pour cette clé : {name}",
+            )
         try:
-            value = await _call_tool(db, user, name, arguments)
+            value = await _call_tool(db, user, scopes, name, arguments)
         except ValueError as exc:
-            # Erreur « métier » → on la renvoie comme résultat d'outil en
-            # erreur (isError), pas comme erreur JSON-RPC protocolaire.
             result = _content_text(str(exc))
             result["isError"] = True
             return _rpc_result(req_id, result)
@@ -356,12 +492,10 @@ async def _handle_rpc(
             value, ensure_ascii=False, default=str
         )
         result = _content_text(text)
-        # `structuredContent` : pratique pour les clients qui le supportent.
         if isinstance(value, dict):
             result["structuredContent"] = value
         return _rpc_result(req_id, result)
 
-    # Méthode non supportée.
     if req_id is None:
         return None
     return _rpc_error(req_id, -32601, f"Méthode non supportée : {method}")
@@ -371,8 +505,7 @@ async def _handle_rpc(
 
 
 def _unauthorized() -> JSONResponse:
-    """Réponse 401 propre (clé invalide). On renvoie un corps JSON-RPC
-    d'erreur ET le bon statut HTTP pour que les clients MCP comprennent."""
+    """Réponse 401 propre (clé invalide)."""
     return JSONResponse(
         status_code=401,
         content=_rpc_error(None, -32001, "Clé d'API invalide ou manquante."),
@@ -389,9 +522,7 @@ async def mcp_streamable_http(
 
     URL du connecteur : `https://<host>/api/v1/mcp/krts_xxx`. Reçoit un
     message JSON-RPC (ou un batch) ; valide la clé du path ; route vers le
-    handler ; renvoie la/les réponses JSON-RPC. Lecture seule."""
-    # Auth : clé dans le path. Session DB dédiée (on n'est pas dans le
-    # graphe de dépendances FastAPI classique ici).
+    handler ; renvoie la/les réponses JSON-RPC."""
     try:
         body = await request.json()
     except Exception:
@@ -401,20 +532,18 @@ async def mcp_streamable_http(
         )
 
     async with AsyncSessionLocal() as db:
-        user = await _user_from_key(db, api_key)
+        user, scopes = await _context_from_key(db, api_key)
         if user is None:
             return _unauthorized()
 
-        # Batch JSON-RPC (liste) ou message unique.
         if isinstance(body, list):
             responses: list[dict[str, Any]] = []
             for msg in body:
                 if not isinstance(msg, dict):
                     continue
-                resp = await _handle_rpc(db, user, msg)
+                resp = await _handle_rpc(db, user, scopes, msg)
                 if resp is not None:
                     responses.append(resp)
-            # Que des notifications → 202 sans corps.
             if not responses:
                 return JSONResponse(status_code=202, content=None)
             return JSONResponse(content=responses)
@@ -425,9 +554,8 @@ async def mcp_streamable_http(
                 content=_rpc_error(None, -32600, "Requête JSON-RPC invalide."),
             )
 
-        resp = await _handle_rpc(db, user, body)
+        resp = await _handle_rpc(db, user, scopes, body)
         if resp is None:
-            # Notification : 202 Accepted, pas de corps JSON-RPC.
             return JSONResponse(status_code=202, content=None)
         return JSONResponse(content=resp)
 
@@ -436,13 +564,10 @@ async def mcp_streamable_http(
 async def mcp_streamable_http_get(
     api_key: str = Path(..., description="Clé d'API krts_... scoping la session."),
 ) -> JSONResponse:
-    """GET sur l'endpoint Streamable HTTP. Le transport Streamable HTTP
-    réserve le GET à l'ouverture d'un flux SSE serveur→client (notifications
-    non sollicitées). Ce serveur est sans état et ne pousse rien : on
-    répond proprement par 405 (méthode non autorisée pour le GET) après
-    avoir tout de même validé la clé pour ne pas fuiter d'info."""
+    """GET sur l'endpoint Streamable HTTP. Ce serveur est sans état et ne
+    pousse rien : on répond 405 après avoir validé la clé (pas de fuite)."""
     async with AsyncSessionLocal() as db:
-        user = await _user_from_key(db, api_key)
+        user, _ = await _context_from_key(db, api_key)
         if user is None:
             return _unauthorized()
     return JSONResponse(
