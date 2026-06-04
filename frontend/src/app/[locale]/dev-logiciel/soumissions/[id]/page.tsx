@@ -535,7 +535,11 @@ function useDnd(ids: number[], onReorder: (orderedIds: number[]) => void) {
   };
 }
 
-// Poignée de glissement discrète (cohérente avec le thème sombre).
+// Poignée de glissement. `text-slate-400` est franchement visible (gris
+// moyen) aussi bien sur les blocs sombres de l'éditeur que sur un fond
+// clair — l'ancien `text-white/25` était quasi invisible (blanc sur fond
+// clair / blanc à 25 % sur fond sombre). On éclaircit au survol pour
+// signaler l'interactivité.
 function DragHandle(
   props: React.HTMLAttributes<HTMLSpanElement> & {
     draggable?: boolean;
@@ -549,7 +553,7 @@ function DragHandle(
       role="button"
       aria-label="Glisser pour réordonner"
       title="Glisser pour réordonner"
-      className="inline-flex cursor-grab touch-none text-white/25 hover:text-white/60 active:cursor-grabbing"
+      className="inline-flex cursor-grab touch-none text-slate-400 hover:text-slate-200 active:cursor-grabbing"
     >
       <GripVertical className="h-3.5 w-3.5" />
     </span>
@@ -995,22 +999,41 @@ export default function SoumissionDetailPage() {
   }
 
   // Réordonnancement d'une liste d'items (drag & drop). `orderedIds` est
-  // l'ordre voulu pour CETTE liste (module / récurrents / features /
-  // fixes / tâches manager). On réécrit `position` localement (ordre
-  // optimiste) puis on persiste via l'endpoint reorder. Le calcul des
-  // totaux est inchangé (même somme d'items) — on rafraîchit le preview
-  // par sécurité.
+  // l'ordre voulu pour CETTE sous-liste (module / récurrents / features /
+  // fixes / tâches manager).
+  //
+  // ⚠️ `position` est GLOBAL à la soumission, mais `orderedIds` ne décrit
+  // qu'UNE sous-liste. Si l'on écrivait naïvement `position = index` (0..N)
+  // sur ces seuls items, on collisionnerait avec les positions des autres
+  // sous-listes : au re-tri global `(position, id)` l'ordre se mélangerait
+  // et le drag & drop « reviendrait à sa place ». On reproduit donc EXACTEMENT
+  // la logique du backend (`reorder_soumission_items`) : on réinjecte la
+  // sous-liste réordonnée aux MÊMES emplacements (slots) qu'elle occupait
+  // dans la liste globale, puis on renumérote TOUS les items 0..N.
+  //
+  // Comme l'ordre optimiste devient ALORS identique à celui que le serveur
+  // persiste, on NE re-fetch PAS la liste après succès (évite la course
+  // « persistance serveur vs rechargement » qui réécrasait l'ordre). On ne
+  // recharge que sur ERREUR, pour retomber sur l'état réel du serveur.
   async function reorderItems(orderedIds: number[]) {
-    const rank = new Map<number, number>();
-    orderedIds.forEach((iid, i) => rank.set(iid, i));
-    // Patch optimiste : on applique les nouvelles positions aux items
-    // concernés, puis on re-trie la liste complète par position pour que
-    // les sous-listes dérivées (filter) reflètent le nouvel ordre.
+    const movedSet = new Set(orderedIds);
     setItems((xs) => {
-      const next = xs.map((it) =>
-        rank.has(it.id) ? { ...it, position: rank.get(it.id)! } : it
+      // Ordre global courant, déterministe (même clé de tri que le backend).
+      const current = [...xs].sort(
+        (a, b) => a.position - b.position || a.id - b.id
       );
-      return [...next].sort((a, b) => a.position - b.position || a.id - b.id);
+      const byId = new Map(current.map((it) => [it.id, it]));
+      // Sous-liste réordonnée, restreinte aux items réellement présents.
+      const moved = orderedIds
+        .map((iid) => byId.get(iid))
+        .filter((it): it is Item => it != null);
+      const movedIter = moved[Symbol.iterator]();
+      // On remplace la sous-séquence déplacée aux slots qu'elle occupait,
+      // les autres items ne bougent pas, puis on renumérote 0..N.
+      const next = current.map((it) =>
+        movedSet.has(it.id) ? movedIter.next().value ?? it : it
+      );
+      return next.map((it, idx) => ({ ...it, position: idx }));
     });
     refreshPreview();
     try {
@@ -1019,10 +1042,9 @@ export default function SoumissionDetailPage() {
         { method: "POST", body: JSON.stringify({ item_ids: orderedIds }) }
       );
       if (!r.ok) throw new Error();
-      const r2 = await authedFetch(
-        `/api/v1/devlog/soumissions/${id}/items`
-      );
-      if (r2.ok) setItems((await r2.json()) as Item[]);
+      // Succès : la persistance serveur correspond déjà à l'ordre optimiste.
+      // On NE recharge PAS la liste (sinon course avec la persistance qui
+      // réécraserait l'ordre par l'ancien). On garde l'état local réordonné.
       refreshPreview();
     } catch {
       setError("Réordonnancement impossible");
@@ -2150,6 +2172,19 @@ function DevisDevOwnerInitial({
     [modules]
   );
 
+  // Total du bloc « Fonctionnalités directes (hors module) » : Σ heures et
+  // Σ prix client des features SANS module_id. Même source (preview) et même
+  // sémantique que le total affiché par chaque module, pour cohérence.
+  const directFeaturesTotals = useMemo(() => {
+    const directs = (init?.features_client ?? []).filter(
+      (f) => f.module_id == null
+    );
+    return {
+      heures: directs.reduce((acc, f) => acc + (f.heures ?? 0), 0),
+      prixClient: directs.reduce((acc, f) => acc + (f.prix_client ?? 0), 0)
+    };
+  }, [init?.features_client]);
+
   // DnD : tâches du chargé de projet, fonctionnalités directes, frais
   // fixes, et modules entre eux (en complément des flèches ↑/↓).
   const taskDnd = useDnd(
@@ -2469,6 +2504,24 @@ function DevisDevOwnerInitial({
             </tbody>
           </table>
         )}
+        {/* Total du bloc (mêmes libellés/style que le total d'un module) :
+            Σ heures dev + prix client total des fonctionnalités directes. */}
+        {featureItems.length > 0 ? (
+          <div className="mt-2 flex flex-wrap items-center justify-end gap-x-3 gap-y-0.5 border-t border-blue-500/20 pt-2 text-[11px] text-white/70">
+            <span>
+              Dev :{" "}
+              <span className="font-semibold text-white">
+                {directFeaturesTotals.heures} h
+              </span>
+            </span>
+            <span>
+              Prix client :{" "}
+              <span className="font-bold text-blue-200">
+                {fmtMoneyShort(directFeaturesTotals.prixClient)}
+              </span>
+            </span>
+          </div>
+        ) : null}
         <button
           type="button"
           onClick={() => onAddItem("feature")}
@@ -3594,5 +3647,6 @@ function StatusActions({
     </div>
   );
 }
+
 
 
