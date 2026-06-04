@@ -129,6 +129,30 @@ async def trigger_appointment_reminders(
     return CronResult(ok=True, job="appointment-reminders")
 
 
+@router.post("/run/email-inbound", response_model=CronResult)
+async def trigger_email_inbound(
+    x_cron_secret: Optional[str] = Header(default=None),
+    secret: Optional[str] = Query(default=None),
+) -> CronResult:
+    """Relève les courriels entrants et les rattache aux fiches CRM
+    (nécessite Graph Mail.Read)."""
+    _check_secret(x_cron_secret, secret)
+    from app.db.session import AsyncSessionLocal
+    from app.services.email_inbound import poll_inbound_emails
+
+    try:
+        async with AsyncSessionLocal() as db:
+            await poll_inbound_emails(db)
+            await db.commit()
+    except Exception as exc:
+        log.exception("Cron email_inbound failed: %s", exc)
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Job a échoué : {exc}",
+        )
+    return CronResult(ok=True, job="email-inbound")
+
+
 class QGDailyPulseResult(CronResult):
     """Détail des entreprises traitées par le cron Daily Pulse."""
 
@@ -587,6 +611,16 @@ async def trigger_all_daily(
     await _safe("qg-daily-pulse", _run_qg_daily_pulse, details)
     await _safe("qg-tache-recurrence", _run_qg_recurrence, details)
     await _safe("bail-renouvellement-tasks", _run_bail_renew_tasks, details)
+
+    async def _run_email_inbound():
+        from app.services.email_inbound import poll_inbound_emails
+
+        async with AsyncSessionLocal() as db:
+            r = await poll_inbound_emails(db)
+            await db.commit()
+            return r
+
+    await _safe("email-inbound", _run_email_inbound, details)
 
     # Insights weekly : on tente quand même daily, le service est
     # idempotent et skip si rien à faire.
