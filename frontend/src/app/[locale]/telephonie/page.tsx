@@ -32,6 +32,7 @@ import { CallButton } from "@/components/call-button";
 import { DialPad } from "@/components/dial-pad";
 import { DialPadFab } from "@/components/dial-pad-fab";
 import { PushNotificationsToggle } from "@/components/push-notifications-toggle";
+import { RecordingPlayer } from "@/components/recording-player";
 import { PageDriveSection } from "@/components/drive/PageDriveSection";
 import { useTelephonieLayout } from "./_client-shell";
 
@@ -2418,14 +2419,7 @@ function CallDrawer({
                 </p>
               )}
               {call.recording_url ? (
-                <a
-                  href={call.recording_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-2 inline-block rounded-md border border-amber-500/40 px-2 py-1 text-[10px] text-amber-200 hover:bg-amber-500/10"
-                >
-                  ▶ Écouter
-                </a>
+                <RecordingPlayer callId={call.id} />
               ) : null}
             </DrawerCard>
           ) : null}

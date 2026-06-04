@@ -8,7 +8,6 @@
 import { useEffect, useState } from "react";
 import {
   Loader2,
-  Mic,
   Phone,
   PhoneIncoming,
   PhoneOutgoing,
@@ -16,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { authedFetch } from "@/lib/auth";
+import { RecordingPlayer } from "@/components/recording-player";
 
 type Call = {
   id: number;
@@ -187,15 +187,11 @@ export function CallDetailModal({ callId, onClose }: Props) {
                   <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/50">
                     Enregistrement
                   </h3>
-                  <a
-                    href={detail.call.recording_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-2 rounded-md border border-brand-800 bg-brand-900 px-3 py-1.5 text-xs text-white hover:border-accent-500"
-                  >
-                    <Mic className="h-3 w-3" />
-                    Ouvrir l&apos;enregistrement Twilio
-                  </a>
+                  <RecordingPlayer
+                    callId={detail.call.id}
+                    label="Écouter l'enregistrement"
+                    className="inline-flex items-center gap-2 rounded-md border border-brand-800 bg-brand-900 px-3 py-1.5 text-xs text-white hover:border-accent-500 disabled:opacity-60"
+                  />
                 </section>
               ) : null}
 
