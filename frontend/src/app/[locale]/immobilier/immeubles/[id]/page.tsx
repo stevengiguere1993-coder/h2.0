@@ -185,7 +185,23 @@ export default function ImmeubleDetailPage({
   const [hypotheques, setHypotheques] = useState<Hypotheque[] | null>(null);
   const [evaluations, setEvaluations] = useState<Evaluation[] | null>(null);
   const [maintenance, setMaintenance] = useState<Maintenance[] | null>(null);
+  const [locataires, setLocataires] = useState<
+    { id: number; full_name: string }[]
+  >([]);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    authedFetch("/api/v1/immobilier/locataires")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => {
+        if (!cancelled) setLocataires(Array.isArray(d) ? d : []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!immeubleId) return;
@@ -687,7 +703,11 @@ export default function ImmeubleDetailPage({
           ) : null}
           {tab === "logements" ? <LogementsTab list={logements} /> : null}
           {tab === "baux" ? (
-            <BauxTab list={baux} logements={logements} />
+            <BauxTab
+              list={baux}
+              logements={logements}
+              locataires={locataires}
+            />
           ) : null}
           {tab === "hypotheques" ? <HypothequesTab list={hypotheques} /> : null}
           {tab === "evaluations" ? <EvaluationsTab list={evaluations} /> : null}
@@ -1207,20 +1227,24 @@ function LogementsTab({ list }: { list: Logement[] | null }) {
 
 function BauxTab({
   list,
-  logements
+  logements,
+  locataires
 }: {
   list: Bail[] | null;
   logements: Logement[] | null;
+  locataires: { id: number; full_name: string }[];
 }) {
   if (list === null) return <Loading />;
   if (list.length === 0) return <Empty msg="Aucun bail." />;
   const logMap = new Map((logements || []).map((l) => [l.id, l.numero]));
+  const locMap = new Map(locataires.map((l) => [l.id, l.full_name]));
   return (
     <div className="overflow-hidden rounded-2xl border border-brand-800 bg-brand-900">
       <table className="w-full text-left text-sm">
         <thead className="border-b border-brand-800 bg-brand-950 text-[10px] uppercase tracking-wider text-white/50">
           <tr>
             <th className="px-4 py-2.5">Logement</th>
+            <th className="px-4 py-2.5">Locataire</th>
             <th className="px-4 py-2.5">Période</th>
             <th className="px-4 py-2.5 text-right">Loyer/m</th>
             <th className="px-4 py-2.5">Statut</th>
@@ -1233,6 +1257,15 @@ function BauxTab({
             <tr key={b.id}>
               <td className="px-4 py-2 font-mono text-xs text-white">
                 {logMap.get(b.logement_id) || `#${b.logement_id}`}
+              </td>
+              <td className="px-4 py-2 text-xs">
+                <Link
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  href={`/immobilier/locataires/${b.locataire_id}` as any}
+                  className="font-medium text-sky-300 hover:underline"
+                >
+                  {locMap.get(b.locataire_id) || `Locataire #${b.locataire_id}`}
+                </Link>
               </td>
               <td className="px-4 py-2 text-xs text-white/70">
                 {b.date_debut} → {b.date_fin}
