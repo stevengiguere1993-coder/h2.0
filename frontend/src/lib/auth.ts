@@ -132,10 +132,30 @@ export async function authedFetch(
   // make the first attempt throw a bare network error ("Load failed"
   // on Safari, "Failed to fetch" on Chrome). Retry once after a short
   // pause before surfacing the error to the caller.
+  let res: Response;
   try {
-    return await doFetch();
+    res = await doFetch();
   } catch (err) {
     await new Promise((r) => setTimeout(r, 1500));
-    return doFetch();
+    res = await doFetch();
   }
+
+  // Session expirée / token invalide : le backend renvoie 401 sur TOUT
+  // appel authentifié. Sans ça, chaque page avalait le 401 et affichait
+  // des données périmées ou « vide » trompeur (ex. « Aucun message »
+  // dans la téléphonie quand le token a expiré pendant que l'onglet
+  // restait ouvert). On purge le token et on renvoie vers la connexion
+  // pour que l'utilisateur se ré-authentifie. Le garde-fou évite toute
+  // boucle si on est déjà sur la page de connexion.
+  if (
+    res.status === 401 &&
+    typeof window !== "undefined" &&
+    !window.location.pathname.includes("/connexion")
+  ) {
+    setToken(null);
+    const seg = window.location.pathname.split("/").filter(Boolean)[0];
+    const locale = seg === "en" ? "en" : "fr";
+    window.location.assign(`/${locale}/connexion`);
+  }
+  return res;
 }
