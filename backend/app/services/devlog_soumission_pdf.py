@@ -180,6 +180,46 @@ def _styles(rl: dict[str, Any]):
             leading=20,
             textColor=accent,
         ),
+        "amount_caption": PS(
+            "amount_caption",
+            parent=base["Normal"],
+            fontName="Helvetica",
+            fontSize=9,
+            leading=12,
+            textColor=muted,
+        ),
+        "module_title": PS(
+            "module_title",
+            parent=base["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=11,
+            leading=14,
+            textColor=accent,
+        ),
+        "feature": PS(
+            "feature",
+            parent=base["Normal"],
+            fontName="Helvetica",
+            fontSize=9.5,
+            leading=13,
+            textColor=muted,
+        ),
+        "module_price": PS(
+            "module_price",
+            parent=base["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=11,
+            leading=14,
+            textColor=dark,
+        ),
+        "free_cond": PS(
+            "free_cond",
+            parent=base["Normal"],
+            fontName="Helvetica-Oblique",
+            fontSize=8.5,
+            leading=11,
+            textColor=muted,
+        ),
     }
 
 
@@ -262,6 +302,44 @@ def _initial_totals_rows(
             ),
         ],
     ]
+
+
+def _amount_box(
+    rl: dict[str, Any],
+    s: dict[str, Any],
+    amount: float,
+    caption: str,
+) -> Any:
+    """Encadré « gros montant clair » réutilisable (bleu Horizon).
+
+    Même habillage que le bloc « Frais mensuels récurrents » pour une
+    cohérence visuelle parfaite entre toutes les sections : fond bleu
+    pâle, bordure bleue, montant en gros, légende discrète en dessous
+    (ex. « payé une seule fois »)."""
+    Paragraph = rl["Paragraph"]
+    Table = rl["Table"]
+    TableStyle = rl["TableStyle"]
+    colors = rl["colors"]
+
+    cell: list = [
+        Paragraph(f"<b>{_fmt_money(amount)}</b>", s["big_amount"]),
+    ]
+    if caption:
+        cell.append(Paragraph(caption, s["amount_caption"]))
+    box = Table([[cell]], colWidths=["100%"])
+    box.setStyle(
+        TableStyle([
+            ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#1e40af")),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#eff6ff")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ])
+    )
+    return box
 
 
 def _render_flat_initial(
@@ -397,6 +475,15 @@ def _render_modules_initial(
         m.get("id") for m in modules_detail if m.get("id") is not None
     }
 
+    # Index id -> nom de module (sur TOUS les modules connus, même non
+    # sélectionnés) : sert à afficher la condition de gratuité « Si le
+    # module "<déclencheur>" est sélectionné » dans la section offerte.
+    name_by_module_id: dict[Any, str] = {}
+    for m in modules_detail:
+        mid = m.get("id")
+        if mid is not None:
+            name_by_module_id[mid] = (m.get("name") or "Module").strip() or "Module"
+
     # Regroupe les features RETENUES par module_id ; ``None`` = hors
     # module. On itère features_client (déjà filtré par la sélection),
     # donc un module non sélectionné n'apparaît jamais ici.
@@ -407,47 +494,60 @@ def _render_modules_initial(
             mid = None
         feats_by_module.setdefault(mid, []).append(f)
 
-    def _feat_rows(feats: list[dict[str, Any]], free: bool) -> list[list[Any]]:
+    def _feat_rows(feats: list[dict[str, Any]]) -> list[list[Any]]:
+        """Lignes de fonctionnalités — VUE CLIENT : on liste UNIQUEMENT
+        les descriptions (le client achète un module, pas des lignes
+        détaillées). Aucun prix par fonctionnalité n'est affiché ; seul
+        le « Prix du module » fait foi."""
         out: list[list[Any]] = []
         for feat in feats:
             desc = (feat.get("description") or "").strip() or "—"
-            if free:
-                montant = Paragraph("<i>Offert</i>", s["body"])
-            else:
-                fid = feat.get("id")
-                prix = (
-                    price_by_id.get(fid)
-                    if fid is not None
-                    else float(feat.get("prix_client") or 0)
-                )
-                montant = Paragraph(_fmt_money(prix or 0), s["body"])
-            out.append([Paragraph(f"&bull; {desc}", s["body"]), montant])
+            out.append([
+                Paragraph(f"&bull; {desc}", s["feature"]),
+                Paragraph("", s["feature"]),
+            ])
         return out
 
     def _module_block(
-        title_html: str,
+        name: str,
         feats: list[dict[str, Any]],
         prix_module: float,
         free: bool,
+        condition: Optional[str] = None,
     ) -> Any:
         """Construit un sous-bloc « module » sous forme de table, gardé
         ensemble (KeepTogether) pour éviter une coupure de page disgra-
-        cieuse au milieu d'un module."""
+        cieuse au milieu d'un module.
+
+        Hiérarchie : nom du module bien visible (sous-titre bleu) +
+        éventuelle condition de gratuité à droite, fonctionnalités en
+        sous-liste discrète SANS prix, puis « Prix du module » aligné à
+        droite et mis en valeur."""
         rows: list[list[Any]] = []
-        rows.append([
-            Paragraph(title_html, s["body_bold"]),
-            Paragraph("", s["body"]),
-        ])
-        rows.extend(_feat_rows(feats, free))
-        # Ligne de prix du module.
+        # En-tête module : nom à gauche, mention/condition à droite.
         if free:
-            prix_cell = Paragraph("<b>Offert — 0,00 $</b>", s["body_bold"])
+            header_right = Paragraph("<b>Offert</b>", s["module_price"])
+        else:
+            header_right = Paragraph("", s["body"])
+        rows.append([
+            Paragraph(name, s["module_title"]),
+            header_right,
+        ])
+        if condition:
+            rows.append([
+                Paragraph(condition, s["free_cond"]),
+                Paragraph("", s["body"]),
+            ])
+        rows.extend(_feat_rows(feats))
+        # Ligne de prix du module (mise en valeur).
+        if free:
+            prix_cell = Paragraph("<b>0,00 $</b>", s["module_price"])
         else:
             prix_cell = Paragraph(
-                f"<b>{_fmt_money(prix_module)}</b>", s["body_bold"]
+                f"<b>{_fmt_money(prix_module)}</b>", s["module_price"]
             )
         rows.append([
-            Paragraph("<b>Prix du module</b>", s["body_bold"]),
+            Paragraph("<b>Prix du module</b>", s["module_price"]),
             prix_cell,
         ])
         t = Table(rows, colWidths=["72%", "28%"])
@@ -456,8 +556,10 @@ def _render_modules_initial(
             TableStyle([
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
-                ("LINEABOVE", (0, last), (-1, last), 0.5, colors.HexColor("#1e40af")),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2ff")),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#c7d2fe")),
+                ("LINEABOVE", (0, last), (-1, last), 0.75, colors.HexColor("#1e40af")),
+                ("BACKGROUND", (0, last), (-1, last), colors.HexColor("#f8fafc")),
                 ("LEFTPADDING", (0, 0), (-1, -1), 6),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 6),
                 ("TOPPADDING", (0, 0), (-1, -1), 4),
@@ -502,7 +604,21 @@ def _render_modules_initial(
             mid = m.get("id")
             name = (m.get("name") or "Module").strip() or "Module"
             feats = feats_by_module.get(mid, [])
-            story.append(_module_block(name, feats, 0.0, free=True))
+            # Condition de gratuité : nom du module déclencheur (celui
+            # dont la sélection rend ce module offert).
+            trigger_id = m.get("free_when_module_id")
+            condition: Optional[str] = None
+            if trigger_id is not None:
+                trigger_name = name_by_module_id.get(trigger_id)
+                if trigger_name:
+                    condition = (
+                        f"(Si le module « {trigger_name} » est sélectionné)"
+                    )
+            story.append(
+                _module_block(
+                    name, feats, 0.0, free=True, condition=condition
+                )
+            )
 
     # --- Frais fixes (toujours hors module) -----------------------------
     if frais_fixes_client:
@@ -562,8 +678,10 @@ def _orphan_block(
     price_by_id: dict[Any, float],
 ) -> Any:
     """Bloc « Autres fonctionnalités » — features retenues sans module
-    (``module_id`` NULL). Pas de prix de module agrégé (elles ne forment
-    pas un module) : chaque feature porte son propre prix client."""
+    (``module_id`` NULL). VUE CLIENT : on liste UNIQUEMENT les
+    descriptions (pas de prix ligne par ligne, cohérent avec les
+    modules) et on affiche un « Prix » agrégé du bloc en bas, mis en
+    valeur comme un prix de module."""
     Paragraph = rl["Paragraph"]
     Spacer = rl["Spacer"]
     Table = rl["Table"]
@@ -573,9 +691,10 @@ def _orphan_block(
 
     rows: list[list[Any]] = []
     rows.append([
-        Paragraph("<b>Autres fonctionnalités</b>", s["body_bold"]),
+        Paragraph("Autres fonctionnalités", s["module_title"]),
         Paragraph("", s["body"]),
     ])
+    total_orphan = 0.0
     for feat in orphan_feats:
         desc = (feat.get("description") or "").strip() or "—"
         fid = feat.get("id")
@@ -584,16 +703,25 @@ def _orphan_block(
             if fid is not None
             else float(feat.get("prix_client") or 0)
         )
+        total_orphan += float(prix or 0)
         rows.append([
-            Paragraph(f"&bull; {desc}", s["body"]),
-            Paragraph(_fmt_money(prix or 0), s["body"]),
+            Paragraph(f"&bull; {desc}", s["feature"]),
+            Paragraph("", s["feature"]),
         ])
+    rows.append([
+        Paragraph("<b>Prix</b>", s["module_price"]),
+        Paragraph(f"<b>{_fmt_money(total_orphan)}</b>", s["module_price"]),
+    ])
     t = Table(rows, colWidths=["72%", "28%"])
+    last = len(rows) - 1
     t.setStyle(
         TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2ff")),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#c7d2fe")),
+            ("LINEABOVE", (0, last), (-1, last), 0.75, colors.HexColor("#1e40af")),
+            ("BACKGROUND", (0, last), (-1, last), colors.HexColor("#f8fafc")),
             ("LEFTPADDING", (0, 0), (-1, -1), 6),
             ("RIGHTPADDING", (0, 0), (-1, -1), 6),
             ("TOPPADDING", (0, 0), (-1, -1), 4),
@@ -692,28 +820,16 @@ def _render_bytes(
     total_monthly_taxe = float(recurring.get("total_client_amount_taxe") or 0)
     if recurring_items_breakdown or total_monthly_client > 0:
         story.append(Paragraph("FRAIS MENSUELS RÉCURRENTS", s["section"]))
-        # Encadré « X $ / mois » (TTC — taxes incluses)
-        encadre = Table(
-            [[
-                Paragraph(
-                    f"<b>{_fmt_money(total_monthly_taxe)} / mois</b>",
-                    s["big_amount"],
-                )
-            ]],
-            colWidths=["100%"],
+        # Encadré « gros montant » (TTC — taxes incluses), cohérent avec
+        # le bloc « Investissement initial » (même helper).
+        story.append(
+            _amount_box(
+                rl,
+                s,
+                total_monthly_taxe,
+                "par mois — taxes incluses",
+            )
         )
-        encadre.setStyle(
-            TableStyle([
-                ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#1e40af")),
-                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#eff6ff")),
-                ("LEFTPADDING", (0, 0), (-1, -1), 10),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-                ("TOPPADDING", (0, 0), (-1, -1), 8),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-            ])
-        )
-        story.append(encadre)
         story.append(Spacer(1, 4))
 
         # Détail des taxes (TPS / TVQ) sous l'encadré récurrent
@@ -782,6 +898,19 @@ def _render_bytes(
 
     if features_client or frais_fixes_client or total_initial > 0:
         story.append(Paragraph("INVESTISSEMENT INITIAL", s["section"]))
+
+        # Gros montant total clair en tête de section (style identique au
+        # bloc mensuel) : le total TTC, payé une seule fois. Le détail par
+        # module et les totaux suivent en dessous.
+        story.append(
+            _amount_box(
+                rl,
+                s,
+                total_initial_taxe,
+                "payé une seule fois — taxes incluses",
+            )
+        )
+        story.append(Spacer(1, 6))
 
         if has_modules:
             _render_modules_initial(
