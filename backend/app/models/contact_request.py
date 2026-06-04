@@ -90,6 +90,12 @@ class ContactRequest(Base, TimestampUpdateMixin):
     )
     internal_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Motif de perte — renseigné quand le lead passe en `lost` (Refusé).
+    # Ex. « Information de contact erroné », « Pas intéressé ». Permet de
+    # tracer POURQUOI le lead est perdu (reporting + filtrage). Remis à
+    # NULL automatiquement si le statut repasse à autre chose que `lost`.
+    lost_reason: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+
     # Assignation à un prospecteur/commercial. SET NULL si l'utilisateur
     # est désactivé pour qu'on n'orpheline pas le lead. Index pour les
     # queries « mes leads ».

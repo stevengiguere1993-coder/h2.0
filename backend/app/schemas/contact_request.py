@@ -35,6 +35,9 @@ class ContactRequestUpdate(BaseModel):
     raffiner les infos client (édition inline depuis la fiche)."""
 
     status: Optional[ContactRequestStatus] = None
+    # Motif de perte. Renseigné => le statut est forcé à `lost`. Un
+    # statut != lost remet ce champ à NULL (cohérence côté repository).
+    lost_reason: Optional[str] = Field(default=None, max_length=120)
     internal_notes: Optional[str] = Field(default=None, max_length=10_000)
     kanban_column: Optional[str] = Field(default=None, max_length=64)
     name: Optional[str] = Field(default=None, max_length=255)
@@ -64,6 +67,7 @@ class ContactRequestRead(BaseModel):
     locale: str
     source: Optional[str]
     status: str
+    lost_reason: Optional[str] = None
     kanban_column: Optional[str] = None
     internal_notes: Optional[str]
     assigned_to_user_id: Optional[int] = None

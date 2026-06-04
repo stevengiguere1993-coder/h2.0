@@ -244,6 +244,13 @@ class Call(Base):
     # quand Léa propose 3 créneaux, on les stocke ici pour retrouver
     # user_id + datetime quand l'appelant choisit au tour suivant.
     session_state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Garde d'idempotence pour le callback de résultat du <Dial> sortant
+    # (/twilio/outbound-bridge-result). Twilio peut rejouer le callback ;
+    # ce flag garantit qu'on ne journalise l'appel et — surtout — qu'on
+    # n'envoie le SMS « tentative de contact » qu'UNE seule fois.
+    outbound_result_processed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
 
     phone_number: Mapped[PhoneNumber] = relationship(back_populates="calls")
     transcript: Mapped[Optional["CallTranscript"]] = relationship(

@@ -162,6 +162,29 @@ class Settings(BaseSettings):
     twilio_api_key_sid: Optional[str] = None
     twilio_api_key_secret: Optional[str] = None
 
+    # Appels sortants click-to-call — automatisation post-appel.
+    # `voice_record_outbound` : enregistre la jambe sortante (les deux
+    # canaux) pour pouvoir transcrire/résumer le message vocal laissé.
+    # Une annonce de consentement est jouée au prospect avant le pont
+    # (conformité Québec / Loi 25). Mettre à False désactive
+    # enregistrement + annonce.
+    voice_record_outbound: bool = True
+    # Annonce vocale de consentement jouée au prospect quand il décroche,
+    # juste avant d'être mis en relation (whisper Twilio).
+    voice_outbound_consent_say: str = (
+        "Bonjour, ici Horizon Services Immobiliers. "
+        "Cet appel pourrait être enregistré à des fins de qualité. "
+        "Je vous mets en relation."
+    )
+    # SMS automatique envoyé au prospect quand un appel sortant n'aboutit
+    # pas (sonnerie dans le vide, occupé, échec). Modifiable sans
+    # redéploiement via la variable d'env OUTBOUND_NO_ANSWER_SMS.
+    outbound_no_answer_sms: str = (
+        "Bonjour, c'est Horizon Services Immobiliers. Nous avons tenté de "
+        "vous joindre au sujet de votre demande. Rappelez-nous ou répondez "
+        "à ce message et nous planifierons un moment. Merci!"
+    )
+
     # Stripe — paiement en ligne des factures Dev logiciel via
     # Checkout hosted (PR chantier #4, mai 2026). Voir
     # `app/services/devlog_stripe.py`.

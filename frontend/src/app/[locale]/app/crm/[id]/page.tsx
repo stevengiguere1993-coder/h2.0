@@ -51,6 +51,7 @@ type Prospect = {
   locale: string;
   source: string | null;
   status: string;
+  lost_reason: string | null;
   internal_notes: string | null;
   assigned_to_user_id: number | null;
   gdpr_consent: boolean;
@@ -69,6 +70,26 @@ const STATUS_LABELS: Record<string, string> = {
   lost: "Soumission refusée",
   spam: "Spam"
 };
+
+// Motifs de perte : choisir l'un d'eux classe le lead en « Refusé »
+// (status=lost) tout en gardant la trace du POURQUOI. « Information de
+// contact erroné » est le motif demandé en priorité.
+const LOSS_REASONS = [
+  "Information de contact erroné",
+  "Pas intéressé",
+  "Budget insuffisant",
+  "Délai trop long",
+  "A choisi un concurrent",
+  "Doublon",
+  "Autre raison"
+];
+
+// Valeur du <select> pour un statut donné : quand le lead est « lost »,
+// on encode le motif après « lost:: » pour pré-sélectionner la bonne
+// option du groupe « Refusé ».
+function statusSelectValue(status: string, lostReason: string | null): string {
+  return status === "lost" ? `lost::${lostReason ?? ""}` : status;
+}
 
 const PROJECT_LABEL: Record<string, string> = {
   salle_bain: "Salle de bain",
@@ -207,14 +228,33 @@ export default function ProspectDetailPage() {
     };
   }, [id]);
 
-  async function updateStatus(newStatus: string) {
+  // onChange du <select> de statut. Les options « Refusé » encodent le
+  // motif via « lost::<motif> » ; tout autre statut efface le motif.
+  function onStatusSelect(value: string) {
+    if (value.startsWith("lost::")) {
+      const reason = value.slice("lost::".length);
+      updateStatus("lost", reason || null);
+    } else {
+      updateStatus(value, null);
+    }
+  }
+
+  async function updateStatus(
+    newStatus: string,
+    lostReason: string | null = null
+  ) {
     if (!p) return;
     const prev = p;
-    setP({ ...p, status: newStatus });
+    const nextLost = newStatus === "lost" ? lostReason : null;
+    setP({ ...p, status: newStatus, lost_reason: nextLost });
     try {
+      const body =
+        newStatus === "lost"
+          ? { status: newStatus, lost_reason: lostReason }
+          : { status: newStatus };
       const res = await authedFetch(`/api/v1/contact/${id}`, {
         method: "PATCH",
-        body: JSON.stringify({ status: newStatus })
+        body: JSON.stringify(body)
       });
       if (!res.ok) throw new Error();
     } catch {
@@ -339,6 +379,9 @@ export default function ProspectDetailPage() {
                 <h1 className="text-2xl font-bold text-white">{p.name}</h1>
                 <p className="mt-1 text-sm text-accent-500">
                   {STATUS_LABELS[p.status] || p.status}
+                  {p.status === "lost" && p.lost_reason
+                    ? ` — ${p.lost_reason}`
+                    : ""}
                 </p>
                 <p className="mt-1 text-xs text-white/50">
                   Créé le{" "}
@@ -355,15 +398,25 @@ export default function ProspectDetailPage() {
                 <div>
                   <label className="label">Statut</label>
                   <select
-                    value={p.status}
-                    onChange={(e) => updateStatus(e.target.value)}
+                    value={statusSelectValue(p.status, p.lost_reason)}
+                    onChange={(e) => onStatusSelect(e.target.value)}
                     className="input w-56"
                   >
-                    {Object.entries(STATUS_LABELS).map(([k, v]) => (
-                      <option key={k} value={k}>
-                        {v}
-                      </option>
-                    ))}
+                    <option value="new">Nouveau</option>
+                    <option value="contacted">À rappeler</option>
+                    <option value="rdv_prevu">Rendez-vous prévu</option>
+                    <option value="qualified">Qualifié</option>
+                    <option value="quoted">Soumission envoyée</option>
+                    <option value="won">Soumission acceptée</option>
+                    <optgroup label="Refusé / Perdu">
+                      <option value="lost::">Refusé (motif non précisé)</option>
+                      {LOSS_REASONS.map((r) => (
+                        <option key={r} value={`lost::${r}`}>
+                          {r}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <option value="spam">Spam</option>
                   </select>
                 </div>
                 <div>

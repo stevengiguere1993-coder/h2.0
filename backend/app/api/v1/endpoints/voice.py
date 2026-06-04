@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from app.api.deps import CurrentAdmin, CurrentUser, DBSession
+from app.core.config import settings
 from app.integrations.voice import get_voice_provider
 from app.integrations.voice.routing import RoutingAction, decide_routing
 from app.integrations.voice.caller_identity import (
@@ -176,6 +177,17 @@ def _outbound_bridge_url(call_id: int) -> str:
         f"{_secretary_base_url()}"
         f"/api/v1/voice/twilio/outbound-bridge?call_id={int(call_id)}"
     )
+
+
+def _outbound_bridge_result_url(call_id: int) -> str:
+    return (
+        f"{_secretary_base_url()}"
+        f"/api/v1/voice/twilio/outbound-bridge-result?call_id={int(call_id)}"
+    )
+
+
+def _outbound_consent_url() -> str:
+    return f"{_secretary_base_url()}/api/v1/voice/twilio/outbound-consent"
 
 
 SUPPORTED_ENTITY_TYPES = {
@@ -1784,10 +1796,20 @@ async def twilio_call_status(request: Request, db: DBSession) -> Response:
     if call is None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    if call_status:
+    # Pour un appel sortant click-to-call, ce callback suit la jambe
+    # AGENT (Horizon → mobile interne) qui « complete » toujours en
+    # dernier. C'est /twilio/outbound-bridge-result (jambe prospect) qui
+    # fait foi de l'issue réelle. Une fois ce résultat traité, on ne
+    # laisse PAS le « completed » de la jambe agent écraser un
+    # « no-answer / busy / failed » côté prospect.
+    outbound_done = (
+        call.direction == CallDirection.OUTBOUND.value
+        and bool(getattr(call, "outbound_result_processed", False))
+    )
+    if call_status and not outbound_done:
         call.status = call_status
     duration_raw = params.get("CallDuration") or params.get("Duration")
-    if duration_raw and duration_raw.isdigit():
+    if duration_raw and duration_raw.isdigit() and not outbound_done:
         call.duration_sec = int(duration_raw)
     if call_status in ("completed", "busy", "no-answer", "failed", "canceled"):
         call.ended_at = datetime.now(timezone.utc)
@@ -2532,6 +2554,25 @@ async def create_outbound_call(
         raise HTTPException(status_code=502, detail=f"twilio_error: {exc}")
 
     call.provider_sid = sid or call.provider_sid
+
+    # Passer un appel à un prospect le sort de « Nouveau » → « À rappeler »
+    # (feedback immédiat dans la fiche, sans attendre la fin de l'appel).
+    # On ne touche pas un statut plus avancé / clos. Le webhook de
+    # résultat refait ce contrôle par sécurité.
+    if payload.entity_type == "contact_request" and payload.entity_id:
+        prospect = (
+            await db.execute(
+                select(ContactRequest).where(
+                    ContactRequest.id == payload.entity_id
+                )
+            )
+        ).scalar_one_or_none()
+        if (
+            prospect is not None
+            and prospect.status == ContactRequestStatus.NEW.value
+        ):
+            prospect.status = ContactRequestStatus.CONTACTED.value
+
     await db.flush()
 
     return OutboundCallResponse(
@@ -2886,8 +2927,250 @@ async def _twilio_outbound_bridge_impl(request: Request, db: DBSession) -> Respo
         )
         return Response(content=twiml, media_type="application/xml")
 
-    twiml = provider.build_forward_response(forward_to_e164=target)
+    # Pont vers le prospect AVEC :
+    #  - callback de résultat → journalise l'issue + SMS si non-réponse ;
+    #  - enregistrement + annonce de consentement (si activé en config).
+    record = bool(settings.voice_record_outbound)
+    twiml = provider.build_outbound_bridge_response(
+        target_e164=target,
+        action_url=_outbound_bridge_result_url(int(call_id_raw))
+        if call_id_raw.isdigit()
+        else None,
+        whisper_url=_outbound_consent_url() if record else None,
+        record=record,
+    )
     return Response(content=twiml, media_type="application/xml")
+
+
+@router.post(
+    "/twilio/outbound-consent",
+    summary="Webhook Twilio : annonce de consentement (whisper prospect)",
+    response_class=Response,
+)
+async def twilio_outbound_consent(request: Request) -> Response:
+    """TwiML joué au prospect seul quand il décroche, avant le pont :
+    courte annonce de consentement à l'enregistrement (conformité). Le
+    <Number url> qui pointe ici reprend la main et bridge tout de suite
+    après la lecture."""
+    try:
+        await _validate_twilio_signature(request)
+    except HTTPException:
+        # Signature KO : on ne bloque pas la mise en relation, on rend un
+        # TwiML vide (le pont se fait sans annonce plutôt que de couper).
+        return Response(content="<Response/>", media_type="application/xml")
+    provider = _twilio_provider()
+    twiml = provider.build_say_only(
+        say=settings.voice_outbound_consent_say, lang="fr-CA"
+    )
+    return Response(content=twiml, media_type="application/xml")
+
+
+@router.post(
+    "/twilio/outbound-bridge-result",
+    summary="Webhook Twilio : résultat du <Dial> sortant (log + SMS auto)",
+    response_class=Response,
+)
+async def twilio_outbound_bridge_result(
+    request: Request, db: DBSession
+) -> Response:
+    try:
+        return await _twilio_outbound_bridge_result_impl(request, db)
+    except HTTPException as _http_exc:
+        log.warning(
+            "outbound-bridge-result rejected: %d %s",
+            _http_exc.status_code, _http_exc.detail,
+        )
+        return Response(content="<Response/>", media_type="application/xml")
+    except Exception:
+        log.exception("twilio_outbound_bridge_result failed")
+        return Response(content="<Response/>", media_type="application/xml")
+
+
+# Mapping DialCallStatus (jambe prospect) → CallStatus persisté.
+_DIAL_TO_CALL_STATUS = {
+    "completed": CallStatus.COMPLETED.value,
+    "answered": CallStatus.COMPLETED.value,
+    "no-answer": CallStatus.NO_ANSWER.value,
+    "busy": CallStatus.BUSY.value,
+    "failed": CallStatus.FAILED.value,
+    "canceled": CallStatus.CANCELED.value,
+}
+# DialCallStatus considérés comme « le prospect a décroché » (humain OU
+# boîte vocale — sans AMD on ne distingue pas, le résumé d'enregistrement
+# révélera un éventuel répondeur).
+_DIAL_REACHED = {"completed", "answered"}
+
+
+async def _twilio_outbound_bridge_result_impl(
+    request: Request, db: DBSession
+) -> Response:
+    """Twilio POST ici à la fin du <Dial> vers le prospect. On y :
+      1. met à jour la ligne Call (statut réel côté prospect, durée,
+         enregistrement) ;
+      2. journalise l'appel dans le suivi commercial (FollowUp) ;
+      3. si personne n'a décroché → envoie le SMS « on a tenté de vous
+         joindre » + le journalise aussi.
+    Idempotent via Call.outbound_result_processed (jamais 2 SMS)."""
+    params = await _validate_twilio_signature(request)
+    call_id_raw = request.query_params.get("call_id", "")
+    if not call_id_raw.isdigit():
+        return Response(content="<Response/>", media_type="application/xml")
+
+    call = (
+        await db.execute(select(Call).where(Call.id == int(call_id_raw)))
+    ).scalar_one_or_none()
+    if call is None:
+        return Response(content="<Response/>", media_type="application/xml")
+
+    dial_status = (params.get("DialCallStatus") or "").lower()
+    dur_raw = params.get("DialCallDuration") or "0"
+    duration = int(dur_raw) if dur_raw.isdigit() else 0
+    rec_url = (params.get("RecordingUrl") or "").strip()
+    rec_sid = (params.get("RecordingSid") or "").strip()
+
+    # 1) Mise à jour de la ligne Call (côté prospect).
+    if dial_status in _DIAL_TO_CALL_STATUS:
+        call.status = _DIAL_TO_CALL_STATUS[dial_status]
+    if duration:
+        call.duration_sec = duration
+    call.ended_at = datetime.now(timezone.utc)
+    if dial_status in _DIAL_REACHED and call.answered_at is None and duration:
+        from datetime import timedelta
+
+        call.answered_at = call.ended_at - timedelta(seconds=duration)
+    if rec_url:
+        call.recording_url = rec_url
+        call.recording_sid = rec_sid or call.recording_sid
+        if not call.recording_summary:
+            from app.services.call_recording_summary import (
+                summarize_call_in_background,
+            )
+
+            asyncio.create_task(summarize_call_in_background(call.id))
+
+    # Idempotence : ne journalise / n'envoie le SMS qu'une fois.
+    already = bool(getattr(call, "outbound_result_processed", False))
+    call.outbound_result_processed = True
+    await db.flush()
+
+    if (
+        not already
+        and call.direction == CallDirection.OUTBOUND.value
+        and call.entity_type == "contact_request"
+        and call.entity_id
+    ):
+        try:
+            await _log_outbound_call_outcome(
+                db,
+                call=call,
+                reached=dial_status in _DIAL_REACHED and duration > 0,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("outbound call outcome logging failed: %s", exc)
+
+    return Response(content="<Response/>", media_type="application/xml")
+
+
+async def _log_outbound_call_outcome(
+    db: DBSession, *, call: "Call", reached: bool
+) -> None:
+    """Journalise un appel sortant dans le suivi commercial et, si le
+    prospect n'a pas décroché, envoie + journalise le SMS automatique.
+    Bascule aussi `new → contacted` (à rappeler) par sécurité."""
+    from app.models.follow_up import FollowUp
+    from app.services.follow_up import (
+        CALLBACK_DELAY_HOURS,
+        CALLBACK_LABEL,
+        add_business_hours,
+    )
+
+    prospect = (
+        await db.execute(
+            select(ContactRequest).where(ContactRequest.id == call.entity_id)
+        )
+    ).scalar_one_or_none()
+
+    now = datetime.now(timezone.utc)
+
+    # Journal de l'appel.
+    if reached:
+        call_fu = FollowUp(
+            subject_type="prospect",
+            subject_id=call.entity_id,
+            kind="call",
+            direction="outbound",
+            outcome="reached",
+            notes=f"Appel sortant abouti (prospect joint). [appel #{call.id}]",
+            performed_at=now,
+        )
+    else:
+        call_fu = FollowUp(
+            subject_type="prospect",
+            subject_id=call.entity_id,
+            kind="call",
+            direction="outbound",
+            outcome="no_answer",
+            notes=f"Appel sortant sans réponse. [appel #{call.id}]",
+            performed_at=now,
+            next_action_label=CALLBACK_LABEL,
+            next_action_at=add_business_hours(now, CALLBACK_DELAY_HOURS),
+        )
+    db.add(call_fu)
+
+    # Bascule de statut : un appel passé fait sortir le lead de « Nouveau »
+    # vers « À rappeler » (on ne touche pas un statut plus avancé / clos).
+    if prospect is not None and prospect.status == ContactRequestStatus.NEW.value:
+        prospect.status = ContactRequestStatus.CONTACTED.value
+
+    await db.flush()
+
+    if reached:
+        return
+
+    # Non-réponse → SMS automatique « on a tenté de vous joindre ».
+    body = (settings.outbound_no_answer_sms or "").strip()
+    to_e164 = (call.to_e164 or "").strip()
+    if not body or not to_e164:
+        return
+    provider = _twilio_provider()
+    try:
+        data = await provider.send_sms(
+            from_e164=call.from_e164, to_e164=to_e164, body=body
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("auto no-answer SMS send failed: %s", exc)
+        return
+    msg_sid = str(data.get("sid") or "")
+    db.add(
+        VoiceSms(
+            phone_number_id=call.phone_number_id,
+            provider_sid=msg_sid or f"auto-{call.id}-{int(now.timestamp())}",
+            direction="outbound",
+            status=str(data.get("status") or "queued"),
+            from_e164=call.from_e164,
+            to_e164=to_e164,
+            body=body,
+            sent_at=now,
+            caller_kind=call.caller_kind,
+            entity_type="contact_request",
+            entity_id=call.entity_id,
+        )
+    )
+    db.add(
+        FollowUp(
+            subject_type="prospect",
+            subject_id=call.entity_id,
+            kind="sms",
+            direction="outbound",
+            outcome="sent",
+            notes=(
+                "SMS automatique envoyé (tentative de contact sans "
+                f"réponse). [appel #{call.id}]"
+            ),
+            performed_at=now,
+        )
+    )
+    await db.flush()
 
 
 @router.post(

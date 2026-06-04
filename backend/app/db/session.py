@@ -816,6 +816,11 @@ async def init_db() -> None:
                 "validated_at",
                 "TIMESTAMP WITH TIME ZONE",
             ),
+            # Motif de perte : pourquoi un lead a été classé « Refusé »
+            # (ex. « Information de contact erroné »). Permet de savoir
+            # POURQUOI le lead est perdu. Posé en même temps que
+            # status='lost' depuis la fiche prospect.
+            ("contact_requests", "lost_reason", "VARCHAR(120)"),
             # Phase 8 : cibles de routage par scénario, configurables
             # depuis l'app (au lieu d'env vars Render).
             ("voice_phone_numbers", "urgency_forward_e164", "VARCHAR(20)"),
@@ -828,6 +833,12 @@ async def init_db() -> None:
             # mémorise les créneaux proposés par Léa pour les
             # retrouver au tour suivant).
             ("voice_calls", "session_state", "TEXT"),
+            # Idempotence du callback de résultat du <Dial> sortant.
+            (
+                "voice_calls",
+                "outbound_result_processed",
+                "BOOLEAN NOT NULL DEFAULT FALSE",
+            ),
             ("prospection_deals", "lead_analysis_id", "INTEGER"),
             ("lead_analyses", "converted_to_deal_id", "INTEGER"),
             # Phase A2 (tri-couche extraction) : modèle utilisé pour

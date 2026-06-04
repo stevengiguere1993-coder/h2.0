@@ -216,6 +216,59 @@ class TwilioVoiceProvider(VoiceProvider):
             "</Response>"
         )
 
+    def build_outbound_bridge_response(
+        self,
+        *,
+        target_e164: str,
+        action_url: Optional[str] = None,
+        whisper_url: Optional[str] = None,
+        record: bool = False,
+        timeout_sec: int = 30,
+    ) -> str:
+        """TwiML du pont click-to-call : <Dial> vers le prospect avec, en
+        option :
+          - `action_url` : Twilio POST le résultat du Dial
+            (DialCallStatus, DialCallDuration, RecordingUrl…) — c'est ce
+            qui nous permet de journaliser l'issue de l'appel côté
+            prospect et de déclencher le SMS de non-réponse.
+          - `record` : enregistre les deux canaux dès que le prospect
+            décroche (pour transcrire/résumer le message vocal laissé).
+          - `whisper_url` : TwiML joué AU PROSPECT seul quand il décroche,
+            avant le pont (annonce de consentement à l'enregistrement).
+        """
+        dial_attrs = f' timeout="{int(timeout_sec)}"'
+        if action_url:
+            dial_attrs += (
+                f' action="{xml_escape(action_url)}" method="POST"'
+            )
+        if record:
+            dial_attrs += ' record="record-from-answer-dual"'
+        if whisper_url:
+            inner = (
+                f'<Number url="{xml_escape(whisper_url)}">'
+                f"{xml_escape(target_e164)}</Number>"
+            )
+        else:
+            inner = xml_escape(target_e164)
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            f"<Dial{dial_attrs}>{inner}</Dial>"
+            "</Response>"
+        )
+
+    def build_say_only(self, *, say: str, lang: str = "fr-CA") -> str:
+        """TwiML minimal : une annonce vocale, sans rien après. Utilisé
+        comme whisper de consentement (le <Number url> reprend la main
+        et bridge automatiquement après la lecture)."""
+        voice = self._voice_for_lang(lang)
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            f'<Say voice="{voice}" language="{lang}">{xml_escape(say)}</Say>'
+            "</Response>"
+        )
+
     def build_reject_response(self, reason: str = "busy") -> str:
         # `reject reason="busy"` rend une tonalité d'occupation, ce qui
         # est plus discret que `hangup` pour les blocklists.
