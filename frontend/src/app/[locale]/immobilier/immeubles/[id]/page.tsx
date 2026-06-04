@@ -41,6 +41,7 @@ type Immeuble = {
   annee_construction?: number | null;
   nb_logements?: number | null;
   matricule?: string | null;
+  urgence_phone?: string | null;
   purchase_price?: number | null;
   purchase_date?: string | null;
   description?: string | null;
@@ -177,7 +178,8 @@ export default function ImmeubleDetailPage({
     type: "residentiel",
     annee_construction: "",
     nb_logements: "",
-    purchase_price: ""
+    purchase_price: "",
+    urgence_phone: ""
   });
   const [financials, setFinancials] = useState<Financials | null>(null);
   const [logements, setLogements] = useState<Logement[] | null>(null);
@@ -378,7 +380,8 @@ export default function ImmeubleDetailPage({
       nb_logements: immeuble.nb_logements ? String(immeuble.nb_logements) : "",
       purchase_price: immeuble.purchase_price
         ? String(immeuble.purchase_price)
-        : ""
+        : "",
+      urgence_phone: immeuble.urgence_phone || ""
     });
     setShowEdit(true);
   }
@@ -405,7 +408,8 @@ export default function ImmeubleDetailPage({
           : null,
         purchase_price: editForm.purchase_price
           ? Number(editForm.purchase_price)
-          : null
+          : null,
+        urgence_phone: editForm.urgence_phone.trim() || null
       };
       const res = await authedFetch(
         `/api/v1/immobilier/immeubles/${immeubleId}`,
@@ -930,6 +934,25 @@ export default function ImmeubleDetailPage({
                   />
                 </EditField>
               </div>
+              <EditField label="Numéro d'urgence (concierge / gestionnaire)">
+                <input
+                  type="tel"
+                  value={editForm.urgence_phone}
+                  onChange={(e) =>
+                    setEditForm((f) => ({
+                      ...f,
+                      urgence_phone: e.target.value
+                    }))
+                  }
+                  placeholder="ex. 514 555-0123"
+                  className="w-full rounded-lg border border-brand-800 bg-brand-900 px-3 py-2 text-sm text-white outline-none focus:border-sky-300"
+                />
+                <p className="mt-1 text-[11px] text-white/50">
+                  Appelé en priorité par Léa lors d'une urgence locataire
+                  (dégât d'eau, effraction, feu…). À défaut, repli sur le
+                  numéro de garde global.
+                </p>
+              </EditField>
               <div className="grid grid-cols-2 gap-3">
                 <EditField label="Type">
                   <select

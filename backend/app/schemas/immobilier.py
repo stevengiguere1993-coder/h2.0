@@ -27,6 +27,9 @@ class ImmeubleBase(BaseModel):
     purchase_date: Optional[date] = None
     cover_photo_url: Optional[str] = Field(default=None, max_length=1000)
     description: Optional[str] = None
+    # Contact d'urgence (concierge/gestionnaire) appelé en priorité par Léa
+    # lors d'une urgence locataire, avant le repli sur le numéro de garde.
+    urgence_phone: Optional[str] = Field(default=None, max_length=32)
     is_active: bool = True
 
 
@@ -51,6 +54,7 @@ class ImmeubleUpdate(BaseModel):
     purchase_date: Optional[date] = None
     cover_photo_url: Optional[str] = Field(default=None, max_length=1000)
     description: Optional[str] = None
+    urgence_phone: Optional[str] = Field(default=None, max_length=32)
     is_active: Optional[bool] = None
 
 

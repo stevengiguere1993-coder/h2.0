@@ -143,6 +143,7 @@ async def init_db() -> None:
             ("achats", "qbo_bill_payment_id", "VARCHAR(64)"),
             ("factures", "next_reminder_at", "TIMESTAMP WITH TIME ZONE"),
             ("voice_calls", "verbatim_transcript", "TEXT"),
+            ("imm_immeubles", "urgence_phone", "VARCHAR(32)"),
             ("soumissions", "qbo_estimate_id", "VARCHAR(64)"),
             ("soumissions", "qbo_doc_number", "VARCHAR(64)"),
             ("soumissions", "qbo_sync_token", "VARCHAR(32)"),
