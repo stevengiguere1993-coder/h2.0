@@ -29,6 +29,8 @@ type User = {
   volets: string[];
   must_change_password: boolean;
   created_at: string;
+  voice_enabled: boolean;
+  phone_e164: string | null;
 };
 
 const VOLET_OPTIONS: { key: string; label: string }[] = [
@@ -108,6 +110,7 @@ export function UsersManager({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
+  const [phoneDraft, setPhoneDraft] = useState("");
   const [assignments, setAssignments] = useState<ProjectMini[]>([]);
   const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [immAssignments, setImmAssignments] = useState<ImmeubleMini[]>([]);
@@ -429,6 +432,51 @@ export function UsersManager({
 
   const selectedUser = users.find((x) => x.id === selected) || null;
 
+  // Réinitialise le brouillon du numéro quand on sélectionne un autre
+  // utilisateur (le champ est local pour permettre l'édition avant save).
+  useEffect(() => {
+    const su = users.find((x) => x.id === selected);
+    setPhoneDraft(su?.phone_e164 || "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
+
+  async function toggleVoiceAccess(u: User) {
+    setBusyUser(u.id);
+    setError(null);
+    try {
+      const res = await authedFetch(`/api/v1/users/${u.id}/voice-settings`, {
+        method: "PATCH",
+        body: JSON.stringify({ voice_enabled: !u.voice_enabled })
+      });
+      if (!res.ok) throw new Error();
+      const updated = (await res.json()) as User;
+      setUsers((xs) => xs.map((x) => (x.id === u.id ? updated : x)));
+    } catch {
+      setError("Mise à jour de l'accès téléphonie échouée.");
+    } finally {
+      setBusyUser(null);
+    }
+  }
+
+  async function saveUserPhone(u: User) {
+    setBusyUser(u.id);
+    setError(null);
+    try {
+      const res = await authedFetch(`/api/v1/users/${u.id}/voice-settings`, {
+        method: "PATCH",
+        body: JSON.stringify({ phone_e164: phoneDraft })
+      });
+      if (!res.ok) throw new Error();
+      const updated = (await res.json()) as User;
+      setUsers((xs) => xs.map((x) => (x.id === u.id ? updated : x)));
+      setPhoneDraft(updated.phone_e164 || "");
+    } catch {
+      setError("Enregistrement du numéro échoué.");
+    } finally {
+      setBusyUser(null);
+    }
+  }
+
   const addBtn = (
     <button
       type="button"
@@ -675,6 +723,77 @@ export function UsersManager({
                           })}
                         </div>
                       )}
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-semibold uppercase tracking-wider text-accent-500">
+                        Téléphonie
+                      </label>
+                      <p className="mt-1 text-[11px] text-white/50">
+                        Accès au click-to-call et numéro de mobile qui sonnera
+                        quand cet utilisateur lance un appel depuis Kratos.
+                      </p>
+                      {selectedUser.role === "owner" ||
+                      selectedUser.role === "admin" ? (
+                        <p className="mt-2 text-[11px] text-white/50">
+                          Les {ROLE_LABEL[selectedUser.role]} ont toujours accès
+                          à la téléphonie.
+                        </p>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => toggleVoiceAccess(selectedUser)}
+                          disabled={busyUser === selectedUser.id}
+                          className={`mt-2 flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition disabled:opacity-60 ${
+                            selectedUser.voice_enabled
+                              ? "border-accent-500/50 bg-accent-500/10 text-white"
+                              : "border-brand-800 bg-brand-950 text-white/60 hover:border-accent-500"
+                          }`}
+                        >
+                          <span
+                            className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border ${
+                              selectedUser.voice_enabled
+                                ? "border-accent-500 bg-accent-500 text-brand-950"
+                                : "border-white/30"
+                            }`}
+                          >
+                            {selectedUser.voice_enabled ? (
+                              <Check className="h-3 w-3" />
+                            ) : null}
+                          </span>
+                          Autoriser la téléphonie
+                        </button>
+                      )}
+                      <div className="mt-3">
+                        <label className="label">
+                          Mobile relié (click-to-call)
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="tel"
+                            value={phoneDraft}
+                            onChange={(e) => setPhoneDraft(e.target.value)}
+                            placeholder="Ex. 514-961-9015"
+                            maxLength={32}
+                            className="input flex-1"
+                          />
+                          {phoneDraft.trim() !==
+                          (selectedUser.phone_e164 || "") ? (
+                            <button
+                              type="button"
+                              onClick={() => saveUserPhone(selectedUser)}
+                              disabled={busyUser === selectedUser.id}
+                              className="btn-accent text-xs disabled:opacity-60"
+                            >
+                              {busyUser === selectedUser.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                "Enregistrer"
+                              )}
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
                   </div>
 

@@ -66,6 +66,10 @@ class UserRead(BaseModel):
     display_name: str = ""
     profile_color: Optional[str] = None
     has_avatar: bool = False
+    # Téléphonie — droit d'accès (click-to-call) + mobile relié qui
+    # sonnera quand cet utilisateur lance un appel depuis Kratos.
+    voice_enabled: bool = False
+    phone_e164: Optional[str] = None
 
 
 async def _user_full_names(db, users: List[User]) -> dict[int, str]:
@@ -107,6 +111,8 @@ def _user_read(u: User, full_name: Optional[str]) -> UserRead:
         display_name=u.display_name,
         profile_color=u.profile_color,
         has_avatar=u.has_avatar,
+        voice_enabled=bool(getattr(u, "voice_enabled", False)),
+        phone_e164=getattr(u, "phone_e164", None),
     )
 
 
@@ -345,6 +351,57 @@ async def update_can_assign_others(
     if u is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
     u.can_assign_others = bool(data.can_assign_others)
+    await db.flush()
+    await db.refresh(u)
+    return _user_read(u, None)
+
+
+def _normalize_phone_e164(raw: str) -> str:
+    """Normalise un numéro NANP en E.164 (+1XXXXXXXXXX). Tolérant aux
+    espaces / parenthèses / tirets. Renvoie '' si vide/inexploitable."""
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    if s.startswith("+"):
+        digits = "".join(c for c in s[1:] if c.isdigit())
+        return f"+{digits}" if digits else ""
+    digits = "".join(c for c in s if c.isdigit())
+    if len(digits) == 10:
+        return f"+1{digits}"
+    if len(digits) == 11 and digits.startswith("1"):
+        return f"+{digits}"
+    if len(digits) >= 8:
+        return f"+{digits}"
+    return ""
+
+
+class VoiceSettingsUpdate(BaseModel):
+    """Accès téléphonie + mobile relié — géré par un admin."""
+
+    voice_enabled: Optional[bool] = None
+    # Chaîne vide => efface le numéro. Format libre, normalisé en E.164.
+    phone_e164: Optional[str] = Field(default=None, max_length=32)
+
+
+@router.patch("/{user_id}/voice-settings", response_model=UserRead)
+async def update_voice_settings(
+    user_id: int,
+    data: VoiceSettingsUpdate,
+    db: DBSession,
+    _: RequireAdminRole,
+) -> UserRead:
+    """Définit qui a droit à la téléphonie (click-to-call) et le numéro
+    de mobile qui sonnera quand cet utilisateur lance un appel. Admin+."""
+    u = (
+        await db.execute(select(User).where(User.id == user_id))
+    ).scalar_one_or_none()
+    if u is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    fields = data.model_dump(exclude_unset=True)
+    if "voice_enabled" in fields and fields["voice_enabled"] is not None:
+        u.voice_enabled = bool(fields["voice_enabled"])
+    if "phone_e164" in fields:
+        u.phone_e164 = _normalize_phone_e164(fields["phone_e164"] or "") or None
     await db.flush()
     await db.refresh(u)
     return _user_read(u, None)

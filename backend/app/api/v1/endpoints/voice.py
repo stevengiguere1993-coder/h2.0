@@ -2476,7 +2476,7 @@ class OutboundCallResponse(BaseModel):
     summary="Initie un appel sortant click-to-call (admin)",
 )
 async def create_outbound_call(
-    payload: OutboundCallRequest, user: CurrentAdmin, db: DBSession
+    payload: OutboundCallRequest, user: CurrentUser, db: DBSession
 ) -> OutboundCallResponse:
     """Click-to-call : Twilio appelle d'abord le mobile interne
     (`TWILIO_FORWARD_TO`), puis bridge vers la cible une fois qu'on a
@@ -2511,9 +2511,24 @@ async def create_outbound_call(
     if pn is None:
         raise HTTPException(status_code=400, detail="no_active_phone_number")
 
+    # Droit d'accès à la téléphonie : owner/admin (via rôle) OU utilisateur
+    # explicitement autorisé par un admin (voice_enabled). Sinon, refus.
+    voice_ok = bool(getattr(user, "voice_enabled", False)) or user.role in (
+        "owner",
+        "admin",
+    )
+    if not voice_ok:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "no_voice_access: ton compte n'a pas accès à la téléphonie. "
+                "Demande à un administrateur de l'activer."
+            ),
+        )
+
     # Le téléphone mis en relation DOIT être celui de l'utilisateur
     # connecté qui lance l'appel — pas un numéro fixe partagé. On exige
-    # donc un mobile renseigné dans le profil (Réglages → Profil). Ainsi,
+    # donc un mobile relié (défini par l'admin ou dans le profil). Ainsi,
     # quel que soit le commercial qui clique « Appeler » dans Kratos,
     # c'est SON téléphone qui sonne.
     bridge_to = _normalize_e164(getattr(user, "phone_e164", None) or "")

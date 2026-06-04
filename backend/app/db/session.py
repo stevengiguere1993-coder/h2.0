@@ -824,6 +824,8 @@ async def init_db() -> None:
             # Mobile perso de l'utilisateur — click-to-call Kratos fait
             # sonner CE numéro quand l'utilisateur lance un appel.
             ("users", "phone_e164", "VARCHAR(20)"),
+            # Droit d'accès à la téléphonie (géré par l'admin).
+            ("users", "voice_enabled", "BOOLEAN NOT NULL DEFAULT FALSE"),
             # Phase 8 : cibles de routage par scénario, configurables
             # depuis l'app (au lieu d'env vars Render).
             ("voice_phone_numbers", "urgency_forward_e164", "VARCHAR(20)"),

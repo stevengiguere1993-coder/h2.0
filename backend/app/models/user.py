@@ -210,6 +210,13 @@ class User(Base, TimestampMixin):
     phone_e164: Mapped[Optional[str]] = mapped_column(
         String(20), nullable=True
     )
+    # Droit d'accès à la téléphonie (click-to-call + console). Défini par
+    # un admin dans la gestion des utilisateurs. Les owner/admin ont
+    # toujours accès via leur rôle ; ce flag sert à l'accorder à des
+    # employés / managers. Sans accès, l'appel sortant est refusé.
+    voice_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     @property
     def display_name(self) -> str:
