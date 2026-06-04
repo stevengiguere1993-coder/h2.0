@@ -1,23 +1,24 @@
-"""Activité du compte (lecture seule, auth par clé d'API).
+"""Activité du compte (auth par clé d'API) + création de tâche par pôle.
 
-  GET /api/v1/activity/me?date=YYYY-MM-DD
-  GET /api/v1/activity/me?from=YYYY-MM-DD&to=YYYY-MM-DD
-  GET /api/v1/activity/me/summary?date=...
+  GET  /api/v1/activity/me?date=YYYY-MM-DD
+  GET  /api/v1/activity/me?from=YYYY-MM-DD&to=YYYY-MM-DD
+  GET  /api/v1/activity/me/summary?date=...
+  POST /api/v1/activity/tasks            (écriture : créer une tâche d'un pôle)
 
-Retourne l'activité de l'utilisateur PROPRIÉTAIRE DE LA CLÉ sur une
-période (par défaut : aujourd'hui, fuseau America/Toronto). Scope strict :
-on ne voit jamais l'activité d'un autre utilisateur.
+LECTURE : retourne l'activité de l'utilisateur PROPRIÉTAIRE DE LA CLÉ sur
+une période (par défaut : aujourd'hui, fuseau America/Toronto). Scope
+strict : on ne voit jamais l'activité d'un autre utilisateur. L'activité
+n'est renvoyée QUE pour les pôles dont la clé porte ``<pole>:activity:read``
+(rétrocompat : clé sans scopes = tous les pôles).
 
-Agrégé :
-  - tasks  : tâches complétées / créées / modifiées sur tous les pôles
-             (devlog, entreprise, prospection, sales, project), filtrées
-             sur celles assignées à OU créées par l'utilisateur.
+ÉCRITURE : ``POST /activity/tasks`` crée une tâche dans un pôle donné, à
+condition que la clé porte ``<pole>:tasks:create``. La tâche est créée
+par / assignée à l'utilisateur de la clé. Audité (mention « via clé API »).
+
+Agrégé en lecture :
+  - tasks  : tâches complétées / créées / modifiées (pôles autorisés).
   - audit  : entrées du journal d'audit où user_id = l'utilisateur.
-  - summary: résumé en langage naturel (français) prêt à lire pour un
-             assistant.
-
-LECTURE SEULE : aucun écriture business ici (la clé d'API ne donne accès
-qu'à ces endpoints).
+  - summary: résumé en langage naturel (français) prêt à lire.
 """
 
 from __future__ import annotations
@@ -27,25 +28,79 @@ from typing import List, Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from app.api.api_key_deps import ApiKeyUser
+from app.api.api_key_deps import ApiKeyContext
 from app.api.deps import DBSession
 from app.models.audit_log import AuditLog
 from app.models.devlog_project_task import DevlogProjectTask
+from app.models.devlog_project import DevlogProject
 from app.models.employe import Employe
+from app.models.entreprise import Entreprise
 from app.models.entreprise_tache import EntrepriseTache
+from app.models.project import Project
 from app.models.project_task import ProjectTask
+from app.models.prospection_deal import ProspectionDeal
 from app.models.prospection_deal_task import ProspectionDealTask
 from app.models.sales_task import SalesTask, sales_task_assignees
 from app.models.user import User
+from app.services.api_capabilities import POLE_LABELS, readable_poles
+from app.services.audit import log_action
 
 
 TORONTO = ZoneInfo("America/Toronto")
 
 
 router = APIRouter(prefix="/activity", tags=["activity"])
+
+
+# Mapping « pôle interne du collecteur » → slug du catalogue de capacités.
+# Les libellés internes (devlog/entreprise/prospection/sales/project) sont
+# conservés dans la réponse pour ne rien casser, mais le FILTRAGE de
+# lecture se fait sur les slugs du catalogue (prospection/devlog/
+# construction/entreprise/...). Sales (CRM/prospects) → prospection ;
+# Project (chantier) → construction.
+_INTERNAL_POLE_TO_SLUG = {
+    "devlog": "devlog",
+    "entreprise": "entreprise",
+    "prospection": "prospection",
+    "sales": "prospection",
+    "project": "construction",
+}
+
+# Préfixes d'audit (entity_type / action) → slug de pôle, pour filtrer le
+# journal d'audit par pôle quand c'est possible.
+_AUDIT_ENTITY_TO_SLUG = {
+    "soumission": "devlog",
+    "facture": "devlog",
+    "devlog": "devlog",
+    "entreprise": "entreprise",
+    "prospection": "prospection",
+    "deal": "prospection",
+    "lead": "prospection",
+    "client": "prospection",
+    "project": "construction",
+    "chantier": "construction",
+    "achat": "comptabilite",
+    "bon": "comptabilite",
+    "fournisseur": "comptabilite",
+    "immeuble": "immobilier",
+    "imm": "immobilier",
+    "bail": "immobilier",
+}
+
+
+def _audit_slug(entry: AuditLog) -> Optional[str]:
+    """Devine le slug de pôle d'une entrée d'audit (best-effort), ou None
+    si indéterminable. On regarde l'entity_type puis l'action."""
+    haystacks = [entry.entity_type or "", entry.action or ""]
+    for h in haystacks:
+        low = h.lower()
+        for key, slug in _AUDIT_ENTITY_TO_SLUG.items():
+            if low.startswith(key) or f"{key}." in low or f"{key}_" in low:
+                return slug
+    return None
 
 
 # ── Schémas ────────────────────────────────────────────────────────
@@ -90,6 +145,30 @@ class SummaryResponse(BaseModel):
     period_start: datetime
     period_end: datetime
     summary: str
+
+
+class TaskCreate(BaseModel):
+    """Création d'une tâche via clé d'API. ``pole`` détermine le modèle
+    cible et l'identifiant parent requis."""
+
+    pole: str = Field(..., description="Slug du pôle : prospection / devlog / construction / entreprise.")
+    # Identifiant de l'entité parente, selon le pôle :
+    #   devlog        → parent_id = devlog_projects.id
+    #   entreprise    → parent_id = entreprises.id
+    #   prospection   → parent_id = prospection_deals.id
+    #   construction  → parent_id = projects.id
+    parent_id: int = Field(..., description="ID de l'entité parente (projet / entreprise / deal selon le pôle).")
+    title: str = Field(..., min_length=1, max_length=500)
+    description: Optional[str] = None
+    due_date: Optional[date_cls] = None
+
+
+class TaskCreated(BaseModel):
+    pole: str
+    entity_type: str
+    entity_id: int
+    title: str
+    status: str
 
 
 # ── Fenêtre temporelle (America/Toronto) ───────────────────────────
@@ -170,105 +249,121 @@ def _reasons(
 
 
 async def _collect_tasks(
-    db, user: User, start: datetime, end: datetime
+    db,
+    user: User,
+    start: datetime,
+    end: datetime,
+    allowed_poles: Optional[set[str]] = None,
 ) -> List[TaskActivity]:
+    """Collecte les tâches de l'utilisateur sur la période. Si
+    ``allowed_poles`` est fourni (set de slugs du catalogue), on ne
+    collecte QUE les modèles dont le slug est autorisé. None = tous
+    (rétrocompat / usage interne sans filtrage)."""
     out: List[TaskActivity] = []
     employe_ids = await _employe_ids_for_user(db, user)
 
+    def _allowed(internal_pole: str) -> bool:
+        if allowed_poles is None:
+            return True
+        return _INTERNAL_POLE_TO_SLUG.get(internal_pole) in allowed_poles
+
     # ── Devlog (assignee_user_id ; status « termine » ; pas de
     #    completed_at → on prend updated_at comme proxy de complétion). ──
-    rows = (
-        await db.execute(
-            select(DevlogProjectTask).where(
-                DevlogProjectTask.assignee_user_id == user.id
-            )
-        )
-    ).scalars().all()
-    for t in rows:
-        is_done = t.status == "termine"
-        completed_at = t.updated_at if is_done else None
-        reasons = _reasons(
-            is_done, completed_at, t.created_at, t.updated_at, start, end
-        )
-        if reasons:
-            out.append(
-                TaskActivity(
-                    pole="devlog",
-                    entity_type="devlog_project_task",
-                    entity_id=t.id,
-                    title=t.title,
-                    status=t.status,
-                    is_completed=is_done,
-                    completed_at=completed_at,
-                    created_at=t.created_at,
-                    updated_at=t.updated_at,
-                    reasons=reasons,
+    if _allowed("devlog"):
+        rows = (
+            await db.execute(
+                select(DevlogProjectTask).where(
+                    DevlogProjectTask.assignee_user_id == user.id
                 )
             )
+        ).scalars().all()
+        for t in rows:
+            is_done = t.status == "termine"
+            completed_at = t.updated_at if is_done else None
+            reasons = _reasons(
+                is_done, completed_at, t.created_at, t.updated_at, start, end
+            )
+            if reasons:
+                out.append(
+                    TaskActivity(
+                        pole="devlog",
+                        entity_type="devlog_project_task",
+                        entity_id=t.id,
+                        title=t.title,
+                        status=t.status,
+                        is_completed=is_done,
+                        completed_at=completed_at,
+                        created_at=t.created_at,
+                        updated_at=t.updated_at,
+                        reasons=reasons,
+                    )
+                )
 
     # ── Entreprise (assignee_user_id ; status « done » ; completed_at). ──
-    rows = (
-        await db.execute(
-            select(EntrepriseTache).where(
-                EntrepriseTache.assignee_user_id == user.id
-            )
-        )
-    ).scalars().all()
-    for t in rows:
-        is_done = t.status == "done"
-        completed_at = t.completed_at or (t.updated_at if is_done else None)
-        reasons = _reasons(
-            is_done, completed_at, t.created_at, t.updated_at, start, end
-        )
-        if reasons:
-            out.append(
-                TaskActivity(
-                    pole="entreprise",
-                    entity_type="entreprise_tache",
-                    entity_id=t.id,
-                    title=t.title,
-                    status=t.status,
-                    is_completed=is_done,
-                    completed_at=completed_at,
-                    created_at=t.created_at,
-                    updated_at=t.updated_at,
-                    reasons=reasons,
+    if _allowed("entreprise"):
+        rows = (
+            await db.execute(
+                select(EntrepriseTache).where(
+                    EntrepriseTache.assignee_user_id == user.id
                 )
             )
+        ).scalars().all()
+        for t in rows:
+            is_done = t.status == "done"
+            completed_at = t.completed_at or (t.updated_at if is_done else None)
+            reasons = _reasons(
+                is_done, completed_at, t.created_at, t.updated_at, start, end
+            )
+            if reasons:
+                out.append(
+                    TaskActivity(
+                        pole="entreprise",
+                        entity_type="entreprise_tache",
+                        entity_id=t.id,
+                        title=t.title,
+                        status=t.status,
+                        is_completed=is_done,
+                        completed_at=completed_at,
+                        created_at=t.created_at,
+                        updated_at=t.updated_at,
+                        reasons=reasons,
+                    )
+                )
 
     # ── Prospection (assignee_user_id ; status « done » ; pas de
     #    completed_at → updated_at comme proxy). ──
-    rows = (
-        await db.execute(
-            select(ProspectionDealTask).where(
-                ProspectionDealTask.assignee_user_id == user.id
-            )
-        )
-    ).scalars().all()
-    for t in rows:
-        is_done = t.status == "done"
-        completed_at = t.updated_at if is_done else None
-        reasons = _reasons(
-            is_done, completed_at, t.created_at, t.updated_at, start, end
-        )
-        if reasons:
-            out.append(
-                TaskActivity(
-                    pole="prospection",
-                    entity_type="prospection_deal_task",
-                    entity_id=t.id,
-                    title=t.name,
-                    status=t.status,
-                    is_completed=is_done,
-                    completed_at=completed_at,
-                    created_at=t.created_at,
-                    updated_at=t.updated_at,
-                    reasons=reasons,
+    if _allowed("prospection"):
+        rows = (
+            await db.execute(
+                select(ProspectionDealTask).where(
+                    ProspectionDealTask.assignee_user_id == user.id
                 )
             )
+        ).scalars().all()
+        for t in rows:
+            is_done = t.status == "done"
+            completed_at = t.updated_at if is_done else None
+            reasons = _reasons(
+                is_done, completed_at, t.created_at, t.updated_at, start, end
+            )
+            if reasons:
+                out.append(
+                    TaskActivity(
+                        pole="prospection",
+                        entity_type="prospection_deal_task",
+                        entity_id=t.id,
+                        title=t.name,
+                        status=t.status,
+                        is_completed=is_done,
+                        completed_at=completed_at,
+                        created_at=t.created_at,
+                        updated_at=t.updated_at,
+                        reasons=reasons,
+                    )
+                )
 
-    # ── Sales (assignation via employes ; done/done_at). ──
-    if employe_ids:
+    # ── Sales (assignation via employes ; done/done_at). → prospection ──
+    if employe_ids and _allowed("sales"):
         rows = (
             await db.execute(
                 select(SalesTask)
@@ -303,7 +398,8 @@ async def _collect_tasks(
                     )
                 )
 
-        # ── Project (assignee_id via employes ; done/done_at). ──
+    # ── Project (assignee_id via employes ; done/done_at). → construction ──
+    if employe_ids and _allowed("project"):
         rows = (
             await db.execute(
                 select(ProjectTask).where(
@@ -365,7 +461,11 @@ def _humanize_audit(entry: AuditLog) -> str:
 
 
 async def _collect_audit(
-    db, user: User, start: datetime, end: datetime
+    db,
+    user: User,
+    start: datetime,
+    end: datetime,
+    allowed_poles: Optional[set[str]] = None,
 ) -> List[AuditActivity]:
     stmt = (
         select(AuditLog)
@@ -377,17 +477,28 @@ async def _collect_audit(
         .order_by(AuditLog.created_at.desc())
     )
     rows = (await db.execute(stmt)).scalars().all()
-    return [
-        AuditActivity(
-            id=e.id,
-            action=e.action,
-            entity_type=e.entity_type,
-            entity_id=e.entity_id,
-            timestamp=e.created_at,
-            summary=_humanize_audit(e),
+    out: List[AuditActivity] = []
+    for e in rows:
+        if allowed_poles is not None:
+            slug = _audit_slug(e)
+            # Si on devine le pôle et qu'il n'est pas autorisé → on cache.
+            # Si on ne devine pas (slug None), on inclut (best-effort) tant
+            # qu'au moins un pôle est en lecture (allowed_poles non vide).
+            if slug is not None and slug not in allowed_poles:
+                continue
+            if slug is None and not allowed_poles:
+                continue
+        out.append(
+            AuditActivity(
+                id=e.id,
+                action=e.action,
+                entity_type=e.entity_type,
+                entity_id=e.entity_id,
+                timestamp=e.created_at,
+                summary=_humanize_audit(e),
+            )
         )
-        for e in rows
-    ]
+    return out
 
 
 # ── Résumé en langage naturel ──────────────────────────────────────
@@ -474,26 +585,150 @@ def _build_summary(
     return f"{prefix} : " + ", ".join(parts) + "."
 
 
+# ── Création de tâche par pôle (réutilisé par l'endpoint + le MCP) ──
+
+
+async def create_task_for_pole(
+    db,
+    user: User,
+    *,
+    pole: str,
+    parent_id: int,
+    title: str,
+    description: Optional[str] = None,
+    due_date: Optional[date_cls] = None,
+    via: str = "api_key",
+) -> TaskCreated:
+    """Crée une tâche dans le pôle ``pole`` (slug du catalogue), rattachée
+    à ``parent_id``, assignée à ``user``. Audité.
+
+    Lève ValueError (→ 4xx côté appelant) si le pôle ne supporte pas la
+    création de tâche ou si l'entité parente est introuvable. L'appelant
+    DOIT déjà avoir vérifié la capacité ``<pole>:tasks:create``."""
+    title = (title or "").strip()
+    if not title:
+        raise ValueError("Le titre de la tâche est requis.")
+
+    pole = (pole or "").strip().lower()
+
+    if pole == "devlog":
+        parent = await db.get(DevlogProject, parent_id)
+        if parent is None:
+            raise ValueError(f"Projet devlog #{parent_id} introuvable.")
+        task = DevlogProjectTask(
+            project_id=parent_id,
+            title=title,
+            description=description or None,
+            assignee_user_id=user.id,
+            status="a_faire",
+            priority="moyenne",
+            due_date=due_date,
+        )
+        db.add(task)
+        await db.flush()
+        entity_type, entity_id, st = "devlog_project_task", task.id, task.status
+
+    elif pole == "entreprise":
+        parent = await db.get(Entreprise, parent_id)
+        if parent is None:
+            raise ValueError(f"Entreprise #{parent_id} introuvable.")
+        task = EntrepriseTache(
+            entreprise_id=parent_id,
+            title=title,
+            description=description or None,
+            assignee_user_id=user.id,
+            status="a_faire",
+            due_date=due_date,
+        )
+        db.add(task)
+        await db.flush()
+        entity_type, entity_id, st = "entreprise_tache", task.id, task.status
+
+    elif pole == "prospection":
+        parent = await db.get(ProspectionDeal, parent_id)
+        if parent is None:
+            raise ValueError(f"Deal de prospection #{parent_id} introuvable.")
+        task = ProspectionDealTask(
+            deal_id=parent_id,
+            name=title,
+            notes=description or None,
+            assignee_user_id=user.id,
+            status="a_faire",
+            due_date=due_date,
+        )
+        db.add(task)
+        await db.flush()
+        entity_type, entity_id, st = "prospection_deal_task", task.id, task.status
+
+    elif pole == "construction":
+        parent = await db.get(Project, parent_id)
+        if parent is None:
+            raise ValueError(f"Projet (chantier) #{parent_id} introuvable.")
+        # Le pôle Construction assigne via employe_id : on relie
+        # l'utilisateur à sa fiche Employe (par courriel) si elle existe.
+        emp_ids = await _employe_ids_for_user(db, user)
+        task = ProjectTask(
+            project_id=parent_id,
+            title=title,
+            description=description or None,
+            assignee_id=emp_ids[0] if emp_ids else None,
+            due_date=due_date,
+            done=False,
+        )
+        db.add(task)
+        await db.flush()
+        entity_type, entity_id, st = "project_task", task.id, "open"
+
+    else:
+        raise ValueError(
+            f"Le pôle « {pole} » ne supporte pas la création de tâche par clé d'API."
+        )
+
+    await log_action(
+        db,
+        user=user,
+        action="task.created",
+        entity_type=entity_type,
+        entity_id=entity_id,
+        details={
+            "pole": pole,
+            "parent_id": parent_id,
+            "title": title,
+            "via": via,
+        },
+    )
+
+    return TaskCreated(
+        pole=pole,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        title=title,
+        status=st,
+    )
+
+
 # ── Endpoints ──────────────────────────────────────────────────────
 
 
 @router.get(
     "/me",
     response_model=ActivityResponse,
-    summary="Activité de mon compte (clé d'API, lecture seule)",
+    summary="Activité de mon compte (clé d'API, pôles autorisés)",
 )
 async def my_activity(
-    user: ApiKeyUser,
+    ctx: ApiKeyContext,
     db: DBSession,
     date: Optional[str] = Query(default=None, description="YYYY-MM-DD (défaut: aujourd'hui)"),
     date_from: Optional[str] = Query(default=None, alias="from"),
     date_to: Optional[str] = Query(default=None, alias="to"),
 ) -> ActivityResponse:
+    user = ctx.user
+    poles = readable_poles(ctx.scopes)
     start, end = _resolve_window(date, date_from, date_to)
     single_day = (end - start) <= timedelta(days=1)
 
-    tasks = await _collect_tasks(db, user, start, end)
-    audit = await _collect_audit(db, user, start, end)
+    tasks = await _collect_tasks(db, user, start, end, allowed_poles=poles)
+    audit = await _collect_audit(db, user, start, end, allowed_poles=poles)
     summary = _build_summary(tasks, audit, start, end, single_day)
 
     return ActivityResponse(
@@ -511,20 +746,22 @@ async def my_activity(
 @router.get(
     "/me/summary",
     response_model=SummaryResponse,
-    summary="Résumé texte de mon activité (clé d'API, lecture seule)",
+    summary="Résumé texte de mon activité (clé d'API, pôles autorisés)",
 )
 async def my_activity_summary(
-    user: ApiKeyUser,
+    ctx: ApiKeyContext,
     db: DBSession,
     date: Optional[str] = Query(default=None),
     date_from: Optional[str] = Query(default=None, alias="from"),
     date_to: Optional[str] = Query(default=None, alias="to"),
 ) -> SummaryResponse:
+    user = ctx.user
+    poles = readable_poles(ctx.scopes)
     start, end = _resolve_window(date, date_from, date_to)
     single_day = (end - start) <= timedelta(days=1)
 
-    tasks = await _collect_tasks(db, user, start, end)
-    audit = await _collect_audit(db, user, start, end)
+    tasks = await _collect_tasks(db, user, start, end, allowed_poles=poles)
+    audit = await _collect_audit(db, user, start, end, allowed_poles=poles)
     summary = _build_summary(tasks, audit, start, end, single_day)
 
     return SummaryResponse(
@@ -533,3 +770,56 @@ async def my_activity_summary(
         period_end=end,
         summary=summary,
     )
+
+
+@router.post(
+    "/tasks",
+    response_model=TaskCreated,
+    status_code=status.HTTP_201_CREATED,
+    summary="Créer une tâche dans un pôle (clé d'API, capacité requise)",
+)
+async def create_task(
+    payload: TaskCreate,
+    ctx: ApiKeyContext,
+    db: DBSession,
+) -> TaskCreated:
+    """Crée une tâche dans le pôle ``payload.pole``. Requiert la capacité
+    ``<pole>:tasks:create`` sur la clé d'API (sinon 403). La tâche est
+    assignée au propriétaire de la clé et auditée.
+
+    La capacité requise dépend du pôle (issu du corps de la requête), donc
+    on ne peut pas l'exprimer comme dépendance statique : on vérifie
+    explicitement ``ctx.has_scope`` sur le contexte déjà authentifié."""
+    pole = (payload.pole or "").strip().lower()
+    if pole not in POLE_LABELS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Pôle inconnu : « {payload.pole} ».",
+        )
+
+    required = f"{pole}:tasks:create"
+    if not ctx.has_scope(required):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Capacité « Créer une tâche » non activée pour le pôle "
+                f"« {POLE_LABELS[pole]} » sur cette clé d'API."
+            ),
+        )
+
+    try:
+        return await create_task_for_pole(
+            db,
+            ctx.user,
+            pole=pole,
+            parent_id=payload.parent_id,
+            title=payload.title,
+            description=payload.description,
+            due_date=payload.due_date,
+            via="api_key",
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )

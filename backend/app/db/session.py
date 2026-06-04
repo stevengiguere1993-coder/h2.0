@@ -969,6 +969,11 @@ async def init_db() -> None:
                 "default_manager_tasks_json",
                 "JSONB",
             ),
+            # Permissions par pôle des clés d'API (juin 2026) : liste JSON de
+            # scopes « <pole>:<capability> » (ex. devlog:activity:read,
+            # prospection:tasks:create). NULL sur les clés existantes =>
+            # rétrocompat : lecture de TOUS les pôles (aucune écriture).
+            ("api_keys", "scopes_json", "TEXT"),
         )
         for table, column, col_type in additive_columns:
             await conn.execute(
