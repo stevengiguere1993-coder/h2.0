@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Cloud,
   ExternalLink,
+  KeyRound,
   Loader2,
   RefreshCw,
   ShieldCheck,
@@ -215,6 +216,28 @@ export default function ParametresPage() {
           </Link>
         ) : null}
 
+        {/* Clés API — chaque user gère SES propres clés (lecture seule)
+            pour connecter un assistant Claude ou un outil externe. */}
+        <Link
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          href={"/app/parametres/cles-api" as any}
+          className="mt-3 flex items-center gap-3 rounded-2xl border border-brand-800 bg-brand-900 p-5 transition hover:border-accent-500"
+        >
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500/15 text-accent-500">
+            <KeyRound className="h-5 w-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base font-bold text-white">
+              Clés API
+            </h2>
+            <p className="mt-0.5 text-xs text-white/60">
+              Génère une clé pour laisser tes assistants Claude (ou d&apos;autres
+              outils) lire ton activité Kratos en lecture seule. Affichée une
+              seule fois, révocable à tout moment.
+            </p>
+          </div>
+          <ChevronRight className="h-4 w-4 text-white/40" />
+        </Link>
         {/* Drive (Phase 1 — Foundation OAuth, juin 2026) :
             chaque user connecte son compte Google et accède à ses
             documents Drive depuis Kratos. La page contient également
