@@ -598,6 +598,41 @@ async def _find_project_lead_online_user_ids(
     return [uid for uid in online if uid in set(member_ids)]
 
 
+async def _immeuble_urgence_phone_for_call(db, call: "Call") -> Optional[str]:
+    """Numéro d'urgence de l'immeuble du locataire appelant.
+
+    Résout : Call.entity_id (locataire) → bail actif → logement →
+    immeuble.urgence_phone. Retourne None si l'appelant n'est pas un
+    locataire identifié, ou si son immeuble n'a pas de contact d'urgence
+    (on basculera alors sur le numéro de garde global).
+    """
+    if call.entity_type != "locataire" or not call.entity_id:
+        return None
+    try:
+        from app.models.immobilier import (
+            Bail,
+            BailStatus,
+            Immeuble,
+            Logement,
+        )
+
+        row = (
+            await db.execute(
+                select(Immeuble.urgence_phone)
+                .join(Logement, Logement.immeuble_id == Immeuble.id)
+                .join(Bail, Bail.logement_id == Logement.id)
+                .where(
+                    Bail.locataire_id == call.entity_id,
+                    Bail.status == BailStatus.ACTIF.value,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        return (row or "").strip() or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def _notify_owners_urgence(db, *, call: "Call", reason: str) -> None:
     """Notif cloche urgente envoyée à TOUS les owners — un appel
     URGENCE LOCATAIRE doit toujours déclencher une alerte visible
@@ -1397,12 +1432,22 @@ async def _twilio_secretary_turn_impl(request: Request, db: DBSession) -> Respon
                 )
             )
         ).scalar_one_or_none()
-        targets = _parse_e164_list(
-            (_pn_for_urgence.urgency_forward_e164 if _pn_for_urgence else None)
-            or os.getenv("URGENCY_FORWARD_E164")
-            or os.getenv("TWILIO_FORWARD_TO")
-            or ""
-        )
+        # Priorité au contact d'urgence de l'immeuble du locataire ; à
+        # défaut, repli sur le numéro de garde global (PhoneNumber / env).
+        imm_urgence = await _immeuble_urgence_phone_for_call(db, call)
+        if imm_urgence:
+            targets = _parse_e164_list(imm_urgence)
+        else:
+            targets = _parse_e164_list(
+                (
+                    _pn_for_urgence.urgency_forward_e164
+                    if _pn_for_urgence
+                    else None
+                )
+                or os.getenv("URGENCY_FORWARD_E164")
+                or os.getenv("TWILIO_FORWARD_TO")
+                or ""
+            )
         # Notif cloche urgente — TOUS les owners reçoivent pour qu'au
         # moins une personne soit avertie même si la cible ne décroche pas.
         await _notify_owners_urgence(

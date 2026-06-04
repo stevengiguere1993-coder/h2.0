@@ -151,6 +151,15 @@ class Immeuble(Base, TimestampUpdateMixin):
     )
 
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Contact d'urgence de l'immeuble (concierge/gestionnaire). Quand Léa
+    # détecte une urgence locataire (dégât d'eau, effraction, feu…), elle
+    # transfère ICI d'abord, puis repli sur le numéro de garde global.
+    # Colonne additive (cf. db/session.py).
+    urgence_phone: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
