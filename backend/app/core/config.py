@@ -91,6 +91,13 @@ class Settings(BaseSettings):
     # copie.
     client_email_bcc: str = "sgiguere@immohorizon.com"
 
+    # Adresse « agenda » : reçoit une invitation calendrier (.ics) pour
+    # CHAQUE rendez-vous prospect planifié, même quand le RDV n'est
+    # assigné à personne — pour que le RDV atterrisse toujours dans
+    # l'agenda du propriétaire. Vider (env APPOINTMENT_OWNER_EMAIL="")
+    # désactive cet envoi.
+    appointment_owner_email: str = "sgiguere@immohorizon.com"
+
     # Cron triggers — secret partagé avec GitHub Actions /
     # cron-job.org pour authentifier les hits HTTP qui lancent les
     # jobs (alternative gratuite aux Render Cron Jobs payants).

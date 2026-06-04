@@ -19,9 +19,11 @@ from app.models.agenda_event import AgendaEvent
 from app.models.contact_request import ContactRequest, ContactRequestStatus
 from app.models.employe import Employe
 from app.models.follow_up import FollowUp
+from app.core.config import settings
 from app.services.appointment_mail import (
     send_appointment_assignee_invite,
     send_appointment_confirmation,
+    send_appointment_owner_invite,
 )
 
 
@@ -93,19 +95,17 @@ async def schedule_appointment(
     await db.flush()
     await db.refresh(event)
 
-    # Auto-transition vers "rdv_prevu" : planifier un RDV doit toujours
-    # refleter le prochain rendez-vous a venir. On bascule donc depuis
-    # n'importe quel statut ACTIF (new, contacted, qualified, quoted),
-    # y compris apres l'envoi d'une soumission. On ne touche PAS aux
-    # dossiers CLOS (won/lost/spam) pour ne pas ressusciter un dossier
-    # termine. Re-affecter "rdv_prevu" a un prospect deja en "rdv_prevu"
-    # est un no-op sans effet de bord.
-    _CLOSED_STATUSES = {
-        ContactRequestStatus.WON.value,
-        ContactRequestStatus.LOST.value,
-        ContactRequestStatus.SPAM.value,
-    }
-    if prospect.status not in _CLOSED_STATUSES:
+    # Auto-transition vers "rdv_prevu" : planifier un RDV bascule le
+    # prospect AVANT l'etape soumission (new, contacted, qualified). On
+    # NE touche PAS une fois la soumission envoyee (quoted) ni les
+    # dossiers clos (won/lost/spam) : a partir du moment ou une
+    # soumission est sortie, on garde l'avancement commercial visible,
+    # un RDV de suivi ne doit pas masquer le "Soumission envoyee".
+    if prospect.status in (
+        ContactRequestStatus.NEW.value,
+        ContactRequestStatus.CONTACTED.value,
+        ContactRequestStatus.QUALIFIED.value,
+    ):
         prospect.status = ContactRequestStatus.RDV_PREVU.value
 
     # Un RDV planifié remplace les relances automatiques : on suspend la
@@ -199,6 +199,42 @@ async def schedule_appointment(
                 await send_appointment_assignee_invite(emp, ev, pr)
 
         bg.add_task(_invite_assignee, data.assignee_id, event.id)
+
+    # Invitation calendrier vers l'adresse « agenda » du proprietaire :
+    # a CHAQUE RDV, meme non assigne, pour qu'il atterrisse toujours
+    # dans son agenda. On evite le doublon si le responsable assigne EST
+    # deja cette adresse (il recoit alors l'invite via _invite_assignee).
+    owner_email = (settings.appointment_owner_email or "").strip()
+    if owner_email:
+        async def _invite_owner(event_id: int, assignee_id: Optional[int]) -> None:
+            from app.db.session import AsyncSessionLocal
+
+            async with AsyncSessionLocal() as fresh_db:
+                ev = (
+                    await fresh_db.execute(
+                        select(AgendaEvent).where(AgendaEvent.id == event_id)
+                    )
+                ).scalar_one_or_none()
+                if ev is None:
+                    return
+                if assignee_id is not None:
+                    emp = (
+                        await fresh_db.execute(
+                            select(Employe).where(Employe.id == assignee_id)
+                        )
+                    ).scalar_one_or_none()
+                    if emp and (emp.email or "").strip().lower() == owner_email.lower():
+                        return  # deja invite comme responsable assigne
+                pr = (
+                    await fresh_db.execute(
+                        select(ContactRequest).where(
+                            ContactRequest.id == ev.contact_request_id
+                        )
+                    )
+                ).scalar_one_or_none() if ev.contact_request_id else None
+                await send_appointment_owner_invite(owner_email, ev, pr)
+
+        bg.add_task(_invite_owner, event.id, data.assignee_id)
 
     return AppointmentRead.model_validate(event)
 
