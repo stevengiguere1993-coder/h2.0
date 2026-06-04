@@ -445,6 +445,10 @@ export default function SoumissionDetailPage() {
   const [totals, setTotals] = useState<Totals>({ initial: 0, monthly: 0 });
   const [preview, setPreview] = useState<DevisPreview | null>(null);
   const [client, setClient] = useState<ClientInfo | null>(null);
+  // Nom du prospect (lead) rattaché, quand la soumission n'a pas encore
+  // de client formel. Sert à afficher un message neutre « Destinataire :
+  // … » plutôt qu'une alerte « aucun client lié » trompeuse.
+  const [leadName, setLeadName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // adminView pour legacy, ownerView pour devis_dev (sémantique inverse,
@@ -493,6 +497,27 @@ export default function SoumissionDetailPage() {
         }
       } else {
         setClient(null);
+      }
+      // Pas de client formel mais un prospect rattaché : on récupère son
+      // nom pour l'afficher comme destinataire (le client sera créé à
+      // l'envoi). Best-effort : si l'appel échoue, on retombe sur un
+      // message générique.
+      if (!sData.client_id && sData.lead_id) {
+        try {
+          const lr = await authedFetch(
+            `/api/v1/devlog/leads/${sData.lead_id}`
+          );
+          if (lr.ok) {
+            const lead = (await lr.json()) as { name?: string | null };
+            setLeadName(lead.name ?? null);
+          } else {
+            setLeadName(null);
+          }
+        } catch {
+          setLeadName(null);
+        }
+      } else {
+        setLeadName(null);
       }
       setError(null);
     } catch (e) {
@@ -1222,6 +1247,7 @@ export default function SoumissionDetailPage() {
               client={client}
               soumissionId={id}
               hasLead={s.lead_id != null}
+              leadName={leadName}
               onLinked={() => void loadAll()}
             />
 
@@ -2627,19 +2653,28 @@ function LegacyView({
 }
 
 // Encadré client (fix #6) — affiche nom + email + téléphone +
-// adresse du client lié à la soumission. Si aucun client n'est lié,
-// affiche un message d'erreur subtil + un bouton « Lier un client »
-// qui ouvre un mini-picker. Le picker poste un PATCH sur la
-// soumission pour mettre à jour ``client_id``.
+// adresse du client lié à la soumission.
+//
+// Si aucun client formel n'est lié, le rendu dépend de la présence
+// d'un prospect (lead) rattaché :
+//   * prospect présent  -> encadré neutre « Destinataire : … », pas
+//     d'alerte (le client sera créé à l'envoi). Le bouton « Lier un
+//     client » reste accessible, mais discret.
+//   * aucun destinataire -> vraie alerte (amber) demandant de lier un
+//     prospect/client avant l'envoi.
+// Le picker poste un PATCH sur la soumission pour mettre à jour
+// ``client_id``.
 function ClientBox({
   client,
   soumissionId,
   hasLead,
+  leadName,
   onLinked
 }: {
   client: ClientInfo | null;
   soumissionId: number;
   hasLead: boolean;
+  leadName: string | null;
   onLinked: () => void;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -2745,18 +2780,52 @@ function ClientBox({
     );
   }
 
+  // Deux cas distincts quand aucun client formel n'est encore lié :
+  //
+  //   * Un prospect (lead) EST rattaché : pas d'alerte. La soumission a
+  //     bien un destinataire — le client formel sera créé à la signature.
+  //     On affiche un encadré neutre (couleurs brand) qui rappelle le
+  //     destinataire, avec un bouton discret « Lier un client » au cas où
+  //     Phil veut rattacher un client existant.
+  //
+  //   * Aucun prospect ni client : vraie alerte (amber). Il faut lier un
+  //     client/prospect avant de pouvoir envoyer.
   return (
-    <div className="mb-5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm">
+    <div
+      className={`mb-5 rounded-lg border px-4 py-3 text-sm ${
+        hasLead
+          ? "border-brand-800 bg-brand-900/40"
+          : "border-amber-500/40 bg-amber-500/10"
+      }`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-amber-200">
-          {hasLead
-            ? "Aucun client lié à cette soumission. Le client sera créé automatiquement à l'envoi (à partir du prospect)."
-            : "Aucun client lié à cette soumission. Lier un client pour pouvoir envoyer."}
-        </p>
+        {hasLead ? (
+          <p className="text-white/70">
+            <span className="text-[10px] uppercase tracking-wider text-white/40">
+              Destinataire
+            </span>
+            <br />
+            <span className="font-semibold text-white/90">
+              {leadName ?? "Prospect rattaché"}
+            </span>{" "}
+            <span className="text-xs text-white/50">
+              — le client formel sera créé à l'envoi.
+            </span>
+          </p>
+        ) : (
+          <p className="text-amber-200">
+            Aucun destinataire lié à cette soumission. Lie un prospect ou
+            un client pour pouvoir l'envoyer.
+          </p>
+        )}
         <button
           type="button"
           onClick={() => setPickerOpen((v) => !v)}
-          className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/20"
+          className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1 text-xs font-semibold ${
+            hasLead
+              ? "border-brand-800 bg-white/5 text-white/60 hover:bg-white/10"
+              : "border-amber-500/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20"
+          }`}
         >
           {pickerOpen ? "Annuler" : "Lier un client"}
         </button>
@@ -2768,7 +2837,7 @@ function ClientBox({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Rechercher un client par nom, courriel ou entreprise…"
-            className="w-full rounded border border-amber-500/40 bg-brand-950 px-3 py-2 text-sm text-white focus:outline-none"
+            className="w-full rounded border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-white focus:outline-none"
             autoFocus
           />
           {linkError ? (
@@ -2779,13 +2848,13 @@ function ClientBox({
           ) : filteredCandidates.length === 0 ? (
             <p className="text-xs text-white/40">Aucun client trouvé.</p>
           ) : (
-            <ul className="max-h-56 overflow-y-auto rounded border border-amber-500/20 bg-brand-950/60">
+            <ul className="max-h-56 overflow-y-auto rounded border border-brand-800 bg-brand-950/60">
               {filteredCandidates.map((c) => (
                 <li key={c.id}>
                   <button
                     type="button"
                     onClick={() => void linkClient(c.id)}
-                    className="flex w-full items-start justify-between gap-3 px-3 py-2 text-left hover:bg-amber-500/10"
+                    className="flex w-full items-start justify-between gap-3 px-3 py-2 text-left hover:bg-white/5"
                   >
                     <span className="text-sm text-white">{c.name}</span>
                     <span className="text-xs text-white/50">

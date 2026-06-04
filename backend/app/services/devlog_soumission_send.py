@@ -1,11 +1,12 @@
-﻿"""Envoi par email d'une soumission devis_dev au client.
+"""Envoi par email d'une soumission devis_dev au client.
 
 Pattern calqué sur ``app.services.offer_send`` :
 
 - Génère un ``signature_token`` opaque si absent
-- Rend le PDF (vue client uniquement)
 - Envoie via Graph un email court au client avec le lien public
-  ``/devlog/sign-soumission/{token}`` et le PDF en pièce jointe
+  ``/devlog/sign-soumission/{token}``. Pas de PDF en pièce jointe :
+  le client doit cliquer sur le lien pour consulter / signer (le PDF
+  reste téléchargeable depuis la page publique)
 - Best-effort : si Graph échoue, on log un warning, on ne fait pas
   échouer l'opération côté caller (à l'inverse de l'offre d'achat,
   où le mail est plus critique)
@@ -23,14 +24,11 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.integrations.email_graph import EmailAttachment, get_mailer
+from app.integrations.email_graph import get_mailer
 from app.models.devlog_client import DevlogClient
 from app.models.devlog_lead import DevlogLead
 from app.models.devlog_soumission import DevlogSoumission
-from app.services.devlog_soumission_pdf import (
-    BUYER_ENTITY_NAME,
-    generate_devis_pdf,
-)
+from app.services.devlog_soumission_pdf import BUYER_ENTITY_NAME
 
 
 log = logging.getLogger(__name__)
@@ -115,9 +113,6 @@ def _client_body(
   <p style="margin:8px 0 16px 0;font-size:12px;color:#555">
     Ou copiez ce lien : {sign_url}
   </p>
-  <p style="margin:0 0 16px 0">
-    Une copie PDF est également jointe à ce courriel.
-  </p>
   <p style="margin:24px 0 4px 0;color:#555;font-size:12px">
     {BUYER_ENTITY_NAME} &middot; Pôle Développement logiciel &middot;
     immohorizon.com
@@ -135,7 +130,8 @@ async def send_devis_email(
     - Vérifie que le statut autorise l'envoi (``brouillon`` ou
       ``envoyee`` — renvoi possible si le client a perdu l'email)
     - Génère / réutilise le ``signature_token``
-    - Génère le PDF
+    - Envoie via Graph un courriel court avec le lien public
+      (sans PDF en pièce jointe)
     - Envoie via Graph (best-effort)
     - Passe ``status=envoyee`` et ``sent_at=now()``
     """
@@ -171,13 +167,9 @@ async def send_devis_email(
         soumission.signature_token = secrets.token_urlsafe(32)
         await db.flush()
 
-    pdf_bytes = await generate_devis_pdf(db, soumission_id)
-    attachment = EmailAttachment(
-        name=f"soumission-devlog-{soumission.id}.pdf",
-        content_bytes=pdf_bytes,
-        content_type="application/pdf",
-    )
-
+    # Pas de PDF en pièce jointe : le client doit cliquer sur le lien
+    # public pour consulter / télécharger / signer la soumission. Le PDF
+    # reste accessible via la page publique (bouton télécharger).
     sign_url = (
         f"{_public_base()}/devlog/sign-soumission/{soumission.signature_token}"
     )
@@ -192,7 +184,6 @@ async def send_devis_email(
                 subject=subject,
                 html_body=body,
                 reply_to=mailer.sender,
-                attachments=[attachment],
             )
         except Exception as exc:  # best-effort
             log.warning(
