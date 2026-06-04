@@ -191,8 +191,19 @@ def create_application() -> FastAPI:
     try:
         from app.api.v1.endpoints.mcp_server import router as mcp_router
 
+        # Montage direct sur l'app → URL backend : /mcp/{api_key}
+        # (atteignable sur https://h2-0.onrender.com/mcp/{key}).
         app.include_router(mcp_router)
-        logger.info("MCP server mounted at /mcp/{api_key} (read-only).")
+        # Montage AUSSI sous /api/v1 → URL sur le domaine propre :
+        # https://immohorizon.com/api/v1/mcp/{key}. Le rewrite Next.js du
+        # frontend ne proxifie QUE /api/*, donc ce second montage rend le
+        # connecteur accessible via le domaine de production (plus robuste
+        # côté réseau que *.onrender.com, parfois filtré par des ISP/iOS).
+        app.include_router(mcp_router, prefix="/api/v1")
+        logger.info(
+            "MCP server mounted at /mcp/{api_key} and "
+            "/api/v1/mcp/{api_key} (read-only)."
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("MCP server mount skipped (app starts normally): %s", exc)
 
