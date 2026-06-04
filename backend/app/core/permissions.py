@@ -16,7 +16,29 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.project_member import ProjectMember
+from app.models.user_immeuble import UserImmeuble
 from app.models.user import User
+
+
+async def visible_immeuble_ids(
+    db: AsyncSession, user: User
+) -> Optional[Set[int]]:
+    """Return the set of immeuble IDs the user can see.
+
+    Returns ``None`` for managers+ (meaning "no restriction, see all").
+    Returns a possibly-empty set for employees (only the immeubles they
+    were assigned to via ``user_immeubles``).
+    """
+    if user.has_min_role("manager"):
+        return None
+    rows = (
+        await db.execute(
+            select(UserImmeuble.immeuble_id).where(
+                UserImmeuble.user_id == user.id
+            )
+        )
+    ).all()
+    return {int(r[0]) for r in rows}
 
 
 async def visible_project_ids(
