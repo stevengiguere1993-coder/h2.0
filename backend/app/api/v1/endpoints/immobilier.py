@@ -26,6 +26,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, select
 
+from app.core.permissions import visible_immeuble_ids
 from app.core.security import decode_token
 from app.repositories.user import UserRepository
 
@@ -103,6 +104,17 @@ def _require_volet(user: CurrentUser) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Volet « Gestion immobilière » non autorisé pour cet utilisateur.",
+        )
+
+
+async def _require_immeuble_visible(db, user, immeuble_id: int) -> None:
+    """Refuse l'accès à un immeuble si l'utilisateur (employé) n'y est pas
+    affecté. Les rôles manager+ voient tout (visible == None)."""
+    visible = await visible_immeuble_ids(db, user)
+    if visible is not None and immeuble_id not in visible:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Accès à cet immeuble non autorisé.",
         )
 
 
@@ -257,7 +269,11 @@ async def list_immeubles(
     ceux dont l'entreprise est propriétaire (au moins une ImmeubleOwnership).
     """
     _require_volet(user)
+    visible = await visible_immeuble_ids(db, user)
     q = select(Immeuble).order_by(Immeuble.name.asc())
+    if visible is not None:
+        # Employé : limité aux immeubles affectés (set possiblement vide).
+        q = q.where(Immeuble.id.in_(visible))
     if only_active:
         q = q.where(Immeuble.is_active.is_(True))
     if entreprise_id is not None:
@@ -488,6 +504,7 @@ async def get_immeuble(
     immeuble_id: int, db: DBSession, user: CurrentUser
 ) -> ImmeubleRead:
     _require_volet(user)
+    await _require_immeuble_visible(db, user, immeuble_id)
     obj = await _get_immeuble_or_404(db, immeuble_id)
     return _immeuble_to_read(obj)
 

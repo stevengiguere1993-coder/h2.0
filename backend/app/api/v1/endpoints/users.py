@@ -24,8 +24,10 @@ from sqlalchemy import delete, func, insert, select
 from app.api.deps import CurrentUser, DBSession, RequireAdminRole, RequireOwner
 from app.core.security import get_password_hash
 from app.models.employe import Employe
+from app.models.immobilier import Immeuble
 from app.models.project import Project
 from app.models.project_member import ProjectMember
+from app.models.user_immeuble import UserImmeuble
 from app.models.user import (
     DEFAULT_VOLETS,
     User,
@@ -170,6 +172,18 @@ class ProjectMini(BaseModel):
     name: str
     address: Optional[str] = None
     status: Optional[str] = None
+
+
+class ImmeubleAssignments(BaseModel):
+    immeuble_ids: List[int]
+
+
+class ImmeubleMini(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    address: Optional[str] = None
+    city: Optional[str] = None
 
 
 @router.get("", response_model=List[UserRead])
@@ -578,3 +592,69 @@ async def set_user_projects(
         )
     await db.flush()
     return list(set(data.project_ids))
+
+
+@router.get("/{user_id}/immeubles", response_model=List[ImmeubleMini])
+async def get_user_immeubles(
+    user_id: int,
+    db: DBSession,
+    _: RequireOwner,
+) -> List[ImmeubleMini]:
+    """Immeubles auxquels cet utilisateur est affecté (table
+    user_immeubles). Sert à pré-cocher les cases dans la gestion des
+    utilisateurs."""
+    stmt = (
+        select(Immeuble)
+        .join(UserImmeuble, UserImmeuble.immeuble_id == Immeuble.id)
+        .where(UserImmeuble.user_id == user_id)
+        .order_by(Immeuble.name.asc())
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    return [ImmeubleMini.model_validate(r) for r in rows]
+
+
+@router.put("/{user_id}/immeubles", response_model=List[int])
+async def set_user_immeubles(
+    user_id: int,
+    data: ImmeubleAssignments,
+    db: DBSession,
+    _: RequireOwner,
+) -> List[int]:
+    """Remplace les affectations d'immeubles de l'utilisateur par
+    l'ensemble fourni. Retourne les IDs persistés."""
+    u = (
+        await db.execute(select(User).where(User.id == user_id))
+    ).scalar_one_or_none()
+    if u is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+
+    # Valide que tous les immeubles existent (pas de faute de frappe
+    # silencieuse).
+    if data.immeuble_ids:
+        existing = (
+            await db.execute(
+                select(Immeuble.id).where(Immeuble.id.in_(data.immeuble_ids))
+            )
+        ).all()
+        existing_ids = {int(r[0]) for r in existing}
+        unknown = set(data.immeuble_ids) - existing_ids
+        if unknown:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Immeuble(s) inconnu(s): {sorted(unknown)}",
+            )
+
+    # Purge + réinsertion — plus simple qu'un diff pour quelques lignes.
+    await db.execute(
+        delete(UserImmeuble).where(UserImmeuble.user_id == user_id)
+    )
+    if data.immeuble_ids:
+        await db.execute(
+            insert(UserImmeuble),
+            [
+                {"user_id": user_id, "immeuble_id": iid}
+                for iid in set(data.immeuble_ids)
+            ],
+        )
+    await db.flush()
+    return list(set(data.immeuble_ids))
