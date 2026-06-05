@@ -1,21 +1,24 @@
 """Génère le PDF complet d'une `LeadAnalysis` — export d'aide à la
 décision pour les associés et collaborateurs prospection.
 
-Layout A4 portrait, polices Helvetica/Helvetica-Bold, accent bleu
-Horizon (#1d4ed8) cohérent avec `nda_pdf.py`. Pagination automatique
-via `SimpleDocTemplate` + pied de page sur chaque page (`onLaterPages`
-+ `onFirstPage`).
+Refonte visuelle 2026 : layout A4 portrait, palette doré/ambre (accent)
++ vert (positif / scénario gagnant) + gris neutres sur fond blanc.
+Pagination automatique via `SimpleDocTemplate` + `story=[...]`, en-tête
+de page (adresse + date) et pied de page sur chaque page (`onFirstPage`
++ `onLaterPages`).
 
 Sections (dans cet ordre) :
     1. En-tête (logo + titre + identité de l'immeuble)
-    2. Informations financières — état actuel
-    3. Typologie des logements
-    4. Inputs manuels d'analyse
-    5. Composition MDF prêteur B
-    6. Scénarios de financement (4 encarts)
-    7. Meilleur scénario refi (avec RCI/PVI calculés)
-    8. Validation (warnings post-extraction)
-    9. Sources & attachments
+    2. Bande de résultats clés (tuiles)
+    3. Informations financières — état actuel
+    4. Typologie des logements
+    5. Inputs manuels d'analyse
+    6. Composition MDF prêteur B
+    7. Scénarios de financement (tableau comparatif + gagnant mis en valeur)
+    8. Meilleur scénario refi (avec RCI/PVI calculés)
+    9. Rendement de l'investisseur (TRI)            ← NOUVEAU
+   10. Validation (warnings post-extraction)
+   11. Sources & attachments
 
 ReportLab pur Python — pas de dépendance système, compatible Render
 Free. Aucune persistance : on régénère à la volée à chaque export.
@@ -59,6 +62,31 @@ _MONTHS_FR_CA = (
 
 # Ordre canonique des typologies dans le tableau.
 _TYPO_ORDER = ("1.5", "2.5", "3.5", "4.5", "5.5", "6.5", "7.5", "8.5")
+
+# ── Palette 2026 ────────────────────────────────────────────────────
+# Doré/ambre = accent (titres de section, en-tête) ; vert = positif /
+# scénario gagnant ; gris neutres ; fond blanc.
+_C_DARK = "#1a1a1a"          # texte principal
+_C_MUTED = "#6b7280"         # texte secondaire
+_C_LINE = "#e5e7eb"          # filets de tableaux
+_C_AMBER = "#b45309"         # accent doré/ambre foncé (titres)
+_C_AMBER_SOFT = "#fef3c7"    # fond ambre pâle (en-têtes de tableaux)
+_C_AMBER_LINE = "#f59e0b"    # bordure ambre vive
+_C_GREEN = "#047857"         # vert positif
+_C_GREEN_SOFT = "#d1fae5"    # fond vert pâle (gagnant / OK)
+_C_GREEN_LINE = "#10b981"    # bordure verte
+_C_GREY_SOFT = "#f3f4f6"     # fond gris pâle (tuiles neutres)
+_C_RED = "#b91c1c"           # négatif (cashflow < 0)
+
+# Défauts des intrants manuels du TRI quand la fiche n'a rien de
+# persisté — dupliqués de `lead_analyses._TRI_DEFAULTS` pour garder ce
+# service autonome (cf. RÈGLE « réutilise/duplique la dérivation »).
+_TRI_DEFAULTS = {
+    "capital": None,
+    "pct": 0.5,
+    "cr_loyers": 0.03,
+    "cr_dep": 0.03,
+}
 
 
 def _lazy_reportlab() -> Dict[str, Any]:
@@ -130,6 +158,17 @@ def _pct(n: Optional[float | int], decimals: int = 2) -> str:
         return "—"
 
 
+def _pct_fraction(n: Optional[float | int], decimals: int = 1) -> str:
+    """Formate une FRACTION (0.157 → « 15.7 % »). Pour les TRI et les
+    croissances stockées en fraction."""
+    if n is None:
+        return "—"
+    try:
+        return f"{float(n) * 100:.{decimals}f} %"
+    except (TypeError, ValueError):
+        return "—"
+
+
 def _int(n: Optional[float | int]) -> str:
     if n is None:
         return "—"
@@ -158,14 +197,13 @@ def _styles(rl: Dict[str, Any]):
     PS = rl["ParagraphStyle"]
     base = rl["getSampleStyleSheet"]()
     colors = rl["colors"]
-    dark = colors.HexColor("#111111")
-    muted = colors.HexColor("#6b6b6b")
-    # Bleu Horizon — cohérent avec `nda_pdf.py`.
-    accent = colors.HexColor("#1d4ed8")
+    dark = colors.HexColor(_C_DARK)
+    muted = colors.HexColor(_C_MUTED)
+    amber = colors.HexColor(_C_AMBER)
     return {
         "title": PS(
             "title", parent=base["Normal"],
-            fontName="Helvetica-Bold", fontSize=18, leading=22,
+            fontName="Helvetica-Bold", fontSize=19, leading=23,
             textColor=dark, alignment=1,
         ),
         "subtitle": PS(
@@ -173,17 +211,18 @@ def _styles(rl: Dict[str, Any]):
             fontName="Helvetica-Oblique", fontSize=10, leading=13,
             textColor=muted, alignment=1,
         ),
+        # Titre de section : barre ambre pleine, texte blanc.
         "section": PS(
             "section", parent=base["Normal"],
-            fontName="Helvetica-Bold", fontSize=11, leading=14,
-            textColor=colors.white, backColor=accent,
-            leftIndent=4, rightIndent=4,
-            spaceBefore=10, spaceAfter=4, borderPadding=4,
+            fontName="Helvetica-Bold", fontSize=11.5, leading=15,
+            textColor=colors.white, backColor=amber,
+            leftIndent=5, rightIndent=5,
+            spaceBefore=12, spaceAfter=6, borderPadding=(5, 5, 5, 5),
         ),
         "subsection": PS(
             "subsection", parent=base["Normal"],
             fontName="Helvetica-Bold", fontSize=10, leading=13,
-            textColor=dark, spaceBefore=6, spaceAfter=2,
+            textColor=amber, spaceBefore=7, spaceAfter=3,
         ),
         "body": PS(
             "body", parent=base["Normal"],
@@ -195,25 +234,81 @@ def _styles(rl: Dict[str, Any]):
             fontName="Helvetica", fontSize=9, leading=12,
             textColor=dark,
         ),
+        # Variante alignée à droite pour les colonnes de chiffres.
+        "num": PS(
+            "num", parent=base["Normal"],
+            fontName="Helvetica", fontSize=9, leading=12,
+            textColor=dark, alignment=2,
+        ),
+        "num_b": PS(
+            "num_b", parent=base["Normal"],
+            fontName="Helvetica-Bold", fontSize=9, leading=12,
+            textColor=dark, alignment=2,
+        ),
         "small_muted": PS(
             "small_muted", parent=base["Normal"],
             fontName="Helvetica", fontSize=8, leading=11,
             textColor=muted,
         ),
+        # En-tête de colonne de tableau (centré, gras, ambre foncé).
+        "th": PS(
+            "th", parent=base["Normal"],
+            fontName="Helvetica-Bold", fontSize=8.5, leading=11,
+            textColor=colors.HexColor(_C_AMBER), alignment=1,
+        ),
+        "th_left": PS(
+            "th_left", parent=base["Normal"],
+            fontName="Helvetica-Bold", fontSize=8.5, leading=11,
+            textColor=colors.HexColor(_C_AMBER), alignment=0,
+        ),
         "info_ok": PS(
             "info_ok", parent=base["Normal"],
             fontName="Helvetica-Bold", fontSize=10, leading=13,
-            textColor=colors.HexColor("#065f46"),
-            backColor=colors.HexColor("#d1fae5"),
-            borderColor=colors.HexColor("#10b981"),
+            textColor=colors.HexColor(_C_GREEN),
+            backColor=colors.HexColor(_C_GREEN_SOFT),
+            borderColor=colors.HexColor(_C_GREEN_LINE),
             borderWidth=0.5, borderPadding=6,
             spaceBefore=4, spaceAfter=4,
+        ),
+        # Styles pour les tuiles de résultats clés.
+        "tile_label": PS(
+            "tile_label", parent=base["Normal"],
+            fontName="Helvetica-Bold", fontSize=7.5, leading=9,
+            textColor=muted, alignment=1,
+        ),
+        "tile_value": PS(
+            "tile_value", parent=base["Normal"],
+            fontName="Helvetica-Bold", fontSize=13, leading=15,
+            textColor=dark, alignment=1,
+        ),
+        "tile_value_green": PS(
+            "tile_value_green", parent=base["Normal"],
+            fontName="Helvetica-Bold", fontSize=13, leading=15,
+            textColor=colors.HexColor(_C_GREEN), alignment=1,
+        ),
+        # Style pour la vedette TRI (gros chiffre vert/rouge centré).
+        "tri_big": PS(
+            "tri_big", parent=base["Normal"],
+            fontName="Helvetica-Bold", fontSize=20, leading=22,
+            textColor=colors.HexColor(_C_GREEN), alignment=1,
+        ),
+        "tri_big_red": PS(
+            "tri_big_red", parent=base["Normal"],
+            fontName="Helvetica-Bold", fontSize=20, leading=22,
+            textColor=colors.HexColor(_C_RED), alignment=1,
+        ),
+        "tri_caption": PS(
+            "tri_caption", parent=base["Normal"],
+            fontName="Helvetica-Bold", fontSize=8, leading=10,
+            textColor=muted, alignment=1,
         ),
     }
 
 
 def _table_two_col(rl, rows, *, s):
-    """Tableau 2 colonnes (libellé / valeur) avec style cohérent."""
+    """Tableau 2 colonnes (libellé / valeur) avec style cohérent. La
+    valeur est alignée à droite. Accepte du markup reportlab (<b>…</b>)
+    dans les valeurs."""
     Paragraph = rl["Paragraph"]
     Table = rl["Table"]
     TableStyle = rl["TableStyle"]
@@ -221,21 +316,23 @@ def _table_two_col(rl, rows, *, s):
     colors = rl["colors"]
 
     data = [
-        [Paragraph(str(k), s["small"]), Paragraph(str(v), s["small"])]
+        [Paragraph(str(k), s["small"]), Paragraph(str(v), s["num"])]
         for k, v in rows
     ]
     if not data:
         return None
-    t = Table(data, colWidths=[70 * mm, "*"])
+    t = Table(data, colWidths=[78 * mm, "*"])
     t.setStyle(
         TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("LINEBELOW", (0, 0), (-1, -2), 0.25,
-             colors.HexColor("#e2e2e2")),
-            ("LEFTPADDING", (0, 0), (-1, -1), 4),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-            ("TOPPADDING", (0, 0), (-1, -1), 3),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+             colors.HexColor(_C_LINE)),
+            ("ROWBACKGROUNDS", (0, 0), (-1, -1),
+             [colors.white, colors.HexColor("#fafafa")]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ])
     )
     return t
@@ -275,23 +372,34 @@ def _loyer_mois_moyen(
         return "—"
 
 
-def _draw_footer(canvas, doc, *, address_label: str):
-    """Pied de page : adresse + numéro de page + date."""
+def _draw_page_furniture(canvas, doc, *, address_label: str, date_label: str):
+    """En-tête (filet ambre + adresse + date) et pied de page (adresse +
+    numéro de page) sur chaque page."""
     canvas.saveState()
-    canvas.setFont("Helvetica", 7)
-    canvas.setFillColorRGB(0.42, 0.42, 0.42)
     page_w, page_h = doc.pagesize
-    bottom_y = 10  # mm équivalent ≈ 28 pt
+    pt = 2.83465  # mm → pt
+    left = 20 * pt
+    right = page_w - 20 * pt
+
+    # ── En-tête : filet ambre fin + libellés discrets ──────────────
+    top_y = page_h - 12 * pt
+    canvas.setStrokeColorRGB(0.706, 0.325, 0.035)  # ambre #b45309
+    canvas.setLineWidth(1.2)
+    canvas.line(left, top_y, right, top_y)
+    canvas.setFont("Helvetica", 7)
+    canvas.setFillColorRGB(0.42, 0.42, 0.45)
+    canvas.drawString(left, top_y + 3, address_label[:70])
+    canvas.drawRightString(right, top_y + 3, date_label)
+
+    # ── Pied de page ────────────────────────────────────────────────
+    bottom_y = 10
+    canvas.setFont("Helvetica", 7)
+    canvas.setFillColorRGB(0.42, 0.42, 0.45)
     canvas.drawString(
-        20 * 2.83465,  # 20 mm
-        bottom_y,
+        left, bottom_y,
         f"Fiche d'analyse — {address_label[:70]}",
     )
-    canvas.drawRightString(
-        page_w - 20 * 2.83465,
-        bottom_y,
-        f"Page {doc.page}",
-    )
+    canvas.drawRightString(right, bottom_y, f"Page {doc.page}")
     canvas.restoreState()
 
 
@@ -317,6 +425,103 @@ def _depenses_rows(
         inocc_pct = 3.0
     rows.append(("Taux d'inoccupation", _pct(inocc_pct, decimals=1)))
     return rows
+
+
+def _key_results_band(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
+    """Bande de tuiles « résultats clés » en haut de la fiche : prix,
+    best refi, MDF prêteur B, cashflow (achat), équité dégagée. Chaque
+    tuile = un encadré arrondi avec libellé + valeur. None-safe."""
+    Paragraph = rl["Paragraph"]
+    Table = rl["Table"]
+    TableStyle = rl["TableStyle"]
+    mm = rl["mm"]
+    colors = rl["colors"]
+
+    scenarios = (results or {}).get("scenarios") or {}
+    achat = scenarios.get("achat") or {}
+
+    prix = rec.asking_price
+    best_amount = None
+    if results:
+        best_amount = (results.get("best_refi") or {}).get("amount")
+    if best_amount is None:
+        best_amount = rec.best_refi_amount
+    mdf_b = None
+    if results:
+        mdf_b = results.get("mdf_preteur_b")
+    if mdf_b is None:
+        mdf_b = rec.mdf_preteur_b
+    cashflow = achat.get("cashflow_annuel")
+    equite = None
+    # Équité dégagée = équité du best refi (gagnant).
+    best = _best_refi_scenario(results) if results else None
+    if best:
+        equite = best.get("equite_a_la_fin")
+
+    # (label, valeur, vert?) — vert pour les métriques « positives ».
+    tiles = [
+        ("PRIX DEMANDÉ", _money(prix), False),
+        ("BEST REFI (ÉQUITÉ)", _money(best_amount), True),
+        ("MDF PRÊTEUR B", _money(mdf_b), False),
+        ("CASHFLOW / AN (ACHAT)", _money(cashflow),
+         (cashflow is not None and float(cashflow or 0) >= 0)),
+        ("ÉQUITÉ AU REFI", _money(equite), True),
+    ]
+
+    cells = []
+    for label, value, is_green in tiles:
+        val_style = s["tile_value_green"] if is_green else s["tile_value"]
+        inner = Table(
+            [[Paragraph(label, s["tile_label"])],
+             [Paragraph(value, val_style)]],
+            colWidths=["*"],
+        )
+        green_bg = is_green and value != "—"
+        inner.setStyle(
+            TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("TOPPADDING", (0, 0), (0, 0), 7),
+                ("BOTTOMPADDING", (0, 0), (0, 0), 1),
+                ("TOPPADDING", (0, 1), (0, 1), 1),
+                ("BOTTOMPADDING", (0, 1), (0, 1), 7),
+                ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+                ("BACKGROUND", (0, 0), (-1, -1),
+                 colors.HexColor(_C_GREEN_SOFT if green_bg
+                                 else _C_GREY_SOFT)),
+                ("BOX", (0, 0), (-1, -1), 0.75,
+                 colors.HexColor(_C_GREEN_LINE if green_bg
+                                 else _C_LINE)),
+                ("ROUNDEDCORNERS", [4, 4, 4, 4]),
+            ])
+        )
+        cells.append(inner)
+
+    n = len(cells)
+    gap = 2.5 * mm
+    total_w = 170 * mm
+    col_w = (total_w - gap * (n - 1)) / n
+    # Insère des colonnes-gouttières entre les tuiles.
+    row = []
+    widths = []
+    for i, c in enumerate(cells):
+        row.append(c)
+        widths.append(col_w)
+        if i < n - 1:
+            row.append("")
+            widths.append(gap)
+    band = Table([row], colWidths=widths)
+    band.setStyle(
+        TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ])
+    )
+    return band
 
 
 def _typology_section(rl, typology: Dict[str, int], *, s) -> Any:
@@ -346,10 +551,13 @@ def _typology_section(rl, typology: Dict[str, int], *, s) -> Any:
         items.append((typo, qty))
         total += qty
 
-    header_row = [Paragraph(f"<b>{k}</b>", s["small"]) for k, _ in items]
-    value_row = [Paragraph(str(v), s["small"]) for _, v in items]
-    header_row.append(Paragraph("<b>Total</b>", s["small"]))
-    value_row.append(Paragraph(f"<b>{total}</b>", s["small"]))
+    # Valeurs centrées sous les en-têtes (style dédié centré).
+    val_style = rl["ParagraphStyle"](
+        "typo_val", parent=s["small"], alignment=1)
+    header_row = [Paragraph(f"{k}", s["th"]) for k, _ in items]
+    value_row = [Paragraph(str(v), val_style) for _, v in items]
+    header_row.append(Paragraph("Total", s["th"]))
+    value_row.append(Paragraph(f"<b>{total}</b>", val_style))
 
     n = len(header_row)
     col_w = (170 / n) * mm
@@ -359,23 +567,139 @@ def _typology_section(rl, typology: Dict[str, int], *, s) -> Any:
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("ALIGN", (0, 0), (-1, -1), "CENTER"),
             ("BACKGROUND", (0, 0), (-1, 0),
-             colors.HexColor("#eff6ff")),
-            ("LINEBELOW", (0, 0), (-1, 0), 0.5,
-             colors.HexColor("#93c5fd")),
+             colors.HexColor(_C_AMBER_SOFT)),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.75,
+             colors.HexColor(_C_AMBER_LINE)),
+            ("BACKGROUND", (-1, 0), (-1, -1),
+             colors.HexColor(_C_GREY_SOFT)),
             ("BOX", (0, 0), (-1, -1), 0.25,
-             colors.HexColor("#e2e2e2")),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+             colors.HexColor(_C_LINE)),
+            ("INNERGRID", (0, 0), (-1, -1), 0.25,
+             colors.HexColor(_C_LINE)),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
         ])
     )
+    return t
+
+
+# Ordre + libellés courts des scénarios pour le tableau comparatif.
+_SCENARIO_KEYS = ("achat", "refi_schl", "refi_aph_50", "refi_aph_100")
+_SCENARIO_SHORT = {
+    "achat": "Achat",
+    "refi_schl": "Refi SCHL",
+    "refi_aph_50": "Refi APH 50",
+    "refi_aph_100": "Refi APH 100",
+}
+
+
+def _scenarios_table(
+    rl, results: dict, *, s, winner_key: Optional[str]
+):
+    """Tableau comparatif des 4 scénarios en colonnes (un scénario par
+    colonne), métriques en lignes. La colonne du scénario gagnant (best
+    refi) est surlignée vert avec un badge « ★ Recommandé ». None-safe."""
+    Paragraph = rl["Paragraph"]
+    Table = rl["Table"]
+    TableStyle = rl["TableStyle"]
+    mm = rl["mm"]
+    colors = rl["colors"]
+
+    scenarios = results.get("scenarios") or {}
+    present = [k for k in _SCENARIO_KEYS if scenarios.get(k)]
+    if not present:
+        return Paragraph(
+            "Aucun scénario calculé — lance l'analyse financière "
+            "depuis la fiche.",
+            s["small_muted"],
+        )
+
+    def g(key, field):
+        return (scenarios.get(key) or {}).get(field)
+
+    def fmt_ltv(v):
+        return f"{float(v) * 100:.0f} %" if v is not None else "—"
+
+    def fmt_amort(v):
+        return f"{int(v)} ans" if v is not None else "—"
+
+    def fmt_rcd(v):
+        return f"{float(v):.2f}" if v is not None else "—"
+
+    # Lignes : (libellé, fonction de format).
+    metric_rows = [
+        ("LTV", lambda k: fmt_ltv(g(k, "ltv"))),
+        ("Amortissement", lambda k: fmt_amort(g(k, "amort_annees"))),
+        ("RCD", lambda k: fmt_rcd(g(k, "rcd"))),
+        ("Revenus nets", lambda k: _money(g(k, "revenus_net"))),
+        ("Prêt hypothécaire max", lambda k: _money(g(k, "financement"))),
+        ("Valeur retenue", lambda k: _money(g(k, "valeur_retenue"))),
+        ("MDF requise", lambda k: _money(g(k, "mdf_necessaire"))),
+        ("Équité au refi", lambda k: _money(g(k, "equite_a_la_fin"))),
+        ("Mensualité", lambda k: _money_decimal(
+            g(k, "paiement_mensuel_actuel"))),
+        ("Cashflow / an", lambda k: _money(g(k, "cashflow_annuel"))),
+    ]
+
+    # En-tête : coin vide + un libellé par scénario (badge si gagnant).
+    header = [Paragraph("", s["th_left"])]
+    for k in present:
+        label = _SCENARIO_SHORT.get(k, k)
+        if k == winner_key:
+            header.append(Paragraph(
+                f"{label}<br/><font size=6 color='{_C_GREEN}'>"
+                f"★ RECOMMANDÉ</font>", s["th"]))
+        else:
+            header.append(Paragraph(label, s["th"]))
+
+    data = [header]
+    for label, fn in metric_rows:
+        row = [Paragraph(label, s["small"])]
+        for k in present:
+            row.append(Paragraph(fn(k), s["num"]))
+        data.append(row)
+
+    n_cols = len(present) + 1
+    first_w = 42 * mm
+    other_w = (170 * mm - first_w) / len(present)
+    col_widths = [first_w] + [other_w] * len(present)
+    t = Table(data, colWidths=col_widths, repeatRows=1)
+
+    style = [
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(_C_AMBER_SOFT)),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.75,
+         colors.HexColor(_C_AMBER_LINE)),
+        ("BACKGROUND", (0, 1), (0, -1), colors.HexColor(_C_GREY_SOFT)),
+        ("ROWBACKGROUNDS", (1, 1), (-1, -1),
+         [colors.white, colors.HexColor("#fafafa")]),
+        ("BOX", (0, 0), (-1, -1), 0.25, colors.HexColor(_C_LINE)),
+        ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor(_C_LINE)),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]
+    # Surlignage de la colonne gagnante.
+    if winner_key in present:
+        col = present.index(winner_key) + 1
+        style.append(("BACKGROUND", (col, 1), (col, -1),
+                      colors.HexColor(_C_GREEN_SOFT)))
+        style.append(("BACKGROUND", (col, 0), (col, 0),
+                      colors.HexColor(_C_GREEN_SOFT)))
+        style.append(("BOX", (col, 0), (col, -1), 1.2,
+                      colors.HexColor(_C_GREEN_LINE)))
+    t.setStyle(TableStyle(style))
     return t
 
 
 def _scenario_card(
     rl, scen: Optional[dict], *, s, frais_demarrage_total: float
 ):
-    """Encart d'un scénario : LTV, amort, RCD, revenus nets, financement,
-    MDF/équité, mensualité, surplus."""
+    """Encart vertical détaillé d'un scénario (conservé pour compat).
+
+    Le PDF utilise désormais `_scenarios_table` pour la vue comparative,
+    mais ce helper reste disponible et None-safe."""
     Paragraph = rl["Paragraph"]
     KeepTogether = rl["KeepTogether"]
     Spacer = rl["Spacer"]
@@ -449,6 +773,47 @@ def _format_warning_severity(sev: Optional[str]) -> str:
     }.get((sev or "").lower(), "Info")
 
 
+def _best_refi_scenario(results: Optional[dict]) -> Optional[dict]:
+    """Retrouve le scénario refi gagnant dans `analysis_results_json`.
+
+    Dupliqué de `lead_analyses._best_refi_scenario` pour garder ce
+    service autonome (cloud-only). On matche d'abord par
+    `best_refi.program` (= `label` du scénario gagnant) ; à défaut, on
+    prend le scénario refi avec la plus grande `equite_a_la_fin`."""
+    scenarios = (results or {}).get("scenarios") or {}
+    refis = [
+        s
+        for k, s in scenarios.items()
+        if k.startswith("refi_") and isinstance(s, dict)
+    ]
+    if not refis:
+        return None
+    best = ((results or {}).get("best_refi") or {}).get("program")
+    if best:
+        for s in refis:
+            if s.get("label") == best:
+                return s
+    return max(refis, key=lambda s: s.get("equite_a_la_fin") or 0.0)
+
+
+def _best_refi_key(results: Optional[dict]) -> Optional[str]:
+    """Clé (`refi_schl` / `refi_aph_50` / `refi_aph_100`) du scénario
+    gagnant, pour surligner la bonne colonne du tableau comparatif."""
+    win = _best_refi_scenario(results)
+    if win is None:
+        return None
+    scenarios = (results or {}).get("scenarios") or {}
+    for k, sc in scenarios.items():
+        if sc is win:
+            return k
+    # Fallback : match par label.
+    label = win.get("label")
+    for k, sc in scenarios.items():
+        if isinstance(sc, dict) and sc.get("label") == label:
+            return k
+    return None
+
+
 def _compute_rci_pvi(
     rec: LeadAnalysis, results: Optional[dict]
 ) -> tuple[Optional[float], Optional[float]]:
@@ -457,24 +822,7 @@ def _compute_rci_pvi(
     if not results:
         return None, None
     scenarios = results.get("scenarios") or {}
-    best = results.get("best_refi") or {}
-    best_program = best.get("program")
-    chosen = None
-    for key in ("refi_aph_100", "refi_aph_50", "refi_schl"):
-        scen = scenarios.get(key)
-        if scen and scen.get("label") == best_program:
-            chosen = scen
-            break
-    # Si pas de match exact, prend celui avec la plus haute équité.
-    if chosen is None:
-        for key in ("refi_aph_100", "refi_aph_50", "refi_schl"):
-            scen = scenarios.get(key)
-            if scen and scen.get("equite_a_la_fin") is not None:
-                if chosen is None or (
-                    float(scen.get("equite_a_la_fin") or 0)
-                    > float(chosen.get("equite_a_la_fin") or 0)
-                ):
-                    chosen = scen
+    chosen = _best_refi_scenario(results)
 
     achat = scenarios.get("achat") or {}
     mdf_achat = achat.get("mdf_necessaire")
@@ -496,6 +844,276 @@ def _compute_rci_pvi(
         except Exception:  # noqa: BLE001
             pvi = None
     return rci, pvi
+
+
+# ── TRI : dérivation des intrants (dupliquée du backend) ─────────────
+#
+# Cf. `lead_analyses._derive_tri_auto_inputs` / `_persisted_manual_inputs`.
+# On duplique ici la logique pour garder ce service de rendu autonome
+# (cloud-only, pas d'import circulaire endpoint → service). Mapping AUTO :
+#   prix        = prix_achat
+#   rpv_achat   = 1 − mdf_preteur_b_pct
+#   pret_constr = Σ frais_financables × (1 − mdf_pct)
+#   mdf         = mdf_preteur_b
+#   loyers2     = best_refi.revenus_totaux
+#   dep2        = best_refi.depenses_total
+#   valeur2     = best_refi.valeur_retenue
+#   rpv_refi    = best_refi.ltv
+
+def _derive_tri_auto_inputs(results: dict) -> dict:
+    """Dérive les 8 intrants AUTO depuis `analysis_results_json`."""
+    prix = float(results.get("prix_achat") or 0)
+    mdf_pct = float(results.get("mdf_preteur_b_pct") or 0)
+    mdf = float(results.get("mdf_preteur_b") or 0)
+
+    frais = results.get("frais_demarrage") or {}
+    financables = set(results.get("frais_demarrage_financables") or [])
+    pret_constr = 0.0
+    for k, v in frais.items():
+        if k in financables:
+            try:
+                pret_constr += float(v or 0) * (1.0 - mdf_pct)
+            except (TypeError, ValueError):
+                continue
+
+    best = _best_refi_scenario(results) or {}
+    return {
+        "prix": prix,
+        "rpv_achat": max(0.0, 1.0 - mdf_pct),
+        "pret_constr": pret_constr,
+        "mdf": mdf,
+        "loyers2": float(best.get("revenus_totaux") or 0),
+        "dep2": float(best.get("depenses_total") or 0),
+        "valeur2": float(best.get("valeur_retenue") or 0),
+        "rpv_refi": float(best.get("ltv") or 0),
+    }
+
+
+def _persisted_manual_inputs(rec: LeadAnalysis) -> dict:
+    """Lit les 4 intrants manuels persistés sur la fiche, ou défauts en
+    dur (`_TRI_DEFAULTS`). Pour le PDF on n'a pas accès aux défauts BD
+    configurables (`tri_defaults`) sans requête supplémentaire — on
+    retombe donc sur les défauts en dur, ce qui reste cohérent avec le
+    comportement de l'endpoint quand le groupe BD est vide."""
+    cap = (
+        float(rec.tri_capital_injecte)
+        if rec.tri_capital_injecte is not None
+        else _TRI_DEFAULTS["capital"]
+    )
+    pct = (
+        float(rec.tri_pct_investisseur)
+        if rec.tri_pct_investisseur is not None
+        else _TRI_DEFAULTS["pct"]
+    )
+    cr_l = (
+        float(rec.tri_croissance_loyers)
+        if rec.tri_croissance_loyers is not None
+        else _TRI_DEFAULTS["cr_loyers"]
+    )
+    cr_d = (
+        float(rec.tri_croissance_depenses)
+        if rec.tri_croissance_depenses is not None
+        else _TRI_DEFAULTS["cr_dep"]
+    )
+    return {"capital": cap, "pct": pct, "cr_loyers": cr_l, "cr_dep": cr_d}
+
+
+def _tri_section(rl, rec: LeadAnalysis, results: Optional[dict], *, s):
+    """Construit la section « Rendement de l'investisseur (TRI) ».
+
+    Retourne une liste de flowables. Si les intrants TRI ne sont pas
+    disponibles (capital non renseigné OU analyse financière absente),
+    affiche un message « TRI non calculé » plutôt que de planter.
+    Entièrement None-safe : tout échec de calcul retombe sur le message
+    d'omission propre."""
+    Paragraph = rl["Paragraph"]
+    Table = rl["Table"]
+    TableStyle = rl["TableStyle"]
+    Spacer = rl["Spacer"]
+    mm = rl["mm"]
+    colors = rl["colors"]
+
+    out: List[Any] = [Paragraph(
+        "RENDEMENT DE L'INVESTISSEUR (TRI)", s["section"])]
+
+    # Condition minimale : capital injecté renseigné sur la fiche.
+    if rec.tri_capital_injecte is None:
+        out.append(Paragraph(
+            "TRI non calculé — renseigne le « capital injecté » de "
+            "l'investisseur sur la fiche pour générer le rendement.",
+            s["small_muted"]))
+        return out
+    if not results:
+        out.append(Paragraph(
+            "TRI non calculé — lance d'abord l'analyse financière "
+            "(les intrants automatiques en dépendent).",
+            s["small_muted"]))
+        return out
+
+    # Dérivation + calcul, entièrement défensifs.
+    try:
+        from app.services.lead_tri_calc import compute_tri  # type: ignore
+        auto = _derive_tri_auto_inputs(results)
+        manual = _persisted_manual_inputs(rec)
+        tri_data = compute_tri(
+            prix=auto["prix"],
+            rpv_achat=auto["rpv_achat"],
+            pret_constr=auto["pret_constr"],
+            mdf=auto["mdf"],
+            capital=manual["capital"] or 0.0,
+            pct=manual["pct"],
+            loyers2=auto["loyers2"],
+            dep2=auto["dep2"],
+            valeur2=auto["valeur2"],
+            rpv_refi=auto["rpv_refi"],
+            cr_loyers=manual["cr_loyers"],
+            cr_dep=manual["cr_dep"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Section TRI PDF — calcul échoué : %s", exc)
+        out.append(Paragraph(
+            "TRI non calculé — données insuffisantes pour le moteur "
+            "de rendement.", s["small_muted"]))
+        return out
+
+    tri = tri_data.get("tri") or {}
+    sommaire = tri_data.get("sommaire") or {}
+    horizons = tri_data.get("horizons") or {}
+    flux = tri_data.get("flux") or {}
+
+    # Rappel des hypothèses (capital, parts, croissances).
+    out.append(Paragraph(
+        f"Capital injecté <b>{_money(manual['capital'])}</b> · "
+        f"parts investisseur <b>{_pct_fraction(manual['pct'], 0)}</b> · "
+        f"croissance loyers <b>{_pct_fraction(manual['cr_loyers'])}</b> · "
+        f"croissance dépenses <b>{_pct_fraction(manual['cr_dep'])}</b>",
+        s["small_muted"]))
+    out.append(Spacer(1, 6))
+
+    # ── Les 3 TRI en vedette (sortie an 2 / 7 / 12) ──────────────────
+    def _tri_cell(label_h, value):
+        big = s["tri_big"]
+        if value is None:
+            disp = "—"
+        else:
+            disp = f"{float(value) * 100:.1f} %"
+            if float(value) < 0:
+                big = s["tri_big_red"]
+        inner = Table(
+            [[Paragraph(disp, big)],
+             [Paragraph(label_h, s["tri_caption"])]],
+            colWidths=["*"])
+        inner.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(_C_GREY_SOFT)),
+            ("BOX", (0, 0), (-1, -1), 0.75, colors.HexColor(_C_AMBER_LINE)),
+            ("ROUNDEDCORNERS", [5, 5, 5, 5]),
+            ("TOPPADDING", (0, 0), (0, 0), 9),
+            ("BOTTOMPADDING", (0, 1), (0, 1), 9),
+            ("TOPPADDING", (0, 1), (0, 1), 0),
+            ("BOTTOMPADDING", (0, 0), (0, 0), 0),
+        ]))
+        return inner
+
+    c2 = _tri_cell("Sortie an 2", tri.get("an2"))
+    c7 = _tri_cell("Sortie an 7", tri.get("an7"))
+    c12 = _tri_cell("Sortie an 12", tri.get("an12"))
+    gap = 4 * mm
+    col_w = (170 * mm - 2 * gap) / 3
+    vedette = Table(
+        [[c2, "", c7, "", c12]],
+        colWidths=[col_w, gap, col_w, gap, col_w])
+    vedette.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    out.append(vedette)
+    out.append(Spacer(1, 8))
+
+    # ── Cash retourné / valeur des parts par horizon ─────────────────
+    out.append(Paragraph(
+        "Cash encaissé et valeur des parts par horizon", s["subsection"]))
+    header = [
+        Paragraph("Horizon", s["th_left"]),
+        Paragraph("Valeur immeuble", s["th"]),
+        Paragraph("Prêt max refi", s["th"]),
+        Paragraph("Cash investisseur", s["th"]),
+        Paragraph("Valeur des parts", s["th"]),
+    ]
+    rows = [header]
+    for h in ("2", "7", "12"):
+        hd = horizons.get(h) or {}
+        rows.append([
+            Paragraph(f"An {h}", s["small"]),
+            Paragraph(_money(hd.get("valeur_immeuble")), s["num"]),
+            Paragraph(_money(hd.get("pret_max_refi")), s["num"]),
+            Paragraph(_money(hd.get("cash_investisseur")), s["num"]),
+            Paragraph(_money(hd.get("valeur_parts")), s["num"]),
+        ])
+    th = Table(rows, colWidths=[24 * mm, "*", "*", "*", "*"], repeatRows=1)
+    th.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(_C_AMBER_SOFT)),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.75, colors.HexColor(_C_AMBER_LINE)),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+         [colors.white, colors.HexColor("#fafafa")]),
+        ("BOX", (0, 0), (-1, -1), 0.25, colors.HexColor(_C_LINE)),
+        ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor(_C_LINE)),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    out.append(th)
+    out.append(Spacer(1, 4))
+    out.append(Paragraph(
+        f"Total cash encaissé (hors vente) sur 12 ans : "
+        f"<b>{_money(sommaire.get('total_cash_sans_vente'))}</b>",
+        s["small"]))
+
+    # ── Ligne de temps des flux (scénario de sortie an 12) ───────────
+    flux12 = flux.get("12")
+    if isinstance(flux12, list) and any(abs(float(x or 0)) > 0.5
+                                        for x in flux12):
+        out.append(Spacer(1, 8))
+        out.append(Paragraph(
+            "Ligne de temps des flux — sortie an 12", s["subsection"]))
+        # On affiche uniquement les années avec un flux non nul + l'an 0.
+        years = [i for i, v in enumerate(flux12)
+                 if i == 0 or abs(float(v or 0)) > 0.5]
+        head = [Paragraph("Année", s["th_left"])]
+        vals = [Paragraph("Flux net", s["small"])]
+        for i in years:
+            head.append(Paragraph(f"An {i}", s["th"]))
+            v = float(flux12[i] or 0)
+            vals.append(Paragraph(_money(v), s["num"]))
+        n = len(head)
+        first_w = 24 * mm
+        other_w = (170 * mm - first_w) / (n - 1)
+        ft = Table([head, vals],
+                   colWidths=[first_w] + [other_w] * (n - 1))
+        ft.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(_C_AMBER_SOFT)),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.5,
+             colors.HexColor(_C_AMBER_LINE)),
+            ("BACKGROUND", (0, 1), (0, 1), colors.HexColor(_C_GREY_SOFT)),
+            ("BOX", (0, 0), (-1, -1), 0.25, colors.HexColor(_C_LINE)),
+            ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor(_C_LINE)),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        out.append(ft)
+        out.append(Paragraph(
+            "An 0 = capital injecté (sortie de fonds) ; années "
+            "suivantes = cash encaissé + liquidation des parts à la "
+            "sortie.", s["small_muted"]))
+
+    return out
 
 
 async def _load(
@@ -536,12 +1154,13 @@ def _render_bytes(
 
     buf = io.BytesIO()
     address_label = (rec.address or f"Lead #{rec.id}").strip() or f"Lead #{rec.id}"
+    date_label = _date_fr_ca_long(datetime.utcnow())
     doc = rl["SimpleDocTemplate"](
         buf,
         pagesize=rl["A4"],
         leftMargin=20 * mm,
         rightMargin=20 * mm,
-        topMargin=18 * mm,
+        topMargin=22 * mm,
         bottomMargin=20 * mm,
         title=f"Fiche d'analyse {rec.id}",
         author="MGV Développement",
@@ -558,7 +1177,8 @@ def _render_bytes(
                     header_logo,
                     Paragraph(
                         "<b>MGV Développement</b><br/>"
-                        "<font size=7 color='#6b6b6b'>Pôle Prospection</font>",
+                        f"<font size=7 color='{_C_MUTED}'>"
+                        "Pôle Prospection</font>",
                         s["small"],
                     ),
                 ]],
@@ -576,9 +1196,15 @@ def _render_bytes(
         "FICHE D'ANALYSE D'OPPORTUNITÉ", s["title"]
     ))
     story.append(Paragraph(
-        f"Générée le {_date_fr_ca_long(datetime.utcnow())}",
+        f"{address_label} · générée le {date_label}",
         s["subtitle"],
     ))
+    story.append(Spacer(1, 10))
+
+    results = _safe_json_load(rec.analysis_results_json)
+
+    # ── Bande de résultats clés (tuiles) ────────────────────────
+    story.append(_key_results_band(rl, rec, results, s=s))
     story.append(Spacer(1, 10))
 
     # ── Identité de l'immeuble ──────────────────────────────────
@@ -617,13 +1243,13 @@ def _render_bytes(
                 break
     identity_rows.append(("Source — URL principale", _str(first_url)))
 
+    story.append(Paragraph("IDENTITÉ DE L'IMMEUBLE", s["section"]))
     t = _table_two_col(rl, identity_rows, s=s)
     if t is not None:
         story.append(t)
     story.append(Spacer(1, 4))
 
     # ── Informations financières — état actuel ─────────────────
-    results = _safe_json_load(rec.analysis_results_json)
     story.append(Paragraph(
         "INFORMATIONS FINANCIÈRES — ÉTAT ACTUEL", s["section"]
     ))
@@ -737,58 +1363,67 @@ def _render_bytes(
         fd_total = float(results.get("frais_demarrage_total") or 0)
         mdf_pct_amt = float(results.get("mdf_pct_prix_achat") or 0)
         mdf_total = float(results.get("mdf_preteur_b") or 0)
+        financables = set(results.get("frais_demarrage_financables") or [])
 
-        frais_rows: List[tuple] = [
-            ("Évaluateur 1", _money(fd.get("evaluateur"))),
-            ("Évaluateur 2", _money(fd.get("evaluateur_2"))),
-            ("Inspection", _money(fd.get("inspection"))),
-            ("Avocat", _money(fd.get("avocat"))),
-            ("Notaire 1", _money(fd.get("notaire"))),
-            ("Notaire 2", _money(fd.get("notaire_2"))),
-            ("Rapport efficacité énergétique",
-             _money(fd.get("rapport_efficacite"))),
-            ("Courtier hypothécaire 1",
-             _money(fd.get("courtier_hypothecaire_1"))),
-            ("Courtier hypothécaire 2",
-             _money(fd.get("courtier_hypothecaire_2"))),
-            ("Taxes de bienvenue (calculées)",
-             _money(fd.get("taxes_bienvenue"))),
-            ("Frais de développement",
-             _money(fd.get("frais_developpement"))),
-            ("Frais de négociations",
-             _money(fd.get("frais_negociations"))),
-            ("Frais de travaux", _money(fd.get("frais_travaux"))),
-            ("Frais de dossier du prêteur",
-             _money(fd.get("frais_dossier_preteur"))),
-            ("Intérêts pendant projet (portage)",
-             _money(fd.get("interets"))),
-            ("Revenus nets pendant projet",
-             _money(fd.get("revenus_nets_pendant_projet"))),
-            ("Total frais de démarrage", f"<b>{_money(fd_total)}</b>"),
-            ("MDF (% × prix d'achat)", _money(mdf_pct_amt)),
-            ("MDF prêteur B totale",
-             f"<b>{_money(mdf_total)}</b>"),
+        # (clé, libellé) — on annote « (finançable) » les postes pris en
+        # charge (partiellement) par le prêteur B.
+        poste_defs = [
+            ("evaluateur", "Évaluateur 1"),
+            ("evaluateur_2", "Évaluateur 2"),
+            ("inspection", "Inspection"),
+            ("avocat", "Avocat"),
+            ("notaire", "Notaire 1"),
+            ("notaire_2", "Notaire 2"),
+            ("rapport_efficacite", "Rapport efficacité énergétique"),
+            ("courtier_hypothecaire_1", "Courtier hypothécaire 1"),
+            ("courtier_hypothecaire_2", "Courtier hypothécaire 2"),
+            ("taxes_bienvenue", "Taxes de bienvenue (calculées)"),
+            ("frais_developpement", "Frais de développement"),
+            ("frais_negociations", "Frais de négociations"),
+            ("frais_travaux", "Frais de travaux"),
+            ("frais_dossier_preteur", "Frais de dossier du prêteur"),
+            ("interets", "Intérêts pendant projet (portage)"),
+            ("revenus_nets_pendant_projet",
+             "Revenus nets pendant projet"),
         ]
-        # Convertit la dernière ligne pour permettre le HTML bold.
+        frais_rows: List[tuple] = []
+        for key, label in poste_defs:
+            tag = (f" <font size=7 color='{_C_GREEN}'>(finançable)</font>"
+                   if key in financables else "")
+            frais_rows.append((f"{label}{tag}", _money(fd.get(key))))
+        frais_rows.append(
+            ("Total frais de démarrage", f"<b>{_money(fd_total)}</b>"))
+        frais_rows.append(
+            ("MDF (% × prix d'achat)", _money(mdf_pct_amt)))
+        frais_rows.append(
+            ("MDF prêteur B totale", f"<b>{_money(mdf_total)}</b>"))
+
         wrapped = [
-            (Paragraph(k, s["small"]), Paragraph(str(v), s["small"]))
+            (Paragraph(k, s["small"]), Paragraph(str(v), s["num"]))
             for k, v in frais_rows
         ]
-        # On rebâtit le tableau directement pour permettre le rendu HTML.
-        t = Table(wrapped, colWidths=[70 * mm, "*"])
+        t = Table(wrapped, colWidths=[78 * mm, "*"])
         t.setStyle(
             TableStyle([
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LINEBELOW", (0, 0), (-1, -2), 0.25,
-                 colors.HexColor("#e2e2e2")),
-                ("LEFTPADDING", (0, 0), (-1, -1), 4),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                ("TOPPADDING", (0, 0), (-1, -1), 3),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("LINEBELOW", (0, 0), (-1, -4), 0.25,
+                 colors.HexColor(_C_LINE)),
+                ("ROWBACKGROUNDS", (0, 0), (-1, -4),
+                 [colors.white, colors.HexColor("#fafafa")]),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                # Total frais (3e avant-dernière) en fond ambre pâle.
                 ("BACKGROUND", (0, -3), (-1, -3),
-                 colors.HexColor("#eff6ff")),
+                 colors.HexColor(_C_AMBER_SOFT)),
+                ("LINEABOVE", (0, -3), (-1, -3), 0.75,
+                 colors.HexColor(_C_AMBER_LINE)),
+                # MDF prêteur B totale (dernière) en fond vert pâle.
                 ("BACKGROUND", (0, -1), (-1, -1),
-                 colors.HexColor("#eff6ff")),
+                 colors.HexColor(_C_GREEN_SOFT)),
+                ("LINEABOVE", (0, -1), (-1, -1), 0.75,
+                 colors.HexColor(_C_GREEN_LINE)),
             ])
         )
         story.append(t)
@@ -800,24 +1435,22 @@ def _render_bytes(
             s["small_muted"],
         ))
 
-    # ── Scénarios de financement ────────────────────────────────
+    # ── Scénarios de financement (tableau comparatif) ───────────
     story.append(Paragraph(
         "SCÉNARIOS DE FINANCEMENT", s["section"]
     ))
     if results:
-        scenarios = results.get("scenarios") or {}
-        fd_total = float(results.get("frais_demarrage_total") or 0)
-        for key in ("achat", "refi_schl", "refi_aph_50", "refi_aph_100"):
-            scen = scenarios.get(key)
-            if scen is None:
-                continue
-            story.append(_scenario_card(
-                rl, scen, s=s, frais_demarrage_total=fd_total
-            ))
+        winner_key = _best_refi_key(results)
+        story.append(_scenarios_table(
+            rl, results, s=s, winner_key=winner_key))
+        story.append(Spacer(1, 3))
+        story.append(Paragraph(
+            "La colonne surlignée en vert est le scénario gagnant "
+            "(meilleure équité au refinancement).", s["small_muted"]))
     else:
         story.append(Paragraph(
             "Aucun scénario calculé — lance l'analyse financière "
-            "depuis la fiche pour générer les 4 scénarios.",
+            "depuis la fiche pour générer les scénarios.",
             s["small_muted"],
         ))
 
@@ -831,27 +1464,21 @@ def _render_bytes(
         amount = best.get("amount") or rec.best_refi_amount
         rci, pvi = _compute_rci_pvi(rec, results)
         best_rows: List[tuple] = [
-            ("Programme retenu", _str(program)),
+            ("Programme retenu", f"<b>{_str(program)}</b>"),
             ("Équité dégagée", _money(amount)),
             ("RCI (% capital récupéré)",
              _pct(rci, decimals=1) if rci is not None else "—"),
             ("PVI (prise de valeur de l'immeuble)",
              _money(pvi) if pvi is not None else "—"),
         ]
-        # Justification : RCD du programme retenu.
-        scenarios = results.get("scenarios") or {}
-        for k in ("refi_aph_100", "refi_aph_50", "refi_schl"):
-            sc = scenarios.get(k)
-            if sc and sc.get("label") == program:
-                best_rows.append(
-                    ("Justification — RCD",
-                     f"{float(sc.get('rcd') or 0):.2f}")
-                )
-                best_rows.append(
-                    ("Justification — LTV",
-                     f"{float(sc.get('ltv') or 0) * 100:.0f} %")
-                )
-                break
+        win = _best_refi_scenario(results)
+        if win:
+            best_rows.append(
+                ("Justification — RCD",
+                 f"{float(win.get('rcd') or 0):.2f}"))
+            best_rows.append(
+                ("Justification — LTV",
+                 f"{float(win.get('ltv') or 0) * 100:.0f} %"))
         t = _table_two_col(rl, best_rows, s=s)
         if t is not None:
             story.append(t)
@@ -860,6 +1487,10 @@ def _render_bytes(
             "Pas encore de meilleur scénario — lance l'analyse.",
             s["small_muted"],
         ))
+
+    # ── Rendement de l'investisseur (TRI) ───────────────────────
+    for fl in _tri_section(rl, rec, results, s=s):
+        story.append(fl)
 
     # ── Validation ──────────────────────────────────────────────
     story.append(Paragraph("VALIDATION", s["section"]))
@@ -871,9 +1502,9 @@ def _render_bytes(
         ))
     else:
         rows = [[
-            Paragraph("<b>Sévérité</b>", s["small"]),
-            Paragraph("<b>Champ</b>", s["small"]),
-            Paragraph("<b>Message</b>", s["small"]),
+            Paragraph("Sévérité", s["th_left"]),
+            Paragraph("Champ", s["th_left"]),
+            Paragraph("Message", s["th_left"]),
         ]]
         for w in warnings:
             sev = _format_warning_severity(w.get("severity"))
@@ -887,13 +1518,16 @@ def _render_bytes(
             TableStyle([
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("BACKGROUND", (0, 0), (-1, 0),
-                 colors.HexColor("#fef3c7")),
-                ("LINEBELOW", (0, 0), (-1, -1), 0.25,
-                 colors.HexColor("#e2e2e2")),
-                ("LEFTPADDING", (0, 0), (-1, -1), 4),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                ("TOPPADDING", (0, 0), (-1, -1), 3),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                 colors.HexColor(_C_AMBER_SOFT)),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.75,
+                 colors.HexColor(_C_AMBER_LINE)),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                 [colors.white, colors.HexColor("#fafafa")]),
+                ("BOX", (0, 0), (-1, -1), 0.25, colors.HexColor(_C_LINE)),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
             ])
         )
         story.append(t)
@@ -920,9 +1554,9 @@ def _render_bytes(
     ))
     if attachments:
         att_rows = [[
-            Paragraph("<b>Nom</b>", s["small"]),
-            Paragraph("<b>Type MIME</b>", s["small"]),
-            Paragraph("<b>Taille</b>", s["small"]),
+            Paragraph("Nom", s["th_left"]),
+            Paragraph("Type MIME", s["th_left"]),
+            Paragraph("Taille", s["th_left"]),
         ]]
         for att in attachments:
             size_kb = (att.size_bytes or 0) / 1024.0
@@ -933,20 +1567,23 @@ def _render_bytes(
             att_rows.append([
                 Paragraph(_str(att.filename), s["small"]),
                 Paragraph(_str(att.content_type), s["small"]),
-                Paragraph(size_str, s["small"]),
+                Paragraph(size_str, s["num"]),
             ])
         t = Table(att_rows, colWidths=["55%", "30%", "15%"])
         t.setStyle(
             TableStyle([
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("BACKGROUND", (0, 0), (-1, 0),
-                 colors.HexColor("#eff6ff")),
-                ("LINEBELOW", (0, 0), (-1, -1), 0.25,
-                 colors.HexColor("#e2e2e2")),
-                ("LEFTPADDING", (0, 0), (-1, -1), 4),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                ("TOPPADDING", (0, 0), (-1, -1), 3),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                 colors.HexColor(_C_AMBER_SOFT)),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.75,
+                 colors.HexColor(_C_AMBER_LINE)),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                 [colors.white, colors.HexColor("#fafafa")]),
+                ("BOX", (0, 0), (-1, -1), 0.25, colors.HexColor(_C_LINE)),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
             ])
         )
         story.append(t)
@@ -955,9 +1592,12 @@ def _render_bytes(
             "Aucun fichier joint.", s["small_muted"]
         ))
 
-    # ── Build avec pied de page sur chaque page ────────────────
+    # ── Build avec en-tête + pied de page sur chaque page ──────
     def _on_page(canvas, doc):
-        _draw_footer(canvas, doc, address_label=address_label)
+        _draw_page_furniture(
+            canvas, doc,
+            address_label=address_label, date_label=date_label,
+        )
 
     try:
         doc.build(story, onFirstPage=_on_page, onLaterPages=_on_page)
@@ -1003,4 +1643,3 @@ async def generate_lead_analysis_pdf(
     if rec is None:
         raise ValueError(f"LeadAnalysis {analysis_id} introuvable")
     return _render_bytes(rec, atts)
-
