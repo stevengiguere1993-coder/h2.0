@@ -403,32 +403,13 @@ export function SoumissionClientView({
                   (comme les modules) et on n'affiche qu'UN SEUL total pour
                   tout le bloc. */}
               {directFeatures.length > 0 ? (
-                <div className="mt-4">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-slate-500" />
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                      Autres fonctionnalités (incluses)
-                    </h3>
-                  </div>
-                  <div className="mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white">
-                    <div className="p-4">
-                      <ul className="space-y-1">
-                        {directFeatures.map((feat, idx) => (
-                          <li
-                            key={`direct-${idx}`}
-                            className="flex items-start gap-2 text-sm text-slate-600"
-                          >
-                            <span className="mt-1.5 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-slate-400" />
-                            <span>{feat.description || "—"}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                    <div className="flex items-baseline justify-between gap-3 border-t border-slate-200 bg-slate-50 px-4 py-2">
-                      <span className="text-sm font-semibold text-slate-700">
-                        Total
+                <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                  <div className="p-4">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="text-sm font-bold text-slate-900">
+                        Autres fonctionnalités
                       </span>
-                      <span className="text-sm font-bold text-slate-800">
+                      <span className="flex-shrink-0 text-sm font-bold text-blue-700">
                         {fmtMoney(
                           directFeatures.reduce(
                             (acc, feat) => acc + (feat.prix_client || 0),
@@ -437,6 +418,17 @@ export function SoumissionClientView({
                         )}
                       </span>
                     </div>
+                    <ul className="mt-2 space-y-1">
+                      {directFeatures.map((feat, idx) => (
+                        <li
+                          key={`direct-${idx}`}
+                          className="flex items-start gap-2 text-sm text-slate-600"
+                        >
+                          <span className="mt-1.5 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-blue-400" />
+                          <span>{feat.description || "—"}</span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 </div>
               ) : null}
