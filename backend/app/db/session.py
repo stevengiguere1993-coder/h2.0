@@ -2284,6 +2284,54 @@ async def init_db() -> None:
             # Table absente au tout premier boot — retentera plus tard.
             pass
 
+        # ── Seed des frais de démarrage PERSONNALISÉS (juin 2026) ────
+        # Défaut à valeur structurée (``value_json``) : LISTE des postes
+        # de frais de démarrage personnalisés (ajoutables/retirables par
+        # l'admin depuis l'app). Seedé à liste VIDE → aucun poste
+        # personnalisé par défaut, donc résultat du moteur STRICTEMENT
+        # identique à avant. Chaque item (ajouté via les endpoints CRUD)
+        # a la forme ``{id, label_fr, type_montant, valeur,
+        # financable_par_defaut}``.
+        #
+        # UPSERT idempotent : INSERT avec ``value_json = []`` si la clé
+        # est absente ; sur conflit on ne met à jour QUE les métadonnées
+        # (label/desc/group) — JAMAIS ``value_json`` (préserve la liste
+        # déjà construite par l'admin via les endpoints).
+        try:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO prospection_analysis_defaults
+                      (key, value_json, label_fr, description_fr,
+                       step, group_name, updated_at)
+                    VALUES (:key, CAST(:value_json AS JSONB), :label_fr,
+                            :description_fr, :step, :group, NOW())
+                    ON CONFLICT (key) DO UPDATE SET
+                        label_fr       = EXCLUDED.label_fr,
+                        description_fr = EXCLUDED.description_fr,
+                        group_name     = EXCLUDED.group_name
+                    """
+                ),
+                {
+                    "key": "frais_mdf_custom",
+                    "value_json": json.dumps([]),
+                    "label_fr": "Frais de démarrage personnalisés (liste)",
+                    "description_fr": (
+                        "Liste des postes de frais de démarrage "
+                        "personnalisés ajoutés par l'admin. Chaque poste "
+                        "{id, label_fr, type_montant, valeur, "
+                        "financable_par_defaut} ; type_montant ∈ {fixe, "
+                        "pct_prix_achat, pct_financement}. Vide par "
+                        "défaut (aucun impact sur le calcul)."
+                    ),
+                    "step": 0.01,
+                    "group": "mdf_frais",
+                },
+            )
+        except Exception:
+            # Table absente au tout premier boot — retentera plus tard.
+            pass
+
         # ── Backfill `financable_par_defaut` (mai 2026) ──────────────
         # On ne TOUCHE PAS aux items pour lesquels Phil a déjà
         # configuré explicitement la valeur (NULL → on backfill, NOT
@@ -2360,7 +2408,6 @@ async def close_db() -> None:
     Should be called on application shutdown.
     """
     await engine.dispose()
-
 
 
 
