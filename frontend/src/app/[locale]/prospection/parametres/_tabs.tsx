@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import {
+  Calculator,
   Cog,
   Database,
   Plug,
@@ -42,6 +43,12 @@ const TABS: Tab[] = [
     label: "Sources de données",
     icon: Database,
     minRole: "owner"
+  },
+  {
+    href: "/prospection/parametres/analyse",
+    label: "Calculateur",
+    icon: Calculator,
+    minRole: "admin"
   },
   {
     href: "/prospection/parametres/outils",
