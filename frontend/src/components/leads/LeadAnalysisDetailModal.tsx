@@ -2034,6 +2034,11 @@ function FieldYesNo({
   value: boolean;
   onSave: (v: boolean) => void;
 }) {
+  // Structure alignée sur `FieldNumber` : label uppercase au-dessus,
+  // contrôle pleine largeur en dessous à la même hauteur qu'un `.input`
+  // pour un alignement parfait dans la grille `SubCard`. Le contrôle est
+  // un segmented « Oui / Non » avec les deux options toujours visibles et
+  // un fort contraste sur l'option active.
   return (
     <div>
       <label className="text-[10px] uppercase tracking-wider text-white/50">
@@ -2042,24 +2047,19 @@ function FieldYesNo({
       <div
         role="radiogroup"
         aria-label={label}
-        className="mt-1 inline-flex items-center gap-0.5 rounded-full border border-brand-700 bg-brand-950 p-0.5"
+        className="mt-1 grid h-[38px] grid-cols-2 gap-1 rounded-lg border border-brand-700 bg-brand-950 p-1"
       >
         <button
           type="button"
           role="radio"
           aria-checked={value}
           onClick={() => onSave(true)}
-          className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-semibold transition-colors ${
+          className={`flex items-center justify-center rounded-md text-xs font-semibold transition-colors ${
             value
-              ? "bg-emerald-500/90 text-brand-950 shadow-sm"
-              : "text-white/55 hover:text-white/80"
+              ? "bg-emerald-500 text-brand-950 shadow-sm"
+              : "text-white/60 hover:bg-white/5 hover:text-white/80"
           }`}
         >
-          <span
-            className={`h-1.5 w-1.5 rounded-full transition-colors ${
-              value ? "bg-brand-950" : "bg-white/30"
-            }`}
-          />
           Oui
         </button>
         <button
@@ -2067,17 +2067,12 @@ function FieldYesNo({
           role="radio"
           aria-checked={!value}
           onClick={() => onSave(false)}
-          className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-semibold transition-colors ${
+          className={`flex items-center justify-center rounded-md text-xs font-semibold transition-colors ${
             !value
-              ? "bg-white/10 text-white"
-              : "text-white/55 hover:text-white/80"
+              ? "bg-white/15 text-white"
+              : "text-white/60 hover:bg-white/5 hover:text-white/80"
           }`}
         >
-          <span
-            className={`h-1.5 w-1.5 rounded-full transition-colors ${
-              !value ? "bg-white/70" : "bg-white/30"
-            }`}
-          />
           Non
         </button>
       </div>
