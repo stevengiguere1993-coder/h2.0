@@ -47,6 +47,7 @@ from app.models.sales_task import SalesTask, sales_task_assignees
 from app.models.user import User
 from app.services.api_capabilities import POLE_LABELS, readable_poles
 from app.services.audit import log_action
+from app.services.entity_serializers import serialize_entity
 
 
 TORONTO = ZoneInfo("America/Toronto")
@@ -118,6 +119,11 @@ class TaskActivity(BaseModel):
     updated_at: Optional[datetime] = None
     # Pourquoi la tâche apparaît dans la période : completed / created / updated.
     reasons: List[str]
+    # Objet métier enrichi (niveau « summary ») de la tâche : titre lisible,
+    # statut, assigné, pôle, échéance… Ajouté SANS remplacer les champs
+    # ci-dessus (rétrocompat consommateurs). Best-effort : None si la
+    # sérialisation échoue. Voir app.services.entity_serializers.
+    entity: Optional[dict] = None
 
 
 class AuditActivity(BaseModel):
@@ -289,6 +295,7 @@ async def _collect_tasks(
                         pole="devlog",
                         entity_type="devlog_project_task",
                         entity_id=t.id,
+                        entity=serialize_entity("devlog_project_task", t),
                         title=t.title,
                         status=t.status,
                         is_completed=is_done,
@@ -320,6 +327,7 @@ async def _collect_tasks(
                         pole="entreprise",
                         entity_type="entreprise_tache",
                         entity_id=t.id,
+                        entity=serialize_entity("entreprise_tache", t),
                         title=t.title,
                         status=t.status,
                         is_completed=is_done,
@@ -352,6 +360,7 @@ async def _collect_tasks(
                         pole="prospection",
                         entity_type="prospection_deal_task",
                         entity_id=t.id,
+                        entity=serialize_entity("prospection_deal_task", t),
                         title=t.name,
                         status=t.status,
                         is_completed=is_done,
@@ -388,6 +397,7 @@ async def _collect_tasks(
                         pole="sales",
                         entity_type="sales_task",
                         entity_id=t.id,
+                        entity=serialize_entity("sales_task", t),
                         title=t.title,
                         status="done" if t.done else "open",
                         is_completed=t.done,
@@ -418,6 +428,7 @@ async def _collect_tasks(
                         pole="project",
                         entity_type="project_task",
                         entity_id=t.id,
+                        entity=serialize_entity("project_task", t),
                         title=t.title,
                         status="done" if t.done else "open",
                         is_completed=t.done,
