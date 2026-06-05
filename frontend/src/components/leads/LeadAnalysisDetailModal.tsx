@@ -1680,28 +1680,6 @@ function TriResults({ result }: { result: TriResult }) {
         </div>
       </SectionCard>
 
-      {/* Bande de métriques clés */}
-      <div className="grid gap-3 sm:grid-cols-3">
-        <StatTile
-          icon={Wallet}
-          label="Mise initiale"
-          value={fmtMoney(result.sommaire.mise_initiale)}
-          tone="neutral"
-        />
-        <StatTile
-          icon={Coins}
-          label="Total cash encaissé (sans vente)"
-          value={fmtMoney(result.sommaire.total_cash_sans_vente)}
-          tone="emerald"
-        />
-        <StatTile
-          icon={PiggyBank}
-          label="Valeur des parts (an 12)"
-          value={fmtMoney(result.sommaire.valeur_parts_an12)}
-          tone="accent"
-        />
-      </div>
-
       {/* Tableau « Par horizon de sortie » */}
       <SectionCard
         icon={TrendingUp}
@@ -1769,7 +1747,7 @@ function TriResults({ result }: { result: TriResult }) {
               <span className="block text-base font-bold text-white">
                 Détail du calcul
               </span>
-              <span className="mt-0.5 block text-xs text-white/55">
+              <span className="mt-0.5 block text-xs text-white/60">
                 Projections par horizon + lignes de temps des flux.
               </span>
             </span>
@@ -1801,7 +1779,12 @@ function TriDetailTable({ result }: { result: TriResult }) {
     { label: "Argent disponible au refi", pick: (h) => fmtMoney(h.argent_dispo) },
     { label: "Équité", pick: (h) => fmtMoney(h.equite) },
     { label: "Retour de capital", pick: (h) => fmtMoney(h.retour_capital) },
-    { label: "Surplus partagé", pick: (h) => fmtMoney(h.surplus) }
+    { label: "Surplus partagé", pick: (h) => fmtMoney(h.surplus) },
+    {
+      label: "Cash retourné à l'investisseur",
+      pick: (h) => fmtMoney(h.cash_investisseur)
+    },
+    { label: "Valeur des parts", pick: (h) => fmtMoney(h.valeur_parts) }
   ];
   return (
     <div className="mt-1">
@@ -1812,7 +1795,7 @@ function TriDetailTable({ result }: { result: TriResult }) {
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-brand-800">
-              <th className="px-2 py-1.5 text-left font-semibold text-white/55"></th>
+              <th className="px-2 py-1.5 text-left font-semibold text-white/60"></th>
               {TRI_HORIZONS.map((h) => (
                 <th
                   key={h.key}
@@ -1895,15 +1878,15 @@ function TriFluxTable({ result }: { result: TriResult }) {
         <table className="w-full text-[11px]">
           <thead>
             <tr className="border-b border-brand-800">
-              <th className="px-2 py-1.5 text-left font-semibold text-white/55">
-                Sortie
+              <th className="px-2 py-1.5 text-left font-semibold text-white/60">
+                Scénario de sortie
               </th>
               {years.map((y) => (
                 <th
                   key={y}
-                  className="px-2 py-1.5 text-right font-semibold text-white/55"
+                  className="px-2 py-1.5 text-right font-semibold text-white/60"
                 >
-                  an {y}
+                  {y}
                 </th>
               ))}
             </tr>
@@ -3259,11 +3242,15 @@ function FraisDemarrageBreakdownPanel({
 
   let subTotalCash = 0;
   let subTotalFinanced = 0;
+  // Somme brute de tous les postes (colonne « Valeur ») : la valeur totale
+  // des frais de démarrage si AUCUN n'était finançable. Affichage seulement.
+  let subTotalValeur = 0;
   if (frais) {
     for (const k of FRAIS_KEYS) {
       const v =
         overrides[k] != null ? Number(overrides[k]) : Number(frais[k] || 0);
       if (!Number.isFinite(v)) continue;
+      subTotalValeur += v;
       if (financables.has(k)) {
         subTotalCash += v * mdfPctNumeric;
         subTotalFinanced += v * (1 - mdfPctNumeric);
@@ -3350,7 +3337,7 @@ function FraisDemarrageBreakdownPanel({
                     idx % 2 === 1 ? "bg-white/[0.015]" : ""
                   }`}
                 >
-                  <td className="px-3 py-1.5 pl-5 text-white/55">
+                  <td className="px-3 py-1.5 pl-5 text-white/60">
                     {label}
                     {overridden ? (
                       <button
@@ -3398,9 +3385,16 @@ function FraisDemarrageBreakdownPanel({
           <tfoot>
             {/* Les 3 lignes de total, démarquées et color-codées. */}
             <tr className="border-t border-amber-400/40 bg-amber-500/[0.07]">
-              <td className="px-3 py-2 font-semibold text-amber-200" colSpan={3}>
+              <td className="px-3 py-2 font-semibold text-amber-200">
                 Sous-total frais de démarrage (cash)
               </td>
+              <td
+                className="px-3 py-2 text-right font-mono font-semibold tabular-nums text-amber-200/90"
+                title="Valeur brute totale des frais de démarrage (si aucun n'était finançable)"
+              >
+                {fmtMoney(subTotalValeur)}
+              </td>
+              <td aria-hidden="true" />
               <td className="px-3 py-2 text-right font-mono font-semibold tabular-nums text-amber-200">
                 {fmtMoney(subTotalCash)}
               </td>
@@ -3564,7 +3558,7 @@ function ResultRow({
     <tr className={rowCls}>
       <td
         className={`bg-inherit px-2.5 py-2 ${
-          keyRow ? "font-semibold text-white/80" : "text-white/55"
+          keyRow ? "font-semibold text-white/80" : "text-white/60"
         }`}
       >
         {label}
