@@ -28,14 +28,12 @@ import {
   X
 } from "lucide-react";
 
-import { authedFetch, hasMinRole } from "@/lib/auth";
+import { authedFetch } from "@/lib/auth";
 import {
   OffreInvestissementWizard,
   type OffreInvestissementWizardData
 } from "@/components/leads/OffreInvestissementWizard";
-import { useCurrentUser } from "@/hooks/use-current-user";
 import { useConfirm } from "@/components/confirm-dialog";
-import { AnalysisDefaultsModal } from "@/components/analysis-defaults-modal";
 import { PillPicker } from "@/components/task-pills";
 
 /**
@@ -1328,39 +1326,6 @@ export function LeadAnalysisDetailModal({
   );
 }
 
-// ─── Bouton ⚙️ défauts — visible admin/owner uniquement ──────────
-
-function DefaultsGearButton({
-  group,
-  title
-}: {
-  group: "inputs_manuels" | "mdf_frais";
-  title: string;
-}) {
-  const { user } = useCurrentUser();
-  const [open, setOpen] = useState(false);
-  if (!hasMinRole(user, "admin")) return null;
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        title={title}
-        aria-label="Modifier les défauts"
-        className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[10px] text-white/60 hover:bg-white/10 hover:text-white"
-      >
-        <span className="inline-block h-3 w-3">⚙</span>
-        Défauts
-      </button>
-      <AnalysisDefaultsModal
-        open={open}
-        onClose={() => setOpen(false)}
-        group={group}
-      />
-    </>
-  );
-}
-
 // ─── Vignette d'attachment : fetch via authedFetch puis blob URL ───
 
 function AttachmentThumb({
@@ -1864,12 +1829,6 @@ function ManualAnalysisSection({
       title="Analyse financière — inputs manuels"
       tone="accent"
       subtitle="Paramètres du calcul. Les valeurs par défaut sont pré-remplies ; ajuste au besoin puis lance l'analyse."
-      action={
-        <DefaultsGearButton
-          group="inputs_manuels"
-          title="Modifier les défauts des inputs manuels (taux refi, MDF %, taux prêteur B, TGA, durée projet, etc.)"
-        />
-      }
     >
       {missingRequired.length > 0 ? (
         <div className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px]">
@@ -2598,7 +2557,6 @@ function FraisDemarrageBreakdownPanel({
             Composition de la MDF avec prêteur B
           </h4>
         </div>
-        <DefaultsGearButton group="mdf_frais" title="Modifier les défauts des frais MDF (Évaluateur, Inspection, Notaire, Avocat, Rapport efficacité, % courtiers)" />
       </div>
       <p className="mt-2 text-[10px] text-white/50">
         Total à sortir en cash = {_fmtPctShort(mdfPctNumeric)} du prix
