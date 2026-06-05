@@ -175,7 +175,7 @@ const TYPOLOGY_KEYS = ["1.5", "2.5", "3.5", "4.5", "5.5", "6.5", "7.5", "8.5"];
 
 // ─── Onglets internes de la fiche ────────────────────────────────
 
-type TabKey = "infos" | "analyse" | "resultats" | "details";
+type TabKey = "infos" | "analyse" | "resultats" | "details" | "tri";
 
 const TABS: Array<{
   key: TabKey;
@@ -185,7 +185,8 @@ const TABS: Array<{
   { key: "infos", label: "Infos", icon: ClipboardList },
   { key: "analyse", label: "Analyse", icon: Calculator },
   { key: "resultats", label: "Résultats", icon: TrendingUp },
-  { key: "details", label: "Détails des calculs", icon: ListChecks }
+  { key: "details", label: "Détails des calculs", icon: ListChecks },
+  { key: "tri", label: "TRI", icon: Percent }
 ];
 
 /**
@@ -1318,6 +1319,8 @@ export function LeadAnalysisDetailModal({
                   )}
                 </div>
               ) : null}
+
+              {tab === "tri" ? <LeadTriTab analysisId={analysisId} /> : null}
             </div>
           </>
         )}
@@ -1328,6 +1331,608 @@ export function LeadAnalysisDetailModal({
         analysisId={analysisId}
         data={offreWizardData}
       />
+    </div>
+  );
+}
+
+// ─── Onglet TRI investisseur ──────────────────────────────────────
+//
+// Rendement de l'investisseur selon l'horizon de sortie (an 2 / 7 / 12),
+// basé sur le scénario de refinancement retenu. 4 intrants manuels +
+// 8 intrants repris de l'analyse (éditables). Endpoints :
+//   GET  /lead-analyses/{id}/tri-inputs  → pré-remplissage
+//   POST /lead-analyses/{id}/tri         → dict riche du moteur
+
+/** Les 12 intrants envoyés au moteur (formes exactes du backend). */
+type TriInputs = {
+  prix: number;
+  rpv_achat: number;
+  pret_constr: number;
+  mdf: number;
+  capital: number;
+  pct: number;
+  loyers2: number;
+  dep2: number;
+  valeur2: number;
+  rpv_refi: number;
+  cr_loyers: number;
+  cr_dep: number;
+};
+
+type TriInputsResponse = {
+  inputs: TriInputs;
+  analysis_ready: boolean;
+  auto_fields: string[];
+  manual_fields: string[];
+};
+
+/** Détail d'un horizon de sortie (clés exactes du moteur). */
+type TriHorizon = {
+  loyers: number;
+  depenses: number;
+  rno: number;
+  valeur_immeuble: number;
+  pret_max_refi: number;
+  argent_dispo: number;
+  equite: number;
+  retour_capital: number;
+  surplus: number;
+  cash_investisseur: number;
+  valeur_parts: number;
+};
+
+/** Dict riche renvoyé par POST /tri (clés exactes du backend). */
+type TriResult = {
+  intrants: TriInputs;
+  bases: {
+    hypotheque: number;
+    marge: number;
+    rno2: number;
+    multiplicateur: number;
+    cap_rate: number;
+  };
+  horizons: Record<"2" | "7" | "12", TriHorizon>;
+  sommaire: {
+    mise_initiale: number;
+    cash_an2: number;
+    cash_an7: number;
+    cash_an12: number;
+    valeur_parts_an12: number;
+    total_cash_sans_vente: number;
+  };
+  flux: Record<"2" | "7" | "12", number[]>;
+  tri: {
+    an2: number | null;
+    an7: number | null;
+    an12: number | null;
+  };
+};
+
+/** Les 3 horizons modélisés (ordre d'affichage). */
+const TRI_HORIZONS: Array<{ key: "2" | "7" | "12"; tri: "an2" | "an7" | "an12"; label: string }> = [
+  { key: "2", tri: "an2", label: "an 2" },
+  { key: "7", tri: "an7", label: "an 7" },
+  { key: "12", tri: "an12", label: "an 12" }
+];
+
+/** Champs « repris de l'analyse » : libellé + format d'affichage. */
+const TRI_AUTO_FIELDS: Array<{
+  key: keyof TriInputs;
+  label: string;
+  format: "money" | "percent";
+}> = [
+  { key: "prix", label: "Prix d'achat", format: "money" },
+  { key: "rpv_achat", label: "Ratio prêt-valeur (pré-construction)", format: "percent" },
+  { key: "pret_constr", label: "Prêt construction", format: "money" },
+  { key: "mdf", label: "Mise de fonds nécessaire", format: "money" },
+  { key: "loyers2", label: "Loyers bruts stabilisés (an 2)", format: "money" },
+  { key: "dep2", label: "Dépenses d'opération (an 2)", format: "money" },
+  { key: "valeur2", label: "Valeur de l'immeuble stabilisée (an 2)", format: "money" },
+  { key: "rpv_refi", label: "Ratio prêt-valeur au refinancement", format: "percent" }
+];
+
+/** % affiché à 1 décimale (les intrants ratio sont stockés en fraction). */
+function _fmtPctFraction(n: number | null | undefined, decimals = 1): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  return `${(n * 100).toFixed(decimals)} %`;
+}
+
+/** TRI renvoyé par le moteur (fraction) → « 12.3 % » ou « n/d ». */
+function _fmtTri(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "n/d";
+  return `${(n * 100).toFixed(1)} %`;
+}
+
+function LeadTriTab({ analysisId }: { analysisId: number }) {
+  const [inputs, setInputs] = useState<TriInputs | null>(null);
+  const [analysisReady, setAnalysisReady] = useState(true);
+  const [loadingInputs, setLoadingInputs] = useState(true);
+  const [inputsError, setInputsError] = useState<string | null>(null);
+
+  const [result, setResult] = useState<TriResult | null>(null);
+  const [computing, setComputing] = useState(false);
+  const [computeError, setComputeError] = useState<string | null>(null);
+
+  const [autoOpen, setAutoOpen] = useState(false);
+
+  // Chargement des intrants pré-remplis.
+  useEffect(() => {
+    let cancelled = false;
+    const ctrl = new AbortController();
+    (async () => {
+      setLoadingInputs(true);
+      setInputsError(null);
+      try {
+        const r = await authedFetch(
+          `/api/v1/lead-analyses/${analysisId}/tri-inputs`,
+          { signal: ctrl.signal }
+        );
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const json = (await r.json()) as TriInputsResponse;
+        if (cancelled) return;
+        setInputs(json.inputs);
+        setAnalysisReady(json.analysis_ready);
+      } catch (e) {
+        if (!cancelled && (e as Error).name !== "AbortError") {
+          setInputsError("Impossible de charger les intrants du TRI.");
+        }
+      } finally {
+        if (!cancelled) setLoadingInputs(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      ctrl.abort();
+    };
+  }, [analysisId]);
+
+  function setField(key: keyof TriInputs, value: number | null) {
+    setInputs((prev) => (prev ? { ...prev, [key]: value ?? 0 } : prev));
+  }
+
+  async function compute() {
+    if (!inputs) return;
+    setComputing(true);
+    setComputeError(null);
+    try {
+      const r = await authedFetch(`/api/v1/lead-analyses/${analysisId}/tri`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(inputs)
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const json = (await r.json()) as TriResult;
+      setResult(json);
+    } catch {
+      setComputeError("Le calcul du TRI a échoué. Réessaie.");
+    } finally {
+      setComputing(false);
+    }
+  }
+
+  if (loadingInputs) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-16 text-sm text-white/50">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Chargement des intrants…
+      </div>
+    );
+  }
+
+  if (inputsError || !inputs) {
+    return (
+      <EmptyTabHint
+        icon={Percent}
+        message={inputsError || "Intrants du TRI indisponibles."}
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* En-tête de l'onglet */}
+      <SectionCard
+        icon={Percent}
+        title="TRI investisseur"
+        tone="emerald"
+        subtitle="Rendement de l'investisseur selon l'horizon de sortie — basé sur le scénario de refinancement retenu."
+      >
+        {!analysisReady ? (
+          <div className="mb-4 flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 text-xs text-amber-200">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+            <span>
+              L&apos;analyse financière n&apos;a pas encore tourné : les
+              intrants repris sont à 0. Lance l&apos;analyse dans
+              l&apos;onglet « Analyse » ou saisis les intrants à la main.
+            </span>
+          </div>
+        ) : null}
+
+        {/* Intrants manuels (4) — en haut, bien visibles */}
+        <SubCard icon={Coins} title="Intrants de l'investisseur" cols={4}>
+          <FieldNumber
+            label="Capital total à injecter"
+            value={inputs.capital}
+            onSave={(v) => setField("capital", v)}
+            format="money"
+          />
+          <FieldNumber
+            label="% détenu par l'investisseur"
+            value={inputs.pct * 100}
+            onSave={(v) => setField("pct", v == null ? null : v / 100)}
+            format="percent"
+          />
+          <FieldNumber
+            label="Croissance annuelle des loyers"
+            value={inputs.cr_loyers * 100}
+            onSave={(v) => setField("cr_loyers", v == null ? null : v / 100)}
+            format="percent"
+          />
+          <FieldNumber
+            label="Croissance annuelle des dépenses"
+            value={inputs.cr_dep * 100}
+            onSave={(v) => setField("cr_dep", v == null ? null : v / 100)}
+            format="percent"
+          />
+        </SubCard>
+
+        {/* Intrants repris de l'analyse (8) — repliable */}
+        <div className="mt-3 rounded-xl border border-brand-800 bg-brand-950/40">
+          <button
+            type="button"
+            onClick={() => setAutoOpen((o) => !o)}
+            className="flex w-full items-center justify-between gap-2 px-3.5 py-3 text-left"
+          >
+            <span className="flex items-center gap-2">
+              <ListChecks className="h-3.5 w-3.5 text-accent-500" />
+              <span className="text-xs font-semibold text-white/80">
+                Repris automatiquement de l&apos;analyse
+              </span>
+              <span className="text-[10px] text-white/40">· modifiables si besoin</span>
+            </span>
+            <span className="text-[10px] uppercase tracking-wider text-white/40">
+              {autoOpen ? "Masquer" : "Afficher"}
+            </span>
+          </button>
+          {autoOpen ? (
+            <div className="grid gap-3 px-3.5 pb-3.5 sm:grid-cols-2 lg:grid-cols-4">
+              {TRI_AUTO_FIELDS.map((f) => {
+                const isPct = f.format === "percent";
+                const raw = inputs[f.key] as number;
+                return (
+                  <FieldNumber
+                    key={f.key}
+                    label={f.label}
+                    value={isPct ? raw * 100 : raw}
+                    onSave={(v) =>
+                      setField(f.key, v == null ? null : isPct ? v / 100 : v)
+                    }
+                    format={f.format}
+                  />
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+
+        {/* Bouton lancer le calcul */}
+        {computeError ? (
+          <p className="mt-3 text-xs text-rose-300">{computeError}</p>
+        ) : null}
+        <div className="mt-4 flex justify-end">
+          <button
+            type="button"
+            onClick={() => void compute()}
+            disabled={computing}
+            className="btn-accent inline-flex items-center text-sm disabled:opacity-60"
+          >
+            {computing ? (
+              <>
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                Calcul en cours…
+              </>
+            ) : (
+              <>
+                <Flame className="mr-1.5 h-4 w-4" />
+                Lancer le calcul
+              </>
+            )}
+          </button>
+        </div>
+      </SectionCard>
+
+      {/* Résultats */}
+      {result ? (
+        <TriResults result={result} />
+      ) : (
+        <EmptyTabHint
+          icon={TrendingUp}
+          message="Renseigne les intrants ci-dessus et lance le calcul pour obtenir le TRI par horizon de sortie."
+        />
+      )}
+    </div>
+  );
+}
+
+/** Bloc de résultats du TRI (vedette + métriques + tableaux). */
+function TriResults({ result }: { result: TriResult }) {
+  const [detailOpen, setDetailOpen] = useState(false);
+
+  return (
+    <div className="space-y-5">
+      {/* EN VEDETTE : les 3 TRI par horizon de sortie */}
+      <SectionCard
+        icon={TrendingUp}
+        title="Taux de rendement interne (TRI)"
+        tone="emerald"
+        subtitle="Rendement annualisé de l'investisseur selon l'année de sortie du deal."
+      >
+        <div className="grid gap-3 sm:grid-cols-3">
+          {TRI_HORIZONS.map((h) => (
+            <StatTile
+              key={h.key}
+              icon={Percent}
+              label={`TRI — sortie ${h.label}`}
+              value={_fmtTri(result.tri[h.tri])}
+              tone="emerald"
+            />
+          ))}
+        </div>
+      </SectionCard>
+
+      {/* Bande de métriques clés */}
+      <div className="grid gap-3 sm:grid-cols-3">
+        <StatTile
+          icon={Wallet}
+          label="Mise initiale"
+          value={fmtMoney(result.sommaire.mise_initiale)}
+          tone="neutral"
+        />
+        <StatTile
+          icon={Coins}
+          label="Total cash encaissé (sans vente)"
+          value={fmtMoney(result.sommaire.total_cash_sans_vente)}
+          tone="emerald"
+        />
+        <StatTile
+          icon={PiggyBank}
+          label="Valeur des parts (an 12)"
+          value={fmtMoney(result.sommaire.valeur_parts_an12)}
+          tone="accent"
+        />
+      </div>
+
+      {/* Tableau « Par horizon de sortie » */}
+      <SectionCard
+        icon={TrendingUp}
+        title="Par horizon de sortie"
+        tone="neutral"
+        subtitle="Cash retourné à l'investisseur et valeur de ses parts à chaque horizon."
+      >
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-brand-800">
+                <th className="px-2 py-2 text-left font-semibold text-white/60"></th>
+                {TRI_HORIZONS.map((h) => (
+                  <th
+                    key={h.key}
+                    className="px-2 py-2 text-right font-semibold text-white/70"
+                  >
+                    {h.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="border-t border-brand-800/60">
+                <td className="px-2 py-2 text-white/60">
+                  Cash retourné à l&apos;investisseur
+                </td>
+                {TRI_HORIZONS.map((h) => (
+                  <td
+                    key={h.key}
+                    className="px-2 py-2 text-right font-mono tabular-nums text-emerald-300"
+                  >
+                    {fmtMoney(result.horizons[h.key].cash_investisseur)}
+                  </td>
+                ))}
+              </tr>
+              <tr className="border-t border-brand-800/60">
+                <td className="px-2 py-2 text-white/60">Valeur des parts</td>
+                {TRI_HORIZONS.map((h) => (
+                  <td
+                    key={h.key}
+                    className="px-2 py-2 text-right font-mono tabular-nums text-white/90"
+                  >
+                    {fmtMoney(result.horizons[h.key].valeur_parts)}
+                  </td>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
+
+      {/* Détail du calcul — repliable */}
+      <div className="rounded-2xl border border-brand-800 bg-brand-900">
+        <button
+          type="button"
+          onClick={() => setDetailOpen((o) => !o)}
+          className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
+        >
+          <span className="flex items-center gap-3">
+            <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-white/[0.06] text-white/60">
+              <ListChecks className="h-5 w-5" />
+            </span>
+            <span>
+              <span className="block text-base font-bold text-white">
+                Détail du calcul
+              </span>
+              <span className="mt-0.5 block text-xs text-white/55">
+                Projections par horizon + lignes de temps des flux.
+              </span>
+            </span>
+          </span>
+          <span className="text-[10px] uppercase tracking-wider text-white/40">
+            {detailOpen ? "Masquer" : "Afficher"}
+          </span>
+        </button>
+
+        {detailOpen ? (
+          <div className="space-y-5 px-5 pb-5">
+            <TriDetailTable result={result} />
+            <TriFluxTable result={result} />
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** Tableau dense des projections par horizon (type « détails des calculs »). */
+function TriDetailTable({ result }: { result: TriResult }) {
+  const rows: Array<{ label: string; pick: (h: TriHorizon) => string }> = [
+    { label: "Loyers bruts", pick: (h) => fmtMoney(h.loyers) },
+    { label: "Dépenses d'opération", pick: (h) => fmtMoney(h.depenses) },
+    { label: "RNO (revenu net d'opération)", pick: (h) => fmtMoney(h.rno) },
+    { label: "Valeur de l'immeuble", pick: (h) => fmtMoney(h.valeur_immeuble) },
+    { label: "Prêt max au refinancement", pick: (h) => fmtMoney(h.pret_max_refi) },
+    { label: "Argent disponible au refi", pick: (h) => fmtMoney(h.argent_dispo) },
+    { label: "Équité", pick: (h) => fmtMoney(h.equite) },
+    { label: "Retour de capital", pick: (h) => fmtMoney(h.retour_capital) },
+    { label: "Surplus partagé", pick: (h) => fmtMoney(h.surplus) }
+  ];
+  return (
+    <div className="mt-1">
+      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+        Projections par horizon
+      </h4>
+      <div className="mt-2 overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-brand-800">
+              <th className="px-2 py-1.5 text-left font-semibold text-white/55"></th>
+              {TRI_HORIZONS.map((h) => (
+                <th
+                  key={h.key}
+                  className="px-2 py-1.5 text-right font-semibold text-white/70"
+                >
+                  {h.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.label} className="border-t border-brand-800/60">
+                <td className="px-2 py-1 text-white/60">{row.label}</td>
+                {TRI_HORIZONS.map((h) => (
+                  <td
+                    key={h.key}
+                    className="px-2 py-1 text-right font-mono tabular-nums text-white/90"
+                  >
+                    {row.pick(result.horizons[h.key])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Bases du calcul */}
+      <h4 className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+        Bases du calcul
+      </h4>
+      <table className="mt-2 w-full text-xs">
+        <tbody>
+          <tr className="border-t border-brand-800/60">
+            <td className="px-2 py-1 text-white/60">Hypothèque d&apos;achat</td>
+            <td className="px-2 py-1 text-right font-mono tabular-nums text-white/90">
+              {fmtMoney(result.bases.hypotheque)}
+            </td>
+          </tr>
+          <tr className="border-t border-brand-800/60">
+            <td className="px-2 py-1 text-white/60">Marge de manœuvre</td>
+            <td className="px-2 py-1 text-right font-mono tabular-nums text-white/90">
+              {fmtMoney(result.bases.marge)}
+            </td>
+          </tr>
+          <tr className="border-t border-brand-800/60">
+            <td className="px-2 py-1 text-white/60">RNO an 2</td>
+            <td className="px-2 py-1 text-right font-mono tabular-nums text-white/90">
+              {fmtMoney(result.bases.rno2)}
+            </td>
+          </tr>
+          <tr className="border-t border-brand-800/60">
+            <td className="px-2 py-1 text-white/60">Multiplicateur de valeur</td>
+            <td className="px-2 py-1 text-right font-mono tabular-nums text-white/90">
+              {result.bases.multiplicateur.toFixed(2)}
+            </td>
+          </tr>
+          <tr className="border-t border-brand-800/60">
+            <td className="px-2 py-1 text-white/60">Cap rate</td>
+            <td className="px-2 py-1 text-right font-mono tabular-nums text-white/90">
+              {_fmtPctFraction(result.bases.cap_rate, 2)}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Lignes de temps des flux (3 séries an 0 → 12). */
+function TriFluxTable({ result }: { result: TriResult }) {
+  const years = Array.from({ length: 13 }, (_, i) => i);
+  return (
+    <div className="mt-1">
+      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+        Lignes de temps des flux (scénario de sortie)
+      </h4>
+      <div className="mt-2 overflow-x-auto">
+        <table className="w-full text-[11px]">
+          <thead>
+            <tr className="border-b border-brand-800">
+              <th className="px-2 py-1.5 text-left font-semibold text-white/55">
+                Sortie
+              </th>
+              {years.map((y) => (
+                <th
+                  key={y}
+                  className="px-2 py-1.5 text-right font-semibold text-white/55"
+                >
+                  an {y}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {TRI_HORIZONS.map((h) => (
+              <tr key={h.key} className="border-t border-brand-800/60">
+                <td className="px-2 py-1 whitespace-nowrap text-white/70">
+                  {h.label}
+                </td>
+                {result.flux[h.key].map((f, i) => (
+                  <td
+                    key={i}
+                    className={`px-2 py-1 text-right font-mono tabular-nums ${
+                      f > 0
+                        ? "text-emerald-300"
+                        : f < 0
+                        ? "text-rose-300"
+                        : "text-white/30"
+                    }`}
+                  >
+                    {f === 0 ? "—" : fmtMoney(f)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
