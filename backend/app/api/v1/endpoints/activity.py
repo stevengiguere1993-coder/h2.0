@@ -27,7 +27,7 @@ from datetime import date as date_cls, datetime, time, timedelta
 from typing import List, Optional
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Path, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -37,7 +37,7 @@ from app.models.audit_log import AuditLog
 from app.models.devlog_project_task import DevlogProjectTask
 from app.models.devlog_project import DevlogProject
 from app.models.employe import Employe
-from app.models.entreprise import Entreprise
+from app.models.entreprise import Entreprise, EntreprisePartner
 from app.models.entreprise_tache import EntrepriseTache
 from app.models.project import Project
 from app.models.project_task import ProjectTask
@@ -48,6 +48,15 @@ from app.models.user import User
 from app.services.api_capabilities import POLE_LABELS, readable_poles
 from app.services.audit import log_action
 from app.services.entity_serializers import serialize_entity
+
+# Modèles supplémentaires chargés UNIQUEMENT pour la lecture détaillée
+# (endpoints /activity/entities/...). Importés en tête : ces imports sont
+# déjà tirés ailleurs dans l'app, donc sûrs au démarrage.
+from app.models.devlog_soumission import DevlogSoumission
+from app.models.devlog_soumission_module import DevlogSoumissionModule
+from app.models.devlog_soumission_item import DevlogSoumissionItem
+from app.models.devlog_client import DevlogClient
+from app.models.devlog_lead import DevlogLead
 
 
 TORONTO = ZoneInfo("America/Toronto")
@@ -834,3 +843,239 @@ async def create_task(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         )
+
+
+# ── Lecture détail d'une entité (JSON « full ») ────────────────────
+#
+# Renvoie le JSON complet d'une entité métier par son id, en respectant
+# le scope de pôle de la clé. Réutilisé par les endpoints REST ci-dessous
+# ET par les outils MCP (kratos_get_*). Aucune écriture ; lecture seule.
+#
+# Chaque type d'entité déclare : son modèle ORM, le slug de pôle qui
+# gouverne le scope, le type de sérialisation, et la capacité de lecture
+# détail dédiée. L'autorisation est accordée si la clé porte la capacité
+# détail OU peut lire l'activité de ce pôle (``<pole>:activity:read``) —
+# ce qui préserve la RÉTROCOMPAT (clé sans scopes = lecture tous pôles).
+
+
+#: Type d'entité de détail → (modèle ORM, slug de pôle, entity_type de
+#: sérialisation, capacité de lecture détail dédiée).
+_DETAIL_ENTITIES: dict[str, tuple] = {
+    "soumission": (
+        DevlogSoumission, "devlog", "devlog_soumission",
+        "devlog:soumissions:read",
+    ),
+    "devlog_soumission": (
+        DevlogSoumission, "devlog", "devlog_soumission",
+        "devlog:soumissions:read",
+    ),
+    "deal": (
+        ProspectionDeal, "prospection", "prospection_deal",
+        "prospection:deals:read",
+    ),
+    "prospection_deal": (
+        ProspectionDeal, "prospection", "prospection_deal",
+        "prospection:deals:read",
+    ),
+    "entreprise": (
+        Entreprise, "entreprise", "entreprise", "entreprise:read",
+    ),
+    # Tâches : chaque modèle a son slug de pôle et sa capacité <pole>:tasks:read.
+    "devlog_project_task": (
+        DevlogProjectTask, "devlog", "devlog_project_task",
+        "devlog:tasks:read",
+    ),
+    "entreprise_tache": (
+        EntrepriseTache, "entreprise", "entreprise_tache",
+        "entreprise:tasks:read",
+    ),
+    "prospection_deal_task": (
+        ProspectionDealTask, "prospection", "prospection_deal_task",
+        "prospection:tasks:read",
+    ),
+    "sales_task": (
+        SalesTask, "prospection", "sales_task", "prospection:tasks:read",
+    ),
+    "project_task": (
+        ProjectTask, "construction", "project_task",
+        "construction:tasks:read",
+    ),
+}
+
+
+def _can_read_entity(ctx, pole: str, detail_cap: str) -> bool:
+    """La clé peut-elle lire le détail d'une entité de ce pôle ?
+
+    Vrai si elle porte la capacité de lecture détail dédiée OU si elle peut
+    lire l'activité du pôle (``<pole>:activity:read``). Ce second test
+    couvre la RÉTROCOMPAT : une clé sans scopes lit tous les pôles."""
+    return ctx.has_scope(detail_cap) or ctx.has_scope(f"{pole}:activity:read")
+
+
+async def _enrich_soumission(db, obj: DevlogSoumission) -> None:
+    """Précharge (best-effort, sans casser) lead/client/modules/items sur
+    une soumission devlog pour que le serializer « full » les expose. Les
+    attributs sont posés en clair sur l'instance (pas des relations ORM)."""
+    try:
+        if getattr(obj, "lead_id", None) is not None:
+            obj.lead = await db.get(DevlogLead, obj.lead_id)
+        if getattr(obj, "client_id", None) is not None:
+            obj.client = await db.get(DevlogClient, obj.client_id)
+        mods = (
+            await db.execute(
+                select(DevlogSoumissionModule)
+                .where(DevlogSoumissionModule.soumission_id == obj.id)
+                .order_by(DevlogSoumissionModule.position)
+            )
+        ).scalars().all()
+        obj.modules = list(mods)
+        items = (
+            await db.execute(
+                select(DevlogSoumissionItem)
+                .where(DevlogSoumissionItem.soumission_id == obj.id)
+                .order_by(DevlogSoumissionItem.position)
+            )
+        ).scalars().all()
+        obj.items = list(items)
+    except Exception:
+        # L'enrichissement est best-effort : le détail de base reste servi.
+        pass
+
+
+async def _enrich_entreprise(db, obj: Entreprise) -> None:
+    """Précharge les partenaires d'une entreprise (best-effort)."""
+    try:
+        partners = (
+            await db.execute(
+                select(EntreprisePartner)
+                .where(EntreprisePartner.entreprise_id == obj.id)
+            )
+        ).scalars().all()
+        obj.partners = list(partners)
+    except Exception:
+        pass
+
+
+async def load_entity_full(
+    db,
+    ctx,
+    entity_type: str,
+    entity_id: int,
+) -> dict:
+    """Charge une entité par son id et retourne son JSON « full » sérialisé,
+    après vérification du scope de pôle. Réutilisé par REST et MCP.
+
+    Lève :
+      - ValueError("unknown") si ``entity_type`` n'est pas reconnu ;
+      - PermissionError(message) si la clé n'a pas le scope requis ;
+      - LookupError(message) si l'entité est introuvable.
+    """
+    spec = _DETAIL_ENTITIES.get(entity_type)
+    if spec is None:
+        raise ValueError("unknown")
+    model, pole, ser_type, detail_cap = spec
+
+    if not _can_read_entity(ctx, pole, detail_cap):
+        raise PermissionError(
+            f"Lecture du détail non autorisée pour le pôle "
+            f"« {POLE_LABELS.get(pole, pole)} » sur cette clé d'API."
+        )
+
+    obj = await db.get(model, entity_id)
+    if obj is None:
+        raise LookupError(f"{entity_type} #{entity_id} introuvable.")
+
+    # Préchargement spécifique selon le type (best-effort).
+    if ser_type == "devlog_soumission":
+        await _enrich_soumission(db, obj)
+    elif ser_type == "entreprise":
+        await _enrich_entreprise(db, obj)
+
+    return serialize_entity(ser_type, obj, level="full")
+
+
+@router.get(
+    "/entities/{entity_type}/{entity_id}",
+    summary="Lire le JSON détaillé d'une entité par son id (clé d'API)",
+)
+async def get_entity_detail(
+    ctx: ApiKeyContext,
+    db: DBSession,
+    entity_type: str = Path(
+        ...,
+        description=(
+            "Type d'entité : soumission, deal, entreprise, ou un type de "
+            "tâche (devlog_project_task, entreprise_tache, "
+            "prospection_deal_task, sales_task, project_task)."
+        ),
+    ),
+    entity_id: int = Path(..., description="Identifiant de l'entité."),
+) -> dict:
+    """Renvoie le JSON « full » d'une entité métier (lecture seule),
+    en respectant le scope de pôle de la clé.
+
+    404 si le type est inconnu ou l'entité introuvable ; 403 si la clé n'a
+    pas le scope de lecture du pôle correspondant."""
+    try:
+        return await load_entity_full(db, ctx, entity_type, entity_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Type d'entité inconnu : « {entity_type} ».",
+        )
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        )
+
+
+@router.get(
+    "/entities/soumission/{entity_id}",
+    summary="Détail d'une soumission devlog (clé d'API)",
+)
+async def get_soumission_detail(
+    ctx: ApiKeyContext, db: DBSession,
+    entity_id: int = Path(..., description="Id de la soumission devlog."),
+) -> dict:
+    try:
+        return await load_entity_full(db, ctx, "devlog_soumission", entity_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
+@router.get(
+    "/entities/deal/{entity_id}",
+    summary="Détail d'un deal de prospection (clé d'API)",
+)
+async def get_deal_detail(
+    ctx: ApiKeyContext, db: DBSession,
+    entity_id: int = Path(..., description="Id du deal de prospection."),
+) -> dict:
+    try:
+        return await load_entity_full(db, ctx, "prospection_deal", entity_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
+@router.get(
+    "/entities/entreprise/{entity_id}",
+    summary="Détail d'une entreprise (clé d'API)",
+)
+async def get_entreprise_detail(
+    ctx: ApiKeyContext, db: DBSession,
+    entity_id: int = Path(..., description="Id de l'entreprise."),
+) -> dict:
+    try:
+        return await load_entity_full(db, ctx, "entreprise", entity_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))

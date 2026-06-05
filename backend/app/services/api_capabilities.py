@@ -86,12 +86,98 @@ def _tasks_create(pole_slug: str, pole_label: str) -> dict:
     }
 
 
+def _tasks_read(pole_slug: str, pole_label: str) -> dict:
+    return {
+        "id": f"{pole_slug}:tasks:read",
+        "pole": pole_slug,
+        "label_fr": "Lire le détail d'une tâche",
+        "description": (
+            f"Lire le JSON détaillé d'une tâche du pôle {pole_label} "
+            "par son identifiant (description, statut, assigné, échéance, "
+            "priorité, dates)."
+        ),
+        "category": "lecture",
+        "risk": "faible",
+        "coming_soon": False,
+    }
+
+
+#: Capacités de LECTURE DÉTAIL spécifiques à une entité métier d'un pôle,
+#: au-delà des tâches. Chaque entrée donne accès au JSON complet (niveau
+#: « full ») d'une entité par son id, via l'API REST (``GET
+#: /activity/entities/...``) et les outils MCP (``kratos_get_*``).
+def _detail_read(
+    cap_id: str, pole_slug: str, label_fr: str, description: str
+) -> dict:
+    return {
+        "id": cap_id,
+        "pole": pole_slug,
+        "label_fr": label_fr,
+        "description": description,
+        "category": "lecture",
+        "risk": "faible",
+        "coming_soon": False,
+    }
+
+
+#: Pôles qui portent des tâches lisibles par id (alignés sur les modèles
+#: de tâches sérialisables). Les autres pôles n'ont pas (encore) d'entité
+#: « tâche » exposée par clé d'API.
+_TASK_READ_POLES: tuple[str, ...] = (
+    "devlog",
+    "entreprise",
+    "prospection",
+    "construction",
+)
+
+
 def _build_capabilities() -> list[dict]:
     caps: list[dict] = []
     for pole in POLES:
         slug, label = pole["slug"], pole["label_fr"]
         caps.append(_activity_read(slug, label))
         caps.append(_tasks_create(slug, label))
+        if slug in _TASK_READ_POLES:
+            caps.append(_tasks_read(slug, label))
+    # Lecture détail des entités métier de plus haut niveau (au-delà des
+    # tâches) — JSON complet par id, exposé en REST + MCP.
+    caps.append(
+        _detail_read(
+            "devlog:soumissions:read",
+            "devlog",
+            "Lire le détail d'une soumission",
+            (
+                "Lire le JSON détaillé d'une soumission (devis) du pôle "
+                "Développement logiciel par son id : client/lead, statut, "
+                "modules + fonctionnalités + tâches du chargé de projet, "
+                "montants (HT, TPS, TVQ, TTC), taux, dates, lien public."
+            ),
+        )
+    )
+    caps.append(
+        _detail_read(
+            "prospection:deals:read",
+            "prospection",
+            "Lire le détail d'un deal",
+            (
+                "Lire le JSON détaillé d'un deal du Pipeline Prospection "
+                "par son id : adresse, étape pipeline, et données clés de "
+                "l'analyse financière liée si disponibles."
+            ),
+        )
+    )
+    caps.append(
+        _detail_read(
+            "entreprise:read",
+            "entreprise",
+            "Lire le détail d'une entreprise",
+            (
+                "Lire le JSON détaillé d'une entreprise du pôle Gestion "
+                "d'entreprises par son id : nom, type, NEQ, contact "
+                "principal, description, statut."
+            ),
+        )
+    )
     # Capacité SPÉCIFIQUE au Développement logiciel, déclarée mais
     # « à venir » : brouillon de soumission. NON implémentée dans ce lot
     # → marquée coming_soon (jamais accordée, affichée désactivée).
