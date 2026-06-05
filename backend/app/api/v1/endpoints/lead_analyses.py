@@ -3061,8 +3061,53 @@ def _derive_tri_auto_inputs(results: dict) -> dict:
     }
 
 
-def _persisted_manual_inputs(rec: LeadAnalysis) -> dict:
-    """Lit les 4 intrants manuels persistés sur la fiche, ou défauts."""
+async def _load_tri_defaults(db) -> dict:
+    """Charge les défauts des 3 intrants manuels du TRI configurables
+    (groupe ``tri_defaults``) et les convertit en FRACTION.
+
+    Les valeurs en BD sont stockées en POURCENTAGE (50.0 = 50 %, 3.0 =
+    3 %) pour s'aligner sur la convention des autres défauts ; le moteur
+    de TRI attend des fractions (0.5, 0.03). On convertit donc ÷100.
+
+    Retourne ``{"pct":.., "cr_loyers":.., "cr_dep":..}``. Toute clé
+    absente / vide retombe sur ``_TRI_DEFAULTS`` (déjà en fraction) pour
+    préserver le comportement historique. Le ``capital`` n'a PAS de
+    défaut global (propre à chaque deal)."""
+    out = {
+        "pct": _TRI_DEFAULTS["pct"],
+        "cr_loyers": _TRI_DEFAULTS["cr_loyers"],
+        "cr_dep": _TRI_DEFAULTS["cr_dep"],
+    }
+    key_to_field = {
+        "tri_pct_investisseur_defaut": "pct",
+        "tri_croissance_loyers_defaut": "cr_loyers",
+        "tri_croissance_depenses_defaut": "cr_dep",
+    }
+    try:
+        rows = (
+            await db.execute(select(ProspectionAnalysisDefault))
+        ).scalars().all()
+        for row in rows:
+            field = key_to_field.get(row.key)
+            if field is not None and row.value_float is not None:
+                # BD en pct (50.0, 3.0) → fraction (0.5, 0.03).
+                out[field] = float(row.value_float) / 100.0
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to load TRI defaults from DB: %s", exc)
+    return out
+
+
+def _persisted_manual_inputs(
+    rec: LeadAnalysis, tri_defaults: Optional[dict] = None
+) -> dict:
+    """Lit les 4 intrants manuels persistés sur la fiche, ou défauts.
+
+    Quand un intrant n'a PAS de valeur persistée sur la fiche, on
+    pré-remplit depuis ``tri_defaults`` (chargé du groupe BD
+    ``tri_defaults``, déjà converti en fraction). Si ``tri_defaults`` est
+    None ou qu'une clé manque, on retombe sur ``_TRI_DEFAULTS`` (en dur).
+    Le ``capital`` reste vide par défaut (propre à chaque deal)."""
+    d = {**_TRI_DEFAULTS, **(tri_defaults or {})}
     cap = (
         float(rec.tri_capital_injecte)
         if rec.tri_capital_injecte is not None
@@ -3071,17 +3116,17 @@ def _persisted_manual_inputs(rec: LeadAnalysis) -> dict:
     pct = (
         float(rec.tri_pct_investisseur)
         if rec.tri_pct_investisseur is not None
-        else _TRI_DEFAULTS["pct"]
+        else d["pct"]
     )
     cr_l = (
         float(rec.tri_croissance_loyers)
         if rec.tri_croissance_loyers is not None
-        else _TRI_DEFAULTS["cr_loyers"]
+        else d["cr_loyers"]
     )
     cr_d = (
         float(rec.tri_croissance_depenses)
         if rec.tri_croissance_depenses is not None
-        else _TRI_DEFAULTS["cr_dep"]
+        else d["cr_dep"]
     )
     return {"capital": cap, "pct": pct, "cr_loyers": cr_l, "cr_dep": cr_d}
 
@@ -3096,7 +3141,9 @@ async def get_tri_inputs(
 ) -> TriInputsResponse:
     """Renvoie les 8 intrants AUTO dérivés de l'analyse financière
     (éditables côté front) + les 4 intrants MANUELS persistés sur la
-    fiche (ou défauts : pct=0.5, croissances=0.03, capital=null).
+    fiche, ou pré-remplis depuis les défauts configurables du groupe BD
+    ``tri_defaults`` (pct, croissances loyers/dépenses) — le capital
+    reste vide (propre à chaque deal).
 
     Si l'analyse financière n'a pas encore tourné
     (``analysis_results_json`` absent), les 8 auto valent 0 et
@@ -3120,7 +3167,10 @@ async def get_tri_inputs(
         except Exception:  # noqa: BLE001
             analysis_ready = False
 
-    manual = _persisted_manual_inputs(rec)
+    # Défauts configurables (Paramètres → groupe ``tri_defaults``) pour
+    # pré-remplir les intrants manuels non encore saisis sur la fiche.
+    tri_defaults = await _load_tri_defaults(db)
+    manual = _persisted_manual_inputs(rec, tri_defaults)
     inputs = TriInputs(
         **auto,
         capital=manual["capital"] or 0.0,

@@ -2198,6 +2198,51 @@ async def init_db() -> None:
                     0.01,
                     "baremes_fiscaux",
                 ),
+                # ── Groupe : Défauts du TRI investisseur (juin 2026) ──
+                # Pré-remplissage des 3 intrants MANUELS du calculateur
+                # de TRI (onglet TRI de la fiche d'analyse) quand la
+                # fiche n'a pas encore de valeur persistée. Stockés en
+                # POURCENTAGE (50.0 = 50 %, 3.0 = 3 %) ; convertis en
+                # fraction (÷100) au runtime côté ``get_tri_inputs``
+                # (pct, cr_loyers, cr_dep). Le ``capital`` n'a PAS de
+                # défaut global (propre à chaque deal). Modifiables dans
+                # Paramètres (GET ?group=tri_defaults).
+                (
+                    "tri_pct_investisseur_defaut",
+                    50.0,
+                    "TRI — % détenu par l'investisseur (défaut)",
+                    "Pourcentage des parts détenu par l'investisseur "
+                    "minoritaire, pré-rempli dans le calculateur de TRI "
+                    "quand la fiche n'a pas de valeur saisie. Défaut 50 %.",
+                    0.0,
+                    100.0,
+                    0.5,
+                    "tri_defaults",
+                ),
+                (
+                    "tri_croissance_loyers_defaut",
+                    3.0,
+                    "TRI — croissance annuelle des loyers (défaut)",
+                    "Taux de croissance annuel composé des loyers, "
+                    "pré-rempli dans le calculateur de TRI quand la fiche "
+                    "n'a pas de valeur saisie. Défaut 3 %.",
+                    0.0,
+                    20.0,
+                    0.1,
+                    "tri_defaults",
+                ),
+                (
+                    "tri_croissance_depenses_defaut",
+                    3.0,
+                    "TRI — croissance annuelle des dépenses (défaut)",
+                    "Taux de croissance annuel composé des dépenses "
+                    "d'opération, pré-rempli dans le calculateur de TRI "
+                    "quand la fiche n'a pas de valeur saisie. Défaut 3 %.",
+                    0.0,
+                    20.0,
+                    0.1,
+                    "tri_defaults",
+                ),
         ):
             try:
                 # UPSERT : on insère si la clé n'existe pas, sinon on
