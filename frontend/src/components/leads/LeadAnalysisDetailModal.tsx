@@ -1,17 +1,30 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { ComponentType, ReactNode } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
   Ban,
+  Banknote,
+  Building2,
+  Calculator,
   CheckCircle2,
+  ClipboardList,
+  Coins,
   Download,
   FileDown,
+  FileText,
   Flame,
+  Gauge,
   Info,
+  ListChecks,
   Loader2,
+  Percent,
+  PiggyBank,
   Sparkles,
+  TrendingUp,
+  Wallet,
   X
 } from "lucide-react";
 
@@ -162,13 +175,277 @@ const COLUMNS: Array<{
 
 const TYPOLOGY_KEYS = ["1.5", "2.5", "3.5", "4.5", "5.5", "6.5", "7.5", "8.5"];
 
-function fmtMoney(n: number | null): string {
-  if (n == null) return "—";
+// ─── Onglets internes de la fiche ────────────────────────────────
+
+type TabKey = "infos" | "analyse" | "resultats" | "details";
+
+const TABS: Array<{
+  key: TabKey;
+  label: string;
+  icon: ComponentType<{ className?: string }>;
+}> = [
+  { key: "infos", label: "Infos", icon: ClipboardList },
+  { key: "analyse", label: "Analyse", icon: Calculator },
+  { key: "resultats", label: "Résultats", icon: TrendingUp },
+  { key: "details", label: "Détails des calculs", icon: ListChecks }
+];
+
+/**
+ * Formatage monétaire unique de la fiche (style « 12 345 $ »). Source de
+ * vérité unifiée : les anciens helpers `_formatMoneyExcel` et
+ * `_fmtMoneyDetail` (logique identique) délèguent désormais ici.
+ */
+function fmtMoney(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—";
   const rounded = Math.round(n);
   const sign = rounded < 0 ? "-" : "";
   const abs = Math.abs(rounded).toString();
   const withSep = abs.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
   return `${sign}${withSep} $`;
+}
+
+// ─── Briques UI réutilisables (look 2026) ────────────────────────
+
+type SectionTone = "neutral" | "accent" | "emerald" | "amber";
+
+const SECTION_TONE: Record<
+  SectionTone,
+  { tile: string; border: string }
+> = {
+  neutral: {
+    tile: "bg-white/[0.06] text-white/70",
+    border: "border-brand-800 bg-brand-900"
+  },
+  accent: {
+    tile: "bg-accent-500/15 text-accent-500",
+    border: "border-accent-500/30 bg-accent-500/[0.06]"
+  },
+  emerald: {
+    tile: "bg-emerald-500/15 text-emerald-400",
+    border: "border-emerald-500/30 bg-emerald-500/[0.06]"
+  },
+  amber: {
+    tile: "bg-amber-500/15 text-amber-400",
+    border: "border-amber-500/30 bg-amber-500/[0.06]"
+  }
+};
+
+/**
+ * Carte de section « standard 2026 » : conteneur arrondi + en-tête à
+ * tuile-icône colorée, titre `text-base font-bold`, sous-titre discret.
+ * Imite `prospection/parametres/page.tsx`.
+ */
+function SectionCard({
+  icon: Icon,
+  title,
+  subtitle,
+  tone = "neutral",
+  action,
+  children,
+  className = ""
+}: {
+  icon: ComponentType<{ className?: string }>;
+  title: string;
+  subtitle?: ReactNode;
+  tone?: SectionTone;
+  action?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  const t = SECTION_TONE[tone];
+  return (
+    <section
+      className={`rounded-2xl border p-5 ${t.border} ${className}`}
+    >
+      <header className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span
+            className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl ${t.tile}`}
+          >
+            <Icon className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <h3 className="text-base font-bold text-white">{title}</h3>
+            {subtitle ? (
+              <p className="mt-0.5 text-xs text-white/60">{subtitle}</p>
+            ) : null}
+          </div>
+        </div>
+        {action ? <div className="flex-shrink-0">{action}</div> : null}
+      </header>
+      <div className="mt-4">{children}</div>
+    </section>
+  );
+}
+
+/**
+ * Sous-carte thématique pour regrouper des inputs (ex. « Financement »,
+ * « Frais & projet »). Micro-titre lisible + grille de champs.
+ */
+function SubCard({
+  icon: Icon,
+  title,
+  children,
+  cols = 3
+}: {
+  icon?: ComponentType<{ className?: string }>;
+  title: string;
+  children: ReactNode;
+  cols?: 2 | 3 | 4;
+}) {
+  const gridCls =
+    cols === 4
+      ? "sm:grid-cols-4"
+      : cols === 2
+      ? "sm:grid-cols-2"
+      : "sm:grid-cols-3";
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-950/40 p-3.5">
+      <div className="flex items-center gap-2">
+        {Icon ? <Icon className="h-3.5 w-3.5 text-accent-500" /> : null}
+        <p className="text-xs font-semibold text-white/80">{title}</p>
+      </div>
+      <div className={`mt-3 grid gap-3 ${gridCls}`}>{children}</div>
+    </div>
+  );
+}
+
+/**
+ * Tuile de statistique pour la bande « hero metrics ». Signal couleur
+ * emerald (bon) / rose (négatif) / neutre. Pattern compact inspiré de
+ * `lead-analysis-summary.tsx`.
+ */
+function StatTile({
+  icon: Icon,
+  label,
+  value,
+  hint,
+  tone = "neutral"
+}: {
+  icon: ComponentType<{ className?: string }>;
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "neutral" | "emerald" | "rose" | "amber" | "accent";
+}) {
+  const toneCls =
+    tone === "emerald"
+      ? "text-emerald-300"
+      : tone === "rose"
+      ? "text-rose-300"
+      : tone === "amber"
+      ? "text-amber-200"
+      : tone === "accent"
+      ? "text-accent-500"
+      : "text-white";
+  const iconCls =
+    tone === "emerald"
+      ? "bg-emerald-500/15 text-emerald-400"
+      : tone === "rose"
+      ? "bg-rose-500/15 text-rose-400"
+      : tone === "amber"
+      ? "bg-amber-500/15 text-amber-400"
+      : tone === "accent"
+      ? "bg-accent-500/15 text-accent-500"
+      : "bg-white/[0.06] text-white/60";
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-900 p-3">
+      <div className="flex items-center gap-2">
+        <span
+          className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-lg ${iconCls}`}
+        >
+          <Icon className="h-3.5 w-3.5" />
+        </span>
+        <p className="truncate text-[10px] uppercase tracking-wider text-white/50">
+          {label}
+        </p>
+      </div>
+      <p
+        className={`mt-1.5 truncate font-mono text-base font-bold tabular-nums ${toneCls}`}
+        title={value}
+      >
+        {value}
+      </p>
+      {hint ? (
+        <p className="mt-0.5 truncate text-[10px] text-white/40" title={hint}>
+          {hint}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Hook de feedback de sauvegarde réutilisable. Affiche brièvement
+ * « Enregistré ✓ » après chaque sauvegarde au blur (la sauvegarde était
+ * jusqu'ici silencieuse). `markSaved()` à appeler après un patch réussi ;
+ * `markError()` en cas d'échec.
+ */
+function useSaveFeedback() {
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error">(
+    "idle"
+  );
+  useEffect(() => {
+    if (state !== "saved") return;
+    const t = setTimeout(() => setState("idle"), 2200);
+    return () => clearTimeout(t);
+  }, [state]);
+  return {
+    state,
+    markSaving: () => setState("saving"),
+    markSaved: () => setState("saved"),
+    markError: () => setState("error"),
+    reset: () => setState("idle")
+  };
+}
+
+/** Petit badge inline « Enregistré ✓ » piloté par `useSaveFeedback`. */
+function SaveIndicator({
+  state
+}: {
+  state: "idle" | "saving" | "saved" | "error";
+}) {
+  if (state === "idle") return null;
+  if (state === "saving") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium text-white/60">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        Enregistrement…
+      </span>
+    );
+  }
+  if (state === "error") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[10px] font-medium text-rose-300">
+        <AlertTriangle className="h-3 w-3" />
+        Échec de l&apos;enregistrement
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-300">
+      <CheckCircle2 className="h-3 w-3" />
+      Enregistré
+    </span>
+  );
+}
+
+/** Encart vide pour un onglet sans données (Résultats / Détails). */
+function EmptyTabHint({
+  icon: Icon,
+  message
+}: {
+  icon: ComponentType<{ className?: string }>;
+  message: string;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-brand-800 bg-brand-900/40 px-6 py-12 text-center">
+      <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/[0.04] text-white/40">
+        <Icon className="h-6 w-6" />
+      </span>
+      <p className="max-w-sm text-sm text-white/50">{message}</p>
+    </div>
+  );
 }
 
 // ─── Composant principal ──────────────────────────────────────────
@@ -192,6 +469,8 @@ export function LeadAnalysisDetailModal({
   const [data, setData] = useState<LeadDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<TabKey>("infos");
+  const save = useSaveFeedback();
 
   useEffect(() => {
     if (!open) return;
@@ -225,14 +504,18 @@ export function LeadAnalysisDetailModal({
   async function patchField(field: string, value: unknown) {
     if (!data) return;
     setData({ ...data, [field]: value } as LeadDetail);
+    save.markSaving();
     try {
-      await authedFetch(`/api/v1/lead-analyses/${analysisId}`, {
+      const r = await authedFetch(`/api/v1/lead-analyses/${analysisId}`, {
         method: "PATCH",
         body: JSON.stringify({ [field]: value })
       });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      save.markSaved();
       onAfterUpdate?.();
     } catch {
-      /* silent — local state retained */
+      /* local state retained — surface a discreet error */
+      save.markError();
     }
   }
 
@@ -440,6 +723,61 @@ export function LeadAnalysisDetailModal({
     }
   }
 
+  // ── Hero metrics : chiffres clés dérivés du dernier calcul ──────
+  const hero = useMemo(() => {
+    if (!data) return null;
+    let results: AnalysisResults | null = null;
+    try {
+      results = data.analysis_results_json
+        ? (JSON.parse(data.analysis_results_json) as AnalysisResults)
+        : null;
+    } catch {
+      results = null;
+    }
+    // Best refi : on retient le scénario gagnant pour afficher son
+    // cashflow / son équité dans la bande hero. On l'identifie par son
+    // équité finale (= best_refi.amount, cf. « Montant (équité finale) »),
+    // avec repli sur le libellé puis sur le meilleur refi disponible.
+    // NB : purement indicatif — les chiffres faisant foi restent le
+    // tableau de résultats, intact.
+    const scen = results?.scenarios;
+    const bestProgram = results?.best_refi.program ?? data.best_refi_program;
+    const bestAmount = results?.best_refi.amount ?? null;
+    let winner: ScenarioResult | null = null;
+    if (scen) {
+      const refis: Array<ScenarioResult | null> = [
+        scen.refi_aph_100,
+        scen.refi_aph_50,
+        scen.refi_schl
+      ];
+      winner =
+        (bestAmount != null
+          ? refis.find(
+              (s) =>
+                s &&
+                s.equite_a_la_fin != null &&
+                Math.abs(s.equite_a_la_fin - bestAmount) < 1
+            )
+          : null) ||
+        (bestProgram
+          ? refis.find((s) => s && (s.label === bestProgram || s.name === bestProgram))
+          : null) ||
+        scen.refi_aph_100 ||
+        scen.refi_aph_50 ||
+        scen.refi_schl ||
+        null;
+    }
+    return {
+      askingPrice: data.asking_price,
+      bestRefiAmount: results?.best_refi.amount ?? data.best_refi_amount,
+      bestRefiProgram: bestProgram ?? null,
+      mdf: results?.mdf_preteur_b ?? data.mdf_preteur_b,
+      cashflow: winner?.cashflow_annuel ?? null,
+      equite: winner?.equite_a_la_fin ?? null,
+      hasResults: !!results
+    };
+  }, [data]);
+
   if (!open) return null;
 
   return (
@@ -448,15 +786,18 @@ export function LeadAnalysisDetailModal({
       onClick={onClose}
     >
       <div
-        className="flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-brand-800 bg-brand-950"
+        className="flex max-h-[calc(100vh-2rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-brand-800 bg-brand-950"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex flex-shrink-0 items-start justify-between gap-3 border-b border-brand-800 px-5 py-4">
           <div className="min-w-0 flex-1">
-            <p className="text-[10px] uppercase tracking-wider text-accent-500">
-              Fiche d&apos;analyse
-            </p>
-            <h2 className="mt-0.5 truncate text-base font-bold text-white">
+            <div className="flex items-center gap-2">
+              <p className="text-[10px] uppercase tracking-wider text-accent-500">
+                Fiche d&apos;analyse
+              </p>
+              <SaveIndicator state={save.state} />
+            </div>
+            <h2 className="mt-0.5 truncate text-lg font-bold text-white">
               {data?.address || `Lead #${analysisId}`}
             </h2>
             {data ? <ExtractionBadgeInline modelUsed={data.model_used} /> : null}
@@ -534,49 +875,128 @@ export function LeadAnalysisDetailModal({
           </div>
         ) : null}
 
-        <div className="flex-1 overflow-y-auto px-5 py-4">
-          {loading ? (
+        {loading ? (
+          <div className="flex-1 overflow-y-auto px-5 py-4">
             <p className="py-12 text-center text-sm text-white/40">
               <Loader2 className="mr-2 inline h-4 w-4 animate-spin" />
               Chargement…
             </p>
-          ) : error ? (
+          </div>
+        ) : error ? (
+          <div className="flex-1 overflow-y-auto px-5 py-4">
             <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
               {error}
             </p>
-          ) : !data ? null : (
-            <div className="space-y-5">
-              <section className="rounded-xl border border-brand-800 bg-brand-900 p-4">
-                <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-                  Statut du lead
-                </h3>
-                <p className="mt-1 text-[10px] text-white/50">
-                  Change la colonne du kanban depuis ici aussi.
+          </div>
+        ) : !data ? null : (
+          <>
+            {/* ── Zone fixe : Statut + hero metrics + onglets ─────── */}
+            <div className="flex-shrink-0 border-b border-brand-800 bg-brand-950 px-5 pt-4">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
+                  Statut
                 </p>
-                <div className="mt-2">
-                  <PillPicker
-                    options={COLUMNS.map((c) => ({
-                      value: c.key,
-                      label: c.label,
-                      dot: c.dot,
-                      cls: c.dot
-                    }))}
-                    value={data.status}
-                    onChange={(v) => patchField("status", v)}
-                    ariaLabel="Statut du lead"
+                <PillPicker
+                  options={COLUMNS.map((c) => ({
+                    value: c.key,
+                    label: c.label,
+                    dot: c.dot,
+                    cls: c.dot
+                  }))}
+                  value={data.status}
+                  onChange={(v) => patchField("status", v)}
+                  ariaLabel="Statut du lead"
+                />
+              </div>
+
+              {/* Bande de hero metrics */}
+              {hero ? (
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+                  <StatTile
+                    icon={Banknote}
+                    label="Prix demandé"
+                    value={fmtMoney(hero.askingPrice)}
+                    tone="accent"
+                  />
+                  <StatTile
+                    icon={TrendingUp}
+                    label="Best refi"
+                    value={fmtMoney(hero.bestRefiAmount)}
+                    hint={hero.bestRefiProgram || undefined}
+                    tone={
+                      hero.bestRefiAmount != null && hero.bestRefiAmount >= 0
+                        ? "emerald"
+                        : "rose"
+                    }
+                  />
+                  <StatTile
+                    icon={Wallet}
+                    label="MDF prêteur B"
+                    value={fmtMoney(hero.mdf)}
+                    tone="amber"
+                  />
+                  <StatTile
+                    icon={Coins}
+                    label="Cashflow / an"
+                    value={hero.cashflow != null ? fmtMoney(hero.cashflow) : "—"}
+                    tone={
+                      hero.cashflow == null
+                        ? "neutral"
+                        : hero.cashflow >= 0
+                        ? "emerald"
+                        : "rose"
+                    }
+                  />
+                  <StatTile
+                    icon={PiggyBank}
+                    label="Équité à la fin"
+                    value={hero.equite != null ? fmtMoney(hero.equite) : "—"}
+                    tone={
+                      hero.equite == null
+                        ? "neutral"
+                        : hero.equite >= 0
+                        ? "emerald"
+                        : "rose"
+                    }
                   />
                 </div>
-              </section>
+              ) : null}
 
-              <section>
-                <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-                  Infos extraites
-                </h3>
-                <p className="mt-0.5 text-[11px] text-white/40">
-                  Champs pré-remplis par l&apos;IA — clique pour corriger.
-                  Les champs vides sont à compléter manuellement.
-                </p>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              {/* Barre d'onglets */}
+              <div className="mt-3 flex gap-1 overflow-x-auto">
+                {TABS.map((t) => {
+                  const active = tab === t.key;
+                  const Icon = t.icon;
+                  return (
+                    <button
+                      key={t.key}
+                      type="button"
+                      onClick={() => setTab(t.key)}
+                      className={`inline-flex flex-shrink-0 items-center gap-1.5 rounded-t-lg border-b-2 px-3 py-2 text-xs font-semibold transition ${
+                        active
+                          ? "border-accent-500 text-white"
+                          : "border-transparent text-white/50 hover:text-white/80"
+                      }`}
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* ── Zone scrollable : contenu de l'onglet actif ────── */}
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {tab === "infos" ? (
+                <div className="space-y-5">
+              <SectionCard
+                icon={Building2}
+                title="Infos extraites"
+                tone="neutral"
+                subtitle="Champs pré-remplis par l'IA — clique pour corriger. Les champs vides sont à compléter manuellement."
+              >
+                <div className="grid gap-3 sm:grid-cols-2">
                   <FieldText
                     label="Adresse"
                     value={data.address}
@@ -711,8 +1131,8 @@ export function LeadAnalysisDetailModal({
                   </p>
                 ) : null}
 
-                <div className="mt-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
+                <div className="mt-4 rounded-xl border border-brand-800 bg-brand-950/40 p-3.5">
+                  <p className="text-xs font-semibold text-white/80">
                     Typologie des logements
                   </p>
                   <p className="mt-0.5 text-[10px] text-white/40">
@@ -727,10 +1147,8 @@ export function LeadAnalysisDetailModal({
                   />
                 </div>
 
-                <div className="mt-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
-                    Description
-                  </p>
+                <div className="mt-4">
+                  <label className="label !text-xs">Description</label>
                   <textarea
                     rows={3}
                     value={data.description || ""}
@@ -739,18 +1157,18 @@ export function LeadAnalysisDetailModal({
                     }
                     onBlur={(e) => patchField("description", e.target.value)}
                     placeholder="Description / notes du courtier"
-                    className="input mt-1 text-xs"
+                    className="input text-xs"
                   />
                 </div>
-              </section>
+              </SectionCard>
 
               {/* Sources originales */}
               {data.source_urls || data.source_text || data.attachments?.length ? (
-                <section>
-                  <div className="flex items-center justify-between gap-2">
-                    <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-                      Sources originales
-                    </h3>
+                <SectionCard
+                  icon={FileText}
+                  title="Sources originales"
+                  tone="neutral"
+                  action={
                     <ReExtractButtons
                       id={analysisId}
                       hasSources={
@@ -768,9 +1186,10 @@ export function LeadAnalysisDetailModal({
                         onAfterUpdate?.();
                       }}
                     />
-                  </div>
+                  }
+                >
                   {data.source_urls ? (
-                    <div className="mt-2 space-y-1">
+                    <div className="space-y-1">
                       {data.source_urls
                         .split("\n")
                         .filter((u) => u.trim())
@@ -808,58 +1227,19 @@ export function LeadAnalysisDetailModal({
                       </pre>
                     </details>
                   ) : null}
-                </section>
+                </SectionCard>
               ) : null}
 
               {/* Phase A3 — Panneau "Validation de l'extraction" */}
               <ValidationPanel warnings={data.validation_warnings} />
 
-              {/* Section Analyse financière — inputs manuels + bouton */}
-              <ManualAnalysisSection
-                data={data}
-                onPatch={patchField}
-                onRefresh={async () => {
-                  const r = await authedFetch(
-                    `/api/v1/lead-analyses/${analysisId}`
-                  );
-                  if (r.ok) setData((await r.json()) as LeadDetail);
-                  onAfterUpdate?.();
-                }}
-              />
-
-              {/* Résultats si analyse exécutée */}
-              {data.analysis_results_json ? (
-                <AnalysisResultsTable
-                  resultsJson={data.analysis_results_json}
-                  overridesJson={data.frais_demarrage_overrides_json}
-                  financablesJson={data.frais_demarrage_financables_json}
-                  mdfPct={data.mdf_preteur_b_pct ?? 25}
-                  prixAchat={data.asking_price ?? 0}
-                  fraisDemarrageTotalDb={null}
-                  mdfPreteurBDb={data.mdf_preteur_b ?? null}
-                  onPatchOverrides={(j) =>
-                    patchField("frais_demarrage_overrides_json", j)
-                  }
-                  onPatchFinancables={(j) =>
-                    patchField("frais_demarrage_financables_json", j)
-                  }
-                />
-              ) : null}
-
-              {/* Détail granulaire des calculs (style Excel) */}
-              {data.analysis_results_json ? (
-                <CalculationDetailsSection
-                  resultsJson={data.analysis_results_json}
-                  overridesJson={data.frais_demarrage_overrides_json}
-                  lead={data}
-                />
-              ) : null}
-
               {/* Notes internes */}
-              <section>
-                <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-                  Notes internes
-                </h3>
+              <SectionCard
+                icon={FileText}
+                title="Notes internes"
+                tone="neutral"
+                subtitle="Tes notes privées sur ce lead — visibles uniquement dans la fiche."
+              >
                 <textarea
                   rows={3}
                   value={data.notes || ""}
@@ -868,13 +1248,75 @@ export function LeadAnalysisDetailModal({
                   }
                   onBlur={(e) => patchField("notes", e.target.value)}
                   placeholder="Tes notes privées sur ce lead"
-                  className="input mt-2 text-xs"
+                  className="input text-xs"
                 />
-              </section>
+              </SectionCard>
+                </div>
+              ) : null}
 
+              {tab === "analyse" ? (
+                <div className="space-y-5">
+                  {/* Section Analyse financière — inputs manuels + bouton */}
+                  <ManualAnalysisSection
+                    data={data}
+                    onPatch={patchField}
+                    onRefresh={async () => {
+                      const r = await authedFetch(
+                        `/api/v1/lead-analyses/${analysisId}`
+                      );
+                      if (r.ok) setData((await r.json()) as LeadDetail);
+                      onAfterUpdate?.();
+                    }}
+                  />
+                </div>
+              ) : null}
+
+              {tab === "resultats" ? (
+                <div className="space-y-5">
+                  {data.analysis_results_json ? (
+                    <AnalysisResultsTable
+                      resultsJson={data.analysis_results_json}
+                      overridesJson={data.frais_demarrage_overrides_json}
+                      financablesJson={data.frais_demarrage_financables_json}
+                      mdfPct={data.mdf_preteur_b_pct ?? 25}
+                      prixAchat={data.asking_price ?? 0}
+                      fraisDemarrageTotalDb={null}
+                      mdfPreteurBDb={data.mdf_preteur_b ?? null}
+                      onPatchOverrides={(j) =>
+                        patchField("frais_demarrage_overrides_json", j)
+                      }
+                      onPatchFinancables={(j) =>
+                        patchField("frais_demarrage_financables_json", j)
+                      }
+                    />
+                  ) : (
+                    <EmptyTabHint
+                      icon={TrendingUp}
+                      message="Aucun résultat pour le moment. Renseigne les inputs dans l'onglet « Analyse » puis lance le calcul."
+                    />
+                  )}
+                </div>
+              ) : null}
+
+              {tab === "details" ? (
+                <div className="space-y-5">
+                  {data.analysis_results_json ? (
+                    <CalculationDetailsSection
+                      resultsJson={data.analysis_results_json}
+                      overridesJson={data.frais_demarrage_overrides_json}
+                      lead={data}
+                    />
+                  ) : (
+                    <EmptyTabHint
+                      icon={ListChecks}
+                      message="Le détail granulaire des calculs apparaîtra ici une fois l'analyse lancée."
+                    />
+                  )}
+                </div>
+              ) : null}
             </div>
-          )}
-        </div>
+          </>
+        )}
       </div>
       <OffreInvestissementWizard
         open={offreWizardOpen}
@@ -1043,7 +1485,7 @@ function FieldText({
           missingRequired
             ? "text-rose-400 font-semibold"
             : necessaryForCalc
-            ? "text-amber-600 dark:text-amber-300/80"
+            ? "text-amber-300/80"
             : "text-white/50"
         }`}
       >
@@ -1067,13 +1509,9 @@ function FieldText({
   );
 }
 
+/** Alias historique — délègue au formatage monétaire unifié. */
 function _formatMoneyExcel(n: number): string {
-  const sign = n < 0 ? "-" : "";
-  const rounded = Math.round(Math.abs(n));
-  const withSep = rounded
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-  return `${sign}${withSep} $`;
+  return fmtMoney(n);
 }
 
 function _formatPercentExcel(n: number): string {
@@ -1137,7 +1575,7 @@ function FieldNumber({
             missingRequired
               ? "text-rose-400 font-semibold"
               : necessaryForCalc
-              ? "text-amber-600 dark:text-amber-300/80"
+              ? "text-amber-300/80"
               : "text-white/50"
           }`}
         >
@@ -1418,24 +1856,27 @@ function ManualAnalysisSection({
     }
   }
 
-  return (
-    <section className="rounded-xl border border-accent-500/30 bg-accent-500/5 p-4">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-accent-500" />
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-accent-500">
-            Analyse financière — inputs manuels
-          </h3>
-        </div>
-        <DefaultsGearButton group="inputs_manuels" title="Modifier les défauts des inputs manuels (taux refi, MDF %, taux prêteur B, TGA, durée projet, etc.)" />
-      </div>
+  const loyersTypoKeys = TYPOLOGY_KEYS.filter((k) => (typology[k] || 0) > 0);
 
+  return (
+    <SectionCard
+      icon={Calculator}
+      title="Analyse financière — inputs manuels"
+      tone="accent"
+      subtitle="Paramètres du calcul. Les valeurs par défaut sont pré-remplies ; ajuste au besoin puis lance l'analyse."
+      action={
+        <DefaultsGearButton
+          group="inputs_manuels"
+          title="Modifier les défauts des inputs manuels (taux refi, MDF %, taux prêteur B, TGA, durée projet, etc.)"
+        />
+      }
+    >
       {missingRequired.length > 0 ? (
-        <div className="mt-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px]">
+        <div className="mb-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px]">
           <p className="text-rose-300">
             ⚠ Obligatoires manquants :{" "}
             <strong>{missingRequired.join(", ")}</strong>. Complète-les
-            dans la section ci-dessus avant de lancer l&apos;analyse.
+            dans l&apos;onglet « Infos » avant de lancer l&apos;analyse.
           </p>
           {missingEstimable.length > 0 ? (
             <div className="mt-1.5 flex items-center gap-2">
@@ -1459,7 +1900,7 @@ function ManualAnalysisSection({
       ) : null}
 
       {missingRequired.length === 0 && missingRecommended.length > 0 ? (
-        <p className="mt-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/60">
+        <p className="mb-4 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/60">
           ℹ Informations recommandées non saisies (l&apos;analyse peut
           quand même se lancer) :{" "}
           <strong className="text-white/80">
@@ -1469,100 +1910,103 @@ function ManualAnalysisSection({
         </p>
       ) : null}
 
-      {/* Inputs avec défaut */}
-      <div className="mt-3 grid gap-3 sm:grid-cols-4">
-        <FieldNumber
-          label="TGA (%)"
-          value={data.tga_pct ?? 4}
-          onSave={(v) => onPatch("tga_pct", v ?? 4)}
-          format="percent"
-        />
-        <FieldNumber
-          label="Taux intérêt achat (%)"
-          value={data.taux_interet_achat_pct ?? 4}
-          onSave={(v) => onPatch("taux_interet_achat_pct", v ?? 4)}
-          format="percent"
-        />
-        <FieldNumber
-          label="MDF prêteur B (%)"
-          value={data.mdf_preteur_b_pct ?? 25}
-          onSave={(v) => onPatch("mdf_preteur_b_pct", v ?? 25)}
-          format="percent"
-        />
-        <FieldYesNo
-          label="Wifi inclus refi"
-          value={data.ajout_wifi ?? true}
-          onSave={(v) => onPatch("ajout_wifi", v)}
-        />
-      </div>
+      <div className="space-y-3">
+        {/* Financement & taux */}
+        <SubCard icon={Percent} title="Financement & taux" cols={3}>
+          <FieldNumber
+            label="TGA (%)"
+            value={data.tga_pct ?? 4}
+            onSave={(v) => onPatch("tga_pct", v ?? 4)}
+            format="percent"
+          />
+          <FieldNumber
+            label="Taux intérêt achat (%)"
+            value={data.taux_interet_achat_pct ?? 4}
+            onSave={(v) => onPatch("taux_interet_achat_pct", v ?? 4)}
+            format="percent"
+          />
+          <FieldNumber
+            label="Taux d'intérêt refi (%)"
+            value={data.taux_interet_refi_pct}
+            onSave={(v) => onPatch("taux_interet_refi_pct", v)}
+            format="percent"
+          />
+          <FieldNumber
+            label="MDF prêteur B (%)"
+            value={data.mdf_preteur_b_pct ?? 25}
+            onSave={(v) => onPatch("mdf_preteur_b_pct", v ?? 25)}
+            format="percent"
+          />
+          <FieldNumber
+            label="Taux d'intérêt prêteur B (%)"
+            value={data.taux_interet_preteur_b_projet_pct ?? 8}
+            onSave={(v) =>
+              onPatch("taux_interet_preteur_b_projet_pct", v ?? 8)
+            }
+            format="percent"
+          />
+          <FieldNumber
+            label="Durée projet (années)"
+            value={data.duree_projet_annees}
+            onSave={(v) => onPatch("duree_projet_annees", v)}
+          />
+        </SubCard>
 
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-        <FieldNumber
-          label="Logements ajoutés refi"
-          value={data.nb_logements_ajoutes}
-          onSave={(v) => onPatch("nb_logements_ajoutes", v)}
-        />
-        <FieldNumber
-          label="Thermopompes ajoutées"
-          value={data.nb_thermopompes_ajoutees}
-          onSave={(v) => onPatch("nb_thermopompes_ajoutees", v)}
-        />
-        <FieldNumber
-          label="% réduction énergie"
-          value={data.reduction_energie_pct}
-          onSave={(v) => onPatch("reduction_energie_pct", v)}
-          format="percent"
-        />
-        <FieldNumber
-          label="Taux d'intérêt refi (%)"
-          value={data.taux_interet_refi_pct}
-          onSave={(v) => onPatch("taux_interet_refi_pct", v)}
-          format="percent"
-        />
-        <FieldNumber
-          label="Taux d'intérêt prêteur B (%)"
-          value={data.taux_interet_preteur_b_projet_pct ?? 8}
-          onSave={(v) =>
-            onPatch("taux_interet_preteur_b_projet_pct", v ?? 8)
-          }
-          format="percent"
-        />
-        <FieldNumber
-          label="Durée projet (années)"
-          value={data.duree_projet_annees}
-          onSave={(v) => onPatch("duree_projet_annees", v)}
-        />
-        <FieldNumber
-          label="Frais développement ($)"
-          value={data.frais_developpement}
-          onSave={(v) => onPatch("frais_developpement", v)}
-          format="money"
-        />
-        <FieldNumber
-          label="Frais négociations ($)"
-          value={data.frais_negociations}
-          onSave={(v) => onPatch("frais_negociations", v)}
-          format="money"
-        />
-        <FieldNumber
-          label="Frais travaux ($)"
-          value={data.travaux_estimes}
-          onSave={(v) => onPatch("travaux_estimes", v)}
-          format="money"
-        />
-        <FieldNumber
-          label="Loyer abordable (APH SELECT)"
-          value={loyerAbord ? Number(loyerAbord) : null}
-          onSave={(v) => setLoyerAbordable(v == null ? "" : String(v))}
-        />
-      </div>
+        {/* Optimisation refi */}
+        <SubCard icon={Gauge} title="Optimisation refi" cols={4}>
+          <FieldNumber
+            label="Logements ajoutés refi"
+            value={data.nb_logements_ajoutes}
+            onSave={(v) => onPatch("nb_logements_ajoutes", v)}
+          />
+          <FieldNumber
+            label="Thermopompes ajoutées"
+            value={data.nb_thermopompes_ajoutees}
+            onSave={(v) => onPatch("nb_thermopompes_ajoutees", v)}
+          />
+          <FieldNumber
+            label="% réduction énergie"
+            value={data.reduction_energie_pct}
+            onSave={(v) => onPatch("reduction_energie_pct", v)}
+            format="percent"
+          />
+          <FieldYesNo
+            label="Wifi inclus refi"
+            value={data.ajout_wifi ?? true}
+            onSave={(v) => onPatch("ajout_wifi", v)}
+          />
+        </SubCard>
 
-      <div className="mt-3">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50">
-          Loyers projetés par typologie (uniquement où la quantité &gt; 0)
-        </p>
-        <div className="mt-1 grid gap-2 sm:grid-cols-3">
-          {TYPOLOGY_KEYS.filter((k) => (typology[k] || 0) > 0).map((k) => (
+        {/* Frais & projet */}
+        <SubCard icon={Banknote} title="Frais & projet" cols={4}>
+          <FieldNumber
+            label="Frais développement ($)"
+            value={data.frais_developpement}
+            onSave={(v) => onPatch("frais_developpement", v)}
+            format="money"
+          />
+          <FieldNumber
+            label="Frais négociations ($)"
+            value={data.frais_negociations}
+            onSave={(v) => onPatch("frais_negociations", v)}
+            format="money"
+          />
+          <FieldNumber
+            label="Frais travaux ($)"
+            value={data.travaux_estimes}
+            onSave={(v) => onPatch("travaux_estimes", v)}
+            format="money"
+          />
+          <FieldNumber
+            label="Loyer abordable (APH SELECT)"
+            value={loyerAbord ? Number(loyerAbord) : null}
+            onSave={(v) => setLoyerAbordable(v == null ? "" : String(v))}
+          />
+        </SubCard>
+
+        {/* Loyers projetés par typologie */}
+        <SubCard icon={Coins} title="Loyers projetés par typologie" cols={3}>
+          {loyersTypoKeys.map((k) => (
             <div key={k}>
               <label className="text-[10px] uppercase tracking-wider text-white/50">
                 {k} ({typology[k]} log.) — $/mois
@@ -1572,22 +2016,22 @@ function ManualAnalysisSection({
                 step="any"
                 value={prixLoyers[k] ?? ""}
                 onChange={(e) => setPrixLoyer(k, e.target.value)}
-                className="input font-mono text-xs"
+                className="input mt-1 font-mono text-xs"
                 placeholder="ex. 1400"
               />
             </div>
           ))}
-          {TYPOLOGY_KEYS.filter((k) => (typology[k] || 0) > 0).length === 0 ? (
-            <p className="col-span-3 text-[11px] text-white/40">
-              Renseigne d&apos;abord la typologie dans les infos extraites
-              ci-dessus.
+          {loyersTypoKeys.length === 0 ? (
+            <p className="col-span-full text-[11px] text-white/40">
+              Renseigne d&apos;abord la typologie dans l&apos;onglet
+              « Infos ».
             </p>
           ) : null}
-        </div>
+        </SubCard>
       </div>
 
       {err ? (
-        <p className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-300">
+        <p className="mt-4 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-300">
           {err}
         </p>
       ) : null}
@@ -1612,7 +2056,7 @@ function ManualAnalysisSection({
           )}
         </button>
       </div>
-    </section>
+    </SectionCard>
   );
 }
 
@@ -1790,30 +2234,66 @@ function AnalysisResultsTable({
   const inputsChanged =
     jsonPctPercent != null && Math.abs(jsonPctPercent - livePct) > 0.01;
 
+  const metricRows: Array<{
+    label: string;
+    pick: (s: ScenarioResult) => number | null | undefined;
+    bold?: boolean;
+    fallback?: string;
+    colorEquite?: boolean;
+  }> = [
+    { label: "Loyer moyen ($/mois)", pick: (s) => s.loyer_mois },
+    { label: "Revenus totaux ($/an)", pick: (s) => s.revenus_totaux },
+    { label: "Dépenses totales", pick: (s) => s.depenses_total },
+    { label: "Revenus net", pick: (s) => s.revenus_net },
+    { label: "Valeur éco RDC", pick: (s) => s.valeur_eco_rcd },
+    { label: "Valeur éco TGA", pick: (s) => s.valeur_eco_tga },
+    { label: "Valeur marchande", pick: (s) => s.valeur_marchande, fallback: "—" },
+    { label: "Valeur retenue", pick: (s) => s.valeur_retenue, bold: true },
+    { label: "Prêt accordé", pick: (s) => s.financement, bold: true },
+    { label: "MDF nécessaire", pick: (s) => s.mdf_necessaire, fallback: "N/A" },
+    {
+      label: "Cashflow annuel",
+      pick: (s) => s.cashflow_annuel,
+      fallback: "N/A",
+      colorEquite: true
+    },
+    {
+      label: "Équité à la fin",
+      pick: (s) => s.equite_a_la_fin,
+      fallback: "N/A",
+      colorEquite: true
+    }
+  ];
+
   return (
-    <section className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-emerald-300">
-          ✓ Résultats de l&apos;analyse financière
-        </h3>
-        <div className="text-[11px] text-white/70">
-          <strong className="text-emerald-300">Best refi</strong> :{" "}
-          {fmtMoney(data.best_refi.amount)} —{" "}
-          <span className="text-white/60">{data.best_refi.program}</span>
+    <SectionCard
+      icon={TrendingUp}
+      title="Résultats de l'analyse financière"
+      tone="emerald"
+      subtitle={
+        <>
+          Frais démarrage : {fmtMoney(data.frais_demarrage_total)} · Prix
+          acquisition : {fmtMoney(data.prix_acquisition)} · Loyer pondéré
+          H13 : {fmtMoney(data.typology.h13_loyer_pondere)} /mois
+          {data.typology.nb_abordables > 0
+            ? ` · ${data.typology.nb_abordables} abord / ${data.typology.nb_pdm} PDM`
+            : ""}
+        </>
+      }
+      action={
+        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-right">
+          <p className="text-[9px] uppercase tracking-wider text-emerald-300/80">
+            Best refi
+          </p>
+          <p className="font-mono text-sm font-bold tabular-nums text-emerald-300">
+            {fmtMoney(data.best_refi.amount)}
+          </p>
+          <p className="text-[10px] text-white/50">{data.best_refi.program}</p>
         </div>
-      </div>
-
-      <p className="mt-1 text-[10px] text-white/40">
-        Frais démarrage : {fmtMoney(data.frais_demarrage_total)} · Prix
-        acquisition : {fmtMoney(data.prix_acquisition)} · Loyer pondéré H13 :{" "}
-        {fmtMoney(data.typology.h13_loyer_pondere)} /mois
-        {data.typology.nb_abordables > 0
-          ? ` · ${data.typology.nb_abordables} abord / ${data.typology.nb_pdm} PDM`
-          : ""}
-      </p>
-
+      }
+    >
       {inputsChanged ? (
-        <div className="mt-2 rounded-lg border border-amber-400/60 bg-amber-500/15 px-3 py-2 text-[11px] text-amber-200">
+        <div className="mb-3 rounded-lg border border-amber-400/60 bg-amber-500/15 px-3 py-2 text-[11px] text-amber-200">
           ⚠ Les inputs ont changé depuis la dernière analyse
           (ex. MDF prêteur B : {jsonPctPercent}% → {livePct}%).{" "}
           <strong>Relance l&apos;analyse</strong> pour mettre à jour
@@ -1822,11 +2302,11 @@ function AnalysisResultsTable({
       ) : null}
 
       {data.mdf_preteur_b != null ? (
-        <div className="mt-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2">
+        <div className="mb-3 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2">
           <p className="text-[10px] uppercase tracking-wider text-amber-300">
             MDF avec prêteur B
           </p>
-          <p className="mt-0.5 text-sm font-bold text-amber-200">
+          <p className="mt-0.5 text-base font-bold text-amber-200">
             {fmtMoney(data.mdf_preteur_b)}
           </p>
           <p className="text-[10px] text-white/50">
@@ -1842,18 +2322,21 @@ function AnalysisResultsTable({
         </div>
       ) : null}
 
-      <div className="mt-3 overflow-x-auto">
-        <table className="w-full min-w-[640px] text-[11px]">
-          <thead>
-            <tr className="text-white/40">
-              <th className="px-2 py-1 text-left">Métrique</th>
+      {/* Tableau desktop avec en-tête sticky */}
+      <div className="hidden max-h-[460px] overflow-auto rounded-xl border border-brand-800 sm:block">
+        <table className="w-full min-w-[640px] border-collapse text-[11px]">
+          <thead className="sticky top-0 z-10">
+            <tr className="bg-brand-900 text-white/50">
+              <th className="sticky left-0 z-20 bg-brand-900 px-3 py-2 text-left font-semibold">
+                Métrique
+              </th>
               {cols.map(([label, s]) => (
-                <th key={label} className="px-2 py-1 text-right">
-                  {label}
+                <th key={label} className="px-3 py-2 text-right font-semibold">
+                  <span className="text-white/80">{label}</span>
                   {s ? (
-                    <span className="ml-1 text-white/30">
-                      ({(s.ltv * 100).toFixed(0)}% · {s.amort_annees}ans · RCD{" "}
-                      {s.rcd.toFixed(2)})
+                    <span className="ml-1 block text-[9px] font-normal text-white/30">
+                      {(s.ltv * 100).toFixed(0)}% · {s.amort_annees} ans · RCD{" "}
+                      {s.rcd.toFixed(2)}
                     </span>
                   ) : null}
                 </th>
@@ -1861,20 +2344,73 @@ function AnalysisResultsTable({
             </tr>
           </thead>
           <tbody>
-            <ResultRow label="Loyer moyen ($/mois)" cols={cols} pick={(s) => s.loyer_mois} />
-            <ResultRow label="Revenus totaux ($/an)" cols={cols} pick={(s) => s.revenus_totaux} />
-            <ResultRow label="Dépenses totales" cols={cols} pick={(s) => s.depenses_total} />
-            <ResultRow label="Revenus net" cols={cols} pick={(s) => s.revenus_net} />
-            <ResultRow label="Valeur éco RDC" cols={cols} pick={(s) => s.valeur_eco_rcd} />
-            <ResultRow label="Valeur éco TGA" cols={cols} pick={(s) => s.valeur_eco_tga} />
-            <ResultRow label="Valeur marchande" cols={cols} pick={(s) => s.valeur_marchande} fallback="—" />
-            <ResultRow label="Valeur retenue" cols={cols} pick={(s) => s.valeur_retenue} bold />
-            <ResultRow label="Prêt accordé" cols={cols} pick={(s) => s.financement} bold />
-            <ResultRow label="MDF nécessaire" cols={cols} pick={(s) => s.mdf_necessaire} fallback="N/A" />
-            <ResultRow label="Cashflow annuel" cols={cols} pick={(s) => s.cashflow_annuel} fallback="N/A" colorEquite />
-            <ResultRow label="Équité à la fin" cols={cols} pick={(s) => s.equite_a_la_fin} fallback="N/A" colorEquite />
+            {metricRows.map((r) => (
+              <ResultRow
+                key={r.label}
+                label={r.label}
+                cols={cols}
+                pick={r.pick}
+                bold={r.bold}
+                fallback={r.fallback}
+                colorEquite={r.colorEquite}
+              />
+            ))}
           </tbody>
         </table>
+      </div>
+
+      {/* Fallback mobile : une carte par scénario */}
+      <div className="space-y-3 sm:hidden">
+        {cols.map(([label, s]) => (
+          <div
+            key={label}
+            className="rounded-xl border border-brand-800 bg-brand-950/40 p-3"
+          >
+            <p className="text-xs font-semibold text-white">{label}</p>
+            {s ? (
+              <>
+                <p className="mt-0.5 text-[10px] text-white/40">
+                  {(s.ltv * 100).toFixed(0)}% · {s.amort_annees} ans · RCD{" "}
+                  {s.rcd.toFixed(2)}
+                </p>
+                <dl className="mt-2 space-y-1">
+                  {metricRows.map((r) => {
+                    const val = r.pick(s);
+                    const display =
+                      val == null ? r.fallback || "—" : fmtMoney(val);
+                    const tone =
+                      r.colorEquite && val != null
+                        ? val >= 0
+                          ? "text-emerald-300"
+                          : "text-rose-300"
+                        : r.bold
+                        ? "text-white"
+                        : "text-white/80";
+                    return (
+                      <div
+                        key={r.label}
+                        className="flex items-center justify-between gap-2 border-t border-brand-800/60 pt-1 text-[11px]"
+                      >
+                        <dt className="text-white/50">{r.label}</dt>
+                        <dd
+                          className={`font-mono tabular-nums ${tone} ${
+                            r.bold ? "font-bold" : ""
+                          }`}
+                        >
+                          {display}
+                        </dd>
+                      </div>
+                    );
+                  })}
+                </dl>
+              </>
+            ) : (
+              <p className="mt-1 text-[11px] text-white/30">
+                Scénario non applicable.
+              </p>
+            )}
+          </div>
+        ))}
       </div>
 
       <FraisDemarrageBreakdownPanel
@@ -1887,7 +2423,7 @@ function AnalysisResultsTable({
         onPatchOverrides={onPatchOverrides}
         onPatchFinancables={onPatchFinancables}
       />
-    </section>
+    </SectionCard>
   );
 }
 
@@ -2052,14 +2588,19 @@ function FraisDemarrageBreakdownPanel({
   if (!frais) return null;
 
   return (
-    <section className="mt-4 rounded-lg border border-amber-400/30 bg-amber-500/5 p-4">
+    <section className="mt-4 rounded-xl border border-amber-400/30 bg-amber-500/5 p-4">
       <div className="flex items-center justify-between gap-2">
-        <h4 className="text-xs font-semibold uppercase tracking-wider text-amber-300">
-          Composition de la MDF avec prêteur B
-        </h4>
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-amber-400">
+            <Wallet className="h-4 w-4" />
+          </span>
+          <h4 className="text-sm font-bold text-white">
+            Composition de la MDF avec prêteur B
+          </h4>
+        </div>
         <DefaultsGearButton group="mdf_frais" title="Modifier les défauts des frais MDF (Évaluateur, Inspection, Notaire, Avocat, Rapport efficacité, % courtiers)" />
       </div>
-      <p className="mt-0.5 text-[10px] text-white/50">
+      <p className="mt-2 text-[10px] text-white/50">
         Total à sortir en cash = {_fmtPctShort(mdfPctNumeric)} du prix
         d&apos;achat + frais non finançables + {_fmtPctShort(mdfPctNumeric)}
         {" "}des frais finançables. Coche un poste pour le rendre
@@ -2274,15 +2815,17 @@ function ResultRow({
   colorEquite?: boolean;
 }) {
   return (
-    <tr className="border-t border-brand-800/60">
-      <td className="px-2 py-1 text-white/60">{label}</td>
+    <tr className="border-t border-brand-800/60 odd:bg-white/[0.015]">
+      <td className="sticky left-0 z-10 bg-inherit px-3 py-1.5 text-white/60">
+        {label}
+      </td>
       {cols.map(([k, s]) => {
         if (!s) return (
-          <td key={k} className="px-2 py-1 text-right text-white/30">—</td>
+          <td key={k} className="px-3 py-1.5 text-right text-white/30">—</td>
         );
         const val = pick(s);
         if (val == null) return (
-          <td key={k} className="px-2 py-1 text-right text-white/30">
+          <td key={k} className="px-3 py-1.5 text-right text-white/30">
             {fallback || "—"}
           </td>
         );
@@ -2297,7 +2840,7 @@ function ResultRow({
         return (
           <td
             key={k}
-            className={`px-2 py-1 text-right font-mono tabular-nums ${tone} ${bold ? "font-bold" : ""}`}
+            className={`px-3 py-1.5 text-right font-mono tabular-nums ${tone} ${bold ? "font-bold" : ""}`}
           >
             {txt}
           </td>
@@ -2318,7 +2861,9 @@ function CalculationDetailsSection({
   overridesJson?: string | null;
   lead: LeadDetail;
 }) {
-  const [open, setOpen] = useState(false);
+  // Détails ouverts par défaut : la section occupe désormais son propre
+  // onglet. Le repli reste disponible pour alléger la lecture.
+  const [open, setOpen] = useState(true);
 
   const data = useMemo<AnalysisResults | null>(() => {
     try {
@@ -2342,22 +2887,23 @@ function CalculationDetailsSection({
   if (!data) return null;
 
   return (
-    <section className="mt-3">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="text-xs text-emerald-300 underline-offset-2 hover:underline"
-      >
-        {open ? "▾" : "▸"} Voir détails des calculs
-      </button>
-
+    <SectionCard
+      icon={ListChecks}
+      title="Détails des calculs"
+      tone="neutral"
+      subtitle="Reproduit la granularité du fichier Excel d'origine. Toutes les valeurs sont issues du dernier calcul persisté."
+      action={
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-white/60 hover:bg-white/10 hover:text-white"
+        >
+          {open ? "Replier" : "Déplier"}
+        </button>
+      }
+    >
       {open ? (
-        <div className="mt-2 max-h-[600px] overflow-y-auto rounded-xl border border-brand-800 bg-brand-950/40 p-4 text-[11px] text-white/80">
-          <p className="text-[10px] text-white/40">
-            Reproduit la granularité du fichier Excel d&apos;origine. Toutes
-            les valeurs sont issues du dernier calcul d&apos;analyse persisté.
-          </p>
-
+        <div className="text-[11px] text-white/80">
           <HypothesesSubsection lead={lead} data={data} />
           <TypologieSubsection data={data} />
           <FraisDemarrageDetailSubsection
@@ -2370,17 +2916,13 @@ function CalculationDetailsSection({
           <BestRefiSubsection data={data} />
         </div>
       ) : null}
-    </section>
+    </SectionCard>
   );
 }
 
+/** Alias historique — délègue au formatage monétaire unifié. */
 function _fmtMoneyDetail(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return "—";
-  const rounded = Math.round(n);
-  const sign = rounded < 0 ? "-" : "";
-  const abs = Math.abs(rounded).toString();
-  const withSep = abs.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-  return `${sign}${withSep} $`;
+  return fmtMoney(n);
 }
 
 function _fmtPctDetail(n: number | null | undefined): string {
@@ -2862,24 +3404,26 @@ function ValidationPanel({
 
   if (list.length === 0) {
     return (
-      <section>
-        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-          Validation de l&apos;extraction
-        </h3>
-        <div className="mt-2 flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+      <SectionCard
+        icon={CheckCircle2}
+        title="Validation de l'extraction"
+        tone="emerald"
+      >
+        <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
           <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
           <span>Aucune anomalie détectée sur les champs extraits.</span>
         </div>
-      </section>
+      </SectionCard>
     );
   }
 
   return (
-    <section>
-      <h3 className="text-[10px] font-semibold uppercase tracking-wider text-accent-500">
-        Validation de l&apos;extraction ({list.length})
-      </h3>
-      <ul className="mt-2 space-y-2">
+    <SectionCard
+      icon={AlertTriangle}
+      title={`Validation de l'extraction (${list.length})`}
+      tone="amber"
+    >
+      <ul className="space-y-2">
         {list.map((w, i) => {
           const sevCls =
             w.severity === "error"
@@ -2948,7 +3492,7 @@ function ValidationPanel({
           );
         })}
       </ul>
-    </section>
+    </SectionCard>
   );
 }
 
