@@ -534,6 +534,57 @@ async def _load_bareme_overrides(
     return bareme, seuil, inoccupation
 
 
+# ── Juin 2026 : Dé-hardcodage des scénarios de financement ───────────
+#
+# Mapping clé BD (groupe ``scenarios_financement``) → (slug interne,
+# attribut). Les 12 clés couvrent les 4 scénarios × LTV / amortissement
+# / RCD. LTV et RCD sont stockés en BD en décimal (0.75, 1.20), comme
+# dans ``lead_analysis_finance.SCENARIO_*`` — aucune conversion. Amort
+# est un entier (années). Les valeurs écrasent les dataclasses
+# ``SCENARIO_*`` poste par poste ; champ absent → fallback hardcoded.
+_DB_KEY_TO_SCENARIO: dict[str, tuple[str, str]] = {
+    "scenario_achat_ltv": ("achat", "ltv"),
+    "scenario_achat_amort": ("achat", "amort"),
+    "scenario_achat_rcd": ("achat", "rcd"),
+    "scenario_schl_std_ltv": ("schl_std", "ltv"),
+    "scenario_schl_std_amort": ("schl_std", "amort"),
+    "scenario_schl_std_rcd": ("schl_std", "rcd"),
+    "scenario_aph50_ltv": ("aph50", "ltv"),
+    "scenario_aph50_amort": ("aph50", "amort"),
+    "scenario_aph50_rcd": ("aph50", "rcd"),
+    "scenario_aph100_ltv": ("aph100", "ltv"),
+    "scenario_aph100_amort": ("aph100", "amort"),
+    "scenario_aph100_rcd": ("aph100", "rcd"),
+}
+
+
+async def _load_scenario_overrides(db) -> dict:
+    """Charge les overrides des scénarios de financement (groupe
+    ``scenarios_financement``).
+
+    Retourne un dict imbriqué ``{ slug: {"ltv":.., "amort":..,
+    "rcd":..} }`` prêt à passer à ``FinanceInputs.scenario_overrides``.
+    Les clés/attributs absents en BD → le moteur retombe sur les
+    constantes hardcoded ``SCENARIO_*``. Dict vide si table absente.
+    """
+    overrides: dict[str, dict[str, float]] = {}
+    try:
+        rows = (
+            await db.execute(select(ProspectionAnalysisDefault))
+        ).scalars().all()
+        for row in rows:
+            if row.value_float is None:
+                continue
+            mapped = _DB_KEY_TO_SCENARIO.get(row.key)
+            if mapped is None:
+                continue
+            slug, attr = mapped
+            overrides.setdefault(slug, {})[attr] = float(row.value_float)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to load scenario overrides from DB: %s", exc)
+    return overrides
+
+
 async def _load_defaults_for_new_analysis(db) -> dict:
     """Charge les défauts depuis la BD et fusionne avec les fallbacks.
 
@@ -1514,6 +1565,10 @@ async def run_financial_analysis(
         await _load_bareme_overrides(db)
     )
 
+    # Juin 2026 : overrides des scénarios de financement (LTV / amort /
+    # RCD des 4 scénarios). Si absents en BD, fallback ``SCENARIO_*``.
+    scenario_overrides_global = await _load_scenario_overrides(db)
+
     inputs = FinanceInputs(
         adresse=rec.address or "",
         prix_achat=float(rec.asking_price or 0),
@@ -1557,6 +1612,9 @@ async def run_financial_analysis(
         # Juin 2026 : barème dépenses normalisées SCHL (groupe
         # ``depenses_normalisees``). Dict vide → fallback ``BAREME``.
         bareme_overrides=bareme_overrides_global,
+        # Juin 2026 : scénarios de financement (groupe
+        # ``scenarios_financement``). Dict vide → fallback ``SCENARIO_*``.
+        scenario_overrides=scenario_overrides_global,
         # Mai 2026 : nouveau frais MDF, surchargé globalement via le
         # défaut ``frais_dossier_preteur_pct``. Si la BD n'a pas (encore)
         # de ligne pour cette clé, on laisse ``FinanceInputs`` retomber

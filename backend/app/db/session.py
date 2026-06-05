@@ -2034,6 +2034,142 @@ async def init_db() -> None:
                     1.0,
                     "depenses_normalisees",
                 ),
+                # ── Groupe : Scénarios de financement (juin 2026) ────
+                # LTV / amortissement / RCD des 4 scénarios. Valeurs =
+                # EXACTEMENT les dataclasses ``SCENARIO_*`` hardcoded.
+                # LTV et RCD en décimal (0.75, 1.20) ; amort en années.
+                (
+                    "scenario_achat_ltv",
+                    0.75,
+                    "Achat — LTV (ratio prêt/valeur)",
+                    "Ratio prêt/valeur du scénario d'achat conventionnel "
+                    "(prêteur B). Défaut 0.75 (75 %).",
+                    0.0,
+                    1.0,
+                    0.01,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_achat_amort",
+                    25.0,
+                    "Achat — Amortissement (années)",
+                    "Période d'amortissement du scénario d'achat "
+                    "conventionnel. Défaut 25 ans.",
+                    1.0,
+                    50.0,
+                    1.0,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_achat_rcd",
+                    1.20,
+                    "Achat — RCD (ratio couverture de dette)",
+                    "Ratio de couverture de dette du scénario d'achat "
+                    "conventionnel. Défaut 1.20.",
+                    1.0,
+                    3.0,
+                    0.01,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_schl_std_ltv",
+                    0.85,
+                    "SCHL standard — LTV (ratio prêt/valeur)",
+                    "Ratio prêt/valeur du scénario refi SCHL standard. "
+                    "Défaut 0.85 (85 %).",
+                    0.0,
+                    1.0,
+                    0.01,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_schl_std_amort",
+                    35.0,
+                    "SCHL standard — Amortissement (années)",
+                    "Période d'amortissement du scénario refi SCHL "
+                    "standard. Défaut 35 ans.",
+                    1.0,
+                    50.0,
+                    1.0,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_schl_std_rcd",
+                    1.30,
+                    "SCHL standard — RCD (ratio couverture de dette)",
+                    "Ratio de couverture de dette du scénario refi SCHL "
+                    "standard. Défaut 1.30.",
+                    1.0,
+                    3.0,
+                    0.01,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_aph50_ltv",
+                    0.85,
+                    "APH 50 pts — LTV (ratio prêt/valeur)",
+                    "Ratio prêt/valeur du scénario refi SCHL Efficacité "
+                    "énergétique (50 pts). Défaut 0.85 (85 %).",
+                    0.0,
+                    1.0,
+                    0.01,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_aph50_amort",
+                    40.0,
+                    "APH 50 pts — Amortissement (années)",
+                    "Période d'amortissement du scénario refi APH 50 pts. "
+                    "Défaut 40 ans.",
+                    1.0,
+                    50.0,
+                    1.0,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_aph50_rcd",
+                    1.10,
+                    "APH 50 pts — RCD (ratio couverture de dette)",
+                    "Ratio de couverture de dette du scénario refi APH 50 "
+                    "pts. Défaut 1.10.",
+                    1.0,
+                    3.0,
+                    0.01,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_aph100_ltv",
+                    0.95,
+                    "APH 100 pts — LTV (ratio prêt/valeur)",
+                    "Ratio prêt/valeur du scénario refi SCHL Abordabilité "
+                    "+ Efficacité (100 pts). Défaut 0.95 (95 %).",
+                    0.0,
+                    1.0,
+                    0.01,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_aph100_amort",
+                    50.0,
+                    "APH 100 pts — Amortissement (années)",
+                    "Période d'amortissement du scénario refi APH 100 pts. "
+                    "Défaut 50 ans.",
+                    1.0,
+                    50.0,
+                    1.0,
+                    "scenarios_financement",
+                ),
+                (
+                    "scenario_aph100_rcd",
+                    1.10,
+                    "APH 100 pts — RCD (ratio couverture de dette)",
+                    "Ratio de couverture de dette du scénario refi APH 100 "
+                    "pts. Défaut 1.10.",
+                    1.0,
+                    3.0,
+                    0.01,
+                    "scenarios_financement",
+                ),
         ):
             try:
                 # UPSERT : on insère si la clé n'existe pas, sinon on

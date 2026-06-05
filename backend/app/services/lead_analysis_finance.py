@@ -133,6 +133,43 @@ REFI_SCENARIOS: List[ScenarioConfig] = [
     SCENARIO_REFI_SCHL, SCENARIO_REFI_APH_50, SCENARIO_REFI_APH_100,
 ]
 
+# Slugs internes des 4 scénarios → instance ``ScenarioConfig`` de
+# référence (valeurs hardcoded). Utilisé pour appliquer les overrides
+# globaux du groupe BD ``scenarios_financement`` (juin 2026).
+SCENARIO_BASES: Dict[str, ScenarioConfig] = {
+    "achat": SCENARIO_ACHAT,
+    "schl_std": SCENARIO_REFI_SCHL,
+    "aph50": SCENARIO_REFI_APH_50,
+    "aph100": SCENARIO_REFI_APH_100,
+}
+
+
+def resolve_scenario(
+    slug: str,
+    overrides: Optional[Dict[str, Dict[str, float]]] = None,
+) -> ScenarioConfig:
+    """Retourne le ``ScenarioConfig`` d'un scénario en appliquant les
+    overrides globaux (groupe BD ``scenarios_financement``) par-dessus
+    les constantes hardcoded.
+
+    ``overrides`` : dict imbriqué ``{ slug: {"ltv":.., "amort":..,
+    "rcd":..} }`` (clés partielles autorisées). Champ absent → on garde
+    la valeur de la dataclass hardcoded (fallback ultime). ``name`` et
+    ``label`` ne sont jamais externalisés.
+    """
+    base = SCENARIO_BASES[slug]
+    ov = (overrides or {}).get(slug) or {}
+    ltv = ov.get("ltv")
+    amort = ov.get("amort")
+    rcd = ov.get("rcd")
+    return ScenarioConfig(
+        name=base.name,
+        label=base.label,
+        ltv=float(ltv) if ltv is not None else base.ltv,
+        amort_annees=int(amort) if amort is not None else base.amort_annees,
+        rcd=float(rcd) if rcd is not None else base.rcd,
+    )
+
 
 # ─── Helpers ───────────────────────────────────────────────────────
 
@@ -733,6 +770,16 @@ class FinanceInputs:
     # le défaut global ``seuil_bascule_bareme_log``.
     seuil_bascule_bareme_log: int = SEUIL_BASCULE_BAREME_LOG
 
+    # Juin 2026 — Dé-hardcodage des scénarios de financement. Overrides
+    # GLOBAUX des ratios LTV / amortissement / RCD des 4 scénarios
+    # (groupe BD ``scenarios_financement``). Dict imbriqué
+    # ``{ slug: {"ltv":.., "amort":.., "rcd":..} }`` avec slug ∈
+    # {achat, schl_std, aph50, aph100}. Champ absent → fallback
+    # constante hardcoded (``SCENARIO_*``).
+    scenario_overrides: Dict[str, Dict[str, float]] = field(
+        default_factory=dict
+    )
+
 
 @dataclass
 class FinanceResults:
@@ -853,6 +900,15 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
       6. MDF achat / équité refi
       7. Best refi
     """
+    # Juin 2026 : configs des scénarios résolues depuis les overrides
+    # globaux (groupe ``scenarios_financement``), avec fallback sur les
+    # constantes hardcoded ``SCENARIO_*`` poste par poste.
+    sc_ov = inputs.scenario_overrides
+    cfg_achat = resolve_scenario("achat", sc_ov)
+    cfg_schl = resolve_scenario("schl_std", sc_ov)
+    cfg_aph50 = resolve_scenario("aph50", sc_ov)
+    cfg_aph100 = resolve_scenario("aph100", sc_ov)
+
     typo = compute_typology_aggregates(
         inputs.typologie, inputs.typologie_prix, inputs.nombre_logements
     )
@@ -882,7 +938,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         seuil_bascule_log=inputs.seuil_bascule_bareme_log,
     )
     achat = compute_scenario(
-        config=SCENARIO_ACHAT,
+        config=cfg_achat,
         nb_log=nb_log_achat,
         loyer_mois=loyer_mois_achat,
         revenus_totaux=inputs.revenus_annuels,
@@ -940,7 +996,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         seuil_bascule_log=inputs.seuil_bascule_bareme_log,
     )
     refi_schl = compute_scenario(
-        config=SCENARIO_REFI_SCHL,
+        config=cfg_schl,
         nb_log=nb_log_refi,
         loyer_mois=loyer_mois_refi_std,
         revenus_totaux=revenus_refi_std,
@@ -950,7 +1006,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         valeur_marchande=None,
     )
     refi_aph_50 = compute_scenario(
-        config=SCENARIO_REFI_APH_50,
+        config=cfg_aph50,
         nb_log=nb_log_refi,
         loyer_mois=loyer_mois_refi_std,
         revenus_totaux=revenus_refi_std,
@@ -987,7 +1043,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             seuil_bascule_log=inputs.seuil_bascule_bareme_log,
         )
         refi_aph_100 = compute_scenario(
-            config=SCENARIO_REFI_APH_100,
+            config=cfg_aph100,
             nb_log=nb_log_refi,
             loyer_mois=loyer_mois_aph_100,
             revenus_totaux=revenus_aph_100,
@@ -1021,7 +1077,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         frais_negociations=inputs.frais_negociations,
         frais_travaux=inputs.frais_travaux,
         frais_dossier_preteur_pct=inputs.frais_dossier_preteur_pct,
-        ltv_achat_preteur_b=SCENARIO_ACHAT.ltv,
+        ltv_achat_preteur_b=cfg_achat.ltv,
         frais_fixes_overrides=inputs.frais_fixes_overrides,
         pct_courtiers_overrides=inputs.pct_courtiers_overrides,
     )
