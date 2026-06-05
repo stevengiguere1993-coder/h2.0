@@ -2347,14 +2347,14 @@ function AnalysisResultsTable({
         </div>
       ) : null}
 
-      {/* Tableau desktop avec en-tête sticky. Plus de scroll horizontal :
-          les 4 colonnes tiennent dans la largeur du modal (max-w-5xl), on
-          ne garde que le scroll vertical pour l'en-tête sticky. */}
-      <div className="hidden max-h-[460px] overflow-y-auto rounded-xl border border-brand-800 sm:block">
+      {/* Tableau desktop affiché en entier : aucun scroll (ni vertical ni
+          horizontal). Les 4 colonnes tiennent dans la largeur du modal
+          (max-w-5xl) et toutes les lignes sont visibles d'un coup. */}
+      <div className="hidden rounded-xl border border-brand-800 sm:block">
         <table className="w-full table-fixed border-collapse text-[11px]">
-          <thead className="sticky top-0 z-10">
+          <thead>
             <tr className="bg-brand-900 align-bottom text-white/50">
-              <th className="sticky left-0 z-20 w-[28%] bg-brand-900 px-2.5 py-2.5 text-left text-[9px] font-semibold uppercase tracking-wider text-white/40">
+              <th className="w-[28%] bg-brand-900 px-2.5 py-2.5 text-left text-[9px] font-semibold uppercase tracking-wider text-white/40">
                 Métrique
               </th>
               {cols.map(([label, s], i) => {
@@ -2956,7 +2956,7 @@ function ResultRow({
   return (
     <tr className={rowCls}>
       <td
-        className={`sticky left-0 z-10 bg-inherit px-2.5 py-2 ${
+        className={`bg-inherit px-2.5 py-2 ${
           keyRow ? "font-semibold text-white/80" : "text-white/55"
         }`}
       >
