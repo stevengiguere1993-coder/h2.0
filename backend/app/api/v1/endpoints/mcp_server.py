@@ -7,9 +7,10 @@ consomment les connecteurs custom de claude.ai / Claude Code / Cowork.
 
 Permissions PAR PÔLE : la clé porte des ``scopes`` (``<pole>:<capability>``).
 Les outils de LECTURE ne renvoient que l'activité des pôles autorisés
-(``<pole>:activity:read``) ; l'outil d'ÉCRITURE ``kratos_create_task``
-exige ``<pole>:tasks:create``. RÉTROCOMPAT : une clé sans scopes lit tous
-les pôles (mais ne peut rien écrire).
+(``<pole>:activity:read``) ; les outils d'ÉCRITURE exigent la capacité
+correspondante (``<pole>:tasks:create`` / ``:update`` / ``:move``).
+RÉTROCOMPAT : une clé sans scopes lit tous les pôles (mais ne peut rien
+écrire).
 
 Pourquoi une implémentation JSON-RPC native plutôt que le SDK FastMCP ?
   - Kratos est en PRODUCTION. La priorité absolue est de NE JAMAIS casser
@@ -32,7 +33,11 @@ Outils exposés :
   - kratos_my_activity   : activité d'un jour (tâches pôles autorisés + audit).
   - kratos_my_summary    : résumé en français de l'activité d'un jour.
   - kratos_activity_range: activité agrégée sur une plage from/to.
-  - kratos_create_task   : crée une tâche dans un pôle (capacité requise).
+  - kratos_get_*         : JSON détaillé d'une entité par id (lecture).
+  - kratos_list_members  : membres assignables (Users + Employés).
+  - kratos_create_task   : crée une tâche dans un pôle (assignable, capacité requise).
+  - kratos_update_task   : modifie une tâche (capacité requise).
+  - kratos_move_task     : déplace une tâche (capacité requise).
 """
 
 from __future__ import annotations
@@ -47,12 +52,16 @@ from fastapi.responses import JSONResponse
 from app.api.api_key_deps import API_KEY_PREFIX, hash_api_key
 from app.api.v1.endpoints.activity import (
     _DETAIL_ENTITIES,
+    _TASK_WRITE_ENTITIES,
     _build_summary,
     _collect_audit,
     _collect_tasks,
     _resolve_window,
     create_task_for_pole,
+    list_members,
     load_entity_full,
+    move_task_for_type,
+    update_task_for_type,
 )
 from app.db.session import AsyncSessionLocal
 from app.models.api_key import ApiKey
@@ -88,7 +97,7 @@ DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 
 # Métadonnées du serveur renvoyées à l'`initialize`.
 SERVER_NAME = "kratos-activity"
-SERVER_VERSION = "1.1.0"
+SERVER_VERSION = "1.2.0"
 
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
@@ -168,19 +177,31 @@ _READ_TOOLS: list[dict[str, Any]] = [
 # au moins un pôle). La description liste les pôles autorisés au handshake.
 _CREATE_TASK_TOOL_NAME = "kratos_create_task"
 
+# Outils d'écriture supplémentaires (modification / déplacement).
+_UPDATE_TASK_TOOL_NAME = "kratos_update_task"
+_MOVE_TASK_TOOL_NAME = "kratos_move_task"
+_LIST_MEMBERS_TOOL_NAME = "kratos_list_members"
+
+#: Types de tâche reconnus par les outils d'écriture (alignés sur le
+#: registre d'écriture d'activity.py).
+_WRITE_TASK_TYPES = tuple(_TASK_WRITE_ENTITIES.keys())
+
 
 def _create_task_tool(creatable_poles: list[str]) -> dict[str, Any]:
     labels = ", ".join(POLE_LABELS.get(p, p) for p in creatable_poles)
     return {
         "name": _CREATE_TASK_TOOL_NAME,
         "description": (
-            "Crée une tâche Kratos dans un pôle, assignée à l'utilisateur. "
+            "Crée une tâche Kratos dans un pôle. La tâche peut être assignée "
+            "à N'IMPORTE QUEL membre de l'équipe via `assignee` (courriel, nom "
+            "ou id — utilise kratos_list_members pour les choix) ; par défaut "
+            "elle revient à l'utilisateur de la clé. "
             f"Pôles autorisés pour cette clé : {labels}. Fournis `pole` (un "
             "de ces slugs), `parent_id` (l'ID de l'entité parente : projet "
             "devlog, entreprise, deal de prospection, ou projet de chantier "
-            "selon le pôle), et `title`. `description` et `due_date` "
-            "(YYYY-MM-DD) sont optionnels. Écriture — n'utilise cet outil que "
-            "sur demande explicite de créer/ajouter une tâche."
+            "selon le pôle), et `title`. `description`, `due_date` "
+            "(YYYY-MM-DD) et `assignee` sont optionnels. Écriture — n'utilise "
+            "cet outil que sur demande explicite de créer/ajouter une tâche."
         ),
         "inputSchema": {
             "type": "object",
@@ -209,11 +230,122 @@ def _create_task_tool(creatable_poles: list[str]) -> dict[str, Any]:
                     "type": "string",
                     "description": "Échéance YYYY-MM-DD (optionnel).",
                 },
+                "assignee": {
+                    "type": "string",
+                    "description": (
+                        "Membre à qui assigner (courriel / nom / id). "
+                        "Optionnel ; défaut = propriétaire de la clé."
+                    ),
+                },
             },
             "required": ["pole", "parent_id", "title"],
             "additionalProperties": False,
         },
     }
+
+
+def _update_task_tool(types: list[str]) -> dict[str, Any]:
+    return {
+        "name": _UPDATE_TASK_TOOL_NAME,
+        "description": (
+            "Modifie une tâche EXISTANTE (N'IMPORTE laquelle, pas seulement "
+            "celles de l'utilisateur de la clé). Fournis `type` (modèle de "
+            "tâche) et `id`, plus AU MOINS un champ à changer : `title`, "
+            "`description`, `status` (colonne kanban du pôle), `priority`, "
+            "`due_date` (YYYY-MM-DD), `assignee` (courriel / nom / id ; chaîne "
+            "vide pour désassigner). Seuls les champs fournis sont modifiés. "
+            f"Types autorisés pour cette clé : {', '.join(types)}. Écriture — "
+            "n'utilise cet outil que sur demande explicite."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "enum": types,
+                    "description": "Modèle de tâche (entity_type).",
+                },
+                "id": {"type": "integer", "description": "Id de la tâche."},
+                "title": {"type": "string", "description": "Nouveau titre."},
+                "description": {
+                    "type": "string",
+                    "description": "Nouvelle description.",
+                },
+                "status": {
+                    "type": "string",
+                    "description": "Nouveau statut / colonne kanban du pôle.",
+                },
+                "priority": {
+                    "type": "string",
+                    "description": "Nouvelle priorité (si le pôle en a une).",
+                },
+                "due_date": {
+                    "type": "string",
+                    "description": "Nouvelle échéance YYYY-MM-DD.",
+                },
+                "assignee": {
+                    "type": "string",
+                    "description": (
+                        "Nouvel assigné (courriel / nom / id ; vide = "
+                        "désassigner)."
+                    ),
+                },
+            },
+            "required": ["type", "id"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _move_task_tool(types: list[str]) -> dict[str, Any]:
+    return {
+        "name": _MOVE_TASK_TOOL_NAME,
+        "description": (
+            "Déplace une tâche d'une colonne / étape kanban à une autre "
+            "(change son `status`) et, si le modèle le supporte, ajuste sa "
+            "`position`. Fournis `type`, `id` et `status` (cible). "
+            f"Types autorisés pour cette clé : {', '.join(types)}. Écriture — "
+            "n'utilise cet outil que sur demande explicite de déplacer / "
+            "changer le statut d'une tâche."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "enum": types,
+                    "description": "Modèle de tâche (entity_type).",
+                },
+                "id": {"type": "integer", "description": "Id de la tâche."},
+                "status": {
+                    "type": "string",
+                    "description": "Statut / colonne cible (vocabulaire du pôle).",
+                },
+                "position": {
+                    "type": "integer",
+                    "description": "Position dans la colonne (optionnel).",
+                },
+            },
+            "required": ["type", "id", "status"],
+            "additionalProperties": False,
+        },
+    }
+
+
+_LIST_MEMBERS_TOOL = {
+    "name": _LIST_MEMBERS_TOOL_NAME,
+    "description": (
+        "Renvoie la liste des membres assignables (Users + Employés actifs) "
+        "avec leur nom, id et courriel. Utilise cet outil AVANT d'assigner "
+        "une tâche à quelqu'un pour choisir le bon identifiant d'assigné. "
+        "Lecture seule."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    },
+}
 
 
 # ── Outils de lecture détail (JSON full d'une entité par id) ───────
@@ -362,20 +494,39 @@ def _get_tools_for_scopes(scopes: Optional[list[str]]) -> list[dict[str, Any]]:
     return tools
 
 
+def _writable_task_types(scopes: Optional[list[str]], action: str) -> list[str]:
+    """Types de tâche pour lesquels la clé porte ``<pole>:tasks:<action>``.
+    ``action`` ∈ {update, move}. Préserve l'ordre du registre."""
+    out: list[str] = []
+    for t, spec in _TASK_WRITE_ENTITIES.items():
+        if key_has_scope(scopes, f"{spec.pole}:tasks:{action}"):
+            out.append(t)
+    return out
+
+
 def _tools_for_scopes(scopes: Optional[list[str]]) -> list[dict[str, Any]]:
     """Liste des outils exposés à cette clé, selon ses scopes. Les outils de
-    lecture apparaissent si au moins un pôle est lisible ; l'outil de
-    création apparaît si au moins un pôle autorise la création de tâche."""
+    lecture apparaissent si au moins un pôle est lisible ; les outils
+    d'écriture apparaissent si au moins un pôle/type autorise l'action."""
     tools: list[dict[str, Any]] = []
     if readable_poles(scopes):
         tools.extend(_READ_TOOLS)
         tools.extend(_get_tools_for_scopes(scopes))
+        # kratos_list_members : utile dès qu'on peut lire un pôle (aide à
+        # choisir un assigné).
+        tools.append(_LIST_MEMBERS_TOOL)
     creatable = [
         slug for slug in POLE_SLUGS
         if key_has_scope(scopes, f"{slug}:tasks:create")
     ]
     if creatable:
         tools.append(_create_task_tool(creatable))
+    updatable = _writable_task_types(scopes, "update")
+    if updatable:
+        tools.append(_update_task_tool(updatable))
+    movable = _writable_task_types(scopes, "move")
+    if movable:
+        tools.append(_move_task_tool(movable))
     return tools
 
 
@@ -538,6 +689,34 @@ async def _get_entity_detail(
         raise ValueError(f"Type d'entité inconnu : « {entity_type} ».")
 
 
+def _require_write_type(
+    scopes: Optional[list[str]], entity_type: str, action: str
+) -> None:
+    """Vérifie que ``entity_type`` est un type de tâche écrivable et que la
+    clé porte ``<pole>:tasks:<action>``. Lève ValueError sinon."""
+    spec = _TASK_WRITE_ENTITIES.get(entity_type)
+    if spec is None:
+        raise ValueError(
+            "`type` doit être l'un de : " + ", ".join(_WRITE_TASK_TYPES) + "."
+        )
+    if not key_has_scope(scopes, f"{spec.pole}:tasks:{action}"):
+        label = "Modifier une tâche" if action == "update" else "Déplacer une tâche"
+        raise ValueError(
+            f"Capacité « {label} » non activée pour le pôle "
+            f"« {POLE_LABELS.get(spec.pole, spec.pole)} » sur cette clé d'API."
+        )
+
+
+def _coerce_id(arguments: dict[str, Any]) -> int:
+    raw_id = arguments.get("id")
+    if raw_id is None:
+        raise ValueError("`id` (id de la tâche) est requis.")
+    try:
+        return int(raw_id)
+    except (TypeError, ValueError):
+        raise ValueError("`id` doit être un entier.")
+
+
 async def _call_tool(
     db,
     user: User,
@@ -569,6 +748,16 @@ async def _call_tool(
             db, user, allowed, date_from=date_from, date_to=date_to
         )
 
+    # ── Membres assignables (lecture) ──
+    if name == _LIST_MEMBERS_TOOL_NAME:
+        members = await list_members(db)
+        return {
+            "members": [
+                {"kind": m.kind, "id": m.id, "name": m.name, "email": m.email}
+                for m in members
+            ]
+        }
+
     # ── Outils de lecture détail (JSON full d'une entité par id) ──
     if name in (
         _GET_SOUMISSION_TOOL,
@@ -596,14 +785,7 @@ async def _call_tool(
         title = str(arguments.get("title") or "").strip()
         if not title:
             raise ValueError("`title` (titre de la tâche) est requis.")
-        due_raw = arguments.get("due_date")
-        due_date = None
-        if due_raw:
-            from datetime import date as _date_cls
-            try:
-                due_date = _date_cls.fromisoformat(str(due_raw))
-            except ValueError:
-                raise ValueError("`due_date` doit être au format YYYY-MM-DD.")
+        due_date = _coerce_due(arguments.get("due_date"))
         created = await create_task_for_pole(
             db,
             user,
@@ -612,6 +794,7 @@ async def _call_tool(
             title=title,
             description=(arguments.get("description") or None),
             due_date=due_date,
+            assignee=(arguments.get("assignee") or None),
             via="mcp",
         )
         # On commit explicitement : on est hors du graphe FastAPI (session
@@ -625,7 +808,83 @@ async def _call_tool(
             "title": created.title,
             "status": created.status,
         }
+
+    if name == _UPDATE_TASK_TOOL_NAME:
+        entity_type = str(arguments.get("type") or "").strip()
+        _require_write_type(scopes, entity_type, "update")
+        entity_id = _coerce_id(arguments)
+        # On ne transmet QUE les champs explicitement présents dans les
+        # arguments (distingue « absent » de « mis à vide »).
+        fields: dict[str, Any] = {}
+        for k in ("title", "description", "status", "priority", "assignee"):
+            if k in arguments:
+                fields[k] = arguments.get(k)
+        if "due_date" in arguments:
+            fields["due_date"] = _coerce_due(arguments.get("due_date"))
+        if not fields:
+            raise ValueError("Aucun champ à modifier n'a été fourni.")
+        try:
+            result = await update_task_for_type(
+                db, user, entity_type=entity_type, entity_id=entity_id,
+                fields=fields, via="mcp",
+            )
+        except LookupError as exc:
+            raise ValueError(str(exc))
+        await db.commit()
+        return {
+            "updated": True,
+            "pole": result.pole,
+            "entity_type": result.entity_type,
+            "entity_id": result.entity_id,
+            "title": result.title,
+            "status": result.status,
+            "entity": result.entity,
+        }
+
+    if name == _MOVE_TASK_TOOL_NAME:
+        entity_type = str(arguments.get("type") or "").strip()
+        _require_write_type(scopes, entity_type, "move")
+        entity_id = _coerce_id(arguments)
+        new_status = str(arguments.get("status") or "").strip()
+        if not new_status:
+            raise ValueError("`status` (colonne / statut cible) est requis.")
+        position = arguments.get("position")
+        if position is not None:
+            try:
+                position = int(position)
+            except (TypeError, ValueError):
+                raise ValueError("`position` doit être un entier.")
+        try:
+            result = await move_task_for_type(
+                db, user, entity_type=entity_type, entity_id=entity_id,
+                new_status=new_status, position=position, via="mcp",
+            )
+        except LookupError as exc:
+            raise ValueError(str(exc))
+        await db.commit()
+        return {
+            "moved": True,
+            "pole": result.pole,
+            "entity_type": result.entity_type,
+            "entity_id": result.entity_id,
+            "title": result.title,
+            "status": result.status,
+            "entity": result.entity,
+        }
+
     raise KeyError(name)
+
+
+def _coerce_due(due_raw: Any):
+    """Convertit une échéance YYYY-MM-DD (ou None / vide) en date. Lève
+    ValueError si le format est invalide."""
+    if not due_raw:
+        return None
+    from datetime import date as _date_cls
+    try:
+        return _date_cls.fromisoformat(str(due_raw))
+    except ValueError:
+        raise ValueError("`due_date` doit être au format YYYY-MM-DD.")
 
 
 # ── Helpers JSON-RPC 2.0 ───────────────────────────────────────────
@@ -677,8 +936,9 @@ async def _handle_rpc(
                     "Outils sur l'activité Kratos de "
                     f"{user.email}. Pôles lisibles par cette clé : "
                     f"{readable_labels}. Lecture par jour ou par plage de "
-                    "dates (fuseau America/Toronto) ; création de tâche dans "
-                    "les pôles explicitement autorisés."
+                    "dates (fuseau America/Toronto) ; création, modification "
+                    "et déplacement de tâches dans les pôles explicitement "
+                    "autorisés (tâche assignable à n'importe quel membre)."
                 ),
             },
         )

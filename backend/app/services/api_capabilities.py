@@ -77,8 +77,42 @@ def _tasks_create(pole_slug: str, pole_label: str) -> dict:
         "pole": pole_slug,
         "label_fr": "Créer une tâche",
         "description": (
-            f"Créer une tâche dans le pôle {pole_label} "
-            "(assignée au propriétaire de la clé)."
+            f"Créer une tâche dans le pôle {pole_label}. La tâche peut être "
+            "assignée à N'IMPORTE QUEL membre de l'équipe (par courriel, nom "
+            "ou identifiant) ; par défaut elle revient au propriétaire de la "
+            "clé."
+        ),
+        "category": "ecriture",
+        "risk": "moyen",
+        "coming_soon": False,
+    }
+
+
+def _tasks_update(pole_slug: str, pole_label: str) -> dict:
+    return {
+        "id": f"{pole_slug}:tasks:update",
+        "pole": pole_slug,
+        "label_fr": "Modifier une tâche",
+        "description": (
+            f"Modifier N'IMPORTE QUELLE tâche du pôle {pole_label} (pas "
+            "seulement celles du propriétaire de la clé) : statut, titre, "
+            "description, assigné (n'importe quel membre), échéance, priorité."
+        ),
+        "category": "ecriture",
+        "risk": "moyen",
+        "coming_soon": False,
+    }
+
+
+def _tasks_move(pole_slug: str, pole_label: str) -> dict:
+    return {
+        "id": f"{pole_slug}:tasks:move",
+        "pole": pole_slug,
+        "label_fr": "Déplacer une tâche",
+        "description": (
+            f"Déplacer N'IMPORTE QUELLE tâche du pôle {pole_label} d'une "
+            "colonne / étape à une autre (changer son statut kanban), et "
+            "ajuster sa position dans la colonne si applicable."
         ),
         "category": "ecriture",
         "risk": "moyen",
@@ -120,10 +154,12 @@ def _detail_read(
     }
 
 
-#: Pôles qui portent des tâches lisibles par id (alignés sur les modèles
-#: de tâches sérialisables). Les autres pôles n'ont pas (encore) d'entité
-#: « tâche » exposée par clé d'API.
-_TASK_READ_POLES: tuple[str, ...] = (
+#: Pôles qui portent des tâches lisibles / écrivables par clé d'API
+#: (alignés sur les modèles de tâches sérialisables). Les autres pôles
+#: n'ont pas (encore) d'entité « tâche » exposée par clé d'API. Pour
+#: CHACUN de ces pôles on déclare : tasks:read, tasks:create,
+#: tasks:update, tasks:move.
+_TASK_POLES: tuple[str, ...] = (
     "devlog",
     "entreprise",
     "prospection",
@@ -137,8 +173,10 @@ def _build_capabilities() -> list[dict]:
         slug, label = pole["slug"], pole["label_fr"]
         caps.append(_activity_read(slug, label))
         caps.append(_tasks_create(slug, label))
-        if slug in _TASK_READ_POLES:
+        if slug in _TASK_POLES:
             caps.append(_tasks_read(slug, label))
+            caps.append(_tasks_update(slug, label))
+            caps.append(_tasks_move(slug, label))
     # Lecture détail des entités métier de plus haut niveau (au-delà des
     # tâches) — JSON complet par id, exposé en REST + MCP.
     caps.append(
