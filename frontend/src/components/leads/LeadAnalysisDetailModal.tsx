@@ -2690,7 +2690,7 @@ function FraisDemarrageBreakdownPanel({
       <div className="mt-3 overflow-hidden rounded-lg border border-brand-800">
         <table className="w-full border-collapse text-[11px]">
           <thead>
-            <tr className="bg-brand-900/70 text-[9px] font-semibold uppercase tracking-wider text-white/45">
+            <tr className="bg-brand-900 text-[9px] font-semibold uppercase tracking-wider text-white/40">
               <th className="px-3 py-2 text-left">Poste</th>
               <th className="px-3 py-2 text-right">Valeur</th>
               <th
@@ -2708,7 +2708,7 @@ function FraisDemarrageBreakdownPanel({
               <td className="px-3 py-2 font-semibold text-amber-200" colSpan={3}>
                 {_fmtPctShort(mdfPctNumeric)} du prix d&apos;achat
                 {prixFinal > 0 ? (
-                  <span className="ml-1 font-normal text-white/45">
+                  <span className="ml-1 font-normal text-white/50">
                     ({_fmtPctShort(mdfPctNumeric)} × {fmtMoney(prixFinal)})
                   </span>
                 ) : null}
@@ -2719,7 +2719,7 @@ function FraisDemarrageBreakdownPanel({
             </tr>
             <tr>
               <td
-                className="px-3 pt-2.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-white/35"
+                className="px-3 pt-2.5 pb-1 text-[9px] font-semibold uppercase tracking-wider text-white/40"
                 colSpan={4}
               >
                 Frais de démarrage
@@ -2743,7 +2743,7 @@ function FraisDemarrageBreakdownPanel({
                     idx % 2 === 1 ? "bg-white/[0.015]" : ""
                   }`}
                 >
-                  <td className="px-3 py-1.5 pl-5 text-white/65">
+                  <td className="px-3 py-1.5 pl-5 text-white/55">
                     {label}
                     {overridden ? (
                       <button
