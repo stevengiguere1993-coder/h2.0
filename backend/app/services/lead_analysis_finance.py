@@ -120,6 +120,70 @@ PCT_COURTIERS: Dict[str, float] = {
 # le défaut global ``frais_dossier_preteur_pct``.
 DEFAULT_FRAIS_DOSSIER_PRETEUR_PCT: float = 0.02
 
+
+# ─── Frais de démarrage PERSONNALISÉS (dynamiques, juin 2026) ──────
+#
+# En plus des postes FIXES ci-dessus (évaluateur, inspection, avocat,
+# notaire 1/2, rapport efficacité, courtiers, frais dossier prêteur),
+# l'admin peut AJOUTER/RETIRER des postes de frais de démarrage
+# arbitraires depuis l'app. Ces postes sont stockés en BD dans le
+# défaut global ``frais_mdf_custom`` (groupe ``mdf_frais``, dans
+# ``value_json``) sous forme d'une LISTE d'objets :
+#
+#   {
+#     "id":                  "<slug/uuid stable>",
+#     "label_fr":            "<nom affiché>",
+#     "type_montant":        "fixe" | "pct_prix_achat" | "pct_financement",
+#     "valeur":              <montant $ OU taux selon le type>,
+#     "financable_par_defaut": <bool>,
+#   }
+#
+# Calcul du montant ($) selon ``type_montant`` :
+#   - "fixe"           : ``valeur`` est un montant $ direct.
+#   - "pct_prix_achat" : ``valeur`` est un % (5.0 = 5 %) appliqué au
+#                        prix d'achat.
+#   - "pct_financement": ``valeur`` est un % appliqué au financement
+#                        refi retenu (best APH, comme le courtier 2).
+#
+# IMPORTANT — exactitude : tant qu'AUCUN poste personnalisé n'est
+# créé (liste vide), le résultat du moteur est STRICTEMENT identique à
+# avant. Les postes personnalisés ne s'ajoutent au calcul que s'ils
+# existent.
+FRAIS_CUSTOM_TYPES: tuple[str, ...] = (
+    "fixe",
+    "pct_prix_achat",
+    "pct_financement",
+)
+
+
+def compute_frais_custom_montant(
+    item: dict,
+    prix_achat: float,
+    financement_refi: float,
+) -> float:
+    """Calcule le montant $ d'un poste de frais personnalisé selon son
+    ``type_montant``.
+
+    ``item`` : dict ``{id, label_fr, type_montant, valeur,
+    financable_par_defaut}``. ``financement_refi`` = financement du
+    « best APH » retenu (même base que le courtier hypothécaire 2).
+
+    Les pourcentages sont stockés en pourcentage (5.0 = 5 %) et
+    convertis en fraction (÷100) ici. Type inconnu / valeur invalide
+    → 0.0 (poste neutre, n'altère pas le calcul)."""
+    try:
+        valeur = float(item.get("valeur", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    type_montant = item.get("type_montant", "fixe")
+    if type_montant == "fixe":
+        return valeur
+    if type_montant == "pct_prix_achat":
+        return (valeur / 100.0) * float(prix_achat or 0)
+    if type_montant == "pct_financement":
+        return (valeur / 100.0) * float(financement_refi or 0)
+    return 0.0
+
 # LTV du prêt à l'achat conventionnel (Prêteur B) — utilisé pour
 # calculer la base des frais de dossier du prêteur (= prix_achat ×
 # ltv_achat). Aligné sur ``SCENARIO_ACHAT.ltv`` (75 %).
@@ -610,27 +674,46 @@ class FraisDemarrage:
     interets: float
     revenus_nets_pendant_projet: float
 
+    # Postes de frais de démarrage PERSONNALISÉS (dynamiques, juin
+    # 2026). Liste d'items dont le montant $ est DÉJÀ calculé (cf.
+    # ``compute_frais_custom_montant``) :
+    #   {"id": str, "label_fr": str, "montant": float,
+    #    "financable": bool}
+    # Vide par défaut → aucun impact sur le calcul (rétrocompat). Ce
+    # champ n'est PAS un montant scalaire : il est traité à part dans
+    # ``total`` et dans la composition de la MDF (jamais itéré comme un
+    # attribut $ nommé).
+    frais_custom: List[dict] = field(default_factory=list)
+
+    @property
+    def frais_custom_total(self) -> float:
+        """Somme des montants $ des postes personnalisés."""
+        return sum(float(it.get("montant", 0) or 0) for it in self.frais_custom)
+
     @property
     def total(self) -> float:
-        return sum(
-            [
-                self.courtier_hypothecaire_1,
-                self.courtier_hypothecaire_2,
-                self.taxes_bienvenue,
-                self.evaluateur,
-                self.evaluateur_2,
-                self.inspection,
-                self.avocat,
-                self.notaire,
-                self.notaire_2,
-                self.rapport_efficacite,
-                self.frais_developpement,
-                self.frais_negociations,
-                self.frais_travaux,
-                self.frais_dossier_preteur,
-                self.interets,
-                self.revenus_nets_pendant_projet,
-            ]
+        return (
+            sum(
+                [
+                    self.courtier_hypothecaire_1,
+                    self.courtier_hypothecaire_2,
+                    self.taxes_bienvenue,
+                    self.evaluateur,
+                    self.evaluateur_2,
+                    self.inspection,
+                    self.avocat,
+                    self.notaire,
+                    self.notaire_2,
+                    self.rapport_efficacite,
+                    self.frais_developpement,
+                    self.frais_negociations,
+                    self.frais_travaux,
+                    self.frais_dossier_preteur,
+                    self.interets,
+                    self.revenus_nets_pendant_projet,
+                ]
+            )
+            + self.frais_custom_total
         )
 
 
@@ -650,6 +733,7 @@ def compute_frais_demarrage(
     frais_fixes_overrides: Optional[Dict[str, float]] = None,
     pct_courtiers_overrides: Optional[Dict[str, float]] = None,
     taxes_bienvenue_brackets: Optional[List[tuple]] = None,
+    frais_custom_defs: Optional[List[dict]] = None,
 ) -> FraisDemarrage:
     """Calcule L4..L19. `financement_aph_100` est utilisé pour le
     courtier hyp. 2 (1 % du financement APH 100 pts, le plus généreux).
@@ -665,7 +749,15 @@ def compute_frais_demarrage(
 
     ``frais_dossier_preteur_pct`` : fraction (0.02 = 2 %) appliquée au
     prêt initial du prêteur B (= prix_achat × ltv_achat_preteur_b).
-    Provient du défaut global ``frais_dossier_preteur_pct``."""
+    Provient du défaut global ``frais_dossier_preteur_pct``.
+
+    ``frais_custom_defs`` (liste, optionnel) : définitions des postes de
+    frais de démarrage PERSONNALISÉS (groupe BD ``frais_mdf_custom``).
+    Chaque item ``{id, label_fr, type_montant, valeur,
+    financable_par_defaut}``. Leur montant $ est calculé ici selon
+    ``type_montant`` (cf. ``compute_frais_custom_montant``) et stocké
+    dans ``FraisDemarrage.frais_custom``. Liste vide / ``None`` →
+    aucun poste personnalisé (résultat identique à avant)."""
     ff = dict(FRAIS_FIXES)
     if frais_fixes_overrides:
         for k, v in frais_fixes_overrides.items():
@@ -681,6 +773,28 @@ def compute_frais_demarrage(
             pc[k] = float(v)
 
     pret_initial_preteur_b = prix_achat * ltv_achat_preteur_b
+
+    # Postes personnalisés : calcule le montant $ de chaque item selon
+    # son ``type_montant`` et conserve son flag « finançable ». La base
+    # du type ``pct_financement`` est le financement du best APH (même
+    # base que le courtier hypothécaire 2).
+    frais_custom: List[dict] = []
+    for item in frais_custom_defs or []:
+        if not isinstance(item, dict):
+            continue
+        montant = compute_frais_custom_montant(
+            item, prix_achat, financement_aph_100
+        )
+        frais_custom.append(
+            {
+                "id": str(item.get("id", "")),
+                "label_fr": str(item.get("label_fr", "")),
+                "type_montant": item.get("type_montant", "fixe"),
+                "valeur": item.get("valeur", 0),
+                "montant": montant,
+                "financable": bool(item.get("financable_par_defaut", False)),
+            }
+        )
 
     return FraisDemarrage(
         courtier_hypothecaire_1=pc["courtier_hypothecaire_1"] * prix_achat,
@@ -707,6 +821,7 @@ def compute_frais_demarrage(
         # L18 : -revenus_net_achat × durée (négatif = pas de revenu
         # pendant le projet, donc coût)
         revenus_nets_pendant_projet=-revenus_net_achat * duree_projet_annees,
+        frais_custom=frais_custom,
     )
 
 
@@ -791,6 +906,15 @@ class FinanceInputs:
     # (L4 et L5). Clés : ``courtier_hypothecaire_1`` / ``_2``. Valeurs
     # en fraction (0.01 = 1 %).
     pct_courtiers_overrides: Dict[str, float] = field(default_factory=dict)
+
+    # Juin 2026 — Frais de démarrage PERSONNALISÉS (dynamiques). Liste
+    # de définitions ``{id, label_fr, type_montant, valeur,
+    # financable_par_defaut}`` provenant du défaut global
+    # ``frais_mdf_custom`` (groupe ``mdf_frais``, ``value_json``). Le
+    # moteur calcule le montant $ de chaque poste et l'ajoute aux frais
+    # de démarrage (logique « finançable » identique aux postes fixes).
+    # Liste vide → aucun poste personnalisé (résultat identique à avant).
+    frais_custom_defs: List[dict] = field(default_factory=list)
 
     # Juin 2026 — Dé-hardcodage du barème des dépenses normalisées SCHL.
     # Overrides GLOBAUX du barème ``BAREME`` (groupe BD
@@ -1135,6 +1259,7 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         frais_fixes_overrides=inputs.frais_fixes_overrides,
         pct_courtiers_overrides=inputs.pct_courtiers_overrides,
         taxes_bienvenue_brackets=inputs.taxes_bienvenue_brackets,
+        frais_custom_defs=inputs.frais_custom_defs,
     )
     # Overrides manuels : pour chaque clé fournie par l'utilisateur,
     # on remplace la valeur calculée par sa saisie. Permet d'ajuster
@@ -1159,8 +1284,22 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
     financables = set(inputs.frais_demarrage_financables or [])
     frais_cash_total = 0.0
     for k, v in frais.__dict__.items():
+        # ``frais_custom`` est une LISTE (postes personnalisés), pas un
+        # montant scalaire : traité séparément ci-dessous pour éviter
+        # un ``float(list)``.
+        if k == "frais_custom":
+            continue
         amount = float(v or 0)
         if k in financables:
+            frais_cash_total += amount * mdf_pct
+        else:
+            frais_cash_total += amount
+    # Postes personnalisés : même logique « finançable » que les postes
+    # fixes — si finançable, seul ``mdf_pct`` est payé cash (le reste
+    # est financé) ; sinon 100 % cash. Liste vide → contribution nulle.
+    for item in frais.frais_custom:
+        amount = float(item.get("montant", 0) or 0)
+        if item.get("financable"):
             frais_cash_total += amount * mdf_pct
         else:
             frais_cash_total += amount
@@ -1196,4 +1335,3 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         best_refi_amount=best_amount,
         best_refi_program=best_program,
     )
-
