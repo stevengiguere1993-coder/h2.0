@@ -455,6 +455,85 @@ _DB_KEY_TO_FINANCABLE_KEY: dict[str, str] = {
 }
 
 
+# ── Juin 2026 : Dé-hardcodage du barème des dépenses normalisées ──────
+#
+# Mapping clé BD (groupe ``depenses_normalisees``) → clé interne de
+# ``lead_analysis_finance.BAREME``. Les valeurs sont chargées au runtime
+# de ``run-financial-analysis`` pour overrider le barème hardcoded. Les
+# clés ``*_pct`` (pourcentages de gestion) sont stockées en BD en pct
+# (4.25 = 4.25 %) et converties en fraction (÷100) pour matcher la
+# convention interne de ``BAREME`` (gestion_lt12 = 0.0425). Les autres
+# postes ($/log, $/mois) sont passés tels quels.
+_DB_KEY_TO_BAREME: dict[str, str] = {
+    "conciergerie_moins_12_log": "concierge_lt12",
+    "conciergerie_12_log_plus": "concierge_gte12",
+    "entretien_par_log": "entretien",
+    "gestion_moins_12_pct": "gestion_lt12",
+    "gestion_12_log_plus_pct": "gestion_gte12",
+    "wifi_par_log_mois": "wifi_par_log",
+    "internet_batiment_mois": "internet_fixe",
+    "entretien_thermopompe_an": "thermopompe",
+}
+
+# Clés du barème stockées en BD en pourcentage → fraction (÷100) avant
+# de passer au moteur (qui attend des fractions pour la gestion).
+_DB_BAREME_PCT_KEYS: set[str] = {
+    "gestion_moins_12_pct",
+    "gestion_12_log_plus_pct",
+}
+
+
+async def _load_bareme_overrides(
+    db,
+) -> tuple[dict, Optional[int], Optional[float]]:
+    """Charge les overrides du barème des dépenses normalisées SCHL +
+    le taux d'inoccupation.
+
+    Retourne ``(bareme_overrides, seuil_bascule_bareme_log,
+    taux_inoccupation_fraction)`` prêt à passer à ``FinanceInputs``.
+
+    - ``bareme_overrides`` : valeurs BD du groupe ``depenses_normalisees``
+      qui écrasent ``lead_analysis_finance.BAREME`` poste par poste ;
+      les % de gestion sont convertis pct → fraction.
+    - ``seuil_bascule_bareme_log`` (clé ``seuil_bascule_bareme_log``) :
+      seuil petit/grand immeuble (12 par défaut). ``None`` si absent →
+      le moteur retombe sur ``SEUIL_BASCULE_BAREME_LOG``.
+    - ``taux_inoccupation_fraction`` (clé ``taux_inoccupation_pct``,
+      groupe ``inputs_manuels``) : stocké en BD en pct (3.0 = 3 %),
+      converti en fraction (0.03). ``None`` si absent → le moteur
+      retombe sur ``FinanceInputs.taux_inoccupation_pct`` (0.03).
+      Juin 2026 : ce défaut était seedé mais JAMAIS relu — fix branché
+      ici (cf. PR « prospection-config-dehardcode-1a »).
+
+    Si la table est vide/absente, retourne ``({}, None, None)`` →
+    fallback constantes hardcoded.
+    """
+    bareme: dict[str, float] = {}
+    seuil: Optional[int] = None
+    inoccupation: Optional[float] = None
+    try:
+        rows = (
+            await db.execute(select(ProspectionAnalysisDefault))
+        ).scalars().all()
+        for row in rows:
+            if row.value_float is None:
+                continue
+            v = float(row.value_float)
+            internal = _DB_KEY_TO_BAREME.get(row.key)
+            if internal is not None:
+                if row.key in _DB_BAREME_PCT_KEYS:
+                    v = v / 100.0
+                bareme[internal] = v
+            elif row.key == "seuil_bascule_bareme_log":
+                seuil = int(v)
+            elif row.key == "taux_inoccupation_pct":
+                # BD en pct (3.0 = 3 %), moteur en fraction (0.03).
+                inoccupation = v / 100.0
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to load barème overrides from DB: %s", exc)
+    return bareme, seuil, inoccupation
+
+
 async def _load_defaults_for_new_analysis(db) -> dict:
     """Charge les défauts depuis la BD et fusionne avec les fallbacks.
 
@@ -1427,6 +1506,14 @@ async def run_financial_analysis(
         await _load_frais_mdf_overrides(db)
     )
 
+    # Juin 2026 : overrides du barème des dépenses normalisées SCHL
+    # (groupe ``depenses_normalisees``), seuil de bascule petit/grand
+    # immeuble, et taux d'inoccupation (fix : était seedé mais jamais
+    # relu). Si absents en BD, le moteur retombe sur les constantes.
+    bareme_overrides_global, seuil_bascule_global, taux_inoccupation_global = (
+        await _load_bareme_overrides(db)
+    )
+
     inputs = FinanceInputs(
         adresse=rec.address or "",
         prix_achat=float(rec.asking_price or 0),
@@ -1467,6 +1554,9 @@ async def run_financial_analysis(
         ),
         frais_fixes_overrides=frais_fixes_overrides,
         pct_courtiers_overrides=pct_courtiers_overrides,
+        # Juin 2026 : barème dépenses normalisées SCHL (groupe
+        # ``depenses_normalisees``). Dict vide → fallback ``BAREME``.
+        bareme_overrides=bareme_overrides_global,
         # Mai 2026 : nouveau frais MDF, surchargé globalement via le
         # défaut ``frais_dossier_preteur_pct``. Si la BD n'a pas (encore)
         # de ligne pour cette clé, on laisse ``FinanceInputs`` retomber
@@ -1474,6 +1564,19 @@ async def run_financial_analysis(
         **(
             {"frais_dossier_preteur_pct": frais_dossier_preteur_pct_global}
             if frais_dossier_preteur_pct_global is not None
+            else {}
+        ),
+        # Juin 2026 : seuil de bascule du barème (12 par défaut).
+        **(
+            {"seuil_bascule_bareme_log": seuil_bascule_global}
+            if seuil_bascule_global is not None
+            else {}
+        ),
+        # Juin 2026 — FIX : taux d'inoccupation, seedé mais jamais relu
+        # auparavant. Brancher la config si présente (sinon défaut 3 %).
+        **(
+            {"taux_inoccupation_pct": taux_inoccupation_global}
+            if taux_inoccupation_global is not None
             else {}
         ),
     )

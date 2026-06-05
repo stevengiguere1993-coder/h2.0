@@ -42,6 +42,16 @@ BAREME: Dict[str, float] = {
     "thermopompe":     190.0,
 }
 
+# Seuil de bascule du barème des dépenses normalisées (concierge +
+# gestion). En-dessous de ce nombre de logements on applique les tarifs
+# « petit immeuble » (concierge_lt12, gestion_lt12), au-dessus ou égal
+# les tarifs « grand immeuble ». Cf. R39/R41 dans l'Excel.
+#
+# Juin 2026 : externalisé via le défaut global ``seuil_bascule_bareme_log``
+# (groupe ``depenses_normalisees``). Le moteur lit la config si présente,
+# sinon retombe sur cette constante (fallback ultime).
+SEUIL_BASCULE_BAREME_LOG: int = 12
+
 
 # ─── Frais fixes (L7..L13) ─────────────────────────────────────────
 #
@@ -317,6 +327,8 @@ def compute_depenses_for_scenario(
     wifi_ajoute: bool,
     nb_thermopompes_ajoutees: int,
     taux_inoccupation_pct: float,
+    bareme_overrides: Optional[Dict[str, float]] = None,
+    seuil_bascule_log: int = SEUIL_BASCULE_BAREME_LOG,
 ) -> DepensesBreakdown:
     """Calcule R35..R45 pour un scénario donné.
 
@@ -331,29 +343,46 @@ def compute_depenses_for_scenario(
       - Thermopompes : **uniquement en APH** (efficacité énergétique).
         Dans l'Excel R44 col C (SCHL) = D5×J43 avec J43 vide → 0.
         R44 col D (APH 50) = D5×K43 avec K43 = 190 $/thermopompe.
+
+    ``bareme_overrides`` (dict, optionnel) écrase poste par poste les
+    valeurs hardcoded de ``BAREME``. Provient des défauts globaux
+    ``ProspectionAnalysisDefault`` (groupe ``depenses_normalisees``).
+    ``seuil_bascule_log`` : seuil de bascule petit/grand immeuble
+    (défaut ``SEUIL_BASCULE_BAREME_LOG`` = 12).
     """
+    bareme = dict(BAREME)
+    if bareme_overrides:
+        for k, v in bareme_overrides.items():
+            if v is None:
+                continue
+            bareme[k] = float(v)
+
     inoccupation = taux_inoccupation_pct * revenus_totaux
 
     concierge_par_log = (
-        BAREME["concierge_lt12"] if nb_log < 12 else BAREME["concierge_gte12"]
+        bareme["concierge_lt12"]
+        if nb_log < seuil_bascule_log
+        else bareme["concierge_gte12"]
     )
     concierge = concierge_par_log * nb_log
-    entretien = nb_log * BAREME["entretien"]
+    entretien = nb_log * bareme["entretien"]
     gestion_pct = (
-        BAREME["gestion_lt12"] if nb_log < 12 else BAREME["gestion_gte12"]
+        bareme["gestion_lt12"]
+        if nb_log < seuil_bascule_log
+        else bareme["gestion_gte12"]
     )
     gestion = gestion_pct * revenus_totaux
 
     if is_refi:
         energie = energie_base * (1.0 - reduction_energie_pct)
         wifi = (
-            BAREME["wifi_par_log"] * nb_log * 12 + BAREME["internet_fixe"] * 12
+            bareme["wifi_par_log"] * nb_log * 12 + bareme["internet_fixe"] * 12
             if wifi_ajoute
             else 0.0
         )
         # Thermopompes UNIQUEMENT en APH (pas SCHL standard).
         thermopompes = (
-            nb_thermopompes_ajoutees * BAREME["thermopompe"]
+            nb_thermopompes_ajoutees * bareme["thermopompe"]
             if is_aph
             else 0.0
         )
@@ -690,6 +719,20 @@ class FinanceInputs:
     # en fraction (0.01 = 1 %).
     pct_courtiers_overrides: Dict[str, float] = field(default_factory=dict)
 
+    # Juin 2026 — Dé-hardcodage du barème des dépenses normalisées SCHL.
+    # Overrides GLOBAUX du barème ``BAREME`` (groupe BD
+    # ``depenses_normalisees``). Clés = celles de ``BAREME``
+    # (concierge_lt12, concierge_gte12, entretien, gestion_lt12,
+    # gestion_gte12, wifi_par_log, internet_fixe, thermopompe). Valeurs
+    # déjà converties dans l'unité interne attendue par le moteur (les %
+    # de gestion en fraction, ex. 0.0425). Vide → fallback ``BAREME``.
+    bareme_overrides: Dict[str, float] = field(default_factory=dict)
+
+    # Seuil de bascule du barème petit/grand immeuble (concierge +
+    # gestion). Défaut ``SEUIL_BASCULE_BAREME_LOG`` (12). Externalisé via
+    # le défaut global ``seuil_bascule_bareme_log``.
+    seuil_bascule_bareme_log: int = SEUIL_BASCULE_BAREME_LOG
+
 
 @dataclass
 class FinanceResults:
@@ -835,6 +878,8 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         wifi_ajoute=inputs.wifi_ajoute,
         nb_thermopompes_ajoutees=inputs.nb_thermopompes_ajoutees,
         taux_inoccupation_pct=inputs.taux_inoccupation_pct,
+        bareme_overrides=inputs.bareme_overrides,
+        seuil_bascule_log=inputs.seuil_bascule_bareme_log,
     )
     achat = compute_scenario(
         config=SCENARIO_ACHAT,
@@ -873,6 +918,8 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         wifi_ajoute=inputs.wifi_ajoute,
         nb_thermopompes_ajoutees=inputs.nb_thermopompes_ajoutees,
         taux_inoccupation_pct=inputs.taux_inoccupation_pct,
+        bareme_overrides=inputs.bareme_overrides,
+        seuil_bascule_log=inputs.seuil_bascule_bareme_log,
     )
     # Dépenses APH 50 : avec thermopompes (is_aph=True).
     depenses_aph_50 = compute_depenses_for_scenario(
@@ -889,6 +936,8 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
         wifi_ajoute=inputs.wifi_ajoute,
         nb_thermopompes_ajoutees=inputs.nb_thermopompes_ajoutees,
         taux_inoccupation_pct=inputs.taux_inoccupation_pct,
+        bareme_overrides=inputs.bareme_overrides,
+        seuil_bascule_log=inputs.seuil_bascule_bareme_log,
     )
     refi_schl = compute_scenario(
         config=SCENARIO_REFI_SCHL,
@@ -934,6 +983,8 @@ def compute_all(inputs: FinanceInputs, use_aph_select: bool = True) -> FinanceRe
             wifi_ajoute=inputs.wifi_ajoute,
             nb_thermopompes_ajoutees=inputs.nb_thermopompes_ajoutees,
             taux_inoccupation_pct=inputs.taux_inoccupation_pct,
+            bareme_overrides=inputs.bareme_overrides,
+            seuil_bascule_log=inputs.seuil_bascule_bareme_log,
         )
         refi_aph_100 = compute_scenario(
             config=SCENARIO_REFI_APH_100,

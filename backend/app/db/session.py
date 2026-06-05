@@ -1928,6 +1928,112 @@ async def init_db() -> None:
                     0.05,
                     "mdf_frais",
                 ),
+                # ── Groupe : Dépenses normalisées SCHL (juin 2026) ───
+                # Barème ``lead_analysis_finance.BAREME`` externalisé.
+                # Valeurs = EXACTEMENT les constantes hardcoded. Les % de
+                # gestion sont seedés en pct (4.25, 5.0) et reconvertis en
+                # fraction (÷100) au runtime côté loader.
+                (
+                    "conciergerie_moins_12_log",
+                    215.0,
+                    "Conciergerie — moins de 12 log ($/log/an)",
+                    "Frais de conciergerie normalisés par logement et par "
+                    "an pour un immeuble de moins de 12 logements.",
+                    0.0,
+                    5000.0,
+                    5.0,
+                    "depenses_normalisees",
+                ),
+                (
+                    "conciergerie_12_log_plus",
+                    365.0,
+                    "Conciergerie — 12 log et plus ($/log/an)",
+                    "Frais de conciergerie normalisés par logement et par "
+                    "an pour un immeuble de 12 logements ou plus.",
+                    0.0,
+                    5000.0,
+                    5.0,
+                    "depenses_normalisees",
+                ),
+                (
+                    "entretien_par_log",
+                    610.0,
+                    "Entretien ($/log/an)",
+                    "Frais d'entretien normalisés par logement et par an.",
+                    0.0,
+                    10000.0,
+                    10.0,
+                    "depenses_normalisees",
+                ),
+                (
+                    "gestion_moins_12_pct",
+                    4.25,
+                    "Gestion — moins de 12 log (% des revenus)",
+                    "Pourcentage des revenus alloué à la gestion pour un "
+                    "immeuble de moins de 12 logements.",
+                    0.0,
+                    20.0,
+                    0.05,
+                    "depenses_normalisees",
+                ),
+                (
+                    "gestion_12_log_plus_pct",
+                    5.0,
+                    "Gestion — 12 log et plus (% des revenus)",
+                    "Pourcentage des revenus alloué à la gestion pour un "
+                    "immeuble de 12 logements ou plus.",
+                    0.0,
+                    20.0,
+                    0.05,
+                    "depenses_normalisees",
+                ),
+                (
+                    "wifi_par_log_mois",
+                    5.0,
+                    "WIFI ($/log/mois)",
+                    "Coût WIFI normalisé par logement et par mois (ajouté "
+                    "seulement aux scénarios refi si l'option WIFI est "
+                    "activée).",
+                    0.0,
+                    100.0,
+                    0.5,
+                    "depenses_normalisees",
+                ),
+                (
+                    "internet_batiment_mois",
+                    120.0,
+                    "Internet du bâtiment ($/mois)",
+                    "Coût fixe de la connexion internet du bâtiment par "
+                    "mois (ajouté seulement aux scénarios refi si l'option "
+                    "WIFI est activée).",
+                    0.0,
+                    2000.0,
+                    5.0,
+                    "depenses_normalisees",
+                ),
+                (
+                    "entretien_thermopompe_an",
+                    190.0,
+                    "Entretien thermopompe ($/thermopompe/an)",
+                    "Coût d'entretien annuel par thermopompe ajoutée "
+                    "(scénarios APH — efficacité énergétique uniquement).",
+                    0.0,
+                    5000.0,
+                    5.0,
+                    "depenses_normalisees",
+                ),
+                (
+                    "seuil_bascule_bareme_log",
+                    12.0,
+                    "Seuil de bascule du barème (nb log)",
+                    "Nombre de logements à partir duquel on bascule des "
+                    "tarifs « petit immeuble » (conciergerie/gestion) vers "
+                    "les tarifs « grand immeuble ». Défaut 12.",
+                    1.0,
+                    100.0,
+                    1.0,
+                    "depenses_normalisees",
+                ),
         ):
             try:
                 # UPSERT : on insère si la clé n'existe pas, sinon on
