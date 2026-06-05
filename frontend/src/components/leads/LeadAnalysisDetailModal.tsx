@@ -2347,12 +2347,14 @@ function AnalysisResultsTable({
         </div>
       ) : null}
 
-      {/* Tableau desktop avec en-tête sticky */}
-      <div className="hidden max-h-[460px] overflow-auto rounded-xl border border-brand-800 sm:block">
-        <table className="w-full min-w-[640px] border-collapse text-[11px]">
+      {/* Tableau desktop avec en-tête sticky. Plus de scroll horizontal :
+          les 4 colonnes tiennent dans la largeur du modal (max-w-5xl), on
+          ne garde que le scroll vertical pour l'en-tête sticky. */}
+      <div className="hidden max-h-[460px] overflow-y-auto rounded-xl border border-brand-800 sm:block">
+        <table className="w-full table-fixed border-collapse text-[11px]">
           <thead className="sticky top-0 z-10">
             <tr className="bg-brand-900 align-bottom text-white/50">
-              <th className="sticky left-0 z-20 bg-brand-900 px-3 py-2.5 text-left text-[9px] font-semibold uppercase tracking-wider text-white/40">
+              <th className="sticky left-0 z-20 w-[28%] bg-brand-900 px-2.5 py-2.5 text-left text-[9px] font-semibold uppercase tracking-wider text-white/40">
                 Métrique
               </th>
               {cols.map(([label, s], i) => {
@@ -2360,7 +2362,7 @@ function AnalysisResultsTable({
                 return (
                   <th
                     key={label}
-                    className={`px-3 py-2.5 text-right align-bottom font-semibold ${
+                    className={`px-2.5 py-2.5 text-right align-bottom font-semibold ${
                       isWinner
                         ? "bg-emerald-500/10"
                         : "bg-brand-900"
@@ -2903,7 +2905,7 @@ function ResultRow({
   return (
     <tr className={rowCls}>
       <td
-        className={`sticky left-0 z-10 bg-inherit px-3 py-2 ${
+        className={`sticky left-0 z-10 bg-inherit px-2.5 py-2 ${
           keyRow ? "font-semibold text-white/80" : "text-white/55"
         }`}
       >
@@ -2915,7 +2917,7 @@ function ResultRow({
         if (!s) return (
           <td
             key={k}
-            className={`px-3 py-2 text-right text-white/30 ${winnerBg}`}
+            className={`px-2.5 py-2 text-right text-white/30 ${winnerBg}`}
           >
             —
           </td>
@@ -2924,7 +2926,7 @@ function ResultRow({
         if (val == null) return (
           <td
             key={k}
-            className={`px-3 py-2 text-right text-white/30 ${winnerBg}`}
+            className={`px-2.5 py-2 text-right text-white/30 ${winnerBg}`}
           >
             {fallback || "—"}
           </td>
@@ -2945,7 +2947,7 @@ function ResultRow({
         return (
           <td
             key={k}
-            className={`px-3 py-2 text-right font-mono tabular-nums ${tone} ${
+            className={`px-2.5 py-2 text-right font-mono tabular-nums ${tone} ${
               bold ? "font-bold" : ""
             } ${winnerBg}`}
           >
